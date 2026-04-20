@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eternalai"
+version = "0.1.0"
+description = "Python-first monorepo-style bootstrap scaffold for EternalAI."
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = [
+  "services/api/tests",
+  "services/worker/tests",
+  "services/asr/tests",
+  "tests/smoke",
+]
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["services*"]
