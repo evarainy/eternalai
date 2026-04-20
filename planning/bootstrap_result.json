@@ -9,9 +9,6 @@
     "templates/",
     ".gitkeep"
   ],
-  "removed_paths": [
-    "nul"
-  ],
   "created_paths": [
     ".editorconfig",
     ".env.example",
@@ -34,6 +31,9 @@
     "status": "unverified",
     "reason": "Direct PowerShell script execution was blocked by execution policy, and running doctor.ps1 via ExecutionPolicy Bypass confirmed that a real Python interpreter was not available on PATH."
   },
+  "local_workspace_cleanup_notes": [
+    "Observed a local root artifact named `nul` during bootstrap work and cleaned it locally. It was not part of tracked repository history on main."
+  ],
   "non_goals": [
     "Business feature implementation",
     "Langfuse runtime integration",
