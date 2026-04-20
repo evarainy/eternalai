@@ -24,7 +24,7 @@ apps/
   miniapp/              Placeholder miniapp boundary
 services/
   api/                  Minimal API bootstrap service
-  worker/               Minimal worker bootstrap service
+  worker/               Minimal Worker bootstrap service
   asr/                  Minimal ASR bootstrap service
 contracts/              Interface placeholders for HTTP and events
 docs/                   Architecture, runbook, and observability notes
@@ -54,6 +54,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\doctor.ps1
 .\scripts\dev-api.ps1
 .\scripts\dev-worker.ps1
@@ -61,10 +62,10 @@ Copy-Item .env.example .env
 .\scripts\test.ps1
 ```
 
-If PowerShell execution policy blocks direct script execution on Windows, use:
+If PowerShell execution policy blocks direct script execution on Windows, apply a process-scoped bypass before running any of the bootstrap scripts:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 ## Docker Bootstrap
@@ -77,6 +78,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 - `asr`
 
 This file does not claim that business flows are wired together. It only provides a starting point for local infrastructure and service containers.
+
+Compose reads service variables from `.env`, so copy `.env.example` before using `docker compose up`.
 
 ## Observability Note
 
