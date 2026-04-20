@@ -1,0 +1,49 @@
+{
+  "phase": "bootstrap",
+  "status": "completed_with_unverified_runtime",
+  "repo_stage_before": "planning_pack_carrier",
+  "repo_stage_after": "development_repo_scaffold",
+  "preserved_assets": [
+    "checklists/",
+    "prompts/",
+    "templates/",
+    ".gitkeep"
+  ],
+  "removed_paths": [
+    "nul"
+  ],
+  "created_paths": [
+    ".editorconfig",
+    ".env.example",
+    ".gitignore",
+    ".github/workflows/smoke.yml",
+    "apps/",
+    "contracts/",
+    "deploy/docker/",
+    "docker-compose.yml",
+    "docs/",
+    "planning/bootstrap_plan.md",
+    "pyproject.toml",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "scripts/",
+    "services/",
+    "tests/smoke/"
+  ],
+  "runtime_verification": {
+    "status": "unverified",
+    "reason": "Direct PowerShell script execution was blocked by execution policy, and running doctor.ps1 via ExecutionPolicy Bypass confirmed that a real Python interpreter was not available on PATH."
+  },
+  "non_goals": [
+    "Business feature implementation",
+    "Langfuse runtime integration",
+    "Production deployment readiness",
+    "Final model selection"
+  ],
+  "next_recommended_phase": "review_scaffold_then_rerun_business_repo_planning",
+  "rerun_business_planning_when": [
+    "A real Python toolchain is installed",
+    "CI or a prepared machine validates smoke tests and health checks",
+    "The scaffold structure is accepted as the baseline for business work"
+  ]
+}
