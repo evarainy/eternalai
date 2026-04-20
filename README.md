@@ -24,7 +24,7 @@ apps/
   miniapp/              Placeholder miniapp boundary
 services/
   api/                  Minimal API bootstrap service
-  worker/               Minimal Worker bootstrap service
+  worker/               Minimal worker bootstrap service
   asr/                  Minimal ASR bootstrap service
 contracts/              Interface placeholders for HTTP and events
 docs/                   Architecture, runbook, and observability notes
