@@ -1,0 +1,47 @@
+contract_id: event.worker.jobs.v1
+status: draft
+owner_service: services/worker
+transport:
+  type: redis_queue_or_stream
+  queue_name_env: WORKER_QUEUE
+
+events:
+  - event_type: assistant.answer.requested
+    publisher: services/api
+    consumer: services/worker
+    implementation_status: planned
+    payload:
+      required:
+        - task_id
+        - session_id
+        - turn_id
+        - input_text
+      optional:
+        - transcript_text
+        - retrieval_profile
+
+  - event_type: knowledge.ingestion.requested
+    publisher: services/api
+    consumer: services/worker
+    implementation_status: planned
+    payload:
+      required:
+        - task_id
+        - knowledge_source_id
+        - source_type
+        - source_locator
+      optional:
+        - requested_by
+
+  - event_type: asr.transcription.requested
+    publisher: services/api
+    consumer: services/worker
+    implementation_status: planned
+    payload:
+      required:
+        - task_id
+        - transcription_request_id
+        - input_type
+      optional:
+        - audio_ref
+        - language_hint

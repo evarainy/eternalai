@@ -1,0 +1,222 @@
+modules:
+  - id: api_runtime
+    name: API runtime bootstrap
+    status: implemented_bootstrap
+    layer: api
+    current_paths:
+      - services/api/app/main.py
+      - services/api/tests/test_health.py
+    target_paths:
+      - services/api/app/main.py
+      - services/api/app/routes/
+      - services/api/app/schemas/
+      - services/api/app/services/
+    responsibilities:
+      - keep `/health` stable
+      - assemble the FastAPI application
+      - register business routers without moving business logic into route handlers
+    depends_on:
+      - contract_registry
+      - runtime_config
+    forbidden_dependencies:
+      - apps/web
+      - apps/miniapp
+
+  - id: assistant_session_api
+    name: Session and message API
+    status: planned
+    layer: api
+    current_paths: []
+    target_paths:
+      - services/api/app/routes/sessions.py
+      - services/api/app/routes/messages.py
+      - services/api/app/schemas/session.py
+      - services/api/app/schemas/message.py
+      - services/api/app/services/session_service.py
+    responsibilities:
+      - create and fetch sessions
+      - accept user messages
+      - expose task-oriented responses for async processing
+    depends_on:
+      - api_runtime
+      - persistence_store
+      - worker_orchestrator
+      - contract_registry
+    forbidden_dependencies:
+      - apps/web
+      - apps/miniapp
+      - provider_specific_llm_code
+
+  - id: knowledge_ingestion_api
+    name: Knowledge-source registration API
+    status: planned
+    layer: api
+    current_paths: []
+    target_paths:
+      - services/api/app/routes/knowledge_sources.py
+      - services/api/app/schemas/knowledge_source.py
+      - services/api/app/services/knowledge_source_service.py
+    responsibilities:
+      - register knowledge sources
+      - queue ingestion jobs
+      - surface ingestion status
+    depends_on:
+      - persistence_store
+      - worker_orchestrator
+      - contract_registry
+    forbidden_dependencies:
+      - apps/web
+      - raw_queue_driver_in_routes
+
+  - id: worker_orchestrator
+    name: Worker job orchestration
+    status: planned
+    layer: worker
+    current_paths:
+      - services/worker/app/main.py
+      - services/worker/tests/test_worker_bootstrap.py
+    target_paths:
+      - services/worker/app/main.py
+      - services/worker/app/jobs/
+      - services/worker/app/consumers/
+      - services/worker/app/services/
+    responsibilities:
+      - consume answer jobs
+      - consume ingestion jobs
+      - update durable task states
+    depends_on:
+      - persistence_store
+      - worker_event_contract
+      - runtime_config
+    forbidden_dependencies:
+      - apps/web
+      - apps/miniapp
+
+  - id: asr_gateway
+    name: ASR provider gateway
+    status: planned_extension
+    layer: asr
+    current_paths:
+      - services/asr/app/main.py
+      - services/asr/tests/test_asr_bootstrap.py
+    target_paths:
+      - services/asr/app/main.py
+      - services/asr/app/routes/transcriptions.py
+      - services/asr/app/providers/
+      - services/asr/app/schemas/
+    responsibilities:
+      - keep `/health` stable
+      - expose transcription endpoint
+      - normalize provider-specific output
+    depends_on:
+      - asr_http_contract
+      - runtime_config
+    forbidden_dependencies:
+      - apps/web
+      - apps/miniapp
+
+  - id: persistence_store
+    name: Durable assistant state
+    status: planned
+    layer: data
+    current_paths: []
+    target_paths:
+      - services/api/app/models/
+      - services/api/app/repositories/
+      - migrations/
+    responsibilities:
+      - persist sessions, turns, knowledge sources, and tasks
+      - manage schema evolution
+      - expose repository interfaces for API and worker flows
+    depends_on:
+      - runtime_config
+    forbidden_dependencies:
+      - apps/web
+      - apps/miniapp
+      - direct_http_handlers
+
+  - id: contract_registry
+    name: Shared contract registry
+    status: planned_in_phase0
+    layer: contract
+    current_paths:
+      - contracts/README.md
+      - contracts/http/README.md
+      - contracts/events/README.md
+    target_paths:
+      - contracts/http/api.yaml
+      - contracts/http/asr.yaml
+      - contracts/events/worker.yaml
+    responsibilities:
+      - define public HTTP contracts
+      - define ASR internal contracts
+      - define worker event payloads
+    depends_on: []
+    forbidden_dependencies:
+      - client_private_fields
+
+  - id: web_client
+    name: Web client
+    status: planned
+    layer: frontend-web
+    current_paths:
+      - apps/web/README.md
+      - apps/web/src/.gitkeep
+    target_paths:
+      - apps/web/src/
+    responsibilities:
+      - create sessions
+      - submit text or audio questions
+      - poll task status
+      - render final answer payloads
+    depends_on:
+      - assistant_session_api
+      - asr_gateway
+      - contract_registry
+    forbidden_dependencies:
+      - services/worker
+      - direct_database_access
+
+  - id: miniapp_client
+    name: Miniapp client
+    status: planned
+    layer: frontend-miniapp
+    current_paths:
+      - apps/miniapp/README.md
+      - apps/miniapp/src/.gitkeep
+    target_paths:
+      - apps/miniapp/src/
+    responsibilities:
+      - mirror the public session and task flow on a miniapp surface
+      - share contract assumptions with the web client
+    depends_on:
+      - assistant_session_api
+      - asr_gateway
+      - contract_registry
+    forbidden_dependencies:
+      - services/worker
+      - direct_database_access
+
+  - id: runtime_config
+    name: Runtime configuration and verification
+    status: implemented_bootstrap
+    layer: ops
+    current_paths:
+      - .env.example
+      - scripts/doctor.ps1
+      - scripts/dev-api.ps1
+      - scripts/dev-asr.ps1
+      - scripts/dev-worker.ps1
+      - scripts/test.ps1
+      - .github/workflows/smoke.yml
+    target_paths:
+      - .env.example
+      - scripts/
+      - .github/workflows/
+    responsibilities:
+      - keep host-first verification working
+      - document required environment variables
+      - extend CI as feature tests are added
+    depends_on: []
+    forbidden_dependencies:
+      - business_domain_logic

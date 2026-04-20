@@ -1,0 +1,80 @@
+invariants:
+  - id: INV-HEALTH-001
+    scope: services/api
+    statement: API `GET /health` remains unauthenticated and returns `status`, `service`, and `environment`.
+    rationale: Preserve bootstrap observability and deployment smoke checks while business endpoints evolve.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_health.py
+
+  - id: INV-HEALTH-002
+    scope: services/asr
+    statement: ASR `GET /health` remains unauthenticated and returns service identity plus provider preference metadata.
+    rationale: Preserve an independent readiness surface for ASR rollouts.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/asr/tests/test_asr_bootstrap.py
+
+  - id: INV-CONTRACT-001
+    scope: public_http
+    statement: Every externally callable API route must be represented in `contracts/http/api.yaml` before or in the same change as implementation.
+    rationale: Clients and backend services need one source of truth for payload shapes.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_contract_registry.py
+
+  - id: INV-CONTRACT-002
+    scope: internal_http_and_events
+    statement: ASR internal HTTP operations and worker job payloads must be versioned in YAML contracts.
+    rationale: Prevent silent drift across service boundaries.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/asr/tests/test_contract_registry.py services/worker/tests/test_event_contracts.py
+
+  - id: INV-DATA-001
+    scope: durable_state
+    statement: Postgres is the source of truth for sessions, turns, knowledge sources, and tasks.
+    rationale: Redis is present for coordination but should not become the canonical business record.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_repositories.py services/worker/tests/test_task_state_updates.py
+
+  - id: INV-ASYNC-001
+    scope: request_handling
+    statement: Long-running answer, ingestion, and transcription work must execute outside HTTP request handlers.
+    rationale: Keep API latency bounded and make retries explicit.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_message_submission.py services/worker/tests/test_answer_jobs.py
+
+  - id: INV-ASR-001
+    scope: asr_provider_selection
+    statement: ASR integration must go through a provider adapter that prefers SenseVoice and can fall back to `faster-whisper`.
+    rationale: Preserve provider independence and keep the bootstrap preference documented in code.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest services/asr/tests/test_provider_selection.py
+
+  - id: INV-CLIENT-001
+    scope: client_integration
+    statement: `apps/web` and `apps/miniapp` consume the same public API resource model and may not invent backend-only fields.
+    rationale: Prevent contract divergence across clients.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest apps/web/tests/test_contract_alignment.py apps/miniapp/tests/test_contract_alignment.py
+
+  - id: INV-OPS-001
+    scope: local_verification
+    statement: Host-first verification through `.venv` and `pytest` remains supported even if Docker flows are added later.
+    rationale: The current verified baseline is host runtime, not Docker.
+    verification:
+      automated:
+        - .venv\Scripts\python.exe -m pytest
+
+  - id: INV-OBS-001
+    scope: observability
+    statement: Langfuse is optional for phase 1 and cannot become a hard prerequisite for local feature verification.
+    rationale: The repository deliberately does not ship a verified Langfuse runtime today.
+    verification:
+      manual:
+        - Review `docker-compose.yml`, `docs/observability/README.md`, and new runbooks for optional-not-mandatory semantics.

@@ -1,0 +1,46 @@
+{
+  "phase": "phase0_spec_first_business_planning",
+  "status": "completed_pending_review",
+  "generated_on": "2026-04-20",
+  "planning_ready": {
+    "value": true,
+    "reason": "Required phase-0 planning, spec, contract, acceptance, and run-policy artifacts exist and align to the inspected repository scaffold.",
+    "evidence": [
+      "spec/product_spec.md",
+      "spec/product_spec.yaml",
+      "spec/module_spec.yaml",
+      "spec/resource_spec.yaml",
+      "spec/invariant_spec.yaml",
+      "contracts/http/api.yaml",
+      "contracts/http/asr.yaml",
+      "contracts/events/worker.yaml",
+      "planning/dev_plan.yaml",
+      "planning/acceptance_spec.yaml",
+      "planning/run_policy.yaml",
+      "planning/implement.md",
+      "planning/documentation.md",
+      "planning/plan_review_checklist.md"
+    ]
+  },
+  "execution_ready": {
+    "value": false,
+    "reason": "Execution is intentionally paused pending human review of the phase-0 plan and explicit decisions on blocked review gates.",
+    "blockers": [
+      "Phase-0 planning artifacts need review sign-off.",
+      "Auth mode for non-bootstrap business routes is not approved yet.",
+      "Primary client priority and frontend stack are not selected yet.",
+      "Knowledge-source format scope and audio-retention policy need approval.",
+      "Docker runtime remains unverified."
+    ]
+  },
+  "repository_baseline": {
+    "repo_stage": "development_repo_scaffold",
+    "host_runtime_verified": true,
+    "docker_verified": false
+  },
+  "next_actions": [
+    "Review the product, module, resource, invariant, and contract specs together.",
+    "Approve or adjust the human-gated decisions called out in the product spec and dev plan.",
+    "Select the first execution task from planning/dev_plan.yaml after review."
+  ]
+}
