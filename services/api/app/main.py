@@ -2,6 +2,7 @@ from functools import lru_cache
 
 import uvicorn
 from fastapi import FastAPI
+from services.api.app.errors import register_exception_handlers
 from services.api.app.routes import get_router_registrations
 from services.runtime_config import APIServiceSettings
 
@@ -18,6 +19,7 @@ def get_settings() -> APISettings:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
+    register_exception_handlers(app)
 
     for registration in get_router_registrations(environment=settings.app_env):
         app.include_router(registration.router)

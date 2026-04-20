@@ -44,4 +44,24 @@ def get_contract_routes() -> tuple[ContractRoute, ...]:
             method="GET",
             path="/health",
         ),
+        ContractRoute(
+            operation_id="createSession",
+            method="POST",
+            path="/v1/sessions",
+        ),
+        ContractRoute(
+            operation_id="getSession",
+            method="GET",
+            path="/v1/sessions/{session_id}",
+        ),
+        ContractRoute(
+            operation_id="submitMessage",
+            method="POST",
+            path="/v1/sessions/{session_id}/messages",
+        ),
+        ContractRoute(
+            operation_id="getTask",
+            method="GET",
+            path="/v1/tasks/{task_id}",
+        ),
     )

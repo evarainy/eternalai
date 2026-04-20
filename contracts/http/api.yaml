@@ -40,7 +40,7 @@ endpoints:
               type: string
 
   - operation_id: createSession
-    implementation_status: planned
+    implementation_status: implemented
     method: POST
     path: /v1/sessions
     auth: review_required
@@ -118,7 +118,7 @@ endpoints:
                   type: object
 
   - operation_id: getSession
-    implementation_status: planned
+    implementation_status: implemented
     method: GET
     path: /v1/sessions/{session_id}
     auth: review_required
@@ -246,7 +246,7 @@ endpoints:
                   type: string
 
   - operation_id: submitMessage
-    implementation_status: planned
+    implementation_status: implemented
     method: POST
     path: /v1/sessions/{session_id}/messages
     auth: review_required
@@ -336,7 +336,7 @@ endpoints:
                   type: string
 
   - operation_id: getTask
-    implementation_status: planned
+    implementation_status: implemented
     method: GET
     path: /v1/tasks/{task_id}
     auth: review_required

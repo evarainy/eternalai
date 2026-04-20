@@ -33,11 +33,11 @@ invariants:
 
   - id: INV-DATA-001
     scope: durable_state
-    statement: Postgres is the source of truth for sessions, turns, knowledge sources, and tasks.
-    rationale: Redis is present for coordination but should not become the canonical business record.
+    statement: Phase 1B uses process-local in-memory state for sessions, turns, and tasks; Postgres becomes the source of truth in the later persistence phase.
+    rationale: This keeps the minimal HTTP loop honest about current behavior while preserving the later durable-state direction.
     verification:
       automated:
-        - .venv\Scripts\python.exe -m pytest services/api/tests/test_repositories.py services/worker/tests/test_task_state_updates.py
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py services/api/tests/test_task_status_api.py
 
   - id: INV-ASYNC-001
     scope: request_handling
