@@ -22,4 +22,5 @@ def test_expected_bootstrap_paths_exist() -> None:
 
 
 def test_nul_artifact_was_removed() -> None:
-    assert not (REPO_ROOT / "nul").exists()
+    entries = {path.name.lower() for path in REPO_ROOT.iterdir()}
+    assert "nul" not in entries
