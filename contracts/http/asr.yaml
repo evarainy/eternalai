@@ -1,0 +1,88 @@
+contract_id: http.asr.internal.v1
+status: draft
+owner_service: services/asr
+consumers:
+  - services/api
+  - services/worker
+
+endpoints:
+  - operation_id: getAsrHealth
+    implementation_status: implemented
+    method: GET
+    path: /health
+    auth: none
+    request:
+      body: null
+    responses:
+      "200":
+        description: ASR service is healthy
+        body:
+          type: object
+          required:
+            - status
+            - service
+            - provider_preference
+          properties:
+            status:
+              type: string
+              const: ok
+            service:
+              type: string
+              const: asr
+            provider_preference:
+              type: string
+
+  - operation_id: createTranscription
+    implementation_status: planned
+    method: POST
+    path: /v1/transcriptions
+    auth: internal_only
+    request:
+      body:
+        type: object
+        required:
+          - input_type
+        properties:
+          input_type:
+            type: string
+            enum:
+              - file_ref
+              - bytes
+          audio_ref:
+            type: string
+          language_hint:
+            type: string
+          trace_id:
+            type: string
+    responses:
+      "202":
+        description: Transcription request accepted
+        body:
+          type: object
+          required:
+            - transcription_request_id
+            - status
+          properties:
+            transcription_request_id:
+              type: string
+            status:
+              type: string
+              const: queued
+      "200":
+        description: Synchronous transcription result for small inputs
+        body:
+          type: object
+          required:
+            - transcription_request_id
+            - status
+            - transcript_text
+          properties:
+            transcription_request_id:
+              type: string
+            status:
+              type: string
+              const: completed
+            transcript_text:
+              type: string
+            provider_name:
+              type: string

@@ -2,23 +2,11 @@ import json
 import logging
 from functools import lru_cache
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from services.runtime_config import WorkerServiceSettings
 
 
-class WorkerSettings(BaseSettings):
-    app_name: str = "eternalai-worker"
-    app_env: str = "development"
-    log_level: str = "INFO"
-    database_url: str = "postgresql://eternalai:eternalai@postgres:5432/eternalai"
-    redis_url: str = "redis://redis:6379/0"
-    worker_queue: str = "bootstrap"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
+class WorkerSettings(WorkerServiceSettings):
+    """Backward-compatible worker settings alias with shared runtime defaults."""
 
 
 @lru_cache

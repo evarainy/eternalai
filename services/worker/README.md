@@ -3,7 +3,7 @@
 `services/worker` is the background execution boundary in the EternalAI bootstrap scaffold.
 
 Current scope:
-- load worker configuration
+- load the shared runtime configuration profile plus worker queue settings
 - initialize minimal logging
 - expose a no-op bootstrap entrypoint
 

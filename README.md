@@ -4,6 +4,7 @@ EternalAI is a Python-first monorepo-style bootstrap scaffold for an enterprise 
 
 The current scaffold is intentionally small:
 - it creates real service boundaries for `services/api`, `services/worker`, and `services/asr`
+- it keeps a shared runtime configuration profile across those services
 - it adds base project files, smoke tests, Docker placeholders, and CI
 - it does not claim that product features, Langfuse integration, or end-to-end business workflows are complete
 

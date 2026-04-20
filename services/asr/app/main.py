@@ -2,23 +2,11 @@ from functools import lru_cache
 
 import uvicorn
 from fastapi import FastAPI
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from services.runtime_config import ASRServiceSettings
 
 
-class ASRSettings(BaseSettings):
-    app_name: str = "eternalai-asr"
-    app_env: str = "development"
-    log_level: str = "INFO"
-    asr_host: str = "0.0.0.0"
-    asr_port: int = 8010
-    asr_provider: str = "sensevoice"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
+class ASRSettings(ASRServiceSettings):
+    """Backward-compatible ASR settings alias with shared runtime defaults."""
 
 
 @lru_cache

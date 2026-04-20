@@ -1,0 +1,554 @@
+plan_version: phase0-2026-04-20
+strategy: spec_first_incremental_execution
+baseline:
+  host_runtime_verified: true
+  docker_runtime_verified: false
+  current_code_boundaries:
+    - services/api
+    - services/worker
+    - services/asr
+    - apps/web
+    - apps/miniapp
+    - contracts
+
+tasks:
+  - id: DV-001
+    title: Normalize shared runtime configuration across API, worker, and ASR
+    layer: foundation
+    goal: Consolidate bootstrap settings into a reusable configuration shape so future business modules inherit one validated env policy.
+    deps: []
+    touched_paths:
+      - .env.example
+      - services/api/app/
+      - services/worker/app/
+      - services/asr/app/
+      - services/api/tests/
+      - services/worker/tests/
+      - services/asr/tests/
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - contracts/http/
+      - contracts/events/
+    acceptance_ids:
+      - ACC-BASE-001
+    parallel_safe: false
+    needs_db: false
+    needs_ports: []
+    shared_resources_touched:
+      - runtime_config_profile
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_health.py services/worker/tests/test_worker_bootstrap.py services/asr/tests/test_asr_bootstrap.py
+    evidence_paths:
+      - .env.example
+      - services/api/tests/
+      - services/worker/tests/
+      - services/asr/tests/
+    human_gate:
+      required: false
+      reason: Existing bootstrap env policy is already accepted.
+    notes:
+      - Keep current variable names stable unless the contract files are updated in the same change.
+      - Preserve `.env` compatibility for host-first development.
+
+  - id: DV-002
+    title: Add versioned API route registration and contract-test harness
+    layer: contract
+    goal: Introduce a route assembly pattern that can grow beyond `/health` while making contracts reviewable and testable.
+    deps:
+      - DV-001
+    touched_paths:
+      - services/api/app/main.py
+      - services/api/app/routes/
+      - services/api/tests/
+      - contracts/http/api.yaml
+      - planning/acceptance_spec.yaml
+    forbidden_paths:
+      - services/worker/
+      - services/asr/
+      - apps/web/
+      - apps/miniapp/
+    acceptance_ids:
+      - ACC-CONTRACT-001
+    parallel_safe: false
+    needs_db: false
+    needs_ports:
+      - 8000
+    shared_resources_touched:
+      - api_health
+      - session
+      - conversation_turn
+      - assistant_task
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_health.py services/api/tests/test_contract_registry.py
+      - powershell -Command "$proc=Start-Process -FilePath .venv\Scripts\python.exe -ArgumentList '-m','uvicorn','services.api.app.main:app','--host','127.0.0.1','--port','18000' -PassThru; try { Start-Sleep -Seconds 1; Invoke-WebRequest http://127.0.0.1:18000/health | Select-Object -ExpandProperty StatusCode } finally { Stop-Process -Id $proc.Id -Force }"
+    evidence_paths:
+      - contracts/http/api.yaml
+      - services/api/tests/test_contract_registry.py
+    human_gate:
+      required: false
+      reason: Public contract scope is already captured in phase-0 planning.
+    notes:
+      - Do not implement business logic in this task; focus on router structure and contract alignment.
+      - Keep `/health` behavior unchanged.
+
+  - id: DV-003
+    title: Define API schemas for sessions, messages, tasks, and knowledge sources
+    layer: schema
+    goal: Create explicit request and response models so all business resources have typed boundaries before persistence or worker logic lands.
+    deps:
+      - DV-002
+    touched_paths:
+      - services/api/app/schemas/
+      - services/api/tests/
+      - contracts/http/api.yaml
+      - spec/resource_spec.yaml
+    forbidden_paths:
+      - services/worker/
+      - services/asr/
+      - apps/web/
+      - apps/miniapp/
+    acceptance_ids:
+      - ACC-CONTRACT-001
+      - ACC-API-SESSION-001
+      - ACC-API-MESSAGE-001
+      - ACC-KB-001
+    parallel_safe: false
+    needs_db: false
+    needs_ports: []
+    shared_resources_touched:
+      - session
+      - conversation_turn
+      - assistant_task
+      - knowledge_source
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_session_schemas.py services/api/tests/test_message_schemas.py services/api/tests/test_knowledge_source_schemas.py
+    evidence_paths:
+      - services/api/app/schemas/
+      - contracts/http/api.yaml
+    human_gate:
+      required: false
+      reason: Schema scope is derived directly from approved resources and contracts.
+    notes:
+      - Add error response models alongside success payloads.
+      - Do not finalize auth-specific fields until auth review is complete.
+
+  - id: DV-004
+    title: Establish durable persistence for sessions, turns, tasks, and knowledge sources
+    layer: data
+    goal: Introduce the first durable data model and migration flow with Postgres as the source of truth.
+    deps:
+      - DV-001
+      - DV-003
+    touched_paths:
+      - services/api/app/models/
+      - services/api/app/repositories/
+      - services/api/tests/
+      - services/worker/tests/
+      - migrations/
+      - requirements.txt
+      - requirements-dev.txt
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - services/asr/
+    acceptance_ids:
+      - ACC-DATA-001
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 5432
+    shared_resources_touched:
+      - session
+      - conversation_turn
+      - assistant_task
+      - knowledge_source
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_repositories.py services/worker/tests/test_task_state_updates.py
+      - docker compose up -d postgres
+    evidence_paths:
+      - migrations/
+      - services/api/app/repositories/
+      - services/api/tests/test_repositories.py
+    human_gate:
+      required: false
+      reason: Postgres is already the planned durable store in compose and env defaults.
+    notes:
+      - Prefer minimal schema required for phase 1 rather than speculative future tables.
+      - Do not allow Redis to become the canonical task state record.
+
+  - id: DV-005
+    title: Implement session creation and retrieval endpoints
+    layer: api
+    goal: Make session lifecycle real so clients can create a conversation container and fetch its state.
+    deps:
+      - DV-003
+      - DV-004
+    touched_paths:
+      - services/api/app/routes/
+      - services/api/app/services/
+      - services/api/tests/
+      - contracts/http/api.yaml
+    forbidden_paths:
+      - services/worker/
+      - services/asr/
+      - apps/web/
+      - apps/miniapp/
+    acceptance_ids:
+      - ACC-API-SESSION-001
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 8000
+      - 5432
+    shared_resources_touched:
+      - session
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py
+      - powershell -Command "$env:API_PORT='18000'; $proc=Start-Process -FilePath .venv\Scripts\python.exe -ArgumentList '-m','uvicorn','services.api.app.main:app','--host','127.0.0.1','--port','18000' -PassThru; try { Start-Sleep -Seconds 1; Invoke-WebRequest -Method Post -Uri http://127.0.0.1:18000/v1/sessions -ContentType 'application/json' -Body '{\"channel\":\"web\"}' | Select-Object -ExpandProperty StatusCode } finally { Stop-Process -Id $proc.Id -Force }"
+    evidence_paths:
+      - services/api/tests/test_sessions_api.py
+      - contracts/http/api.yaml
+    human_gate:
+      required: false
+      reason: Session resource shape is already defined in phase-0 specs.
+    notes:
+      - Return deterministic IDs and timestamps suitable for contract tests.
+      - Avoid adding message submission in this task.
+
+  - id: DV-006
+    title: Implement message submission and task-status polling endpoints
+    layer: api
+    goal: Accept user text or audio inputs asynchronously and expose a stable task polling surface.
+    deps:
+      - DV-004
+      - DV-005
+    touched_paths:
+      - services/api/app/routes/
+      - services/api/app/services/
+      - services/api/tests/
+      - contracts/http/api.yaml
+      - contracts/events/worker.yaml
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - deploy/docker/
+    acceptance_ids:
+      - ACC-API-MESSAGE-001
+      - ACC-CONTRACT-003
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 8000
+      - 5432
+      - 6379
+    shared_resources_touched:
+      - conversation_turn
+      - assistant_task
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_message_submission.py services/api/tests/test_task_status_api.py
+    evidence_paths:
+      - services/api/tests/test_message_submission.py
+      - services/api/tests/test_task_status_api.py
+      - contracts/events/worker.yaml
+    human_gate:
+      required: false
+      reason: Async task flow is already part of the approved phase-1 scope.
+    notes:
+      - Return `202 Accepted` for asynchronous operations.
+      - Persist an accepted turn record before publishing worker events.
+
+  - id: DV-007
+    title: Implement worker answer-job consumption and task-state transitions
+    layer: worker
+    goal: Consume answer jobs and move task records through queued, running, succeeded, and failed states.
+    deps:
+      - DV-004
+      - DV-006
+    touched_paths:
+      - services/worker/app/
+      - services/worker/tests/
+      - contracts/events/worker.yaml
+      - services/api/tests/
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - services/asr/
+    acceptance_ids:
+      - ACC-WORKER-001
+      - ACC-CONTRACT-003
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 5432
+      - 6379
+    shared_resources_touched:
+      - assistant_task
+      - conversation_turn
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/worker/tests/test_answer_jobs.py services/worker/tests/test_task_state_updates.py
+    evidence_paths:
+      - services/worker/tests/test_answer_jobs.py
+      - contracts/events/worker.yaml
+    human_gate:
+      required: false
+      reason: Worker ownership is already fixed by the existing service boundary.
+    notes:
+      - Keep queue driver swappable; do not hard-code a production broker assumption.
+      - Stub LLM execution if needed before final model selection.
+
+  - id: DV-008
+    title: Implement knowledge-source registration and ingestion flow
+    layer: worker
+    goal: Make the first knowledge-source lifecycle real, from API registration to worker-driven ingestion status updates.
+    deps:
+      - DV-004
+      - DV-006
+    touched_paths:
+      - services/api/app/routes/
+      - services/api/app/services/
+      - services/api/tests/
+      - services/worker/app/
+      - services/worker/tests/
+      - contracts/http/api.yaml
+      - contracts/events/worker.yaml
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - services/asr/
+    acceptance_ids:
+      - ACC-KB-001
+      - ACC-CONTRACT-001
+      - ACC-CONTRACT-003
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 8000
+      - 5432
+      - 6379
+    shared_resources_touched:
+      - knowledge_source
+      - assistant_task
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_knowledge_sources_api.py services/worker/tests/test_ingestion_jobs.py
+    evidence_paths:
+      - services/api/tests/test_knowledge_sources_api.py
+      - services/worker/tests/test_ingestion_jobs.py
+      - contracts/http/api.yaml
+    human_gate:
+      required: true
+      reason: Knowledge-source formats and retention policy must be approved before implementation.
+    notes:
+      - Start with one or two concrete source types only.
+      - Record failure reasons explicitly in durable state.
+
+  - id: DV-009
+    title: Implement ASR transcription endpoint and provider adapter
+    layer: asr
+    goal: Extend the ASR service from health-only bootstrap to a normalized transcription interface with provider abstraction.
+    deps:
+      - DV-001
+    touched_paths:
+      - services/asr/app/
+      - services/asr/tests/
+      - contracts/http/asr.yaml
+      - requirements.txt
+      - requirements-dev.txt
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - services/api/app/routes/
+    acceptance_ids:
+      - ACC-CONTRACT-002
+      - ACC-ASR-001
+    parallel_safe: false
+    needs_db: false
+    needs_ports:
+      - 8010
+    shared_resources_touched:
+      - asr_health
+      - transcription_request
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/asr/tests/test_transcriptions_api.py services/asr/tests/test_provider_selection.py
+      - powershell -Command "$env:ASR_PORT='18100'; $proc=Start-Process -FilePath .venv\Scripts\python.exe -ArgumentList '-m','uvicorn','services.asr.app.main:app','--host','127.0.0.1','--port','18100' -PassThru; try { Start-Sleep -Seconds 1; Invoke-WebRequest http://127.0.0.1:18100/health | Select-Object -ExpandProperty StatusCode } finally { Stop-Process -Id $proc.Id -Force }"
+    evidence_paths:
+      - services/asr/tests/test_transcriptions_api.py
+      - services/asr/tests/test_provider_selection.py
+      - contracts/http/asr.yaml
+    human_gate:
+      required: true
+      reason: Packaging and runtime assumptions for SenseVoice and fallback execution need explicit approval.
+    notes:
+      - Keep provider adapters mockable for CI and host-first local tests.
+      - Do not make GPU availability mandatory.
+
+  - id: DV-010
+    title: Bridge API audio-question flow to ASR and worker orchestration
+    layer: integration
+    goal: Allow a message with `input_type=audio` to produce transcript text and then enter the same answer-task pipeline as text input.
+    deps:
+      - DV-006
+      - DV-007
+      - DV-009
+    touched_paths:
+      - services/api/app/
+      - services/api/tests/
+      - services/worker/app/
+      - services/worker/tests/
+      - contracts/http/api.yaml
+      - contracts/http/asr.yaml
+      - contracts/events/worker.yaml
+    forbidden_paths:
+      - apps/web/
+      - apps/miniapp/
+      - deploy/docker/
+    acceptance_ids:
+      - ACC-API-ASR-001
+    parallel_safe: false
+    needs_db: true
+    needs_ports:
+      - 8000
+      - 8010
+      - 5432
+      - 6379
+    shared_resources_touched:
+      - transcription_request
+      - conversation_turn
+      - assistant_task
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_audio_message_flow.py services/worker/tests/test_transcription_jobs.py
+    evidence_paths:
+      - services/api/tests/test_audio_message_flow.py
+      - services/worker/tests/test_transcription_jobs.py
+    human_gate:
+      required: true
+      reason: Audio retention policy and internal ASR invocation mode need review approval.
+    notes:
+      - Reuse the same task state model as text questions.
+      - Keep audio-specific fields out of the public answer payload.
+
+  - id: DV-011
+    title: Implement the first web client flow against the public API contract
+    layer: frontend-web
+    goal: Turn `apps/web` from placeholder into a client that can create a session, submit a question, poll a task, and render an answer.
+    deps:
+      - DV-005
+      - DV-006
+    touched_paths:
+      - apps/web/
+      - contracts/http/api.yaml
+      - apps/web/README.md
+    forbidden_paths:
+      - services/worker/
+      - services/asr/
+      - apps/miniapp/
+    acceptance_ids:
+      - ACC-FE-WEB-001
+    parallel_safe: true
+    needs_db: false
+    needs_ports:
+      - 8000
+    shared_resources_touched:
+      - session
+      - conversation_turn
+      - assistant_task
+    verification_commands:
+      - web client test command to be chosen with framework selection
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py
+    evidence_paths:
+      - apps/web/
+      - apps/web/README.md
+    human_gate:
+      required: true
+      reason: The repository intentionally has not chosen a web framework yet.
+    notes:
+      - Use the shared public contract as the source of truth for client payloads.
+      - Keep the first client slice thin and task-oriented.
+
+  - id: DV-012
+    title: Implement the first miniapp client flow against the same public API contract
+    layer: frontend-miniapp
+    goal: Turn `apps/miniapp` from placeholder into a thin client that mirrors the session and task flow without forking backend semantics.
+    deps:
+      - DV-005
+      - DV-006
+    touched_paths:
+      - apps/miniapp/
+      - contracts/http/api.yaml
+      - apps/miniapp/README.md
+    forbidden_paths:
+      - services/worker/
+      - services/asr/
+      - apps/web/
+    acceptance_ids:
+      - ACC-FE-MINI-001
+    parallel_safe: true
+    needs_db: false
+    needs_ports:
+      - 8000
+    shared_resources_touched:
+      - session
+      - conversation_turn
+      - assistant_task
+    verification_commands:
+      - miniapp client test command to be chosen with framework selection
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py
+    evidence_paths:
+      - apps/miniapp/
+      - apps/miniapp/README.md
+    human_gate:
+      required: true
+      reason: The repository intentionally has not chosen a miniapp stack yet.
+    notes:
+      - Reuse the same task polling semantics as the web client.
+      - Do not add backend-only fields for miniapp convenience.
+
+  - id: DV-013
+    title: Extend CI, runbooks, and Docker verification for the approved feature set
+    layer: ops
+    goal: Expand verification from bootstrap smoke tests to business-path acceptance checks while keeping Docker optional until it is genuinely verified.
+    deps:
+      - DV-007
+      - DV-008
+      - DV-009
+      - DV-010
+    touched_paths:
+      - .github/workflows/
+      - scripts/
+      - docker-compose.yml
+      - deploy/docker/
+      - docs/runbooks/
+      - docs/architecture/
+      - docs/observability/
+      - README.md
+    forbidden_paths:
+      - apps/web/src/
+      - apps/miniapp/src/
+    acceptance_ids:
+      - ACC-OPS-001
+      - ACC-BASE-001
+    parallel_safe: true
+    needs_db: true
+    needs_ports:
+      - 5432
+      - 6379
+      - 8000
+      - 8010
+    shared_resources_touched:
+      - runtime_config_profile
+      - api_health
+      - asr_health
+    verification_commands:
+      - .venv\Scripts\python.exe -m pytest
+      - docker compose config
+      - docker compose up -d postgres redis api worker asr
+    evidence_paths:
+      - .github/workflows/
+      - docs/runbooks/
+      - docker-compose.yml
+    human_gate:
+      required: true
+      reason: Docker is still unverified today and must not be marked required without a real green run.
+    notes:
+      - Keep host-first verification as the baseline path even after Docker smoke is added.
+      - Update root README only after commands are actually validated.

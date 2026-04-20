@@ -3,7 +3,7 @@
 `services/asr` is the speech-service boundary in the EternalAI bootstrap scaffold.
 
 Current scope:
-- load ASR-related configuration
+- load the shared runtime configuration profile plus ASR-specific settings
 - expose a minimal `GET /health` endpoint
 - reserve a stable service location for later speech features
 

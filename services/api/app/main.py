@@ -2,26 +2,12 @@ from functools import lru_cache
 
 import uvicorn
 from fastapi import FastAPI
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from services.api.app.routes import get_router_registrations
+from services.runtime_config import APIServiceSettings
 
 
-class APISettings(BaseSettings):
-    app_name: str = "eternalai-api"
-    app_env: str = "development"
-    log_level: str = "INFO"
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    database_url: str = "postgresql://eternalai:eternalai@postgres:5432/eternalai"
-    redis_url: str = "redis://redis:6379/0"
-    llm_provider: str = "replace-with-provider"
-    llm_model: str = "replace-with-model-id"
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",
-    )
+class APISettings(APIServiceSettings):
+    """Backward-compatible API settings alias with shared runtime defaults."""
 
 
 @lru_cache
@@ -33,13 +19,8 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
 
-    @app.get("/health", tags=["system"])
-    def health() -> dict[str, object]:
-        return {
-            "status": "ok",
-            "service": "api",
-            "environment": settings.app_env,
-        }
+    for registration in get_router_registrations(environment=settings.app_env):
+        app.include_router(registration.router)
 
     return app
 

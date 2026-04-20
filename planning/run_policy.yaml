@@ -1,0 +1,82 @@
+run_policy:
+  baseline:
+    host_first: true
+    docker_optional_until_verified: true
+    verified_on: "2026-04-20"
+    verified_facts:
+      - .venv is usable through `.venv\Scripts\python.exe`
+      - `pytest` passes on the host path
+      - API `/health` returns HTTP 200 on the host path
+      - Docker runtime has not been verified yet
+
+  entrypoints:
+    doctor:
+      command: powershell -ExecutionPolicy Bypass -File scripts/doctor.ps1
+      expectation: confirms Python and optional Docker presence
+    test:
+      command: .venv\Scripts\python.exe -m pytest
+      expectation: baseline verification for every implementation slice
+    api:
+      command: powershell -ExecutionPolicy Bypass -File scripts/dev-api.ps1
+      default_port: 8000
+    asr:
+      command: powershell -ExecutionPolicy Bypass -File scripts/dev-asr.ps1
+      default_port: 8010
+    worker:
+      command: powershell -ExecutionPolicy Bypass -File scripts/dev-worker.ps1
+      expectation: starts the worker bootstrap or later worker runtime
+
+  reserved_ports:
+    api:
+      primary: 8000
+      alt_test: 18000
+    asr:
+      primary: 8010
+      alt_test: 18100
+    postgres:
+      primary: 5432
+    redis:
+      primary: 6379
+
+  environment_policy:
+    source_of_truth:
+      - .env.example
+      - process environment
+    required_runtime_keys:
+      - APP_ENV
+      - LOG_LEVEL
+      - DATABASE_URL
+      - REDIS_URL
+    optional_phase_1_keys:
+      - LLM_PROVIDER
+      - LLM_MODEL
+      - OPENAI_API_KEY
+      - ASR_PROVIDER
+      - AUTH_MODE
+    rules:
+      - Never commit real secrets.
+      - Update `.env.example` whenever runtime keys change.
+      - Preserve bootstrap-compatible defaults until corresponding contracts and runbooks are updated.
+
+  execution_rules:
+    - Implement one `planning/dev_plan.yaml` task at a time unless `parallel_safe` is true and touched paths do not overlap.
+    - Update contract YAML in the same change as any new route or worker payload.
+    - Keep bootstrap health endpoints working throughout feature work.
+    - Do not mark Docker as required before a real compose verification passes.
+    - Keep host-first verification green before attempting Docker verification.
+
+  evidence_policy:
+    required_for_each_task:
+      - automated test file or contract test
+      - updated contract file when a boundary changes
+      - notes in relevant README or runbook when operator behavior changes
+    preferred_storage:
+      - repository test files
+      - contracts/
+      - docs/runbooks/
+
+  stop_conditions:
+    - Product scope changes beyond the current product spec
+    - Auth mode decision blocks route design
+    - Knowledge-source format decision blocks ingestion implementation
+    - Docker-specific failures tempt the team to remove host-first verification

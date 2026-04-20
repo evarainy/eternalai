@@ -1,6 +1,6 @@
 {
   "phase": "bootstrap",
-  "status": "completed_with_unverified_runtime",
+  "status": "completed_with_host_runtime_verified_docker_pending",
   "repo_stage_before": "planning_pack_carrier",
   "repo_stage_after": "development_repo_scaffold",
   "preserved_assets": [
@@ -28,8 +28,46 @@
     "tests/smoke/"
   ],
   "runtime_verification": {
-    "status": "unverified",
-    "reason": "Direct PowerShell script execution was blocked by execution policy, and running doctor.ps1 via ExecutionPolicy Bypass confirmed that a real Python interpreter was not available on PATH."
+    "status": "host_verified_docker_pending",
+    "verified_on": "2026-04-20",
+    "host_runtime": {
+      "venv_path": ".venv",
+      "python_interpreter": ".venv\\Scripts\\python.exe",
+      "python_version": "3.12.10",
+      "status": "passed"
+    },
+    "checks": [
+      {
+        "id": "host_venv_available",
+        "status": "passed",
+        "command": ".venv\\Scripts\\python.exe --version",
+        "result": "Python 3.12.10"
+      },
+      {
+        "id": "pytest_bootstrap_suite",
+        "status": "passed",
+        "command": ".venv\\Scripts\\python.exe -m pytest",
+        "result": "8 passed in 0.32s"
+      },
+      {
+        "id": "api_health_http",
+        "status": "passed",
+        "command": ".venv\\Scripts\\python.exe -m uvicorn services.api.app.main:app --host 127.0.0.1 --port 18000, then HTTP GET http://127.0.0.1:18000/health",
+        "result": "HTTP 200 with {\"status\":\"ok\",\"service\":\"api\",\"environment\":\"development\"}"
+      },
+      {
+        "id": "docker_runtime",
+        "status": "unverified",
+        "command": "docker compose up",
+        "result": "Not executed in this phase"
+      }
+    ],
+    "summary": {
+      "venv_available": true,
+      "pytest_passed": true,
+      "api_health_verified": true,
+      "docker_verified": false
+    }
   },
   "local_workspace_cleanup_notes": [
     "Observed a local root artifact named `nul` during bootstrap work and cleaned it locally. It was not part of tracked repository history on main."
@@ -40,10 +78,10 @@
     "Production deployment readiness",
     "Final model selection"
   ],
-  "next_recommended_phase": "review_scaffold_then_rerun_business_repo_planning",
+  "next_recommended_phase": "review_phase0_spec_first_planning_then_execute_approved_workstreams",
   "rerun_business_planning_when": [
-    "A real Python toolchain is installed",
-    "CI or a prepared machine validates smoke tests and health checks",
-    "The scaffold structure is accepted as the baseline for business work"
+    "Product scope or service boundaries materially change",
+    "Local Docker validation becomes a required baseline",
+    "A new runtime constraint invalidates the current phase-0 assumptions"
   ]
 }

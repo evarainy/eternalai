@@ -1,0 +1,234 @@
+planning_acceptance:
+  - id: PLAN-ACC-001
+    title: Required phase-0 planning artifacts exist
+    phase: phase0
+    automated: true
+    commands:
+      - Test-Path spec/product_spec.md
+      - Test-Path spec/product_spec.yaml
+      - Test-Path spec/module_spec.yaml
+      - Test-Path spec/resource_spec.yaml
+      - Test-Path spec/invariant_spec.yaml
+      - Test-Path contracts/README.md
+      - Test-Path planning/dev_plan.yaml
+      - Test-Path planning/acceptance_spec.yaml
+      - Test-Path planning/run_policy.yaml
+      - Test-Path planning/implement.md
+      - Test-Path planning/documentation.md
+      - Test-Path planning/plan_review_checklist.md
+      - Test-Path planning/phase0_result.json
+    assertions:
+      - Every required planning file exists in the repository.
+    evidence_paths:
+      - spec/
+      - contracts/
+      - planning/
+
+  - id: PLAN-ACC-002
+    title: Bootstrap runtime status reflects current host verification
+    phase: phase0
+    automated: true
+    commands:
+      - Get-Content planning/bootstrap_result.json
+      - .venv\Scripts\python.exe --version
+      - .venv\Scripts\python.exe -m pytest
+    assertions:
+      - planning/bootstrap_result.json records `.venv` as available.
+      - planning/bootstrap_result.json records `pytest` as passed.
+      - planning/bootstrap_result.json records API `/health` as verified.
+      - planning/bootstrap_result.json leaves Docker as unverified.
+    evidence_paths:
+      - planning/bootstrap_result.json
+
+execution_acceptance:
+  - id: ACC-BASE-001
+    title: Bootstrap guardrails remain green during business implementation
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_health.py services/worker/tests/test_worker_bootstrap.py services/asr/tests/test_asr_bootstrap.py tests/smoke/test_repo_layout.py
+    assertions:
+      - All bootstrap tests pass.
+      - API and ASR health payload shape is unchanged unless contracts are versioned intentionally.
+    evidence_paths:
+      - services/api/tests/test_health.py
+      - services/worker/tests/test_worker_bootstrap.py
+      - services/asr/tests/test_asr_bootstrap.py
+      - tests/smoke/test_repo_layout.py
+
+  - id: ACC-CONTRACT-001
+    title: Public API contract and implementation stay aligned
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_health.py services/api/tests/test_contract_registry.py
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_contract_registry.py services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py services/api/tests/test_knowledge_sources_api.py
+    assertions:
+      - Route registration keeps `/health` contract-backed and reserves a versioned `/v1` assembly point.
+      - Every implemented public API route appears in `contracts/http/api.yaml`.
+      - Request and response payloads match the contract-tested schema.
+      - Error cases include explicit status-code assertions.
+    evidence_paths:
+      - contracts/http/api.yaml
+      - services/api/tests/
+
+  - id: ACC-CONTRACT-002
+    title: ASR internal contract and implementation stay aligned
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/asr/tests/test_contract_registry.py services/asr/tests/test_transcriptions_api.py
+    assertions:
+      - `contracts/http/asr.yaml` covers every implemented ASR route.
+      - The transcription response shape is normalized and contract-tested.
+    evidence_paths:
+      - contracts/http/asr.yaml
+      - services/asr/tests/
+
+  - id: ACC-CONTRACT-003
+    title: Worker event payloads are versioned and testable
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_message_submission.py services/worker/tests/test_event_contracts.py services/worker/tests/test_answer_jobs.py services/worker/tests/test_ingestion_jobs.py
+    assertions:
+      - Published event payloads conform to `contracts/events/worker.yaml`.
+      - Worker consumers reject malformed payloads deterministically.
+    evidence_paths:
+      - contracts/events/worker.yaml
+      - services/worker/tests/
+
+  - id: ACC-DATA-001
+    title: Durable data model persists the core assistant resources
+    phase: execution
+    automated: true
+    commands:
+      - docker compose up -d postgres
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_repositories.py services/worker/tests/test_task_state_updates.py
+    assertions:
+      - Sessions, turns, tasks, and knowledge sources survive process restarts through Postgres persistence.
+      - Task state transitions are queryable after worker execution.
+    evidence_paths:
+      - migrations/
+      - services/api/app/repositories/
+      - services/api/tests/test_repositories.py
+
+  - id: ACC-API-SESSION-001
+    title: Session lifecycle endpoints are usable through HTTP
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py
+      - powershell -Command "$env:API_PORT='18000'; $proc=Start-Process -FilePath .venv\Scripts\python.exe -ArgumentList '-m','uvicorn','services.api.app.main:app','--host','127.0.0.1','--port','18000' -PassThru; try { Start-Sleep -Seconds 1; Invoke-WebRequest -Method Post -Uri http://127.0.0.1:18000/v1/sessions -ContentType 'application/json' -Body '{\"channel\":\"web\"}' | Select-Object -ExpandProperty StatusCode } finally { Stop-Process -Id $proc.Id -Force }"
+    assertions:
+      - `POST /v1/sessions` returns `201`.
+      - `GET /v1/sessions/{session_id}` returns the same session and its turn list.
+    evidence_paths:
+      - services/api/tests/test_sessions_api.py
+
+  - id: ACC-API-MESSAGE-001
+    title: Message submission returns an accepted turn and pollable task
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_message_submission.py services/api/tests/test_task_status_api.py
+    assertions:
+      - `POST /v1/sessions/{session_id}/messages` returns `202`.
+      - The response includes `task_id`, `accepted_turn_id`, and queued status.
+      - `GET /v1/tasks/{task_id}` reflects subsequent worker state transitions.
+    evidence_paths:
+      - services/api/tests/test_message_submission.py
+      - services/api/tests/test_task_status_api.py
+
+  - id: ACC-WORKER-001
+    title: Worker answer jobs update task records and produce answer payloads
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/worker/tests/test_answer_jobs.py services/worker/tests/test_task_state_updates.py
+    assertions:
+      - Worker moves tasks through queued, running, and terminal states.
+      - Completed answer jobs persist result payloads linked to the originating turn.
+    evidence_paths:
+      - services/worker/tests/test_answer_jobs.py
+      - services/worker/tests/test_task_state_updates.py
+
+  - id: ACC-KB-001
+    title: Knowledge-source registration and ingestion are observable end to end
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_knowledge_sources_api.py services/worker/tests/test_ingestion_jobs.py
+    assertions:
+      - Registering a knowledge source returns a task and initial queued state.
+      - Ingestion updates the knowledge-source status and task result deterministically.
+    evidence_paths:
+      - services/api/tests/test_knowledge_sources_api.py
+      - services/worker/tests/test_ingestion_jobs.py
+
+  - id: ACC-ASR-001
+    title: ASR service exposes a normalized transcription interface
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/asr/tests/test_transcriptions_api.py services/asr/tests/test_provider_selection.py
+    assertions:
+      - `POST /v1/transcriptions` returns either queued or completed states defined in the ASR contract.
+      - Provider selection respects SenseVoice preference and `faster-whisper` fallback behavior through adapters.
+    evidence_paths:
+      - services/asr/tests/test_transcriptions_api.py
+      - services/asr/tests/test_provider_selection.py
+
+  - id: ACC-API-ASR-001
+    title: Audio questions flow through ASR before the answer pipeline
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_audio_message_flow.py services/worker/tests/test_transcription_jobs.py
+    assertions:
+      - Audio message submission creates a transcription request and downstream answer task linkage.
+      - The final task result references transcript-derived text rather than raw binary payload.
+    evidence_paths:
+      - services/api/tests/test_audio_message_flow.py
+      - services/worker/tests/test_transcription_jobs.py
+
+  - id: ACC-FE-WEB-001
+    title: Web client can complete the first session-to-answer flow
+    phase: execution
+    automated: true
+    commands:
+      - web framework test command selected during implementation
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py
+    assertions:
+      - The web client creates a session, submits a question, polls task state, and renders the final answer without private backend fields.
+    evidence_paths:
+      - apps/web/
+
+  - id: ACC-FE-MINI-001
+    title: Miniapp client follows the same contract-defined flow
+    phase: execution
+    automated: true
+    commands:
+      - miniapp framework test command selected during implementation
+      - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py
+    assertions:
+      - The miniapp client uses the same session and task payload shapes as the web client.
+    evidence_paths:
+      - apps/miniapp/
+
+  - id: ACC-OPS-001
+    title: CI, runbooks, and Docker verification cover the approved feature set
+    phase: execution
+    automated: true
+    commands:
+      - .venv\Scripts\python.exe -m pytest
+      - docker compose config
+      - docker compose up -d postgres redis api worker asr
+    assertions:
+      - CI exercises the expanded test suite.
+      - Runbooks document host-first and Docker flows separately.
+      - Docker is marked verified only after a real green run.
+    evidence_paths:
+      - .github/workflows/
+      - docs/runbooks/
+      - docker-compose.yml
