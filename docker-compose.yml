@@ -23,7 +23,7 @@ services:
       context: .
       dockerfile: deploy/docker/api.Dockerfile
     env_file:
-      - .env.example
+      - .env
     depends_on:
       - postgres
       - redis
@@ -35,7 +35,7 @@ services:
       context: .
       dockerfile: deploy/docker/worker.Dockerfile
     env_file:
-      - .env.example
+      - .env
     depends_on:
       - postgres
       - redis
@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: deploy/docker/asr.Dockerfile
     env_file:
-      - .env.example
+      - .env
     ports:
       - "8010:8010"
 

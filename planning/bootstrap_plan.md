@@ -12,7 +12,7 @@ No business-facing source tree, environment template, runtime scripts, Docker fi
 
 ## Cleanup
 
-- Removed root `nul` after identifying it as an accidental placeholder artifact
+- Observed a local root `nul` artifact during workspace preparation and cleaned it locally; it was not part of the tracked repository history
 - Kept the planning assets as method assets for later spec-first business planning
 
 ## Scaffold Goals
