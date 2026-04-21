@@ -5,12 +5,14 @@
 Current scope:
 - load the shared runtime configuration profile
 - expose a minimal `GET /health` endpoint
-- register a versioned public API router rooted at `/v1`
+- expose a minimal in-memory HTTP loop for sessions, message submission, and task polling under `/v1`
 - define typed request and response schemas in `services/api/app/schemas/`
-- provide a stable location for later business API work
+- keep public route definitions aligned with `contracts/http/api.yaml`
 
-Non-goals for this bootstrap:
-- authentication flows
-- assistant workflows
-- retrieval or knowledge-base integration
-- production business endpoints
+Non-goals for this Phase 1B slice:
+- database persistence and migrations
+- Redis-backed coordination
+- worker-driven task execution
+- Langfuse integration
+- real ASR execution
+- frontend client implementation

@@ -99,5 +99,32 @@ def test_runtime_routes_match_contract_registry() -> None:
     contract_registry = set(get_contract_routes())
     contract_routes = _load_implemented_contract_routes()
 
+    assert contract_registry == {
+        ContractRoute(
+            operation_id="getApiHealth",
+            method="GET",
+            path="/health",
+        ),
+        ContractRoute(
+            operation_id="createSession",
+            method="POST",
+            path="/v1/sessions",
+        ),
+        ContractRoute(
+            operation_id="getSession",
+            method="GET",
+            path="/v1/sessions/{session_id}",
+        ),
+        ContractRoute(
+            operation_id="submitMessage",
+            method="POST",
+            path="/v1/sessions/{session_id}/messages",
+        ),
+        ContractRoute(
+            operation_id="getTask",
+            method="GET",
+            path="/v1/tasks/{task_id}",
+        ),
+    }
     assert runtime_routes == contract_registry
     assert runtime_routes == contract_routes

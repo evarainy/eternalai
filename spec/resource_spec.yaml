@@ -31,12 +31,12 @@ resources:
       - contracts/http/asr.yaml#getAsrHealth
 
   - id: session
-    status: planned
+    status: implemented_phase1b
     owner_module: assistant_session_api
     canonical_identifier: sess_<uuid>
     storage:
-      source_of_truth: postgres
-      cache: redis_optional
+      source_of_truth: process_memory
+      durability: none
     fields:
       required:
         - session_id
@@ -65,11 +65,12 @@ resources:
       - contracts/http/api.yaml#getSession
 
   - id: conversation_turn
-    status: planned
+    status: implemented_phase1b
     owner_module: assistant_session_api
     canonical_identifier: turn_<uuid>
     storage:
-      source_of_truth: postgres
+      source_of_truth: process_memory
+      durability: none
     fields:
       required:
         - turn_id
@@ -133,12 +134,13 @@ resources:
       - contracts/http/api.yaml#getKnowledgeSource
 
   - id: assistant_task
-    status: planned
+    status: implemented_phase1b
     owner_module: worker_orchestrator
     canonical_identifier: task_<uuid>
     storage:
-      source_of_truth: postgres
-      coordination: redis
+      source_of_truth: process_memory
+      durability: none
+      coordination: none
     fields:
       required:
         - task_id
