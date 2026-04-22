@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  smoke:
+  memory-smoke:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,5 +21,60 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
 
-      - name: Run smoke tests
-        run: python -m pytest
+      - name: Run memory smoke tests
+        run: |
+          python -m pytest \
+            services/api/tests/test_health.py \
+            services/api/tests/test_contract_registry.py \
+            services/api/tests/test_knowledge_source_schemas.py \
+            services/api/tests/test_session_schemas.py \
+            services/api/tests/test_message_schemas.py \
+            services/api/tests/test_task_schemas.py \
+            services/api/tests/test_repository_selection.py \
+            services/api/tests/test_sessions_api.py \
+            services/api/tests/test_message_submission.py \
+            services/api/tests/test_task_status_api.py \
+            services/api/tests/test_postgres_test_support.py \
+            tests/smoke/test_repo_layout.py \
+            -v
+
+  postgres:
+    needs: memory-smoke
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: eternalai
+          POSTGRES_PASSWORD: eternalai
+          POSTGRES_DB: eternalai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U eternalai -d eternalai_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      TEST_DATABASE_URL: postgresql://eternalai:eternalai@127.0.0.1:5432/eternalai_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run Postgres tests
+        run: |
+          python -m pytest \
+            services/api/tests/test_postgres_migrations.py \
+            services/api/tests/test_postgres_repositories.py \
+            services/api/tests/test_postgres_http_api.py \
+            -v
