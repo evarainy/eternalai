@@ -11,7 +11,8 @@ The current scaffold is intentionally small:
 ## Current Status
 
 This repo now represents a bootstrap engineering baseline:
-- `services/api` is a minimal FastAPI service with `GET /health`
+- `services/api` exposes `GET /health` plus a minimal session/message/task HTTP loop
+- `services/api` can run the current loop on either in-memory state or Postgres-backed repositories
 - `services/worker` is a minimal worker bootstrap with config loading
 - `services/asr` is an ASR service placeholder with config loading and `GET /health`
 - `apps/web` and `apps/miniapp` are placeholders for future client work
@@ -24,7 +25,7 @@ apps/
   web/                  Placeholder web client boundary
   miniapp/              Placeholder miniapp boundary
 services/
-  api/                  Minimal API bootstrap service
+  api/                  Minimal API service plus Phase 1C persistence foundation
   worker/               Minimal worker bootstrap service
   asr/                  Minimal ASR bootstrap service
 contracts/              Interface placeholders for HTTP and events
@@ -55,6 +56,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 Copy-Item .env.example .env
+python -m alembic upgrade head
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\scripts\doctor.ps1
 .\scripts\dev-api.ps1
@@ -81,6 +83,14 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 This file does not claim that business flows are wired together. It only provides a starting point for local infrastructure and service containers.
 
 Compose reads service variables from `.env`, so copy `.env.example` before using `docker compose up`.
+
+## Phase 1C Persistence Foundation
+
+The current API persistence scope is intentionally narrow:
+- `API_PERSISTENCE_BACKEND=memory` keeps the fast Phase 1B-style local test path
+- `API_PERSISTENCE_BACKEND=postgres` routes sessions, turns, and tasks through Postgres
+- `python -m alembic upgrade head` applies the minimal Phase 1C schema for `sessions`, `turns`, and `tasks`
+- knowledge sources, Redis coordination, Langfuse, ASR execution, and worker-driven task transitions remain out of scope for this phase
 
 ## Observability Note
 

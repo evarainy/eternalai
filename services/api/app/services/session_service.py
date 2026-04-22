@@ -1,7 +1,10 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from fastapi import Request
+
 from services.api.app.errors import ResourceNotFoundError
+from services.api.app.repositories.base import SessionTaskRepository
 from services.api.app.schemas.message import SubmitMessageRequest, SubmitMessageResponse
 from services.api.app.schemas.session import (
     ConversationTurn,
@@ -10,7 +13,6 @@ from services.api.app.schemas.session import (
     GetSessionResponse,
 )
 from services.api.app.schemas.task import GetTaskResponse
-from services.api.app.services.in_memory_state import STATE
 
 
 def _prefixed_id(prefix: str) -> str:
@@ -22,6 +24,9 @@ def _now() -> datetime:
 
 
 class SessionService:
+    def __init__(self, repository: SessionTaskRepository) -> None:
+        self._repository = repository
+
     def create_session(self, payload: CreateSessionRequest) -> CreateSessionResponse:
         now = _now()
         session = GetSessionResponse(
@@ -34,17 +39,16 @@ class SessionService:
             metadata=payload.metadata,
             turns=[],
         )
-        STATE.sessions[session.session_id] = session
+        self._repository.create_session(session)
         return CreateSessionResponse(**session.model_dump(exclude={"turns"}))
 
     def get_session(self, session_id: str) -> GetSessionResponse:
-        session = STATE.sessions.get(session_id)
+        session = self._repository.get_session(session_id)
         if session is None:
             raise ResourceNotFoundError(resource="session", resource_id=session_id, message="Session not found")
         return session
 
     def submit_message(self, session_id: str, payload: SubmitMessageRequest) -> SubmitMessageResponse:
-        session = self.get_session(session_id)
         now = _now()
         task_type = "answer" if payload.input_type == "text" else "transcription"
         task = GetTaskResponse(
@@ -65,24 +69,22 @@ class SessionService:
             created_at=now,
             transcript_text=None,
         )
-        session.turns.append(turn)
-        session.updated_at = now
-        STATE.tasks[task.task_id] = task
+        persisted = self._repository.submit_message(
+            session_id=session_id,
+            turn=turn,
+            task=task,
+            session_updated_at=now,
+        )
+        if not persisted:
+            raise ResourceNotFoundError(resource="session", resource_id=session_id, message="Session not found")
         return SubmitMessageResponse(task_id=task.task_id, accepted_turn_id=turn.turn_id)
 
     def get_task(self, task_id: str) -> GetTaskResponse:
-        task = STATE.tasks.get(task_id)
+        task = self._repository.get_task(task_id)
         if task is None:
             raise ResourceNotFoundError(resource="task", resource_id=task_id, message="Task not found")
         return task
 
 
-SESSION_SERVICE = SessionService()
-
-
-def get_session_service() -> SessionService:
-    return SESSION_SERVICE
-
-
-def reset_in_memory_state() -> None:
-    STATE.reset()
+def get_session_service(request: Request) -> SessionService:
+    return SessionService(request.app.state.session_task_repository)
