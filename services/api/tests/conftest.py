@@ -1,8 +1,13 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
 from services.api.app.main import APISettings, create_app
-from services.api.tests.postgres_test_support import get_required_test_database_url
+from services.api.tests.postgres_test_support import (
+    DEFAULT_TEST_DATABASE_URL,
+    validate_test_database_url,
+)
 
 
 @pytest.fixture()
@@ -14,7 +19,9 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def postgres_database_url() -> str:
-    return get_required_test_database_url()
+    return validate_test_database_url(
+        os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+    )
 
 
 @pytest.fixture()

@@ -1,14 +1,10 @@
-import os
 from urllib.parse import urlsplit
 
 
-def get_required_test_database_url() -> str:
-    database_url = os.environ.get("TEST_DATABASE_URL")
-    if not database_url:
-        raise RuntimeError(
-            "TEST_DATABASE_URL must be set to a dedicated Postgres test database before running destructive Postgres tests."
-        )
+DEFAULT_TEST_DATABASE_URL = "postgresql://eternalai:eternalai@127.0.0.1:5432/eternalai_test"
 
+
+def validate_test_database_url(database_url: str) -> str:
     database_name = urlsplit(database_url).path.removeprefix("/")
     if not database_name.endswith("_test"):
         raise RuntimeError(
