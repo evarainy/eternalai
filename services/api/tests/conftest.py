@@ -1,13 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from services.api.app.main import create_app
-from services.api.app.services.session_service import reset_in_memory_state
+from services.api.app.main import APISettings, create_app
 
 
 @pytest.fixture()
 def client() -> TestClient:
-    reset_in_memory_state()
-    with TestClient(create_app()) as test_client:
+    settings = APISettings(app_env="test", auth_mode="disabled", persistence_backend="memory")
+    with TestClient(create_app(settings=settings)) as test_client:
         yield test_client
-    reset_in_memory_state()

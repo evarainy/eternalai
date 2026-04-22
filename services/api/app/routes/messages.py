@@ -1,8 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from services.api.app.schemas.common import SessionId
 from services.api.app.schemas.message import SubmitMessageRequest, SubmitMessageResponse
-from services.api.app.services.session_service import get_session_service
+from services.api.app.services.session_service import SessionService, get_session_service
 
 
 router = APIRouter(tags=["messages"])
@@ -14,5 +14,9 @@ router = APIRouter(tags=["messages"])
     response_model=SubmitMessageResponse,
     status_code=202,
 )
-def submit_message(session_id: SessionId, payload: SubmitMessageRequest) -> SubmitMessageResponse:
-    return get_session_service().submit_message(session_id, payload)
+def submit_message(
+    session_id: SessionId,
+    payload: SubmitMessageRequest,
+    service: SessionService = Depends(get_session_service),
+) -> SubmitMessageResponse:
+    return service.submit_message(session_id, payload)

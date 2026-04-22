@@ -10,6 +10,7 @@ def test_api_settings_have_bootstrap_defaults() -> None:
     assert settings.llm_provider == "replace-with-provider"
     assert settings.llm_model == "replace-with-model-id"
     assert settings.log_level == "INFO"
+    assert settings.persistence_backend == "memory"
 
 
 def test_api_health_endpoint() -> None:
