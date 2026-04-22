@@ -33,11 +33,11 @@ invariants:
 
   - id: INV-DATA-001
     scope: durable_state
-    statement: Phase 1B uses process-local in-memory state for sessions, turns, and tasks; Postgres becomes the source of truth in the later persistence phase.
-    rationale: This keeps the minimal HTTP loop honest about current behavior while preserving the later durable-state direction.
+    statement: Phase 1C routes sessions, turns, and tasks through a repository abstraction; memory mode remains available for fast local tests, and Postgres is the durable source of truth when the Postgres backend is selected.
+    rationale: This keeps the existing HTTP loop stable while introducing the minimal persistence foundation without pretending worker execution or knowledge-source storage already exists.
     verification:
       automated:
-        - .venv\Scripts\python.exe -m pytest services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py services/api/tests/test_task_status_api.py
+        - .venv\Scripts\python.exe -m pytest services/api/tests/test_repository_selection.py services/api/tests/test_sessions_api.py services/api/tests/test_message_submission.py services/api/tests/test_task_status_api.py services/api/tests/test_postgres_migrations.py services/api/tests/test_postgres_repositories.py services/api/tests/test_postgres_http_api.py
 
   - id: INV-ASYNC-001
     scope: request_handling
