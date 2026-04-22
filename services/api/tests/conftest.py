@@ -1,9 +1,8 @@
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
 from services.api.app.main import APISettings, create_app
+from services.api.tests.postgres_test_support import get_required_test_database_url
 
 
 @pytest.fixture()
@@ -15,10 +14,7 @@ def client() -> TestClient:
 
 @pytest.fixture()
 def postgres_database_url() -> str:
-    return os.environ.get(
-        "TEST_DATABASE_URL",
-        "postgresql://eternalai:eternalai@127.0.0.1:5432/eternalai",
-    )
+    return get_required_test_database_url()
 
 
 @pytest.fixture()
