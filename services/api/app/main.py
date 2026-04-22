@@ -15,7 +15,7 @@ class APISettings(APIServiceSettings):
 
     persistence_backend: str = Field(
         default="memory",
-        validation_alias=AliasChoices("API_PERSISTENCE_BACKEND", "PERSISTENCE_BACKEND"),
+        validation_alias=AliasChoices("persistence_backend", "API_PERSISTENCE_BACKEND", "PERSISTENCE_BACKEND"),
     )
 
 

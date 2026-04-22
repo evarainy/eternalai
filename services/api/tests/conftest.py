@@ -19,3 +19,27 @@ def postgres_database_url() -> str:
         "TEST_DATABASE_URL",
         "postgresql://eternalai:eternalai@127.0.0.1:5432/eternalai",
     )
+
+
+@pytest.fixture()
+def migrated_postgres_database_url(postgres_database_url: str) -> str:
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import text
+
+    from services.api.app.persistence.db import build_engine
+
+    engine = build_engine(postgres_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS turns CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS tasks CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS sessions CASCADE"))
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version CASCADE"))
+    finally:
+        engine.dispose()
+
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", postgres_database_url)
+    command.upgrade(config, "head")
+    return postgres_database_url
