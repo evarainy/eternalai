@@ -1,0 +1,33 @@
+{
+  "comment": "Optional Claude Code hooks example. Phase 0 v1.0.11 does not depend on hooks; they are auxiliary only. Review scripts and permissions before enabling. Rename to .claude/settings.json only after the project scripts exist.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/check_no_weak_tests.sh || true",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/check_alembic_no_autogen.sh || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run pytest tests/architecture/test_import_boundaries.py || true",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,77 @@
+# Unified Phase 0 Task Record schema v1.0.11.
+# Store task records as: docs/phase0/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
+
+not_applicable_template: &not_applicable_template
+  not_applicable_reason: ""
+  not_applicable_scope: "current_phase_only | waiting_dependency | intentionally_deferred"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: ""
+  evidence: ""
+
+task_id: ""
+task_type: "spike | preparation | infrastructure | interface_contract | implementation | test | documentation | review"
+result: "passed | failed | blocked"
+started_at: "YYYY-MM-DDTHH:MM:SS+09:00"
+completed_at: "YYYY-MM-DDTHH:MM:SS+09:00"
+plan_approved_by: "human name or handle"
+plan_approved_at: "YYYY-MM-DDTHH:MM:SS+09:00"
+plan_approved_via: "Codex session | Claude Code session | GitHub comment | other"
+summary: ""
+acceptance_criteria_result:
+  - criterion: ""
+    result: "passed | failed | not_applicable"
+    evidence: "command output, CI job, file path, or ADR path"
+    <<: *not_applicable_template
+failure_examples_tested:
+  - example: ""
+    result: "triggered | not_triggered | not_applicable"
+    evidence: ""
+    <<: *not_applicable_template
+step_verification_points:
+  - step: ""
+    result: "passed | failed | not_applicable"
+    command: ""
+    evidence: ""
+    <<: *not_applicable_template
+changed_files: []
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: ""
+    result: "passed | failed | not_applicable"
+    output_snippet: ""
+    <<: *not_applicable_template
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "passed | failed | not_applicable"
+  evidence: ""
+  <<: *not_applicable_template
+security_scan_result:
+  result: "passed | failed | not_applicable"
+  evidence: ""
+  <<: *not_applicable_template
+weak_test_scan_result:
+  result: "passed | failed | not_applicable"
+  evidence: ""
+  <<: *not_applicable_template
+ci_evidence:
+  result: "passed | failed | not_applicable"
+  run_id: ""
+  url_or_log_path: ""
+  <<: *not_applicable_template
+review:
+  mode: "none | self_check | human_optional"
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: ""
+remaining_risks: []
+rollback_or_failure_record: ""
+git_commit_sha: ""
+package_confirmation_status: "created | not_created | not_applicable"
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: ""
+package_evidence: ""
