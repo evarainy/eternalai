@@ -25,16 +25,16 @@ Task: P0-PREP-001
 | Local settings | `cat .claude/settings.local.json` | Exists. Contains Bash permission allowlist for `uv`, `pnpm`, `docker`, `git`, `pip config`, `npm config` commands. No sandbox/network/security configuration found. | file content | passed |
 | Hooks | `ls .claude/` | No hooks.json found. Only `agents/`, `settings.example.json`, `settings.local.json` present. | directory listing | not_applicable |
 | Codex OTel | env / config check | Not configured. No OTel environment variables or Codex audit configuration found. | env check | blocked |
-| Audit alternative | rule check | Git history + CI + Task Record serving as audit fallback per AGENTS.md rule. | AGENTS.md | passed |
+| Audit alternative | rule check | Git diff + Task Record + Codex review + subsequent CI serving as audit fallback per AGENTS.md rule. | AGENTS.md | passed |
 
 ### 2a. Codex Sandbox / Approval / Network Posture — Detailed
 
 | Item | Command | Result | Evidence | Status | Conclusion |
 |------|---------|--------|----------|--------|------------|
-| Sandbox mode | `cat .claude/settings.local.json` | `permissions.allow` list present; 7 Bash commands whitelisted (`uv`, `pnpm`, `docker`, `docker compose`, `git`, `pip config`, `npm config`). No `deny` list. No `sandbox` key found. | `.claude/settings.local.json` content | blocked | Sandbox mode not explicitly configured; Claude Code defaults to interactive approval for non-whitelisted commands. No restrictive sandbox policy found. |
-| Approval posture | `cat .claude/settings.local.json` | No `auto_accept`, `yolo`, or `dangerously_skip_confirmation` key found. Approval is per-command via the allowlist. | `.claude/settings.local.json` content | passed | Standard interactive approval mode active. Each non-allowlisted tool call requires human confirmation. |
-| Network posture | env + config check | No proxy, no VPN, no network restriction config found in `.claude/` or environment variables. Docker available (Docker 29.4.0) suggesting host network access. `npm config get registry` returns public `https://registry.npmjs.org/`. | env check + npm config | passed | Network is open to public registries. No internal network isolation detected. Public PyPI/npm accessible. |
-| OTel / audit | env + config check | `OTEL_*` environment variables not set. No Codex OTel integration configured. No CI workflow file triggered by this task. | env check | blocked | Codex OTel not configured. Audit fallback: Git commit history + this Task Record. Acceptable for Phase 0 preparation tasks; may need resolution before implementation tasks. |
+| Sandbox mode | `cat .claude/settings.local.json` | `permissions.allow` list present; 7 Bash commands whitelisted (`uv`, `pnpm`, `docker`, `docker compose`, `git`, `pip config`, `npm config`). No `deny` list. No explicit `sandbox` key found. No Codex CLI native sandbox config detected; Codex native config probe commands were not run. | `.claude/settings.local.json` content | blocked | No explicit Codex sandbox policy file found. Claude Code uses interactive approval for non-whitelisted commands by default, but no Codex-native sandbox enforcement was verified. |
+| Approval posture | `cat .claude/settings.local.json` | No `auto_accept`, `yolo`, or `dangerously_skip_confirmation` key found. Approval is per-command via the allowlist. No Codex CLI native approval config file detected; Codex native config probe commands were not run. | `.claude/settings.local.json` content | blocked | No Codex-native approval posture was explicitly verified. Current operating mode is Claude Code interactive confirmation, not Codex explicit approval config. |
+| Network posture | env + config check | No proxy, no VPN, no network restriction config found in `.claude/` or environment variables. Docker available (Docker 29.4.0) suggesting host network access. `npm config get registry` returns public `https://registry.npmjs.org/`. No Codex CLI native network posture config detected; Codex native config probe commands were not run. | env check + npm config | blocked | Public network is accessible, but no Codex-native network posture policy was explicitly verified. Cannot confirm whether Codex would enforce network isolation. |
+| OTel / audit | env + config check | `OTEL_*` environment variables not set. No Codex OTel integration configured. No CI workflow file triggered by this task. | env check | blocked | Codex OTel not configured. Audit fallback for this task: Git diff + Task Record + Codex review + subsequent CI run. May need resolution before implementation tasks. |
 
 ---
 
@@ -83,8 +83,8 @@ Task: P0-PREP-001
 ## 6. Summary
 
 ### Passed items
-- Git repository: functional, correct branch, clean-ish working tree
-- Claude Code: operational with local settings permission allowlist
+- Git repository: functional, correct branch, clean working tree
+- Claude Code: operational with local settings permission allowlist (sandbox/approval posture not natively verified — see Blocked)
 - Python 3.12.10: available
 - Node.js v24.15.0: available
 - Docker 29.4.0 + Compose v5.1.2: available
@@ -98,7 +98,10 @@ Task: P0-PREP-001
 - **PyTorch**: not installed. Required for GPU / vLLM spike tasks.
 - **vLLM**: not installed. Blocked by PyTorch and GPU VRAM constraints.
 - **GPU VRAM**: 2048 MiB (940MX) insufficient for LLM inference. P0-SPIKE tasks requiring GPU will be blocked.
-- **Codex OTel**: not configured. Using Git + CI + Task Record as audit fallback.
+- **Codex sandbox mode**: no explicit Codex-native sandbox config detected; probe commands not run.
+- **Codex approval posture**: no explicit Codex-native approval config detected; probe commands not run.
+- **Codex network posture**: no explicit Codex-native network policy detected; probe commands not run.
+- **Codex OTel**: not configured. Audit fallback: Git diff + Task Record + Codex review + subsequent CI.
 - **PyPI mirror**: no internal mirror configured. All pip installs will use public PyPI (network-dependent).
 - **npm mirror**: default public registry. No internal mirror configured.
 

@@ -11,8 +11,9 @@ plan_approved_via: "Claude Code session"
 
 summary: |
   Read-only environment audit of repository, toolchain, GPU, and internal mirror
-  configurations. All checks completed. 6 items blocked (uv, pnpm, PyTorch, vLLM,
-  Codex OTel, internal mirrors) — recorded as blockers without remediation attempts.
+  configurations. All checks completed. 8 items blocked (uv, pnpm, PyTorch, vLLM,
+  Codex OTel, Codex sandbox/approval/network posture, internal mirrors) — recorded
+  as blockers without remediation attempts.
   Output: docs/phase0/repo_env_audit.md.
 
 acceptance_criteria_result:
@@ -22,7 +23,7 @@ acceptance_criteria_result:
 
   - criterion: "Check Codex / Claude Code config: sandbox, approval, network posture, OTel or audit alternative"
     result: passed
-    evidence: ".claude/settings.local.json exists with Bash permission allowlist; no .claude/settings.json; no hooks.json; Codex OTel not configured (blocked); audit fallback = Git + CI + Task Record per AGENTS.md"
+    evidence: ".claude/settings.local.json exists with Bash permission allowlist; no .claude/settings.json; no hooks.json; Codex native sandbox/approval/network config not detected and probe commands not run (all blocked); Codex OTel not configured (blocked); audit fallback = Git diff + Task Record + Codex review + subsequent CI"
 
   - criterion: "Check Python / uv / Node / pnpm / Docker / Docker Compose availability"
     result: passed
@@ -100,7 +101,7 @@ tests_run:
     blocked_by_task_id: ""
     activation_task_id: ""
     expiry_condition: "Permanently not applicable for P0-PREP-* preparation tasks"
-    evidence: "changed_files contains only docs/phase0/ YAML and markdown; no testable code produced"
+    evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No testable code produced."
 
 dependency_changes:
   added: []
@@ -114,7 +115,7 @@ import_boundary_check:
   blocked_by_task_id: ""
   activation_task_id: ""
   expiry_condition: "N/A — permanently not applicable for this task type"
-  evidence: "changed_files contains only docs/phase0/ YAML and markdown"
+  evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No importable code produced."
 
 security_scan_result:
   result: not_applicable
@@ -141,7 +142,7 @@ ci_evidence:
   blocked_by_task_id: ""
   activation_task_id: ""
   expiry_condition: "Permanently not applicable for P0-PREP-* preparation tasks"
-  evidence: "changed_files are docs/phase0/ only; no CI workflow triggered"
+  evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No CI workflow triggered."
 
 review:
   mode: self_check
