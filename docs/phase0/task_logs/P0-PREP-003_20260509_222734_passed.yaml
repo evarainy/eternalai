@@ -123,7 +123,7 @@ review:
 remaining_risks: []
 rollback_or_failure_record: ""
 
-git_commit_sha: "(pending — will be recorded after commit)"
+git_commit_sha: "ec9c3a1"
 package_confirmation_status: created
 package_confirmation: "confirmation that a fresh package was created from the current repository state"
 package_scope: "docs/phase0/spec_freeze_check.md created; both blueprint files verified present and unmodified"
