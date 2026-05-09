@@ -1,0 +1,166 @@
+# Unified Phase 0 Task Record — P0-PREP-001
+
+task_id: P0-PREP-001
+task_type: preparation
+result: passed
+started_at: "2026-05-09T20:48:00+08:00"
+completed_at: "2026-05-09T20:55:00+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-09T20:48:00+08:00"
+plan_approved_via: "Claude Code session"
+
+summary: |
+  Read-only environment audit of repository, toolchain, GPU, and internal mirror
+  configurations. All checks completed. 8 items blocked (uv, pnpm, PyTorch, vLLM,
+  Codex OTel, Codex sandbox/approval/network posture, internal mirrors) — recorded
+  as blockers without remediation attempts.
+  Output: docs/phase0/repo_env_audit.md.
+
+acceptance_criteria_result:
+  - criterion: "Output current repo root, branch, git status"
+    result: passed
+    evidence: "git rev-parse → E:/code/eternalai; git branch → phase0/P0-PREP-001; git status → .gitignore added, phase0_execution_pack_v1_0_11.zip deleted (post-extraction), docs/phase0/ outputs added"
+
+  - criterion: "Check Codex / Claude Code config: sandbox, approval, network posture, OTel or audit alternative"
+    result: passed
+    evidence: ".claude/settings.local.json exists with Bash permission allowlist; no .claude/settings.json; no hooks.json; Codex native sandbox/approval/network config not detected and probe commands not run (all blocked); Codex OTel not configured (blocked); audit fallback = Git diff + Task Record + Codex review + subsequent CI"
+
+  - criterion: "Check Python / uv / Node / pnpm / Docker / Docker Compose availability"
+    result: passed
+    evidence: "Python 3.12.10 (passed), uv not found (blocked), Node v24.15.0 (passed), pnpm not found (blocked), Docker 29.4.0 (passed), Docker Compose v5.1.2 (passed)"
+
+  - criterion: "Check GPU / CUDA / vLLM conditions; record blockers if absent, do not fabricate"
+    result: passed
+    evidence: "nvidia-smi → NVIDIA GeForce 940MX 2048MiB CUDA 12.1; torch not installed (blocked); vLLM not installed (blocked); 2GB VRAM insufficient for LLM inference"
+
+  - criterion: "Check internal PyPI / npm mirror config; record blockers if absent"
+    result: passed
+    evidence: "pip config list → empty; npm registry → https://registry.npmjs.org/ (public); no .npmrc; no pyproject.toml; all blocked"
+
+  - criterion: "Output repo_env_audit.md"
+    result: passed
+    evidence: "docs/phase0/repo_env_audit.md created with all checks documented per command/result/evidence/status format"
+
+failure_examples_tested: []
+
+step_verification_points:
+  - step: "Git repository info"
+    result: passed
+    command: "git rev-parse --show-toplevel && git branch --show-current && git log --oneline -5 && git status --short && git remote -v"
+    evidence: "All commands returned expected output. Repo at E:/code/eternalai, branch phase0/P0-PREP-001, remote origin github.com/evarainy/eternalai.git. Working tree: .gitignore added, phase0_execution_pack_v1_0_11.zip deleted (post-extraction hygiene)"
+
+  - step: "Claude Code config check"
+    result: passed
+    command: "cat .claude/settings.local.json; ls .claude/"
+    evidence: "settings.local.json has permissions.allow list; no hooks.json; no settings.json"
+
+  - step: "Development toolchain check"
+    result: passed
+    command: "python --version; uv --version; node --version; pnpm --version; docker --version; docker compose version; git --version"
+    evidence: "Python 3.12.10, Node v24.15.0, Docker 29.4.0, Docker Compose v5.1.2, Git 2.53.0 available; uv and pnpm not found"
+
+  - step: "GPU / CUDA / vLLM check"
+    result: passed
+    command: "nvidia-smi; python -c 'import torch; print(torch.cuda.is_available())'"
+    evidence: "nvidia-smi → 940MX 2GB CUDA 12.1; torch ModuleNotFoundError (blocked)"
+
+  - step: "Internal mirror check"
+    result: passed
+    command: "pip config list; npm config get registry; test -f .npmrc; test -f pyproject.toml"
+    evidence: "pip config empty; npm registry public; no .npmrc or pyproject.toml"
+
+  - step: "Generate repo_env_audit.md"
+    result: passed
+    command: "Write tool → docs/phase0/repo_env_audit.md"
+    evidence: "File created with all 6 sections, every check has command/result/evidence/status"
+
+  - step: "Generate Task Record"
+    result: passed
+    command: "Write tool → docs/phase0/task_logs/P0-PREP-001_20260509_205000_passed.yaml"
+    evidence: "This file"
+
+changed_files:
+  - .gitignore
+  - docs/phase0/repo_env_audit.md
+  - docs/phase0/task_logs/P0-PREP-001_20260509_205000_passed.yaml
+  - phase0_execution_pack_v1_0_11.zip
+changed_files_note: >
+  phase0_execution_pack_v1_0_11.zip was deleted from Git after extraction;
+  unpacked execution pack files remain tracked in repository.
+  .gitignore was added as part of repository hygiene.
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "N/A — preparation task, no unit tests"
+    result: not_applicable
+    output_snippet: "Read-only checks only; evidence is command output recorded in repo_env_audit.md"
+    not_applicable_reason: "Preparation task performs read-only environment checks only; no code written or modified"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: "Permanently not applicable for P0-PREP-* preparation tasks"
+    evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No testable code produced."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "No code files modified; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "N/A — permanently not applicable for this task type"
+  evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No importable code produced."
+
+security_scan_result:
+  result: not_applicable
+  not_applicable_reason: "No code or secrets introduced; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "N/A — permanently not applicable for this task type"
+  evidence: "No sensitive values in output; repo_env_audit.md contains only version strings, paths, and registry URLs"
+
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "No tests written or modified; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "N/A — permanently not applicable for this task type"
+  evidence: "No test files in changed_files"
+
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "Preparation task does not trigger CI; no production code changes"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "Permanently not applicable for P0-PREP-* preparation tasks"
+  evidence: "Current diff is limited to P0-PREP-001 audit artifacts plus repository hygiene changes: .gitignore added and extracted ZIP archive removed. No CI workflow triggered."
+
+review:
+  mode: self_check
+  reviewed_by: "Claude Code (agent)"
+  reviewed_at: "2026-05-09T20:55:00+08:00"
+  notes: "All 6 acceptance criteria verified via command output. 6 environment items blocked and recorded as blockers without remediation attempts."
+
+remaining_risks:
+  - "uv not installed — Python dependency management tasks will be blocked until installed"
+  - "pnpm not installed — frontend/Node dependency tasks will be blocked until installed"
+  - "GPU 940MX with 2GB VRAM insufficient for LLM inference — vLLM spike tasks will be blocked"
+  - "No internal PyPI/npm mirrors configured — dependency installs depend on public network access"
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "b2e2769ebe2056e4003c177d664378c10a525f56"
+
+package_confirmation_status: not_applicable
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "Preparation task only; no code or package produced. repo_env_audit.md and Task Record generated from current repo state."
+package_evidence: "docs/phase0/repo_env_audit.md exists; Task Record at docs/phase0/task_logs/P0-PREP-001_20260509_205000_passed.yaml"

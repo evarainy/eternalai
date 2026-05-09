@@ -1,0 +1,3 @@
+# Local AI tool state
+.claude/settings.local.json
+.codex/
