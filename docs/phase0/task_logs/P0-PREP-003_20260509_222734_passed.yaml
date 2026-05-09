@@ -80,28 +80,28 @@ import_boundary_check:
   result: not_applicable
   not_applicable_reason: "preparation task — no code imports created"
   not_applicable_scope: "current_phase_only"
-  blocked_by_task_id: ""
-  activation_task_id: ""
-  expiry_condition: "N/A — this task never produces code imports"
-  evidence: "No Python/JS files touched; only markdown and YAML created"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this P0-PREP-003 preparation check."
+  evidence: "P0-PREP-003 only verifies frozen file placement and freeze declaration; runtime, CI, golden-task, and implementation checks are outside scope."
 
 security_scan_result:
   result: not_applicable
   not_applicable_reason: "preparation task — no code produced, no secrets handled"
   not_applicable_scope: "current_phase_only"
-  blocked_by_task_id: ""
-  activation_task_id: ""
-  expiry_condition: "N/A — this task never produces executable code"
-  evidence: "Only docs/phase0/spec_freeze_check.md and task log YAML created"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this P0-PREP-003 preparation check."
+  evidence: "P0-PREP-003 only verifies frozen file placement and freeze declaration; runtime, CI, golden-task, and implementation checks are outside scope."
 
 weak_test_scan_result:
   result: not_applicable
   not_applicable_reason: "preparation task — no test files created or modified"
   not_applicable_scope: "current_phase_only"
-  blocked_by_task_id: ""
-  activation_task_id: ""
-  expiry_condition: "N/A — this task never produces test code"
-  evidence: "No test files touched"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this P0-PREP-003 preparation check."
+  evidence: "P0-PREP-003 only verifies frozen file placement and freeze declaration; runtime, CI, golden-task, and implementation checks are outside scope."
 
 ci_evidence:
   result: not_applicable
@@ -109,10 +109,10 @@ ci_evidence:
   url_or_log_path: ""
   not_applicable_reason: "preparation task — no CI pipeline required for markdown-only output"
   not_applicable_scope: "current_phase_only"
-  blocked_by_task_id: ""
-  activation_task_id: ""
-  expiry_condition: "N/A — this task is file-existence verification only"
-  evidence: "Task produces only declaration files; no code to build or test"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this P0-PREP-003 preparation check."
+  evidence: "P0-PREP-003 only verifies frozen file placement and freeze declaration; runtime, CI, golden-task, and implementation checks are outside scope."
 
 review:
   mode: self_check
@@ -123,7 +123,8 @@ review:
 remaining_risks: []
 rollback_or_failure_record: ""
 
-git_commit_sha: "ec9c3a1"
+git_commit_sha: "50efe25"
+git_commit_sha_note: "HEAD at final P0-PREP-003 review time."
 package_confirmation_status: created
 package_confirmation: "confirmation that a fresh package was created from the current repository state"
 package_scope: "docs/phase0/spec_freeze_check.md created; both blueprint files verified present and unmodified"
