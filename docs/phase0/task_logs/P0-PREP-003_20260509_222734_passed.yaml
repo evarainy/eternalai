@@ -123,8 +123,8 @@ review:
 remaining_risks: []
 rollback_or_failure_record: ""
 
-git_commit_sha: "50efe25"
-git_commit_sha_note: "HEAD at final P0-PREP-003 review time."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
 package_confirmation_status: created
 package_confirmation: "confirmation that a fresh package was created from the current repository state"
 package_scope: "docs/phase0/spec_freeze_check.md created; both blueprint files verified present and unmodified"
