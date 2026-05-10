@@ -1,0 +1,211 @@
+task_id: P0-SPIKE-006
+task_type: spike
+result: passed
+started_at: "2026-05-10T12:05:00+08:00"
+completed_at: "2026-05-10T12:07:20+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-10T12:05:00+08:00"
+plan_approved_via: Claude Code session
+summary: >
+  Verified MinIO Community Server (GNU AGPLv3) as S3-compatible object storage
+  candidate. Created spike put/get/delete test scripts with static validation.
+  ADR documents license risk (AGPLv3 compliance requires legal review),
+  deployment, backup, permission model, operational risks, and alternatives.
+  Phase 1 recommendation: conditional adoption pending legal/compliance review.
+
+acceptance_criteria_result:
+  - criterion: "At least one S3-compatible candidate verified"
+    result: passed
+    evidence: >
+      MinIO Community Server evaluated in detail. NAS S3 Gateway, enterprise
+      object storage, Ceph RGW, and Garage documented as secondary alternatives.
+      See ADR-P0-SPIKE-006 sections 2-4.
+
+  - criterion: "Minimum put/get/delete spike script created with static validation"
+    result: passed
+    evidence: >
+      experiments/phase0/s3_storage/minio_put_get_delete_test.py contains
+      put_object, get_object, delete_object operations. ast.parse and py_compile
+      passed. Real execution marked needs_test_environment.
+
+  - criterion: "License, deployment, backup, permission, operational risks documented"
+    result: passed
+    evidence: >
+      ADR-P0-SPIKE-006 sections 3.1-3.8 cover license_current_state (AGPLv3),
+      license_risk, AGPLv3 compliance risk, commercial_license_or_alternative_required,
+      deployment_mode, backup_strategy, permission_model, operational_risks.
+
+  - criterion: "Phase 1 recommendation provided"
+    result: passed
+    evidence: >
+      ADR-P0-SPIKE-006 section 6: conditional adoption recommended, with
+      4 prerequisites (legal AGPLv3 confirmation, boto3 mirror availability,
+      Docker capability, Community feature adequacy) and 4 alternative paths.
+
+failure_examples_tested:
+  - example: "No Docker/MinIO test environment available"
+    result: triggered
+    evidence: >
+      Real S3 operations cannot execute. Test scripts pass static checks only.
+      Marked needs_test_environment throughout.
+
+  - example: "boto3 not confirmed on internal PyPI mirror"
+    result: triggered
+    evidence: >
+      boto3 import guarded with try/except. Not installed in current environment.
+      Marked needs_internal_mirror_confirmation.
+
+  - example: "MinIO AGPLv3 license risk blocks Phase 1 adoption without legal review"
+    result: triggered
+    evidence: >
+      ADR section 3.2-3.3 documents AGPLv3 compliance as legal/compliance review risk.
+      Phase 1 recommendation conditioned on legal confirmation.
+
+  - example: "No vendor documentation for NAS S3 Gateway / enterprise storage specifics"
+    result: triggered
+    evidence: >
+      NAS S3 Gateway and enterprise object storage marked needs_vendor_confirmation
+      in ADR section 10.
+
+step_verification_points:
+  - step: "MinIO candidate information complete"
+    result: passed
+    command: "manual review"
+    evidence: "ADR-P0-SPIKE-006 sections 3.1-3.8, 4"
+
+  - step: "Spike script syntax correct"
+    result: passed
+    command: "python -m py_compile experiments/phase0/s3_storage/minio_put_get_delete_test.py && python -m py_compile experiments/phase0/s3_storage/s3_test_helpers.py"
+    evidence: "Both py_compile checks passed"
+
+  - step: "ADR recommendation is explicit"
+    result: passed
+    command: "manual review"
+    evidence: "ADR section 6: conditional adoption with prerequisites and alternatives"
+
+  - step: "Spike code not in forbidden paths"
+    result: passed
+    command: "git status --short"
+    evidence: >
+      git status --short output shows 5 staged files (A status):
+      docs/adr/phase0/ADR-P0-SPIKE-006-s3-compatible-storage.md,
+      docs/phase0/task_logs/P0-SPIKE-006_20260510_120720_passed.yaml,
+      experiments/phase0/s3_storage/README.md,
+      experiments/phase0/s3_storage/minio_put_get_delete_test.py,
+      experiments/phase0/s3_storage/s3_test_helpers.py.
+      No app/, docs/blueprint/, runtime/, gateway/, or execution_fabric/ modifications.
+
+  - step: "needs markers complete"
+    result: passed
+    command: "grep needs_ ADR-P0-SPIKE-006"
+    evidence: "needs_test_environment, needs_internal_mirror_confirmation, needs_vendor_confirmation all present"
+
+  - step: "staged files match Task Record changed_files"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "5 files in order: docs/adr/..., docs/phase0/task_logs/..., experiments/.../README.md, experiments/.../minio_put_get_delete_test.py, experiments/.../s3_test_helpers.py"
+
+changed_files:
+  - docs/adr/phase0/ADR-P0-SPIKE-006-s3-compatible-storage.md
+  - docs/phase0/task_logs/P0-SPIKE-006_20260510_120720_passed.yaml
+  - experiments/phase0/s3_storage/README.md
+  - experiments/phase0/s3_storage/minio_put_get_delete_test.py
+  - experiments/phase0/s3_storage/s3_test_helpers.py
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "python -c \"import ast; ast.parse(open('experiments/phase0/s3_storage/minio_put_get_delete_test.py').read())\""
+    result: passed
+    output_snippet: "AST parse: PASSED"
+
+  - command: "python -c \"import ast; ast.parse(open('experiments/phase0/s3_storage/s3_test_helpers.py').read())\""
+    result: passed
+    output_snippet: "AST parse: PASSED"
+
+  - command: "python -m py_compile experiments/phase0/s3_storage/minio_put_get_delete_test.py"
+    result: passed
+    output_snippet: "py_compile: PASSED"
+
+  - command: "python -m py_compile experiments/phase0/s3_storage/s3_test_helpers.py"
+    result: passed
+    output_snippet: "py_compile: PASSED"
+
+  - command: "git status --short"
+    result: passed
+    output_snippet: "5 staged files (A status), no forbidden path or dependency modifications"
+
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "5 files matching changed_files list exactly"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "Spike task; no app/ code created; import boundary tests not triggered"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "N/A for spike tasks"
+  evidence: "git status --short confirms no app/ modifications"
+
+security_scan_result:
+  result: passed
+  evidence: >
+    No plaintext secrets or hardcoded credentials in spike code. Credentials
+    read from environment variables (MINIO_ACCESS_KEY, MINIO_SECRET_KEY) with
+    non-usable placeholder defaults. ADR Docker Compose example uses variable
+    interpolation (${MINIO_ROOT_USER}, ${MINIO_ROOT_PASSWORD}). No tokens/passwords
+    persisted in fixtures, logs, or Trace output.
+
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "Spike task produces no production tests; spike scripts validated by static checks only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "N/A for spike tasks"
+  evidence: "No pytest test files created"
+
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "Phase 0 spike; no CI pipeline wired for spike scripts"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "CI pipeline established"
+  evidence: "No .github/workflows/ changes"
+
+review:
+  mode: self_check
+  reviewed_by: Claude Code
+  reviewed_at: "2026-05-10T12:07:20+08:00"
+  notes: >
+    Self-check completed. All static validations passed. No forbidden paths
+    modified. No dependency changes. No hardcoded credentials. AGPLv3 license
+    risk documented as compliance/legal review risk without legal conclusions.
+    Codex review FAIL items fixed: hardcoded credentials replaced with env vars
+    and non-usable placeholders, not_applicable empty strings changed to none,
+    git_commit_sha deferred, changed_files reordered to match git diff,
+    git status evidence corrected.
+
+remaining_risks:
+  - "AGPLv3 compliance risk: legal review required before Phase 1 MinIO adoption"
+  - "boto3 internal PyPI mirror availability unconfirmed"
+  - "No real S3 put/get/delete execution (needs_test_environment)"
+  - "MinIO Community vs Commercial feature gap unassessed for Phase 1 requirements"
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: not_created
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "Spike task; package creation deferred to infrastructure task"
+package_evidence: "No production code or dependency changes; staging only"
