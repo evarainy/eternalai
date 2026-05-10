@@ -1,0 +1,301 @@
+# Unified Phase 0 Task Record — P0-SPIKE-005
+# Target Business Systems API and Authentication Reconnaissance
+
+task_id: P0-SPIKE-005
+task_type: spike
+result: passed
+started_at: "2026-05-09T23:30:00+08:00"
+completed_at: "2026-05-09T23:45:00+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-09T23:25:00+08:00"
+plan_approved_via: "Codex session"
+
+executor_tool: "Codex"
+executor_model: "GPT-5.5 high"
+reviewer_tool: "Codex"
+reviewer_model: "GPT-5.5 high"
+
+summary: >
+  完成泛微 e-cology 9、用友 U8+、海康 iVMS 三个目标业务系统的 API 类型、认证机制、
+  权限边界、身份绑定需求、Credential Vault 需求和 Mock Adapter 形态的初步探查。
+  产出三份 ADR 和三份研究笔记。所有无法从公开资料确认的结论均标记为 needs_vendor_confirmation，
+  未编造任何结论，未连接任何生产系统。无公开可复核 URL 的 evidence_tier 已降级。
+
+acceptance_criteria_result:
+  - criterion: "每个目标系统各完成一份 ADR"
+    result: passed
+    evidence: >
+      docs/adr/phase0/ADR-P0-SPIKE-005a-oa-api-auth.md,
+      docs/adr/phase0/ADR-P0-SPIKE-005b-u8-api-auth.md,
+      docs/adr/phase0/ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md
+
+  - criterion: "每份 ADR 记录 API 类型、认证方式、是否支持 OAuth2、是否需要 Vault、是否存在厂商 token、是否支持用户级权限"
+    result: passed
+    evidence: >
+      三份 ADR 均包含 API Type、Authentication Mode、OAuth2 支持状态、
+      Credential Vault Requirement、Token/Session Lifecycle、User Identity Mapping、
+      Permission Source of Truth 章节。
+      Vault 需求在 ADR Section 18 中明确记录：OA 需厂商确认、U8 大概率需要但待确认、
+      iVMS 取决于 AK/SK 和网关配置。Phase 0 只允许 mock credential reference。
+
+  - criterion: "每份 ADR 记录 Phase 1 是否只做 Mock、是否允许只读 PoC、是否禁止写入"
+    result: passed
+    evidence: >
+      三份 ADR 均包含 Phase 0 Allowed / Forbidden Operations 表格，
+      recommendation 均为 mock_only + can_build_adapter_later + needs_vendor_confirmation。
+
+  - criterion: "明确 Identity Binding 对该系统的最小需求"
+    result: passed
+    evidence: >
+      三份 ADR Section 15 均包含 Identity Binding Minimal Requirement 章节。
+
+failure_examples_tested:
+  - example: "厂商无公开 API 文档"
+    result: not_applicable
+    not_applicable_reason: "spike 任务不产生 implementation 级 failure_examples"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A — spike 类型不适用 implementation failure_examples"
+    evidence: "CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md: spike 类型用 blocking examples 替代 failure_examples"
+
+step_verification_points:
+  - step: "V-1: ADR 文件存在且格式完整"
+    result: passed
+    command: "Get-ChildItem docs/adr/phase0/ADR-P0-SPIKE-005*.md"
+    evidence: "3 个文件均存在：005a (7504B), 005b (7134B), 005c (7637B)"
+
+  - step: "V-2: 每份 ADR 包含全部要求字段"
+    result: passed
+    command: "manual review"
+    evidence: >
+      三份 ADR 均包含：system_name, version_or_assumed_version, auth_mode,
+      vault_requirement, token/session lifecycle, user identity mapping,
+      permission source of truth, read/write API, callback/webhook,
+      rate/concurrency limit, audit log, sandbox, irreversible ops,
+      Phase 0 allowed/forbidden, open questions, blocking risks,
+      recommendation, identity_binding_minimal_requirement
+
+  - step: "V-3: needs_vendor_confirmation 项有合理说明"
+    result: passed
+    evidence: >
+      所有 needs_vendor_confirmation 标记均附有具体原因和待确认事项
+
+  - step: "V-4: 无真实凭证写入"
+    result: passed
+    command: "Select-String -Pattern 'password|token|secret|api_key'"
+    evidence: >
+      扫描结果仅包含字段名和描述文本（Username + Password、Token-based、
+      appKey/appSecret、API Token / App Credential 等），无真实或伪造敏感值。
+
+  - step: "V-5: Identity Binding 最小需求已明确"
+    result: passed
+    evidence: >
+      三份 ADR Section 15 均包含 Identity Binding Minimal Requirement 章节。
+
+  - step: "V-6: recommendation 取值在允许范围内"
+    result: passed
+    evidence: >
+      三份 ADR recommendation 均为 mock_only + can_build_adapter_later + needs_vendor_confirmation。
+      未使用 not_suitable 或范围外值。
+
+  - step: "V-7: 证据分级标注完整"
+    result: passed
+    evidence: >
+      三份研究笔记和 ADR 中每条关键结论均标注 evidence_tier。
+      OA 和 U8 无公开可复核来源的 official 已降级为 needs_vendor_confirmation。
+      iVMS 中 open.hikvision.com 可复核的项保留 official，其余降级。
+
+  - step: "V-8: source_inventory 存在且可复核"
+    result: passed
+    evidence: >
+      三份研究笔记均包含 Section 10 Source Inventory / Evidence Sources。
+      每个 source 包含 source_id, evidence_tier, source_type, title_or_doc_name,
+      url_or_local_reference, accessed_or_recorded_date, supports_which_claims, confidence。
+      ADR Section 18 引用对应 research notes source_id。
+
+changed_files:
+  - path: "docs/adr/phase0/ADR-P0-SPIKE-005a-oa-api-auth.md"
+    action: created
+    description: "泛微 e-cology 9 API & Authentication ADR (含 vault_requirement)"
+  - path: "docs/adr/phase0/ADR-P0-SPIKE-005b-u8-api-auth.md"
+    action: created
+    description: "用友 U8+ API & Authentication ADR (含 vault_requirement)"
+  - path: "docs/adr/phase0/ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md"
+    action: created
+    description: "海康 iVMS API & Authentication ADR (含 vault_requirement)"
+  - path: "docs/phase0/task_logs/P0-SPIKE-005_20260509_154146_passed.yaml"
+    action: created
+    description: "Task Record"
+  - path: "docs/research/phase0/target_systems/hikvision_ivms_research_notes.md"
+    action: created
+    description: "海康 iVMS 研究笔记 — ADR-005c 证据附件 (含 source_inventory)"
+  - path: "docs/research/phase0/target_systems/oa_research_notes.md"
+    action: created
+    description: "泛微 e-cology 9 研究笔记 — ADR-005a 证据附件 (含 source_inventory)"
+  - path: "docs/research/phase0/target_systems/u8_research_notes.md"
+    action: created
+    description: "用友 U8+ 研究笔记 — ADR-005b 证据附件 (含 source_inventory)"
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "Get-ChildItem docs/adr/phase0/ADR-P0-SPIKE-005*.md"
+    result: passed
+    output_snippet: "3 files: 005a, 005b, 005c"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "Select-String -Pattern 'needs_vendor_confirmation' -Path docs/adr/phase0/ADR-P0-SPIKE-005*.md"
+    result: passed
+    output_snippet: "needs_vendor_confirmation present across all 3 ADRs"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "Select-String -Pattern 'vault_requirement' -Path docs/adr/phase0/ADR-P0-SPIKE-005*.md"
+    result: passed
+    output_snippet: "vault_requirement present in all 3 ADRs Section 18"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "Select-String -Pattern 'password|token|secret|api_key' -Path docs/adr/phase0/ADR-P0-SPIKE-005*.md,docs/research/phase0/target_systems/*.md"
+    result: passed
+    output_snippet: "仅字段名和描述文本，无真实凭证值"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: >
+      docs/adr/phase0/ADR-P0-SPIKE-005a-oa-api-auth.md
+      docs/adr/phase0/ADR-P0-SPIKE-005b-u8-api-auth.md
+      docs/adr/phase0/ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md
+      docs/phase0/task_logs/P0-SPIKE-005_20260509_154146_passed.yaml
+      docs/research/phase0/target_systems/hikvision_ivms_research_notes.md
+      docs/research/phase0/target_systems/oa_research_notes.md
+      docs/research/phase0/target_systems/u8_research_notes.md
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "7 files changed, 1201 insertions(+)"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "git diff --cached --name-only | findstr /I 'app/runtime app/gateway app/execution_fabric'"
+    result: passed
+    output_snippet: "no forbidden paths in staged changes"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+  - command: "Select-String -Path docs/research/phase0/target_systems/*.md -Pattern 'source_id|evidence_tier|source_type|supports_which_claims|confidence'"
+    result: passed
+    output_snippet: "oa_research_notes.md: source_id/evidence_tier/source_type/supports_which_claims/confidence in Section 10; u8_research_notes.md: same; hikvision_ivms_research_notes.md: same"
+    not_applicable_reason: ""
+    not_applicable_scope: ""
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: ""
+    evidence: ""
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "本次任务无代码变更，仅产出 ADR 文档和研究笔记"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A — spike 文档任务不涉及 import boundary"
+  evidence: "changed_files 中无 .py 文件"
+
+security_scan_result:
+  result: passed
+  evidence: >
+    Select-String 扫描 docs/adr/phase0/ 和 docs/research/phase0/target_systems/ 中的
+    password|token|secret|api_key 模式，结果仅包含字段名和描述文本，无真实或伪造敏感值。
+    三份 ADR vault_requirement 章节均声明 Phase 0 只允许 mock credential reference。
+
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "本次任务无测试代码"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A — spike 文档任务不产出测试文件"
+  evidence: "changed_files 中无 test 文件"
+
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "spike 文档任务无 CI 配置变更，无代码需 CI 验证"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "仅产出 Markdown 文件"
+
+review:
+  mode: "self_check"
+  reviewed_by: "Codex (GPT-5.5 high)"
+  reviewed_at: "2026-05-09T23:45:00+08:00"
+  notes: >
+    自查完成：3 份 ADR 存在且格式完整，vault_requirement 已补充，
+    needs_vendor_confirmation 标记合理，recommendation 取值合规，
+    无敏感值泄露，forbidden_paths 未修改。OA/U8 无公开可复核来源的
+    official 已降级。source_inventory 已添加到三份研究笔记。
+
+remaining_risks:
+  - "三个目标系统的公开 API 文档有限，大量结论标记为 needs_vendor_confirmation"
+  - "e-cology 9 版本基线已确认但具体补丁版本、已购模块、认证配置均待厂商确认"
+  - "用友 U8 的 API 形态（COM vs REST vs Cloud）取决于具体版本，Adapter 复杂度未定"
+  - "海康 iVMS 网络可达性需现场确认（安防专网隔离风险）"
+  - "三个系统的 Credential Vault 需求均待厂商/现场确认"
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: created
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "ADR deliverables (3 files), research notes (3 files), task record (1 file)"
+package_evidence: >
+  All files listed in changed_files are newly created in this session.
+  git diff --cached --name-only confirms 7 staged files, all within touched_paths.
+  No forbidden_paths (app/runtime, app/gateway, app/execution_fabric) present in staged changes.
+  No existing files modified.
