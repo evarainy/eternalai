@@ -1,0 +1,4 @@
+# spike-only: does not represent production dependency decisions
+# These packages are used solely for P0-SPIKE-004 Redis + ARQ evaluation.
+arq>=0.26,<1
+redis>=5,<6
