@@ -1,0 +1,193 @@
+# Unified Phase 0 Task Record — P0-NAV-001
+# Generated: 2026-05-11T18:56:04+08:00
+
+not_applicable_template: &not_applicable_template
+  not_applicable_reason: "P0-NAV-001 is a documentation-only task"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "P0-NAV-001 creates markdown documentation files only; no code, tests, packages, or CI pipelines are produced"
+
+task_id: P0-NAV-001
+task_type: documentation
+result: passed
+started_at: "2026-05-11T18:30:00+08:00"
+completed_at: "2026-05-11T18:56:04+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-11T18:00:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Created docs/phase0/REPOSITORY_CONTEXT_MAP.md with 11 sections covering
+  purpose, default minimal context (Claude Code execution, Codex execution,
+  Codex review), key directories and files, authority/source-of-truth
+  relationships, progressive loading guide for 8 task types, debug/modification
+  routing for 9 problem types, do-not-load/do-not-modify defaults, Phase 0
+  status/pending stack, knowledge cleanup advisory boundaries, and maintenance
+  rules. Created docs/phase0/tasks/P0-NAV-001.md task prompt. Updated
+  MANIFEST.md with two new entries.
+acceptance_criteria_result:
+  - criterion: "AC-1: REPOSITORY_CONTEXT_MAP.md exists with all 11 section headers"
+    result: passed
+    evidence: "Select-String check confirms all 11 ## section headers present; see step_verification_points"
+  - criterion: "AC-2: Section 3 lists only verified-existing paths"
+    result: passed
+    evidence: "All mandatory listed paths verified via Test-Path before writing Section 3; self_checks/*.yaml marked 'optional, if present'; no invented non-existing paths"
+  - criterion: "AC-3: Section 5 covers all 8 task types"
+    result: passed
+    evidence: "Progressive loading table contains rows for: documentation/ADR, spike, code, database/persistence, API/gateway, capability/plugin/tool/skill, review, debug"
+  - criterion: "AC-4: Section 6 covers 9 problem types"
+    result: passed
+    evidence: "Debug/modification routing table contains rows for: Task Record YAML invalid, changed_files mismatch, duplicate YAML key, stale evidence/stat mismatch, forbidden path modified, Docker/Redis/MinIO/dependency issue, context loading/cross-read confusion, style drift/formatting churn, database/API/plugin boundary confusion"
+  - criterion: "AC-5: Section 2 has 3 separate subsections"
+    result: passed
+    evidence: "Claude Code execution, Codex execution tasks, and Codex review tasks each have their own subsection with specific file tables"
+  - criterion: "AC-6: Section 4 uses time-bounded Task Record description"
+    result: passed
+    evidence: "Authority table states 'historical evidence after task close / commit / merge' and 'Current in-progress Task Record may be updated before commit'"
+  - criterion: "AC-7: Section 9 contains all 4 status stacks"
+    result: passed
+    evidence: "Completed (9 tasks), Current (P0-NAV-001), Next (3 items), Deferred (3 items) all present with specified content"
+  - criterion: "AC-8: Section 10 documents advisory boundaries"
+    result: passed
+    evidence: "Knowledge cleanup section documents when to consider, boundaries (read-only first, no auto-modify, no overwrite rules/records, etc.), and states 'Not installed or run as part of this task'"
+  - criterion: "AC-9: P0-NAV-001.md exists with complete task YAML"
+    result: passed
+    evidence: "docs/phase0/tasks/P0-NAV-001.md created with task_id, title, type, objective, constraints, acceptance_criteria, touched_paths, forbidden_paths, validation"
+  - criterion: "AC-10: MANIFEST.md contains new entries"
+    result: passed
+    evidence: "Select-String check confirms MANIFEST.md contains P0-NAV-001.md and REPOSITORY_CONTEXT_MAP.md"
+  - criterion: "AC-11: Task Record YAML passes safe_load"
+    result: passed
+    evidence: "python yaml.safe_load succeeds; see step_verification_points"
+  - criterion: "AC-12: Task Record passes UniqueKeyLoader duplicate-key check"
+    result: passed
+    evidence: "UniqueKeyLoader raises no ConstructorError; see step_verification_points"
+  - criterion: "AC-13: changed_files matches git diff --cached --name-only"
+    result: passed
+    evidence: "python list comparison: yaml_changed_files == git_diff_name_only evaluates to True"
+  - criterion: "AC-14: No empty strings in checked fields"
+    result: passed
+    evidence: "empty-string check script finds no violations in not_applicable_template, ci_evidence, rollback_or_failure_record, package_scope, package_evidence"
+  - criterion: "AC-15: package_confirmation_status is not_applicable"
+    result: passed
+    evidence: "package_confirmation_status field value is 'not_applicable'"
+  - criterion: "AC-16: Forbidden paths not modified"
+    result: passed
+    evidence: "git diff --cached --name-only shows only 4 expected files; no forbidden paths in diff"
+  - criterion: "AC-17: Guardrails/style/template/strategy/index not modified"
+    result: passed
+    evidence: "git diff --cached --name-only contains no matches for TASK_INDEX, CONTEXT_LOADING_STRATEGY, ROLE_AND_METHOD_GUARDRAILS, or CODING_STYLE_BASELINE"
+failure_examples_tested:
+  - example: "P0-NAV-001 is documentation type; no implementation failure examples apply"
+    result: not_applicable
+    not_applicable_reason: "Documentation task has no implementation failure examples; acceptance criteria serve as verification"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+    evidence: "Documentation task; acceptance criteria cover all required checks"
+step_verification_points:
+  - step: "Step 1: Create P0-NAV-001.md task prompt"
+    result: passed
+    command: "Select-String -Path docs/phase0/tasks/P0-NAV-001.md -Pattern 'task_id: P0-NAV-001'"
+    evidence: "Match found: task_id: P0-NAV-001"
+  - step: "Step 2: Create REPOSITORY_CONTEXT_MAP.md"
+    result: passed
+    command: "Select-String -Path docs/phase0/REPOSITORY_CONTEXT_MAP.md -Pattern '^## [0-9]+\\.'"
+    evidence: "11 matches: Purpose, Default minimal context, Key directories and files, Authority, Progressive loading guide, Debug / modification routing, Do not load by default, Do not modify by default, Phase 0 status, Knowledge cleanup, Maintenance rules"
+  - step: "Step 2a: Section 3 path verification"
+    result: passed
+    command: "bash loop: Test-Path for all candidate paths"
+    evidence: "All mandatory listed paths verified to exist; docs/phase0/self_checks/*.yaml marked 'optional, if present' and excluded from mandatory Test-Path check"
+  - step: "Step 2b: Section 5 task type coverage"
+    result: passed
+    command: "Select-String -Path docs/phase0/REPOSITORY_CONTEXT_MAP.md -Pattern 'documentation.*ADR|spike task|code task|database.*persistence|API.*gateway|capability.*plugin|review task|debug task'"
+    evidence: "All 8 task types found in progressive loading table"
+  - step: "Step 2c: Section 6 debug routing coverage"
+    result: passed
+    command: "Select-String -Path docs/phase0/REPOSITORY_CONTEXT_MAP.md -Pattern 'Task Record YAML invalid|changed_files mismatch|duplicate YAML key|stale evidence|forbidden path|Docker.*Redis|context loading|style drift|database.*API.*plugin'"
+    evidence: "All 9 problem types found in debug routing table"
+  - step: "Step 2d: Section 2 default minimal context precision"
+    result: passed
+    command: "Select-String checks for 'Relevant sections of', 'CONTEXT_LOADING_STRATEGY.md only as the routing guide', 'Codex.*execution tasks', 'Do not read CLAUDE.md'"
+    evidence: "All precision keywords found"
+  - step: "Step 3: Update MANIFEST.md"
+    result: passed
+    command: "Select-String -Path MANIFEST.md -Pattern 'P0-NAV-001|REPOSITORY_CONTEXT_MAP'"
+    evidence: "2 matches: docs/phase0/tasks/P0-NAV-001.md and docs/phase0/REPOSITORY_CONTEXT_MAP.md"
+  - step: "Step 4: Generate Task Record"
+    result: passed
+    command: "python -c \"import yaml; yaml.safe_load(open('docs/phase0/task_logs/P0-NAV-001_20260511_185604_passed.yaml', encoding='utf-8'))\""
+    evidence: "YAML parsed successfully"
+  - step: "Step 5: Stage and verify"
+    result: passed
+    command: "git add + git status --short + git diff --cached --name-only + git diff --cached --stat"
+    evidence: "4 files staged, no forbidden paths; git diff --cached --stat: MANIFEST.md | 2 +, REPOSITORY_CONTEXT_MAP.md | 246 +++, task_log | 193 +++, P0-NAV-001.md | 141 +++; 4 files changed, 582 insertions(+)"
+  - step: "Step 6: Validate Task Record against staged diff"
+    result: passed
+    command: "python UniqueKeyLoader check + empty-string check + changed_files comparison"
+    evidence: "No duplicate keys, no empty strings, changed_files matches git diff --cached --name-only"
+changed_files:
+  - MANIFEST.md
+  - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+  - docs/phase0/task_logs/P0-NAV-001_20260511_185604_passed.yaml
+  - docs/phase0/tasks/P0-NAV-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python -c \"import yaml; yaml.safe_load(open('docs/phase0/task_logs/P0-NAV-001_20260511_185604_passed.yaml', encoding='utf-8'))\""
+    result: passed
+    output_snippet: "YAML parsed successfully, no errors"
+    evidence: "yaml.safe_load succeeded with UTF-8 encoding"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "Documentation task creates only markdown and YAML files"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "No code files in changed_files; all 4 files are .md or .yaml documentation files"
+security_scan_result:
+  result: not_applicable
+  not_applicable_reason: "Documentation task creates only markdown and YAML files"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "No code files in changed_files; all 4 files are .md or .yaml documentation files"
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "Documentation task does not create or modify test files"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "No test files in changed_files; all 4 files are .md or .yaml documentation files"
+ci_evidence:
+  result: not_applicable
+  run_id: "none"
+  url_or_log_path: "none"
+  not_applicable_reason: "Documentation task; no CI pipeline triggered"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "No CI pipeline triggered for documentation-only task"
+review:
+  mode: self_check
+  reviewed_by: "Claude Code (self-check)"
+  reviewed_at: "2026-05-11T18:56:04+08:00"
+  notes: "Self-check verification against all acceptance criteria; no human review required per v1.0.11 rules"
+remaining_risks: []
+rollback_or_failure_record: "none"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "not applicable — P0-NAV-001 creates documentation files only; no package or archive is generated"
+package_scope: "none — documentation-only task produces no deployable package"
+package_evidence: "changed_files contains only .md and .yaml files; no build, bundle, wheel, sdist, docker image, or archive artifact was produced"
