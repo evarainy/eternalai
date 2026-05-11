@@ -24,7 +24,7 @@ Do not paste this file plus the full task prompt plus the long spec into the sam
 
 For every selected task:
 
-1. Read `AGENTS.md` or `CLAUDE.md` boot rules.
+1. Read your tool's boot rules: Codex reads `AGENTS.md`; Claude Code reads `CLAUDE.md`.
 2. Read the task prompt listed below.
 3. Use `docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`.
 4. Produce a Plan first.

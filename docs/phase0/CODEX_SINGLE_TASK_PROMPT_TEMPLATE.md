@@ -14,7 +14,10 @@
 
 ## 全局硬约束
 
-优先读取紧凑根约束 `AGENTS.md`；Claude Code 还应读取紧凑 `CLAUDE.md`。按 `docs/phase0/CONTEXT_LOADING_STRATEGY.md` 只加载当前任务需要的文件；不要把整份 Phase 0 spec 粘贴进本任务上下文。本模板仍是每次单任务执行的直接约束。
+- Codex / generic coding agent: read `AGENTS.md`
+- Claude Code / MiMo: read `CLAUDE.md`
+
+按 `docs/phase0/CONTEXT_LOADING_STRATEGY.md` 只加载当前工具需要的文件；不要把整份 Phase 0 spec 粘贴进本任务上下文。本模板仍是每次单任务执行的直接约束。
 
 1. 不修改冻结主蓝图。
 2. 不扩写主蓝图，不提前写 Phase 1 / Phase 2-5 spec。

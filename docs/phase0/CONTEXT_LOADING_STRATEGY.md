@@ -7,10 +7,12 @@ Avoid context pollution. Codex and Claude Code should receive only the context n
 ## Tiered loading model
 
 ### Tier 0 — Compact boot files
-Always-loaded or startup files:
+Tool-specific startup files:
 
-- `AGENTS.md`
-- `CLAUDE.md`
+- `AGENTS.md` — Codex / generic coding agent boot rules
+- `CLAUDE.md` — Claude Code / MiMo boot rules
+
+Each tool reads only its own boot file by default. Cross-reading the other tool's boot file is not required unless the per-task prompt or task template explicitly requests it.
 
 These files must stay short. They contain hard rules and pointers only. They must not include long task lists, full schema sections, full specs, or full acceptance matrices.
 
@@ -45,7 +47,7 @@ Do not paste Tier 3 documents into every coding-agent session.
 
 For each task, provide only:
 
-1. `AGENTS.md` / `CLAUDE.md` boot context already present in repo;
+1. 本工具对应的 boot file（Codex → `AGENTS.md`；Claude Code → `CLAUDE.md`）;
 2. the single `docs/phase0/tasks/<task_id>.md`;
 3. `CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`;
 4. any explicitly referenced Tier 2 files needed for that task.
@@ -73,7 +75,7 @@ If the per-task prompt is incomplete, the agent must stop with `task_prompt_inco
 
 ## v1.0.11 Note
 
-Hooks / subagent are optional enhancements only. Do not load them as mandatory blocking context. The minimal task context is still AGENTS.md + current per-task prompt + CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md + relevant evidence templates.
+Hooks / subagent are optional enhancements only. Do not load them as mandatory blocking context. The minimal task context is: tool-appropriate boot file (AGENTS.md or CLAUDE.md) + current per-task prompt + CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md + relevant evidence templates.
 
 
 ## Batch 2-7 Prompt Generation Gate
