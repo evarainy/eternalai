@@ -34,6 +34,7 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/P0-SPIKE-004.md
 - docs/phase0/tasks/P0-SPIKE-005.md
 - docs/phase0/tasks/P0-SPIKE-006.md
+- docs/phase0/tasks/P0-RULES-001.md
 - docs/phase0/tasks/P0-SPIKE-007.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
 
