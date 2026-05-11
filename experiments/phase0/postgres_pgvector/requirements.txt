@@ -1,0 +1,5 @@
+# spike-only dependencies for P0-SPIKE-003.
+# This file is not a production dependency decision.
+alembic>=1.13,<2.0
+SQLAlchemy>=2.0,<3.0
+psycopg[binary]>=3.1,<4.0
