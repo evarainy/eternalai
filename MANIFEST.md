@@ -38,6 +38,8 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/P0-RULES-001.md
 - docs/phase0/tasks/P0-RULES-002.md
 - docs/phase0/tasks/P0-SPIKE-007.md
+- docs/phase0/tasks/P0-STYLE-001.md
+- docs/phase0/CODING_STYLE_BASELINE.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
