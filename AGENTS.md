@@ -12,6 +12,7 @@ Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
 - Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md`
 - Task record schema: `docs/dev/task_record_schema.yaml`
 - Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
+- Role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 
 ## Non-negotiable hard rules
 1. Execute exactly one `task_id` per session turn; stop after Task Record and wait for human confirmation.
@@ -26,6 +27,7 @@ Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
 10. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 11. Work on one task branch: `phase0/<task_id>`.
 12. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
+13. Use the shared role/method guardrails (`docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`) according to the current role (execution or review). Do not cross-read another tool-specific boot file unless the current task or review prompt explicitly requires it.
 
 ## Completion
 Use the unified Task Record. Package confirmation is not tied to mandatory human diff review in v1.0.11. Record `package_confirmation_status`, `package_scope`, and `package_evidence`.

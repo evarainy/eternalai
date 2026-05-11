@@ -22,6 +22,7 @@ Files:
 - docs/phase0/FIRST_BATCH_TASKS.md
 docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/README_FOR_CODEX.md
+- docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md
 - docs/phase0/TASK_INDEX.md
 - docs/phase0/self_checks/README.md
 - docs/phase0/task_logs/INDEX.md
@@ -35,6 +36,7 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/P0-SPIKE-005.md
 - docs/phase0/tasks/P0-SPIKE-006.md
 - docs/phase0/tasks/P0-RULES-001.md
+- docs/phase0/tasks/P0-RULES-002.md
 - docs/phase0/tasks/P0-SPIKE-007.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
 
