@@ -107,8 +107,7 @@ Centralizing these guardrails is meant to reduce duplicated boot context; it doe
 - Prefer project formatter/linter rules when they exist.
 - Reviewers should flag unrelated formatting or style drift as scope creep.
 
-> Full coding style baseline will be defined in a future P0-STYLE-001 task.
-> This section establishes principles only.
+> Full coding style baseline: see docs/phase0/CODING_STYLE_BASELINE.md and apply only relevant sections for the current task.
 
 ## Superpowers Usage
 
