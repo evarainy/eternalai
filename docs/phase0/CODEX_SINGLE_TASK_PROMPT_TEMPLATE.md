@@ -19,6 +19,14 @@
 
 按 `docs/phase0/CONTEXT_LOADING_STRATEGY.md` 只加载当前工具需要的文件；不要把整份 Phase 0 spec 粘贴进本任务上下文。本模板仍是每次单任务执行的直接约束。
 
+## 角色与工程方法
+
+当前 task prompt 应声明：
+- role: execution / review / mixed / documentation
+- method: PDR / BDD / TDD / mixed / not_applicable
+
+执行或审查时按角色应用 `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md` 中对应 guardrails。
+
 1. 不修改冻结主蓝图。
 2. 不扩写主蓝图，不提前写 Phase 1 / Phase 2-5 spec。
 3. 不接真实生产 OA / U8 / 海康 iVMS。

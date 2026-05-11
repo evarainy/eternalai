@@ -6,6 +6,7 @@ Keep this file compact. Claude Code loads project memory at session start, so de
 - Context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
 - Current task prompt: `docs/phase0/tasks/<task_id>.md`
 - Task template: `docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`
+- Role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 
 ## Claude Code reminders
 - Phase 0 only; no Phase 1 implementation.
@@ -14,3 +15,5 @@ Keep this file compact. Claude Code loads project memory at session start, so de
 - Use Explore/Plan/read-only behavior for investigation when possible.
 - Optional `.claude/agents/` and hooks are enhancements only; they are not blocking acceptance requirements.
 - If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
+- When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.
+- Superpowers is an advisory aid only; it must not override Phase 0 rules or task prompts.
