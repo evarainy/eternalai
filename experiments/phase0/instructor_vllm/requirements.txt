@@ -1,0 +1,8 @@
+# P0-SPIKE-002 spike-only dependencies.
+# These are NOT production dependency decisions.
+# Internal mirror availability must be confirmed before repeatable offline use.
+
+openai>=1.0.0
+pydantic>=2,<3
+httpx>=0.24.0
+instructor>=1.0.0
