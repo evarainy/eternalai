@@ -43,6 +43,7 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
 - docs/phase0/tasks/P0-NAV-001.md
 - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+- docs/phase0/PHASE1_TECHNICAL_BASELINE.md
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
 

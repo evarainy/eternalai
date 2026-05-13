@@ -85,6 +85,7 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/phase0/README_FOR_CODEX.md | Codex quick-start guide | First-time Codex setup |
 | docs/phase0/FRONTEND_MOCK_FIXTURES.md | Frontend mock fixture definitions | When working on frontend mocks |
 | docs/phase0/REPOSITORY_CONTEXT_MAP.md | This file — repository navigation map | When orienting in the repo |
+| docs/phase0/PHASE1_TECHNICAL_BASELINE.md | Phase 1 structured-output technical baseline decision summary | When implementing Phase 1 LLM structured output or changing output strategy |
 | **docs/phase0/tasks/** | | |
 | docs/phase0/tasks/*.md | Per-task prompts (one file per task_id) | Current task only |
 | **docs/phase0/task_logs/** | | |
