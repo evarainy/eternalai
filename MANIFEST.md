@@ -48,6 +48,7 @@ Files:
 - docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md
 - docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md
 - docs/phase0/PHASE1_TECHNICAL_BASELINE.md
+- docs/phase0/tasks/P0-TEMPLATE-001.md
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
 

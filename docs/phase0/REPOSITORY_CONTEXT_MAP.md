@@ -217,14 +217,16 @@ The following should not be modified unless the current task prompt explicitly a
 - P0-STYLE-001 — Coding style and quality baseline
 - P0-NAV-001 — Repository context map, progressive loading guide, and Phase 0 task stack
 - P0-BASELINE-001 — Phase 1 structured-output technical baseline summary
+- P0-CLEANUP-001 — Documentation sync after Batch 1
+- P0-TEMPLATE-001 — Task template upgrade with method_profile, evidence rules, and role boundaries
 
 ### Current:
 
-- P0-CLEANUP-001 — Documentation sync after Batch 1
+- Generate Batch 2 per-task prompts (Batch 2 prompt gate per TASK_INDEX.md).
 
 ### Next:
 
-- Generate Batch 2-7 per-task prompts (Batch 2 prompt gate per TASK_INDEX.md).
+- Execute Batch 2 / Phase 1 tasks per generated prompts.
 - Then proceed to Batch 2 / Phase 1 tasks according to the generated templates.
 
 ### Deferred:
