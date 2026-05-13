@@ -105,7 +105,11 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md | Frozen enterprise blueprint | Only when resolving contradictions |
 | docs/blueprint/phase0_handoff_after_blueprint_freeze.md | Blueprint handoff notes | Only when resolving contradictions |
 | **docs/adr/phase0/** | | |
+| docs/adr/phase0/ADR-P0-SPIKE-001-qwen-structured-output.md | Qwen structured output spike ADR (accepted — Phase 1 baseline) | When implementing Phase 1 LLM structured output |
+| docs/adr/phase0/ADR-P0-SPIKE-002-instructor-vllm-stability.md | instructor + vLLM stability spike ADR (failed) | When evaluating instructor library |
+| docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md | PostgreSQL + pgvector spike ADR | When working on database/pgvector tasks |
 | docs/adr/phase0/ADR-P0-SPIKE-004-redis-arq.md | Redis + ARQ spike ADR | When working on Redis/ARQ tasks |
+| docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md | PydanticAI + Qwen/vLLM spike ADR (failed) | When evaluating PydanticAI library |
 | docs/adr/phase0/ADR-P0-SPIKE-005a-oa-api-auth.md | OA API auth spike ADR | When working on OA adapter |
 | docs/adr/phase0/ADR-P0-SPIKE-005b-u8-api-auth.md | U8 API auth spike ADR | When working on U8 adapter |
 | docs/adr/phase0/ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md | Hikvision iVMS API auth spike ADR | When working on Hik adapter |
@@ -116,6 +120,10 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/research/phase0/target_systems/u8_research_notes.md | U8 system research | When working on U8 integration |
 | docs/research/phase0/target_systems/hikvision_ivms_research_notes.md | Hikvision iVMS research | When working on Hik integration |
 | **experiments/phase0/** | | |
+| experiments/phase0/qwen_structured_output/ | Qwen structured output spike experiments | When referencing spike code (not production) |
+| experiments/phase0/instructor_vllm/ | instructor + vLLM spike experiments | When referencing spike code (not production) |
+| experiments/phase0/postgres_pgvector/ | PostgreSQL + pgvector spike experiments | When referencing spike code (not production) |
+| experiments/phase0/pydanticai_qwen_vllm/ | PydanticAI + Qwen/vLLM spike experiments | When referencing spike code (not production) |
 | experiments/phase0/redis_arq/ | Redis + ARQ spike experiments | When referencing spike code (not production) |
 | experiments/phase0/s3_storage/ | S3-compatible storage spike experiments | When referencing spike code (not production) |
 | **infra/** | | |
@@ -197,27 +205,32 @@ The following should not be modified unless the current task prompt explicitly a
 - P0-PREP-001 — Repository and Environment Readiness Check
 - P0-PREP-002 — Phase 0 Docs Directory and Template Setup
 - P0-PREP-003 — Freeze Spec v1.0.11 Placement Check
+- P0-SPIKE-001 — Qwen Local Model Structured Output Spike (passed; Phase 1 baseline)
+- P0-SPIKE-002 — instructor + vLLM OpenAI-compatible API Stability Spike (failed; not Phase 1 baseline)
+- P0-SPIKE-003 — PostgreSQL 18 + pgvector >= 0.8.2 Deployment Spike
 - P0-SPIKE-004 — Redis + ARQ Baseline Spike
 - P0-SPIKE-005 — Target Business Systems API and Authentication Reconnaissance
 - P0-SPIKE-006 — S3-compatible Object Storage Candidate Spike
+- P0-SPIKE-007 — PydanticAI + Qwen/vLLM Compatibility Spike (failed; not Phase 1 baseline)
 - P0-RULES-001 — Align tool-specific rule loading
 - P0-RULES-002 — Role-based guardrails and method selection
 - P0-STYLE-001 — Coding style and quality baseline
+- P0-NAV-001 — Repository context map, progressive loading guide, and Phase 0 task stack
+- P0-BASELINE-001 — Phase 1 structured-output technical baseline summary
 
 ### Current:
 
-- P0-NAV-001 — Create repository context map, progressive loading guide, and Phase 0 task stack
+- P0-CLEANUP-001 — Documentation sync after Batch 1
 
 ### Next:
 
-- Continue remaining Batch 1 spike tasks after P0-NAV-001 (P0-SPIKE-001, P0-SPIKE-002, P0-SPIKE-003, P0-SPIKE-007).
-- After Batch 1 completion, open a P0-TEMPLATE-001-style task to upgrade Batch 2 / Phase 1 task templates with method_profile and BDD/TDD/PDR evidence rules.
-- Then proceed to Batch 2 / Phase 1 tasks according to the upgraded templates.
+- Generate Batch 2-7 per-task prompts (Batch 2 prompt gate per TASK_INDEX.md).
+- Then proceed to Batch 2 / Phase 1 tasks according to the generated templates.
 
 ### Deferred:
 
+- Internal vLLM/Qwen structured-output validation (activation condition: intranet access available).
 - During future persistence/database tasks, refine detailed PostgreSQL / schema / migration / ORM / index / audit / JSON / rollback conventions.
-- After major stage milestones, consider running khazix-skills / neat-freak style cleanup in read-only / Plan mode as advisory knowledge consistency check.
 - If Phase 0 status grows, split into PHASE0_STATUS_AND_NEXT_STEPS.md in a separate task.
 
 ## 10. Knowledge cleanup / handoff maintenance

@@ -20,7 +20,7 @@ Files:
 - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
 - docs/phase0/CONTEXT_LOADING_STRATEGY.md
 - docs/phase0/FIRST_BATCH_TASKS.md
-docs/phase0/FRONTEND_MOCK_FIXTURES.md
+- docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/README_FOR_CODEX.md
 - docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md
 - docs/phase0/TASK_INDEX.md
@@ -43,6 +43,10 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
 - docs/phase0/tasks/P0-NAV-001.md
 - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+- docs/adr/phase0/ADR-P0-SPIKE-001-qwen-structured-output.md
+- docs/adr/phase0/ADR-P0-SPIKE-002-instructor-vllm-stability.md
+- docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md
+- docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md
 - docs/phase0/PHASE1_TECHNICAL_BASELINE.md
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
