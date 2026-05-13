@@ -50,6 +50,8 @@ Files:
 - docs/phase0/PHASE1_TECHNICAL_BASELINE.md
 - docs/phase0/tasks/P0-TEMPLATE-001.md
 - docs/phase0/tasks/P0-SCHEMA-001.md
+- docs/dev/AI_AGENT_ENGINEERING_LESSONS.md
+- docs/phase0/tasks/P0-EXPERIENCE-001.md
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
 

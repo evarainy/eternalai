@@ -100,6 +100,7 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/dev/human_review_checklist.md | Optional human review checklist | After task completion (optional) |
 | docs/dev/package_definition.md | Package confirmation semantics | When filling package_confirmation fields |
 | docs/dev/codex_setup.md | Codex execution posture | First-time Codex setup |
+| docs/dev/AI_AGENT_ENGINEERING_LESSONS.md | Engineering lessons-learned reference | On demand: task record creation/review, evidence drift investigation, spike/runtime/env tasks, blocked/failed reruns, cleanup/index/handoff, Codex evidence-drift findings, stage-level audit. Do not load full file by default — load only relevant sections. Not a mandatory context file. |
 | **docs/blueprint/** | | |
 | docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md | Frozen Phase 0 spec | Only when resolving contradictions or generating task prompts |
 | docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md | Frozen enterprise blueprint | Only when resolving contradictions |
@@ -148,14 +149,14 @@ All paths below were verified to exist at the time this file was created. Mandat
 
 | Task type | Load by default | Load on demand | Do not load |
 |---|---|---|---|
-| **1. Documentation / ADR task** | Boot file, task prompt, task template, ADR template (if creating ADR) | CODING_STYLE_BASELINE.md documentation/ADR section, existing related ADRs | Production code files, database specs, API specs, full blueprint |
+| **1. Documentation / ADR task** | Boot file, task prompt, task template, ADR template (if creating ADR) | CODING_STYLE_BASELINE.md documentation/ADR section, existing related ADRs, AI_AGENT_ENGINEERING_LESSONS.md relevant sections | Production code files, database specs, API specs, full blueprint |
 | **2. Spike task** | Boot file, task prompt, task template | Related ADRs, research notes, experiment code, CODING_STYLE_BASELINE.md security/dependency sections if spike touches those domains | Production app/ code, full blueprint, unrelated spike ADRs |
 | **3. Code task** | Boot file, task prompt, task template, touched files | CODING_STYLE_BASELINE.md Python/backend/testing sections, ROLE_AND_METHOD_GUARDRAILS.md execution guardrails, existing port/adapter interfaces | Full blueprint, all ADRs, all task records, documentation-only baseline sections |
 | **4. Database / persistence task** | Boot file, task prompt, task template, touched files | CODING_STYLE_BASELINE.md database/schema section, ADR-P0-SPIKE-003 (if pgvector-related), existing migration files | Full blueprint, unrelated ADRs, frontend specs |
 | **5. API / gateway task** | Boot file, task prompt, task template, touched files | CODING_STYLE_BASELINE.md API/interface section, interface contract docs, existing route definitions | Full blueprint, database migration specs, unrelated ADRs |
 | **6. Capability / plugin / tool / skill task** | Boot file, task prompt, task template, touched files | CODING_STYLE_BASELINE.md extension-point/capability section, capability registry interface, existing adapter interfaces | Full blueprint, database migration specs, unrelated gateway code |
-| **7. Review task** | Boot file, review prompt, staged diff, Task Record | Relevant guardrails/style sections for the domain under review, original task prompt being reviewed | Full blueprint, all historical task records, unrelated ADRs |
-| **8. Debug task** | Boot file, task prompt (if one exists), touched files, error logs | Relevant ADR or task record for the feature being debugged, CODING_STYLE_BASELINE.md error-handling section, boundary checklist | Full blueprint, all historical prompts, unrelated experiments |
+| **7. Review task** | Boot file, review prompt, staged diff, Task Record | Relevant guardrails/style sections for the domain under review, original task prompt being reviewed, AI_AGENT_ENGINEERING_LESSONS.md evidence rules section | Full blueprint, all historical task records, unrelated ADRs |
+| **8. Debug task** | Boot file, task prompt (if one exists), touched files, error logs | Relevant ADR or task record for the feature being debugged, CODING_STYLE_BASELINE.md error-handling section, boundary checklist, AI_AGENT_ENGINEERING_LESSONS.md environment/runtime section | Full blueprint, all historical prompts, unrelated experiments |
 
 ## 6. Debug / modification routing
 
