@@ -64,7 +64,7 @@ ci_evidence:
   url_or_log_path: ""
   <<: *not_applicable_template
 review:
-  mode: "none | self_check | human_optional"
+  mode: "none | self_check | human_optional | codex_review"
   reviewed_by: ""
   reviewed_at: ""
   notes: ""
