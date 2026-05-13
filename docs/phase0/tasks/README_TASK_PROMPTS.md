@@ -13,6 +13,26 @@ Each per-task prompt should contain:
 
 Current execution package includes per-task prompts for Batch 0 + Batch 1 only. Generate later Batch prompts immediately before those batches begin, after all prerequisite ADRs and interfaces are available.
 
+## Batch 2+ requirements
+
+Starting with Batch 2, every per-task prompt must include a `method_profile` field in its Task YAML:
+
+```yaml
+method_profile:
+  execution_role: "execution | review | mixed | documentation"
+  execution_owner: "claude_code_mimo | codex | human | mixed"
+  review_owner: "codex | claude_code_mimo | human | separate_session | none"
+  review_mode: "none | codex_review | human_optional"
+  method: "PDR | BDD | TDD | mixed | not_applicable"
+  reason_for_owner_choice: "<why this owner/reviewer/method is appropriate>"
+```
+
+Key rules:
+- Method choices are PDR / BDD / TDD / mixed / not_applicable; see `CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md` for selection guidance.
+- Repository-changing tasks (implementation, test, infrastructure, documentation, template, cleanup) default to `review_mode: codex_review`.
+- Tasks must declare `execution_owner` and `review_owner`; roles are task-specific, not hard-coded by tool.
+- Evidence rules and Task Record requirements from `CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md` apply.
+- Do not retrofit historical Batch 0 / Batch 1 task prompts with method_profile unless a separate cleanup task explicitly requires it.
 
 ## Progressive loading rule
 
