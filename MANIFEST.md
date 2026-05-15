@@ -52,6 +52,16 @@ Files:
 - docs/phase0/tasks/P0-SCHEMA-001.md
 - docs/dev/AI_AGENT_ENGINEERING_LESSONS.md
 - docs/phase0/tasks/P0-EXPERIENCE-001.md
+- docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md
+- docs/phase0/tasks/P0-INFRA-001.md
+- docs/phase0/tasks/P0-INFRA-002.md
+- docs/phase0/tasks/P0-INFRA-003.md
+- docs/phase0/tasks/P0-INFRA-004.md
+- docs/phase0/tasks/P0-INFRA-005.md
+- docs/phase0/tasks/P0-INFRA-006.md
+- docs/phase0/tasks/P0-INFRA-007.md
+- docs/phase0/tasks/P0-INFRA-008.md
+- docs/phase0/task_logs/P0-BATCH2-PROMPTS-001_20260515_151040_passed.yaml
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
 

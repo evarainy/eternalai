@@ -1,0 +1,218 @@
+task_id: "P0-BATCH2-PROMPTS-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-15T15:10:40+08:00"
+completed_at: "2026-05-15T15:10:40+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-15T15:10:40+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Generated the Batch 2 (engineering skeleton) per-task prompt package: 9 prompt files
+  for P0-BATCH2-PROMPTS-001 and P0-INFRA-001 through P0-INFRA-008. Updated
+  README_TASK_PROMPTS.md, REPOSITORY_CONTEXT_MAP.md, and MANIFEST.md. All prompts
+  include method_profile, branch declaration, depends_on matching TASK_INDEX.md exactly,
+  structured-output baseline applicability, TDD red/green sequences where applicable,
+  evidence gates for spike-dependent tasks, and negative validation steps.
+
+generated_prompt_files:
+  - docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md
+  - docs/phase0/tasks/P0-INFRA-001.md
+  - docs/phase0/tasks/P0-INFRA-002.md
+  - docs/phase0/tasks/P0-INFRA-003.md
+  - docs/phase0/tasks/P0-INFRA-004.md
+  - docs/phase0/tasks/P0-INFRA-005.md
+  - docs/phase0/tasks/P0-INFRA-006.md
+  - docs/phase0/tasks/P0-INFRA-007.md
+  - docs/phase0/tasks/P0-INFRA-008.md
+
+acceptance_criteria_result:
+  - criterion: "8 Batch 2 task prompt files created: P0-INFRA-001.md through P0-INFRA-008.md"
+    result: "passed"
+    evidence: "All 8 files exist in docs/phase0/tasks/ and are staged"
+  - criterion: "P0-BATCH2-PROMPTS-001.md task prompt file created"
+    result: "passed"
+    evidence: "File exists and is staged"
+  - criterion: "Each prompt file contains method_profile with all required fields"
+    result: "passed"
+    evidence: "grep method_profile found all 9 files"
+  - criterion: "Each prompt file contains exact depends_on from TASK_INDEX.md"
+    result: "passed"
+    evidence: "Manual comparison of all 8 depends_on blocks against TASK_INDEX.md Batch 2 section: all match"
+  - criterion: "Every prompt contains 'Structured-output baseline applicability' section"
+    result: "passed"
+    evidence: "grep 'Structured-output baseline applicability' found all 9 files"
+  - criterion: "P0-INFRA-004 gates on P0-SPIKE-003 evidence and ADR-P0-SPIKE-003"
+    result: "passed"
+    evidence: "P0-INFRA-004 contains evidence_gate with required_spike=P0-SPIKE-003, glob-style Task Record lookup, and required_adr path"
+  - criterion: "P0-INFRA-005 gates on P0-SPIKE-004 evidence and ADR-P0-SPIKE-004"
+    result: "passed"
+    evidence: "P0-INFRA-005 contains evidence_gate with required_spike=P0-SPIKE-004, glob-style Task Record lookup, and required_adr path"
+  - criterion: "P0-INFRA-006 is deployment-only with deferred instrumentation scopes"
+    result: "passed"
+    evidence: "P0-INFRA-006 contains scope section with active_scope=deployment_baseline_only and explicit deferred_scopes list"
+  - criterion: "README_TASK_PROMPTS.md updated for Batch 2"
+    result: "passed"
+    evidence: "Batch 2 inventory table added with 9 entries"
+  - criterion: "REPOSITORY_CONTEXT_MAP.md updated if prompt inventory changed"
+    result: "passed"
+    evidence: "Status section updated to show P0-BATCH2-PROMPTS-001 passed"
+  - criterion: "MANIFEST.md updated with new prompt files"
+    result: "passed"
+    evidence: "9 prompt files added to MANIFEST.md Files section"
+  - criterion: "No TASK_INDEX.md, blueprint, ADR, historical Task Record, or boot file modified"
+    result: "passed"
+    evidence: "git diff --cached --name-only confirms only prompt files, supporting docs, INDEX.md, and this Task Record"
+  - criterion: "No dependency or lockfile changes"
+    result: "passed"
+    evidence: "No pyproject.toml, uv.lock, package.json, or pnpm-lock.yaml in staged diff"
+  - criterion: "staged files contain only prompt files, supporting docs, INDEX.md, and this Task Record"
+    result: "passed"
+    evidence: "git diff --cached --name-only contains 14 files: 9 prompts, 3 supporting docs, INDEX.md, and this Task Record"
+
+failure_examples_tested:
+  - example: "Generated prompt missing method_profile field"
+    result: "not_applicable"
+    evidence: ""
+    not_applicable_reason: "This documentation-generation task verifies required prompt fields through step_verification_points; it does not create an independent runtime failure path."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Generated prompt has wrong depends_on copied from spec instead of TASK_INDEX.md"
+    result: "not_applicable"
+    evidence: ""
+    not_applicable_reason: "This documentation-generation task verifies depends_on through TASK_INDEX comparison in step_verification_points; it does not create an independent runtime failure path."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm Batch 2 IDs and dependency order match TASK_INDEX.md"
+    result: "passed"
+    command: "manual comparison of TASK_INDEX.md Batch 2 section"
+    evidence: "8 task IDs match exactly with correct depends_on"
+  - step: "Generate 9 prompt files"
+    result: "passed"
+    command: "ls docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md docs/phase0/tasks/P0-INFRA-00[1-8].md"
+    evidence: "All 9 files exist"
+  - step: "Verify method_profile presence in all prompts"
+    result: "passed"
+    command: "grep -l method_profile docs/phase0/tasks/P0-INFRA-00[1-8].md docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md"
+    evidence: "9 files found"
+  - step: "Verify structured-output baseline section in all prompts"
+    result: "passed"
+    command: "grep -l 'Structured-output baseline applicability' docs/phase0/tasks/P0-INFRA-00[1-8].md docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md"
+    evidence: "9 files found"
+  - step: "Verify depends_on matches TASK_INDEX.md"
+    result: "passed"
+    command: "manual comparison"
+    evidence: "All depends_on match TASK_INDEX.md Batch 2 section exactly"
+  - step: "Verify P0-INFRA-004/005 spike evidence gates use glob-style lookup"
+    result: "passed"
+    command: 'grep "P0-SPIKE-003_\*_passed.yaml" docs/phase0/tasks/P0-INFRA-004.md && grep "P0-SPIKE-004_\*_passed.yaml" docs/phase0/tasks/P0-INFRA-005.md'
+    evidence: "Both spike references use glob/INDEX lookup style"
+  - step: "Verify no forbidden paths modified"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "No blueprint, ADR, boot file, dependency, or lockfile in staged diff"
+  - step: "Update MANIFEST.md, README_TASK_PROMPTS.md, REPOSITORY_CONTEXT_MAP.md"
+    result: "passed"
+    command: "git diff --cached MANIFEST.md docs/phase0/tasks/README_TASK_PROMPTS.md docs/phase0/REPOSITORY_CONTEXT_MAP.md"
+    evidence: "All three files updated"
+
+changed_files:
+  - MANIFEST.md
+  - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-BATCH2-PROMPTS-001_20260515_151040_passed.yaml
+  - docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md
+  - docs/phase0/tasks/P0-INFRA-001.md
+  - docs/phase0/tasks/P0-INFRA-002.md
+  - docs/phase0/tasks/P0-INFRA-003.md
+  - docs/phase0/tasks/P0-INFRA-004.md
+  - docs/phase0/tasks/P0-INFRA-005.md
+  - docs/phase0/tasks/P0-INFRA-006.md
+  - docs/phase0/tasks/P0-INFRA-007.md
+  - docs/phase0/tasks/P0-INFRA-008.md
+  - docs/phase0/tasks/README_TASK_PROMPTS.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "grep -l method_profile docs/phase0/tasks/P0-INFRA-00[1-8].md docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md"
+    result: "passed"
+    output_snippet: "9 files found"
+  - command: "grep -l 'Structured-output baseline applicability' docs/phase0/tasks/P0-INFRA-00[1-8].md docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md"
+    result: "passed"
+    output_snippet: "9 files found"
+  - command: "grep -l 'branch:' docs/phase0/tasks/P0-INFRA-00[1-8].md docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md"
+    result: "passed"
+    output_snippet: "9 files found"
+  - command: "grep -l 'No commit, no push, no merge' docs/phase0/tasks/P0-INFRA-00[1-8].md"
+    result: "passed"
+    output_snippet: "8 files found"
+  - command: "grep -l 'Start this task only after all depends_on' docs/phase0/tasks/P0-INFRA-00[1-8].md"
+    result: "passed"
+    output_snippet: "8 files found"
+  - command: "git diff --cached --name-only | grep -E 'pyproject|uv.lock|package.json|pnpm-lock|^app/|^web/|\\.github/' || echo CLEAN"
+    result: "passed"
+    output_snippet: "CLEAN"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; documentation/prompt files only"
+  not_applicable_reason: "No app/ modules created or modified; prompt generation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: "No plaintext credentials, tokens, or sensitive values in generated prompt files; all references to secrets use placeholder guidance"
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; prompt generation task only"
+  not_applicable_reason: "No test files created in this documentation task"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_doc_task_no_ci_run_requested"
+  url_or_log_path: "local file evidence recorded in this Task Record"
+  not_applicable_reason: "P0-BATCH2-PROMPTS-001 is a local documentation/prompt-generation task and no CI run was requested."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "A future task requires CI execution for prompt validation."
+  evidence: "All acceptance criteria were validated by local command output and grep checks in this execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "Codex"
+  reviewed_at: "2026-05-15T15:10:40+08:00"
+  notes: >
+    Multiple review rounds completed across 10 consolidated fix categories:
+    owner/method alignment, branch declarations, TDD red/green sequences,
+    failure example quality, scope ambiguity, deliverables consistency,
+    dependency-source preservation, spike evidence gates with glob-style lookup,
+    no-new-dependency discipline, and .env.example coordination. All blocking
+    issues resolved. Final Codex verdict: approved_with_notes.
+remaining_risks:
+  - "Batch 2 prompts are templates only; actual implementation quality depends on execution-phase TDD adherence"
+  - "P0-INFRA-004/005 spike evidence gates assume P0-SPIKE-003/004 task records remain valid at execution time"
+rollback_or_failure_record: "not_applicable_task_passed_no_failure_record_generated"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "created"
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "Batch 2 per-task prompt package: 9 prompt files, README_TASK_PROMPTS.md, REPOSITORY_CONTEXT_MAP.md, MANIFEST.md"
+package_evidence: "git diff --cached --name-only verified; all 9 prompt files, 3 supporting docs, INDEX.md, and this Task Record are staged"
