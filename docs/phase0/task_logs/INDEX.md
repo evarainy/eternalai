@@ -24,3 +24,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-SCHEMA-001 | 2026-05-13 | passed | phase0/p0-schema-001-review-mode-alignment | (see git log) | not_applicable | codex_review |
 | P0-EXPERIENCE-001 | 2026-05-14 | passed | phase0/p0-experience-001-agent-lessons | (see git log) | not_applicable | codex_review |
 | P0-BATCH2-PROMPTS-001 | 2026-05-15 | passed | phase0/p0-batch2-prompts-001 | (see git log) | not_applicable | codex_review |
+| P0-INFRA-008 | 2026-05-15 | passed | phase0/p0-infra-008 | (see git log) | not_applicable | codex_review |

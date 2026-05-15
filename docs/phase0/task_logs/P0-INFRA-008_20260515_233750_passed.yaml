@@ -1,0 +1,178 @@
+task_id: P0-INFRA-008
+task_type: infrastructure
+result: passed
+started_at: "2026-05-15T23:37:50+08:00"
+completed_at: "2026-05-15T23:40:34+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-15T23:37:50+08:00"
+plan_approved_via: Codex session
+summary: >
+  Established the Phase 0 dependency mirror and allowlist governance baseline.
+  Added placeholder-only mirror environment documentation, a deterministic
+  Dependency Allowlist section in docs/dev/dependency_policy.md, and a
+  stdlib-only local checker that validates current dependency manifests against
+  that allowlist. CI wiring remains deferred to P0-INFRA-007.
+
+acceptance_criteria_result:
+  - criterion: "docs/dev/dependency_policy.md documents Python uv + intranet PyPI mirror usage rules"
+    result: passed
+    evidence: "docs/dev/dependency_policy.md contains Python uv Mirror Rules; validation command Select-String matched required allowlist fields and checker source."
+  - criterion: "docs/dev/dependency_policy.md documents frontend pnpm + intranet npm mirror usage rules"
+    result: passed
+    evidence: "docs/dev/dependency_policy.md contains Frontend pnpm Registry Rules and defers real registry values to internal package administration."
+  - criterion: "docs/dev/dependency_policy.md contains a structured Dependency Allowlist section with required fields"
+    result: passed
+    evidence: "The section '## Dependency Allowlist' contains table fields ecosystem, package, allowed_version_range, dependency_group, mirror_status, approval_source."
+  - criterion: "Dependency allowlist checker script reads the deterministic policy input and runs locally (exits zero on clean state, non-zero on undeclared dependency)"
+    result: passed
+    evidence: "python scripts/check_dependencies.py exited 0 with 5 manifests scanned and 16 dependencies checked; negative validation exited 1 for python:definitely-unapproved-package."
+  - criterion: "docs/dev/dependency_policy.md documents future CI integration handoff to P0-INFRA-007; actual CI workflow failure behavior is deferred to P0-INFRA-007"
+    result: passed
+    evidence: "docs/dev/dependency_policy.md states that CI integration for this checker is deferred to P0-INFRA-007; no CI workflow files were changed."
+  - criterion: "Repository-controlled allowlist/checker input is deterministic; future executors do not need to guess where policy lives"
+    result: passed
+    evidence: "docs/dev/dependency_policy.md names its own Dependency Allowlist section as the deterministic checker source; scripts/check_dependencies.py defaults to docs/dev/dependency_policy.md."
+
+failure_examples_tested:
+  - example: "AI agent adds a dependency not in the allowlist"
+    result: triggered
+    evidence: >
+      Negative validation used a temporary requirements-bad.txt containing
+      definitely-unapproved-package>=1.0. python scripts/check_dependencies.py
+      --manifest <temporary file> exited 1 and reported
+      'Undeclared dependency: python:definitely-unapproved-package' plus
+      'Deterministic allowlist source: docs/dev/dependency_policy.md'. The
+      temporary input was deleted; cleanup evidence reported
+      temporary_input_exists_after_cleanup=False.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Lockfile changes without corresponding pyproject.toml or package.json change"
+    result: not_applicable
+    evidence: "No dependency manifests or lockfiles were modified in P0-INFRA-008; full lockfile drift enforcement is deferred to P0-INFRA-007 or later dependency-changing tasks."
+    not_applicable_reason: "Full lockfile drift enforcement requires dependency/lockfile mutation or CI wiring, both outside P0-INFRA-008 scope."
+    not_applicable_scope: "intentionally_deferred"
+    blocked_by_task_id: "none"
+    activation_task_id: "P0-INFRA-007"
+    expiry_condition: "Checker is integrated into CI and dependency/lockfile drift checks are activated."
+
+step_verification_points:
+  - step: "Create docs/dev/dependency_policy.md"
+    result: passed
+    command: "Test-Path docs/dev/dependency_policy.md"
+    evidence: "True"
+  - step: "Verify deterministic allowlist source and required fields"
+    result: passed
+    command: "Select-String -Path docs/dev/dependency_policy.md -Pattern '## Dependency Allowlist','ecosystem','package','allowed_version_range','dependency_group','mirror_status','approval_source'"
+    evidence: "Matched the Dependency Allowlist heading and required field names in docs/dev/dependency_policy.md."
+  - step: "Update .env.example with mirror placeholder documentation"
+    result: passed
+    command: "Select-String -Path .env.example -Pattern 'PIP_INDEX_URL|UV_INDEX_URL|NPM_CONFIG_REGISTRY|npm.*registry|pnpm.*registry'"
+    evidence: "Matched placeholder PIP_INDEX_URL, UV_INDEX_URL, npm/pnpm registry text, and NPM_CONFIG_REGISTRY."
+  - step: "Create scripts/check_dependencies.py"
+    result: passed
+    command: "Test-Path scripts/check_dependencies.py"
+    evidence: "True"
+  - step: "Run checker script against clean state (positive case)"
+    result: passed
+    command: "python scripts/check_dependencies.py"
+    evidence: "Dependency check passed; deterministic allowlist source docs/dev/dependency_policy.md; manifests scanned 5; dependencies checked 16."
+  - step: "Negative checker validation: run checker against known-bad input (undeclared dependency) and confirm non-zero exit"
+    result: passed
+    command: "python tempfile harness invoking python scripts/check_dependencies.py --manifest <temporary requirements-bad.txt>"
+    evidence: "Exit code 1; output named python:definitely-unapproved-package and docs/dev/dependency_policy.md; temporary_input_exists_after_cleanup=False."
+  - step: "Stage all files and verify diff"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "Final staged file list is recorded in changed_files."
+
+changed_files:
+  - .env.example
+  - docs/dev/dependency_policy.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-INFRA-008_20260515_233750_passed.yaml
+  - scripts/check_dependencies.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git branch --show-current"
+    result: passed
+    output_snippet: "phase0/p0-infra-008"
+  - command: "git status --short"
+    result: passed
+    output_snippet: "Only intended staged P0-INFRA-008 files were present during closeout."
+  - command: "python -m py_compile scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "No output; command exited 0."
+  - command: "python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed. Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests scanned: 5. Dependencies checked: 16."
+  - command: "negative checker validation with Python tempfile"
+    result: passed
+    output_snippet: "checker_exit_code=1; Undeclared dependency: python:definitely-unapproved-package; Deterministic allowlist source: docs/dev/dependency_policy.md; temporary_input_exists_after_cleanup=False."
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: ".env.example; docs/dev/dependency_policy.md; docs/phase0/task_logs/INDEX.md; docs/phase0/task_logs/P0-INFRA-008_20260515_233750_passed.yaml; scripts/check_dependencies.py"
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "5 files changed; stat captured during final closeout validation."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+  evidence: "No production dependency manifests or lockfiles changed. scripts/check_dependencies.py imports only Python stdlib modules: argparse, json, re, sys, tomllib, dataclasses, pathlib."
+
+import_boundary_check:
+  result: passed
+  evidence: "git diff --cached --name-only contains no app/, web/src/, or app/execution_fabric/real_adapters/ paths; no Runtime, Gateway, or Adapter code was modified."
+
+security_scan_result:
+  result: passed
+  evidence: ".env.example contains placeholder-only example.invalid values; no real mirror URL, internal network URL, credential, or environment-specific private value was added."
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "P0-INFRA-008 added no test files; checker behavior was validated through required local positive and negative commands."
+  not_applicable_reason: "No repository test file was part of this infrastructure policy/checker deliverable."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "CI/checker integration task decides whether to add persistent tests or CI checks for this local checker."
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "P0-INFRA-008 explicitly defers checker CI wiring to P0-INFRA-007; no CI workflow files were changed."
+  not_applicable_reason: "CI integration and workflow failure behavior belong to P0-INFRA-007, not P0-INFRA-008."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "P0-INFRA-007 wires the dependency checker into CI."
+
+review:
+  mode: codex_review
+  reviewed_by: "Claude Code review and Codex review"
+  reviewed_at: "2026-05-15T23:40:34+08:00"
+  notes: >
+    Claude Code review verdict: approved_with_notes, no blocking issues, no
+    required corrections. Codex review verdict: approved_with_notes, no blocking
+    issues, no required corrections.
+
+remaining_risks:
+  - "tomllib requires Python 3.11+."
+  - "Manifest discovery with rglob may need depth limits in a larger repo."
+  - "Future work may enforce allowed_version_range more deeply."
+rollback_or_failure_record: ""
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: not_applicable
+package_confirmation: "No archive or deployable package was required or created for P0-INFRA-008."
+package_scope: "Task closeout staged repository files only: dependency policy, placeholder environment example, checker script, task log index, and this Task Record."
+package_evidence: "The task prompt deliverables are repository files; no package creation command was specified or run."
