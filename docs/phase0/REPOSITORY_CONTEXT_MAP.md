@@ -87,7 +87,7 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/phase0/REPOSITORY_CONTEXT_MAP.md | This file — repository navigation map | When orienting in the repo |
 | docs/phase0/PHASE1_TECHNICAL_BASELINE.md | Phase 1 structured-output technical baseline decision summary | When implementing Phase 1 LLM structured output or changing output strategy |
 | **docs/phase0/tasks/** | | |
-| docs/phase0/tasks/*.md | Per-task prompts (one file per task_id) | Current task only |
+| docs/phase0/tasks/*.md | Per-task prompts (one file per task_id); Batch 0/1/2 prompts available | Current task only |
 | **docs/phase0/task_logs/** | | |
 | docs/phase0/task_logs/*.yaml | Unified Task Records (historical evidence) | Current task record only; do not load all |
 | docs/phase0/task_logs/INDEX.md | Human-maintained task log index | When reviewing task history |
@@ -223,7 +223,7 @@ The following should not be modified unless the current task prompt explicitly a
 
 ### Current:
 
-- Generate Batch 2 per-task prompts (Batch 2 prompt gate per TASK_INDEX.md).
+- P0-BATCH2-PROMPTS-001 — Batch 2 per-task prompt package generation (passed)
 
 ### Next:
 
