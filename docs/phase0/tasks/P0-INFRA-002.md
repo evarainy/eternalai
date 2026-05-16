@@ -76,8 +76,12 @@ constraints:
   - No business logic implementation
   - Use enterprise intranet PyPI mirror or offline cache; AI must not add uncached dependencies
   - Python dependencies must be selected from known pyproject.toml range; new dependencies must record reason, version range, and intranet mirror availability
+  - Before changing pyproject.toml or uv.lock, direct dependencies required by this task must be verified or updated in docs/dev/dependency_policy.md
+  - When widening existing spike dependency rows for backend use, preserve original spike approval history and append the P0-INFRA-002 backend approval context rather than replacing history
   - uv.lock changes must be documented in the task log
   - If pyproject.toml already exists from P0-INFRA-008, preserve its dependency source / mirror / allowlist configuration and modify it incrementally. Do not overwrite or recreate it blindly. If pyproject.toml does not exist, create only the minimal file required by this task and document why.
+  - Scope is limited to Python / FastAPI backend skeleton work in pyproject.toml, uv.lock, app/, tests/, and docs/dev/dependency_policy.md only for dependency allowlist alignment
+  - Do not expand this task into frontend implementation, database migrations, runtime chain, gateway implementation, business adapters, CI wiring, Redis/ARQ production adoption, observability runtime instrumentation, or Docker Compose redesign
 
 acceptance_criteria:
   - criterion: "uv sync succeeds under intranet mirror or offline cache"
@@ -112,6 +116,10 @@ failure_examples_tested:
     expiry_condition: "N/A"
 
 step_verification_points:
+  - step: "Verify or update docs/dev/dependency_policy.md for direct P0-INFRA-002 dependencies before manifest or lockfile changes"
+    result: "pending"
+    command: "python scripts/check_dependencies.py"
+    evidence: ""
   - step: "Inspect existing pyproject.toml from P0-INFRA-008 (if present) and preserve dependency source configuration"
     result: "pending"
     command: "test -f pyproject.toml && echo 'EXISTS_PRESERVE_INCREMENTAL' || echo 'NOT_EXISTS_CREATE_MINIMAL'"
@@ -154,6 +162,7 @@ step_verification_points:
     evidence: ""
 
 touched_paths:
+  - docs/dev/dependency_policy.md
   - pyproject.toml
   - uv.lock
   - app/
