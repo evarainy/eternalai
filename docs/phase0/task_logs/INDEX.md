@@ -26,3 +26,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-BATCH2-PROMPTS-001 | 2026-05-15 | passed | phase0/p0-batch2-prompts-001 | (see git log) | not_applicable | codex_review |
 | P0-INFRA-008 | 2026-05-15 | passed | phase0/p0-infra-008 | (see git log) | not_applicable | codex_review |
 | P0-INFRA-001 | 2026-05-16 | passed | phase0/p0-infra-001 | (see git log) | not_applicable | codex_review |
+| P0-INFRA-002A | 2026-05-16 | passed | phase0/p0-infra-002a-deps | not_committed | not_applicable | codex_review |
