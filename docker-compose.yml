@@ -1,0 +1,115 @@
+# Phase 0 single-node Compose baseline (P0-INFRA-001).
+# Parse-only placeholder. No real credentials, mirror URLs, or secrets.
+# Profiles: core-infra, app, observability.
+# Do NOT add cross-profile depends_on between app and core-infra services.
+
+name: eternalai
+
+networks:
+  internal:
+    name: eternalai_internal
+
+volumes:
+  postgres-data:
+  redis-data:
+  langfuse-data:
+
+services:
+  # ── core-infra profile ────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    profiles: [core-infra]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-eternalai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-eternalai}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eternalai} -d ${POSTGRES_DB:-eternalai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    profiles: [core-infra]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── app profile ───────────────────────────────────────────────
+  api:
+    image: python:3.12-slim
+    profiles: [app]
+    # No cross-profile depends_on on postgres or redis.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eternalai}:${POSTGRES_PASSWORD:-change_me}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-eternalai}
+      REDIS_URL: redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}/0
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:${OTEL_COLLECTOR_PORT:-4317}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-placeholder_public_key}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-placeholder_secret_key}
+      LANGFUSE_HOST: http://langfuse:${LANGFUSE_PORT:-3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - internal
+
+  frontend:
+    image: node:22-alpine
+    profiles: [app]
+    # No cross-profile depends_on on postgres or redis.
+    environment:
+      API_URL: http://api:${API_PORT:-8000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    networks:
+      - internal
+
+  # ── observability profile ─────────────────────────────────────
+  langfuse:
+    image: langfuse/langfuse:3
+    profiles: [observability]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-eternalai}:${POSTGRES_PASSWORD:-change_me}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-eternalai}
+      NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-placeholder_nextauth_secret}
+      SALT: ${LANGFUSE_SALT:-placeholder_salt}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-placeholder_public_key}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-placeholder_secret_key}
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    volumes:
+      - langfuse-data:/var/lib/langfuse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.127.0
+    profiles: [observability]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./infra/docker/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${OTEL_COLLECTOR_PORT:-4317}:4317"
+      - "${OTEL_COLLECTOR_HTTP_PORT:-4318}:4318"
+      - "8888:8888"
+    networks:
+      - internal

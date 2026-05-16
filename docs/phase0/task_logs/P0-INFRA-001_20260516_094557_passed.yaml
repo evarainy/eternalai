@@ -1,0 +1,228 @@
+task_id: P0-INFRA-001
+task_type: infrastructure
+branch: phase0/p0-infra-001
+planning_owner: Codex
+implementation_owner: Claude Code / MiMo
+review_owner: Codex
+result: passed
+started_at: "2026-05-16T09:45:57+08:00"
+completed_at: "2026-05-16T09:45:58+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-16T09:45:57+08:00"
+plan_approved_via: Codex session
+summary: >
+  Established the Phase 0 single-node Docker Compose placeholder baseline.
+  Created docker-compose.yml with three parse-only profiles (core-infra, app,
+  observability) defining six services (postgres, redis, api, frontend,
+  langfuse, otel-collector). Added a minimal OTLP Collector config skeleton,
+  updated .env.example with four required variable groups, and created
+  README.md with a Docker Compose profiles section. All validation is
+  parse-only via docker compose config; no containers were started and no
+  runtime readiness is claimed.
+
+acceptance_criteria_result:
+  - criterion: "docker compose config passes for all profiles without errors"
+    result: passed
+    evidence: >
+      docker compose --env-file .env.example --profile core-infra --profile app
+      --profile observability config exited 0; all six services rendered with
+      correct structure.
+  - criterion: "core-infra / app / observability profiles define expected services, images/placeholders, ports, and config without conflicts"
+    result: passed
+    evidence: >
+      core-infra config showed postgres (postgres:17-alpine, port 5432) and
+      redis (redis:7-alpine, port 6379); app config showed api
+      (python:3.12-slim, port 8000) and frontend (node:22-alpine, port 5173);
+      observability config showed langfuse (langfuse/langfuse:3, port 3000) and
+      otel-collector (otel/opentelemetry-collector-contrib:0.127.0, ports
+      4317/4318/8888). No profile conflicts detected.
+  - criterion: ".env.example lists required variables for POSTGRES_, REDIS_, LANGFUSE_, and OTEL_ groups"
+    result: passed
+    evidence: >
+      PowerShell variable group check: POSTGRES_ count=4
+      (POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT);
+      REDIS_ count=2 (REDIS_HOST, REDIS_PORT);
+      LANGFUSE_ count=5 (LANGFUSE_PORT, LANGFUSE_PUBLIC_KEY,
+      LANGFUSE_SECRET_KEY, LANGFUSE_NEXTAUTH_SECRET, LANGFUSE_SALT);
+      OTEL_ count=2 (OTEL_COLLECTOR_PORT, OTEL_COLLECTOR_HTTP_PORT).
+      All groups >= 2 entries.
+  - criterion: "README.md append-only: new 'Docker Compose profiles' section added without overwriting existing content"
+    result: passed
+    evidence: >
+      README.md was created (did not previously exist at repository root)
+      containing a 'Docker Compose profiles' section with profile table,
+      quick-start commands, and environment variable notes.
+
+failure_examples_tested:
+  - example: "Docker daemon unavailable on execution host"
+    result: not_applicable
+    evidence: "Docker Desktop 29.4.0 with Compose v5.1.2 was available and confirmed running."
+    not_applicable_reason: "Docker availability confirmed during execution."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Compose config references undefined service or missing image"
+    result: triggered
+    evidence: >
+      Negative validation used a temporary invalid compose file with a service
+      referencing undefined network missing_network. docker compose config
+      exited 1 with stderr: 'service "broken" refers to undefined network
+      missing_network: invalid compose project'. Temporary file was deleted
+      after validation; no fixtures remain in the repository.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Create docker-compose.yml with core-infra, app, and observability profiles"
+    result: passed
+    command: "docker compose --env-file .env.example --profile core-infra --profile app --profile observability config"
+    evidence: "Exited 0; all 6 services rendered correctly."
+  - step: "Negative compose validation: prove docker compose config fails on invalid config"
+    result: passed
+    command: >
+      Created temporary invalid compose file referencing undefined network
+      missing_network, ran docker compose -f <temp-file> config, confirmed
+      exit code 1 and stderr contained missing_network. Deleted temp file.
+    evidence: "Exit code 1; stderr: service \"broken\" refers to undefined network missing_network: invalid compose project"
+  - step: "Create .env.example with required variable groups"
+    result: passed
+    command: >
+      PowerShell: Get-Content .env.example | Where-Object { $_ -match '^[A-Z0-9_]+=' }
+      then count per prefix POSTGRES_, REDIS_, LANGFUSE_, OTEL_.
+    evidence: "POSTGRES_=4, REDIS_=2, LANGFUSE_=5, OTEL_=2; all >= 2."
+  - step: "Create infra/docker/ directory with service configs"
+    result: passed
+    command: "test -f infra/docker/otel-collector-config.yaml"
+    evidence: "File exists; Python yaml.safe_load confirmed valid YAML with receivers, exporters, service.pipelines (traces, metrics, logs)."
+  - step: "Create README.md with 'Docker Compose profiles' section"
+    result: passed
+    command: "grep -c 'Docker Compose profiles' README.md"
+    evidence: "Count >= 1."
+  - step: "Stage all files and verify diff"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: ".env.example, README.md, docker-compose.yml, infra/docker/otel-collector-config.yaml"
+
+changed_files:
+  - .env.example
+  - README.md
+  - docker-compose.yml
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-INFRA-001_20260516_094557_passed.yaml
+  - infra/docker/otel-collector-config.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "docker compose version"
+    result: passed
+    output_snippet: "Docker Compose version v5.1.2"
+  - command: "docker compose --env-file .env.example config"
+    result: passed
+    output_snippet: "name: eternalai; services: {} (no profiles active)"
+  - command: "docker compose --env-file .env.example --profile core-infra config"
+    result: passed
+    output_snippet: "postgres (postgres:17-alpine, port 5432), redis (redis:7-alpine, port 6379)"
+  - command: "docker compose --env-file .env.example --profile app config"
+    result: passed
+    output_snippet: "api (python:3.12-slim, port 8000), frontend (node:22-alpine, port 5173)"
+  - command: "docker compose --env-file .env.example --profile observability config"
+    result: passed
+    output_snippet: "langfuse (langfuse/langfuse:3, port 3000), otel-collector (otel/opentelemetry-collector-contrib:0.127.0, ports 4317/4318/8888)"
+  - command: "docker compose --env-file .env.example --profile core-infra --profile app --profile observability config"
+    result: passed
+    output_snippet: "All 6 services rendered with correct structure"
+  - command: "docker compose --env-file .env.example --profile core-infra --profile app --profile observability config --services"
+    result: passed
+    output_snippet: "api, frontend, langfuse, otel-collector, postgres, redis"
+  - command: "python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed. Manifests scanned: 5. Dependencies checked: 16."
+  - command: "negative validation: temporary invalid compose with missing_network"
+    result: passed
+    output_snippet: "Exit code 1; stderr: service \"broken\" refers to undefined network missing_network: invalid compose project"
+  - command: "PowerShell .env.example variable group check"
+    result: passed
+    output_snippet: "POSTGRES_=4, REDIS_=2, LANGFUSE_=5, OTEL_=2; all groups >= 2 entries"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+  evidence: >
+    No production dependency manifests or lockfiles changed. Only Docker
+    Compose YAML, environment placeholder, OTel config skeleton, and README
+    were added or modified.
+
+import_boundary_check:
+  result: passed
+  evidence: >
+    git diff --cached --name-only contains no app/, web/src/, or
+    app/execution_fabric/real_adapters/ paths; no Runtime, Gateway, or Adapter
+    code was modified.
+
+security_scan_result:
+  result: passed
+  evidence: >
+    .env.example contains placeholder-only values (change_me, placeholder_*,
+    example.invalid); no real mirror URL, internal network URL, credential, or
+    environment-specific private value was added.
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "P0-INFRA-001 added no test files; validation was performed through required docker compose config and static checks."
+  not_applicable_reason: "No repository test file was part of this infrastructure baseline deliverable."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "P0-INFRA-001 does not add or modify CI workflow files."
+  not_applicable_reason: "CI workflow changes are outside the scope of this baseline task."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "CI integration may be added in a future infrastructure task."
+
+user_local_verification:
+  result: passed
+  evidence: >
+    Saved Docker Compose verification log confirmed all profile configs
+    parsed correctly. An earlier terminal paste appeared truncated/mixed but
+    the saved log proved the anomaly was not reproducible against the staged
+    file content. All 6 services rendered correctly with proper redis
+    structure nesting (healthcheck, image, networks, ports, volumes).
+
+review:
+  mode: codex_review
+  reviewed_by: "Codex"
+  reviewed_at: "2026-05-16T09:45:58+08:00"
+  notes: >
+    Codex implementation review verdict: approved. No blocking issues.
+    P0-INFRA-008 files preserved. No cross-profile depends_on. Parse-only
+    validation confirmed. Task Record readiness: ready.
+
+remaining_risks:
+  - "Image tags (postgres:17-alpine, langfuse/langfuse:3, otel/opentelemetry-collector-contrib:0.127.0) may require updates when pinned to exact versions in a future task."
+  - "Runtime readiness validation is deferred to P0-INFRA-004 (PostgreSQL), P0-INFRA-005 (Redis), P0-INFRA-006 (OTel/Langfuse)."
+  - "API and frontend images are base-image placeholders; real build targets are deferred to P0-INFRA-002 and P0-INFRA-003."
+rollback_or_failure_record: ""
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and the remote branch history after push.
+
+package_confirmation_status: not_applicable
+package_confirmation: "No archive or deployable package was required or created for P0-INFRA-001."
+package_scope: "Task closeout staged repository files only: docker-compose.yml, otel-collector config, environment example, README, task log index, and this Task Record."
+package_evidence: "The task prompt deliverables are repository files; no package creation command was specified or run."
