@@ -61,6 +61,8 @@ constraints:
   - Must not create web/ directory or any frontend implementation code
   - Must not modify docs/dev/dependency_policy.md
   - Must not add dependencies to any manifest or lockfile
+  - Must not perform broad repository cleanup
+  - Must not use _tmp/; _scratch/ is the only repo-local temporary workspace for later spike execution, and _scratch/ contents must not be committed
   - Must test @ant-design/x against React 18 + Ant Design 5.x + ProComponents 2.x compatibility matrix
   - Must check availability in enterprise npm mirror or offline cache
   - Must document version constraints and peer dependency conflicts
@@ -91,25 +93,34 @@ acceptance_criteria:
     evidence: ""
 
 failure_examples_tested:
+  # Pre-execution placeholders only. The final Task Record must not blindly copy
+  # these placeholder result/evidence values. During execution, overwrite each
+  # result using real command evidence:
+  # - triggered: the failure condition actually occurred and evidence proves it.
+  # - not_triggered: the failure condition was tested, did not occur, and
+  #   evidence proves it.
+  # - not_applicable: the example truly does not apply, with complete
+  #   not_applicable fields.
+  # If no real command evidence exists, do not mark triggered or not_triggered.
   - example: "@ant-design/x peer dependency conflicts with Ant Design 5.x"
-    result: "triggered"
-    evidence: "npm ls or pnpm list output showing peer dependency resolution failure"
+    result: "not_triggered"
+    evidence: "Pre-execution placeholder only; final Task Record must overwrite this with real command evidence."
     not_applicable_reason: "none"
     not_applicable_scope: "none"
     blocked_by_task_id: "none"
     activation_task_id: "none"
     expiry_condition: "N/A"
   - example: "@ant-design/x not available in enterprise npm mirror or offline cache"
-    result: "triggered"
-    evidence: "npm view or pnpm info output showing package not found in configured registry"
+    result: "not_triggered"
+    evidence: "Pre-execution placeholder only; final Task Record must overwrite this with real command evidence."
     not_applicable_reason: "none"
     not_applicable_scope: "none"
     blocked_by_task_id: "none"
     activation_task_id: "none"
     expiry_condition: "N/A"
   - example: "@ant-design/x requires React 19+ and is incompatible with frozen React 18 baseline"
-    result: "triggered"
-    evidence: "package.json engines or peerDependencies showing React >= 19 requirement"
+    result: "not_triggered"
+    evidence: "Pre-execution placeholder only; final Task Record must overwrite this with real command evidence."
     not_applicable_reason: "none"
     not_applicable_scope: "none"
     blocked_by_task_id: "none"
@@ -175,7 +186,7 @@ step_verification_points:
     evidence: ""
   - step: "Final forbidden-path scan"
     result: "pending"
-    command: "if (git diff --cached --name-only | Select-String -Pattern '^web/','^docs/dev/dependency_policy.md$','^scripts/check_dependencies.py$','(^|/)package.json$','(^|/)pnpm-lock.yaml$','(^|/)package-lock.json$','(^|/)yarn.lock$','^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^docs/blueprint/','^app/','^CLAUDE.md$','^AGENTS.md$','^\\.github/') { throw 'Forbidden staged path detected' }"
+    command: "$staged = @(git diff --cached --name-only); if ($staged | Select-String -Pattern '^web/','^docs/dev/dependency_policy.md$','^scripts/check_dependencies.py$','(^|/)package.json$','(^|/)pnpm-lock.yaml$','(^|/)package-lock.json$','(^|/)yarn.lock$','^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^docs/blueprint/','^app/','^CLAUDE.md$','^AGENTS.md$','^\\.github/') { throw 'Forbidden staged path detected' }; $badTaskLogs = @($staged | Where-Object { $_ -like 'docs/phase0/task_logs/*' -and $_ -ne 'docs/phase0/task_logs/INDEX.md' -and $_ -notmatch '^docs/phase0/task_logs/P0-FE-SPIKE-001_\\d{8}_\\d{6}_(passed|failed|blocked)\\.yaml$' }); if ($badTaskLogs.Count -gt 0) { throw 'Forbidden task log staged path detected' }"
     evidence: ""
   - step: "Final no-dependency-change check"
     result: "pending"
@@ -183,11 +194,17 @@ step_verification_points:
     evidence: ""
   - step: "Verify Task Record changed_files matches staged diff exactly"
     result: "pending"
-    command: "$recordFile = Get-ChildItem docs/phase0/task_logs/P0-FE-SPIKE-001_*_passed.yaml | Sort-Object LastWriteTime -Descending | Select-Object -First 1; $staged = @(git diff --cached --name-only); $lines = Get-Content $recordFile.FullName; $start = [Array]::IndexOf($lines, 'changed_files:'); $end = [Array]::IndexOf($lines, 'touched_paths_confirmed: true'); if ($start -lt 0 -or $end -le $start) { throw 'changed_files section not found' }; $record = @($lines[($start + 1)..($end - 1)] | Where-Object { $_ -match '^  - ' } | ForEach-Object { $_ -replace '^  - ', '' }); if ($staged.Count -ne $record.Count) { throw 'changed_files count mismatch' }; for ($i = 0; $i -lt $staged.Count; $i++) { if ($staged[$i] -ne $record[$i]) { throw 'changed_files order mismatch' } }"
+    command: "$recordFile = Get-ChildItem docs/phase0/task_logs/P0-FE-SPIKE-001_*_*.yaml | Where-Object { $_.Name -match '^P0-FE-SPIKE-001_\\d{8}_\\d{6}_(passed|failed|blocked)\\.yaml$' } | Sort-Object LastWriteTime -Descending | Select-Object -First 1; $staged = @(git diff --cached --name-only); $lines = Get-Content $recordFile.FullName; $start = [Array]::IndexOf($lines, 'changed_files:'); $end = [Array]::IndexOf($lines, 'touched_paths_confirmed: true'); if ($start -lt 0 -or $end -le $start) { throw 'changed_files section not found' }; $record = @($lines[($start + 1)..($end - 1)] | Where-Object { $_ -match '^  - ' } | ForEach-Object { $_ -replace '^  - ', '' }); if ($staged.Count -ne $record.Count) { throw 'changed_files count mismatch' }; for ($i = 0; $i -lt $staged.Count; $i++) { if ($staged[$i] -ne $record[$i]) { throw 'changed_files order mismatch' } }"
     evidence: ""
 
 touched_paths:
   - docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_passed.yaml
+  - docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_failed.yaml
+  - docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_blocked.yaml
+  - docs/phase0/task_logs/INDEX.md
+
+touched_paths_notes:
+  - "docs/phase0/task_logs/INDEX.md may be updated only when a Task Record is produced and staged, and only to add the P0-FE-SPIKE-001 Task Record entry. No other INDEX rewrite or cleanup is allowed."
 
 forbidden_paths:
   - web/**
@@ -205,13 +222,20 @@ forbidden_paths:
   - .github/**
   - CLAUDE.md
   - AGENTS.md
-  - docs/phase0/task_logs/** except docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_passed.yaml
+  - docs/phase0/task_logs/** except docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_passed.yaml, docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_failed.yaml, docs/phase0/task_logs/P0-FE-SPIKE-001_<timestamp>_blocked.yaml, and docs/phase0/task_logs/INDEX.md under touched_paths_notes
 
 stop_conditions:
   - "Working tree is not clean at task start"
   - "Forbidden paths are modified"
   - "Dependency or lockfile changes detected"
   - "Cannot access npm registry (enterprise mirror or npmjs) to check @ant-design/x"
+  - "@ant-design/x requires React 19+ or Ant Design 6+"
+  - "Peer dependency resolution fails against React 18 + Ant Design 5.x + ProComponents 2.x"
+  - "Enterprise npm mirror or offline cache is unavailable or cannot provide evidence"
+  - "Command evidence cannot be produced"
+  - "Continuing would require creating web/ or modifying dependency manifests or lockfiles"
+  - "Continuing would require modifying docs/dev/dependency_policy.md"
+  - "Continuing would require touching forbidden paths"
   - "changed_files cannot be reconciled with staged diff"
   - "Task Record changed_files does not exactly match git diff --cached --name-only after staging"
   - "Commit, push, or merge is attempted before independent staged review"
