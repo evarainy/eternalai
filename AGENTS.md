@@ -29,6 +29,14 @@ Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
 12. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
 13. Use the shared role/method guardrails (`docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`) according to the current role (execution or review). Do not cross-read another tool-specific boot file unless the current task or review prompt explicitly requires it.
 
+## Scratch/temp and artifact review rules
+- Verify no temp/cache artifacts (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_scratch/` contents) are staged.
+- Verify untracked files are either intentionally ignored or cleaned before closeout.
+- Verify `git ls-files --others --exclude-standard` is clean, or only shows intentional files that are explicitly explained.
+- Verify Task Record `changed_files` exactly matches `git diff --cached --name-only`.
+- Verify artifact lifecycle and cleanup timing are recorded in the Task Record.
+- Treat `.venv/` internals as out of scope unless task scope explicitly says otherwise.
+
 ## Completion
 Use the unified Task Record. Package confirmation is not tied to mandatory human diff review in v1.0.11. Record `package_confirmation_status`, `package_scope`, and `package_evidence`.
 

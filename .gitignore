@@ -1,3 +1,58 @@
 # Local AI tool state
 .claude/settings.local.json
 .codex/
+
+# ──────────────────────────────────────────────
+# Repository-local scratch/temp workspace
+# ──────────────────────────────────────────────
+_scratch/
+
+# ──────────────────────────────────────────────
+# Python bytecode and tool caches
+# ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ──────────────────────────────────────────────
+# Local Python virtual environments
+# ──────────────────────────────────────────────
+/.venv/
+/.venv*/
+/venv/
+/env/
+
+# ──────────────────────────────────────────────
+# Root-level temporary files
+# ──────────────────────────────────────────────
+/*.log
+/*.tmp
+/*.temp
+/*.bak
+/*.orig
+/*.rej
+
+# ──────────────────────────────────────────────
+# Root-level build, coverage, and package artifacts
+# ──────────────────────────────────────────────
+/dist/
+/build/
+/coverage/
+/htmlcov/
+/.coverage
+/.coverage.*
+/*.zip
+/*.tar
+/*.tar.gz
+/*.tgz
+/*.7z
+/*.whl
+
+# ──────────────────────────────────────────────
+# Frontend dependency/cache artifacts
+# ──────────────────────────────────────────────
+node_modules/
+.vite/
