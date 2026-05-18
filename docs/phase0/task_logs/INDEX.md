@@ -29,3 +29,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-INFRA-002A | 2026-05-16 | passed | phase0/p0-infra-002a-deps | not_committed | not_applicable | codex_review |
 | P0-INFRA-002 | 2026-05-18 | passed | phase0/p0-infra-002 | not_committed | not_applicable | codex_review |
 | P0-INFRA-002B | 2026-05-18 | passed | phase0/p0-infra-002b-cleanup | not_committed | not_applicable | codex_review |
+| P0-BATCH2-FE-PROMPTS-001 | 2026-05-18 | passed | phase0/P0-BATCH2-FE-PROMPTS-001 | not_committed | not_applicable | codex_review |

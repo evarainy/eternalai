@@ -224,11 +224,12 @@ The following should not be modified unless the current task prompt explicitly a
 ### Current:
 
 - P0-BATCH2-PROMPTS-001 — Batch 2 per-task prompt package generation (passed)
+- P0-BATCH2-FE-PROMPTS-001 — Frontend Batch 2 task sequence and prompt package update (current task)
 
 ### Next:
 
-- Execute Batch 2 / Phase 1 tasks per generated prompts.
-- Then proceed to Batch 2 / Phase 1 tasks according to the generated templates.
+- Execute frontend prerequisite sequence: P0-FE-SPIKE-001 -> P0-INFRA-003A -> P0-FE-GUIDE-001 -> P0-INFRA-003 -> P0-FE-ARCH-001
+- Then continue Batch 2 backend and infrastructure tasks per TASK_INDEX.md
 
 ### Deferred:
 
