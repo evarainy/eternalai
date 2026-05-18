@@ -1,0 +1,34 @@
+[project]
+name = "eternalai"
+version = "0.1.0"
+description = "EternalAI Phase 0 backend skeleton"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "pydantic>=2,<3",
+    "sqlalchemy>=2.0,<3.0",
+    "alembic>=1.13,<2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+    "httpx>=0.24.0",
+    "ruff>=0.8,<1",
+    "mypy>=1.13,<2",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
