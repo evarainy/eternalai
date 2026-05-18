@@ -18,10 +18,15 @@ Current execution package includes per-task prompts for Batch 0, Batch 1, and Ba
 | task_id | file | depends_on | type |
 |---|---|---|---|
 | P0-BATCH2-PROMPTS-001 | P0-BATCH2-PROMPTS-001.md | none | documentation (prompt generation) |
+| P0-BATCH2-FE-PROMPTS-001 | P0-BATCH2-FE-PROMPTS-001.md | P0-INFRA-002B | documentation (frontend prompt generation) |
 | P0-INFRA-008 | P0-INFRA-008.md | P0-PREP-003 | infrastructure |
 | P0-INFRA-001 | P0-INFRA-001.md | P0-INFRA-008 | infrastructure |
 | P0-INFRA-002 | P0-INFRA-002.md | P0-INFRA-008 | infrastructure |
-| P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-008 | infrastructure |
+| P0-FE-SPIKE-001 | P0-FE-SPIKE-001.md | P0-INFRA-008 | spike (frontend) |
+| P0-INFRA-003A | P0-INFRA-003A.md | P0-FE-SPIKE-001 | infrastructure (frontend deps) |
+| P0-FE-GUIDE-001 | P0-FE-GUIDE-001.md | P0-INFRA-003A | documentation (frontend) |
+| P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-003A, P0-FE-GUIDE-001 | infrastructure (frontend skeleton) |
+| P0-FE-ARCH-001 | P0-FE-ARCH-001.md | P0-INFRA-003 | spike (frontend architecture) |
 | P0-INFRA-004 | P0-INFRA-004.md | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | infrastructure |
 | P0-INFRA-006 | P0-INFRA-006.md | P0-INFRA-001, P0-INFRA-002 | infrastructure |
 | P0-INFRA-007 | P0-INFRA-007.md | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-006, P0-INFRA-008 | infrastructure |
