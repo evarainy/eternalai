@@ -1,0 +1,463 @@
+task_id: "P0-FE-SPIKE-001"
+task_type: "spike"
+result: "blocked"
+started_at: "2026-05-18T21:10:00+08:00"
+completed_at: "2026-05-18T21:13:35+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-18T21:10:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  @ant-design/x compatibility spike blocked. Registry investigation found no
+  approved enterprise npm mirror or offline cache configured in the environment
+  (repo .npmrc: absent, user .npmrc: absent, builtin .npmrc: npmjs.org default
+  only, no NPM_CONFIG_REGISTRY or related env vars set). Public npmjs.org
+  metadata (non-authoritative reference) shows @ant-design/x v1.0.0–v1.6.1
+  declares antd peerDep >=5.0.0 or ^5.20.3 with react >=18.0.0, which is
+  compatible with the frozen baseline (Ant Design 5.x + React 18). However,
+  the entire v2.x line (2.0.0–2.7.0) requires antd ^6.0.0+, making it
+  incompatible with the frozen Ant Design 5.x baseline. Enterprise mirror/cache
+  availability is a blocking requirement per dependency_policy.md and cannot be
+  proven with public npmjs.org results. Decision: blocked.
+
+decision: "blocked"
+decision_rationale: >
+  Primary blocker: no approved enterprise npm mirror or approved offline cache
+  is configured in this environment. The dependency_policy.md requires
+  "Use only internal mirrors or approved offline caches supplied by the
+  internal environment/package administrator." Public npmjs.org metadata
+  cannot satisfy this requirement.
+  Secondary finding: even if a mirror were available, @ant-design/x v2.x
+  (the active development line) requires antd ^6.0.0+, which is incompatible
+  with the frozen Ant Design 5.x baseline. Only the legacy v1.x line
+  (latest: v1.6.1, peerDep antd ^5.20.3, react >=18.0.0) would be compatible.
+  Recommendation for P0-INFRA-003A: do not add @ant-design/x to the npm
+  allowlist until (1) enterprise mirror/cache availability is confirmed, and
+  (2) a decision is made on whether to use the legacy v1.6.1 line or upgrade
+  the frozen baseline to Ant Design 6.x.
+
+blocking_conditions:
+  - "No approved enterprise npm mirror or approved offline cache configured in the environment"
+  - "npmjs.org results cannot serve as proof of enterprise mirror/cache availability"
+  - "If mirror becomes available: v2.x line requires antd ^6.0.0+ (incompatible with frozen antd 5.x baseline)"
+
+acceptance_criteria_result:
+  - criterion: "@ant-design/x compatibility with React 18 + Ant Design 5.x + ProComponents 2.x is tested and documented"
+    result: "failed"
+    evidence: >
+      Non-authoritative reference from npmjs.org: @ant-design/x v1.6.1 declares
+      peerDependencies: antd ^5.20.3, react >=18.0.0, react-dom >=18.0.0.
+      This is compatible with frozen React 18 + Ant Design 5.x baseline.
+      v2.x (2.0.0-2.7.0) declares antd ^6.0.0+, incompatible with frozen antd 5.x.
+      ProComponents 2.x is not a direct peerDependency of @ant-design/x;
+      compatibility would require runtime integration testing (deferred).
+      Evidence source: public npmjs.org (non-authoritative; enterprise mirror not available).
+      Result is failed because enterprise mirror/cache availability was not proven;
+      authoritative compatibility testing against an approved mirror cannot be confirmed.
+  - criterion: "@ant-design/x availability in enterprise npm mirror or offline cache is verified"
+    result: "failed"
+    evidence: >
+      Registry investigation: npm config get registry = https://registry.npmjs.org/.
+      npm config list shows no custom registry. repo .npmrc: NOT FOUND.
+      user .npmrc: NOT FOUND. builtin .npmrc: npmjs.org default only.
+      Env vars NPM_CONFIG_REGISTRY, NPM_REGISTRY, NPM_CONFIG_MIRROR, NPM_MIRROR,
+      npm_config_registry, npm_config_cache: all not set. No approved enterprise
+      mirror or offline cache is configured or discoverable in this environment.
+  - criterion: "Version constraints and peer dependency conflicts are documented"
+    result: "passed"
+    evidence: >
+      Full version matrix documented (see step_verification_points).
+      v1.0.0–v1.0.6: antd >=5.0.0, react >=18.0.0 (compatible).
+      v1.1.0–v1.6.1: antd ^5.20.3, react >=18.0.0 (compatible).
+      v2.0.0: antd ^6.0.0, react >=18.0.0 (incompatible with antd 5.x).
+      v2.0.1+: antd ^6.0.1 or ^6.1.x, react >=18.0.0 (incompatible with antd 5.x).
+  - criterion: "Clear decision (accept / reject / conditional accept) is recorded in Task Record"
+    result: "passed"
+    evidence: "Decision: blocked. See decision and decision_rationale fields."
+  - criterion: "Decision includes rationale, blocking conditions (if any), and recommendation for P0-INFRA-003A"
+    result: "passed"
+    evidence: "See decision_rationale and blocking_conditions fields."
+  - criterion: "No web/ directory created, no dependency_policy.md modified, no manifests or lockfiles changed"
+    result: "passed"
+    evidence: "Working tree clean at start and end. No manifest or lockfile modifications."
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: "Staged diff: 2 files changed, 464 insertions(+). changed_files matches staged diff order and count exactly."
+
+failure_examples_tested:
+  - example: "@ant-design/x peer dependency conflicts with Ant Design 5.x"
+    result: "triggered"
+    evidence: >
+      @ant-design/x v2.0.0–v2.7.0 declares antd peerDep ^6.0.0+, which conflicts
+      with the frozen Ant Design 5.x baseline. The v1.x line (1.0.0–1.6.1) declares
+      antd >=5.0.0 or ^5.20.3, which is compatible. However, v1.x is the legacy line
+      and v2.x is the active development line. Evidence from npmjs.org (non-authoritative).
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "@ant-design/x not available in enterprise npm mirror or offline cache"
+    result: "triggered"
+    evidence: >
+      Registry investigation found no approved enterprise mirror or offline cache.
+      All npm config layers (repo .npmrc, user .npmrc, builtin .npmrc, env vars)
+      point to npmjs.org only. This is the primary blocking condition.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "@ant-design/x requires React 19+ and is incompatible with frozen React 18 baseline"
+    result: "not_triggered"
+    evidence: >
+      All published @ant-design/x versions (0.0.0-experimental through 2.7.0) declare
+      react peerDep >=18.0.0, which is compatible with the frozen React 18 baseline.
+      No version requires React 19+. Evidence from npmjs.org (non-authoritative).
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm branch and clean working tree"
+    result: "passed"
+    command: "git branch --show-current && git status --short"
+    exit_code: 0
+    evidence: "branch: phase0/P0-FE-SPIKE-001, working tree clean"
+  - step: "Registry investigation: npm config list"
+    result: "passed"
+    command: "npm config list"
+    exit_code: 0
+    evidence: >
+      No custom registry configured. Only default npmjs.org via builtin config.
+      prefix: 'C:\Users\Administrator\AppData\Roaming\npm'. No scoped registries.
+  - step: "Registry investigation: npm config get registry"
+    result: "passed"
+    command: "npm config get registry"
+    exit_code: 0
+    evidence: "https://registry.npmjs.org/ (default, not an enterprise mirror)"
+  - step: "Registry investigation: npm config get @ant-design:registry"
+    result: "passed"
+    command: "npm config get @ant-design:registry"
+    exit_code: 0
+    evidence: "undefined (no scoped registry override)"
+  - step: "Registry investigation: repo .npmrc"
+    result: "passed"
+    command: 'Test-Path E:\code\eternalai\.npmrc'
+    exit_code: 0
+    evidence: "NOT FOUND"
+  - step: "Registry investigation: user .npmrc"
+    result: "passed"
+    command: 'Test-Path "$env:USERPROFILE\.npmrc"'
+    exit_code: 0
+    evidence: "NOT FOUND"
+  - step: "Registry investigation: npm environment variables"
+    result: "passed"
+    command: >-
+      foreach ($v in @('NPM_CONFIG_REGISTRY','NPM_REGISTRY','NPM_CONFIG_MIRROR',
+      'NPM_MIRROR','npm_config_registry','npm_config_cache')) { $val =
+      [Environment]::GetEnvironmentVariable($v); if ($val) { Write-Output
+      "$v = PRESENT" } else { Write-Output "$v = not set" } }
+    exit_code: 0
+    evidence: "All six variables: not set. No mirror configuration found in environment."
+  - step: "npmjs.org non-authoritative reference: @ant-design/x latest version and peerDependencies"
+    result: "passed"
+    command: "npm view @ant-design/x version peerDependencies --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (non-authoritative reference; not an approved enterprise mirror)"
+    tool_version: "npm 11.12.1, node v24.15.0"
+    evidence: >
+      Latest stable: v2.7.0. peerDependencies: antd ^6.1.1, react >=18.0.0,
+      react-dom >=18.0.0. Incompatible with frozen antd 5.x baseline.
+  - step: "npmjs.org non-authoritative reference: @ant-design/x v1.x peerDependencies"
+    result: "passed"
+    command: "npm view @ant-design/x@1 version peerDependencies --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (non-authoritative reference)"
+    tool_version: "npm 11.12.1"
+    evidence: >
+      v1.0.0–v1.0.6: antd >=5.0.0, react >=18.0.0 (compatible with frozen baseline).
+      v1.1.0–v1.6.1: antd ^5.20.3, react >=18.0.0 (compatible with frozen baseline).
+  - step: "npmjs.org non-authoritative reference: @ant-design/x v2.x peerDependencies"
+    result: "passed"
+    command: "npm view @ant-design/x@2 version peerDependencies --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (non-authoritative reference)"
+    tool_version: "npm 11.12.1"
+    evidence: >
+      v2.0.0: antd ^6.0.0. v2.0.1: antd ^6.0.1. v2.1.0: antd ^6.0.1 (also optional peerDep mermaid ^11.12.1).
+      v2.1.1: antd ^6.1.0. v2.1.2+: antd ^6.1.1. All require react >=18.0.0.
+      Entire v2.x line incompatible with frozen antd 5.x baseline.
+  - step: "npmjs.org non-authoritative reference: @ant-design/x v1.6.1 dependencies"
+    result: "passed"
+    command: "npm view @ant-design/x@1.6.1 dependencies --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (non-authoritative reference)"
+    tool_version: "npm 11.12.1"
+    evidence: >
+      Dependencies: rc-util ^5.43.0, rc-motion ^2.9.2, classnames ^2.5.1,
+      @babel/runtime ^7.25.6, @ant-design/icons ^5.4.0, @ant-design/colors ^7.1.0,
+      @ant-design/cssinjs ^1.21.1, @ant-design/fast-color ^2.0.6,
+      @ant-design/cssinjs-utils ^1.1.0.
+  - step: "Run scripts/check_dependencies.py"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    exit_code: 0
+    evidence: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-FE-SPIKE-001"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: |
+      M  docs/phase0/task_logs/INDEX.md
+      A  docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: |
+      docs/phase0/task_logs/INDEX.md
+      docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: |
+       docs/phase0/task_logs/INDEX.md                                       |   1 +
+       .../P0-FE-SPIKE-001_20260518_211335_blocked.yaml                     | 463 +++++++++++++++++++++
+       2 files changed, 464 insertions(+)
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output (clean)."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output (no untracked files)."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: >-
+      $staged = @(git diff --cached --name-only); if ($staged | Select-String
+      -Pattern '^web/','^docs/dev/dependency_policy\.md$','^scripts/check_dependencies\.py$',
+      '(^|/)package\.json$','(^|/)pnpm-lock\.yaml$','(^|/)package-lock\.json$',
+      '(^|/)yarn\.lock$','^pyproject\.toml$','^uv\.lock$','^docker-compose\.yml$',
+      '^docs/blueprint/','^app/','^CLAUDE\.md$','^AGENTS\.md$','^\.github/')
+      { throw 'Forbidden staged path detected' }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "FORBIDDEN PATH SCAN: PASSED - no forbidden staged paths"
+  - step: "Final no-dependency-change check"
+    result: "passed"
+    command: >-
+      if (git diff --cached --name-only | Select-String -Pattern
+      '^docs/dev/dependency_policy\.md$','^scripts/check_dependencies\.py$',
+      '(^|/)package\.json$','(^|/)pnpm-lock\.yaml$','(^|/)package-lock\.json$',
+      '(^|/)yarn\.lock$','^pyproject\.toml$','^uv\.lock$')
+      { throw 'Dependency, policy, or lockfile changed' }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "DEPENDENCY CHANGE CHECK: PASSED - no dependency/policy/lockfile changes"
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: >-
+      $lines = Get-Content docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml;
+      $start = [Array]::IndexOf($lines, 'changed_files:');
+      $end = [Array]::IndexOf($lines, 'touched_paths_confirmed: true');
+      $record = @($lines[($start+1)..($end-1)] | Where-Object { $_ -match '^\s+-\s' } |
+      ForEach-Object { ($_ -replace '^\s+-\s+"?','' -replace '"?\s*$','').Trim() });
+      $staged = @(git diff --cached --name-only);
+      for ($i=0; $i -lt $staged.Count; $i++) { if ($staged[$i] -ne $record[$i]) {
+      throw "mismatch at $i" } }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "Staged order: INDEX.md, P0-FE-SPIKE-001_20260518_211335_blocked.yaml. changed_files: same. Count: 2 = 2."
+  - step: "Validate Task Record YAML"
+    result: "passed"
+    command: "python -c \"from pathlib import Path; import yaml; p=Path('docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml'); yaml.safe_load(p.read_text(encoding='utf-8')); print('YAML OK')\""
+    exit_code: 0
+    evidence: "YAML OK"
+
+changed_files:
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "npm config list"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No custom registry; only npmjs.org default"
+  - command: "npm view @ant-design/x version peerDependencies --registry https://registry.npmjs.org/"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "v2.7.0, antd ^6.1.1, react >=18.0.0"
+  - command: "npm view @ant-design/x@1 version peerDependencies --registry https://registry.npmjs.org/"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "v1.0.0–v1.6.1: antd >=5.0.0/^5.20.3, react >=18.0.0"
+  - command: "npm view @ant-design/x@2 version peerDependencies --registry https://registry.npmjs.org/"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "v2.0.0–v2.7.0: antd ^6.0.0+, react >=18.0.0"
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; investigation-only spike task."
+  not_applicable_reason: "Spike investigation produces no application code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or registry auth values
+    exposed in Task Record or any output. .npmrc existence checked without
+    reading auth lines. Environment variables checked for presence only
+    with safe redaction rules. All npmjs.org queries used public metadata only.
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; investigation-only spike task."
+  not_applicable_reason: "Spike investigation produces no test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_spike_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record"
+  not_applicable_reason: "Local spike investigation; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "pending"
+  reviewed_at: "pending"
+  notes: "Ready for independent Codex staged review. Task blocked due to missing enterprise mirror/cache; non-authoritative npmjs.org reference data included for future use."
+remaining_risks:
+  - "Enterprise npm mirror/offline cache remains unconfirmed; all evidence sourced from public npmjs.org."
+  - "@ant-design/x v1.6.1 (latest antd 5.x-compatible) is the legacy line; v2.x active development requires antd 6.x."
+  - "If baseline upgrades to Ant Design 6.x, @ant-design/x v2.x becomes the compatible path."
+  - "If baseline stays on Ant Design 5.x, only @ant-design/x v1.6.1 is viable but may lack future feature/security updates."
+  - "ProComponents 2.x runtime interaction with @ant-design/x not tested; requires integration testing when web/ is created."
+  - "@ant-design/x v1.6.1 dependencies include @ant-design/cssinjs and @ant-design/icons which may conflict or overlap with existing antd 5.x internal dependencies."
+rollback_or_failure_record: "not_applicable_task_blocked_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; investigation-only spike task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install commands were run during this task."
+registry_availability:
+  enterprise_mirror_found: false
+  offline_cache_found: false
+  checked_sources:
+    - source: "npm config get registry"
+      value: "https://registry.npmjs.org/"
+      is_enterprise: false
+    - source: "npm config list"
+      value: "builtin default only (npmjs.org)"
+      is_enterprise: false
+    - source: "npm config get @ant-design:registry"
+      value: "undefined"
+      is_enterprise: false
+    - source: 'repo .npmrc (E:\code\eternalai\.npmrc)'
+      value: "NOT FOUND"
+      is_enterprise: false
+    - source: 'user .npmrc ($USERPROFILE\.npmrc)'
+      value: "NOT FOUND"
+      is_enterprise: false
+    - source: "builtin .npmrc"
+      value: "npmjs.org default"
+      is_enterprise: false
+    - source: "env NPM_CONFIG_REGISTRY"
+      value: "not set"
+      is_enterprise: false
+    - source: "env NPM_REGISTRY"
+      value: "not set"
+      is_enterprise: false
+    - source: "env NPM_CONFIG_MIRROR"
+      value: "not set"
+      is_enterprise: false
+    - source: "env NPM_MIRROR"
+      value: "not set"
+      is_enterprise: false
+  conclusion: >
+    No approved enterprise npm mirror or approved offline cache is configured
+    or discoverable in this environment. The only available registry source
+    is public npmjs.org, which does not satisfy dependency_policy.md requirements.
+  secrets_redacted: true
+  redaction_note: "No auth lines, tokens, or passwords were read from any .npmrc file."
+ant_design_x_compatibility_matrix:
+  source: "https://registry.npmjs.org/ (non-authoritative reference)"
+  source_note: "Public registry metadata only; not an approved enterprise source."
+  frozen_baseline:
+    react: "18.x"
+    antd: "5.x"
+    procomponents: "2.x"
+    vite: "frozen"
+    typescript_strict: true
+    react_router: "frozen"
+    tanstack_query: "frozen"
+    zustand: "frozen"
+    orval: "frozen"
+  versions_tested:
+    - version: "1.0.0"
+      antd_peer: ">=5.0.0"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: true
+      notes: "Initial stable release; antd peerDep is open-ended >=5.0.0"
+    - version: "1.0.6"
+      antd_peer: ">=5.0.0"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: true
+      notes: "Last 1.0.x release with open-ended antd peerDep"
+    - version: "1.1.0"
+      antd_peer: "^5.20.3"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: true
+      notes: "antd peerDep narrowed to ^5.20.3 (still 5.x-compatible)"
+    - version: "1.6.1"
+      antd_peer: "^5.20.3"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: true
+      notes: "Latest v1.x stable; antd ^5.20.3 compatible with 5.x baseline"
+    - version: "2.0.0"
+      antd_peer: "^6.0.0"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: false
+      notes: "Major version bump; antd peerDep jumps to ^6.0.0 (incompatible)"
+    - version: "2.7.0"
+      antd_peer: "^6.1.1"
+      react_peer: ">=18.0.0"
+      compatible_with_baseline: false
+      notes: "Latest stable v2.x; antd ^6.1.1 requires Ant Design 6.x"
+  procomponents_compatibility:
+    status: "not_tested_runtime_integration"
+    notes: >
+      ProComponents 2.x is not a direct peerDependency of @ant-design/x.
+      No peerDep conflict declared. Runtime compatibility requires integration
+      testing when web/ is created (deferred to P0-INFRA-003 or later).
