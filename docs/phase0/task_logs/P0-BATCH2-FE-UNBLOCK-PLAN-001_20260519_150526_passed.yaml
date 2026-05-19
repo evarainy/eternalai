@@ -1,0 +1,442 @@
+task_id: "P0-BATCH2-FE-UNBLOCK-PLAN-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-19T15:00:00+08:00"
+completed_at: "2026-05-19T15:05:26+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-19T15:00:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Batch 2 frontend unblock plan update completed. Repaired the task DAG after
+  P0-INFRA-003A blocked by inserting P0-INFRA-003B (Frontend Toolchain Unblock)
+  between P0-INFRA-003A and downstream tasks. Updated P0-FE-GUIDE-001 and
+  P0-INFRA-003 dependencies from P0-INFRA-003A to P0-INFRA-003B. Added
+  P0-INFRA-005 as hard dependency for P0-INFRA-007 with fallback note. Registered
+  P0-BATCH3-PROMPTS-001 as minimal Batch 3 prompt generation gate and enforced
+  it in TASK_INDEX.md before all Batch 3 interface-contract rows. Updated all
+  index, manifest, and context-map files. Pre-existing unregistered dependency
+  (P0-INFRA-002B) in README_TASK_PROMPTS.md was also resolved. Revision applied
+  after Codex needs_revision review: tightened P0-INFRA-003B registry gate,
+  enforced P0-BATCH3-PROMPTS-001 in TASK_INDEX.md, removed stale Ant Design X
+  wording from active prompts, and filled in final validation evidence. Second
+  revision after Codex staged review: refreshed stale Task Record diff-stat
+  evidence, clarified P0-BATCH3-PROMPTS-001 prerequisite wording, and added
+  scoped MANIFEST.md allowance for Batch 3 prompt registration.
+
+decision: "passed"
+decision_rationale: >
+  All planned DAG repairs completed cleanly. P0-INFRA-003B inserted after
+  P0-INFRA-003A. P0-FE-GUIDE-001 depends on P0-INFRA-003B (not P0-INFRA-003A).
+  P0-INFRA-003 depends on P0-INFRA-003B and P0-FE-GUIDE-001 (not P0-INFRA-003A).
+  P0-INFRA-005 added to P0-INFRA-007 dependencies with fallback note.
+  P0-BATCH3-PROMPTS-001 registered and enforced in TASK_INDEX.md before all
+  Batch 3 interface-contract rows. All DAG and stale-dependency validations pass.
+  No forbidden paths touched. No dependency manifests or lockfiles created.
+  Revision after Codex needs_revision: (1) P0-INFRA-003B registry gate tightened
+  — only enterprise_mirror and approved_offline_cache are pass outcomes;
+  public_npmjs_reference_only is reference-only/blocked; (2) P0-BATCH3-PROMPTS-001
+  enforced in TASK_INDEX.md with all P0-DOMAIN-*a rows depending on it;
+  (3) stale Ant Design X wording removed from P0-FE-GUIDE-001 and P0-INFRA-003;
+  (4) final validation evidence filled in. Second revision: (5) refreshed stale
+  Task Record diff-stat evidence to match actual final staged state;
+  (6) clarified P0-BATCH3-PROMPTS-001 prerequisite wording — prompt generation
+  may proceed before implementation prerequisites are complete, but generated
+  prompts must declare dependencies and not authorize early execution;
+  (7) added scoped MANIFEST.md allowance for Batch 3 prompt registration.
+
+acceptance_criteria_result:
+  - criterion: "P0-INFRA-003B inserted after P0-INFRA-003A in task DAG"
+    result: "passed"
+    evidence: >
+      P0-INFRA-003B.md created with depends_on: [P0-INFRA-003A]. Registered
+      in TASK_INDEX.md and README_TASK_PROMPTS.md.
+  - criterion: "P0-FE-GUIDE-001 depends on P0-INFRA-003B, not P0-INFRA-003A"
+    result: "passed"
+    evidence: >
+      TASK_INDEX.md, README_TASK_PROMPTS.md, and P0-FE-GUIDE-001.md all updated.
+      DAG validation and stale string check pass.
+  - criterion: "P0-INFRA-003 depends on P0-INFRA-003B and P0-FE-GUIDE-001, not P0-INFRA-003A"
+    result: "passed"
+    evidence: >
+      TASK_INDEX.md, README_TASK_PROMPTS.md, and P0-INFRA-003.md all updated.
+      DAG validation and stale string check pass.
+  - criterion: "P0-FE-GUIDE-001 remains lean: frontend AI coding guardrails only"
+    result: "passed"
+    evidence: >
+      P0-FE-GUIDE-001.md inspected. Objective already scoped to frontend AI coding
+      guidelines only. No broad handbook, no SDUI design, no Admin Console product
+      design. Dependencies and stop conditions updated to reference P0-INFRA-003B.
+  - criterion: "P0-INFRA-003 remains focused on fast frontend skeleton"
+    result: "passed"
+    evidence: >
+      P0-INFRA-003.md inspected. Objective focused on React 18 + Vite + Ant Design
+      skeleton. Only dependency reference updated from P0-INFRA-003A to P0-INFRA-003B.
+  - criterion: "P0-FE-ARCH-001 remains minimal SDUI boundary task"
+    result: "passed"
+    evidence: >
+      P0-FE-ARCH-001.md inspected. Covers card/status/error, ResponseEnvelope
+      relationship, explicit deferrals, no Ant Design X, no Ant Design 6.
+      No changes needed — dependency on P0-INFRA-003 was already correct.
+  - criterion: "P0-INFRA-004 remains strict"
+    result: "passed"
+    evidence: >
+      P0-INFRA-004.md inspected. PostgreSQL/Alembic baseline, strong planning,
+      review, migration/test evidence, Task Record discipline. No changes needed.
+  - criterion: "P0-INFRA-006 inspected and intentionally left unchanged"
+    result: "passed"
+    evidence: >
+      P0-INFRA-006.md inspected. Already deployment-only, already defers app
+      instrumentation, Gateway/Runtime spans, and end-to-end trace claims.
+      No stale or contradictory wording found. No changes needed.
+  - criterion: "P0-INFRA-005 sequenced before P0-INFRA-007 with fallback note"
+    result: "passed"
+    evidence: >
+      P0-INFRA-007.md updated with P0-INFRA-005 in depends_on. Fallback note
+      added: if P0-INFRA-005 becomes blocked, queue-related CI checks stay
+      conditional/not_applicable. P0-INFRA-005 remains JobQueuePort candidate
+      boundary only.
+  - criterion: "P0-BATCH3-PROMPTS-001 registered as minimal Batch 3 gate"
+    result: "passed"
+    evidence: >
+      P0-BATCH3-PROMPTS-001.md created. Registered in README_TASK_PROMPTS.md
+      Batch 3 inventory. Depends on P0-INFRA-002 and P0-INFRA-003B.
+      Carries forward constraints checklist. Does not generate domain prompts now.
+  - criterion: "No forbidden files changed"
+    result: "passed"
+    evidence: >
+      Forbidden path scan confirms no web/, package.json, pnpm-lock.yaml,
+      docs/blueprint/, app/, .github/, CLAUDE.md, AGENTS.md, pyproject.toml,
+      uv.lock, docker-compose.yml, or .gitignore in staged diff.
+  - criterion: "No dependency manifests or lockfiles created"
+    result: "passed"
+    evidence: "No package.json, pnpm-lock.yaml, package-lock.json, yarn.lock, pyproject.toml, or uv.lock in staged diff."
+  - criterion: "Final staged-diff evidence matches Task Record changed_files"
+    result: "passed"
+    evidence: >
+      changed_files lists 11 files (9 implementation + INDEX + Task Record).
+      git diff --cached --name-only after final staging matches.
+
+documentation_coverage_audit:
+  files_inspected:
+    - MANIFEST.md
+    - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+    - docs/phase0/TASK_INDEX.md
+    - docs/phase0/tasks/README_TASK_PROMPTS.md
+    - docs/phase0/task_logs/INDEX.md
+    - docs/phase0/tasks/P0-INFRA-003A.md
+    - docs/phase0/tasks/P0-FE-GUIDE-001.md
+    - docs/phase0/tasks/P0-INFRA-003.md
+    - docs/phase0/tasks/P0-FE-ARCH-001.md
+    - docs/phase0/tasks/P0-INFRA-004.md
+    - docs/phase0/tasks/P0-INFRA-005.md
+    - docs/phase0/tasks/P0-INFRA-006.md
+    - docs/phase0/tasks/P0-INFRA-007.md
+  files_updated:
+    - MANIFEST.md (registered P0-INFRA-003B.md and P0-BATCH3-PROMPTS-001.md)
+    - docs/phase0/REPOSITORY_CONTEXT_MAP.md (updated Completed, Current, Next sections)
+    - docs/phase0/TASK_INDEX.md (added P0-INFRA-003B row, added P0-BATCH3-PROMPTS-001 row, updated P0-FE-GUIDE-001/P0-INFRA-003/P0-INFRA-007 dependencies, enforced P0-BATCH3-PROMPTS-001 gate on all Batch 3 P0-DOMAIN-*a rows)
+    - docs/phase0/tasks/README_TASK_PROMPTS.md (added P0-INFRA-003B, P0-BATCH3-PROMPTS-001, P0-INFRA-002A, P0-INFRA-002B rows; updated P0-FE-GUIDE-001/P0-INFRA-003/P0-INFRA-007 dependencies; added Batch 3 inventory section)
+    - docs/phase0/task_logs/INDEX.md (added P0-BATCH2-FE-UNBLOCK-PLAN-001 row)
+    - docs/phase0/tasks/P0-FE-GUIDE-001.md (updated depends_on and stop condition to P0-INFRA-003B; removed stale Ant Design X acceptance wording)
+    - docs/phase0/tasks/P0-INFRA-003.md (updated depends_on from P0-INFRA-003A to P0-INFRA-003B; replaced stale 'finalized in P0-INFRA-003A' wording with current blocked-state wording)
+    - docs/phase0/tasks/P0-INFRA-007.md (added P0-INFRA-005 dependency and fallback note)
+  files_intentionally_unchanged:
+    - docs/phase0/tasks/P0-INFRA-006.md — inspected; already deployment-only, defers app instrumentation and Gateway/Runtime spans. No stale or contradictory wording found.
+    - docs/phase0/tasks/P0-FE-ARCH-001.md — inspected; already minimal SDUI boundary task with correct dependency on P0-INFRA-003. No changes needed.
+    - docs/phase0/tasks/P0-INFRA-004.md — inspected; already strict with PostgreSQL/Alembic baseline. No changes needed.
+    - docs/phase0/tasks/P0-INFRA-005.md — inspected; already JobQueuePort candidate boundary only. No changes needed.
+    - docs/phase0/tasks/P0-INFRA-003A.md — completed/merged task record; not modified per rules.
+    - docs/phase0/CONTEXT_LOADING_STRATEGY.md — not affected by DAG changes.
+    - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md — not affected.
+  stale_references_found:
+    - "P0-INFRA-002B unregistered in README_TASK_PROMPTS.md (pre-existing); resolved by adding row."
+    - "P0-INFRA-002A unregistered in README_TASK_PROMPTS.md (pre-existing); resolved by adding row."
+  notes: "No missing or unexpected documentation surfaces found."
+
+failure_examples_tested:
+  - example: "Pre-existing unregistered dependency P0-INFRA-002B blocks DAG validation"
+    result: "triggered"
+    evidence: >
+      DAG validation initially failed with: dependencies pointing to unregistered
+      task ids: [('P0-BATCH2-FE-PROMPTS-001', 'P0-INFRA-002B', ...)]. Fixed by
+      adding P0-INFRA-002A and P0-INFRA-002B rows to README_TASK_PROMPTS.md.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Duplicate P0-INFRA-002B row introduced by editing"
+    result: "triggered"
+    evidence: >
+      Second DAG validation failed with: duplicate task ids in same file:
+      [('P0-INFRA-002B', ...)]. Fixed by removing the duplicate row.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm branch and clean working tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short; git log --oneline --decorate -6"
+    exit_code: 0
+    evidence: >
+      Branch: phase0/P0-BATCH2-FE-UNBLOCK-PLAN-001. Working tree clean at start.
+      HEAD: 0333685 (origin/phase0/main, phase0/main) merge phase0(P0-INFRA-003A).
+  - step: "Read all affected task prompt files and index files"
+    result: "passed"
+    command: "read P0-INFRA-003A.md, P0-FE-GUIDE-001.md, P0-INFRA-003.md, P0-FE-ARCH-001.md, P0-INFRA-004.md, P0-INFRA-005.md, P0-INFRA-006.md, P0-INFRA-007.md, TASK_INDEX.md, README_TASK_PROMPTS.md, MANIFEST.md, REPOSITORY_CONTEXT_MAP.md, task_logs/INDEX.md"
+    evidence: "All files read successfully. Content analyzed for required changes."
+  - step: "Create P0-INFRA-003B.md task prompt"
+    result: "passed"
+    command: "Test-Path docs/phase0/tasks/P0-INFRA-003B.md"
+    exit_code: 0
+    evidence: "Created. Contains task_id, depends_on: [P0-INFRA-003A], method_profile, acceptance_criteria, stop_conditions, no-commit/no-push rules."
+  - step: "Create P0-BATCH3-PROMPTS-001.md task prompt"
+    result: "passed"
+    command: "Test-Path docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md"
+    exit_code: 0
+    evidence: "Created. Contains task_id, depends_on: [P0-INFRA-002, P0-INFRA-003B], method_profile, constraints_to_carry_forward checklist, acceptance_criteria."
+  - step: "Update P0-FE-GUIDE-001.md dependencies"
+    result: "passed"
+    command: "Select-String P0-FE-GUIDE-001.md -Pattern 'P0-INFRA-003B'"
+    evidence: "depends_on updated to P0-INFRA-003B. Stop condition updated. Step reference updated."
+  - step: "Update P0-INFRA-003.md dependencies"
+    result: "passed"
+    command: "Select-String P0-INFRA-003.md -Pattern 'P0-INFRA-003B'"
+    evidence: "depends_on updated from P0-INFRA-003A to P0-INFRA-003B."
+  - step: "Update P0-INFRA-007.md dependencies"
+    result: "passed"
+    command: "Select-String P0-INFRA-007.md -Pattern 'P0-INFRA-005'"
+    evidence: "P0-INFRA-005 added to depends_on. Fallback note added to constraints."
+  - step: "Update TASK_INDEX.md"
+    result: "passed"
+    command: "Select-String TASK_INDEX.md -Pattern 'P0-INFRA-003B'"
+    evidence: "P0-INFRA-003B row added. P0-FE-GUIDE-001, P0-INFRA-003, P0-INFRA-007 dependencies updated."
+  - step: "Update README_TASK_PROMPTS.md"
+    result: "passed"
+    command: "Select-String README_TASK_PROMPTS.md -Pattern 'P0-INFRA-003B','P0-BATCH3-PROMPTS-001'"
+    evidence: "P0-INFRA-003B, P0-INFRA-002A, P0-INFRA-002B rows added. Dependencies updated. Batch 3 inventory section added."
+  - step: "Update MANIFEST.md"
+    result: "passed"
+    command: "Select-String MANIFEST.md -Pattern 'P0-INFRA-003B.md','P0-BATCH3-PROMPTS-001.md'"
+    evidence: "New task files registered."
+  - step: "Update REPOSITORY_CONTEXT_MAP.md"
+    result: "passed"
+    command: "Select-String REPOSITORY_CONTEXT_MAP.md -Pattern 'P0-BATCH2-FE-UNBLOCK-PLAN-001'"
+    evidence: "Completed, Current, and Next sections updated."
+  - step: "DAG validation"
+    result: "passed"
+    command: "python DAG validation script"
+    exit_code: 0
+    evidence: "TASK DAG CHECK OK. No duplicates. No missing dependencies. All dependency assertions pass."
+  - step: "Stale dependency check"
+    result: "passed"
+    command: "python stale dependency check script"
+    exit_code: 0
+    evidence: "STALE FRONTEND DEPENDENCY CHECK OK. P0-FE-GUIDE-001 and P0-INFRA-003 no longer reference P0-INFRA-003A."
+  - step: "Forbidden path check"
+    result: "passed"
+    command: "python forbidden path check script"
+    exit_code: 0
+    evidence: "No forbidden paths in changed/new files."
+  - step: "New file metadata check"
+    result: "passed"
+    command: "python metadata check script"
+    exit_code: 0
+    evidence: "Both P0-INFRA-003B.md and P0-BATCH3-PROMPTS-001.md have task_id, depends_on, method_profile, no-commit, no-push."
+  - step: "Stage files"
+    result: "passed"
+    command: "git add MANIFEST.md docs/phase0/REPOSITORY_CONTEXT_MAP.md docs/phase0/TASK_INDEX.md docs/phase0/task_logs/INDEX.md docs/phase0/task_logs/P0-BATCH2-FE-UNBLOCK-PLAN-001_20260519_150526_passed.yaml docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md docs/phase0/tasks/P0-FE-GUIDE-001.md docs/phase0/tasks/P0-INFRA-003.md docs/phase0/tasks/P0-INFRA-003B.md docs/phase0/tasks/P0-INFRA-007.md docs/phase0/tasks/README_TASK_PROMPTS.md"
+    exit_code: 0
+    evidence: "11 files staged (LF/CRLF warnings on new .md/.yaml files, normal for Windows)."
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: >
+      MANIFEST.md, docs/phase0/REPOSITORY_CONTEXT_MAP.md, docs/phase0/TASK_INDEX.md,
+      docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-BATCH2-FE-UNBLOCK-PLAN-001_20260519_150526_passed.yaml,
+      docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md, docs/phase0/tasks/P0-FE-GUIDE-001.md,
+      docs/phase0/tasks/P0-INFRA-003.md, docs/phase0/tasks/P0-INFRA-003B.md,
+      docs/phase0/tasks/P0-INFRA-007.md, docs/phase0/tasks/README_TASK_PROMPTS.md.
+      11 files total.
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: >
+      11 files changed, 1064 insertions(+), 31 deletions(-). Includes new
+      P0-INFRA-003B.md (307 lines), P0-BATCH3-PROMPTS-001.md (257 lines),
+      Task Record (442 lines). TASK_INDEX.md shows 30-line diff due to
+      Batch 3 gate enforcement.
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output (clean). No whitespace issues."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output (no untracked files remaining)."
+
+changed_files:
+  - "MANIFEST.md"
+  - "docs/phase0/REPOSITORY_CONTEXT_MAP.md"
+  - "docs/phase0/TASK_INDEX.md"
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-BATCH2-FE-UNBLOCK-PLAN-001_20260519_150526_passed.yaml"
+  - "docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md"
+  - "docs/phase0/tasks/P0-FE-GUIDE-001.md"
+  - "docs/phase0/tasks/P0-INFRA-003.md"
+  - "docs/phase0/tasks/P0-INFRA-003B.md"
+  - "docs/phase0/tasks/P0-INFRA-007.md"
+  - "docs/phase0/tasks/README_TASK_PROMPTS.md"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python DAG validation script"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "TASK DAG CHECK OK"
+  - command: "python stale dependency check script"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "STALE FRONTEND DEPENDENCY CHECK OK"
+  - command: "python forbidden path check script"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "FORBIDDEN PATH CHECK OK"
+  - command: "python new file metadata check script"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "All required metadata present in both new files"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; documentation/planning task."
+  not_applicable_reason: "Documentation/planning task produces no application code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: "No credentials, tokens, passwords, or secrets in any changed files."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; documentation/planning task."
+  not_applicable_reason: "Documentation/planning task produces no test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_task_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record"
+  not_applicable_reason: "Local documentation task; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "codex"
+  reviewed_at: "2026-05-19"
+  notes: >
+    Initial Codex review returned needs_revision with 4 blocking issues.
+    All 4 corrections applied in first revision pass. Second Codex staged review
+    returned needs_revision with 3 remaining issues. All 3 corrections applied
+    in second revision pass. Third Codex staged review requested.
+
+revision_corrections:
+  correction_1:
+    issue: "P0-INFRA-003B weakens registry gate by allowing public registry fallback"
+    fix: >
+      Rewrote registry classification rules: only enterprise_mirror and
+      approved_offline_cache are pass outcomes. public_npmjs_reference_only is
+      reference-only and insufficient for unblocking. Added Registry
+      classification rules section. Updated acceptance criteria, constraints,
+      stop conditions, and failure examples.
+    files_changed:
+      - docs/phase0/tasks/P0-INFRA-003B.md
+  correction_2:
+    issue: "P0-BATCH3-PROMPTS-001 not enforced in TASK_INDEX.md before Batch 3 rows"
+    fix: >
+      Added P0-BATCH3-PROMPTS-001 row to TASK_INDEX.md Batch 3 section.
+      Updated all P0-DOMAIN-*a rows to depend on P0-BATCH3-PROMPTS-001 instead
+      of P0-INFRA-002. P0-DOMAIN-005a retains P0-INFRA-006; P0-DOMAIN-010a
+      retains P0-SPIKE-001 and P0-SPIKE-002.
+    files_changed:
+      - docs/phase0/TASK_INDEX.md
+  correction_3:
+    issue: "Task Record final validation steps still marked pending"
+    fix: >
+      Reran all final validation commands after revision staging. Filled in
+      actual command evidence for final staged file list, diff stat, whitespace
+      check, and untracked-file check.
+    files_changed:
+      - docs/phase0/task_logs/P0-BATCH2-FE-UNBLOCK-PLAN-001_20260519_150526_passed.yaml
+  correction_4:
+    issue: "Active frontend prompts contain stale Ant Design X / blocked P0-INFRA-003A wording"
+    fix: >
+      P0-FE-GUIDE-001: replaced 'If P0-FE-SPIKE-001 decided to accept @ant-design/x'
+      with explicit blocked/excluded statement. P0-INFRA-003: replaced 'handled by
+      P0-FE-SPIKE-001 / P0-INFRA-003A' and 'finalized in P0-INFRA-003A' with
+      current blocked-state wording referencing P0-INFRA-003B as the unblock gate.
+    files_changed:
+      - docs/phase0/tasks/P0-FE-GUIDE-001.md
+      - docs/phase0/tasks/P0-INFRA-003.md
+  correction_5:
+    issue: "Task Record final diff-stat evidence stale (938 insertions vs actual 1028)"
+    fix: >
+      Reran git diff --cached --stat after all second-revision edits. Updated
+      Final staged diff stat evidence from 938 to 1028 insertions, P0-BATCH3-PROMPTS-001.md
+      from 235 to 257 lines, Task Record from 338 to 406 lines.
+    files_changed:
+      - docs/phase0/task_logs/P0-BATCH2-FE-UNBLOCK-PLAN-001_20260519_150526_passed.yaml
+  correction_6:
+    issue: "P0-BATCH3-PROMPTS-001 contradictory prerequisite wording"
+    fix: >
+      Objective now clarifies that prompt generation may proceed before downstream
+      implementation prerequisites are complete, but generated prompts must declare
+      dependencies and not authorize early execution. Added failure example for
+      dependency gate removal. Clarified that this task must not claim prerequisite
+      implementation evidence exists when it does not.
+    files_changed:
+      - docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md
+  correction_7:
+    issue: "MANIFEST.md forbidden in P0-BATCH3-PROMPTS-001, blocking prompt registration"
+    fix: >
+      Removed MANIFEST.md from forbidden_paths. Added scoped constraint allowing
+      MANIFEST.md updates only to register generated Batch 3 prompt files. Added
+      allowed_paths_with_scope section. Updated forbidden-path scan command in
+      step_verification_points. Updated deliverable to include MANIFEST.md.
+    files_changed:
+      - docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md
+remaining_risks:
+  - "P0-INFRA-003B is not yet executed; frontend toolchain may remain blocked if pnpm installation and npm mirror are not resolved."
+  - "P0-BATCH3-PROMPTS-001 is not yet executed; Batch 3 prompts are not generated yet."
+  - "P0-INFRA-002A/002B were not in TASK_INDEX.md (completed and merged out-of-band); they are now registered in README_TASK_PROMPTS.md but not in TASK_INDEX.md."
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; documentation/planning task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install commands were run during this task."

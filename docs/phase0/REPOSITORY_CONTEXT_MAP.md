@@ -220,16 +220,23 @@ The following should not be modified unless the current task prompt explicitly a
 - P0-BASELINE-001 — Phase 1 structured-output technical baseline summary
 - P0-CLEANUP-001 — Documentation sync after Batch 1
 - P0-TEMPLATE-001 — Task template upgrade with method_profile, evidence rules, and role boundaries
+- P0-BATCH2-PROMPTS-001 — Batch 2 per-task prompt package generation (passed)
+- P0-BATCH2-FE-PROMPTS-001 — Frontend Batch 2 task sequence and prompt package update (passed)
+- P0-INFRA-008 — Internal Dependency Mirror and Dependency Allowlist Baseline (passed)
+- P0-INFRA-001 — Docker Compose Single-node Baseline (passed)
+- P0-INFRA-002 — Python uv + FastAPI Backend Skeleton (passed)
+- P0-FE-SPIKE-001 — Ant Design X Compatibility and Dependency Spike (blocked)
+- P0-INFRA-003A — Frontend Dependency Policy and pnpm Availability Gate (blocked)
 
 ### Current:
 
-- P0-BATCH2-PROMPTS-001 — Batch 2 per-task prompt package generation (passed)
-- P0-BATCH2-FE-PROMPTS-001 — Frontend Batch 2 task sequence and prompt package update (current task)
+- P0-BATCH2-FE-UNBLOCK-PLAN-001 — Batch 2 frontend unblock plan update (current task)
 
 ### Next:
 
-- Execute frontend prerequisite sequence: P0-FE-SPIKE-001 -> P0-INFRA-003A -> P0-FE-GUIDE-001 -> P0-INFRA-003 -> P0-FE-ARCH-001
-- Then continue Batch 2 backend and infrastructure tasks per TASK_INDEX.md
+- Execute frontend toolchain unblock sequence: P0-INFRA-003B -> P0-FE-GUIDE-001 -> P0-INFRA-003 -> P0-FE-ARCH-001
+- Continue Batch 2 backend and infrastructure tasks per TASK_INDEX.md
+- Generate Batch 3 interface-contract prompts via P0-BATCH3-PROMPTS-001
 
 ### Deferred:
 

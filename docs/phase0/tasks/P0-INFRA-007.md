@@ -31,6 +31,7 @@ depends_on:
   - P0-INFRA-002
   - P0-INFRA-003
   - P0-INFRA-004
+  - P0-INFRA-005
   - P0-INFRA-006
   - P0-INFRA-008
 priority: prerequisite
@@ -78,6 +79,7 @@ constraints:
   - Existing pyproject.toml, web/package.json, and dependency source/allowlist configuration from prior tasks must be modified incrementally, not overwritten
   - Do not recreate scripts/check_dependencies.py; it is owned by P0-INFRA-008. This task only verifies it exists and wires CI to invoke it.
   - If app/ports/job_queue.py or tests/infra/job_queue/ do not yet exist, mark corresponding import-boundary and test coverage checks as not_applicable with reason "P0-INFRA-005 not yet merged"
+  - P0-INFRA-005 is a hard dependency, but if it becomes blocked or cannot run, queue-related CI checks must be kept conditional/not_applicable rather than blocking CI indefinitely. Do not turn P0-INFRA-005 into production queue adoption; it remains JobQueuePort + Redis/ARQ candidate boundary only.
 
 acceptance_criteria:
   - criterion: "Backend lint / mypy / pytest empty baseline can run"

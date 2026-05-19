@@ -31,7 +31,7 @@ branch: "phase0/P0-FE-GUIDE-001"
 title: Frontend AI Coding Guidelines
 type: documentation
 depends_on:
-  - P0-INFRA-003A
+  - P0-INFRA-003B
 priority: P0
 source_spec: "docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md"
 task_index: "docs/phase0/TASK_INDEX.md"
@@ -64,7 +64,7 @@ constraints:
   - Must reference the frozen frontend baseline: React 18 + Vite + TypeScript strict + Ant Design 5.x + ProComponents 2.x + React Router + TanStack Query + Zustand + Orval
   - Must cover: AntD layout, ProComponents usage, token/CSS Module styling, no arbitrary inline styles, Orval generated client usage, TanStack Query/Zustand boundaries, Vitest/React Testing Library conventions, no handwritten business fetch/axios
   - Must be written as actionable rules for AI coding agents, not general developer documentation
-  - If P0-FE-SPIKE-001 decided to accept @ant-design/x, include guidelines for its usage patterns
+  - Ant Design X is not adopted for current Phase 1 (P0-FE-SPIKE-001 was blocked; P0-INFRA-003A excluded @ant-design/x from the allowlist). Do not include Ant Design X usage guidelines.
 
 acceptance_criteria:
   - criterion: "docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md created and registered in MANIFEST.md"
@@ -121,9 +121,9 @@ step_verification_points:
     result: "pending"
     command: "git branch --show-current && git status --short"
     evidence: ""
-  - step: "Locate P0-FE-SPIKE-001 and P0-INFRA-003A Task Records for reference"
+  - step: "Locate P0-INFRA-003B Task Record for reference"
     result: "pending"
-    command: "Get-ChildItem docs/phase0/task_logs/P0-FE-SPIKE-001_*_passed.yaml, Get-ChildItem docs/phase0/task_logs/P0-INFRA-003A_*_passed.yaml"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-FE-SPIKE-001_*_blocked.yaml, Get-ChildItem docs/phase0/task_logs/P0-INFRA-003B_*_passed.yaml"
     evidence: ""
   - step: "Create docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md"
     result: "pending"
@@ -199,7 +199,7 @@ forbidden_paths:
 
 stop_conditions:
   - "Working tree is not clean at task start"
-  - "P0-INFRA-003A Task Record not found or result is not passed"
+  - "P0-INFRA-003B Task Record not found or result is not passed"
   - "Forbidden paths are modified"
   - "Frontend code or dependency files created"
   - "changed_files cannot be reconciled with staged diff"

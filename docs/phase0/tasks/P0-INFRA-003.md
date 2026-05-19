@@ -30,7 +30,7 @@ branch: "phase0/P0-INFRA-003"
 title: React 18 + Vite + Ant Design 5.x Frontend Skeleton
 type: infrastructure
 depends_on:
-  - P0-INFRA-003A
+  - P0-INFRA-003B
   - P0-FE-GUIDE-001
 priority: P0
 source_spec: "docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md"
@@ -50,8 +50,11 @@ objective: >
   for deterministic OpenAPI codegen against a checked-in mock OpenAPI fixture or
   stable backend OpenAPI JSON. Only provide health page, basic layout, and mock
   API call sample. Clarify ProComponents 2.x / MSW / Orval intranet mirror status.
-  Does not decide Ant Design X adoption (handled by P0-FE-SPIKE-001 / P0-INFRA-003A)
-  or frontend npm allowlist (handled by P0-INFRA-003A). Must reference
+  Does not decide Ant Design X adoption — P0-FE-SPIKE-001 was blocked and
+  @ant-design/x is excluded from the current Phase 1 allowlist. Ant Design 6
+  is not adopted. Frontend npm allowlist was established in P0-INFRA-003A but
+  the toolchain gate was blocked; P0-INFRA-003B must resolve pnpm and enterprise
+  mirror/cache before this skeleton task can proceed. Must reference
   docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for frontend coding conventions.
 
 structured_output_baseline_applicability: "not_applicable — this task does not implement LLM structured output."
@@ -70,8 +73,8 @@ constraints:
   - No Redis/ARQ changes
   - No Langfuse changes
   - Only health page, basic layout, and mock API call sample
-  - Does not decide Ant Design X adoption — that decision is made by P0-FE-SPIKE-001 and finalized in P0-INFRA-003A
-  - Does not decide frontend npm allowlist — that is finalized in P0-INFRA-003A
+  - Does not decide Ant Design X adoption — P0-FE-SPIKE-001 was blocked; @ant-design/x is excluded from the current Phase 1 allowlist; Ant Design 6 is not adopted
+  - Does not decide frontend npm allowlist — established in P0-INFRA-003A; toolchain unblock gate is P0-INFRA-003B
   - Must reference docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for all frontend coding conventions
   - Use enterprise intranet npm mirror or offline cache; AI must not add uncached dependencies
   - Frontend API client connecting to backend OpenAPI must be generated via Orval or equivalent OpenAPI codegen
