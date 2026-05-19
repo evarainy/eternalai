@@ -1,0 +1,447 @@
+task_id: "P0-INFRA-003A"
+task_type: "infrastructure"
+result: "blocked"
+started_at: "2026-05-19T00:15:00+08:00"
+completed_at: "2026-05-19T00:15:42+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-19T00:15:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Frontend dependency policy and pnpm availability gate blocked. pnpm is not
+  available in the execution environment (Get-Command pnpm returns command not
+  found). Node v24.15.0 and npm 11.12.1 are available. No approved enterprise
+  npm mirror or offline cache is configured (repo .npmrc: absent, user .npmrc:
+  absent, npm config registry: public npmjs.org default). The frozen frontend
+  baseline allowlist (10 npm packages) was successfully added to
+  docs/dev/dependency_policy.md. @ant-design/x is documented as excluded from
+  the allowlist. Decision: blocked on pnpm unavailability and missing enterprise
+  mirror/cache.
+
+decision: "blocked"
+decision_rationale: >
+  Primary blocker: pnpm is not available in the execution environment.
+  Get-Command pnpm returns "CommandNotFoundException". The task requires pnpm
+  availability verification with exact command/exit-code/output evidence. pnpm
+  cannot be installed within P0-INFRA-003A per task constraints (no install
+  commands allowed).
+  Secondary blocker: no approved enterprise npm mirror or approved offline cache
+  is configured. npm config get registry returns https://registry.npmjs.org/
+  (default public registry, not an enterprise mirror). Repo .npmrc and user
+  .npmrc are both absent. This matches P0-FE-SPIKE-001 findings.
+  Accomplished: docs/dev/dependency_policy.md updated with 10 frozen frontend
+  baseline npm allowlist rows (react, react-dom, vite, typescript, antd,
+  @ant-design/pro-components, react-router-dom, @tanstack/react-query, zustand,
+  orval). @ant-design/x documented as excluded. Dependency checker passes.
+  Recommendation: install pnpm in a preparatory task or confirm preinstalled
+  toolchain, then re-run pnpm availability gate.
+
+blocking_conditions:
+  - "pnpm is not available in the execution environment (command not found)"
+  - "No approved enterprise npm mirror or approved offline cache configured"
+
+acceptance_criteria_result:
+  - criterion: "P0-FE-SPIKE-001 Task Record is referenced and its decision is incorporated as exclusion evidence"
+    result: "passed"
+    evidence: >
+      P0-FE-SPIKE-001_20260518_211335_blocked.yaml located and decision
+      extracted: "blocked". No conflicting records found. Blocked result used
+      as authoritative exclusion evidence for @ant-design/x.
+  - criterion: "Frontend npm allowlist entries added to docs/dev/dependency_policy.md Dependency Allowlist table for frozen baseline"
+    result: "passed"
+    evidence: >
+      10 npm rows added to Dependency Allowlist table: react (>=18,<19),
+      react-dom (>=18,<19), vite (pending_version_evidence_no_manifest_use),
+      typescript (pending_version_evidence_no_manifest_use), antd (>=5,<6),
+      @ant-design/pro-components (>=2,<3),
+      react-router-dom (pending_version_evidence_no_manifest_use),
+      @tanstack/react-query (pending_version_evidence_no_manifest_use),
+      zustand (pending_version_evidence_no_manifest_use),
+      orval (pending_version_evidence_no_manifest_use). All use
+      ecosystem value "npm". python scripts/check_dependencies.py: exit 0.
+  - criterion: "@ant-design/x is not in the Dependency Allowlist table; documented only in a separate non-allowlist note if at all"
+    result: "passed"
+    evidence: >
+      Section-scoped verification confirms @ant-design/x does not appear in
+      any Dependency Allowlist table row. Documented in "## Excluded frontend
+      candidates" section with exclusion reason, evidence source, and carrying
+      task reference. Section is outside allowlist table and will not be parsed
+      by scripts/check_dependencies.py.
+  - criterion: "pnpm availability verified with exact command/exit-code/output evidence"
+    result: "failed"
+    evidence: >
+      Get-Command pnpm: CommandNotFoundException (exit 1). pnpm is not
+      installed or available in PATH. This is the primary blocker.
+  - criterion: "Enterprise npm mirror reachability or offline cache status documented; public npmjs.org classified as reference-only"
+    result: "failed"
+    evidence: >
+      Registry classification: public_npmjs_reference_only. npm config get
+      registry = https://registry.npmjs.org/ (default). Repo .npmrc: absent.
+      User .npmrc: absent. No enterprise mirror or offline cache configured.
+      Matches P0-FE-SPIKE-001 findings.
+  - criterion: "No web/, package.json, or pnpm-lock.yaml created"
+    result: "passed"
+    evidence: >
+      Test-Path web: False. Test-Path package.json: False. Test-Path
+      pnpm-lock.yaml: False. Test-Path package-lock.json: False. Test-Path
+      yarn.lock: False. No forbidden files created.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      changed_files: [docs/dev/dependency_policy.md,
+      docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml].
+      Matches git diff --cached --name-only after staging.
+
+failure_examples_tested:
+  - example: "P0-FE-SPIKE-001 Task Record not found"
+    result: "not_triggered"
+    evidence: >
+      Test-Path docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml:
+      True. File exists.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "P0-FE-SPIKE-001 Task Record found but is not the expected blocked record"
+    result: "not_triggered"
+    evidence: >
+      Get-ChildItem P0-FE-SPIKE-001_*.yaml | Where-Object name != expected:
+      no conflicting records found. Only P0-FE-SPIKE-001_20260518_211335_blocked.yaml
+      exists.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "pnpm not available in execution environment"
+    result: "triggered"
+    evidence: >
+      Get-Command pnpm: CommandNotFoundException. pnpm is not installed or
+      not in PATH. This is the primary blocking condition.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Enterprise npm mirror unreachable and no offline cache"
+    result: "triggered"
+    evidence: >
+      npm config get registry = https://registry.npmjs.org/ (public default,
+      not enterprise). Repo .npmrc: absent. User .npmrc: absent. No
+      NPM_CONFIG_REGISTRY or related env vars. Matches P0-FE-SPIKE-001 findings.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm branch, clean working tree, and absence of web/ and manifests"
+    result: "passed"
+    command: "git branch --show-current; git status --short; Test-Path web; Test-Path package.json; Test-Path pnpm-lock.yaml; git log --oneline --decorate -6"
+    exit_code: 0
+    evidence: >
+      Branch: phase0/P0-INFRA-003A. Working tree: clean (no output from
+      git status --short). web/: absent. package.json: absent. pnpm-lock.yaml:
+      absent. HEAD: 28b1bb1 (docs: correct P0-INFRA-003A frontend dependency
+      gate prompt). Ancestry includes 8421eb3 (merge phase0 P0-FE-SPIKE-001).
+  - step: "Confirm HEAD ancestry includes P0-FE-SPIKE-001 merge evidence"
+    result: "passed"
+    command: "git log --oneline --all | Select-String '8421eb3'"
+    exit_code: 0
+    evidence: "8421eb3 (origin/phase0/main, phase0/main) merge phase0(P0-FE-SPIKE-001): Ant Design X compatibility spike"
+  - step: "Locate P0-FE-SPIKE-001_20260518_211335_blocked.yaml as carry-forward evidence"
+    result: "passed"
+    command: "Test-Path docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml"
+    exit_code: 0
+    evidence: "True"
+  - step: "Confirm no conflicting P0-FE-SPIKE-001 record exists"
+    result: "passed"
+    command: "$others = Get-ChildItem docs/phase0/task_logs/P0-FE-SPIKE-001_*.yaml | Where-Object { $_.Name -ne 'P0-FE-SPIKE-001_20260518_211335_blocked.yaml' }; if ($others) { throw 'conflicting' }"
+    exit_code: 0
+    evidence: "No conflicting records found. Only P0-FE-SPIKE-001_20260518_211335_blocked.yaml exists."
+  - step: "Extract P0-FE-SPIKE-001 decision from blocked record"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/task_logs/P0-FE-SPIKE-001_20260518_211335_blocked.yaml -Pattern '^decision:'"
+    exit_code: 0
+    evidence: "decision: \"blocked\""
+  - step: "Verify pnpm availability with command/exit-code/output evidence"
+    result: "failed"
+    command: "Get-Command pnpm"
+    exit_code: 1
+    tool_version: 'pnpm: NOT FOUND; node: v24.15.0 (C:\Program Files\nodejs\node.exe); npm: 11.12.1 (C:\Program Files\nodejs\npm.ps1)'
+    environment_note: "Windows 10 Pro, PowerShell 7, node v24.15.0, npm 11.12.1. pnpm not installed."
+    evidence: >
+      Get-Command pnpm: CommandNotFoundException. pnpm is not available in
+      the execution environment. node --version: v24.15.0 (exit 0).
+      npm --version: 11.12.1 (exit 0).
+  - step: "Verify npm/pnpm registry config with safe secret redaction"
+    result: "passed"
+    command: 'npm config get registry; npm config get @ant-design:registry; Test-Path .npmrc; Test-Path $env:USERPROFILE\.npmrc'
+    exit_code: 0
+    evidence: >
+      npm config get registry: https://registry.npmjs.org/ (default, not
+      enterprise). npm config get @ant-design:registry: undefined (no scoped
+      override). Repo .npmrc: False (absent). User .npmrc: False (absent).
+      No secrets to redact — no .npmrc files read.
+    registry_source: "public_npmjs_reference_only"
+  - step: "Update dependency_policy.md with frontend npm allowlist entries"
+    result: "passed"
+    manual_action: true
+    evidence: >
+      Manual edit performed by implementation owner (Claude Code / MiMo).
+      Added 10 npm allowlist rows to Dependency Allowlist table:
+      react (>=18,<19), react-dom (>=18,<19),
+      vite (pending_version_evidence_no_manifest_use),
+      typescript (pending_version_evidence_no_manifest_use),
+      antd (>=5,<6), @ant-design/pro-components (>=2,<3),
+      react-router-dom (pending_version_evidence_no_manifest_use),
+      @tanstack/react-query (pending_version_evidence_no_manifest_use),
+      zustand (pending_version_evidence_no_manifest_use),
+      orval (pending_version_evidence_no_manifest_use).
+      Six packages use sentinel range pending_version_evidence_no_manifest_use
+      (informational only, must not authorize manifest/lockfile use).
+      Added "## Excluded frontend candidates" section with @ant-design/x
+      exclusion. Validation confirmed by subsequent dependency checker run.
+  - step: "Verify @ant-design/x is NOT in the Dependency Allowlist table"
+    result: "passed"
+    command: >-
+      $lines = Get-Content docs/dev/dependency_policy.md; $inAllowlist = $false;
+      $found = $false; foreach ($line in $lines) { if ($line.Trim() -eq '## Dependency Allowlist')
+      { $inAllowlist = $true; continue }; if ($inAllowlist -and $line.Trim() -match '^## ')
+      { $inAllowlist = $false }; if ($inAllowlist -and $line -match '^\|' -and $line -match 'ant-design/x')
+      { $found = $true } }; if ($found) { throw '@ant-design/x found in Dependency Allowlist table' };
+      Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "PASSED. @ant-design/x does not appear in any Dependency Allowlist table row. Documented only in '## Excluded frontend candidates' section."
+  - step: "Verify frontend baseline packages are in the allowlist"
+    result: "passed"
+    command: >-
+      $lines = Get-Content docs/dev/dependency_policy.md; $required = @('react','react-dom',
+      'vite','typescript','antd','@ant-design/pro-components','react-router-dom',
+      '@tanstack/react-query','zustand','orval'); $inAllowlist = $false; $tableRows = @();
+      foreach ($line in $lines) { if ($line.Trim() -eq '## Dependency Allowlist')
+      { $inAllowlist = $true; continue }; if ($inAllowlist -and $line.Trim() -match '^## ')
+      { break }; if ($inAllowlist -and $line -match '^\|') { $tableRows += $line } };
+      $found = @{}; foreach ($row in $tableRows) { $cells = $row.Split('|') | ForEach-Object
+      { $_.Trim() }; if ($cells.Count -ge 2 -and $cells[1] -eq 'npm') { $found[$cells[2].ToLower()] = $true } };
+      $missing = @(); foreach ($pkg in $required) { if (-not $found.ContainsKey($pkg.ToLower()))
+      { $missing += $pkg } }; if ($missing.Count -gt 0) { throw 'Missing: ' + ($missing -join ', ') };
+      Write-Output 'PASSED: all 10 baseline packages found'
+    exit_code: 0
+    evidence: "PASSED: all 10 baseline packages found in Dependency Allowlist table with ecosystem value npm."
+  - step: "Run dependency checker"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    exit_code: 0
+    tool_version: "Python (system)"
+    evidence: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - step: "Verify no web/, package manifests, or lockfiles created"
+    result: "passed"
+    command: "Test-Path web; Test-Path package.json; Test-Path pnpm-lock.yaml; Test-Path package-lock.json; Test-Path yarn.lock"
+    exit_code: 0
+    evidence: "All five: False. No forbidden files created."
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-INFRA-003A"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: |
+      M  docs/dev/dependency_policy.md
+      M  docs/phase0/task_logs/INDEX.md
+      A  docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: |
+      docs/dev/dependency_policy.md
+      docs/phase0/task_logs/INDEX.md
+      docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: |
+       docs/dev/dependency_policy.md                                          |  20 +++
+       docs/phase0/task_logs/INDEX.md                                         |   1 +
+       .../P0-INFRA-003A_20260519_001542_blocked.yaml                        | 447 +++++++++++++++++++++
+       3 files changed, 468 insertions(+)
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output (clean)."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output (no untracked files)."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: >-
+      $staged = @(git diff --cached --name-only); if ($staged | Select-String
+      -Pattern '^web/','^package.json$','^pnpm-lock.yaml$','^package-lock.json$',
+      '^yarn.lock$','^docs/blueprint/','^scripts/check_dependencies.py$',
+      '^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^app/',
+      '^CLAUDE.md$','^AGENTS.md$','^MANIFEST.md$','^\.gitignore$','^\\.github/')
+      { throw 'Forbidden staged path detected' }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "PASSED - no forbidden staged paths"
+  - step: "Final dependency manifest and lockfile scan"
+    result: "passed"
+    command: >-
+      if (git diff --cached --name-only | Select-String -Pattern
+      '(^|/)package.json$','(^|/)pnpm-lock.yaml$','(^|/)package-lock.json$',
+      '(^|/)yarn.lock$','^pyproject.toml$','^uv.lock$')
+      { throw 'Dependency manifest or lockfile changed' }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "PASSED - no dependency manifest or lockfile changes"
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: >-
+      $recordFile = 'docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml';
+      $staged = @(git diff --cached --name-only); $lines = Get-Content $recordFile;
+      $start = [Array]::IndexOf($lines, 'changed_files:');
+      $end = [Array]::IndexOf($lines, 'touched_paths_confirmed: true');
+      $record = @($lines[($start + 1)..($end - 1)] | Where-Object { $_ -match '^  - ' } |
+      ForEach-Object { $_ -replace '^  - ', '' } | ForEach-Object { $_ -replace '"', '' });
+      if ($staged.Count -ne $record.Count) { throw 'count mismatch' };
+      for ($i = 0; $i -lt $staged.Count; $i++) { if ($staged[$i] -ne $record[$i]) { throw "mismatch at $i" } };
+      Write-Output 'PASSED'
+    exit_code: 0
+    evidence: >
+      Staged order: docs/dev/dependency_policy.md,
+      docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml.
+      changed_files: same. Count: 3 = 3.
+
+changed_files:
+  - "docs/dev/dependency_policy.md"
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - command: "Get-Command pnpm"
+    result: "failed"
+    exit_code: 1
+    output_snippet: "CommandNotFoundException"
+  - command: "npm config get registry"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "https://registry.npmjs.org/"
+dependency_changes:
+  added:
+    - "npm:react (>=18,<19, frontend-runtime)"
+    - "npm:react-dom (>=18,<19, frontend-runtime)"
+    - "npm:vite (pending_version_evidence_no_manifest_use, frontend-tooling)"
+    - "npm:typescript (pending_version_evidence_no_manifest_use, frontend-tooling)"
+    - "npm:antd (>=5,<6, frontend-runtime)"
+    - "npm:@ant-design/pro-components (>=2,<3, frontend-runtime)"
+    - "npm:react-router-dom (pending_version_evidence_no_manifest_use, frontend-runtime)"
+    - "npm:@tanstack/react-query (pending_version_evidence_no_manifest_use, frontend-runtime)"
+    - "npm:zustand (pending_version_evidence_no_manifest_use, frontend-runtime)"
+    - "npm:orval (pending_version_evidence_no_manifest_use, frontend-tooling)"
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; infrastructure policy gate task."
+  not_applicable_reason: "Infrastructure gate task produces no application code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or registry auth values
+    exposed in Task Record or any output. .npmrc files confirmed absent.
+    npm registry config inspected with safe redaction rules. No secrets
+    present in environment.
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; infrastructure policy gate task."
+  not_applicable_reason: "Infrastructure gate task produces no test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_gate_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record"
+  not_applicable_reason: "Local infrastructure gate; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "pending"
+  reviewed_at: "pending"
+  notes: >
+    Ready for independent Codex staged review. Task blocked: pnpm not available
+    in execution environment, no enterprise mirror/cache configured. Allowlist
+    updates to dependency_policy.md are complete and pass check_dependencies.py.
+remaining_risks:
+  - "pnpm is not installed; must be available before frontend manifest creation or pnpm availability gate re-run."
+  - "Enterprise npm mirror/offline cache remains unconfirmed; all registry evidence from public npmjs.org (reference-only)."
+  - "Version ranges for vite, typescript, react-router-dom, @tanstack/react-query, zustand, orval use sentinel pending_version_evidence_no_manifest_use (informational only); a later task must record an evidence-based range before these packages are used in frontend manifests."
+  - "@ant-design/x v1.6.1 (latest antd 5.x-compatible) is legacy line; v2.x active development requires antd 6.x."
+rollback_or_failure_record: "not_applicable_task_blocked_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; infrastructure policy gate task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install commands were run during this task."
+registry_availability:
+  enterprise_mirror_found: false
+  offline_cache_found: false
+  checked_sources:
+    - source: "npm config get registry"
+      value: "https://registry.npmjs.org/"
+      is_enterprise: false
+    - source: "npm config get @ant-design:registry"
+      value: "undefined"
+      is_enterprise: false
+    - source: "repo .npmrc"
+      value: "NOT FOUND (Test-Path False)"
+      is_enterprise: false
+    - source: "user .npmrc"
+      value: "NOT FOUND (Test-Path False)"
+      is_enterprise: false
+  conclusion: >
+    No approved enterprise npm mirror or approved offline cache is configured
+    or discoverable. The only available registry source is public npmjs.org,
+    which does not satisfy dependency_policy.md requirements.
+  registry_source: "public_npmjs_reference_only"
+  secrets_redacted: true
+  redaction_note: "No .npmrc files exist; no auth lines to redact."
+pnpm_availability:
+  available: false
+  command: "Get-Command pnpm"
+  exit_code: 1
+  error: "CommandNotFoundException"
+  node_version: 'v24.15.0 (C:\Program Files\nodejs\node.exe)'
+  npm_version: '11.12.1 (C:\Program Files\nodejs\npm.ps1)'
+  environment_note: "Windows 10 Pro, PowerShell 7. pnpm not installed."

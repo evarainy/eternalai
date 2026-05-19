@@ -68,7 +68,27 @@ explicitly names a future dedicated allowlist file.
 | python | psycopg | >=3.1,<4.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
+| npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
+| npm | react-dom | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
+| npm | vite | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Vite); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | typescript | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (TypeScript strict); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | antd | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Ant Design 5.x); peerDep >=5.0.0/^5.20.3 confirmed |
+| npm | @ant-design/pro-components | >=2,<3 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (ProComponents 2.x) |
+| npm | react-router-dom | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React Router); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | @tanstack/react-query | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (TanStack Query); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | zustand | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Zustand); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | orval | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Orval); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
 
 Future frontend entries must use `ecosystem` value `npm` and must be added here
 before any frontend manifest or lockfile is changed.
+
+## Excluded frontend candidates
+
+The following packages were evaluated but are excluded from the Phase 1 npm
+allowlist. This section is informational only and must not be parsed as part of
+the Dependency Allowlist table above.
+
+| package | exclusion_reason | evidence_source | carrying_task |
+|---|---|---|---|
+| @ant-design/x | Blocked: no approved enterprise npm mirror or offline cache configured. v2.x requires antd ^6.0.0+ (incompatible with frozen antd 5.x baseline). Only legacy v1.x (v1.6.1) is antd 5.x-compatible. | P0-FE-SPIKE-001_20260518_211335_blocked.yaml; public npmjs.org (non-authoritative reference) | P0-FE-SPIKE-001 |
 
