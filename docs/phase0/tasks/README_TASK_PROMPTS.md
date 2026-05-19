@@ -27,7 +27,7 @@ Current execution package includes per-task prompts for Batch 0, Batch 1, and Ba
 | P0-INFRA-002B | (no prompt file; cleanup task) | P0-INFRA-002A | infrastructure (cleanup) |
 | P0-FE-SPIKE-001 | P0-FE-SPIKE-001.md | P0-INFRA-008 | spike (frontend) |
 | P0-INFRA-003A | P0-INFRA-003A.md | P0-FE-SPIKE-001 | infrastructure (frontend deps) |
-| P0-INFRA-003B | P0-INFRA-003B.md | P0-INFRA-003A | infrastructure (frontend toolchain unblock) |
+| P0-INFRA-003B | P0-INFRA-003B.md | P0-INFRA-003A | infrastructure (frontend toolchain / Docker boundary) |
 | P0-FE-GUIDE-001 | P0-FE-GUIDE-001.md | P0-INFRA-003B | documentation (frontend) |
 | P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-003B, P0-FE-GUIDE-001 | infrastructure (frontend skeleton) |
 | P0-FE-ARCH-001 | P0-FE-ARCH-001.md | P0-INFRA-003 | spike (frontend architecture) |

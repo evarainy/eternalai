@@ -7,14 +7,50 @@ usage and where the deterministic dependency allowlist lives.
 P0-INFRA-008 does not add production dependencies, lockfiles, or CI wiring. CI
 integration for this checker is deferred to P0-INFRA-007.
 
+## Environment model
+
+This policy recognizes three distinct environments with different dependency-source
+requirements:
+
+### Phase 0 internet-connected local development/build
+
+- Development/build machines have internet access.
+- May use public registries (PyPI, npmjs.org) only when explicitly allowed by
+  the task prompt and this policy.
+- `uv sync`, `pnpm install`, `npm install` run in this environment.
+- All added dependencies must still have a matching row in the Dependency
+  Allowlist before the manifest or lockfile is changed.
+
+### Intranet runtime deployment
+
+- Uses prebuilt Docker images produced from the local development/build phase.
+- Must not run `pnpm install`, `npm install`, `uv sync`, or `pip install` at
+  runtime.
+- Must not require npm, pnpm, or PyPI registry access at runtime.
+- Docker images are self-contained with all dependencies pre-installed.
+
+### Future intranet source build / intranet CI / stricter supply-chain governance
+
+- Enterprise npm mirror or approved offline cache is required.
+- This requirement is deferred to later tasks (e.g., P0-INFRA-007 when executed
+  in intranet CI, or a dedicated supply-chain governance task).
+- The mirror_status field in the Dependency Allowlist records the current state
+  for each dependency.
+
 ## General Rules
 
 - Do not add a Python, npm, or pnpm dependency unless it is represented in the
   deterministic allowlist source below.
 - Do not store real mirror URLs, credentials, tokens, cookies, passwords, or
   private registry authentication in this repository.
-- Use only internal mirrors or approved offline caches supplied by the internal
-  environment/package administrator.
+- Phase 0 internet-connected local development/build may use public registries
+  (PyPI, npmjs.org) only when explicitly allowed by the task prompt and this
+  policy. Public registries are not enterprise mirror evidence or approved
+  offline-cache evidence, and do not prove intranet source-build compliance.
+- Internal mirrors or approved offline caches supplied by the internal
+  environment/package administrator are required for intranet source build,
+  intranet CI, or stricter supply-chain governance. This requirement is deferred
+  to relevant future tasks.
 - Spike dependencies must remain in spike-only manifests and must not enter
   production dependency groups without a later task updating this policy.
 - Production dependency manifests and lockfiles are out of scope for
@@ -35,6 +71,13 @@ integration for this checker is deferred to P0-INFRA-007.
 
 - Use `pnpm` for frontend dependency installation once frontend manifests are
   created by later tasks.
+- Phase 0 internet-connected local development/build may use public npm registry
+  (https://registry.npmjs.org/) when explicitly allowed by the task prompt and
+  this policy.
+- Intranet runtime uses prebuilt Docker images and must not run `pnpm install`
+  or require npm registry access.
+- Enterprise npm mirror or approved offline cache is required only for future
+  intranet source build, intranet CI, or stricter supply-chain governance tasks.
 - Configure registry endpoints through environment variables such as
   `NPM_CONFIG_REGISTRY` or through local developer/package-manager config that
   is not committed with secrets.

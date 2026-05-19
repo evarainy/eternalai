@@ -49,12 +49,13 @@ objective: >
   TanStack Query, Zustand, pnpm frontend skeleton. Must include generate:api script
   for deterministic OpenAPI codegen against a checked-in mock OpenAPI fixture or
   stable backend OpenAPI JSON. Only provide health page, basic layout, and mock
-  API call sample. Clarify ProComponents 2.x / MSW / Orval intranet mirror status.
-  Does not decide Ant Design X adoption — P0-FE-SPIKE-001 was blocked and
-  @ant-design/x is excluded from the current Phase 1 allowlist. Ant Design 6
-  is not adopted. Frontend npm allowlist was established in P0-INFRA-003A but
-  the toolchain gate was blocked; P0-INFRA-003B must resolve pnpm and enterprise
-  mirror/cache before this skeleton task can proceed. Must reference
+  API call sample. Install/build happens in the Phase 0 internet-connected local
+  development/build environment; intranet runtime consumes prebuilt Docker images
+  and must not require npm/pnpm registry access. Does not decide Ant Design X
+  adoption — P0-FE-SPIKE-001 was blocked and @ant-design/x is excluded from the
+  current Phase 1 allowlist. Ant Design 6 is not adopted. Frontend npm allowlist
+  was established in P0-INFRA-003A; the toolchain gate and deployment-runtime
+  boundary were resolved in P0-INFRA-003B. Must reference
   docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for frontend coding conventions.
 
 structured_output_baseline_applicability: "not_applicable — this task does not implement LLM structured output."
@@ -76,20 +77,20 @@ constraints:
   - Does not decide Ant Design X adoption — P0-FE-SPIKE-001 was blocked; @ant-design/x is excluded from the current Phase 1 allowlist; Ant Design 6 is not adopted
   - Does not decide frontend npm allowlist — established in P0-INFRA-003A; toolchain unblock gate is P0-INFRA-003B
   - Must reference docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for all frontend coding conventions
-  - Use enterprise intranet npm mirror or offline cache; AI must not add uncached dependencies
+  - Install/build happens in the Phase 0 internet-connected local development/build environment (public npm registry allowed per dependency_policy.md); intranet runtime consumes prebuilt Docker images and must not require npm/pnpm registry access. AI must not add dependencies not in the Dependency Allowlist.
   - Frontend API client connecting to backend OpenAPI must be generated via Orval or equivalent OpenAPI codegen
   - web/package.json must include test, typecheck, and generate:api scripts; generate:api must execute deterministically, not just exist
   - Test runner must be Vitest; pnpm test script must invoke `vitest --run` for non-watch execution
   - If backend OpenAPI JSON is not stable or available, create a checked-in mock OpenAPI fixture under web/openapi/ and generate from that fixture
   - Do not hand-write fetch/axios calls for backend business API in business pages; health page static mock and pure fixture display are exempt
-  - Phase 0 frontend skeleton does not require full Admin Console; must record whether ProComponents 2.x / MSW is cached in intranet npm mirror; if not cached, only record the dependency gap
+  - Phase 0 frontend skeleton does not require full Admin Console; ProComponents 2.x and MSW availability must be verified during pnpm install; if any dependency is unavailable from the configured registry, record the gap in the Task Record
   - pnpm-lock.yaml changes must be documented in the task log
   - Root dependency/lock files are forbidden: package.json, pnpm-lock.yaml, package-lock.json, yarn.lock, pyproject.toml, uv.lock
   - web/package.json and web/pnpm-lock.yaml are allowed only for the P0-INFRA-003 frontend skeleton
   - Must not modify CI, Docker, backend app/runtime code, backend tests, frozen blueprint files, or unrelated infra files
 
 acceptance_criteria:
-  - criterion: "pnpm install succeeds under intranet npm mirror or offline cache"
+  - criterion: "pnpm install succeeds in Phase 0 internet-connected local development/build environment"
     result: "pending"
     evidence: ""
   - criterion: "pnpm lint succeeds"
@@ -126,7 +127,7 @@ failure_examples_tested:
     blocked_by_task_id: "none"
     activation_task_id: "none"
     expiry_condition: "N/A"
-  - example: "pnpm install fails due to missing intranet mirror or uncached dependency"
+  - example: "pnpm install fails due to missing dependency or registry issue"
     result: "not_applicable"
     evidence: "Dependency policy enforced by P0-INFRA-008 allowlist checker"
     not_applicable_reason: "Dependency policy and allowlist checker from P0-INFRA-008 guard against this"
@@ -319,7 +320,7 @@ allowed_dependency_files:
 
 stop_conditions:
   - "Working tree is not clean at task start"
-  - "pnpm install fails under intranet mirror constraints"
+  - "pnpm install fails in Phase 0 local development/build environment"
   - "Forbidden paths are modified"
   - "changed_files cannot be reconciled with staged diff"
   - "Any step_verification_point command returning a non-zero exit code (except expected TDD red-phase or temporary negative drift checks) must stop execution, report the failing command/output, and must not continue to the next step"
