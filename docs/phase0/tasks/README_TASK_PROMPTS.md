@@ -19,18 +19,28 @@ Current execution package includes per-task prompts for Batch 0, Batch 1, and Ba
 |---|---|---|---|
 | P0-BATCH2-PROMPTS-001 | P0-BATCH2-PROMPTS-001.md | none | documentation (prompt generation) |
 | P0-BATCH2-FE-PROMPTS-001 | P0-BATCH2-FE-PROMPTS-001.md | P0-INFRA-002B | documentation (frontend prompt generation) |
+| P0-BATCH2-FE-UNBLOCK-PLAN-001 | (no prompt file; DAG repair task) | P0-INFRA-003A | documentation (DAG repair after blocked gate) |
 | P0-INFRA-008 | P0-INFRA-008.md | P0-PREP-003 | infrastructure |
 | P0-INFRA-001 | P0-INFRA-001.md | P0-INFRA-008 | infrastructure |
 | P0-INFRA-002 | P0-INFRA-002.md | P0-INFRA-008 | infrastructure |
+| P0-INFRA-002A | (no prompt file; dependency task) | P0-INFRA-001 | infrastructure (backend dependency resolution) |
+| P0-INFRA-002B | (no prompt file; cleanup task) | P0-INFRA-002A | infrastructure (cleanup) |
 | P0-FE-SPIKE-001 | P0-FE-SPIKE-001.md | P0-INFRA-008 | spike (frontend) |
 | P0-INFRA-003A | P0-INFRA-003A.md | P0-FE-SPIKE-001 | infrastructure (frontend deps) |
-| P0-FE-GUIDE-001 | P0-FE-GUIDE-001.md | P0-INFRA-003A | documentation (frontend) |
-| P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-003A, P0-FE-GUIDE-001 | infrastructure (frontend skeleton) |
+| P0-INFRA-003B | P0-INFRA-003B.md | P0-INFRA-003A | infrastructure (frontend toolchain unblock) |
+| P0-FE-GUIDE-001 | P0-FE-GUIDE-001.md | P0-INFRA-003B | documentation (frontend) |
+| P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-003B, P0-FE-GUIDE-001 | infrastructure (frontend skeleton) |
 | P0-FE-ARCH-001 | P0-FE-ARCH-001.md | P0-INFRA-003 | spike (frontend architecture) |
 | P0-INFRA-004 | P0-INFRA-004.md | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | infrastructure |
 | P0-INFRA-006 | P0-INFRA-006.md | P0-INFRA-001, P0-INFRA-002 | infrastructure |
-| P0-INFRA-007 | P0-INFRA-007.md | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-006, P0-INFRA-008 | infrastructure |
+| P0-INFRA-007 | P0-INFRA-007.md | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-005, P0-INFRA-006, P0-INFRA-008 | infrastructure |
 | P0-INFRA-005 | P0-INFRA-005.md | P0-SPIKE-004, P0-INFRA-001, P0-INFRA-002 | infrastructure |
+
+## Batch 3 prompt inventory
+
+| task_id | file | depends_on | type |
+|---|---|---|---|
+| P0-BATCH3-PROMPTS-001 | P0-BATCH3-PROMPTS-001.md | P0-INFRA-002, P0-INFRA-003B | documentation (prompt generation) |
 
 ## Batch 2+ requirements
 
