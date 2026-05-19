@@ -1,4 +1,4 @@
-# P0-INFRA-003B — Frontend Toolchain Unblock
+# P0-INFRA-003B — Frontend Toolchain / Docker Deployment-Runtime Boundary
 
 Use this instead of pasting the full Phase 0 spec.
 
@@ -29,7 +29,7 @@ Use this instead of pasting the full Phase 0 spec.
 ```yaml
 task_id: P0-INFRA-003B
 branch: "phase0/P0-INFRA-003B"
-title: Frontend Toolchain Unblock
+title: Frontend Toolchain / Docker Deployment-Runtime Boundary
 type: infrastructure
 depends_on:
   - P0-INFRA-003A
@@ -44,28 +44,34 @@ method_profile:
   review_mode: "codex_review"
   method: "PDR"
   reason_for_owner_choice: >
-    Infrastructure gate resolution task that resolves the P0-INFRA-003A blocked
-    conditions. Claude Code/MiMo executes pnpm installation verification, npm
-    mirror/cache resolution, and allowlist finalization; Codex reviews policy
-    changes. PDR because this resolves a policy/infrastructure gate.
+    Infrastructure task that verifies node/npm/pnpm availability for Phase 0
+    local development/build and documents the Docker deployment-runtime boundary.
+    Claude Code/MiMo executes toolchain verification and policy alignment; Codex
+    reviews. PDR because this resolves a policy/infrastructure gate.
 
 objective: >
-  Resolve the P0-INFRA-003A blocked conditions so that frontend skeleton and
-  guide tasks can proceed. P0-INFRA-003A established the frozen frontend
-  baseline allowlist in dependency_policy.md but was blocked on two conditions:
-  (1) pnpm not available in the execution environment; (2) no approved enterprise
-  npm mirror or offline cache configured. This task resolves those conditions by
-  verifying or establishing pnpm availability, confirming enterprise npm mirror
-  readiness or offline cache, and ensuring the npm allowlist remains complete.
+  Verify node/npm/pnpm availability for Phase 0 local development/build and
+  document the Docker deployment-runtime boundary. P0-INFRA-003A established the
+  frozen frontend baseline allowlist in dependency_policy.md but was blocked on
+  two conditions: (1) pnpm not available; (2) no approved enterprise npm mirror
+  or offline cache. The environment model has since been clarified: Phase 0
+  internet-connected local development/build may use public npm registry when
+  explicitly allowed by the task prompt and dependency policy; intranet runtime
+  uses prebuilt Docker images and must not require npm/pnpm registry access.
+  Enterprise mirror/offline cache is deferred to future intranet source build,
+  intranet CI, or stricter supply-chain governance. This task validates pnpm
+  availability, updates dependency_policy.md and downstream tasks to reflect the
+  deployment-runtime boundary, and unblocks P0-FE-GUIDE-001 and P0-INFRA-003.
   Must not create web/, package.json, or pnpm-lock.yaml. Must not modify the
   frozen frontend baseline.
 
 structured_output_baseline_applicability: "not_applicable — this task does not implement LLM structured output."
 
 deliverable:
-  - Evidence of pnpm availability (or documented resolution path if installation is out of scope)
-  - Evidence of enterprise npm mirror readiness or offline cache documentation
-  - docs/dev/dependency_policy.md (only if allowlist updates are needed)
+  - Evidence of node/npm/pnpm availability (pnpm via Corepack if needed)
+  - docs/dev/dependency_policy.md updated with Docker deployment-runtime boundary
+  - docs/phase0/tasks/P0-INFRA-003.md updated to reflect new environment model
+  - docs/phase0/TASK_INDEX.md and docs/phase0/tasks/README_TASK_PROMPTS.md updated as needed
   - Task Record with all blocking conditions resolved or documented
 
 constraints:
@@ -77,18 +83,23 @@ constraints:
   - Must not adopt Ant Design 6 or React 19
   - Must use P0-INFRA-003A_20260519_001542_blocked.yaml as carry-forward evidence
   - If a different or conflicting P0-INFRA-003A record is found, stop for human review
-  - If pnpm installation requires global system changes, document the requirement and stop for human approval before installing
-  - If enterprise npm mirror is not available, document the gap; if approved offline cache is not available either, this task remains blocked. public npmjs.org is not enterprise mirror evidence and is not approved offline cache evidence. P0-INFRA-003B cannot pass if the only registry/cache evidence is public_npmjs_reference_only.
+  - pnpm may be activated through Corepack (corepack prepare pnpm@9.15.9 --activate) if not directly available; do not run corepack enable
+  - Public npm registry (https://registry.npmjs.org/) may be used for Phase 0 internet-connected local development/build when explicitly allowed by the task prompt and dependency policy. It is not enterprise mirror evidence and does not prove intranet source-build compliance.
+  - Intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access at runtime.
+  - Enterprise mirror/offline cache is deferred to future intranet source build, intranet CI, or stricter supply-chain governance tasks.
   - Must run python scripts/check_dependencies.py and confirm dependency_policy.md integrity
 
 acceptance_criteria:
-  - criterion: "P0-INFRA-003A blocked Task Record is referenced and carry-forward evidence is confirmed"
+  - criterion: "Node/npm/pnpm availability verified (pnpm via Corepack if needed) with exact command/exit-code/output evidence"
     result: "pending"
     evidence: ""
-  - criterion: "pnpm availability verified with exact command/exit-code/output evidence, OR documented resolution path provided with human approval"
+  - criterion: "Docker deployment-runtime boundary documented in dependency_policy.md: Phase 0 local dev/build may use public npm registry; intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access"
     result: "pending"
     evidence: ""
-  - criterion: "Enterprise npm mirror readiness (enterprise_mirror) OR approved offline cache (approved_offline_cache) documented with classification evidence. public_npmjs_reference_only is reference-only and insufficient for unblocking."
+  - criterion: "docs/dev/dependency_policy.md distinguishes Phase 0 internet-connected local development/build, intranet runtime prebuilt Docker deployment, and future intranet source build/CI supply-chain governance"
+    result: "pending"
+    evidence: ""
+  - criterion: "docs/phase0/tasks/P0-INFRA-003.md updated to reflect new environment model: install/build in Phase 0 local dev; intranet runtime consumes prebuilt Docker images"
     result: "pending"
     evidence: ""
   - criterion: "docs/dev/dependency_policy.md allowlist remains complete (10 frozen baseline npm packages); dependency checker passes"
@@ -121,7 +132,7 @@ failure_examples_tested:
     blocked_by_task_id: "P0-INFRA-003A"
     activation_task_id: "P0-INFRA-003A"
     expiry_condition: "N/A"
-  - example: "pnpm installation requires global system changes without human approval"
+  - example: "pnpm unavailable and Corepack activation fails or Corepack is unavailable"
     result: "pending"
     evidence: ""
     not_applicable_reason: "none"
@@ -129,7 +140,7 @@ failure_examples_tested:
     blocked_by_task_id: "none"
     activation_task_id: "none"
     expiry_condition: "N/A"
-  - example: "Only public npmjs.org registry evidence available; no enterprise mirror or approved offline cache"
+  - example: "Dependency policy cannot be reconciled with AGENTS.md Rule 8 deployment-runtime boundary"
     result: "pending"
     evidence: ""
     not_applicable_reason: "none"
@@ -155,11 +166,15 @@ step_verification_points:
     result: "pending"
     command: "Select-String -Path docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml -Pattern '^blocking_conditions:' -Context 0,3"
     evidence: ""
-  - step: "Verify pnpm availability or attempt installation"
+  - step: "Verify node/npm/pnpm availability"
     result: "pending"
-    command: "Get-Command pnpm; pnpm --version"
+    command: "node --version; npm --version; Get-Command pnpm; pnpm --version"
     evidence: ""
-  - step: "Verify npm/pnpm registry config with safe secret redaction"
+  - step: "Activate pnpm via Corepack if unavailable"
+    result: "pending"
+    command: "corepack prepare pnpm@9.15.9 --activate; corepack pnpm --version; where.exe pnpm"
+    evidence: ""
+  - step: "Verify npm registry config (informational — public npm is allowed for Phase 0 local dev)"
     result: "pending"
     command: "npm config get registry; npm config get @ant-design:registry; Test-Path .npmrc; Test-Path $env:USERPROFILE\.npmrc; if (Test-Path .npmrc) { Get-Content .npmrc | Where-Object { $_ -notmatch '_authToken|_auth|token|password|username|cookie|sessionid|access_token|refresh_token' } }"
     evidence: ""
@@ -209,7 +224,7 @@ step_verification_points:
     evidence: ""
   - step: "Final forbidden-path scan"
     result: "pending"
-    command: "if (git diff --cached --name-only | Select-String -Pattern '^web/','^package.json$','^pnpm-lock.yaml$','^package-lock.json$','^yarn.lock$','^docs/blueprint/','^scripts/check_dependencies.py$','^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^app/','^CLAUDE.md$','^AGENTS.md$','^MANIFEST.md$','^\.gitignore$','^\\.github/') { throw 'Forbidden staged path detected' }"
+    command: "if (git diff --cached --name-only | Select-String -Pattern '^web/','^package.json$','^pnpm-lock.yaml$','^package-lock.json$','^yarn.lock$','^docs/blueprint/','^scripts/check_dependencies.py$','^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^app/','^CLAUDE.md$','^MANIFEST.md$','^\.gitignore$','^\\.github/') { throw 'Forbidden staged path detected' }"
     evidence: ""
   - step: "Final dependency manifest and lockfile scan"
     result: "pending"
@@ -221,7 +236,12 @@ step_verification_points:
     evidence: ""
 
 touched_paths:
-  - docs/dev/dependency_policy.md (only if allowlist updates are needed)
+  - AGENTS.md (Rule 8 one-line dependency source policy edit only — do not expand beyond that)
+  - docs/dev/dependency_policy.md
+  - docs/phase0/tasks/P0-INFRA-003B.md
+  - docs/phase0/tasks/P0-INFRA-003.md
+  - docs/phase0/TASK_INDEX.md
+  - docs/phase0/tasks/README_TASK_PROMPTS.md
   - docs/phase0/task_logs/P0-INFRA-003B_<timestamp>_<passed|blocked|failed>.yaml
   - docs/phase0/task_logs/INDEX.md
 
@@ -239,9 +259,9 @@ forbidden_paths:
   - app/**
   - .github/**
   - CLAUDE.md
-  - AGENTS.md
   - MANIFEST.md
   - .gitignore
+  - AGENTS.md (forbidden for expansion beyond the one-line Rule 8 edit explicitly allowed by this task; the existing Rule 8 edit in the current staged diff is the only allowed change)
 
 stop_conditions:
   - "Branch is not phase0/P0-INFRA-003B"
@@ -249,12 +269,12 @@ stop_conditions:
   - "P0-INFRA-003A_20260519_001542_blocked.yaml not found, or a conflicting P0-INFRA-003A record exists"
   - "Forbidden paths would need edits"
   - "web/ or package manifests/lockfiles would need creation"
-  - "pnpm installation requires global system changes without human approval"
+  - "pnpm unavailable and Corepack activation fails or Corepack is unavailable"
   - "@ant-design/x would need to be allowlisted"
   - "Ant Design 6 or React 19 would need adoption"
   - "Dependency policy and frontend baseline are inconsistent"
   - "Command/exit-code evidence cannot be produced"
-  - "The only registry/cache evidence is public_npmjs_reference_only — this is insufficient for unblocking"
+  - "Dependency policy cannot be reconciled with AGENTS.md Rule 8 deployment-runtime boundary"
   - "changed_files cannot match staged diff exactly"
   - "Commit, push, or merge is attempted before independent staged review"
 ```
@@ -263,19 +283,21 @@ stop_conditions:
 
 - The specific merged Task Record is: `docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml`
 - Its blocked result identifies two blocking conditions: (1) pnpm unavailable, (2) no enterprise npm mirror/cache.
-- Accomplished in P0-INFRA-003A: frontend baseline allowlist (10 npm packages) added to `docs/dev/dependency_policy.md`; @ant-design/x documented as excluded.
-- P0-INFRA-003B must resolve both blocking conditions (or document resolution paths) before P0-FE-GUIDE-001 and P0-INFRA-003 can proceed.
+- P0-INFRA-003A accomplished: frontend baseline allowlist (10 npm packages) added to `docs/dev/dependency_policy.md`; @ant-design/x documented as excluded.
+- The environment model has since been clarified: Phase 0 internet-connected local development/build may use public npm registry when explicitly allowed; intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access.
+- P0-INFRA-003B resolves both blocking conditions: (1) pnpm activated via Corepack; (2) enterprise mirror/cache requirement re-scoped — public npm registry is acceptable for Phase 0 local dev, and enterprise mirror/offline cache is deferred to future intranet source build, intranet CI, or stricter supply-chain governance.
+- P0-FE-GUIDE-001 and P0-INFRA-003 can proceed under the clarified environment model.
 - If a different or conflicting P0-INFRA-003A record is found, implementation must stop for human review.
 
-## Registry classification rules
+## Docker deployment-runtime boundary
 
-Registry classification values for this task:
-- `enterprise_mirror`: PASS evidence — approved enterprise intranet npm mirror is reachable and configured.
-- `approved_offline_cache`: PASS evidence — approved offline npm cache is populated and verifiable.
-- `public_npmjs_reference_only`: BLOCKED — public npmjs.org may be used only as non-authoritative/reference metadata. It is not enterprise mirror evidence. It is not approved offline cache evidence. P0-INFRA-003B cannot pass if this is the only classification.
-- `not_configured`: BLOCKED — no registry or cache is discoverable.
+This task documents the following environment model, which replaces the previous registry classification rules:
 
-P0-INFRA-003B passes only when registry classification is `enterprise_mirror` or `approved_offline_cache`.
+- **Phase 0 internet-connected local development/build**: May use public npm registry (https://registry.npmjs.org/) when explicitly allowed by the task prompt and dependency policy. `pnpm install` runs in this environment.
+- **Intranet runtime deployment**: Uses prebuilt Docker images. Must not run `pnpm install`/`npm install`. Must not require npm/pnpm registry access at runtime.
+- **Future intranet source build / intranet CI / stricter supply-chain governance**: Enterprise npm mirror or approved offline cache is required. This is deferred to later tasks (e.g., P0-INFRA-007 when executed in intranet CI, or a dedicated supply-chain task).
+
+Public npm registry usage is permitted for Phase 0 local development/build only. It is not enterprise mirror evidence and does not prove intranet source-build or CI compliance.
 
 ## Technical baselines to preserve
 

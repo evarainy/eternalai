@@ -1,0 +1,461 @@
+task_id: "P0-INFRA-003B"
+task_type: "infrastructure"
+result: "passed"
+started_at: "2026-05-19T23:41:00+08:00"
+completed_at: "2026-05-19T23:41:43+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-19T23:41:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  P0-INFRA-003B re-scoped from frontend toolchain unblock (requiring enterprise
+  npm mirror/offline cache) to frontend toolchain / Docker deployment-runtime
+  boundary. pnpm 9.15.9 activated via Corepack (corepack prepare pnpm@9.15.9
+  --activate). Node v24.15.0, npm 11.12.1, corepack 0.34.6 available. Six docs
+  updated: AGENTS.md (Rule 8 preserved), dependency_policy.md (three-environment
+  model), P0-INFRA-003B.md (re-scoped), P0-INFRA-003.md (updated constraints),
+  TASK_INDEX.md, README_TASK_PROMPTS.md. Docker deployment-runtime boundary
+  documented: Phase 0 local dev/build may use public npm registry; intranet
+  runtime uses prebuilt Docker images; enterprise mirror deferred to future
+  intranet source build/CI. Dependency checker passes. No forbidden files
+  created. No install/scaffold/manifest/lockfile work occurred.
+
+decision: "passed"
+decision_rationale: >
+  Both original P0-INFRA-003A blocking conditions resolved: (1) pnpm now
+  available via Corepack — corepack prepare pnpm@9.15.9 --activate succeeded
+  (exit 0), corepack pnpm --version returns 9.15.9; (2) enterprise mirror/cache
+  requirement re-scoped — the environment model clarified that Phase 0
+  internet-connected local development/build may use public npm registry when
+  explicitly allowed, intranet runtime uses prebuilt Docker images, and
+  enterprise mirror/offline cache is deferred to future intranet source build /
+  intranet CI / stricter supply-chain governance. Six documentation files
+  updated to reflect the new three-environment model. P0-FE-GUIDE-001 and
+  P0-INFRA-003 can now proceed under the clarified deployment-runtime boundary.
+
+blocking_conditions: []
+
+acceptance_criteria_result:
+  - criterion: "Node/npm/pnpm availability verified (pnpm via Corepack if needed) with exact command/exit-code/output evidence"
+    result: "passed"
+    evidence: >
+      node --version: v24.15.0 (exit 0). npm --version: 11.12.1 (exit 0).
+      corepack --version: 0.34.6 (exit 0). corepack prepare pnpm@9.15.9
+      --activate: "Preparing pnpm@9.15.9 for immediate activation..." (exit 0).
+      corepack pnpm --version: 9.15.9 (exit 0). pnpm direct command: not
+      available (expected — Corepack shim not in PATH without corepack enable).
+      pnpm 9.15.9 is available through Corepack. Node at C:\Program Files\
+      nodejs\node.exe, npm at C:\Program Files\nodejs\npm, corepack at
+      C:\Program Files\nodejs\corepack.
+  - criterion: "Docker deployment-runtime boundary documented in dependency_policy.md: Phase 0 local dev/build may use public npm registry; intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access"
+    result: "passed"
+    evidence: >
+      dependency_policy.md updated with "## Environment model" section
+      distinguishing three environments: Phase 0 internet-connected local
+      development/build (may use public registries), Intranet runtime deployment
+      (prebuilt Docker images, no npm/pnpm at runtime), Future intranet source
+      build / intranet CI / stricter supply-chain governance (enterprise mirror
+      required). Frontend pnpm Registry Rules section updated to match.
+  - criterion: "docs/dev/dependency_policy.md distinguishes Phase 0 internet-connected local development/build, intranet runtime prebuilt Docker deployment, and future intranet source build/CI supply-chain governance"
+    result: "passed"
+    evidence: >
+      Three subsections added under "## Environment model": (1) Phase 0
+      internet-connected local development/build, (2) Intranet runtime
+      deployment, (3) Future intranet source build / intranet CI / stricter
+      supply-chain governance. Each subsection documents the applicable
+      dependency-source rules for that environment.
+  - criterion: "docs/phase0/tasks/P0-INFRA-003.md updated to reflect new environment model: install/build in Phase 0 local dev; intranet runtime consumes prebuilt Docker images"
+    result: "passed"
+    evidence: >
+      P0-INFRA-003.md updated: objective now states "Install/build happens in
+      the Phase 0 internet-connected local development/build environment;
+      intranet runtime consumes prebuilt Docker images"; constraint replaces
+      "enterprise intranet npm mirror" with Phase 0 local dev environment rule;
+      acceptance criterion changed from "pnpm install succeeds under intranet
+      npm mirror" to "pnpm install succeeds in Phase 0 internet-connected local
+      development/build environment"; stop condition updated accordingly.
+  - criterion: "docs/dev/dependency_policy.md allowlist remains complete (10 frozen baseline npm packages); dependency checker passes"
+    result: "passed"
+    evidence: >
+      python scripts/check_dependencies.py: exit 0. "Dependency check passed.
+      Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests
+      scanned: 6. Dependencies checked: 24." All 10 frozen baseline npm packages
+      remain in the Dependency Allowlist table with ecosystem value npm. No
+      allowlist rows added or removed.
+  - criterion: "@ant-design/x remains excluded from the Dependency Allowlist table"
+    result: "passed"
+    evidence: >
+      @ant-design/x remains documented only in "## Excluded frontend candidates"
+      section of dependency_policy.md. Not present in any Dependency Allowlist
+      table row. No changes to the excluded candidates section.
+  - criterion: "No web/, package.json, or pnpm-lock.yaml created"
+    result: "passed"
+    evidence: >
+      Test-Path web: False. Test-Path package.json: False. Test-Path
+      pnpm-lock.yaml: False. Test-Path package-lock.json: False. Test-Path
+      yarn.lock: False. No forbidden files created.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      git diff --cached --name-only: 8 files. changed_files: 8 entries. Order
+      and count match exactly. AGENTS.md, docs/dev/dependency_policy.md,
+      docs/phase0/TASK_INDEX.md, docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-INFRA-003B_20260519_234143_passed.yaml,
+      docs/phase0/tasks/P0-INFRA-003.md, docs/phase0/tasks/P0-INFRA-003B.md,
+      docs/phase0/tasks/README_TASK_PROMPTS.md.
+
+failure_examples_tested:
+  - example: "P0-INFRA-003A blocked Task Record not found"
+    result: "not_triggered"
+    evidence: >
+      Test-Path docs/phase0/task_logs/P0-INFRA-003A_20260519_001542_blocked.yaml:
+      True. Record found and validated as carry-forward.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "P0-INFRA-003A Task Record found but is not the expected blocked record"
+    result: "not_triggered"
+    evidence: >
+      Only P0-INFRA-003A_20260519_001542_blocked.yaml exists. No conflicting
+      records.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "pnpm unavailable and Corepack activation fails or Corepack is unavailable"
+    result: "not_triggered"
+    evidence: >
+      corepack prepare pnpm@9.15.9 --activate succeeded (exit 0). corepack pnpm
+      --version returns 9.15.9 (exit 0). Corepack 0.34.6 is available at
+      C:\Program Files\nodejs\corepack. pnpm is available through Corepack.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Dependency policy cannot be reconciled with AGENTS.md Rule 8 deployment-runtime boundary"
+    result: "not_triggered"
+    evidence: >
+      AGENTS.md Rule 8 and dependency_policy.md Environment model are aligned.
+      Both state: Phase 0 internet-connected local development/build may use
+      public registries when explicitly allowed; intranet runtime uses prebuilt
+      Docker images; enterprise mirror required for future intranet source build
+      / CI / stricter supply-chain governance.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm branch, clean working tree, and absence of web/ and manifests"
+    result: "passed"
+    command: "git branch --show-current; git status --short --branch; if (Test-Path web) { throw 'web/ already exists' }; if (Test-Path package.json) { throw 'root package.json already exists' }; if (Test-Path pnpm-lock.yaml) { throw 'root pnpm-lock.yaml already exists' }"
+    exit_code: 0
+    evidence: >
+      Branch: phase0/P0-INFRA-003B. Working tree: only AGENTS.md unstaged
+      (expected Rule 8 edit). No staged files. web/: absent. package.json:
+      absent. pnpm-lock.yaml: absent.
+  - step: "Preserve AGENTS.md Rule 8 edit"
+    result: "passed"
+    command: "Select-String -Path AGENTS.md -Pattern 'Dependency source policy is task-scoped'"
+    exit_code: 0
+    evidence: >
+      AGENTS.md Rule 8 confirmed present with correct text: "Dependency source
+      policy is task-scoped. Phase 0 internet-connected local development/build
+      may use public registries only when explicitly allowed by the task prompt
+      and dependency policy; intranet runtime uses prebuilt Docker images and
+      must not require npm/pnpm registry access. Internal mirror/offline-cache
+      remains required for intranet source build, intranet CI, or stricter
+      supply-chain tasks." No other edits to AGENTS.md.
+  - step: "Verify node/npm/pnpm availability"
+    result: "passed"
+    command: "node --version; npm --version; Get-Command pnpm; corepack pnpm --version"
+    exit_code: 0
+    tool_version: "node: v24.15.0; npm: 11.12.1; corepack: 0.34.6; pnpm: 9.15.9 (via Corepack)"
+    evidence: >
+      node --version: v24.15.0 (exit 0). npm --version: 11.12.1 (exit 0).
+      Get-Command pnpm: not found (expected — Corepack shim not in PATH).
+      corepack pnpm --version: 9.15.9 (exit 0).
+  - step: "Activate pnpm via Corepack"
+    result: "passed"
+    command: "corepack prepare pnpm@9.15.9 --activate; corepack pnpm --version"
+    exit_code: 0
+    evidence: >
+      corepack prepare pnpm@9.15.9 --activate: "Preparing pnpm@9.15.9 for
+      immediate activation..." (exit 0). corepack pnpm --version: 9.15.9 (exit 0).
+      pnpm 9.15.9 is available through Corepack.
+  - step: "Verify npm registry config (informational)"
+    result: "passed"
+    command: "npm config get registry; npm config get @ant-design:registry; Test-Path .npmrc; Test-Path $env:USERPROFILE\\.npmrc"
+    exit_code: 0
+    evidence: >
+      npm config get registry: https://registry.npmjs.org/ (public default).
+      npm config get @ant-design:registry: undefined (no scoped override).
+      Repo .npmrc: absent. User .npmrc: absent. No secrets to redact.
+      Registry is public npmjs.org — permitted for Phase 0 local dev/build
+      under the re-scoped policy.
+  - step: "Verify node and npm versions"
+    result: "passed"
+    command: "node --version; npm --version; corepack --version"
+    exit_code: 0
+    evidence: "node: v24.15.0; npm: 11.12.1; corepack: 0.34.6. All available."
+  - step: "Update dependency_policy.md with Docker deployment-runtime boundary"
+    result: "passed"
+    command: "Manual edit: added '## Environment model' with three subsections; updated '## Frontend pnpm Registry Rules'"
+    exit_code: 0
+    evidence: >
+      Three-environment model added: (1) Phase 0 internet-connected local
+      development/build, (2) Intranet runtime deployment, (3) Future intranet
+      source build / intranet CI / stricter supply-chain governance. Frontend
+      pnpm Registry Rules updated to reflect the new model.
+  - step: "Re-scope P0-INFRA-003B.md"
+    result: "passed"
+    command: "Manual edit: updated title, objective, deliverable, constraints, acceptance_criteria, failure_examples, stop_conditions, carry-forward impact, registry classification → Docker boundary"
+    exit_code: 0
+    evidence: >
+      Title changed to "Frontend Toolchain / Docker Deployment-Runtime Boundary".
+      Objective updated to validate toolchain and document Docker boundary.
+      Enterprise mirror/offline cache pass requirement removed; replaced with
+      Docker deployment-runtime boundary documentation. Registry classification
+      rules section replaced with Docker deployment-runtime boundary section.
+  - step: "Update P0-INFRA-003.md"
+    result: "passed"
+    command: "Manual edit: updated objective, constraint, acceptance_criterion, failure_example, stop_condition"
+    exit_code: 0
+    evidence: >
+      Objective now states install/build in Phase 0 local dev; intranet runtime
+      consumes prebuilt Docker images. Constraint replaces enterprise intranet
+      npm mirror with Phase 0 local dev rule. Acceptance criterion changed to
+      "pnpm install succeeds in Phase 0 internet-connected local development/
+      build environment". Stop condition updated.
+  - step: "Update TASK_INDEX.md and README_TASK_PROMPTS.md"
+    result: "passed"
+    command: "Manual edit: updated P0-INFRA-003B row descriptions"
+    exit_code: 0
+    evidence: >
+      TASK_INDEX.md: P0-INFRA-003B description changed to "Frontend Toolchain /
+      Docker Deployment-Runtime Boundary" with updated notes. README_TASK_PROMPTS.md:
+      type updated to "infrastructure (frontend toolchain / Docker boundary)".
+  - step: "Verify P0-INFRA-007 not changed"
+    result: "passed"
+    command: "git diff --name-only | Select-String 'P0-INFRA-007'"
+    exit_code: 0
+    evidence: >
+      P0-INFRA-007.md is not in the diff. Left unchanged per task instructions.
+      Deferred note: P0-INFRA-007 must revisit CI/build network premise when
+      executed — if CI runs in intranet or performs source builds, enterprise
+      mirror/offline cache or another approved dependency strategy must be
+      handled then.
+  - step: "Verify @ant-design/x is NOT in the Dependency Allowlist table"
+    result: "passed"
+    command: "Section-scoped verification against docs/dev/dependency_policy.md Dependency Allowlist table"
+    exit_code: 0
+    evidence: "@ant-design/x remains in '## Excluded frontend candidates' section only. Not in allowlist table."
+  - step: "Run dependency checker"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    exit_code: 0
+    evidence: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - step: "Verify no web/, package manifests, or lockfiles created"
+    result: "passed"
+    command: "Test-Path web; Test-Path package.json; Test-Path pnpm-lock.yaml; Test-Path package-lock.json; Test-Path yarn.lock"
+    exit_code: 0
+    evidence: "All five: False. No forbidden files created."
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-INFRA-003B"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: "M AGENTS.md, M docs/dev/dependency_policy.md, M docs/phase0/TASK_INDEX.md, M docs/phase0/task_logs/INDEX.md, A docs/phase0/task_logs/P0-INFRA-003B_20260519_234143_passed.yaml, M docs/phase0/tasks/P0-INFRA-003.md, M docs/phase0/tasks/P0-INFRA-003B.md, M docs/phase0/tasks/README_TASK_PROMPTS.md"
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: "8 files: AGENTS.md, docs/dev/dependency_policy.md, docs/phase0/TASK_INDEX.md, docs/phase0/task_logs/INDEX.md, docs/phase0/task_logs/P0-INFRA-003B_20260519_234143_passed.yaml, docs/phase0/tasks/P0-INFRA-003.md, docs/phase0/tasks/P0-INFRA-003B.md, docs/phase0/tasks/README_TASK_PROMPTS.md"
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: "8 files changed, 584 insertions(+), 56 deletions(-)"
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output (clean)."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output (no untracked files)."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String forbidden patterns"
+    exit_code: 0
+    evidence: "PASSED: no forbidden paths (web/, package.json, pnpm-lock.yaml, docs/blueprint/, app/, .github/, docker-compose.yml) in staged diff."
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: "Compare changed_files against git diff --cached --name-only"
+    exit_code: 0
+    evidence: "changed_files (8 entries) matches git diff --cached --name-only (8 files) in count and order."
+
+changed_files:
+  - "AGENTS.md"
+  - "docs/dev/dependency_policy.md"
+  - "docs/phase0/TASK_INDEX.md"
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-INFRA-003B_20260519_234143_passed.yaml"
+  - "docs/phase0/tasks/P0-INFRA-003.md"
+  - "docs/phase0/tasks/P0-INFRA-003B.md"
+  - "docs/phase0/tasks/README_TASK_PROMPTS.md"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "node --version; npm --version; corepack --version"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "v24.15.0; 11.12.1; 0.34.6"
+  - command: "corepack prepare pnpm@9.15.9 --activate"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Preparing pnpm@9.15.9 for immediate activation..."
+  - command: "corepack pnpm --version"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "9.15.9"
+  - command: "Get-Command pnpm"
+    result: "passed"
+    exit_code: 1
+    output_snippet: "pnpm NOT available as direct command (expected — Corepack shim not in PATH; pnpm 9.15.9 available via corepack pnpm)"
+  - command: "npm config get registry"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "https://registry.npmjs.org/"
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - command: "Test-Path web, package.json, pnpm-lock.yaml, package-lock.json, yarn.lock"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "False; False; False; False; False"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; documentation/policy re-scope task."
+  not_applicable_reason: "Documentation and policy re-scope task produces no application code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or registry auth values exposed
+    in Task Record or any output. .npmrc files confirmed absent. npm registry
+    config inspected with safe redaction rules. No secrets to redact.
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; documentation/policy re-scope task."
+  not_applicable_reason: "Documentation and policy re-scope task produces no test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_gate_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record"
+  not_applicable_reason: "Local toolchain and policy task; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "codex"
+  reviewed_at: "2026-05-20"
+  notes: >
+    Initially passed by Claude Code/MiMo. Codex staged review returned
+    changes_requested with three blocking issues: (1) dependency_policy.md
+    General Rule "Use only internal mirrors" was unconditional and contradicted
+    the new environment model — fixed by making the rule conditional, scoping
+    internal mirror/offline cache to intranet source build/CI only; (2) Task
+    Record used unsupported schema values pending and mixed — fixed by replacing
+    all pending with passed and actual staged evidence, replacing mixed with
+    passed plus explanatory output_snippet; (3) P0-INFRA-003B.md touched_paths
+    only listed 3 paths and forbidden_paths still included AGENTS.md — fixed by
+    expanding touched_paths to 8 staged files and removing AGENTS.md from
+    forbidden_paths with a qualified note. Task re-validated: YAML parses,
+    dependency checker passes, no forbidden files, staged diff clean. Enterprise
+    mirror/offline cache deferred to future intranet source build/CI tasks.
+    P0-INFRA-007 must revisit CI/build network premise when executed.
+remaining_risks:
+  - "pnpm is available through Corepack (corepack pnpm) but not as a direct pnpm command. P0-INFRA-003 skeleton task must use 'corepack pnpm' or the task prompt must explicitly allow corepack enable."
+  - "Enterprise npm mirror/offline cache remains unconfigured — this is now intentional and deferred to future intranet source build/CI tasks."
+  - "Version ranges for vite, typescript, react-router-dom, @tanstack/react-query, zustand, orval still use sentinel pending_version_evidence_no_manifest_use."
+  - "P0-INFRA-007 must revisit CI/build network premise when executed in intranet CI or if it performs source builds."
+  - "@ant-design/x v1.6.1 (latest antd 5.x-compatible) is legacy line; v2.x requires antd 6.x."
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; documentation/policy re-scope task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install commands were run during this task. corepack prepare pnpm@9.15.9 --activate used only for pnpm activation."
+pnpm_availability:
+  available: true
+  method: "corepack"
+  activation_command: "corepack prepare pnpm@9.15.9 --activate"
+  activation_exit_code: 0
+  version_command: "corepack pnpm --version"
+  version: "9.15.9"
+  version_exit_code: 0
+  direct_command_available: false
+  corepack_version: "0.34.6 (C:\\Program Files\\nodejs\\corepack)"
+  node_version: "v24.15.0 (C:\\Program Files\\nodejs\\node.exe)"
+  npm_version: "11.12.1 (C:\\Program Files\\nodejs\\npm)"
+  environment_note: "Windows 10 Pro, PowerShell 7. pnpm 9.15.9 available through Corepack."
+npm_registry:
+  registry: "https://registry.npmjs.org/"
+  classification: "public_npmjs_reference_only"
+  classification_note: >
+    Public npmjs.org is the configured registry. This is acceptable for Phase 0
+    internet-connected local development/build under the re-scoped policy. It is
+    not enterprise mirror evidence and does not prove intranet source-build or CI
+    compliance — those concerns are deferred to future tasks.
+  repo_npmrc: "absent"
+  user_npmrc: "absent"
+  global_npmrc: "absent"
+  secrets_redacted: true
+  redaction_note: "No .npmrc files exist; no auth lines to inspect or redact."
+docker_deployment_runtime_boundary:
+  documented_in:
+    - "docs/dev/dependency_policy.md (## Environment model)"
+    - "docs/phase0/tasks/P0-INFRA-003B.md (## Docker deployment-runtime boundary)"
+    - "docs/phase0/tasks/P0-INFRA-003.md (constraints)"
+    - "AGENTS.md (Rule 8)"
+  phase0_local_dev_build: "May use public npm registry when explicitly allowed by task prompt and dependency policy."
+  intranet_runtime: "Uses prebuilt Docker images. Must not run pnpm install/npm install. Must not require npm/pnpm registry access."
+  future_intranet_source_build_ci: "Enterprise npm mirror or approved offline cache required. Deferred to later tasks."
+  p0_infra_007_deferred_note: >
+    P0-INFRA-007 not modified. When executed, it must revisit CI/build network
+    premise: if CI runs in intranet or performs source builds, enterprise mirror/
+    offline cache or another approved dependency strategy must be handled then.

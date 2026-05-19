@@ -64,7 +64,7 @@ Batch 7：Golden Task 验收
 | P0-INFRA-002 | Python uv + FastAPI Backend Skeleton | P0-INFRA-008 | 只做健康检查和骨架 |
 | P0-FE-SPIKE-001 | Ant Design X Compatibility and Dependency Spike | P0-INFRA-008 | 决定 @ant-design/x 是否进入前端依赖 allowlist |
 | P0-INFRA-003A | Frontend Dependency Policy and pnpm Availability Gate | P0-FE-SPIKE-001 | 使用 spike 结果更新 npm allowlist；不创建 web/ 或 lockfile |
-| P0-INFRA-003B | Frontend Toolchain Unblock | P0-INFRA-003A | 解决 003A blocked 条件：pnpm 可用性和 npm mirror/cache |
+| P0-INFRA-003B | Frontend Toolchain / Docker Deployment-Runtime Boundary | P0-INFRA-003A | 验证 node/npm/pnpm 可用性，文档化 Docker 部署-运行时边界，重新范围定义 003A 的 blocked 条件 |
 | P0-FE-GUIDE-001 | Frontend AI Coding Guidelines | P0-INFRA-003B | 创建 docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md |
 | P0-INFRA-003 | React 18 + Vite + Ant Design 5.x Frontend Skeleton | P0-INFRA-003B, P0-FE-GUIDE-001 | 必须包含 generate:api；不决定 Ant Design X 或 npm allowlist |
 | P0-FE-ARCH-001 | SDUI Renderer Architecture Baseline | P0-INFRA-003 | 仅架构定义；不实现 web/src/sdui/** |

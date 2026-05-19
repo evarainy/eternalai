@@ -22,7 +22,7 @@ Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
 5. `P0-PREP-*` tasks are execution-pack-only preparation tasks; they create no Runtime/Gateway/Adapter capability.
 6. Spike code must not enter `app/`; use `experiments/phase0/`, `docs/adr/`, `docs/research/`, or reusable `tests/utils/` only.
 7. `app/runtime/` must not import `app/execution_fabric/` or concrete adapters.
-8. Do not add dependencies outside approved internal mirrors/offline cache.
+8. Dependency source policy is task-scoped. Phase 0 internet-connected local development/build may use public registries only when explicitly allowed by the task prompt and dependency policy; intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access. Internal mirror/offline-cache remains required for intranet source build, intranet CI, or stricter supply-chain tasks.
 9. Do not weaken tests to pass: no `assert True`, empty `pass`, broad skip, or deleted assertions.
 10. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 11. Work on one task branch: `phase0/<task_id>`.
