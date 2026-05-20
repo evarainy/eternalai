@@ -51,7 +51,9 @@ objective: >
   boundaries. This is architecture definition only, not full card library
   implementation. Do not create web/src/sdui/** code unless a later task
   explicitly authorizes implementation. Reference FRONTEND_AI_CODING_GUIDELINES.md
-  for frontend conventions.
+  for frontend conventions. SDUI/frontend architecture work must follow the
+  guide's current frontend baseline, lean-mode development rules, and
+  non-baseline exclusions.
 
 structured_output_baseline_applicability: "not_applicable — this task does not implement LLM structured output."
 

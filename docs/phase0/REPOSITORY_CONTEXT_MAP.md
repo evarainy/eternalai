@@ -84,6 +84,7 @@ All paths below were verified to exist at the time this file was created. Mandat
 | docs/phase0/ADR_TEMPLATE.md | ADR document template | When creating new ADRs |
 | docs/phase0/README_FOR_CODEX.md | Codex quick-start guide | First-time Codex setup |
 | docs/phase0/FRONTEND_MOCK_FIXTURES.md | Frontend mock fixture definitions | When working on frontend mocks |
+| docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md | Canonical frontend AI coding guideline / lean-mode development standard for Phase 0 / Phase 1 frontend work. Read before any task that creates or changes `web/**` frontend code; follow during frontend implementation, frontend architecture, frontend testing, mock/fixture work that affects frontend behavior, and frontend staged review. Applies before and during development, not only after implementation. Constrains AI-generated frontend code but does not authorize dependencies; dependency authority remains `docs/dev/dependency_policy.md` and task prompts. | Before and during frontend implementation, architecture, testing, mock/fixture, or review work |
 | docs/phase0/REPOSITORY_CONTEXT_MAP.md | This file — repository navigation map | When orienting in the repo |
 | docs/phase0/PHASE1_TECHNICAL_BASELINE.md | Phase 1 structured-output technical baseline decision summary | When implementing Phase 1 LLM structured output or changing output strategy |
 | **docs/phase0/tasks/** | | |
