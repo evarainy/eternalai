@@ -7,6 +7,7 @@ Use this instead of pasting the full Phase 0 spec.
 - Your tool's boot file: AGENTS.md (Codex) or CLAUDE.md (Claude Code)
 - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
 - docs/phase0/BOUNDARY_CHECKLIST.md
+- docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md
 - docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md only as source of truth; do not paste it in full.
 
 ## Global hard rules
@@ -57,6 +58,9 @@ objective: >
   was established in P0-INFRA-003A; the toolchain gate and deployment-runtime
   boundary were resolved in P0-INFRA-003B. Must reference
   docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for frontend coding conventions.
+  The skeleton must follow the guide's lean-mode rules, current frontend
+  baseline, non-baseline exclusions, dependency-authority boundary, and AI
+  coding constraints throughout implementation and review.
 
 structured_output_baseline_applicability: "not_applicable — this task does not implement LLM structured output."
 

@@ -1,0 +1,448 @@
+task_id: "P0-FE-GUIDE-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-20T15:50:00+08:00"
+completed_at: "2026-05-20T17:06:09+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-20T15:50:00+08:00"
+plan_approved_via: "Codex session; user explicitly approved the existing Plan-only baseline for execution"
+summary: >
+  Created docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md as the canonical
+  frontend AI coding guideline / lean-mode development standard for Phase 0 and
+  Phase 1, registered it in MANIFEST.md, and added minimal pre-push
+  discoverability references in REPOSITORY_CONTEXT_MAP.md plus the frontend
+  skeleton and SDUI architecture task prompts. The guide is concise and
+  constraint-oriented: it documents the current React 18 / Vite / TypeScript
+  strict / Ant Design 5.x / ProComponents 2.x / React Router / TanStack Query /
+  Zustand / Orval baseline, explicitly excludes Ant Design X, Ant Design 6,
+  React 19, Next.js, Tailwind, and shadcn/ui from current baseline use,
+  preserves the P0-INFRA-003B public npm versus intranet runtime Docker
+  boundary, and gives practical rules for future AI coding agents. No frontend
+  runtime code, dependency manifests, lockfiles, dependency policy edits, or
+  package artifacts were created.
+
+acceptance_criteria_result:
+  - criterion: "docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md created and registered in MANIFEST.md"
+    result: "passed"
+    evidence: >
+      Test-Path docs\phase0\FRONTEND_AI_CODING_GUIDELINES.md: True.
+      Select-String -Path MANIFEST.md -Pattern
+      'docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md': MANIFEST.md:23.
+      REPOSITORY_CONTEXT_MAP.md now lists the guide as the canonical frontend
+      AI coding guideline / lean-mode development standard for Phase 0 / Phase
+      1 frontend work.
+  - criterion: "Guidelines cover AntD layout conventions"
+    result: "passed"
+    evidence: >
+      docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md section "Ant Design And
+      ProComponents" requires AntD layout, form, table, feedback, typography,
+      theme token, ConfigProvider, and App conventions where appropriate.
+  - criterion: "Guidelines cover ProComponents 2.x usage patterns"
+    result: "passed"
+    evidence: >
+      Baseline lists ProComponents 2.x. The Ant Design/ProComponents section
+      instructs use of ProLayout, ProTable, and ProForm only when task evidence
+      calls for admin-console patterns.
+  - criterion: "Guidelines cover token/CSS Module styling with prohibition of arbitrary inline styles"
+    result: "passed"
+    evidence: >
+      Styling section prefers AntD tokens and CSS Modules, avoids repeated
+      arbitrary inline styles, and limits inline style to narrow dynamic values
+      or required AntD API escape hatches.
+  - criterion: "Guidelines cover Orval-generated client usage"
+    result: "passed"
+    evidence: >
+      API/state section requires Orval-generated clients for backend business
+      APIs when OpenAPI/client generation is available and forbids hand-editing
+      generated clients.
+  - criterion: "Guidelines cover TanStack Query / Zustand boundary rules"
+    result: "passed"
+    evidence: >
+      API/state section assigns server/cache state to TanStack Query, local
+      UI/session state to Zustand, and forbids duplicating server data in
+      Zustand.
+  - criterion: "Guidelines cover Vitest / React Testing Library conventions"
+    result: "passed"
+    evidence: >
+      Testing section says to use Vitest and React Testing Library for component
+      and route behavior tests when they are authorized by the current task
+      prompt and dependency policy. This is guidance, not dependency approval.
+  - criterion: "Guidelines explicitly prohibit handwritten business fetch/axios calls"
+    result: "passed"
+    evidence: >
+      API/state section states: "Do not write ad-hoc business fetch or axios
+      clients unless a task explicitly authorizes it."
+  - criterion: "No frontend implementation code or dependency files created"
+    result: "passed"
+    evidence: >
+      No web/ path exists in changed files. No package.json, pnpm-lock.yaml,
+      package-lock.json, yarn.lock, pyproject.toml, or uv.lock is in the diff.
+      python scripts/check_dependencies.py passed.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      Final base-aware staged validation recorded below. changed_files has 6
+      entries and matches git diff --cached --name-only
+      8dd6f135421a1bcb1a1d4aec6c29839fe56392ff -- exactly.
+
+failure_examples_tested:
+  - example: "Guidelines reference outdated Ant Design version or incorrect component API"
+    result: "not_triggered"
+    evidence: >
+      Select-String confirms the guide references Ant Design 5 / AntD and
+      ProComponents 2.x only for current baseline composition. Non-baseline
+      technologies are explicitly excluded.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Guidelines document is too vague for AI agent to follow"
+    result: "not_triggered"
+    evidence: >
+      Guide sections use direct must/do-not rules covering baseline,
+      non-baseline technologies, lean scope, AntD/ProComponents, styling, API
+      and state, routing, testing, dependency/deployment boundary, and AI-agent
+      behavior.
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Preflight: confirm branch and clean working tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    exit_code: 0
+    evidence: >
+      Before execution: branch phase0/P0-FE-GUIDE-001; git status --short had
+      no output.
+  - step: "Confirm base ancestry"
+    result: "passed"
+    command: "git merge-base --is-ancestor 8dd6f13 HEAD"
+    exit_code: 0
+    evidence: "exit 0: 8dd6f13 is ancestor of HEAD."
+  - step: "Locate P0-INFRA-003B Task Record for reference"
+    result: "passed"
+    command: "Test-Path docs\\phase0\\task_logs\\P0-INFRA-003B_20260519_234143_passed.yaml"
+    exit_code: 0
+    evidence: "True."
+  - step: "Create docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md"
+    result: "passed"
+    command: "Test-Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md"
+    exit_code: 0
+    evidence: "True."
+  - step: "Register frontend guidelines in MANIFEST.md"
+    result: "passed"
+    command: "Select-String -Path MANIFEST.md -Pattern 'docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md'"
+    exit_code: 0
+    evidence: "MANIFEST.md:23 contains docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md."
+  - step: "Register frontend guidelines in repository context map"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\REPOSITORY_CONTEXT_MAP.md -SimpleMatch -Pattern 'FRONTEND_AI_CODING_GUIDELINES','before any task that creates or changes `web/**`','during frontend implementation','does not authorize dependencies'"
+    exit_code: 0
+    evidence: >
+      REPOSITORY_CONTEXT_MAP.md now identifies docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md
+      as the canonical frontend AI coding guideline / lean-mode development
+      standard, says to read it before web/** frontend work, follow it during
+      implementation/architecture/testing/mock-fixture/review work, and states
+      that dependency authority remains dependency_policy.md and task prompts.
+  - step: "Clarify P0-INFRA-003 guide load/follow requirement"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\tasks\\P0-INFRA-003.md -Pattern 'docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md','lean-mode rules','dependency-authority boundary'"
+    exit_code: 0
+    evidence: >
+      P0-INFRA-003.md now includes the guide in Required context and states the
+      skeleton must follow the guide's lean-mode rules, current baseline,
+      non-baseline exclusions, dependency-authority boundary, and AI coding
+      constraints throughout implementation and review.
+  - step: "Clarify P0-FE-ARCH-001 guide applicability"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\tasks\\P0-FE-ARCH-001.md -Pattern 'FRONTEND_AI_CODING_GUIDELINES.md','lean-mode development rules','non-baseline exclusions'"
+    exit_code: 0
+    evidence: >
+      P0-FE-ARCH-001.md already loaded the guide in Required context; this amend
+      adds one concise sentence that SDUI/frontend architecture work must follow
+      the guide's current frontend baseline, lean-mode development rules, and
+      non-baseline exclusions.
+  - step: "Verify guideline covers required baseline sections"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'React 18','Vite','TypeScript','Ant Design 5','ProComponents','React Router','TanStack Query','Zustand','Orval'"
+    exit_code: 0
+    evidence: >
+      Matches found for React 18, Vite, TypeScript strict, Ant Design 5.x,
+      ProComponents 2.x, React Router, TanStack Query, Zustand, and Orval.
+  - step: "Verify guideline excludes non-baseline frontend candidates"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'Ant Design X','Ant Design 6','React 19','Next.js','Tailwind','shadcn'"
+    exit_code: 0
+    evidence: >
+      Matches found in the non-baseline section for Ant Design X, Ant Design 6,
+      React 19, Next.js, Tailwind, and shadcn/ui; additional Tailwind and
+      Next.js prohibitions appear in styling and routing.
+  - step: "Verify P0-INFRA-003B dependency/deployment boundary wording"
+    result: "passed"
+    command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'public npm','prebuilt Docker images','intranet runtime','enterprise npm mirror'"
+    exit_code: 0
+    evidence: >
+      Matches found for public npm, prebuilt Docker images, intranet runtime,
+      and enterprise npm mirror/offline cache in the dependency/deployment
+      boundary section.
+  - step: "Run dependency checker"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    exit_code: 0
+    evidence: >
+      Dependency check passed. Deterministic allowlist source:
+      docs/dev/dependency_policy.md. Manifests scanned: 6. Dependencies
+      checked: 24.
+  - step: "Pre-stage diff whitespace/path check"
+    result: "passed"
+    command: "git diff --check"
+    exit_code: 0
+    evidence: >
+      No whitespace errors. PowerShell output included Git line-ending warning:
+      "warning: in the working copy of 'MANIFEST.md', LF will be replaced by
+      CRLF the next time Git touches it".
+  - step: "Pre-stage changed tracked file list"
+    result: "passed"
+    command: "git diff --name-only"
+    exit_code: 0
+    evidence: "MANIFEST.md. New untracked guide appears in git ls-files output before staging."
+  - step: "Pre-stage diff stat"
+    result: "passed"
+    command: "git diff --stat"
+    exit_code: 0
+    evidence: >
+      MANIFEST.md | 1 +; 1 file changed, 1 insertion(+). New untracked guide is
+      not included in git diff --stat before staging.
+  - step: "Pre-stage untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md before Task Record creation."
+  - step: "Verify no web/ or dependency files created"
+    result: "passed"
+    command: "Final forbidden-path and self-review checks after staging"
+    exit_code: 0
+    evidence: "No web/ files and no dependency manifests or lockfiles are staged."
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-FE-GUIDE-001."
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: >
+      M  docs/phase0/REPOSITORY_CONTEXT_MAP.md; M
+      docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml; M
+      docs/phase0/tasks/P0-FE-ARCH-001.md; M
+      docs/phase0/tasks/P0-INFRA-003.md after staging amend changes.
+  - step: "Incremental staged file list against HEAD"
+    result: "passed"
+    command: "git diff --cached --name-only HEAD --"
+    exit_code: 0
+    evidence: >
+      docs/phase0/REPOSITORY_CONTEXT_MAP.md;
+      docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml;
+      docs/phase0/tasks/P0-FE-ARCH-001.md;
+      docs/phase0/tasks/P0-INFRA-003.md.
+  - step: "Incremental staged diff stat against HEAD"
+    result: "passed"
+    command: "git diff --cached --stat HEAD --"
+    exit_code: 0
+    evidence: >
+      docs/phase0/REPOSITORY_CONTEXT_MAP.md | 1 +;
+      docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml | 137
+      ++++++++++++++++-----; docs/phase0/tasks/P0-FE-ARCH-001.md | 4 +-;
+      docs/phase0/tasks/P0-INFRA-003.md | 4 +; 4 files changed, 115
+      insertions(+), 31 deletions(-).
+  - step: "Final base-aware staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only 8dd6f135421a1bcb1a1d4aec6c29839fe56392ff --"
+    exit_code: 0
+    evidence: >
+      MANIFEST.md; docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md;
+      docs/phase0/REPOSITORY_CONTEXT_MAP.md;
+      docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml;
+      docs/phase0/tasks/P0-FE-ARCH-001.md;
+      docs/phase0/tasks/P0-INFRA-003.md.
+  - step: "Final base-aware staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat 8dd6f135421a1bcb1a1d4aec6c29839fe56392ff --"
+    exit_code: 0
+    evidence: >
+      MANIFEST.md | 1 +; docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md | 97
+      +++++; docs/phase0/REPOSITORY_CONTEXT_MAP.md | 1 +;
+      docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml | 448
+      +++++++++++++++++++++; docs/phase0/tasks/P0-FE-ARCH-001.md | 4 +-;
+      docs/phase0/tasks/P0-INFRA-003.md | 4 +; 6 files changed, 554
+      insertions(+), 1 deletion(-).
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output; staged whitespace/path check clean."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output after staging final files."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String forbidden patterns"
+    exit_code: 0
+    evidence: >
+      No forbidden staged paths: no web/, dependency manifests, lockfiles,
+      docs/blueprint/**, docs/dev/dependency_policy.md, scripts/check_dependencies.py,
+      app/**, CLAUDE.md, AGENTS.md, or .github/**.
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: "Compare changed_files against git diff --cached --name-only 8dd6f135421a1bcb1a1d4aec6c29839fe56392ff --"
+    exit_code: 0
+    evidence: "changed_files has 6 entries and matches the base-aware staged file order exactly."
+
+changed_files:
+  - "MANIFEST.md"
+  - "docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md"
+  - "docs/phase0/REPOSITORY_CONTEXT_MAP.md"
+  - "docs/phase0/task_logs/P0-FE-GUIDE-001_20260520_160144_passed.yaml"
+  - "docs/phase0/tasks/P0-FE-ARCH-001.md"
+  - "docs/phase0/tasks/P0-INFRA-003.md"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git branch --show-current"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "phase0/P0-FE-GUIDE-001"
+  - command: "git status --short"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Initial preflight had no output; final staged status lists only REPOSITORY_CONTEXT_MAP.md, this Task Record, P0-FE-ARCH-001.md, and P0-INFRA-003.md as amend changes."
+  - command: "git merge-base --is-ancestor 8dd6f13 HEAD"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "exit 0"
+  - command: "git merge-base HEAD origin/phase0/main"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "8dd6f135421a1bcb1a1d4aec6c29839fe56392ff"
+  - command: "Test-Path docs\\phase0\\task_logs\\P0-INFRA-003B_20260519_234143_passed.yaml"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "True"
+  - command: "Test-Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "True"
+  - command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'React 18','Vite','TypeScript','Ant Design 5','ProComponents','React Router','TanStack Query','Zustand','Orval'"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Required baseline terms all matched."
+  - command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'Ant Design X','Ant Design 6','React 19','Next.js','Tailwind','shadcn'"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Future-candidate/non-baseline terms all matched."
+  - command: "Select-String -Path docs\\phase0\\FRONTEND_AI_CODING_GUIDELINES.md -Pattern 'public npm','prebuilt Docker images','intranet runtime','enterprise npm mirror'"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency/deployment boundary terms all matched."
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - command: "git diff --check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No whitespace errors; Git emitted MANIFEST.md LF-to-CRLF warning."
+  - command: "git diff --cached --check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No output; staged whitespace/path check clean."
+  - command: "git ls-files --others --exclude-standard"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No output after staging final files."
+  - command: "git diff --cached --name-only HEAD --"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Incremental staged amend diff against HEAD contains REPOSITORY_CONTEXT_MAP.md, this Task Record, P0-FE-ARCH-001.md, and P0-INFRA-003.md."
+  - command: "git diff --cached --name-only 8dd6f135421a1bcb1a1d4aec6c29839fe56392ff --"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Full final task diff against base contains MANIFEST.md, FRONTEND_AI_CODING_GUIDELINES.md, REPOSITORY_CONTEXT_MAP.md, this Task Record, P0-FE-ARCH-001.md, and P0-INFRA-003.md."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ code or import graph changed; documentation-only task."
+  not_applicable_reason: "No runtime, gateway, adapter, or application module was created or modified."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "Import boundary checks become applicable when application modules are created or CI boundary checks are wired."
+
+security_scan_result:
+  result: "passed"
+  evidence: "Changed files contain policy guidance and task evidence only; no credential values were added."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files were created or modified."
+  not_applicable_reason: "Documentation-only task; no test code exists in this diff."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-003"
+  expiry_condition: "Frontend test guidance becomes executable when a later task creates the frontend skeleton and test files."
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_documentation_task_no_ci_run_requested"
+  url_or_log_path: "local command evidence in this Task Record"
+  not_applicable_reason: "Documentation-only task; CI execution was not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "A later CI task wires and requires CI execution."
+
+review:
+  mode: "self_check"
+  reviewed_by: "codex"
+  reviewed_at: "2026-05-20"
+  notes: >
+    Codex implementation-owner self-check completed. A minimal pre-push
+    discoverability amend added REPOSITORY_CONTEXT_MAP.md navigation plus
+    explicit guide-loading/following references in P0-INFRA-003 and
+    P0-FE-ARCH-001. Independent staged review is still required before any
+    commit, push, or merge. No commit, push, merge, reset, or new task was
+    performed in this amend.
+
+remaining_risks:
+  - "Vitest and React Testing Library guidance is intentionally phrased as when-authorized guidance because this task does not authorize dependency changes."
+  - "Independent staged review is still required before commit, push, or merge."
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "not_committed_per_task_instruction"
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package artifact was created; package creation is out of scope for this task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install, scaffold, archive, or dependency command was run."
+
+artifact_lifecycle:
+  temporary_artifacts_created: []
+  cleanup_evidence: "No temp/cache/scratch artifacts were created."
+  package_artifact_created: false
+  package_artifact_reason: "Package creation is out of scope unless the task prompt explicitly requires one."
