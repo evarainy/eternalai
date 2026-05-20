@@ -113,14 +113,28 @@ explicitly names a future dedicated allowlist file.
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
 | npm | react-dom | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
-| npm | vite | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Vite); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
-| npm | typescript | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (TypeScript strict); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | vite | >=5,<9 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Vite) |
+| npm | typescript | >=5,<7 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TypeScript strict) |
 | npm | antd | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Ant Design 5.x); peerDep >=5.0.0/^5.20.3 confirmed |
 | npm | @ant-design/pro-components | >=2,<3 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (ProComponents 2.x) |
-| npm | react-router-dom | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React Router); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
-| npm | @tanstack/react-query | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (TanStack Query); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
-| npm | zustand | pending_version_evidence_no_manifest_use | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Zustand); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
-| npm | orval | pending_version_evidence_no_manifest_use | frontend-tooling | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Orval); informational only — do not authorize manifest or lockfile use until a later task records an evidence-based version range |
+| npm | react-router-dom | >=6,<8 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (React Router) |
+| npm | @tanstack/react-query | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TanStack Query) |
+| npm | zustand | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Zustand) |
+| npm | @types/react | >=18,<19 | frontend-devtypes | pending_internal_mirror_confirmation | P0-INFRA-003C helper; React 18 type definitions |
+| npm | @types/react-dom | >=18,<19 | frontend-devtypes | pending_internal_mirror_confirmation | P0-INFRA-003C helper; React 18 DOM type definitions |
+| npm | orval | >=7,<9 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Orval) |
+| npm | @vitejs/plugin-react | >=5,<7 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; Vite React plugin for JSX transform |
+| npm | @types/node | >=20,<26 | frontend-devtypes | pending_internal_mirror_confirmation | P0-INFRA-003C helper; Node.js type definitions for Vite config |
+| npm | vitest | >=2,<5 | frontend-test | pending_internal_mirror_confirmation | P0-INFRA-003C helper; test runner |
+| npm | @testing-library/react | >=14,<17 | frontend-test | pending_internal_mirror_confirmation | P0-INFRA-003C helper; React component testing utilities |
+| npm | @testing-library/jest-dom | >=6,<7 | frontend-test | pending_internal_mirror_confirmation | P0-INFRA-003C helper; custom jest matchers for DOM |
+| npm | jsdom | >=24,<30 | frontend-test | pending_internal_mirror_confirmation | P0-INFRA-003C helper; DOM implementation for Vitest |
+| npm | eslint | >=9,<11 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; linter |
+| npm | @eslint/js | >=9,<11 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; ESLint core JS rules |
+| npm | typescript-eslint | >=8,<9 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; TypeScript ESLint integration |
+| npm | eslint-plugin-react-hooks | >=5,<8 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; React hooks lint rules |
+| npm | eslint-plugin-react-refresh | >=0.4,<0.6 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; React refresh lint rules |
+| npm | globals | >=15,<18 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C helper; global variable definitions for ESLint |
 
 Future frontend entries must use `ecosystem` value `npm` and must be added here
 before any frontend manifest or lockfile is changed.

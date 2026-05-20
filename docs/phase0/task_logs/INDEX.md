@@ -34,3 +34,5 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-INFRA-003A | 2026-05-19 | blocked | phase0/P0-INFRA-003A | not_committed | not_applicable | codex_review |
 | P0-BATCH2-FE-UNBLOCK-PLAN-001 | 2026-05-19 | passed | phase0/P0-BATCH2-FE-UNBLOCK-PLAN-001 | not_committed | not_applicable | codex_review |
 | P0-INFRA-003B | 2026-05-19 | passed | phase0/P0-INFRA-003B | not_committed | not_applicable | codex_review |
+| P0-FE-GUIDE-001 | 2026-05-20 | passed | phase0/P0-FE-GUIDE-001 | not_committed | not_applicable | codex_review |
+| P0-INFRA-003C | 2026-05-20 | passed | phase0/P0-INFRA-003C | not_committed | not_applicable | codex_review |

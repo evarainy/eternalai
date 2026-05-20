@@ -56,7 +56,8 @@ objective: >
   adoption — P0-FE-SPIKE-001 was blocked and @ant-design/x is excluded from the
   current Phase 1 allowlist. Ant Design 6 is not adopted. Frontend npm allowlist
   was established in P0-INFRA-003A; the toolchain gate and deployment-runtime
-  boundary were resolved in P0-INFRA-003B. Must reference
+  boundary were resolved in P0-INFRA-003B; sentinel dependency ranges were
+  replaced with evidence-based ranges in P0-INFRA-003C. Must reference
   docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for frontend coding conventions.
   The skeleton must follow the guide's lean-mode rules, current frontend
   baseline, non-baseline exclusions, dependency-authority boundary, and AI
@@ -79,7 +80,7 @@ constraints:
   - No Langfuse changes
   - Only health page, basic layout, and mock API call sample
   - Does not decide Ant Design X adoption — P0-FE-SPIKE-001 was blocked; @ant-design/x is excluded from the current Phase 1 allowlist; Ant Design 6 is not adopted
-  - Does not decide frontend npm allowlist — established in P0-INFRA-003A; toolchain unblock gate is P0-INFRA-003B
+  - Does not decide frontend npm allowlist — established in P0-INFRA-003A; toolchain unblock gate is P0-INFRA-003B; dependency sentinel ranges resolved in P0-INFRA-003C
   - Must reference docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md for all frontend coding conventions
   - Install/build happens in the Phase 0 internet-connected local development/build environment (public npm registry allowed per dependency_policy.md); intranet runtime consumes prebuilt Docker images and must not require npm/pnpm registry access. AI must not add dependencies not in the Dependency Allowlist.
   - Frontend API client connecting to backend OpenAPI must be generated via Orval or equivalent OpenAPI codegen

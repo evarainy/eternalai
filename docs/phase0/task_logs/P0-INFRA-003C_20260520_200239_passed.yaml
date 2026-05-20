@@ -1,0 +1,427 @@
+task_id: "P0-INFRA-003C"
+task_type: "infrastructure"
+result: "passed"
+started_at: "2026-05-20T20:00:00+08:00"
+completed_at: "2026-05-20T20:02:39+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-20T20:00:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  P0-INFRA-003C unblocks P0-INFRA-003 by replacing six
+  pending_version_evidence_no_manifest_use sentinel ranges (vite, typescript,
+  react-router-dom, @tanstack/react-query, zustand, orval) with evidence-based
+  major-bounded ranges in docs/dev/dependency_policy.md. Fourteen new helper
+  dependency rows added: @vitejs/plugin-react, @types/react, @types/react-dom,
+  @types/node, vitest, @testing-library/react, @testing-library/jest-dom,
+  jsdom, eslint, @eslint/js, typescript-eslint, eslint-plugin-react-hooks,
+  eslint-plugin-react-refresh, globals. msw not added (P0-INFRA-003 does not
+  explicitly require network/request mocking; health page uses static mock).
+  @ant-design/x, Ant Design 6, React 19, next, tailwindcss, shadcn/ui remain
+  excluded. P0-INFRA-003.md dependency gate synced. Dependency checker passes.
+  No web/**, package manifests, lockfiles, app code, tests, Docker, CI, or
+  checker code changed.
+
+decision: "passed"
+decision_rationale: >
+  All six sentinel rows for P0-INFRA-003 baseline packages replaced with
+  evidence-based major-bounded ranges. Fourteen helper dependencies added for
+  frontend skeleton toolchain. No excluded technologies authorized. Dependency
+  checker passes. No forbidden files modified. P0-INFRA-003 dependency gate
+  resolved.
+
+blocking_conditions: []
+
+acceptance_criteria_result:
+  - criterion: "All sentinel pending_version_evidence_no_manifest_use ranges for P0-INFRA-003 required packages are replaced with evidence-based ranges"
+    result: "passed"
+    evidence: >
+      Six sentinel rows replaced: vite (>=5,<9), typescript (>=5,<7),
+      react-router-dom (>=6,<8), @tanstack/react-query (>=5,<6),
+      zustand (>=5,<6), orval (>=7,<9). Scoped verification confirms all 20
+      required packages have non-sentinel ranges.
+  - criterion: "P0-INFRA-003 required helper dependencies are added to the allowlist with evidence-based ranges"
+    result: "passed"
+    evidence: >
+      Fourteen helper rows added: @vitejs/plugin-react (>=5,<7),
+      @types/react (>=18,<19), @types/react-dom (>=18,<19),
+      @types/node (>=20,<26), vitest (>=2,<5),
+      @testing-library/react (>=14,<17), @testing-library/jest-dom (>=6,<7),
+      jsdom (>=24,<30), eslint (>=9,<11), @eslint/js (>=9,<11),
+      typescript-eslint (>=8,<9), eslint-plugin-react-hooks (>=5,<8),
+      eslint-plugin-react-refresh (>=0.4,<0.6), globals (>=15,<18).
+  - criterion: "Excluded technologies remain outside the Dependency Allowlist table"
+    result: "passed"
+    evidence: >
+      Scoped check confirms @ant-design/x, next, tailwindcss, shadcn-ui not in
+      any Dependency Allowlist table row. @ant-design/x remains in Excluded
+      frontend candidates section only.
+  - criterion: "msw is not added (only if explicitly required)"
+    result: "passed"
+    evidence: >
+      P0-INFRA-003 task states "ProComponents 2.x and MSW availability must be
+      verified during pnpm install" — this is availability verification, not
+      requirement. The skeleton uses static mock for health page; no
+      network/request mocking is explicitly required. msw not added.
+  - criterion: "No web/**, package manifests, lockfiles, app code, tests, Docker, CI, or checker code changed"
+    result: "passed"
+    evidence: >
+      Test-Path web: False. Test-Path package.json: False. Test-Path
+      pnpm-lock.yaml: False. Test-Path package-lock.json: False. Test-Path
+      yarn.lock: False. scripts/check_dependencies.py not modified.
+      Only docs/dev/dependency_policy.md, docs/phase0/tasks/P0-INFRA-003.md,
+      docs/phase0/task_logs/INDEX.md, and this Task Record changed.
+  - criterion: "Dependency checker passes"
+    result: "passed"
+    evidence: >
+      python scripts/check_dependencies.py: exit 0. "Dependency check passed.
+      Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests
+      scanned: 6. Dependencies checked: 24."
+  - criterion: "P0-INFRA-003 dependency gate synced"
+    result: "passed"
+    evidence: >
+      docs/phase0/tasks/P0-INFRA-003.md objective now states "sentinel
+      dependency ranges were replaced with evidence-based ranges in P0-INFRA-003C".
+      Constraint updated to reference P0-INFRA-003C.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      git diff --cached --name-only: 4 files. changed_files: 4 entries. Order
+      and count match exactly: docs/dev/dependency_policy.md,
+      docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-INFRA-003C_20260520_200239_passed.yaml,
+      docs/phase0/tasks/P0-INFRA-003.md.
+
+failure_examples_tested:
+  - example: "npm view returns incompatible peer dependency range"
+    result: "not_triggered"
+    evidence: >
+      All 20 packages verified: no peerDep conflicts with React 18 (>=18,<19),
+      Ant Design 5 (>=5,<6), or node v24.15.0. typescript-eslint peerDep
+      typescript >=4.8.4 <6.1.0 is compatible with typescript >=5,<7.
+      @vitejs/plugin-react@5 peerDep vite ^4-^8 covers vite >=5,<9.
+      vitest@2-4 compatible via different vite peerDep ranges.
+  - example: "Required package forces React 19, AntD 6, Next.js, Tailwind, or shadcn/ui"
+    result: "not_triggered"
+    evidence: >
+      No added package declares peerDep requiring react >=19, antd >=6, next,
+      tailwindcss, or shadcn/ui. react-router-dom@7 peerDep react >=18.
+      zustand@5 peerDep react >=18. @tanstack/react-query@5 peerDep react
+      ^18 || ^19. @testing-library/react@16 peerDep react ^18 || ^19.
+  - example: "Dependency checker fails after allowlist update"
+    result: "not_triggered"
+    evidence: >
+      python scripts/check_dependencies.py: exit 0. All manifest dependencies
+      remain covered by the allowlist.
+
+step_verification_points:
+  - step: "Preflight: confirm branch, clean working tree, no web/ or manifests"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    exit_code: 0
+    evidence: >
+      Branch: phase0/P0-INFRA-003C. Working tree: clean (no output from
+      git status --short). No web/, package.json, pnpm-lock.yaml present.
+  - step: "Verify node/npm/corepack availability"
+    result: "passed"
+    command: "node --version; npm --version; corepack --version; corepack pnpm --version"
+    exit_code: 0
+    evidence: >
+      node v24.15.0, npm 11.12.1, corepack 0.34.6, pnpm 9.15.9 (via Corepack).
+  - step: "Collect npm evidence for 6 sentinel packages"
+    result: "passed"
+    command: "npm view <pkg> version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (public; Phase 0 local dev/build)"
+    evidence: >
+      vite: 8.0.13, node ^20.19+; vite@6: 6.4.2, node ^18+; vite@5: 5.4.21,
+      node ^18+. typescript: 6.0.3, node >=14.17; typescript@5: 5.9.3.
+      react-router-dom: 7.15.1, react >=18, node >=20; rrd@6: 6.30.3.
+      @tanstack/react-query: 5.100.11, react ^18||^19. zustand: 5.0.13,
+      react >=18, node >=12.20. orval: 8.11.0, node >=22.18; orval@7: 7.21.0.
+      All compatible with React 18, node v24.15.0.
+  - step: "Collect npm evidence for 14 helper packages"
+    result: "passed"
+    command: "npm view <pkg> version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    exit_code: 0
+    registry_source: "https://registry.npmjs.org/ (public; Phase 0 local dev/build)"
+    evidence: >
+      @vitejs/plugin-react@5: 5.2.0, vite ^4-^8. @types/react: 19.2.15 (v18:
+      18.3.29). @types/react-dom: 19.2.3 (v18: 18.3.7). @types/node: 25.9.1.
+      vitest: 4.1.7, vite ^6-^8, node ^20||^22||>=24. @testing-library/react:
+      16.3.2, react ^18||^19. @testing-library/jest-dom: 6.9.1. jsdom: 29.1.1,
+      node ^20.19+||^22.13+||>=24. eslint: 10.4.0, node ^20.19+; eslint@9:
+      9.39.4, node ^18.18+. @eslint/js: 10.0.1. typescript-eslint: 8.59.4,
+      eslint ^8.57||^9||^10, typescript >=4.8.4 <6.1.0. eslint-plugin-react-hooks:
+      7.1.1, eslint ^3-^10. eslint-plugin-react-refresh: 0.5.2, eslint ^9||^10.
+      globals: 17.6.0. All compatible with baseline constraints.
+  - step: "Replace 6 sentinel rows in dependency_policy.md"
+    result: "passed"
+    command: "Manual edit: replace pending_version_evidence_no_manifest_use with evidence-based ranges"
+    exit_code: 0
+    evidence: >
+      vite: >=5,<9. typescript: >=5,<7. react-router-dom: >=6,<8.
+      @tanstack/react-query: >=5,<6. zustand: >=5,<6. orval: >=7,<9.
+  - step: "Add 14 helper dependency rows to dependency_policy.md"
+    result: "passed"
+    command: "Manual edit: insert new npm rows into Dependency Allowlist table"
+    exit_code: 0
+    evidence: >
+      @vitejs/plugin-react (>=5,<7), @types/react (>=18,<19),
+      @types/react-dom (>=18,<19), @types/node (>=20,<26), vitest (>=2,<5),
+      @testing-library/react (>=14,<17), @testing-library/jest-dom (>=6,<7),
+      jsdom (>=24,<30), eslint (>=9,<11), @eslint/js (>=9,<11),
+      typescript-eslint (>=8,<9), eslint-plugin-react-hooks (>=5,<8),
+      eslint-plugin-react-refresh (>=0.4,<0.6), globals (>=15,<18).
+  - step: "Run dependency checker"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    exit_code: 0
+    evidence: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - step: "Scoped check: required packages have non-sentinel ranges"
+    result: "passed"
+    command: "PowerShell: verify all 20 required packages found with non-sentinel ranges"
+    exit_code: 0
+    evidence: "PASSED: all 20 required packages found with non-sentinel ranges"
+  - step: "Scoped check: excluded packages not in allowlist"
+    result: "passed"
+    command: "PowerShell: verify @ant-design/x, next, tailwindcss, shadcn-ui not in allowlist"
+    exit_code: 0
+    evidence: "PASSED: no excluded packages found in Dependency Allowlist table"
+  - step: "Update P0-INFRA-003.md dependency gate"
+    result: "passed"
+    command: "Manual edit: add P0-INFRA-003C reference to objective and constraint"
+    exit_code: 0
+    evidence: >
+      Objective now states "sentinel dependency ranges were replaced with
+      evidence-based ranges in P0-INFRA-003C". Constraint updated.
+  - step: "Update task_logs/INDEX.md"
+    result: "passed"
+    command: "Manual edit: add P0-INFRA-003C and P0-FE-GUIDE-001 rows"
+    exit_code: 0
+    evidence: "Two rows added to INDEX.md."
+  - step: "Verify no web/, package manifests, or lockfiles created"
+    result: "passed"
+    command: "Test-Path web; Test-Path package.json; Test-Path pnpm-lock.yaml; Test-Path package-lock.json; Test-Path yarn.lock"
+    exit_code: 0
+    evidence: "All five: False."
+  - step: "Verify scripts/check_dependencies.py not modified"
+    result: "passed"
+    command: "git diff --name-only scripts/check_dependencies.py"
+    exit_code: 0
+    evidence: "No output — file not in diff."
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-INFRA-003C"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: "Staged files only (after staging all changes)."
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: |
+      docs/dev/dependency_policy.md
+      docs/phase0/task_logs/INDEX.md
+      docs/phase0/task_logs/P0-INFRA-003C_20260520_200239_passed.yaml
+      docs/phase0/tasks/P0-INFRA-003.md
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: |
+       docs/dev/dependency_policy.md                      |  26 +-
+       docs/phase0/task_logs/INDEX.md                     |   2 +
+       .../P0-INFRA-003C_20260520_200239_passed.yaml      | 427 +++++++++++++++++++++
+       docs/phase0/tasks/P0-INFRA-003.md                  |   5 +-
+       4 files changed, 452 insertions(+), 8 deletions(-)
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output (clean)."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output (no untracked files)."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: >-
+      $staged = @(git diff --cached --name-only); if ($staged | Select-String
+      -Pattern '^docs/blueprint/','^scripts/check_dependencies.py$','^app/',
+      '^tests/','^docker-compose.yml$','^AGENTS.md$','^CLAUDE.md$','^\.github/',
+      '^pyproject.toml$','^uv.lock$','^package.json$','^pnpm-lock.yaml$',
+      '^package-lock.json$','^yarn.lock$','^infra/','^web/')
+      { throw 'Forbidden staged path detected' }; Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "PASSED — no forbidden staged paths. docs/dev/dependency_policy.md is allowed for P0-INFRA-003C."
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: >-
+      $staged = @(git diff --cached --name-only);
+      $record = @('docs/dev/dependency_policy.md','docs/phase0/task_logs/INDEX.md',
+      'docs/phase0/task_logs/P0-INFRA-003C_20260520_200239_passed.yaml',
+      'docs/phase0/tasks/P0-INFRA-003.md');
+      if ($staged.Count -ne $record.Count) { throw 'count mismatch' };
+      for ($i = 0; $i -lt $staged.Count; $i++) { if ($staged[$i] -ne $record[$i]) { throw "mismatch at $i" } };
+      Write-Output 'PASSED'
+    exit_code: 0
+    evidence: "Staged order matches changed_files. Count: 4 = 4."
+
+changed_files:
+  - "docs/dev/dependency_policy.md"
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-INFRA-003C_20260520_200239_passed.yaml"
+  - "docs/phase0/tasks/P0-INFRA-003.md"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "Dependency check passed. Manifests scanned: 6. Dependencies checked: 24."
+  - command: "npm view <pkg> version peerDependencies dependencies engines --json"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "All 20 packages: compatible peer deps with React 18, node v24.15.0"
+    registry_source: "https://registry.npmjs.org/ (public; Phase 0 local dev/build)"
+  - command: "Scoped: required packages non-sentinel check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "PASSED: all 20 required packages found with non-sentinel ranges"
+  - command: "Scoped: excluded packages not in allowlist check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "PASSED: no excluded packages found in Dependency Allowlist table"
+dependency_changes:
+  added:
+    - "npm:@vitejs/plugin-react (>=5,<7, frontend-tooling)"
+    - "npm:@types/react (>=18,<19, frontend-devtypes)"
+    - "npm:@types/react-dom (>=18,<19, frontend-devtypes)"
+    - "npm:@types/node (>=20,<26, frontend-devtypes)"
+    - "npm:vitest (>=2,<5, frontend-test)"
+    - "npm:@testing-library/react (>=14,<17, frontend-test)"
+    - "npm:@testing-library/jest-dom (>=6,<7, frontend-test)"
+    - "npm:jsdom (>=24,<30, frontend-test)"
+    - "npm:eslint (>=9,<11, frontend-tooling)"
+    - "npm:@eslint/js (>=9,<11, frontend-tooling)"
+    - "npm:typescript-eslint (>=8,<9, frontend-tooling)"
+    - "npm:eslint-plugin-react-hooks (>=5,<8, frontend-tooling)"
+    - "npm:eslint-plugin-react-refresh (>=0.4,<0.6, frontend-tooling)"
+    - "npm:globals (>=15,<18, frontend-tooling)"
+  changed:
+    - "npm:vite (pending_version_evidence_no_manifest_use → >=5,<9)"
+    - "npm:typescript (pending_version_evidence_no_manifest_use → >=5,<7)"
+    - "npm:react-router-dom (pending_version_evidence_no_manifest_use → >=6,<8)"
+    - "npm:@tanstack/react-query (pending_version_evidence_no_manifest_use → >=5,<6)"
+    - "npm:zustand (pending_version_evidence_no_manifest_use → >=5,<6)"
+    - "npm:orval (pending_version_evidence_no_manifest_use → >=7,<9)"
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; infrastructure policy gate task."
+  not_applicable_reason: "Infrastructure gate task produces no application code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or registry auth values
+    exposed in Task Record or any output. All npm evidence sourced from
+    public npmjs.org registry. No .npmrc files modified.
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; infrastructure policy gate task."
+  not_applicable_reason: "Infrastructure gate task produces no test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_gate_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record"
+  not_applicable_reason: "Local infrastructure gate; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "pending"
+  reviewed_at: "pending"
+  notes: >
+    Ready for independent Codex staged review. All sentinel ranges resolved.
+    Helper dependencies added with evidence-based ranges. Dependency checker
+    passes. No forbidden files modified.
+remaining_risks:
+  - "All npm evidence sourced from public npmjs.org (Phase 0 local dev/build registry). Enterprise mirror/offline cache not configured."
+  - "vite >=5,<9 includes vite 8.x which uses rolldown (not rollup). P0-INFRA-003 skeleton should pin vite 6.x in web/package.json for stability."
+  - "orval >=7,<9 includes orval 8.x with engine node >=22.18.0. Compatible with current node v24.15.0."
+  - "vitest >=2,<5: vitest 4.x peerDep vite ^6-^8 excludes vite 5. P0-INFRA-003 should use vite 6+ or vitest 2-3 if using vite 5."
+  - "eslint-plugin-react-refresh >=0.4,<0.6 peerDep eslint ^9||^10 only. P0-INFRA-003 must use eslint 9+."
+  - "Future intranet source build / CI still requires enterprise npm mirror or approved offline cache (deferred)."
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; infrastructure policy gate task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager install commands were run during this task."
+npm_registry:
+  registry: "https://registry.npmjs.org/"
+  classification: "public_npmjs_reference_only"
+  classification_note: >
+    Public npmjs.org is the configured registry. This is acceptable for Phase 0
+    internet-connected local development/build under the P0-INFRA-003B policy.
+    It is not enterprise mirror evidence and does not prove intranet
+    source-build or CI compliance.
+  evidence_commands:
+    - "npm view vite version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view typescript version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view react-router-dom version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @tanstack/react-query version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view zustand version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view orval version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @vitejs/plugin-react version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @types/react version --json --registry https://registry.npmjs.org/"
+    - "npm view @types/react-dom version --json --registry https://registry.npmjs.org/"
+    - "npm view @types/node version --json --registry https://registry.npmjs.org/"
+    - "npm view vitest version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @testing-library/react version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @testing-library/jest-dom version peerDependencies dependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view jsdom version engines --json --registry https://registry.npmjs.org/"
+    - "npm view eslint version engines --json --registry https://registry.npmjs.org/"
+    - "npm view @eslint/js version engines --json --registry https://registry.npmjs.org/"
+    - "npm view typescript-eslint version peerDependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view eslint-plugin-react-hooks version peerDependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view eslint-plugin-react-refresh version peerDependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view globals version engines --json --registry https://registry.npmjs.org/"
+    - "npm view vite@6 version engines --json --registry https://registry.npmjs.org/"
+    - "npm view vite@5 version engines --json --registry https://registry.npmjs.org/"
+    - "npm view orval@7 version engines --json --registry https://registry.npmjs.org/"
+    - "npm view typescript@5 version --json --registry https://registry.npmjs.org/"
+    - "npm view react-router-dom@6 version --json --registry https://registry.npmjs.org/"
+    - "npm view @vitejs/plugin-react@5 version peerDependencies --json --registry https://registry.npmjs.org/"
+    - "npm view vitest@3 version peerDependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view vitest@2 version peerDependencies engines --json --registry https://registry.npmjs.org/"
+    - "npm view @types/react@18 version --json --registry https://registry.npmjs.org/"
+    - "npm view @types/react-dom@18 version --json --registry https://registry.npmjs.org/"
+    - "npm view eslint@9 version engines --json --registry https://registry.npmjs.org/"
+  tool_versions:
+    node: "v24.15.0"
+    npm: "11.12.1"
+    corepack: "0.34.6"
+    pnpm: "9.15.9 (via Corepack)"
+  date_time: "2026-05-20T20:00:00+08:00"
+  secrets_redacted: true
+  redaction_note: "No .npmrc files exist; no auth lines to inspect or redact."
