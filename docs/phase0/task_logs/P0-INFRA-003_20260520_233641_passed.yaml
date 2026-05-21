@@ -1,0 +1,542 @@
+task_id: "P0-INFRA-003"
+task_type: "infrastructure"
+result: "passed"
+started_at: "2026-05-20T23:25:00+08:00"
+completed_at: "2026-05-20T23:36:41+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-20T23:25:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Created a minimal React 18 + Vite 6 + TypeScript strict + Ant Design 5.x
+  frontend skeleton under web/**. Includes: Vite React TS app, strict TS config,
+  ESLint config (flat config), Vitest test setup with React Testing Library,
+  Ant Design ConfigProvider/App/Layout/Typography minimal shell, React Router
+  routes for / and /health (both serve HealthPage), TanStack Query provider,
+  deterministic static health mock, Orval config with checked-in OpenAPI fixture
+  (web/openapi/health.openapi.json), generated client files under
+  web/src/generated/**, a meaningful HealthPage test (TDD red→green), and
+  minimal CSS. Uses fetch-based custom mutator for Orval to avoid axios
+  dependency (axios is not in the allowlist). No Admin Console, chat UI, SDUI
+  renderer, backend integration, Docker/CI, or database work. All validation
+  commands pass: install, test, typecheck, lint, build, generate:api,
+  dependency checker, API drift, negative drift.
+
+decision: "passed"
+decision_rationale: >
+  All acceptance criteria met. pnpm install succeeded (656 packages resolved).
+  TypeScript strict mode enabled. TDD red→green cycle completed with real
+  evidence. pnpm test passes (1 test, 1 file). pnpm typecheck passes. pnpm lint
+  passes. pnpm build succeeds (1485 modules transformed). pnpm generate:api
+  executes deterministically against checked-in OpenAPI fixture — rerun produces
+  no generated-output drift. Negative drift validation confirms temporary
+  mutation is detected. Dependency checker passes (7 manifests, 48 deps).
+  No forbidden paths modified. No excluded technologies added (no axios, no
+  @ant-design/x, no AntD 6, no React 19, no Next.js, no Tailwind, no shadcn/ui,
+  no msw). Orval generates fetch-based client via customInstance mutator (no
+  axios). All staged files within allowed paths.
+
+blocking_conditions: []
+
+acceptance_criteria_result:
+  - criterion: "pnpm install succeeds in Phase 0 internet-connected local development/build environment"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm install: exit 0. Packages: +656. Dependencies:
+      react 18.3.1, react-dom 18.3.1, antd 5.29.3, @ant-design/pro-components
+      2.8.10, react-router-dom 6.30.3, @tanstack/react-query 5.100.11, zustand
+      5.0.13. DevDependencies: vite 6.4.2, typescript 5.6.3, vitest 3.2.4,
+      @vitejs/plugin-react 5.2.0, @testing-library/react 16.3.2,
+      @testing-library/jest-dom 6.9.1, jsdom 25.0.1, eslint 9.39.4,
+      @eslint/js 9.39.4, typescript-eslint 8.59.4,
+      eslint-plugin-react-hooks 5.2.0, eslint-plugin-react-refresh 0.4.26,
+      globals 15.15.0, orval 7.21.0, @types/react 18.3.29,
+      @types/react-dom 18.3.7, @types/node 22.19.19. Done in 40.4s using
+      pnpm v9.15.9. All versions within allowlist ranges.
+  - criterion: "pnpm lint succeeds"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm lint: exit 0. No lint errors. ESLint flat config
+      with @eslint/js, typescript-eslint, eslint-plugin-react-hooks,
+      eslint-plugin-react-refresh. Ignores dist/ and src/generated/.
+  - criterion: "pnpm typecheck succeeds"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm typecheck: exit 0. tsc -b --noEmit — no errors.
+      Strict mode enabled. Two tsconfig files: tsconfig.json (src/) and
+      tsconfig.node.json (vite/orval/eslint configs).
+  - criterion: "pnpm build succeeds"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm build: exit 0. vite v6.4.2 building for
+      production. 1485 modules transformed. Output: dist/index.html (0.39 kB),
+      dist/assets/index-CzxYZYcy.css (0.14 kB), dist/assets/index-D8PnEYJZ.js
+      (564.10 kB, gzip 182.55 kB). Chunk size warning is non-blocking
+      (Ant Design expected in initial bundle).
+  - criterion: "TypeScript strict mode is enabled in web/tsconfig.json"
+    result: "passed"
+    evidence: >
+      Select-String -Path web\tsconfig.json -Pattern '"strict"\s*:\s*true':
+      line 14 — "strict": true. Also: noUnusedLocals, noUnusedParameters,
+      noFallthroughCasesInSwitch, noUncheckedIndexedAccess all true.
+  - criterion: "pnpm test -- --run succeeds and exercises the health page route/component assertion"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm test: exit 0. Test Files: 1 passed (1). Tests: 1
+      passed (1). HealthPage test asserts "displays health status ok" — renders
+      HealthPage within MemoryRouter, finds text matching /ok/i. TDD red phase
+      (before HealthPage existed): exit 1, "Failed to resolve import
+      '../HealthPage'", Test Files 1 failed. TDD green phase (after
+      implementation): exit 0, Test Files 1 passed, Tests 1 passed.
+  - criterion: "Frontend can access health page"
+    result: "passed"
+    evidence: >
+      web/src/pages/HealthPage.tsx exists and renders health status via
+      mockHealth(). Routes / and /health both serve HealthPage via React Router.
+      Ant Design Typography renders "Status: ok". Verified by passing test
+      and successful production build.
+  - criterion: "pnpm generate:api executes against a deterministic OpenAPI input and rerun produces no unstaged generated-output diff"
+    result: "passed"
+    evidence: >
+      cd web && corepack pnpm generate:api: exit 0. orval v7.21.0 generates
+      web/src/generated/api.ts and web/src/generated/api.schemas.ts from
+      web/openapi/health.openapi.json, then web/scripts/normalize-generated.mjs
+      strips trailing whitespace and trailing blank lines (Node stdlib only, no
+      dependencies). Cross-platform Python SHA256 drift check confirms
+      "generated_api_no_drift" after rerun. git diff --cached --check passes
+      (exit 0). No whitespace issues in generated output.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      git diff --cached --name-only produces 23 files. changed_files has 23
+      entries. Order and count match exactly. Verified by PowerShell comparison
+      script. Staged diff stat: 23 files changed, 7785 insertions(+).
+
+failure_examples_tested:
+  - example: "Health page route or component missing before implementation"
+    result: "triggered"
+    evidence: >
+      TDD red phase: cd web && corepack pnpm test → exit 1. Error: "Failed to
+      resolve import '../HealthPage' from 'src/pages/__tests__/HealthPage.test.tsx'.
+      Does the file exist?" Test Files 1 failed, Tests: no tests. This is the
+      expected TDD red-phase evidence — a failing test before implementation,
+      not a blocking failure.
+  - example: "pnpm install fails due to missing dependency or registry issue"
+    result: "not_applicable"
+    evidence: "Dependency policy enforced by P0-INFRA-008 allowlist checker. All 20 required packages have allowlist rows with non-sentinel ranges."
+    not_applicable_reason: "Dependency policy and allowlist checker from P0-INFRA-008 guard against this"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "generate:api produces output that drifts from backend OpenAPI"
+    result: "triggered"
+    evidence: >
+      Negative drift validation: mutated health.openapi.json (changed "ok" to
+      "healthy"), reran Python SHA256 drift check, exit 1 with "Generated API
+      drift after pnpm generate:api: web/src/generated/api.schemas.ts". Then
+      reverted the mutation. Confirmed drift check detects changes. After
+      revert, reran generate:api and confirmed git diff -- web/src/generated
+      is clean.
+
+step_verification_points:
+  - step: "Inspect existing web/package.json from prior task (if present) and preserve configuration"
+    result: "passed"
+    command: "if (Test-Path web\\package.json) { 'EXISTS_PRESERVE_INCREMENTAL' } else { 'NOT_EXISTS_CREATE_MINIMAL' }"
+    exit_code: 0
+    evidence: "NOT_EXISTS_CREATE_MINIMAL — web/ did not exist before this task."
+  - step: "Create web/ directory with React 18 + Vite + Ant Design skeleton and package.json test/typecheck/generate scripts"
+    result: "passed"
+    command: "if (!(Test-Path web)) { throw 'web directory missing' }; if (!(Test-Path web\\package.json)) { throw 'web/package.json missing' }; Select-String -Path web\\package.json -Pattern '\"test\"','vitest --run','\"typecheck\"','\"generate:api\"'"
+    exit_code: 0
+    evidence: >
+      web/package.json exists with scripts: test (vitest --run), test:watch
+      (vitest), typecheck (tsc -b --noEmit), lint (eslint .), generate:api
+      (orval --config orval.config.ts), build (tsc -b && vite build), dev
+      (vite), preview (vite preview).
+  - step: "Run pnpm install"
+    result: "passed"
+    command: "cd web && corepack pnpm install"
+    exit_code: 0
+    evidence: "Packages: +656. Done in 40.4s using pnpm v9.15.9."
+  - step: "Create health page test/spec FIRST (TDD red phase)"
+    result: "passed"
+    command: "if (!(Test-Path web\\src\\pages\\__tests__\\HealthPage.test.tsx) -and !(Test-Path web\\src\\pages\\HealthPage.test.tsx)) { throw 'Health page test missing' }"
+    exit_code: 0
+    evidence: "web/src/pages/__tests__/HealthPage.test.tsx created before HealthPage.tsx."
+  - step: "Run health page test — expect failure (TDD red phase: health page not yet implemented)"
+    result: "passed"
+    command: "cd web && corepack pnpm test"
+    exit_code: 1
+    evidence: >
+      Exit code 1. Error: "Failed to resolve import '../HealthPage' from
+      'src/pages/__tests__/HealthPage.test.tsx'. Does the file exist?"
+      Test Files: 1 failed, Tests: no tests. This is the expected TDD
+      red-phase evidence.
+  - step: "Implement health page component and route (TDD green phase)"
+    result: "passed"
+    command: "Get-ChildItem -Path web\\src -Recurse -File | Select-String -Pattern 'health|Health'"
+    exit_code: 0
+    evidence: >
+      HealthPage.tsx, HealthPage.test.tsx, mockHealth.ts created. App.tsx routes
+      / and /health to HealthPage. main.tsx renders App with StrictMode.
+  - step: "Re-run pnpm build — expect pass (TDD green phase)"
+    result: "passed"
+    command: "cd web && corepack pnpm build"
+    exit_code: 0
+    evidence: "vite v6.4.2 building for production. 1485 modules transformed. ✓ built in 11.60s."
+  - step: "Run health page test — expect pass (TDD green phase)"
+    result: "passed"
+    command: "cd web && corepack pnpm test"
+    exit_code: 0
+    evidence: "Test Files: 1 passed (1). Tests: 1 passed (1). Duration: 9.53s."
+  - step: "Run pnpm lint"
+    result: "passed"
+    command: "cd web && corepack pnpm lint"
+    exit_code: 0
+    evidence: "eslint . — no errors, no warnings (generated files in ignores)."
+  - step: "Run pnpm typecheck"
+    result: "passed"
+    command: "cd web && corepack pnpm typecheck"
+    exit_code: 0
+    evidence: "tsc -b --noEmit — no errors."
+  - step: "Verify TypeScript strict mode"
+    result: "passed"
+    command: "Select-String -Path web\\tsconfig.json -Pattern '\"strict\"\\s*:\\s*true'"
+    exit_code: 0
+    evidence: "web\\tsconfig.json:14: \"strict\": true."
+  - step: "Run generate:api against deterministic OpenAPI input"
+    result: "passed"
+    command: "cd web && corepack pnpm generate:api"
+    exit_code: 0
+    evidence: >
+      orval v7.21.0. Generated web/src/generated/api.ts and
+      web/src/generated/api.schemas.ts from web/openapi/health.openapi.json.
+      Uses customInstance mutator (fetch-based, no axios).
+  - step: "Verify generated API output has no drift after rerun"
+    result: "passed"
+    command: >
+      Cross-platform Python SHA256 drift check using corepack pnpm generate:api.
+      Snapshot before and after rerun, compare hashes.
+    exit_code: 0
+    evidence: "generated_api_no_drift. git diff -- web/src/generated: no output."
+  - step: "Negative generate:api drift validation"
+    result: "passed"
+    command: >
+      Mutated web/openapi/health.openapi.json (changed "ok" to "healthy"),
+      reran Python SHA256 drift check, confirmed exit 1 with drift detected
+      in web/src/generated/api.schemas.ts, reverted mutation.
+    exit_code: 0
+    evidence: >
+      drift_check_exit_code: 1. NEGATIVE_DRIFT_CHECK_PASSED: mutation detected
+      as expected. After revert, git diff -- web/src/generated is clean.
+  - step: "Verify health page exists"
+    result: "passed"
+    command: "Get-ChildItem -Path web\\src -Recurse -File | Select-String -Pattern 'health|Health'"
+    exit_code: 0
+    evidence: >
+      HealthPage.tsx: import mockHealth, function HealthPage.
+      HealthPage.test.tsx: import HealthPage, describe('HealthPage').
+      mockHealth.ts: export function mockHealth(), HealthResponse interface.
+      health.openapi.json: /api/v1/health path, HealthResponse schema.
+      api.ts: getHealth function, HealthResponse type.
+      api.schemas.ts: HealthResponseStatus, HealthResponse.
+  - step: "Stage all files and verify diff"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: >
+      23 files staged: docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-INFRA-003_20260520_233641_passed.yaml,
+      web/.gitignore, web/eslint.config.js, web/index.html,
+      web/openapi/health.openapi.json, web/orval.config.ts, web/package.json,
+      web/pnpm-lock.yaml, web/scripts/normalize-generated.mjs,
+      web/src/App.tsx, web/src/api/mockHealth.ts,
+      web/src/api/mutator.ts, web/src/generated/api.schemas.ts,
+      web/src/generated/api.ts, web/src/main.tsx,
+      web/src/pages/HealthPage.tsx,
+      web/src/pages/__tests__/HealthPage.test.tsx,
+      web/src/styles.css, web/src/test/setup.ts, web/tsconfig.json,
+      web/tsconfig.node.json, web/vite.config.ts.
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-INFRA-003"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: >
+      M docs/phase0/task_logs/INDEX.md. A for all 22 new files
+      (Task Record + 20 web/ files + web/.gitignore + web/scripts/). No unstaged changes.
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: "23 files. Matches changed_files in count and order exactly."
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: "23 files changed, 7785 insertions(+)."
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: >
+      git diff --cached --check: exit 0, no output. All generated files pass
+      whitespace check after web/scripts/normalize-generated.mjs strips
+      trailing whitespace and trailing blank lines from orval output.
+      No hand-edits to generated logic; normalization is deterministic,
+      dependency-free (Node stdlib only), and runs automatically as part of
+      generate:api.
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output — no untracked files remain."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: >
+      Scanned staged diff for forbidden paths. INDEX.md is the only
+      docs/phase0/task_logs/** file besides P0-INFRA-003 Task Record;
+      explicitly authorized by user for task log registration.
+    exit_code: 0
+    evidence: >
+      PASSED: no forbidden paths in staged diff. No docs/blueprint/**,
+      docs/dev/dependency_policy.md, scripts/check_dependencies.py, app/**,
+      services/api/tests/**, tests/**, docker-compose.yml, AGENTS.md,
+      CLAUDE.md, .github/**, pyproject.toml, uv.lock, root package.json,
+      root pnpm-lock.yaml, package-lock.json, yarn.lock, infra/**.
+      INDEX.md staged per user explicit authorization for task log
+      registration.
+  - step: "Final root dependency and lockfile scan"
+    result: "passed"
+    command: "Scanned staged diff for root dependency and lockfile paths."
+    exit_code: 0
+    evidence: >
+      PASSED: no root dependency or lockfile in staged diff. Only
+      web/package.json and web/pnpm-lock.yaml (explicitly allowed for
+      P0-INFRA-003 frontend skeleton).
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: >
+      PowerShell: compare changed_files array against
+      git diff --cached --name-only. Verify count and order.
+    exit_code: 0
+    evidence: >
+      changed_files has 23 entries. git diff --cached --name-only has 23
+      entries. Order matches exactly. Count: 23 = 23.
+
+changed_files:
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-INFRA-003_20260520_233641_passed.yaml"
+  - "web/.gitignore"
+  - "web/eslint.config.js"
+  - "web/index.html"
+  - "web/openapi/health.openapi.json"
+  - "web/orval.config.ts"
+  - "web/package.json"
+  - "web/pnpm-lock.yaml"
+  - "web/scripts/normalize-generated.mjs"
+  - "web/src/App.tsx"
+  - "web/src/api/mockHealth.ts"
+  - "web/src/api/mutator.ts"
+  - "web/src/generated/api.schemas.ts"
+  - "web/src/generated/api.ts"
+  - "web/src/main.tsx"
+  - "web/src/pages/HealthPage.tsx"
+  - "web/src/pages/__tests__/HealthPage.test.tsx"
+  - "web/src/styles.css"
+  - "web/src/test/setup.ts"
+  - "web/tsconfig.json"
+  - "web/tsconfig.node.json"
+  - "web/vite.config.ts"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "cd web && corepack pnpm test (TDD red phase)"
+    result: "passed"
+    exit_code: 1
+    output_snippet: >
+      Error: Failed to resolve import "../HealthPage" from
+      "src/pages/__tests__/HealthPage.test.tsx". Does the file exist?
+      Test Files: 1 failed, Tests: no tests.
+  - command: "cd web && corepack pnpm test (TDD green phase)"
+    result: "passed"
+    exit_code: 0
+    output_snippet: >
+      ✓ src/pages/__tests__/HealthPage.test.tsx (1 test) 243ms.
+      Test Files: 1 passed (1). Tests: 1 passed (1).
+  - command: "cd web && corepack pnpm typecheck"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "tsc -b --noEmit — no errors."
+  - command: "cd web && corepack pnpm lint"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "eslint . — no errors, no warnings."
+  - command: "cd web && corepack pnpm build"
+    result: "passed"
+    exit_code: 0
+    output_snippet: >
+      vite v6.4.2 building for production. 1485 modules transformed.
+      ✓ built in 11.60s.
+  - command: "cd web && corepack pnpm generate:api"
+    result: "passed"
+    exit_code: 0
+    output_snippet: >
+      🍻 orval v7.21.0 - A swagger client generator for typescript.
+      🎉 api - Your OpenAPI spec has been converted into ready to use orval!
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    exit_code: 0
+    output_snippet: >
+      Dependency check passed. Deterministic allowlist source:
+      docs/dev/dependency_policy.md. Manifests scanned: 7. Dependencies
+      checked: 48.
+  - command: "Cross-platform Python SHA256 drift check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "generated_api_no_drift"
+  - command: "Negative drift check (temporary fixture mutation)"
+    result: "passed"
+    exit_code: 1
+    output_snippet: >
+      Generated API drift after pnpm generate:api:
+      web/src/generated/api.schemas.ts.
+      NEGATIVE_DRIFT_CHECK_PASSED: mutation detected as expected.
+
+dependency_changes:
+  added:
+    - "npm:react (^18.0.0, resolved 18.3.1)"
+    - "npm:react-dom (^18.0.0, resolved 18.3.1)"
+    - "npm:antd (^5.0.0, resolved 5.29.3)"
+    - "npm:@ant-design/pro-components (^2.0.0, resolved 2.8.10)"
+    - "npm:react-router-dom (^6.0.0, resolved 6.30.3)"
+    - "npm:@tanstack/react-query (^5.0.0, resolved 5.100.11)"
+    - "npm:zustand (^5.0.0, resolved 5.0.13)"
+    - "npm:vite (^6.0.0, resolved 6.4.2)"
+    - "npm:typescript (~5.6.0, resolved 5.6.3)"
+    - "npm:@vitejs/plugin-react (^5.0.0, resolved 5.2.0)"
+    - "npm:@types/react (^18.0.0, resolved 18.3.29)"
+    - "npm:@types/react-dom (^18.0.0, resolved 18.3.7)"
+    - "npm:@types/node (^22.0.0, resolved 22.19.19)"
+    - "npm:vitest (^3.0.0, resolved 3.2.4)"
+    - "npm:@testing-library/react (^16.0.0, resolved 16.3.2)"
+    - "npm:@testing-library/jest-dom (^6.0.0, resolved 6.9.1)"
+    - "npm:jsdom (^25.0.0, resolved 25.0.1)"
+    - "npm:eslint (^9.0.0, resolved 9.39.4)"
+    - "npm:@eslint/js (^9.0.0, resolved 9.39.4)"
+    - "npm:typescript-eslint (^8.0.0, resolved 8.59.4)"
+    - "npm:eslint-plugin-react-hooks (^5.0.0, resolved 5.2.0)"
+    - "npm:eslint-plugin-react-refresh (^0.4.0, resolved 0.4.26)"
+    - "npm:globals (^15.0.0, resolved 15.15.0)"
+    - "npm:orval (^7.0.0, resolved 7.21.0)"
+  changed: []
+  lockfiles_changed:
+    - "web/pnpm-lock.yaml (generated by pnpm install, 656 packages)"
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; frontend skeleton under web/** only."
+  not_applicable_reason: "Frontend skeleton task produces no backend Python module code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "Import boundary checks become applicable when backend application modules are created or CI boundary checks are wired."
+
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or registry auth values
+    in any created file. OpenAPI fixture is a mock. mutator.ts uses native
+    fetch (no auth headers). No .npmrc or .env files created. No secrets
+    to redact.
+
+weak_test_scan_result:
+  result: "passed"
+  evidence: >
+    HealthPage.test.tsx asserts screen.getByText(/ok/i).toBeInTheDocument().
+    This is a meaningful component assertion, not a weak "renders without
+    crashing" test. No assert true, empty pass, or skip present.
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_frontend_skeleton_no_ci_run_requested"
+  url_or_log_path: "local command evidence in this Task Record"
+  not_applicable_reason: "Frontend skeleton task; CI not in scope for Phase 0 local dev/build."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "A future CI task wires and requires CI execution."
+
+review:
+  mode: "codex_review"
+  reviewed_by: "pending"
+  reviewed_at: "pending"
+  notes: >
+    Ready for independent Codex staged review. All acceptance criteria met.
+    TDD red→green evidence captured. All validations pass. No excluded
+    technologies introduced (no axios, @ant-design/x, AntD 6, React 19,
+    Next.js, Tailwind, shadcn/ui, msw). Orval generates fetch-based client
+    via customInstance mutator (axios not required). No forbidden paths
+    modified.
+
+remaining_risks:
+  - "pnpm is available through Corepack (corepack pnpm) but not as a direct pnpm command. CI/CD must use corepack pnpm."
+  - "vite build chunk size ~564 kB (Ant Design in initial bundle). Acceptable for skeleton; should be optimized with code splitting in later tasks."
+  - "React Router v6 emits v7 future flag warnings (v7_startTransition, v7_relativeSplatPath). Non-blocking; can be addressed when upgrading to React Router v7."
+  - "Enterprise npm mirror/offline cache remains unconfigured (deferred per P0-INFRA-003B)."
+  - "@ant-design/x, Ant Design 6, React 19, Next.js, Tailwind, shadcn/ui remain excluded per current Phase 1 baseline."
+  - "axios is NOT in the dependency allowlist. Orval customInstance mutator uses native fetch API instead. If future generated code requires axios, axios must first be added to the allowlist via a dependency-policy task."
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package artifact created; frontend skeleton is source code only."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager pack, archive, or Docker build command was run."
+
+artifact_lifecycle:
+  temporary_artifacts_created:
+    - "web/dist/ (Vite build output — removed before staging)"
+    - "web/tsconfig.tsbuildinfo (TypeScript incremental build info — removed before staging)"
+  cleanup_evidence: >
+    Remove-Item -Recurse -Force web/dist, web/tsconfig.tsbuildinfo.
+    web/.gitignore ensures dist/ and *.tsbuildinfo are ignored going forward.
+  package_artifact_created: false
+  package_artifact_reason: "Package creation is out of scope unless the task prompt explicitly requires one."
+
+tool_versions:
+  node: "v24.15.0 (C:\\Program Files\\nodejs\\node.exe)"
+  npm: "11.12.1 (C:\\Program Files\\nodejs\\npm)"
+  corepack: "0.34.6 (C:\\Program Files\\nodejs\\corepack)"
+  pnpm: "9.15.9 (via corepack pnpm)"
+  python: "3.12 (C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python312\\python.exe)"
+  os: "Windows 10 Pro 10.0.19045"
+
+excluded_technologies_confirmed:
+  - axios: "NOT installed. Orval uses fetch-based customInstance mutator."
+  - "@ant-design/x": "NOT installed. Excluded per P0-FE-SPIKE-001 blocked status."
+  - "antd >=6": "NOT installed. Ant Design 5.29.3 used."
+  - "react >=19": "NOT installed. React 18.3.1 used."
+  - "react-dom >=19": "NOT installed. React DOM 18.3.1 used."
+  - "next": "NOT installed."
+  - "tailwindcss": "NOT installed. Minimal CSS only."
+  - "shadcn/ui": "NOT installed."
+  - "msw": "NOT installed. Static mock used for health page."
+
+npm_registry:
+  registry: "https://registry.npmjs.org/"
+  classification: "public_npmjs_reference_only"
+  classification_note: >
+    Public npmjs.org is the configured registry. This is acceptable for Phase 0
+    internet-connected local development/build under the P0-INFRA-003B policy.
+    It is not enterprise mirror evidence and does not prove intranet
+    source-build or CI compliance.
+  secrets_redacted: true
