@@ -22,6 +22,7 @@ Files:
 - docs/phase0/FIRST_BATCH_TASKS.md
 - docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md
 - docs/phase0/FRONTEND_MOCK_FIXTURES.md
+- docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md
 - docs/phase0/README_FOR_CODEX.md
 - docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md
 - docs/phase0/TASK_INDEX.md
