@@ -37,3 +37,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-FE-GUIDE-001 | 2026-05-20 | passed | phase0/P0-FE-GUIDE-001 | not_committed | not_applicable | codex_review |
 | P0-INFRA-003C | 2026-05-20 | passed | phase0/P0-INFRA-003C | not_committed | not_applicable | codex_review |
 | P0-INFRA-003 | 2026-05-20 | passed | phase0/P0-INFRA-003 | not_committed | not_applicable | codex_review |
+| P0-INFRA-004A | 2026-05-21 | passed | phase0/P0-INFRA-004A | not_committed | not_applicable | codex_review |

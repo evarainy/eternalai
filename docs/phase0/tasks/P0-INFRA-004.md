@@ -32,6 +32,7 @@ depends_on:
   - P0-SPIKE-003
   - P0-INFRA-001
   - P0-INFRA-002
+  - P0-INFRA-004A
 priority: prerequisite
 source_spec: "docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md"
 task_index: "docs/phase0/TASK_INDEX.md"
@@ -60,11 +61,14 @@ evidence_gate:
   required_spike: P0-SPIKE-003
   required_spike_result: passed
   required_adr: "docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md"
+  prerequisite_task: P0-INFRA-004A
   gate_condition: >
-    P0-INFRA-004 can only execute if P0-SPIKE-003 Task Record shows result=passed
-    and ADR-P0-SPIKE-003 records a passed or conditionally_passed decision. If
-    P0-SPIKE-003 evidence is missing, failed, or contradictory, DB migration code
-    must NOT be implemented. The executor must stop and report the blocker.
+    P0-INFRA-004 can only execute if P0-SPIKE-003 Task Record shows result=passed,
+    ADR-P0-SPIKE-003 records a passed or conditionally_passed decision, AND
+    P0-INFRA-004A Task Record shows result=passed (psycopg runtime driver added,
+    pgvector Docker image validated, dependency policy updated). If any evidence
+    is missing, failed, or contradictory, DB migration code must NOT be implemented.
+    The executor must stop and report the blocker.
   evidence_verification:
     - "Find the current passed P0-SPIKE-003 Task Record via docs/phase0/task_logs/INDEX.md or `ls docs/phase0/task_logs/P0-SPIKE-003_*_passed.yaml | head -1`; confirm result=passed"
     - "Read docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md and confirm status=accepted"

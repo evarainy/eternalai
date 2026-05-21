@@ -108,7 +108,7 @@ explicitly names a future dedicated allowlist file.
 | python | pydantic-ai | >=1,<2 | spike | pending_internal_mirror_confirmation | P0-SPIKE-007 spike requirements |
 | python | alembic | >=1.13,<2.0 | spike; backend-migration | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (Alembic baseline dependency for later migration integration) |
 | python | sqlalchemy | >=2.0,<3.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (SQLAlchemy backend baseline) |
-| python | psycopg | >=3.1,<4.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements |
+| python | psycopg | >=3.1,<4.0 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-004A / P0-INFRA-004 database baseline runtime driver |
 | python | arq | >=0.26,<1 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | python | redis | >=5,<6 | spike | pending_internal_mirror_confirmation | P0-SPIKE-004 spike requirements |
 | npm | react | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |

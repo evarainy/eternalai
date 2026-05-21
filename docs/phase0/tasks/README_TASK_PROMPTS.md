@@ -31,7 +31,8 @@ Current execution package includes per-task prompts for Batch 0, Batch 1, and Ba
 | P0-FE-GUIDE-001 | P0-FE-GUIDE-001.md | P0-INFRA-003B | documentation (frontend) |
 | P0-INFRA-003 | P0-INFRA-003.md | P0-INFRA-003B, P0-FE-GUIDE-001 | infrastructure (frontend skeleton) |
 | P0-FE-ARCH-001 | P0-FE-ARCH-001.md | P0-INFRA-003 | spike (frontend architecture) |
-| P0-INFRA-004 | P0-INFRA-004.md | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | infrastructure |
+| P0-INFRA-004 | P0-INFRA-004.md | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002, P0-INFRA-004A | infrastructure |
+| P0-INFRA-004A | P0-INFRA-004A.md | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | infrastructure |
 | P0-INFRA-006 | P0-INFRA-006.md | P0-INFRA-001, P0-INFRA-002 | infrastructure |
 | P0-INFRA-007 | P0-INFRA-007.md | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-005, P0-INFRA-006, P0-INFRA-008 | infrastructure |
 | P0-INFRA-005 | P0-INFRA-005.md | P0-SPIKE-004, P0-INFRA-001, P0-INFRA-002 | infrastructure |
