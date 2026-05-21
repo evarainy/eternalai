@@ -68,7 +68,8 @@ Batch 7：Golden Task 验收
 | P0-FE-GUIDE-001 | Frontend AI Coding Guidelines | P0-INFRA-003B | 创建 docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md |
 | P0-INFRA-003 | React 18 + Vite + Ant Design 5.x Frontend Skeleton | P0-INFRA-003B, P0-FE-GUIDE-001 | 必须包含 generate:api；不决定 Ant Design X 或 npm allowlist |
 | P0-FE-ARCH-001 | SDUI Renderer Architecture Baseline | P0-INFRA-003 | 仅架构定义；不实现 web/src/sdui/** |
-| P0-INFRA-004 | PostgreSQL Schema and Alembic Baseline | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | 仅在 pgvector Spike 通过或条件通过后执行 |
+| P0-INFRA-004A | PostgreSQL / pgvector runtime dependency unblock | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002 | Unblock P0-INFRA-004: add psycopg runtime driver, pgvector Docker image, dependency policy scope |
+| P0-INFRA-004 | PostgreSQL Schema and Alembic Baseline | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002, P0-INFRA-004A | 仅在 pgvector Spike 通过或条件通过后执行 |
 | P0-INFRA-006 | OpenTelemetry + Langfuse Baseline Deployment | P0-INFRA-001, P0-INFRA-002 | Golden Task 前置条件，不可降级；仅验 API health / Spike trace，Gateway trace 后移 |
 | P0-INFRA-007 | CI Lint Type Check Staged Import Boundary and Test Baseline | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-005, P0-INFRA-006, P0-INFRA-008 | 必须包含 import boundary check；未实现模块检查标记 not_applicable，不得提前造 Runtime/Gateway/Trace；若 P0-INFRA-005 阻塞，queue 相关检查标记 not_applicable 而非永久阻塞 CI |
 | P0-INFRA-005 | Redis + ARQ Baseline via JobQueuePort Candidate | P0-SPIKE-004, P0-INFRA-001, P0-INFRA-002 | 仅当 ADR 为 passed / conditionally_passed 时执行 |

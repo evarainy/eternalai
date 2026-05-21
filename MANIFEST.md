@@ -62,6 +62,7 @@ Files:
 - docs/phase0/tasks/P0-INFRA-003A.md
 - docs/phase0/tasks/P0-INFRA-003B.md
 - docs/phase0/tasks/P0-INFRA-004.md
+- docs/phase0/tasks/P0-INFRA-004A.md
 - docs/phase0/tasks/P0-INFRA-005.md
 - docs/phase0/tasks/P0-INFRA-006.md
 - docs/phase0/tasks/P0-INFRA-007.md
