@@ -30,3 +30,13 @@ docker compose --env-file .env.example \
 ### Environment variables
 
 Copy `.env.example` to `.env` and adjust values. All secrets are placeholders — never commit real credentials.
+
+## Observability baseline
+
+Deployment-only baseline for OpenTelemetry Collector and Langfuse self-hosted. See [`infra/observability/README.md`](infra/observability/README.md) for full details.
+
+```powershell
+docker compose --env-file .env.example --profile observability config
+```
+
+Runtime tracing and app instrumentation are **deferred** — not implemented in Phase 0.
