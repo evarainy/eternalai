@@ -72,6 +72,7 @@ Batch 7：Golden Task 验收
 | P0-INFRA-004 | PostgreSQL Schema and Alembic Baseline | P0-SPIKE-003, P0-INFRA-001, P0-INFRA-002, P0-INFRA-004A | 仅在 pgvector Spike 通过或条件通过后执行 |
 | P0-INFRA-006 | OpenTelemetry + Langfuse Baseline Deployment | P0-INFRA-001, P0-INFRA-002 | Golden Task 前置条件，不可降级；仅验 API health / Spike trace，Gateway trace 后移 |
 | P0-INFRA-007 | CI Lint Type Check Staged Import Boundary and Test Baseline | P0-INFRA-002, P0-INFRA-003, P0-INFRA-004, P0-INFRA-005, P0-INFRA-006, P0-INFRA-008 | 必须包含 import boundary check；未实现模块检查标记 not_applicable，不得提前造 Runtime/Gateway/Trace；若 P0-INFRA-005 阻塞，queue 相关检查标记 not_applicable 而非永久阻塞 CI |
+| P0-INFRA-007A | Frontend pnpm build approval hotfix | P0-INFRA-007 | 修复 pnpm 11 strictDepBuilds 阻止 esbuild build scripts 的 CI 失败；仅新增 web/pnpm-workspace.yaml allowBuilds: esbuild: true |
 | P0-INFRA-005 | Redis + ARQ Baseline via JobQueuePort Candidate | P0-SPIKE-004, P0-INFRA-001, P0-INFRA-002 | 仅当 ADR 为 passed / conditionally_passed 时执行 |
 
 ## 4. Batch 3 — 接口契约冻结
