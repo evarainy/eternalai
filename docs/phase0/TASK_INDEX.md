@@ -75,6 +75,12 @@ Batch 7：Golden Task 验收
 | P0-INFRA-007A | Frontend pnpm build approval hotfix | P0-INFRA-007 | 修复 pnpm 11 strictDepBuilds 阻止 esbuild build scripts 的 CI 失败；仅新增 web/pnpm-workspace.yaml allowBuilds: esbuild: true |
 | P0-INFRA-005 | Redis + ARQ Baseline via JobQueuePort Candidate | P0-SPIKE-004, P0-INFRA-001, P0-INFRA-002 | 仅当 ADR 为 passed / conditionally_passed 时执行 |
 
+## 3.5. Documentation Sync (interstitial, non-blocking)
+
+| task_id | title | depends_on | notes |
+|---|---|---|---|
+| P0-DOC-SYNC-001 | Phase 0 Post-CI Documentation/Index Synchronization | P0-INFRA-007, P0-INFRA-007A | Documentation/index cleanup before Batch 3; no source code or CI changes |
+
 ## 4. Batch 3 — 接口契约冻结
 
 | task_id | title | depends_on |
