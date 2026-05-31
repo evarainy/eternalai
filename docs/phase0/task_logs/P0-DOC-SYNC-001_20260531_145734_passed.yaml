@@ -1,0 +1,239 @@
+task_id: P0-DOC-SYNC-001
+task_type: documentation
+result: passed
+started_at: "2026-05-31T14:55:00+09:00"
+completed_at: "2026-05-31T14:57:34+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-31T14:55:00+09:00"
+plan_approved_via: Claude Code session
+summary: >
+  Phase 0 post-CI documentation/index synchronization after P0-INFRA-007
+  and P0-INFRA-007A. Added 4 missing passed records to task_logs/INDEX.md,
+  added README errata note clarifying web/pnpm-workspace.yaml as intentional
+  persistent config (superseding P0-INFRA-007's "local artifact" description),
+  registered P0-DOC-SYNC-001 in TASK_INDEX and MANIFEST.
+
+acceptance_criteria_result:
+  - criterion: "task_logs/INDEX.md includes P0-INFRA-005, P0-INFRA-006, P0-INFRA-007, P0-INFRA-007A"
+    result: passed
+    evidence: >
+      4 rows added after P0-INFRA-004 entry, ordered by date ascending.
+      All entries: result=passed, git_sha=not_committed (consistent with
+      existing convention for recent entries), reviewer=codex_review.
+
+  - criterion: "INDEX.md rows exactly match existing YAML filenames and statuses"
+    result: passed
+    evidence: >
+      Verified against existing files:
+      P0-INFRA-006_20260526_122210_passed.yaml (date 2026-05-26, passed);
+      P0-INFRA-005_20260527_234054_passed.yaml (date 2026-05-27, passed);
+      P0-INFRA-007_20260528_192241_passed.yaml (date 2026-05-28, passed);
+      P0-INFRA-007A_20260530_113534_passed.yaml (date 2026-05-30, passed).
+      Branch names from git log: phase0/P0-INFRA-005, phase0/P0-INFRA-006,
+      phase0/P0-INFRA-007, phase0/P0-INFRA-007A.
+
+  - criterion: "README note explains web/pnpm-workspace.yaml accurately"
+    result: passed
+    evidence: >
+      Section "web/pnpm-workspace.yaml (P0-INFRA-007A errata)" added.
+      States: intentional persistent config, approves only esbuild build
+      scripts via allowBuilds: esbuild: true, does not use
+      dangerouslyAllowAllBuilds, does not disable strictDepBuilds.
+      Does not overstate supply-chain guarantees.
+
+  - criterion: "P0-INFRA-007 historical Task Record YAML not edited"
+    result: passed
+    evidence: >
+      P0-INFRA-007_20260528_192241_passed.yaml not modified.
+      Errata note placed in README.md only.
+      git diff confirms no changes to any task_logs/*.yaml except the new
+      P0-DOC-SYNC-001 record.
+
+  - criterion: "P0-DOC-SYNC-001 registered in TASK_INDEX and MANIFEST"
+    result: passed
+    evidence: >
+      TASK_INDEX.md: added Section 3.5 "Documentation Sync (interstitial,
+      non-blocking)" with P0-DOC-SYNC-001 row depending on P0-INFRA-007,
+      P0-INFRA-007A. MANIFEST.md: added docs/phase0/tasks/P0-DOC-SYNC-001.md.
+
+  - criterion: "No source code, CI, dependency, or lockfile changes"
+    result: passed
+    evidence: >
+      git diff --cached --name-only shows only docs/ files and MANIFEST.md.
+      No files in app/, web/src/, .github/workflows/, pyproject.toml,
+      pnpm-lock.yaml, or pnpm-workspace.yaml modified.
+
+  - criterion: "Docs/index validation script check"
+    result: not_applicable
+    not_applicable_reason: "No docs/index validation script exists in the repository"
+    not_applicable_scope: "intentionally_deferred"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+    evidence: "No matching script found in scripts/ or .github/workflows/"
+
+failure_examples_tested:
+  - example: "INDEX.md row added for non-existent YAML file"
+    result: not_triggered
+    evidence: >
+      All 4 added rows verified against existing YAML files in
+      docs/phase0/task_logs/ directory. Glob confirmed file existence.
+
+  - example: "README note overstates supply-chain guarantees"
+    result: not_triggered
+    evidence: >
+      Note limited to factual description: what file does, what it approves,
+      what it does not do. No claims about broader supply-chain security.
+
+step_verification_points:
+  - step: "Read current INDEX.md, identify gap"
+    result: passed
+    command: "Read docs/phase0/task_logs/INDEX.md"
+    evidence: "Last entry: P0-INFRA-004 (2026-05-21). 4 passed records missing."
+
+  - step: "Verify YAML files exist for all 4 missing entries"
+    result: passed
+    command: "Glob docs/phase0/task_logs/*.yaml"
+    evidence: >
+      P0-INFRA-006_20260526_122210_passed.yaml,
+      P0-INFRA-005_20260527_234054_passed.yaml,
+      P0-INFRA-007_20260528_192241_passed.yaml,
+      P0-INFRA-007A_20260530_113534_passed.yaml all exist.
+
+  - step: "Add 4 rows to INDEX.md"
+    result: passed
+    command: "Edit docs/phase0/task_logs/INDEX.md"
+    evidence: "4 rows added after P0-INFRA-004, ordered by date."
+
+  - step: "Add README errata and pnpm-workspace section"
+    result: passed
+    command: "Edit README.md"
+    evidence: >
+      Section added at end of README. Errata references P0-INFRA-007
+      Task Record line that was superseded.
+
+  - step: "Create P0-DOC-SYNC-001 task prompt"
+    result: passed
+    command: "Write docs/phase0/tasks/P0-DOC-SYNC-001.md"
+    evidence: "Task prompt created with full scope, required work, validation, and review sections."
+
+  - step: "Register in TASK_INDEX.md"
+    result: passed
+    command: "Edit docs/phase0/TASK_INDEX.md"
+    evidence: "Section 3.5 added between Batch 2 and Batch 3."
+
+  - step: "Register in MANIFEST.md"
+    result: passed
+    command: "Edit MANIFEST.md"
+    evidence: "docs/phase0/tasks/P0-DOC-SYNC-001.md added to file list."
+
+  - step: "Verify no forbidden file changes"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: >
+      Only docs/ files and MANIFEST.md in staged diff.
+      No source code, CI, lockfile, or historical YAML changes.
+
+changed_files:
+  - docs/phase0/task_logs/INDEX.md
+  - README.md
+  - docs/phase0/tasks/P0-DOC-SYNC-001.md
+  - docs/phase0/TASK_INDEX.md
+  - MANIFEST.md
+  - docs/phase0/task_logs/P0-DOC-SYNC-001_20260531_145734_passed.yaml
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: >
+      MANIFEST.md, README.md, docs/phase0/TASK_INDEX.md,
+      docs/phase0/task_logs/INDEX.md,
+      docs/phase0/task_logs/P0-DOC-SYNC-001_20260531_145734_passed.yaml,
+      docs/phase0/tasks/P0-DOC-SYNC-001.md
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "6 files changed, 319 insertions(+)"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "(no output — no whitespace errors)"
+  - command: "git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "(no output — no untracked files)"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "Documentation-only task; no source code changes"
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+  evidence: "No Python or TypeScript source files modified"
+
+security_scan_result:
+  result: passed
+  evidence: >
+    No secrets, tokens, or credentials in documentation changes.
+    No code changes to scan.
+
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "Documentation-only task; no test files changed"
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+  evidence: "No test files modified"
+
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "Documentation-only task; no CI behavior changes"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "No CI workflow or check changes"
+
+review:
+  mode: "human_review_pending"
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Documentation-only task. Targeted review confirms: no code changes,
+    no CI changes, no lockfile changes, no historical YAML edits.
+    INDEX.md rows verified against existing YAML filenames.
+    README note is factual and does not overstate guarantees.
+    Awaiting human review before commit.
+
+remaining_risks: []
+
+artifact_lifecycle:
+  persistent_artifacts:
+    - artifact: "docs/phase0/tasks/P0-DOC-SYNC-001.md"
+      reason: "Task prompt; required by Phase 0 process"
+    - artifact: "docs/phase0/task_logs/P0-DOC-SYNC-001_20260531_145734_passed.yaml"
+      reason: "Task Record; required by Phase 0 process"
+  temporary_artifacts_created: []
+  cleanup_timing: "No temporary artifacts created"
+  ignored_workspace: "_scratch/ and __pycache__/ treated as out of scope"
+  final_untracked_scan: "pending"
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "pending_review"
+git_commit_sha_note: >
+  Not yet committed. Awaiting targeted human review of staged diff.
+
+package_confirmation_status: not_applicable
+package_confirmation: "No package created; documentation-only task"
+package_scope: ""
+package_evidence: ""

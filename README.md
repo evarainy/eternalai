@@ -123,3 +123,17 @@ activation_task_id, expiry_condition, evidence). No fake no-op CI steps are
 added for these checks.
 
 Run `uv run python scripts/check_dependencies.py` to validate manifests against the allowlist.
+
+## web/pnpm-workspace.yaml (P0-INFRA-007A errata)
+
+`web/pnpm-workspace.yaml` is intentional persistent frontend configuration, not a
+local pnpm artifact. It was added in P0-INFRA-007A to fix GitHub Actions frontend
+install failures under pnpm 11 `strictDepBuilds`.
+
+- Approves only esbuild build scripts: `allowBuilds: esbuild: true`
+- Does not use `dangerouslyAllowAllBuilds`
+- Does not disable `strictDepBuilds`
+
+**Errata**: P0-INFRA-007 Task Record describes this file as a "local pnpm artifact
+(not committed)". That interpretation was superseded by P0-INFRA-007A, which
+established it as committed, tracked configuration.

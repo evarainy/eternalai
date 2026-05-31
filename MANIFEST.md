@@ -68,6 +68,7 @@ Files:
 - docs/phase0/tasks/P0-INFRA-007.md
 - docs/phase0/tasks/P0-INFRA-007A.md
 - docs/phase0/tasks/P0-INFRA-008.md
+- docs/phase0/tasks/P0-DOC-SYNC-001.md
 - docs/phase0/tasks/P0-FE-SPIKE-001.md
 - docs/phase0/tasks/P0-FE-GUIDE-001.md
 - docs/phase0/tasks/P0-FE-ARCH-001.md
