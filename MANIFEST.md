@@ -73,6 +73,17 @@ Files:
 - docs/phase0/tasks/P0-FE-GUIDE-001.md
 - docs/phase0/tasks/P0-FE-ARCH-001.md
 - docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md
+- docs/phase0/tasks/P0-DOMAIN-001a.md
+- docs/phase0/tasks/P0-DOMAIN-002a.md
+- docs/phase0/tasks/P0-DOMAIN-003a.md
+- docs/phase0/tasks/P0-DOMAIN-004a.md
+- docs/phase0/tasks/P0-DOMAIN-005a.md
+- docs/phase0/tasks/P0-DOMAIN-006a.md
+- docs/phase0/tasks/P0-DOMAIN-007a.md
+- docs/phase0/tasks/P0-DOMAIN-008a.md
+- docs/phase0/tasks/P0-DOMAIN-009a.md
+- docs/phase0/tasks/P0-DOMAIN-010a.md
+- docs/phase0/tasks/P0-DOMAIN-011a.md
 - docs/phase0/task_logs/P0-BATCH2-PROMPTS-001_20260515_151040_passed.yaml
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
