@@ -1,0 +1,225 @@
+task_id: "P0-DOMAIN-001a"
+task_type: "interface_contract"
+result: "passed"
+started_at: "2026-06-01T15:33:00+09:00"
+completed_at: "2026-06-01T15:41:34+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-01T15:33:00+09:00"
+plan_approved_via: "Codex session attachment"
+summary: >
+  Defined the Phase 0 Task/Session interface contracts only. Added
+  TaskStorePort, SessionStorePort, TaskRecord, SessionRecord, TaskEventRecord,
+  and TaskStatus under app/ports/task_store.py with focused TDD contract tests.
+  No concrete storage, Runtime, Gateway, Control Plane, Execution Fabric,
+  dependency, lockfile, web, or frozen blueprint changes were introduced.
+
+acceptance_criteria_result:
+  - criterion: "TaskStorePort method signatures are defined from spec section 8.6.8"
+    result: "passed"
+    evidence: "tests/ports/test_task_store_port.py asserts create_task, get_task, and update_status signatures; uv run pytest tests/ports/test_task_store_port.py => 14 passed"
+  - criterion: "SessionStorePort method signatures are defined"
+    result: "passed"
+    evidence: "tests/ports/test_task_store_port.py asserts create_session and get_session signatures; uv run pytest tests/ports/test_task_store_port.py => 14 passed"
+  - criterion: "TaskRecord-related annotations use the common model from spec section 8.6.2"
+    result: "passed"
+    evidence: "TaskRecord fields match task_id, session_id, ai_user_id, status, optional trace_id, capability_id, and error_code; status Literal includes no_capability_found"
+  - criterion: "create_task, get_task, update_status, append_event, create_session, and get_session are covered by contract tests"
+    result: "passed"
+    evidence: "Focused contract tests cover all six methods and assert they are coroutine Protocol methods"
+  - criterion: "No concrete storage implementation is introduced"
+    result: "passed"
+    evidence: "Escaped PowerShell scan for sqlalchemy, redis, sqlite, postgres, and open\\( returned PASSED; source defines only models and Protocols"
+  - criterion: "Forbidden runtime/gateway/control_plane/execution_fabric paths are untouched"
+    result: "passed"
+    evidence: "git diff --cached --name-only final staged files contain only app/ports/task_store.py, docs/phase0/task_logs/P0-DOMAIN-001a_20260601_154107_passed.yaml, and tests/ports/test_task_store_port.py"
+
+failure_examples_tested:
+  - example: "Concrete database implementation added to app/ports/task_store.py"
+    result: "triggered"
+    evidence: "Concrete storage scan returned PASSED because no forbidden concrete storage terms are present"
+  - example: "TaskRecord is represented as an untyped dict instead of the common model"
+    result: "triggered"
+    evidence: "Contract tests instantiate TaskRecord as a Pydantic model and assert the section 8.6.2 fields and Literal status values"
+  - example: "Runtime or Gateway imports are added to satisfy tests"
+    result: "triggered"
+    evidence: "uv run pytest tests/architecture/test_import_boundaries.py => 8 passed; staged file list contains no forbidden paths"
+
+step_verification_points:
+  - step: "Preflight branch"
+    result: "passed"
+    command: "git branch --show-current"
+    evidence: "exit code 0; output: phase0/P0-DOMAIN-001a"
+  - step: "Preflight clean tree"
+    result: "passed"
+    command: "git status --short"
+    evidence: "exit code 0; output: empty"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1 -ExpandProperty Name"
+    evidence: "exit code 0; output: P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml"
+  - step: "Create contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_task_store_port.py"
+    evidence: "exit code 1; collected 0 items / 1 error; ModuleNotFoundError: No module named 'app.ports.task_store'"
+  - step: "Implement abstract TaskStorePort and SessionStorePort contracts"
+    result: "passed"
+    command: "Test-Path app/ports/task_store.py"
+    evidence: "app/ports/task_store.py created with TaskRecord, SessionRecord, TaskEventRecord, TaskStorePort, and SessionStorePort"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_task_store_port.py"
+    evidence: "exit code 0; collected 14 items; 14 passed in 0.48s"
+  - step: "Run lint"
+    result: "passed"
+    command: "uv run ruff check app/ports/task_store.py tests/ports/test_task_store_port.py"
+    evidence: "exit code 0; output: All checks passed!"
+  - step: "Run type check"
+    result: "passed"
+    command: "uv run mypy app/ports/task_store.py"
+    evidence: "exit code 0; output: Success: no issues found in 1 source file"
+  - step: "Verify no concrete storage dependency was introduced"
+    result: "passed"
+    command: "$matched = Select-String -Path app/ports/task_store.py -Pattern 'sqlalchemy','redis','sqlite','postgres','open\\(' -Quiet; if ($matched) { throw 'Concrete storage implementation detected' } else { 'PASSED' }"
+    evidence: "exit code 0; output: PASSED. Note: the approved literal open( pattern is invalid PowerShell regex, so the verification used escaped open\\( for the same search intent."
+  - step: "Verify import boundaries"
+    result: "passed"
+    command: "uv run pytest tests/architecture/test_import_boundaries.py"
+    evidence: "exit code 0; collected 8 items; 8 passed in 0.17s"
+  - step: "Verify weak-test checker"
+    result: "passed"
+    command: "uv run python scripts/check_weak_tests.py tests/ports/test_task_store_port.py"
+    evidence: "exit code 0; output: Weak-test check passed."
+  - step: "Verify plaintext secret keyword scan"
+    result: "passed"
+    command: "Select-String -Path 'app\\ports\\task_store.py','tests\\ports\\test_task_store_port.py' -Pattern 'password','token','secret','cookie','sessionid','access_token','refresh_token','Bearer token' -SimpleMatch"
+    evidence: "exit code 0; output: empty"
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "exit code 0; app/ports/task_store.py; docs/phase0/task_logs/P0-DOMAIN-001a_20260601_154107_passed.yaml; tests/ports/test_task_store_port.py"
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    evidence: "exit code 0; 3 files changed, 455 insertions(+)"
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    evidence: "exit code 0; no output"
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    evidence: "exit code 0; no output"
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: "changed_files vs git diff --cached --name-only comparison"
+    evidence: "changed_files exactly matches final staged output in the same order"
+
+changed_files:
+  - app/ports/task_store.py
+  - docs/phase0/task_logs/P0-DOMAIN-001a_20260601_154107_passed.yaml
+  - tests/ports/test_task_store_port.py
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "uv run pytest tests/ports/test_task_store_port.py"
+    result: "failed"
+    output_snippet: "RED phase exit code 1: ModuleNotFoundError: No module named 'app.ports.task_store'"
+  - command: "uv run pytest tests/ports/test_task_store_port.py"
+    result: "passed"
+    output_snippet: "GREEN phase exit code 0: 14 passed in 0.48s"
+  - command: "uv run ruff check app/ports/task_store.py tests/ports/test_task_store_port.py"
+    result: "passed"
+    output_snippet: "exit code 0: All checks passed!"
+  - command: "uv run mypy app/ports/task_store.py"
+    result: "passed"
+    output_snippet: "exit code 0: Success: no issues found in 1 source file"
+  - command: "uv run pytest tests/architecture/test_import_boundaries.py"
+    result: "passed"
+    output_snippet: "exit code 0: 8 passed in 0.17s"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_task_store_port.py"
+    result: "passed"
+    output_snippet: "exit code 0: Weak-test check passed."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs were implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code was implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent validation path was implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output code was changed; raw SDK plus response_format json_object plus Pydantic model_validate plus Literal enum validation baseline remains deferred to downstream tasks."
+  - constraint: "no_capability_found terminal state"
+    result: "preserved"
+    evidence: "TaskStatus includes no_capability_found and does not redefine downstream mapping behavior."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "TaskStatus follows spec section 8.6.2 and does not add clarification_needed."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model was implemented or changed."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy or identity outcome model was implemented or changed."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no full Phase 1 workflow or runtime behavior was implemented."
+
+contract_model_decisions:
+  task_record: "TaskRecord is the runtime domain contract model from spec section 8.6.2, not the Unified Task Record YAML."
+  session_record: "SessionRecord contains only session_id because targeted sections 8.6.2, 8.6.8, and P0-DOMAIN-001a define no Session user identity field or lifecycle status."
+  task_event_record: "TaskEventRecord contains passive event_id, task_id, event_type, timestamp, and payload fields only."
+  append_event: "append_event is a passive contract method with signature async def append_event(self, task_id: str, event: TaskEventRecord) -> None."
+
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/test_import_boundaries.py => exit code 0; 8 passed in 0.17s"
+
+security_scan_result:
+  result: "passed"
+  evidence: "Select-String secret keyword scan across the two changed source/test files returned no matches."
+
+weak_test_scan_result:
+  result: "passed"
+  evidence: "uv run python scripts/check_weak_tests.py tests/ports/test_task_store_port.py => exit code 0; Weak-test check passed."
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No commit, push, or CI run is allowed before independent staged review for this task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "independent staged review"
+  activation_task_id: "post-review commit/push workflow"
+  expiry_condition: "Expires only if the human requests CI evidence after independent review and commit/push."
+  evidence: "Local required validation commands passed and are recorded in tests_run."
+
+review:
+  mode: "codex_review"
+  reviewed_by: "separate_session_required_after_staging"
+  reviewed_at: "not_performed_in_execution_session"
+  notes: "Executor self-check complete; independent staged review is required before commit, push, or merge."
+
+remaining_risks:
+  - "SessionRecord is intentionally minimal because targeted spec sections do not define Session identity or lifecycle fields."
+  - "append_event is intentionally a passive contract because section 8.6.8 does not specify event persistence or replay behavior."
+
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
