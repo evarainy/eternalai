@@ -1,0 +1,255 @@
+task_id: "P0-BATCH3-PROMPTS-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-06-01T01:12:00+09:00"
+completed_at: "2026-06-01T01:49:14+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-31T19:26:07+09:00"
+plan_approved_via: "Codex session"
+summary: >
+  Generated Batch 3 per-task prompts P0-DOMAIN-001a through
+  P0-DOMAIN-011a. Updated README_TASK_PROMPTS.md Batch 3 inventory.
+  Pre-authorized scoped edits applied: MANIFEST.md (11 prompt entries),
+  docs/phase0/task_logs/INDEX.md (current task row),
+  docs/phase0/TASK_INDEX.md (P0-SPIKE-007 added to P0-DOMAIN-010a depends_on).
+  No implementation code, frozen blueprint files, dependency files, workflow
+  files, or boot files were modified.
+
+method_profile:
+  execution_role: "documentation"
+  execution_owner: "claude_code_mimo"
+  review_owner: "codex"
+  review_mode: "codex_review"
+  method: "not_applicable"
+  reason_for_owner_choice: >
+    Documentation task: generating Batch 3 per-task prompts for interface-contract
+    freezing. Claude Code/MiMo generates prompt files based on the approved
+    Codex Part B content; Codex reviews for completeness and constraint
+    preservation. Method is not_applicable because this is prompt generation,
+    not code implementation.
+
+generated_prompt_files:
+  - docs/phase0/tasks/P0-DOMAIN-001a.md
+  - docs/phase0/tasks/P0-DOMAIN-002a.md
+  - docs/phase0/tasks/P0-DOMAIN-003a.md
+  - docs/phase0/tasks/P0-DOMAIN-004a.md
+  - docs/phase0/tasks/P0-DOMAIN-005a.md
+  - docs/phase0/tasks/P0-DOMAIN-006a.md
+  - docs/phase0/tasks/P0-DOMAIN-007a.md
+  - docs/phase0/tasks/P0-DOMAIN-008a.md
+  - docs/phase0/tasks/P0-DOMAIN-009a.md
+  - docs/phase0/tasks/P0-DOMAIN-010a.md
+  - docs/phase0/tasks/P0-DOMAIN-011a.md
+
+acceptance_criteria_result:
+  - criterion: "Batch 3 per-task prompt files (P0-DOMAIN-001a through P0-DOMAIN-011a) generated under docs/phase0/tasks/"
+    result: "passed"
+    evidence: "Get-ChildItem docs/phase0/tasks/P0-DOMAIN-*a.md | Measure-Object => 11 files"
+  - criterion: "Each prompt carries forward the required constraints checklist"
+    result: "passed"
+    evidence: "All 9 constraint terms verified present in all 11 prompt files (using -Raw string match)"
+  - criterion: "Each prompt includes method_profile"
+    result: "passed"
+    evidence: "All 11 files contain 'method_profile:' (verified via -Raw string match; note: Part B template command uses line-level -notmatch which has array semantics — content is correct)"
+  - criterion: "README_TASK_PROMPTS.md updated with Batch 3 prompt inventory"
+    result: "passed"
+    evidence: "Select-String finds P0-DOMAIN-001a, P0-DOMAIN-011a, P0-SPIKE-007"
+  - criterion: "TASK_INDEX.md Batch 3 rows are consistent with generated prompts"
+    result: "passed"
+    evidence: "Select-String docs/phase0/TASK_INDEX.md -Pattern 'P0-DOMAIN-010a.*P0-SPIKE-007' => match found"
+  - criterion: "No implementation code generated"
+    result: "passed"
+    evidence: "Forbidden staged path scan: no app/, web/, .github/, dependency, or blueprint files staged"
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: "changed_files list matches git diff --cached --name-only output (14 files)"
+
+failure_examples_tested:
+  - example: "Batch 3 task implementation prerequisite not yet complete"
+    result: "not_applicable"
+    evidence: >
+      Prompt generation is a documentation task. Generated prompts declare their
+      own depends_on gates and do not authorize execution before dependencies
+      are satisfied. This task does not claim downstream implementation evidence.
+    not_applicable_reason: "Prompt generation requires approved spec text and task index dependencies, not downstream implementation completion."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "P0-DOMAIN-001a through P0-DOMAIN-011a"
+    expiry_condition: "Expires when each generated downstream prompt is executed under its own dependency gates."
+  - example: "Generated prompt missing required constraint"
+    result: "triggered"
+    evidence: "Validated: all 11 prompts contain all 9 required constraint terms (PASSED)"
+  - example: "Generated prompt removes dependency gates or authorizes execution before dependencies are satisfied"
+    result: "triggered"
+    evidence: "Validated: all prompts declare depends_on and include no-commit/no-push rules (PASSED)"
+
+step_verification_points:
+  - step: "Preflight: confirm branch and clean working tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/P0-BATCH3-PROMPTS-001; status: empty"
+  - step: "Verify prerequisite evidence"
+    result: "passed"
+    command: "Select-String P0-INFRA-002 and P0-INFRA-003B task logs"
+    evidence: "P0-INFRA-002: result: passed; P0-INFRA-003B: result: \"passed\""
+  - step: "Verify TASK_INDEX.md Batch 3 rows exist"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/TASK_INDEX.md -Pattern 'P0-DOMAIN-001a'"
+    evidence: "match found at line 92"
+  - step: "Generate Batch 3 per-task prompt files"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/tasks/P0-DOMAIN-*a.md | Measure-Object | Select-Object -ExpandProperty Count"
+    evidence: "11"
+  - step: "Verify each prompt includes method_profile"
+    result: "passed"
+    command: "Raw string match on all 11 files for 'method_profile:'"
+    evidence: "PASSED (note: Part B template uses line-level -notmatch which has array semantics bug; raw string match confirms content is correct)"
+  - step: "Verify README_TASK_PROMPTS.md Batch 3 inventory updated"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/tasks/README_TASK_PROMPTS.md -Pattern 'P0-DOMAIN-011a'"
+    evidence: "match found"
+  - step: "Optional MANIFEST.md update"
+    result: "passed"
+    command: "Select-String -Path MANIFEST.md -Pattern 'P0-DOMAIN-001a.md'"
+    evidence: "11 P0-DOMAIN entries inserted after P0-BATCH3-PROMPTS-001.md line"
+  - step: "Optional TASK_INDEX.md update"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/TASK_INDEX.md -Pattern 'P0-DOMAIN-010a.*P0-SPIKE-007'"
+    evidence: "P0-SPIKE-007 added to P0-DOMAIN-010a depends_on cell"
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    evidence: "phase0/P0-BATCH3-PROMPTS-001"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    evidence: "14 files staged (M: 3 modified, A: 11 added)"
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "14 files listed in changed_files section"
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    evidence: "14 files changed, 2171 insertions(+), 2 deletions(-)"
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    evidence: "exit code 0, no output"
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    evidence: "empty"
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: "forbidden path scan on staged files"
+    evidence: "no app/, web/, .github/, dependency, blueprint, or unrelated task_log files staged"
+  - step: "Dependency file scan"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String package/pnpm/pyproject/uv patterns"
+    evidence: "no matches"
+  - step: "Weak test scan"
+    result: "passed"
+    command: "git diff --cached -U0 | Select-String assert True/pass #/pytest.skip/skipif"
+    evidence: "no matches"
+  - step: "Plaintext secret-value scan"
+    result: "passed"
+    command: "git diff --cached -U0 | Select-String secret patterns"
+    evidence: "no matches"
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "pending"
+    command: "changed_files vs git diff --cached --name-only comparison"
+    evidence: "pending — to be verified after Task Record is staged"
+
+changed_files:
+  - MANIFEST.md
+  - docs/phase0/TASK_INDEX.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml
+  - docs/phase0/tasks/P0-DOMAIN-001a.md
+  - docs/phase0/tasks/P0-DOMAIN-002a.md
+  - docs/phase0/tasks/P0-DOMAIN-003a.md
+  - docs/phase0/tasks/P0-DOMAIN-004a.md
+  - docs/phase0/tasks/P0-DOMAIN-005a.md
+  - docs/phase0/tasks/P0-DOMAIN-006a.md
+  - docs/phase0/tasks/P0-DOMAIN-007a.md
+  - docs/phase0/tasks/P0-DOMAIN-008a.md
+  - docs/phase0/tasks/P0-DOMAIN-009a.md
+  - docs/phase0/tasks/P0-DOMAIN-010a.md
+  - docs/phase0/tasks/P0-DOMAIN-011a.md
+  - docs/phase0/tasks/README_TASK_PROMPTS.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "Documentation validation (no runtime tests)"
+    result: "passed"
+    output_snippet: "All prompt files generated, method_profile verified, constraints checklist verified, README updated"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "Documentation-only prompt generation; no app imports or runtime code were generated."
+  not_applicable_reason: "No importable app code is modified by this task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-DOMAIN-001a through P0-DOMAIN-011a"
+  expiry_condition: "Expires when downstream interface-contract tasks modify app/ports."
+
+security_scan_result:
+  result: "passed"
+  evidence: "git diff --cached -U0 | Select-String secret patterns => no matches"
+
+weak_test_scan_result:
+  result: "passed"
+  evidence: "git diff --cached -U0 | Select-String weak test patterns => no matches"
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No CI run is required for this documentation-only prompt generation task before independent staged review."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "post-review commit/push workflow"
+  expiry_condition: "Expires only if the human requests CI evidence after commit/push."
+
+review:
+  mode: "codex_review"
+  reviewed_by: "Codex staged review (independent)"
+  reviewed_at: "2026-06-01T01:55:00+09:00"
+  notes: >
+    safe_to_commit: yes. No blocking issues. 16 staged files,
+    changed_files exact match PASSED, all boundary, prompt-quality,
+    dependency-consistency, structured-output baseline, optional scoped edit,
+    forbidden-path, dependency-file, weak-test, secret-value, whitespace,
+    and YAML duplicate-key checks PASSED. Non-blocking observations:
+    PowerShell array-semantics issue in the Part B method_profile validation
+    template command was recorded; content was independently verified as
+    correct. Secondary Claude Code / DeepSeek staged review also returned
+    safe_to_commit: yes with no blocking issues; it noted only a non-blocking
+    decorative empty "Execution instruction" heading in P0-DOMAIN-011a.
+
+remaining_risks:
+  - "Generated prompts define downstream execution contracts but do not prove downstream implementation prerequisites."
+  - "Optional MANIFEST.md, task log INDEX.md, and TASK_INDEX.md scoped additions are pre-authorized by the approved Part A plan; only current-task rows/entries are added."
+  - "Part B template method_profile validation command uses line-level -notmatch on an array, which has PowerShell array semantics. Content is correct; command template may need future fix."
+
+rollback_or_failure_record: "If validation fails, create docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_20260601_014914_failed.yaml instead of this passed record."
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package or archive was created for this documentation-only prompt generation task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
+
+optional_path_lifecycle:
+  manfest_md: "Edited — 11 P0-DOMAIN entries inserted (pre-authorized scoped edit)"
+  task_logs_index: "Edited — current task row added with actual completion date (pre-authorized scoped edit)"
+  task_index: "Edited — P0-SPIKE-007 added to P0-DOMAIN-010a depends_on cell (pre-authorized scoped edit)"

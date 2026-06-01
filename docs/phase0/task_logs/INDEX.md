@@ -43,3 +43,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-INFRA-005 | 2026-05-27 | passed | phase0/P0-INFRA-005 | not_committed | not_applicable | codex_review |
 | P0-INFRA-007 | 2026-05-28 | passed | phase0/P0-INFRA-007 | not_committed | not_applicable | codex_review |
 | P0-INFRA-007A | 2026-05-30 | passed | phase0/P0-INFRA-007A | not_committed | not_applicable | codex_review |
+| P0-BATCH3-PROMPTS-001 | 2026-06-01 | passed | phase0/P0-BATCH3-PROMPTS-001 | (see git log) | not_applicable | codex_review |

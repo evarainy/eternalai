@@ -95,7 +95,7 @@ Batch 7：Golden Task 验收
 | P0-DOMAIN-007a | Runtime Interface Contract | P0-BATCH3-PROMPTS-001 |
 | P0-DOMAIN-008a | Adapter Interface Contract | P0-BATCH3-PROMPTS-001 |
 | P0-DOMAIN-009a | SDUI Response Envelope Contract | P0-BATCH3-PROMPTS-001 |
-| P0-DOMAIN-010a | LLM Provider and Structured Output Port Contract | P0-BATCH3-PROMPTS-001, P0-SPIKE-001, P0-SPIKE-002 |
+| P0-DOMAIN-010a | LLM Provider and Structured Output Port Contract | P0-BATCH3-PROMPTS-001, P0-SPIKE-001, P0-SPIKE-002, P0-SPIKE-007 |
 | P0-DOMAIN-011a | SecretProvider Interface Contract | P0-BATCH3-PROMPTS-001 |
 
 ### Batch 1 GPU 阻塞处理
