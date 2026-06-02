@@ -1,0 +1,205 @@
+task_id: "P0-DOMAIN-004a"
+task_type: "interface_contract"
+result: "passed"
+started_at: "2026-06-02T21:30:00+09:00"
+completed_at: "2026-06-02T22:20:52+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-02T21:50:00+09:00"
+plan_approved_via: "Claude Code orchestrator session (pipeline run 3, parallel lane); Codex-generated Plan, Claude Code (Opus) adversarial review, human GATE 1 batched approval with two ratified decisions (import RequestOrgContext; PolicyDecision extra=forbid)"
+summary: >
+  Defined the Phase 0 Policy Guard interface contract only, in app/ports/policy_guard.py.
+  Added PolicyDecisionValue and PolicyRequiredAction TypeAliases, the PolicyDecision model
+  (exact spec section 8.6.6 field shape, with model_config extra=forbid), and the
+  PolicyGuardPort Protocol with decide(ai_user_id, capability_id, arguments,
+  request_context) -> PolicyDecision (exact spec section 8.6.8 signature). RequestOrgContext
+  is IMPORTED from app.ports.capability_gateway rather than reproduced (human-ratified GATE 1
+  decision), since spec 8.6.8 types request_context as that same shared 003a contract;
+  capability_gateway.py was not modified. reason_code is kept as the spec-faithful open
+  str | None (NOT tightened to a Literal), per the 003a carry-forward lesson; the three
+  required reason codes (role_not_allowed, policy_denied, high_risk_action_requires_confirm)
+  are covered by tests. No policy/role/risk/approval evaluation logic, control-plane behavior,
+  or gateway integration was introduced (those belong to downstream policy/runtime tasks).
+  Executed via the Orchestrator-Worker pipeline in an isolated git worktree (codex exec -C at
+  E:\code\eternalai-wt-004a), run concurrently with P0-DOMAIN-008a in a separate worktree
+  (first validated parallel pipeline run). Codex generated the Plan, Claude Code adversarially
+  reviewed it, then Claude Code and Codex cross-reviewed the diff; Codex returned
+  REQUEST_CHANGES with two valid test-strength findings (no contract bug), which were fixed by
+  adding three tests, and Codex re-review then returned APPROVE_FOR_COMMIT.
+acceptance_criteria_result:
+  - criterion: "decide method signature is defined from spec section 8.6.8"
+    result: "passed"
+    evidence: "PolicyGuardPort.decide(self, ai_user_id: str, capability_id: str, arguments: dict[str, Any], request_context: RequestOrgContext) -> PolicyDecision, async Protocol method; test_decide_signature_matches_contract asserts parameter order, type hints, request_context identity (RequestOrgContext from app.ports.capability_gateway), return PolicyDecision, and inspect.iscoroutinefunction => matches spec 8.6.8 (:956-963)"
+  - criterion: "Return structure uses PolicyDecision"
+    result: "passed"
+    evidence: "decide returns PolicyDecision (BaseModel), not bool/dict; test asserts hints['return'] is PolicyDecision; PolicyDecision fields {decision, reason_code, required_action} match spec 8.6.6 (:855-858)"
+  - criterion: "decision values are limited to allow, deny, and confirm"
+    result: "passed"
+    evidence: "PolicyDecisionValue = Literal[allow, deny, confirm]; test_policy_decision_literal_values_match_contract asserts get_args equals exactly those 3; test_policy_decision_accepts_all_decision_values constructs each; test_policy_decision_rejects_decision_outside_contract asserts decision='escalate' raises ValidationError"
+  - criterion: "reason_code values include role_not_allowed, policy_denied, and high_risk_action_requires_confirm"
+    result: "passed"
+    evidence: "reason_code is open str | None per spec 8.6.6; test_policy_decision_reason_codes_are_representable constructs all three required codes; test_policy_decision_accepts_arbitrary_reason_code proves the field is an open str (would fail if tightened to a Literal)"
+  - criterion: "No policy logic is implemented"
+    result: "passed"
+    evidence: "Only TypeAliases, one BaseModel, and one Protocol are defined; no role/risk branching, no evaluation. The prompt no-policy-logic scan ('if .*role','if .*risk','database','sqlalchemy','requests','httpx') returned PASSED"
+  - criterion: "Forbidden control_plane/gateway paths are untouched"
+    result: "passed"
+    evidence: "git status shows only app/ports/policy_guard.py and tests/ports/test_policy_guard_port.py (plus this Task Record); app/control_plane/, app/gateway/, app/runtime/ have no git status entry"
+failure_examples_tested:
+  - example: "PolicyGuardPort returns bool instead of PolicyDecision"
+    result: "triggered"
+    evidence: "test_decide_signature_matches_contract asserts hints['return'] is PolicyDecision; a bool return would fail that assertion"
+  - example: "Policy evaluation logic is implemented in app/ports/policy_guard.py"
+    result: "not_triggered"
+    evidence: "No policy evaluation logic was added; the no-policy-logic scan returned PASSED and the contract file contains only type/model/protocol definitions"
+  - example: "manual_review_needed is replaced by an unrelated outcome"
+    result: "not_triggered"
+    evidence: "decision Literal is exactly allow/deny/confirm per spec 8.6.6; manual_review_needed is a downstream outcome not in this contract and was not redefined"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/P0-DOMAIN-004a (isolated worktree E:\\code\\eternalai-wt-004a, created from phase0/main @ 4f039f4); clean tree before edits"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1"
+    evidence: "P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml present; depends_on satisfied"
+  - step: "Create contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_policy_guard_port.py"
+    evidence: "RED: exit 1, ModuleNotFoundError: No module named 'app.ports.policy_guard' (before implementation)"
+  - step: "Implement abstract PolicyGuardPort contract"
+    result: "passed"
+    command: "Test-Path app/ports/policy_guard.py"
+    evidence: "True; app/ports/policy_guard.py created with PolicyDecisionValue/PolicyRequiredAction/PolicyDecision/PolicyGuardPort"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_policy_guard_port.py"
+    evidence: "GREEN: 14 passed in 0.36s (final state after the cross-review fix cycle; orchestrator firsthand re-run in the worktree)"
+  - step: "Run lint/type checks for task-owned files"
+    result: "passed"
+    command: "uv run ruff check app/ports/policy_guard.py tests/ports/test_policy_guard_port.py; uv run mypy app/ports/policy_guard.py"
+    evidence: "ruff: All checks passed!; mypy: Success: no issues found in 1 source file"
+  - step: "Verify no policy implementation logic was introduced"
+    result: "passed"
+    command: "$matched = Select-String -Path app/ports/policy_guard.py -Pattern 'if .*role','if .*risk','database','sqlalchemy','requests','httpx' -Quiet; if ($matched) { throw 'Policy implementation detected' } else { 'PASSED' }"
+    evidence: "PASSED; no policy/implementation terms in policy_guard.py (the import line references RequestOrgContext, which does not match the lowercase 'requests' pattern)"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/ports/policy_guard.py, docs/phase0/task_logs/P0-DOMAIN-004a_20260602_222052_passed.yaml, tests/ports/test_policy_guard_port.py; no app/control_plane/, app/gateway/, or app/runtime/ path"
+changed_files:
+  - app/ports/policy_guard.py
+  - docs/phase0/task_logs/P0-DOMAIN-004a_20260602_222052_passed.yaml
+  - tests/ports/test_policy_guard_port.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_policy_guard_port.py"
+    result: "passed"
+    output_snippet: "14 passed in 0.36s (orchestrator firsthand re-run in worktree, after fix cycle)"
+  - command: "uv run ruff check app/ports/policy_guard.py tests/ports/test_policy_guard_port.py"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/policy_guard.py"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_policy_guard_port.py"
+    result: "passed"
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.21s (includes test_import_boundaries.py)"
+  - command: "uv run python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "Dependency check passed. Manifests scanned: 7; Dependencies checked: 49"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent parser or capability matching implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output, instructor, or PydanticAI code touched; raw SDK + response_format json_object + Pydantic model_validate + Literal baseline unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "Policy guard contract does not define or redefine no_capability_found; that remains downstream gateway/runtime owned."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "Not referenced or redefined by the policy guard contract; the confirm decision/required_action is distinct from any clarification terminal state."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model implemented or changed."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "decision Literal is exactly allow/deny/confirm; manual_review_needed remains a downstream policy/identity outcome and is not redefined here."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no policy engine, role rules, approval flow, or Phase 1 workflow implemented."
+contract_model_decisions:
+  policy_decision: "PolicyDecision reproduces spec 8.6.6 field shape exactly: decision: PolicyDecisionValue (Literal[allow,deny,confirm]); reason_code: str | None = None; required_action: PolicyRequiredAction | None = None (Literal[confirm,none]|None). model_config=ConfigDict(extra='forbid') was added (human-ratified GATE 1 decision) to close the frozen policy-boundary return contract to exactly its three spec fields; spec 8.6.6 defines no extra fields, so closing it cannot reject any valid spec-shaped decision and prevents accidental leakage of invented policy metadata."
+  reason_code_openness: "reason_code is intentionally kept as the spec-faithful open str | None and was NOT tightened to a Literal, applying the P0-DOMAIN-003a carry-forward lesson (do not tighten a spec str to a Literal unless explicitly authorized). The three required reason codes are asserted representable, and test_policy_decision_accepts_arbitrary_reason_code locks in the open-string contract so a future tightening would fail a test."
+  request_context_sourcing: "RequestOrgContext is IMPORTED from app.ports.capability_gateway (the merged 003a shared context model) rather than reproduced locally, because spec 8.6.8 types decide()'s request_context as that exact shared type. The import-boundary checker only forbids app.ports->app.infra, so this port->port import passes; capability_gateway.py was NOT modified. Local reproduction was rejected because duplicating the context model has no sync guardrail (drift risk)."
+  package_layout: "No __init__.py created anywhere, matching the established app/ports and tests namespace-package convention (mypy strict + pytest pythonpath='.')."
+  cross_field_validation: "No cross-field validator couples required_action to decision; that is downstream policy/composition behavior, out of scope for this interface-only contract task."
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/ => 22 passed. app/ports/policy_guard.py imports only from app.ports.capability_gateway (RequestOrgContext) plus stdlib/pydantic, not app.infra; the active ports_no_infra_imports rule is satisfied; no rule forbids port-to-port imports."
+security_scan_result:
+  result: "passed"
+  evidence: "Staged secret scan over git diff --cached -U0 returned no match (PASSED). No plaintext credential values appear in source, tests, or this Task Record. The credential-like terms in the source-scan command text are field-name/pattern literals, not assigned plaintext secret values."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "uv run python scripts/check_weak_tests.py tests/ports/test_policy_guard_port.py => Weak-test check passed. 14 tests use get_type_hints/get_args/inspect introspection, ValidationError assertions, and positive construction round-trips; no assert True / empty pass / broad skip."
+ci_evidence:
+  result: "pending"
+  run_id: "to_be_recorded_after_push"
+  url_or_log_path: "to_be_recorded_after_push"
+  not_applicable_reason: "not_applicable"
+  not_applicable_scope: "not_applicable"
+  blocked_by_task_id: "not_applicable"
+  activation_task_id: "not_applicable"
+  expiry_condition: "Replace with GitHub Actions run id and conclusion after merge to phase0/main and push."
+  evidence: "Local required validation commands passed and are recorded in tests_run; remote CI to be checked after push per project workflow."
+review:
+  mode: "codex_review"
+  reviewed_by: "Claude Code (Opus) adversarial checklist review + Codex (gpt-5.5) independent codex review, both via codex exec -C in the isolated worktree"
+  reviewed_at: "2026-06-02T22:18:00+09:00"
+  notes: >
+    Plan review: Codex generated the Plan; Claude Code (Opus) adversarial review found no
+    blockers but surfaced two decisions for the human gate (RequestOrgContext import vs
+    reproduce; model_config consistency with the sibling P0-DOMAIN-008a AdapterResult lane).
+    Human GATE 1 ratified: import RequestOrgContext and set PolicyDecision model_config
+    extra=forbid. Code review: Claude Code checklist review PASSED. Codex independent
+    cross-review returned REQUEST_CHANGES with two valid TEST-STRENGTH findings (the
+    contract itself was confirmed correct): (1) the reason_code representability test would
+    still pass if reason_code were tightened to a closed Literal, so it did not lock in spec
+    8.6.6 open str|None; (2) tests asserted the type aliases via get_args but did not assert
+    PolicyDecision CONSTRUCTION accepts every allowed decision value and every allowed
+    required_action value. Both were fixed by adding three tests
+    (accepts_all_decision_values, accepts_all_required_action_values, accepts_arbitrary_reason_code)
+    with no contract change; Codex re-review returned APPROVE_FOR_COMMIT with no remaining
+    findings. The orchestrator independently re-ran all validation in the worktree.
+remaining_risks:
+  - "RequestOrgContext is now imported by app/ports/policy_guard.py (and ErrorCode by the sibling app/ports/adapter.py lane) from app/ports/capability_gateway.py, making that module a de-facto shared-types hub. A future authorized task may consolidate RequestOrgContext/ErrorCode into a dedicated shared contracts module; this task deliberately defers that (handoff §11.5 #1 shared-contract consolidation risk)."
+  - "reason_code is an open str, so the three required reason codes are a documented vocabulary rather than an enforced Literal. Downstream policy implementation tasks own the closed reason-code catalog if one is later authorized; this contract intentionally does not constrain it."
+  - "required_action is not coupled to decision by a validator; a downstream policy/composition task must enforce any allow/deny/confirm <-> required_action consistency rules."
+rollback_or_failure_record: >
+  One in-task fix cycle: Codex independent cross-review returned REQUEST_CHANGES with two
+  valid test-strength findings (no contract defect). Resolved by adding three positive
+  construction / open-string tests to tests/ports/test_policy_guard_port.py (contract file
+  unchanged); Codex re-review returned APPROVE_FOR_COMMIT. No rollback of the task was required.
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
