@@ -1,0 +1,219 @@
+task_id: "P0-DOMAIN-009a"
+task_type: "interface_contract"
+result: "passed"
+started_at: "2026-06-02T18:35:00+09:00"
+completed_at: "2026-06-02T20:05:09+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-02T19:05:00+09:00"
+plan_approved_via: "Claude Code orchestrator session; Codex-generated Plan, Claude Code (Opus) adversarial review, human GATE 1 approval with amendments A1-A5"
+summary: >
+  Defined the Phase 0 SDUI Response Envelope interface contract only. Added
+  UIComponentType, UIAction, TargetSystem, ResponseEnvelopeStatus TypeAliases plus
+  UIComponent and ResponseEnvelope models (exact spec section 8.6.4 field shapes),
+  ConfirmCard / OperatorHandbackCard / BindingRequiredCard specializations, and a
+  minimal UserAction return structure, in app/contracts/sdui/models.py.
+  app/ports/response_envelope.py is a pure re-export facade exposing the frozen
+  port-facing import surface (RuntimePort / P0-DOMAIN-007a imports ResponseEnvelope
+  from there). No renderer, dynamic form orchestrator, multi-turn confirmation state
+  machine, response composer, or ExecutionResult->ResponseEnvelope status-mapping
+  logic was introduced (those belong to P0-DOMAIN-009b / Runtime). ResponseEnvelope.status
+  is a local 5-value Literal; ExecutionStatus/ErrorCode/ExecutionResult from
+  capability_gateway.py were not imported or modified (shared-type duplication of
+  TargetSystem deliberately deferred). Executed via the Orchestrator-Worker pipeline
+  in an isolated git worktree (codex exec -C): Codex generated the Plan, Claude Code
+  adversarially reviewed it (amendments A1 no __init__.py, A2 ports re-export facade,
+  A3 per-card action literals, A4 minimal UserAction, A5 scan hygiene), Codex
+  implemented via TDD, then Claude Code and Codex cross-reviewed the diff. Codex
+  cross-review returned REQUEST_CHANGES with two valid spec-fidelity findings that the
+  Claude Code review and the human-approved amendments had missed; both were fixed and
+  re-review returned APPROVE_FOR_COMMIT.
+acceptance_criteria_result:
+  - criterion: "ResponseEnvelope and UIComponent models are defined from spec section 8.6.4"
+    result: "passed"
+    evidence: "app/contracts/sdui/models.py UIComponent fields {component_type, action, target_system, reason_code, payload} and ResponseEnvelope fields {schema_version, response_id, task_id, session_id, status, message, fallback_text, ui, data, trace_id, trace_summary} match spec 8.6.4 (:781-815) exactly; test_ui_component_fields_types_defaults_and_extra_forbid_are_exact and test_response_envelope_fields_types_defaults_and_required_shape_are_exact assert field names/types/defaults/Literals via get_type_hints/get_args; uv run pytest => 10 passed"
+  - criterion: "confirm_card is defined"
+    result: "passed"
+    evidence: "ConfirmCard(UIComponent) with component_type=Literal['confirm_card'] (default) and required action=Literal['confirm']; test_confirm_card_is_one_shot_confirm_only_and_rejects_state_fields passes"
+  - criterion: "operator_handback_card and binding_required_card are defined"
+    result: "passed"
+    evidence: "OperatorHandbackCard (action required Literal['bind_required','clarify_scope']) and BindingRequiredCard (required action Literal['bind_required']); test_operator_handback_card_requires_bind_or_clarify_action_only and test_binding_required_card_only_allows_bind_required_action pass"
+  - criterion: "user_action return structure is defined"
+    result: "passed"
+    evidence: "UserAction(action_type=Literal['confirm'], response_id=str, confirmed=Literal[True]) with extra=forbid; matches Golden Task GT-007 shape (spec :3255-3258); test_user_action_is_minimal_confirm_return_structure_only passes"
+  - criterion: "confirm_card action is one-shot confirm only"
+    result: "passed"
+    evidence: "ConfirmCard.action is required Literal['confirm']; action is NOT auto-filled (spec :2578 forbidden_shortcut 禁止自动补 action); ConfirmCard() raises missing-action ValidationError; bind_required/clarify_scope/none raise literal_error; no multi-turn state fields (extra=forbid rejects state_id/step/next_action)"
+  - criterion: "No renderer, dynamic form orchestrator, or multi-turn confirmation state machine is introduced"
+    result: "passed"
+    evidence: "test_implementation_sources_do_not_introduce_forbidden_sdui_scope scans models.py + response_envelope.py for renderer/dynamic_form/orchestrator/state_machine and capability_gateway/ExecutionStatus/ErrorCode/ExecutionResult/RequestOrgContext/TaskRecord terms; none present. Pydantic model_json_schema() provides static JSON Schema (test_response_envelope_json_schema_is_producible_for_static_schema_contract) with no renderer code"
+  - criterion: "Forbidden web renderer path is untouched"
+    result: "passed"
+    evidence: "git status shows only 3 touched paths under app/contracts/sdui, app/ports, tests/contracts/sdui; web/src/sdui_renderer/ has no git status entry"
+failure_examples_tested:
+  - example: "web/src/sdui_renderer is created or modified"
+    result: "not_triggered"
+    evidence: "No file under web/src/sdui_renderer/ was created or modified; staged diff contains only the 4 intended files"
+  - example: "confirm_card includes multi-step confirmation state"
+    result: "triggered"
+    evidence: "ConfirmCard(action='confirm', state_id='state-001', step='review', next_action='continue') raises ValidationError extra_forbidden for state_id/step/next_action (model_config extra=forbid); a multi-step confirm card is rejected"
+  - example: "ResponseEnvelope fixtures contain plaintext credential-like values"
+    result: "not_triggered"
+    evidence: "No plaintext credential values appear in source or tests; staged secret scan returned PASSED. Credential-like tokens in the source-scan test set are field-name string literals in negative assertions, not assigned plaintext values"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/P0-DOMAIN-009a (isolated worktree E:\\code\\eternalai-wt-009a); clean base before edits"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1"
+    evidence: "P0-BATCH3-PROMPTS-001 passed Task Record present; depends_on satisfied"
+  - step: "Create SDUI contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/contracts/sdui/test_response_envelope_contract.py"
+    evidence: "RED: exit 1, ModuleNotFoundError: No module named 'app.contracts', collected 0 items / 1 error (before implementation)"
+  - step: "Implement minimal ResponseEnvelope and SDUI contract files"
+    result: "passed"
+    command: "Test-Path app/ports/response_envelope.py; Test-Path app/contracts/sdui"
+    evidence: "Both True; app/contracts/sdui/models.py and app/ports/response_envelope.py created"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/contracts/sdui/test_response_envelope_contract.py"
+    evidence: "GREEN: 10 passed in 0.42s (final state after the cross-review fix cycle)"
+  - step: "Run lint/type checks for task-owned files"
+    result: "passed"
+    command: "uv run ruff check app/ports/response_envelope.py app/contracts/sdui/ tests/contracts/sdui/test_response_envelope_contract.py; uv run mypy app/ports/response_envelope.py app/contracts/sdui/"
+    evidence: "ruff: All checks passed!; mypy: Success: no issues found in 2 source files (mypy directory target worked under strict; A1 file-target fallback not needed)"
+  - step: "Verify no renderer or dynamic orchestrator was introduced"
+    result: "passed"
+    command: "if (git diff --cached --name-only | Select-String -Pattern '^web/src/sdui_renderer/','dynamic_form','renderer' -Quiet) { throw } else { 'PASSED' }"
+    evidence: "PASSED; no renderer/dynamic_form path staged; source-term scan test also confirms no such terms in implementation files"
+  - step: "Verify no plaintext credential values are staged"
+    result: "passed"
+    command: "git diff --cached -U0 | Select-String -Pattern '(?i)(password|token|cookie|sessionid|access_token|refresh_token|api_key|private_key)\\s*[:=]\\s*[\"''][^\"''<][^\"''\\s]{6,}' -Quiet"
+    evidence: "PASSED (no match); credential-like tokens present are field-name literals in negative-assertion test sets only"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/contracts/sdui/models.py, app/ports/response_envelope.py, docs/phase0/task_logs/P0-DOMAIN-009a_20260602_200509_passed.yaml, tests/contracts/sdui/test_response_envelope_contract.py; no forbidden path"
+  - step: "Cross-review fix verification (P2 auto-filled action + P3 UserAction.confirmed)"
+    result: "passed"
+    command: "uv run pytest tests/contracts/sdui/test_response_envelope_contract.py"
+    evidence: "After making card action required (no auto-fill, per spec :2578) and restoring UserAction.confirmed=Literal[True] (per GT-007 :3255-3258): RED showed 3 expected failures, GREEN 10 passed; Codex re-review returned APPROVE_FOR_COMMIT"
+changed_files:
+  - app/contracts/sdui/models.py
+  - app/ports/response_envelope.py
+  - docs/phase0/task_logs/P0-DOMAIN-009a_20260602_200509_passed.yaml
+  - tests/contracts/sdui/test_response_envelope_contract.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/contracts/sdui/test_response_envelope_contract.py"
+    result: "passed"
+    output_snippet: "10 passed in 0.42s (independently re-run by orchestrator after the fix cycle)"
+  - command: "uv run ruff check app/ports/response_envelope.py app/contracts/sdui/ tests/contracts/sdui/test_response_envelope_contract.py"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/response_envelope.py app/contracts/sdui/"
+    result: "passed"
+    output_snippet: "Success: no issues found in 2 source files"
+  - command: "uv run python scripts/check_weak_tests.py tests/contracts/sdui/test_response_envelope_contract.py"
+    result: "passed"
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.20s (includes test_import_boundaries.py)"
+  - command: "uv run python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "Dependency check passed. Manifests scanned: 7; Dependencies checked: 49"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent parser or capability matching implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output, instructor, or PydanticAI code touched; raw SDK + response_format json_object + Pydantic model_validate + Literal baseline unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "no_capability_found is preserved as one of the 5 ResponseEnvelope.status Literal values; no Gateway/Runtime status-mapping logic implemented."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "Not added to ResponseEnvelope.status; test asserts status='clarification_needed' raises literal_error. The clarify path is expressed via operator_handback_card(action=clarify_scope); downstream runtime remains responsible."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model implemented or changed."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy/identity outcome model implemented or changed."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no renderer, composer, multi-turn loop, or Phase 1 workflow implemented."
+contract_model_decisions:
+  ui_component_and_envelope: "UIComponent and ResponseEnvelope reproduce spec 8.6.4 field shapes exactly, with model_config extra=forbid. schema_version is str with default 'phase0.sdui.v1' (not Literal). ResponseEnvelope.status is a local 5-value Literal (completed/blocked/waiting_user/failed/no_capability_found), intentionally distinct from capability_gateway.ExecutionStatus (7 values); ExecutionStatus/ErrorCode/ExecutionResult/RequestOrgContext/TaskRecord are NOT imported and capability_gateway.py is NOT modified."
+  card_specializations: "ConfirmCard, OperatorHandbackCard, BindingRequiredCard are UIComponent subclasses fixing component_type (class identity) and constraining action. action is a REQUIRED field on all three cards (no default) so action is never silently auto-filled, honoring spec :2578 forbidden_shortcut 禁止自动补 action; component_type keeps its identity default. ConfirmCard.action=Literal['confirm'] enforces one-shot confirm with no multi-turn state machine."
+  user_action: "UserAction = {action_type: Literal['confirm'], response_id: str, confirmed: Literal[True]} with extra=forbid. Spec 8.6.4 defines no UserAction model; this minimal shape is frozen to match Golden Task GT-007 (spec :3255-3258) which uses {action_type: confirm, response_id, confirmed: true}. confirmed=Literal[True] enforces explicit one-shot confirmation and rejects confirmed=False."
+  ports_facade: "app/ports/response_envelope.py defines no models; it is a pure re-export facade with __all__ exposing the frozen port-facing import surface so downstream ports (RuntimePort / P0-DOMAIN-007a) import ResponseEnvelope from app.ports.response_envelope. No ResponseEnvelopePort method invented (spec 8.6.8 defines none)."
+  package_layout: "No __init__.py created anywhere, matching the established app/ports and tests/ namespace-package convention (mypy strict + pytest pythonpath='.'); app/contracts/__init__.py was deliberately NOT created (out of touched_paths). Canonical definitions live in app/contracts/sdui/models.py."
+  data_default: "ResponseEnvelope.data defaults to None only. The spec rule that blocked/waiting_user responses default data=None (with documented exceptions) is a downstream Gateway/Runtime composition rule and is intentionally NOT hard-enforced by a cross-field validator here (that would over-constrain P0-DOMAIN-009b)."
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/ => 22 passed. app/ports/response_envelope.py imports only from app.contracts.sdui.models (not app.infra); the active ports_no_infra_imports rule is satisfied; no app.contracts boundary rule exists."
+security_scan_result:
+  result: "passed"
+  evidence: "Staged secret scan over git diff --cached -U0 returned PASSED. No plaintext credential values in source, tests, or this Task Record. Credential-like tokens present (password/token/cookie/...) are field-name string literals used in the UserAction/UIComponent negative-assertion test sets and in this record's scan-command text, not assigned plaintext values."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "uv run python scripts/check_weak_tests.py tests/contracts/sdui/test_response_envelope_contract.py => Weak-test check passed. 10 tests use get_type_hints/get_args/inspect introspection and ValidationError assertions; no assert True / empty pass / broad skip."
+ci_evidence:
+  result: "pending"
+  run_id: "to_be_recorded_after_push"
+  url_or_log_path: "to_be_recorded_after_push"
+  not_applicable_reason: "not_applicable"
+  not_applicable_scope: "not_applicable"
+  blocked_by_task_id: "not_applicable"
+  activation_task_id: "not_applicable"
+  expiry_condition: "Replace with GitHub Actions run id and conclusion after merge to phase0/main and push."
+  evidence: "Local required validation commands passed and are recorded in tests_run; remote CI to be checked after push per project workflow."
+review:
+  mode: "codex_review"
+  reviewed_by: "Claude Code (Opus) adversarial checklist review + Codex (gpt-5.5) independent codex review, both via codex exec -C in the isolated worktree"
+  reviewed_at: "2026-06-02T19:55:00+09:00"
+  notes: >
+    Plan review: Codex generated the Plan; Claude Code (Opus) adversarial review
+    produced amendments A1 (no __init__.py, matching the app/ports namespace-package
+    precedent to avoid an asymmetric mypy-risky layout), A2 (ports re-export facade),
+    A3 (per-card action literals), A4 (minimal UserAction), A5 (source-scan hygiene);
+    human approved at GATE 1. Code review: Claude Code review passed and independently
+    re-ran all validation. Codex independent cross-review returned REQUEST_CHANGES with
+    two valid findings: (P2) ConfirmCard/BindingRequiredCard auto-filled action via a
+    default, contradicting spec :2578 forbidden_shortcut 禁止自动补 action; (P3) the
+    orchestrator's A4 amendment had dropped UserAction.confirmed, but Golden Task GT-007
+    (:3255-3258) uses confirmed:true, so the extra=forbid model would have rejected the
+    canonical GT input. Both fixed: card action made required; confirmed=Literal[True]
+    restored. Codex re-review returned APPROVE_FOR_COMMIT with no remaining findings.
+    Cross-review again added value, this time catching an orchestrator amendment error.
+remaining_risks:
+  - "TargetSystem and the SDUI status/action Literals duplicate vocabulary that also appears in app/ports/capability_gateway.py; shared-contract consolidation is intentionally deferred to a separate authorized task (handoff carry-forward) and not solved here."
+  - "UserAction is a frozen shape not defined in spec 8.6.4; it is anchored to Golden Task GT-007. If a later task changes the user_action contract, GT-007 and this model must be updated together."
+  - "The card subclasses constrain action but inherit payload: dict[str, Any]; payload is an acknowledged escape hatch, so contract tests cannot prove arbitrary payload contents are safe. Downstream P0-DOMAIN-009b composer / sanitizer must enforce payload-level safety."
+rollback_or_failure_record: >
+  One in-task fix cycle: Codex cross-review found two valid spec-fidelity defects (P2
+  auto-filled card action; P3 missing UserAction.confirmed vs GT-007). Resolved by
+  making card action required and restoring confirmed=Literal[True], with test updates;
+  re-review passed. No rollback of the task was required.
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
