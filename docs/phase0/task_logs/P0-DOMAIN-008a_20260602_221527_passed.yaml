@@ -1,0 +1,199 @@
+task_id: "P0-DOMAIN-008a"
+task_type: "interface_contract"
+result: "passed"
+started_at: "2026-06-02T21:30:00+09:00"
+completed_at: "2026-06-02T22:15:27+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-02T21:50:00+09:00"
+plan_approved_via: "Claude Code orchestrator session (pipeline run 3, parallel lane); Codex-generated Plan, Claude Code (Opus) adversarial review, human GATE 1 batched approval with two ratified decisions (import ErrorCode; AdapterResult extra=forbid)"
+summary: >
+  Defined the Phase 0 Adapter interface contract only, in app/ports/adapter.py.
+  Added AdapterStatus and MockErrorMode TypeAliases, the frozen
+  MOCK_ERROR_MODE_TO_ERROR_CODE mapping (MappingProxyType), the AdapterResult model
+  (exact spec section 8.6.5 field shape, with model_config extra=forbid), and the
+  AdapterPort Protocol with execute(capability_id, arguments, execution_context)
+  -> AdapterResult (exact spec section 8.6.8 signature; execution_context kept as
+  dict[str, Any], not tightened). The shared ErrorCode (spec 8.6.3) is IMPORTED from
+  app.ports.capability_gateway rather than reproduced (human-ratified GATE 1 decision),
+  so AdapterResult.error_code and the mapping targets reference a single source of
+  truth; capability_gateway.py was not modified. No mock adapter, real adapter,
+  gateway execution, AdapterResult->ExecutionResult mapping, HTTP/JSON parsing, or
+  business-system call behavior was introduced (those belong to later 008b+/Gateway
+  tasks). Executed via the Orchestrator-Worker pipeline in an isolated git worktree
+  (codex exec -C at E:\code\eternalai-wt-008a), run concurrently with P0-DOMAIN-004a
+  in a separate worktree (first validated parallel pipeline run). Codex generated the
+  Plan, Claude Code adversarially reviewed it, then Claude Code and Codex
+  cross-reviewed the diff; both returned PASS (Codex: APPROVE_FOR_COMMIT, findings none)
+  with no fix cycle required.
+acceptance_criteria_result:
+  - criterion: "execute method signature is defined from spec section 8.6.8"
+    result: "passed"
+    evidence: "AdapterPort.execute(self, capability_id: str, arguments: dict[str, Any], execution_context: dict[str, Any]) -> AdapterResult, async Protocol method; test_execute_signature_matches_contract asserts parameter order, type hints (capability_id/str, arguments/dict[str,Any], execution_context/dict[str,Any]), return AdapterResult, and inspect.iscoroutinefunction via get_type_hints/inspect.signature => matches spec 8.6.8 (:948-954)"
+  - criterion: "execution_context supports mock_error_mode"
+    result: "passed"
+    evidence: "execution_context stays dict[str, Any] (spec-faithful, not tightened); MockErrorMode Literal documents the supported key values; test_mock_error_modes_are_representable_in_execution_context constructs execution_context={'mock_error_mode': mode} for each of the 6 values"
+  - criterion: "mock_error_mode allowed values are represented exactly"
+    result: "passed"
+    evidence: "MockErrorMode = Literal[timeout, permission_denied, malformed_json, empty_response, http_500, missing_required_field]; test_mock_error_mode_literal_values_match_contract asserts get_args(MockErrorMode) equals exactly those 6 values"
+  - criterion: "Output annotation uses AdapterResult and not bare dict"
+    result: "passed"
+    evidence: "execute returns AdapterResult (BaseModel), not dict; test_execute_signature_matches_contract asserts hints['return'] is AdapterResult; AdapterResult fields {status, data, error_code, raw_payload_ref} match spec 8.6.5 (:843-847)"
+  - criterion: "Error mapping contract is represented exactly"
+    result: "passed"
+    evidence: "MOCK_ERROR_MODE_TO_ERROR_CODE (frozen MappingProxyType) equals exactly {timeout:adapter_timeout, permission_denied:upstream_permission_denied, malformed_json:adapter_payload_invalid, empty_response:adapter_empty_response, http_500:adapter_http_500, missing_required_field:adapter_missing_required_field}; test_mock_error_mode_to_error_code_mapping_matches_contract asserts the exact pairs and test_mock_error_mode_to_error_code_values_are_shared_error_codes asserts every value is a member of the shared ErrorCode (drift guard)"
+  - criterion: "No adapter implementation or gateway logic is introduced"
+    result: "passed"
+    evidence: "Only TypeAliases, a static mapping table, one BaseModel, and one Protocol are defined; no I/O, parsing, or branching. test_adapter_source_does_not_contain_concrete_implementation_dependencies and the prompt no-implementation scan confirm no requests/httpx/subprocess/selenium/playwright/open(/sqlalchemy/redis/arq/app.gateway./app.execution_fabric terms"
+failure_examples_tested:
+  - example: "AdapterPort returns dict instead of AdapterResult"
+    result: "triggered"
+    evidence: "test_execute_signature_matches_contract asserts the return annotation is AdapterResult; a bare dict[str,Any] return would fail the hints['return'] is AdapterResult assertion"
+  - example: "mock_error_mode includes unsupported values or misses required values"
+    result: "triggered"
+    evidence: "test_mock_error_mode_literal_values_match_contract pins get_args(MockErrorMode) to exactly the 6 values; adding or dropping a value fails the equality assertion"
+  - example: "Real adapter or gateway implementation is added"
+    result: "not_triggered"
+    evidence: "No real/mock adapter or gateway logic was added; staged diff contains only the two intended source files plus this Task Record; forbidden paths app/execution_fabric/ and app/gateway/ have no git status entry"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/P0-DOMAIN-008a (isolated worktree E:\\code\\eternalai-wt-008a, created from phase0/main @ 4f039f4); clean tree before edits"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1"
+    evidence: "P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml present; depends_on satisfied"
+  - step: "Create adapter contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_adapter_port.py"
+    evidence: "RED: exit 1, ModuleNotFoundError: No module named 'app.ports.adapter' (before implementation)"
+  - step: "Implement abstract AdapterPort contract"
+    result: "passed"
+    command: "Test-Path app/ports/adapter.py"
+    evidence: "True; app/ports/adapter.py created with AdapterStatus/MockErrorMode/MOCK_ERROR_MODE_TO_ERROR_CODE/AdapterResult/AdapterPort"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_adapter_port.py"
+    evidence: "GREEN: 15 passed in 1.04s (orchestrator firsthand re-run in the worktree)"
+  - step: "Run lint/type checks for task-owned files"
+    result: "passed"
+    command: "uv run ruff check app/ports/adapter.py tests/ports/test_adapter_port.py; uv run mypy app/ports/adapter.py"
+    evidence: "ruff: All checks passed!; mypy: Success: no issues found in 1 source file"
+  - step: "Verify no adapter implementation logic was introduced"
+    result: "passed"
+    command: "$matched = Select-String -Path app/ports/adapter.py -Pattern 'requests','httpx','subprocess','selenium','playwright','open\\(' -Quiet; if ($matched) { throw 'Adapter implementation dependency detected' } else { 'PASSED' }"
+    evidence: "PASSED; no implementation dependency terms in adapter.py"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/ports/adapter.py, docs/phase0/task_logs/P0-DOMAIN-008a_20260602_221527_passed.yaml, tests/ports/test_adapter_port.py; no app/execution_fabric/ or app/gateway/ path"
+changed_files:
+  - app/ports/adapter.py
+  - docs/phase0/task_logs/P0-DOMAIN-008a_20260602_221527_passed.yaml
+  - tests/ports/test_adapter_port.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_adapter_port.py"
+    result: "passed"
+    output_snippet: "15 passed in 1.04s (orchestrator firsthand re-run in worktree)"
+  - command: "uv run ruff check app/ports/adapter.py tests/ports/test_adapter_port.py"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/adapter.py"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_adapter_port.py"
+    result: "passed"
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.27s (includes test_import_boundaries.py)"
+  - command: "uv run python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "Dependency check passed. Manifests scanned: 7; Dependencies checked: 49"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent parser or capability matching implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output, instructor, or PydanticAI code touched; raw SDK + response_format json_object + Pydantic model_validate + Literal baseline unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "Adapter contract does not define or redefine no_capability_found; that remains downstream gateway/runtime owned."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "Not referenced or redefined by the adapter contract."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model implemented or changed."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy/identity outcome model implemented or changed."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no mock/real adapter, gateway execution, or Phase 1 workflow implemented."
+contract_model_decisions:
+  adapter_result: "AdapterResult reproduces spec 8.6.5 field shape exactly: status: AdapterStatus (Literal[success,error,timeout,permission_denied]); data: dict[str,Any]|None=None; error_code: ErrorCode|None=None; raw_payload_ref: str|None=None. model_config=ConfigDict(extra='forbid') was added (human-ratified GATE 1 decision) to close the frozen return contract to exactly its four spec fields; spec 8.6.5 defines no extra fields, so closing it cannot reject any valid spec-shaped result. Note: extra=forbid guards only top-level fields; data: dict[str,Any] is an acknowledged escape hatch whose contents downstream code must sanitize."
+  error_code_sourcing: "ErrorCode is IMPORTED from app.ports.capability_gateway (the merged 003a 15-value shared Literal) rather than reproduced locally. Spec 8.6.5 types error_code as Optional[ErrorCode] (the same 8.6.3 ErrorCode), so a single source of truth avoids drift; the import-boundary checker only forbids app.ports->app.infra, so this port->port import passes. capability_gateway.py was NOT modified. The alternative (local reproduction) was rejected because duplicating a 15-value Literal has no sync guardrail."
+  mock_error_mode_and_mapping: "MockErrorMode = Literal[timeout, permission_denied, malformed_json, empty_response, http_500, missing_required_field] documents the supported execution_context['mock_error_mode'] key values without tightening execute()'s execution_context parameter (kept dict[str,Any] per spec 8.6.8). The mock_error_mode -> ErrorCode mapping is frozen as MOCK_ERROR_MODE_TO_ERROR_CODE: Mapping[MockErrorMode, ErrorCode] = MappingProxyType({...6 pairs...}); this is static contract DATA (a lookup table), not adapter behavior (no payload parsing, failure injection, system call, or status conversion). The three enums are kept distinct: AdapterStatus (4 result statuses), MockErrorMode (6 injection modes), ErrorCode (15 shared codes)."
+  package_layout: "No __init__.py created anywhere, matching the established app/ports and tests namespace-package convention (mypy strict + pytest pythonpath='.')."
+  blueprint_status_ok_note: "Later blueprint mock-adapter prose mentions AdapterResult(status='ok'), but spec 8.6.5 fixes status to success/error/timeout/permission_denied; this task implements 8.6.5 and a test asserts status='ok' raises ValidationError. Reconciliation of the prose is deferred to downstream tasks/review."
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/ => 22 passed. app/ports/adapter.py imports only from app.ports.capability_gateway (ErrorCode) plus stdlib/pydantic, not app.infra; the active ports_no_infra_imports rule is satisfied; no rule forbids port-to-port imports."
+security_scan_result:
+  result: "passed"
+  evidence: "Staged secret scan over git diff --cached -U0 returned no match (PASSED). No plaintext credential values appear in source, tests, or this Task Record. Credential/permission-like tokens present (permission_denied, upstream_permission_denied) are spec error-mode/code identifiers, and the scan-pattern terms in this record are field-name literals in command text, not assigned plaintext secret values."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "uv run python scripts/check_weak_tests.py tests/ports/test_adapter_port.py => Weak-test check passed. 15 tests use get_type_hints/get_args/inspect introspection, ValidationError assertions, exact-mapping equality, and a frozen-mapping TypeError assertion; no assert True / empty pass / broad skip."
+ci_evidence:
+  result: "pending"
+  run_id: "to_be_recorded_after_push"
+  url_or_log_path: "to_be_recorded_after_push"
+  not_applicable_reason: "not_applicable"
+  not_applicable_scope: "not_applicable"
+  blocked_by_task_id: "not_applicable"
+  activation_task_id: "not_applicable"
+  expiry_condition: "Replace with GitHub Actions run id and conclusion after merge to phase0/main and push."
+  evidence: "Local required validation commands passed and are recorded in tests_run; remote CI to be checked after push per project workflow."
+review:
+  mode: "codex_review"
+  reviewed_by: "Claude Code (Opus) adversarial checklist review + Codex (gpt-5.5) independent codex review, both via codex exec -C in the isolated worktree"
+  reviewed_at: "2026-06-02T22:05:00+09:00"
+  notes: >
+    Plan review: Codex generated the Plan; Claude Code (Opus) adversarial review found
+    no blockers but surfaced two decisions for the human gate (ErrorCode import vs
+    reproduce; model_config consistency between this contract and P0-DOMAIN-004a's
+    PolicyDecision). Human GATE 1 ratified: import ErrorCode from capability_gateway and
+    set AdapterResult model_config extra=forbid (an orchestrator amendment vs the original
+    plan, which the Claude-side diff review then verified was applied and tested). Code
+    review: Claude Code checklist review PASSED and independently re-ran all validation in
+    the worktree (firsthand evidence). Codex independent cross-review returned
+    APPROVE_FOR_COMMIT with findings none, and independently re-ran pytest/ruff/mypy
+    read-only. Dual cross-review PASS; no fix cycle was required for this lane.
+remaining_risks:
+  - "ErrorCode is now imported by both app/ports/adapter.py and (in the sibling lane) app/ports/policy_guard.py via RequestOrgContext, making app/ports/capability_gateway.py a de-facto shared-types hub. A future authorized task may consolidate ErrorCode/RequestOrgContext into a dedicated shared contracts module; this task deliberately defers that (handoff §11.5 #1 shared-contract consolidation risk)."
+  - "The mock_error_mode contract lives as a documented dict key plus the MockErrorMode Literal and the MOCK_ERROR_MODE_TO_ERROR_CODE table; because execute()'s execution_context stays dict[str,Any] per spec, the contract cannot statically enforce that callers pass a valid mock_error_mode. Downstream mock adapter (008b+) must validate the key against MockErrorMode."
+  - "AdapterResult.data is dict[str,Any]; extra=forbid guards only top-level fields, so payload-content safety must be enforced by the downstream adapter/gateway/sanitizer."
+rollback_or_failure_record: >
+  No fix cycle required for this lane: both the Claude-side adversarial review and the
+  Codex independent cross-review passed the first implementation. No rollback occurred.
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
