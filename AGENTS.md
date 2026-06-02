@@ -1,9 +1,58 @@
-# AGENTS.md — Phase 0 Compact Agent Boot Rules v1.0.11
+# AGENTS.md — Phase 0 Compact Agent Boot Rules v1.0.12
 
 This file is intentionally short. It is the always-loaded boot context for Codex and other coding agents. Do not expand it into a full spec.
 
 ## Phase
 Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
+
+## Project at a glance
+- **EternalAI**: Government/enterprise AI Agent runtime — natural language driven, integrates OA, Yonyou U8, Hikvision iVMS
+- **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations
+- **Backend**: Python + uv + FastAPI | **Frontend**: React 18 + Vite + Ant Design 5.x
+- **Data**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
+- **LLM**: Qwen + vLLM raw JSON mode (instructor/PydanticAI both failed)
+- **Observability**: OpenTelemetry + Langfuse
+- **Full tech stack decisions**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
+
+## Key directories
+```
+app/ports/          Protocol interfaces (TaskStore, CapabilityRegistry, CapabilityGateway, JobQueue...)
+app/infra/          Interface implementations
+app/api/v1/         FastAPI routes
+app/db/             Database config/session/health check
+tests/              Mirrors app/ structure + tests/architecture/ (import boundary, weak test checker)
+docs/phase0/        Phase 0 task prompts, rules, style baselines, context loading strategy
+docs/phase0/tasks/  Per-task prompt files
+docs/phase0/task_logs/  Unified Task Records (YAML)
+web/                Frontend (React 18 + Vite + Ant Design 5.x)
+experiments/phase0/ Spike experiment code (never enters production)
+infra/docker/       Docker Compose templates
+```
+
+## Git workflow
+- **Main branch**: `phase0/main` (not `main`)
+- **Task branch**: `phase0/<task_id>` (e.g. `phase0/P0-DOMAIN-004a`)
+- **Commit message**: `phase0(<task_id>): <short description>`
+- **Merge message**: `merge phase0(<task_id>): <short description>`
+- Check remote GitHub Actions CI after every merge to phase0/main
+
+## Validation commands
+```bash
+# Full test suite
+uv run pytest
+# Single test file
+uv run pytest tests/ports/test_capability_gateway_port.py
+# Lint
+uv run ruff check app/ tests/
+# Type check
+uv run mypy app/
+# Dependency compliance
+uv run python scripts/check_dependencies.py
+# Import boundary + weak test checker
+uv run pytest tests/architecture/
+# Weak test single file
+uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
+```
 
 ## Source pointers
 - Context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`

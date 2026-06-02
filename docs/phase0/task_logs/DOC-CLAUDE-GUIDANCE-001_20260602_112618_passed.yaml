@@ -1,0 +1,167 @@
+task_id: "DOC-CLAUDE-GUIDANCE-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-06-02T10:00:00+09:00"
+completed_at: "2026-06-02T11:26:18+09:00"
+plan_approved_by: "雨爷"
+plan_approved_at: "2026-06-02T10:30:00+09:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Enhanced both CLAUDE.md and AGENTS.md from v1.0.11 to v1.0.12. Added project
+  overview (tech stack, architecture), key directories, git workflow (main branch,
+  commit/merge message format), and validation commands to both boot files.
+  CLAUDE.md also received Phase 0 rules consolidation, read-on-demand reference
+  list, and simplified scratch/temp cleanup. AGENTS.md additions follow OpenAI
+  official AGENTS.md best practices (repo layout, build/test/lint commands, tech
+  stack, engineering conventions). Decision: .claude/rules/ directory not introduced
+  because Codex does not read it, creating rule-source inconsistency in multi-AI
+  collaboration; CLAUDE.md remains well under 200-line threshold so no split needed.
+
+acceptance_criteria_result:
+  - criterion: "CLAUDE.md is under 200 lines"
+    result: "passed"
+    evidence: "CLAUDE.md v1.0.12 is ~78 lines including blank lines, well under 200-line official guideline"
+  - criterion: "CLAUDE.md contains project overview, directories, git workflow, and validation commands"
+    result: "passed"
+    evidence: "Sections added: Project at a glance, Key directories, Git workflow, Validation commands, Phase 0 rules, Read on demand"
+  - criterion: "AGENTS.md contains equivalent project-level information per OpenAI best practices"
+    result: "passed"
+    evidence: "Sections added: Project at a glance, Key directories, Git workflow, Validation commands — matching OpenAI recommended coverage (repo layout, build/test/lint, tech stack, conventions)"
+  - criterion: "Validation commands documented in both files are real and executable"
+    result: "passed"
+    evidence: "uv run ruff check app/ tests/ => All checks passed; uv run mypy app/ => Success no issues in 15 files; uv run pytest tests/architecture/ => 22 passed; uv run python scripts/check_dependencies.py => passed, 49 deps checked"
+  - criterion: "No sensitive values in boot files"
+    result: "passed"
+    evidence: "Manual review of both diffs confirms no credentials, tokens, DATABASE_URL, or sensitive values"
+  - criterion: "Only CLAUDE.md, AGENTS.md, and this Task Record are changed"
+    result: "passed"
+    evidence: "git diff --cached --name-only => AGENTS.md, CLAUDE.md; Task Record added after staging"
+
+failure_examples_tested:
+  - example: "not_applicable"
+    result: "not_applicable"
+    not_applicable_reason: "Documentation task with no contract or behavioral tests"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: "Permanent — documentation tasks do not have failure example tests"
+    evidence: ""
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/DOC-CLAUDE-GUIDANCE-001; status: M CLAUDE.md (only expected change)"
+  - step: "Verify ruff lint command works"
+    result: "passed"
+    command: "uv run ruff check app/ tests/"
+    evidence: "exit code 0; All checks passed!"
+  - step: "Verify mypy type check command works"
+    result: "passed"
+    command: "uv run mypy app/"
+    evidence: "exit code 0; Success: no issues found in 15 source files"
+  - step: "Verify architecture tests command works"
+    result: "passed"
+    command: "uv run pytest tests/architecture/"
+    evidence: "exit code 0; 22 passed in 0.17s"
+  - step: "Verify dependency check command works"
+    result: "passed"
+    command: "uv run python scripts/check_dependencies.py"
+    evidence: "exit code 0; Dependency check passed; manifests scanned: 7; dependencies checked: 49"
+  - step: "Pre-commit staged file check"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "exit code 0; AGENTS.md, CLAUDE.md"
+  - step: "Pre-commit staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    evidence: "exit code 0; AGENTS.md | 51; CLAUDE.md | 87; 2 files changed, 119 insertions(+), 19 deletions(-)"
+  - step: "Pre-commit whitespace check"
+    result: "passed"
+    command: "git diff --cached --check"
+    evidence: "exit code 0; no whitespace errors"
+  - step: "Pre-commit untracked file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    evidence: "exit code 0; empty output"
+
+changed_files:
+  - AGENTS.md
+  - CLAUDE.md
+  - docs/phase0/task_logs/DOC-CLAUDE-GUIDANCE-001_20260602_112618_passed.yaml
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "uv run ruff check app/ tests/"
+    result: "passed"
+    output_snippet: "exit code 0: All checks passed!"
+  - command: "uv run mypy app/"
+    result: "passed"
+    output_snippet: "exit code 0: Success: no issues found in 15 source files"
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "exit code 0: 22 passed in 0.17s"
+  - command: "uv run python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "exit code 0: Dependency check passed; manifests scanned: 7; dependencies checked: 49"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "Documentation-only change; no Python source modified"
+  not_applicable_reason: "No app/ or tests/ Python source files were changed"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "Permanent for documentation tasks"
+
+security_scan_result:
+  result: "passed"
+  evidence: "Manual review confirms no credentials, tokens, passwords, DATABASE_URL, or sensitive values in either boot file diff"
+
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files were created or modified"
+  not_applicable_reason: "Documentation-only change"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "Permanent for documentation tasks"
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "Commit not yet pushed; CI runs on push"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "git push (requires human confirmation)"
+  activation_task_id: "post-push CI verification"
+  expiry_condition: "Expires after push and CI run"
+  evidence: "Local validation commands passed and recorded in tests_run"
+
+review:
+  mode: "self_check"
+  reviewed_by: "Claude Code (Opus 4.6)"
+  reviewed_at: "2026-06-02T11:26:00+09:00"
+  notes: >
+    Low-risk documentation enhancement. Both boot files reviewed against
+    official best practices (Anthropic code.claude.com/docs for CLAUDE.md,
+    OpenAI developers.openai.com/codex/learn/best-practices for AGENTS.md).
+    Shared project facts are consistent across both files.
+
+remaining_risks:
+  - "CLAUDE.md uses Chinese descriptions; AGENTS.md uses English. This is intentional (matching each tool's primary user language) but means project facts exist in two languages."
+
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created for documentation task"
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
