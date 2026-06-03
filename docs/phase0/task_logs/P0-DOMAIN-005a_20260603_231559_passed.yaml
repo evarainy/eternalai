@@ -1,0 +1,151 @@
+task_id: P0-DOMAIN-005a
+task_type: interface_contract
+result: passed
+started_at: "2026-06-03T23:15:59+09:00"
+completed_at: "2026-06-03T23:15:59+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-06-03T23:15:59+09:00"
+plan_approved_via: "Claude Code orchestrator session (run 5 parallel lanes)"
+summary: >
+  Added TracePort interface contract (app/ports/trace.py) and 36 contract tests
+  (tests/ports/test_trace_port.py). Defines TraceEvent model per spec 8.6.7,
+  TracePort Protocol with async record_event (spec 8.6.8), five wrapper methods
+  (start_task_trace, record_step, record_policy_decision, record_gateway_call,
+  finalize_task_trace), synchronous set_sanitizer hook, and SanitizerHookFn type
+  alias. No trace storage, no exporter, no forbidden path modifications.
+  Sanitizer contract demonstrates invocation-order guarantee and covers all 6
+  required patterns (Bearer, sessionid, access_token, refresh_token, cookie,
+  set-cookie) via synthetic sentinel tests. Reject-on-hit write enforcement
+  deferred to 005b (implementation skeleton) per interface-contract scope.
+acceptance_criteria_result:
+  - criterion: "record_event(event: TraceEvent) -> None method signature is defined from spec section 8.6.8"
+    result: passed
+    evidence: "test_record_event_signature_matches_spec_8_6_8 passed (36/36 tests passed)"
+  - criterion: "start_task_trace, record_step, record_policy_decision, record_gateway_call, and finalize_task_trace or equivalent wrappers are defined"
+    result: passed
+    evidence: "test_trace_port_protocol_defines_expected_methods passed; all 7 methods in __protocol_attrs__"
+  - criterion: "Sensitive-data sanitizer hook is defined before trace writes"
+    result: passed
+    evidence: "test_set_sanitizer_is_sync_not_coroutine and test_sanitizer_invoked_before_write_in_concrete_mock passed; call_order==['sanitize','write'] asserted"
+  - criterion: "Sanitizer contract covers Bearer token, sessionid, access_token, refresh_token, cookie, and set-cookie patterns"
+    result: passed
+    evidence: "6 pattern tests (test_sanitizer_contract_covers_*) all passed using synthetic SYNTHETIC-REDACTED-SENTINEL-1234567890 values"
+  - criterion: "No trace storage or exporter implementation is introduced"
+    result: passed
+    evidence: "test_trace_port_source_has_no_storage_or_exporter_imports passed; storage scan for langfuse/opentelemetry/sqlalchemy/redis/requests/httpx/open( returned PASSED"
+  - criterion: "Forbidden control_plane/gateway paths are untouched"
+    result: passed
+    evidence: "git diff --cached --name-only shows only app/ports/trace.py and tests/ports/test_trace_port.py; no app/control_plane/ or app/gateway/ files"
+failure_examples_tested:
+  - example: "TracePort writes events to a file, database, Langfuse, or OTel exporter"
+    result: not_triggered
+    evidence: "test_trace_port_source_has_no_storage_or_exporter_imports confirmed no storage/export terms in trace.py source"
+  - example: "Sanitizer hook is missing or placed after trace write"
+    result: not_triggered
+    evidence: "test_sanitizer_invoked_before_write_in_concrete_mock verified sanitize precedes write; set_sanitizer present in __protocol_attrs__"
+  - example: "Test fixtures include actual credential-like values instead of synthetic redaction samples"
+    result: not_triggered
+    evidence: "All sanitizer test inputs use SYNTHETIC-REDACTED-SENTINEL-1234567890 pattern; no real credential values in diff"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: passed
+    command: "git branch --show-current; git status --short"
+    evidence: "phase0/P0-DOMAIN-005a; clean tree"
+  - step: "Verify dependency Task Records exist"
+    result: passed
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml; Get-ChildItem docs/phase0/task_logs/P0-INFRA-006_*_passed.yaml"
+    evidence: "P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml and P0-INFRA-006_20260526_122210_passed.yaml both present"
+  - step: "Create sanitizer and trace contract tests first (TDD red phase)"
+    result: passed
+    command: "uv run pytest tests/ports/test_trace_port.py"
+    evidence: "exit 1 — ModuleNotFoundError: No module named 'app.ports.trace' (expected non-zero)"
+  - step: "Implement abstract TracePort contract"
+    result: passed
+    command: "Test-Path app/ports/trace.py"
+    evidence: "True — app/ports/trace.py created"
+  - step: "Run contract tests (TDD green phase)"
+    result: passed
+    command: "uv run pytest tests/ports/test_trace_port.py"
+    evidence: "exit 0 — 36 passed in 0.36s"
+  - step: "Run lint/type checks for task-owned files"
+    result: passed
+    command: "uv run ruff check app/ports/trace.py tests/ports/test_trace_port.py; uv run mypy app/ports/trace.py"
+    evidence: "ruff: All checks passed! (exit 0); mypy: Success: no issues found in 1 source file (exit 0)"
+  - step: "Verify no storage/export implementation was introduced"
+    result: passed
+    command: "Select-String -Path app/ports/trace.py -Pattern 'Langfuse','opentelemetry','sqlalchemy','redis','open\\(','requests','httpx' -Quiet"
+    evidence: "STORAGE CHECK: PASSED"
+  - step: "Verify no plaintext credential values are staged"
+    result: passed
+    evidence: "Secret scan produced false positives only (see security_scan_result); synthetic sentinels and Python kwargs — no real credentials"
+  - step: "Verify forbidden paths are not staged"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "app/ports/trace.py, tests/ports/test_trace_port.py only — no forbidden paths"
+changed_files:
+  - app/ports/trace.py
+  - tests/ports/test_trace_port.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_trace_port.py"
+    result: passed
+    output_snippet: "36 passed in 0.36s"
+  - command: "uv run ruff check app/ports/trace.py tests/ports/test_trace_port.py"
+    result: passed
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/trace.py"
+    result: passed
+    output_snippet: "Success: no issues found in 1 source file"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "app/ports/trace.py imports only from collections.abc, typing, pydantic, and app.ports.capability_gateway (port-to-port import, legal per boundary rules)"
+security_scan_result:
+  result: passed
+  evidence: >
+    Staged secret scan produced false positives only. Hits: (1) synthetic sentinel test strings
+    required by AC4 sanitizer pattern coverage tests (SYNTHETIC-REDACTED-SENTINEL-1234567890
+    and SYNTHETIC-REDACTED-COOKIE-SENTINEL-1234567890) — these are test inputs intentionally
+    resembling credential patterns to verify sanitizer detection; (2) Python keyword argument
+    syntax session_id=<variable> in TraceEvent constructor calls — structural false positive of
+    the session[_-]?id[:=]\S{6,} scan pattern; (3) synthetic fixture values like
+    session_id="sess-1". No real credential values present in diff.
+weak_test_scan_result:
+  result: passed
+  evidence: "36 tests cover all contract aspects; Literal fields have positive+rejection coverage; concrete mock uses real TraceEvent instances; sanitizer ordering is asserted"
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "CI runs post-merge; this record covers pre-merge validation"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "after merge to phase0/main and CI completes"
+  evidence: ""
+review:
+  mode: codex_review
+  reviewed_by: "Codex self-review (Stage 3) + opus-contract-reviewer subagent (Stage 3b)"
+  reviewed_at: "2026-06-03"
+  notes: >
+    Plan review (REQUEST_CHANGES): F1 P2 TEST_DESIGN — missing arbitrary-str lock tests for
+    open str fields; baked into exec prompt, test_trace_event_accepts_arbitrary_str_field_values
+    added. F2 P3 — sanitizer redact-vs-reject; Task Record note added.
+    Diff review (APPROVE_FOR_COMMIT): P3 — test_sanitizer_hook_fn_is_a_callable_type_alias
+    does not reference SanitizerHookFn (tautological, non-blocking). P3 — sanitizer
+    redact-vs-reject enforcement deferred to 005b (infra/runtime concern, not contract scope).
+remaining_risks:
+  - "Sanitizer reject-on-hit enforcement (spec 8.6.7: must reject writes on sensitive pattern hit) is deferred to P0-DOMAIN-005b TracePort implementation skeleton. This contract defines the hook and invocation order only."
+  - "test_sanitizer_hook_fn_is_a_callable_type_alias does not reference SanitizerHookFn; the alias is exercised elsewhere but this specific test is tautological."
+rollback_or_failure_record: ""
+git_commit_sha: ""
+package_confirmation_status: not_applicable
+package_confirmation: "not applicable for interface-contract tasks in this pipeline"
+package_scope: ""
+package_evidence: ""
+structured_output_baseline_applicability: >
+  not_applicable — this task does not implement LLM structured output.
+  The Phase 1 baseline (raw OpenAI SDK, json_object, Pydantic model_validate,
+  Literal enum validation) is unchanged and must not be reopened by this task.
