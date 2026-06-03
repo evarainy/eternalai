@@ -1,0 +1,246 @@
+task_id: "P0-DOMAIN-006a"
+task_type: "interface_contract"
+result: "passed"
+branch: "phase0/P0-DOMAIN-006a"
+title: "IdentityMapping Interface Contract"
+timestamp: "2026-06-03T15:52:30+09:00"
+started_at: "2026-06-03T15:40:00+09:00"
+completed_at: "2026-06-03T15:52:30+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-03T15:40:00+09:00"
+plan_approved_via: "User prompt with Stage 2 Execution + Stage 3 Self-Review approval for P0-DOMAIN-006a"
+summary: >
+  Defined the Phase 0 IdentityMapping interface contract only. Added
+  TargetSystem, ExecutionIdentity, IdentityBindStatus, IdentityCheckResult, and
+  IdentityMappingPort under app/ports/identity_mapping.py with focused TDD
+  contract tests. The resolve_execution_identity signature follows spec section
+  8.6.8, query methods support target_system, binding_scope, account_set_id,
+  and device_domain_id, and the return model forbids extra fields and exposes
+  no plaintext credential slots. No credential storage, OAuth, Vault,
+  control-plane, gateway, adapter, or target-system login implementation was
+  introduced.
+acceptance_criteria_result:
+  - criterion: "resolve_execution_identity method signature is defined from spec section 8.6.8"
+    result: "passed"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_resolve_execution_identity_signature_matches_spec_8_6_8 PASSED; 22 passed in 0.19s"
+  - criterion: "Optional mapping/status methods are defined if needed by the contract tests"
+    result: "passed"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_identity_mapping_port_protocol_defines_expected_methods PASSED; protocol attrs are resolve_execution_identity, get_mapping, list_mappings"
+  - criterion: "Query parameters support target_system, binding_scope, account_set_id, and device_domain_id"
+    result: "passed"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_get_mapping_signature_supports_scope_filters PASSED and test_list_mappings_signature_supports_scope_filters PASSED"
+  - criterion: "Return structure uses IdentityCheckResult and does not expose plaintext credentials or token values"
+    result: "passed"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_identity_check_result_field_set_matches_spec_8_6_6 PASSED, test_identity_check_result_defines_no_plaintext_credential_slots PASSED, test_identity_check_result_rejects_extra_fields PASSED"
+  - criterion: "No credential storage implementation is introduced"
+    result: "passed"
+    evidence: "command=\"$matched = Select-String -Path app/ports/identity_mapping.py -Pattern 'Vault','OAuth','sqlalchemy','redis','requests','httpx','open\\(' -Quiet; if ($matched) { throw 'Credential storage detected' } else { Write-Host 'CREDENTIAL SCAN: PASSED' }\", exit_code=0; key output: CREDENTIAL SCAN: PASSED"
+  - criterion: "Forbidden control_plane/gateway paths are untouched"
+    result: "passed"
+    evidence: "command='git diff --cached --name-only', exit_code=0; key output before task record: app/ports/identity_mapping.py; tests/ports/test_identity_mapping_port.py; no app/control_plane/ or app/gateway/ paths"
+failure_examples_tested:
+  - example: "IdentityCheckResult includes plaintext credential or token value fields"
+    result: "triggered"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_identity_check_result_defines_no_plaintext_credential_slots PASSED and test_identity_check_result_rejects_extra_fields PASSED"
+  - example: "Only 1:1 user mapping is represented and binding_scope/account_set_id/device_domain_id are omitted"
+    result: "triggered"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: get_mapping and list_mappings signature scope-filter tests PASSED; arbitrary scope/account/domain values accepted"
+  - example: "Credential storage implementation is added"
+    result: "triggered"
+    evidence: "command='uv run pytest tests/ports/test_identity_mapping_port.py -v', exit_code=0; key output: test_identity_mapping_source_imports_no_storage_or_provider_dependencies PASSED; explicit source scan also returned CREDENTIAL SCAN: PASSED"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "exit_code=0; key output: phase0/P0-DOMAIN-006a; git status --short produced no output at task start"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1"
+    evidence: "exit_code=0; key output: P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml"
+  - step: "Create identity mapping contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_identity_mapping_port.py"
+    evidence: "exit_code=1; expected RED output: collected 0 items / 1 error; ModuleNotFoundError: No module named 'app.ports.identity_mapping'; 1 error in 0.75s"
+  - step: "Implement abstract IdentityMappingPort contract"
+    result: "passed"
+    command: "Test-Path app/ports/identity_mapping.py"
+    evidence: "exit_code=0; key output: True"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_identity_mapping_port.py"
+    evidence: "exit_code=0; key output: collected 22 items; tests\\ports\\test_identity_mapping_port.py ...................... [100%]; 22 passed in 0.19s"
+  - step: "Run lint/type checks for task-owned files"
+    result: "passed"
+    command: "uv run ruff check app/ports/identity_mapping.py tests/ports/test_identity_mapping_port.py; uv run mypy app/ports/identity_mapping.py"
+    evidence: "ruff exit_code=0, key output: All checks passed!; mypy exit_code=0, key output: Success: no issues found in 1 source file"
+  - step: "Verify no credential storage implementation was introduced"
+    result: "passed"
+    command: "$matched = Select-String -Path app/ports/identity_mapping.py -Pattern 'Vault','OAuth','sqlalchemy','redis','requests','httpx','open\\(' -Quiet; if ($matched) { throw 'Credential storage detected' } else { Write-Host 'CREDENTIAL SCAN: PASSED' }"
+    evidence: "exit_code=0; key output: CREDENTIAL SCAN: PASSED"
+  - step: "Verify no plaintext credential values are staged"
+    result: "passed"
+    command: |
+      $secretPattern = '(?i)(password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|bearer|cookie|session[_-]?id|dsn|connection[_-]?string)\s*[:=]\s*["'']?[^"''\s]{6,}'
+      $hits = git diff --cached -U0 | Select-String -Pattern $secretPattern
+      if ($hits) { "SECRET SCAN FAIL:"; $hits | ForEach-Object { $_.Line } }
+      else { "SECRET SCAN: no hits" }
+    evidence: "exit_code=0; key output: SECRET SCAN: no hits"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "exit_code=0; key output before task record: app/ports/identity_mapping.py; tests/ports/test_identity_mapping_port.py"
+validation_summary:
+  - command: "uv run pytest tests/ports/test_identity_mapping_port.py"
+    exit_code: 0
+    key_output: "22 passed in 0.19s"
+  - command: "uv run pytest tests/ports/test_identity_mapping_port.py -v"
+    exit_code: 0
+    key_output: "22 named tests PASSED; 22 passed in 0.19s"
+  - command: "uv run ruff check app/ports/identity_mapping.py tests/ports/test_identity_mapping_port.py"
+    exit_code: 0
+    key_output: "All checks passed!"
+  - command: "uv run mypy app/ports/identity_mapping.py"
+    exit_code: 0
+    key_output: "Success: no issues found in 1 source file"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_identity_mapping_port.py"
+    exit_code: 0
+    key_output: "Weak-test check passed."
+  - command: "uv run pytest tests/architecture/"
+    exit_code: 0
+    key_output: "22 passed in 0.17s"
+  - command: "credential storage source scan"
+    exit_code: 0
+    key_output: "CREDENTIAL SCAN: PASSED"
+  - command: "git diff --cached --check"
+    exit_code: 0
+    key_output: "no output"
+  - command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    key_output: "no output"
+changed_files:
+  - app/ports/identity_mapping.py
+  - docs/phase0/task_logs/P0-DOMAIN-006a_20260603_155209_passed.yaml
+  - tests/ports/test_identity_mapping_port.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_identity_mapping_port.py"
+    result: "passed"
+    output_snippet: "22 passed in 0.19s"
+  - command: "uv run pytest tests/ports/test_identity_mapping_port.py -v"
+    result: "passed"
+    output_snippet: "22 named tests PASSED; 22 passed in 0.19s"
+  - command: "uv run ruff check app/ports/identity_mapping.py tests/ports/test_identity_mapping_port.py"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/identity_mapping.py"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_identity_mapping_port.py"
+    result: "passed"
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.17s"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+constraints_confirmed:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs were implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code was implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent-to-capability validation path was implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output code was changed; raw SDK plus response_format json_object plus Pydantic model_validate plus Literal enum baseline remains unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "No ExecutionStatus or terminal-state model was implemented or changed in this task."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "No runtime terminal-state model was implemented or changed in this task."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model was implemented or changed in this task."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy or identity outcome model was implemented or changed in this task."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no full Phase 1 workflow, credential storage, target login, gateway integration, or adapter integration was implemented."
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs were implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code was implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent-to-capability validation path was implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output code was changed; raw SDK plus response_format json_object plus Pydantic model_validate plus Literal enum baseline remains unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "No ExecutionStatus or terminal-state model was implemented or changed in this task."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "No runtime terminal-state model was implemented or changed in this task."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model was implemented or changed in this task."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy or identity outcome model was implemented or changed in this task."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no full Phase 1 workflow, credential storage, target login, gateway integration, or adapter integration was implemented."
+contract_model_decisions:
+  target_system: "TargetSystem = Literal['oa', 'u8', 'hikvision_ivms']."
+  execution_identity: "ExecutionIdentity = Literal['user_delegated', 'system_scope', 'admin_approved_proxy']."
+  bind_status: "IdentityBindStatus = Literal['active', 'unbound', 'expired', 'revoked', 'verification_failed', 'needs_binding_scope']."
+  result_model: "IdentityCheckResult uses bind_status, not status, and ConfigDict(extra='forbid')."
+  query_methods: "get_mapping and list_mappings support binding_scope, account_set_id, and device_domain_id filters; list_mappings may omit target_system."
+import_boundary_check:
+  result: "passed"
+  evidence: "command='uv run pytest tests/architecture/', exit_code=0; key output: 22 passed in 0.17s"
+security_scan_result:
+  result: "passed"
+  evidence: "command='staged secret scan', exit_code=0; key output: SECRET SCAN: no hits. Credential-like field-name tokens appear only as negative assertion strings, not assigned plaintext values."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "command='uv run python scripts/check_weak_tests.py tests/ports/test_identity_mapping_port.py', exit_code=0; key output: Weak-test check passed."
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No commit, push, or merge is authorized in this task prompt; remote CI is checked after merge to phase0/main by project workflow."
+  not_applicable_scope: "waiting_dependency"
+  blocked_by_task_id: "P0-DOMAIN-006a"
+  activation_task_id: "post-merge-ci-check"
+  expiry_condition: "Replace with GitHub Actions run id and conclusion after authorized merge to phase0/main."
+  evidence: "Local required validation commands passed and are recorded in validation_summary."
+review:
+  mode: "self_check"
+  reviewed_by: "Codex"
+  reviewed_at: "2026-06-03T15:52:30+09:00"
+  notes: "Self-review packet is generated separately in _scratch/review_006a_packet.txt for the independent Opus reviewer. No commit, push, or merge performed."
+remaining_risks:
+  - "This task defines the interface contract only; downstream implementations must preserve the no-plaintext and no-storage boundaries when resolving real identity bindings."
+rollback_or_failure_record: >
+  TDD RED failed as expected before app/ports/identity_mapping.py existed.
+  GREEN and all validation commands passed after adding the approved interface
+  contract. No rollback was required.
+git_commit_sha: "not_committed"
+git_commit_sha_note: "No commit is authorized by the task prompt; staged diff awaits independent review."
+package_confirmation_status: "not_created"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_created"
+package_evidence: "not_created"
