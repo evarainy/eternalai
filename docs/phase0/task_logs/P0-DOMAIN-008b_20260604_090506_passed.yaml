@@ -1,0 +1,145 @@
+task_id: P0-DOMAIN-008b
+title: Mock OA Adapter
+status: passed
+timestamp: "20260604_090506"
+branch: phase0/P0-DOMAIN-008b
+execution_owner: codex
+review_owner: opus-contract-reviewer
+
+objective: >
+  Implement MockOAAdapter satisfying AdapterPort.execute. Returns AdapterResult on both
+  happy-path shapes (pending-workflow and workflow-status) and on all 6 error modes via
+  MOCK_ERROR_MODE_TO_ERROR_CODE. No real OA HTTP calls. Phase 0 mock only.
+
+method: TDD
+
+summary: >
+  MockOAAdapter dispatches by capability_id (workflow_status/get_workflow keyword triggers
+  workflow-status path; else pending-workflow). Error modes are read from
+  execution_context["mock_error_mode"] and mapped via MOCK_ERROR_MODE_TO_ERROR_CODE imported
+  directly from app.ports.adapter (never copied). Both happy-path shapes accept
+  arguments["mock_status"] and arguments["mock_current_step"] for Literal value testing.
+  No HTTP client imports confirmed. OA technical doc (E-cology 9) noted for Phase 1 real
+  adapter - not used in Phase 0 mock.
+
+fix_loop_summary: >
+  One fix loop applied after Stage 3b Codex self-review: test_workflow_status_current_step_
+  all_literal_values_constructible was updated to call through MockOAAdapter.execute() with
+  arguments={"mock_current_step": step_value} (matching how the status parametrized test
+  calls through the adapter). Previously it only constructed AdapterResult directly.
+  Opus confirmed fix in re-review: APPROVE_FOR_COMMIT.
+
+quality_observations: >
+  21 tests pass. Both happy-path shapes tested end-to-end through execute(). All 6 error modes
+  parametrized via MOCK_ERROR_MODE_TO_ERROR_CODE.items(). All Literal values for status
+  (pending/approved/rejected) and current_step (draft/pending/approved/rejected) tested
+  through the adapter. extra="forbid" on AdapterResult tested. No bare dict.
+  Opus noted: MOCK_ERROR_MODE_TO_ERROR_CODE.get(error_mode) returns None for unrecognized
+  modes - latent looseness but outside stated ACs; acceptable at Phase 0.
+  Architecture tests: 22 passed. HTTP import scan: PASSED.
+
+acceptance_criteria:
+  - criterion: "MockOAAdapter satisfies AdapterPort Protocol (duck-type check: has async execute method with correct signature)"
+    result: "passed"
+    evidence: "test_mock_oa_adapter_satisfies_adapter_port_protocol: coroutine + param names verified"
+  - criterion: "Happy path returns AdapterResult(status='success') with required workflow fields"
+    result: "passed"
+    evidence: "test_happy_path_pending_workflow_returns_success: all 5 fields present; test_pending_workflow_status_all_literal_values_constructible[pending/approved/rejected]: all pass"
+  - criterion: "mock_error_mode=timeout returns AdapterResult(status='error', error_code='adapter_timeout')"
+    result: "passed"
+    evidence: "test_error_modes_return_correct_error_code[timeout-adapter_timeout]: PASSED"
+  - criterion: "mock_error_mode=permission_denied returns AdapterResult(status='error', error_code='upstream_permission_denied')"
+    result: "passed"
+    evidence: "test_error_modes_return_correct_error_code[permission_denied-upstream_permission_denied]: PASSED"
+  - criterion: "mock_error_mode=malformed_json returns AdapterResult(status='error', error_code='adapter_payload_invalid') - no uncaught exception"
+    result: "passed"
+    evidence: "test_error_modes_return_correct_error_code[malformed_json-adapter_payload_invalid] + test_malformed_json_no_uncaught_exception: PASSED"
+  - criterion: "mock_error_mode=empty_response returns AdapterResult(status='error', error_code='adapter_empty_response')"
+    result: "passed"
+    evidence: "test_error_modes_return_correct_error_code[empty_response-adapter_empty_response]: PASSED"
+  - criterion: "mock_error_mode=http_500 returns AdapterResult(status='error', error_code='adapter_http_500')"
+    result: "passed"
+    evidence: "test_error_modes_return_correct_error_code[http_500-adapter_http_500]: PASSED"
+  - criterion: "mock_error_mode=missing_required_field returns AdapterResult(status='error', error_code='adapter_missing_required_field')"
+    result: "passed"
+    evidence: "test_missing_required_field_data_is_none: data is None, error_code correct: PASSED"
+  - criterion: "No real HTTP client import in adapter implementation files"
+    result: "passed"
+    evidence: "HTTP IMPORT SCAN PASSED"
+  - criterion: "Happy-path workflow-status returns AdapterResult(status='success') with workflow_id, current_step, approver"
+    result: "passed"
+    evidence: "test_happy_path_workflow_status_returns_success: PASSED; test_workflow_status_current_step_all_literal_values_constructible[draft/pending/approved/rejected]: all PASSED through adapter"
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch=phase0/P0-DOMAIN-008b; expected staged additions present for app/execution_fabric/mock_adapters/oa/mock_oa_adapter.py and tests/execution_fabric/mock_adapters/oa/test_mock_oa_adapter.py; no unstaged output reported"
+  - step: "Verify P0-DOMAIN-008a passed Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-008a_*_passed.yaml"
+    evidence: "P0-DOMAIN-008a_20260602_221527_passed.yaml found"
+  - step: "Create mock adapter tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/execution_fabric/mock_adapters/oa/"
+    evidence: "Exit code 2 (ModuleNotFoundError before implementation existed)"
+  - step: "Implement MockOAAdapter"
+    result: "passed"
+    command: "Test-Path app/execution_fabric/mock_adapters/oa/"
+    evidence: "True"
+  - step: "Run all adapter tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/execution_fabric/mock_adapters/oa/ -v"
+    evidence: "21 passed in 0.23s"
+  - step: "Run lint and type checks"
+    result: "passed"
+    command: "uv run ruff check app/execution_fabric/mock_adapters/oa/ tests/execution_fabric/mock_adapters/oa/; uv run mypy app/execution_fabric/mock_adapters/oa/"
+    evidence: "All checks passed! / Success: no issues found in 1 source file"
+  - step: "Verify no real HTTP client imports"
+    result: "passed"
+    command: "HTTP import scan"
+    evidence: "HTTP IMPORT SCAN PASSED"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/execution_fabric/mock_adapters/oa/..., tests/execution_fabric/mock_adapters/oa/..., and task record"
+
+final_test_commands:
+  - command: "uv run pytest tests/execution_fabric/mock_adapters/oa/ -v"
+    result: "21 passed in 0.23s"
+    exit_code: 0
+  - command: "uv run ruff check app/execution_fabric/mock_adapters/oa/ tests/execution_fabric/mock_adapters/oa/"
+    result: "All checks passed!"
+    exit_code: 0
+  - command: "uv run mypy app/execution_fabric/mock_adapters/oa/"
+    result: "Success: no issues found in 1 source file"
+    exit_code: 0
+
+changed_files:
+  - "app/execution_fabric/mock_adapters/oa/mock_oa_adapter.py"
+  - "docs/phase0/task_logs/P0-DOMAIN-008b_20260604_090506_passed.yaml"
+  - "tests/execution_fabric/mock_adapters/oa/test_mock_oa_adapter.py"
+
+git_diff_stat: " .../mock_adapters/oa/mock_oa_adapter.py            |  48 +++++\n .../P0-DOMAIN-008b_20260604_090506_passed.yaml     | 145 +++++++++++++++\n .../mock_adapters/oa/test_mock_oa_adapter.py       | 199 +++++++++++++++++++++\n 3 files changed, 392 insertions(+)"
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing this file changes HEAD.
+  The authoritative commit SHA is the Git commit containing this Task Record and the remote branch
+  history after push.
+
+structured_output_baseline_applicability: >
+  not_applicable - reason: This task does not implement LLM structured output. Phase 1 baseline unchanged.
+  blocked_by_task_id: Phase 1 structured-output task.
+  activation_task_id: Phase 1 LLM structured-output integration task.
+  expiry_condition: First task that implements or changes LLM structured output.
+  evidence: staged files are limited to MockOAAdapter, tests, and this Task Record.
+
+package_confirmation_status: >
+  not_applicable - reason: No package artifact is produced by this task.
+  blocked_by_task_id: Package-producing task outside P0-DOMAIN-008b.
+  activation_task_id: First task that creates a package or release artifact.
+  expiry_condition: A task requires package build or release confirmation.
+  evidence: staged files contain only app/test/task-record paths.
+package_scope: "No runtime package produced; staged source/test/task record only."
+package_evidence: "git diff --cached --name-only after staging task record lists only app/execution_fabric/mock_adapters/oa/mock_oa_adapter.py, docs/phase0/task_logs/P0-DOMAIN-008b_20260604_090506_passed.yaml, tests/execution_fabric/mock_adapters/oa/test_mock_oa_adapter.py."
