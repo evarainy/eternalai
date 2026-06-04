@@ -1,0 +1,164 @@
+task_id: "P0-DOMAIN-004b"
+task_type: "implementation"
+result: "passed"
+started_at: "2026-06-05T08:40:59+09:00"
+completed_at: "2026-06-05T08:42:36+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-05T00:00:00+09:00"
+plan_approved_via: "Codex session prompt: Stage 2+3 Execution approval for P0-DOMAIN-004b"
+summary: >
+  Implemented the Phase 0 MinimalPolicyGuard pure-logic deny skeleton under
+  app/infra/policy/minimal_policy_guard.py and added TDD coverage under
+  tests/infra/policy/test_minimal_policy_guard.py. The implementation imports
+  PolicyGuardPort and PolicyDecision from app.ports.policy_guard and
+  RequestOrgContext from app.ports.capability_gateway, keeps the decide()
+  annotation identical to the Protocol, and applies only the approved ordered
+  rules: None arguments deny policy_denied, admin_ capabilities deny
+  role_not_allowed, _confirm capabilities return confirm with required_action
+  confirm, and all other requests return allow. No database, HTTP, subprocess,
+  filesystem persistence, external policy engine, dependency, Gateway, Runtime,
+  Adapter, Trace, ResponseEnvelope, or __init__.py behavior was introduced.
+acceptance_criteria_result:
+  - criterion: "Minimal PolicyGuard satisfies PolicyGuardPort Protocol"
+    result: "passed"
+    evidence: "MinimalPolicyGuard.decide is async, keeps arguments: dict[str, Any], request_context: RequestOrgContext, and returns PolicyDecision; port regression test test_decide_signature_matches_contract passed."
+  - criterion: "Safe request path returns PolicyDecision(decision='allow')"
+    result: "passed"
+    evidence: "test_safe_capability_returns_allow and test_decide_return_isinstance passed; return is PolicyDecision, not bool/string/dict."
+  - criterion: "Forbidden role/capability path returns deny role_not_allowed"
+    result: "passed"
+    evidence: "test_admin_capability_denies_role_not_allowed passed with capability_id='admin_delete_user'."
+  - criterion: "Missing or invalid policy context returns deny policy_denied"
+    result: "passed"
+    evidence: "test_none_arguments_denies_policy_denied and test_rule_order_none_before_admin_confirm passed with arguments=None."
+  - criterion: "Every DENY result has a non-empty reason_code"
+    result: "passed"
+    evidence: "None-arguments deny asserts reason_code == policy_denied and non-empty; admin deny asserts reason_code == role_not_allowed."
+  - criterion: "High-risk confirmation returns confirm decision with confirm required_action"
+    result: "passed"
+    evidence: "test_confirm_capability_returns_confirm_decision passed with exact PolicyDecision(decision='confirm', reason_code='high_risk_action_requires_confirm', required_action='confirm')."
+  - criterion: "DENY result remains directly consumable by downstream Gateway short-circuit tests"
+    result: "passed"
+    evidence: "Implementation returns PolicyDecision only and performs no Adapter call, Trace write, ResponseEnvelope generation, Gateway integration, or Runtime integration."
+  - criterion: "No database, HTTP client, subprocess, external policy engine, new dependency, or __init__.py is introduced"
+    result: "passed"
+    evidence: "Pure-logic scan returned PASSED; __init__.py scan returned PASSED; staged changed files are limited to approved source, test, and this Task Record."
+failure_examples_tested:
+  - example: "forbidden_operation_allows"
+    result: "triggered"
+    evidence: "admin_delete_user returned PolicyDecision(decision='deny', reason_code='role_not_allowed') in test_admin_capability_denies_role_not_allowed."
+  - example: "deny_missing_reason"
+    result: "triggered"
+    evidence: "test_none_arguments_denies_policy_denied asserts reason_code is policy_denied and truthy; admin deny asserts role_not_allowed."
+  - example: "missing_policy_context_raises"
+    result: "triggered"
+    evidence: "arguments=None returned PolicyDecision(decision='deny', reason_code='policy_denied') instead of raising."
+  - example: "high_risk_confirm_collapsed"
+    result: "triggered"
+    evidence: "payroll_update_confirm returned the exact confirm PolicyDecision instead of allow or deny."
+step_verification_points:
+  - step: "Preflight branch and touched-path status"
+    result: "passed"
+    command: "git rev-parse --show-toplevel; git branch --show-current; git status --short --untracked-files=all"
+    evidence: "Repository root E:/code/eternalai_wt_004b; branch phase0/P0-DOMAIN-004b. Status showed only the two approved untracked touched-path files: app/infra/policy/minimal_policy_guard.py and tests/infra/policy/test_minimal_policy_guard.py."
+  - step: "Verify P0-DOMAIN-004a passed Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs -Filter 'P0-DOMAIN-004a_*_passed.yaml' | Select-Object -First 5 -ExpandProperty Name"
+    evidence: "P0-DOMAIN-004a_20260602_222052_passed.yaml present."
+  - step: "Create policy guard tests first (TDD red phase)"
+    result: "passed"
+    command: "Run staged test file against a temporary HEAD snapshot without app/infra/policy/minimal_policy_guard.py"
+    evidence: "RED exit 2. Pytest collection failed with ModuleNotFoundError: No module named 'app.infra.policy'. Temp snapshot path: C:\\Users\\Administrator\\AppData\\Local\\Temp\\p0-domain-004b-red-20260605084236."
+  - step: "Implement minimal pure-logic PolicyGuard"
+    result: "passed"
+    command: "Test-Path app/infra/policy/minimal_policy_guard.py"
+    evidence: "True; MinimalPolicyGuard implements only the approved ordered rules and no integration behavior."
+  - step: "Run policy guard tests and port regression tests"
+    result: "passed"
+    command: "uv run pytest tests/infra/policy/ tests/ports/test_policy_guard_port.py -v"
+    evidence: "30 passed in 0.30s."
+  - step: "Run lint and type checks"
+    result: "passed"
+    command: "uv run ruff check app/infra/policy/ tests/infra/policy/; uv run mypy app/infra/policy/"
+    evidence: "ruff: All checks passed!; mypy: Success: no issues found in 1 source file."
+  - step: "Verify pure-logic boundary"
+    result: "passed"
+    command: "Select task-owned Python files for forbidden integration imports or calls"
+    evidence: "PASSED; no sqlalchemy, psycopg, asyncpg, requests, httpx, aiohttp, subprocess, os.system, casbin, or openpolicyagent hits."
+  - step: "Verify no __init__.py files were created"
+    result: "passed"
+    command: "Get-ChildItem app/infra/policy/,tests/infra/policy/ -Filter '__init__.py' -Recurse"
+    evidence: "PASSED; no __init__.py files detected."
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "Compare git diff --cached --name-only against app/ports/, app/runtime/, app/infra/gateway/, pyproject.toml, uv.lock"
+    evidence: "PASSED; no forbidden path staged."
+  - step: "Review staged diff and whitespace"
+    result: "passed"
+    command: "git diff --cached --name-only; git diff --cached --stat; git diff --cached --check"
+    evidence: "Staged name-only initially showed the two approved source/test files; stat was 2 files changed, 180 insertions(+); git diff --cached --check returned exit 0 with no output."
+changed_files:
+  - app/infra/policy/minimal_policy_guard.py
+  - tests/infra/policy/test_minimal_policy_guard.py
+  - docs/phase0/task_logs/P0-DOMAIN-004b_20260605_084059_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/infra/policy/ tests/ports/test_policy_guard_port.py -v"
+    result: "passed"
+    output_snippet: "30 passed in 0.30s; includes 16 tests in tests/infra/policy/test_minimal_policy_guard.py and 14 port contract tests."
+  - command: "uv run ruff check app/infra/policy/ tests/infra/policy/"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/infra/policy/"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "passed"
+  evidence: "No forbidden paths were staged, no Gateway/Runtime/Adapter files were touched, and the task-owned implementation imports only app.ports.capability_gateway and app.ports.policy_guard plus stdlib typing."
+security_scan_result:
+  result: "passed"
+  evidence: "Staged secret scan returned: SECRET SCAN: no hits."
+weak_test_scan_result:
+  result: "not_applicable"
+  not_applicable_reason: "The approved Stage 2+3 validation command list did not include the weak-test checker for this task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "not_scheduled"
+  expiry_condition: "Run scripts/check_weak_tests.py if a reviewer or follow-up task explicitly requests weak-test evidence for this file."
+  evidence: "Tests assert concrete decisions, ValidationError paths, exact PolicyDecision construction, and isinstance returns; pytest validation passed."
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No push or merge was approved; GitHub Actions CI is a post-merge or remote branch gate outside this prompt."
+  not_applicable_scope: "waiting_dependency"
+  blocked_by_task_id: "GATE_2_PUSH_OR_MERGE"
+  activation_task_id: "post_commit_push_or_merge_gate"
+  expiry_condition: "Record remote CI run id and result after explicit GATE 2 approval and push or merge."
+  evidence: "Local approved validation commands passed."
+review:
+  mode: "self_check"
+  reviewed_by: "Codex execution session"
+  reviewed_at: "2026-06-05T08:42:36+09:00"
+  notes: >
+    Self-review checked the staged diff against the approved design decisions:
+    no app/ports modification, no __init__.py, no dependency changes, no DB/HTTP/
+    subprocess/external policy engine, no Gateway/Runtime/Adapter/Trace/
+    ResponseEnvelope integration, and no forbidden path staged. The decide()
+    signature intentionally keeps arguments annotated as dict[str, Any] while
+    still handling None at runtime, matching the user-approved Protocol mandate.
+remaining_risks:
+  - "Gateway/Runtime integration is intentionally downstream; this task only returns PolicyDecision."
+  - "The preflight tree already contained the two approved untracked touched-path files; the red check was reconstructed against a temporary HEAD snapshot to prove the tests fail without the implementation module."
+rollback_or_failure_record: "No rollback performed. Initial temp red-check archive pipeline failed before pytest started; rerun with an explicit archive file produced the expected ModuleNotFoundError red evidence."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The authoritative SHA is the Git commit that contains this Task Record."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this minimal implementation task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"
