@@ -1,0 +1,179 @@
+task_id: "P0-DOMAIN-003b0"
+task_type: "implementation"
+result: "passed"
+started_at: "2026-06-05T08:41:27+09:00"
+completed_at: "2026-06-05T08:44:41+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-05T08:41:27+09:00"
+plan_approved_via: "Codex session prompt: Stage 2+3 Execution approval"
+summary: >
+  Implemented the Phase 0 Capability Gateway pass-through skeleton under
+  app/infra/gateway/. The gateway accepts an injected MockOAAdapter-compatible
+  adapter, propagates mock_error_mode into execution_context, calls
+  adapter.execute(capability_id, arguments, execution_context), and returns an
+  ExecutionResult wrapper with adapter data/error_code preserved and trace_id
+  copied exactly from request_context.request_id. No Policy, Identity, Trace,
+  Registry, Runtime, real OA, dependency, port, or mock-adapter changes were made.
+
+acceptance_criteria_result:
+  - criterion: "Concrete gateway satisfies CapabilityGatewayPort Protocol and exposes async execute_capability with the current port signature"
+    result: "passed"
+    evidence: "app/infra/gateway/capability_gateway.py defines async execute_capability(task_id, session_id, ai_user_id, capability_id, arguments, request_context) -> ExecutionResult; uv run mypy app/infra/gateway/ returned Success: no issues found in 1 source file."
+  - criterion: "execute_capability calls MockOAAdapter.execute with capability_id, arguments, and execution_context"
+    result: "passed"
+    evidence: "tests/infra/gateway/test_capability_gateway.py constructs CapabilityGateway(MockOAAdapter()) and all Gateway -> MockOAAdapter integration tests pass: 8 passed in 0.21s."
+  - criterion: "Happy path works end-to-end through Gateway -> MockOAAdapter and returns ExecutionResult(status='completed') preserving AdapterResult data"
+    result: "passed"
+    evidence: "test_happy_path_returns_execution_result_with_adapter_data_and_trace_id PASSED; asserts isinstance(result, ExecutionResult), status completed, adapter data preserved, error_code None, trace_id trace-001."
+  - criterion: "RequestOrgContext request_id is the only trace_id source and accepts arbitrary open strings"
+    result: "passed"
+    evidence: "test_trace_id_accepts_arbitrary_request_id_without_generation_or_format_lock PASSED with RequestOrgContext(request_id='arbitrary-trace-xyz-123') and result.trace_id equal to that exact value."
+  - criterion: "MockOAAdapter error mode timeout propagates through gateway as ExecutionResult(status='timeout', error_code='adapter_timeout')"
+    result: "passed"
+    evidence: "test_error_modes_return_execution_result_with_mapped_status_and_error_code[timeout-timeout-adapter_timeout] PASSED."
+  - criterion: "MockOAAdapter error mode permission_denied propagates through gateway as ExecutionResult(status='denied', error_code='upstream_permission_denied')"
+    result: "passed"
+    evidence: "test_error_modes_return_execution_result_with_mapped_status_and_error_code[permission_denied-denied-upstream_permission_denied] PASSED."
+  - criterion: "MockOAAdapter malformed_json, empty_response, http_500, and missing_required_field modes propagate through gateway as failed ExecutionResult with the exact AdapterResult error_code"
+    result: "passed"
+    evidence: "Parametrized tests for malformed_json, empty_response, http_500, and missing_required_field all PASSED with status failed and exact adapter error_code."
+  - criterion: "Tests are integration-style: construct gateway with MockOAAdapter, call execute_capability, assert ExecutionResult gateway response wrapper"
+    result: "passed"
+    evidence: "tests/infra/gateway/test_capability_gateway.py helper constructs CapabilityGateway(MockOAAdapter()) and uses asyncio.run() to call execute_capability; tests assert isinstance(result, ExecutionResult)."
+  - criterion: "No Policy, IdentityMapping, TracePort, CapabilityRegistry, Runtime, real OA call, or dependency change is introduced"
+    result: "passed"
+    evidence: "Forbidden integration grep returned PASSED; forbidden staged path check returned PASSED; pyproject.toml and uv.lock unchanged."
+
+failure_examples_tested:
+  - example: "bare_adapter_result_returned"
+    result: "triggered"
+    evidence: "Tests assert isinstance(result, ExecutionResult) on happy path and each error mode; returning AdapterResult would fail those assertions."
+  - example: "adapter_error_swallowed"
+    result: "triggered"
+    evidence: "Six error-mode tests assert mapped gateway status, exact adapter error_code, trace_id preservation, and data is None."
+  - example: "real_oa_call_attempted"
+    result: "triggered"
+    evidence: "Gateway forbidden integration grep for requests/httpx/aiohttp/subprocess/playwright/selenium returned PASSED; no real OA client imports exist in app/infra/gateway/."
+  - example: "policy_identity_trace_added_early"
+    result: "triggered"
+    evidence: "Gateway forbidden integration grep for PolicyGuard, IdentityMapping, SecretProvider, TracePort, OpenTelemetry, Langfuse, and app.runtime returned PASSED."
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git rev-parse --show-toplevel; git branch --show-current; git status --short"
+    evidence: "cwd=E:/code/eternalai_wt_003b0; branch=phase0/P0-DOMAIN-003b0. Pre-existing untracked tests/infra/gateway/ contained the approved test file plus ignored __pycache__; cache was not deleted because deletion was outside approval and is not staged."
+  - step: "Verify dependency Task Records exist, including P0-DOMAIN-008b passed log"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-003a_*_passed.yaml, docs/phase0/task_logs/P0-DOMAIN-005a_*_passed.yaml, docs/phase0/task_logs/P0-DOMAIN-008a_*_passed.yaml, docs/phase0/task_logs/P0-DOMAIN-008b_*_passed.yaml | Select-Object Name"
+    evidence: "Found P0-DOMAIN-003a_20260601_235059_passed.yaml, P0-DOMAIN-005a_20260603_231559_passed.yaml, P0-DOMAIN-008a_20260602_221527_passed.yaml, and P0-DOMAIN-008b_20260604_090506_passed.yaml."
+  - step: "Verify MockOAAdapter can be imported from app/execution_fabric/mock_adapters/oa/"
+    result: "passed"
+    command: "uv run python -c \"from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter; print(MockOAAdapter.__name__)\""
+    evidence: "MockOAAdapter"
+  - step: "Create gateway integration tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/gateway/"
+    evidence: "Exit code 1 before implementation; collection failed with ModuleNotFoundError: No module named 'app.infra.gateway'."
+  - step: "Implement pass-through Capability Gateway skeleton"
+    result: "passed"
+    command: "Test-Path app/infra/gateway/capability_gateway.py"
+    evidence: "Gateway module added with no __init__.py file."
+  - step: "Run gateway integration tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/gateway/ -v"
+    evidence: "8 passed in 0.21s."
+  - step: "Run lint and type checks"
+    result: "passed"
+    command: "uv run ruff check app/infra/gateway/ tests/infra/gateway/; uv run mypy app/infra/gateway/"
+    evidence: "Ruff: All checks passed! Mypy: Success: no issues found in 1 source file."
+  - step: "Verify no Policy, Identity, Trace, Runtime, or real OA integration was added"
+    result: "passed"
+    command: "Select-String forbidden integration scan over app/infra/gateway/*.py"
+    evidence: "PASSED"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "$forbidden = @('app/ports/','app/runtime/','app/execution_fabric/mock_adapters/','pyproject.toml','uv.lock'); $changed = git diff --cached --name-only; ... "
+    evidence: "PASSED"
+  - step: "Verify temp/cache artifacts are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String -Pattern '(^|/)(__pycache__|\\.pytest_cache|\\.mypy_cache|\\.ruff_cache|_scratch/|.*\\.pyc$)'"
+    evidence: "PASSED"
+
+changed_files:
+  - "app/infra/gateway/capability_gateway.py"
+  - "docs/phase0/task_logs/P0-DOMAIN-003b0_20260605_084119_passed.yaml"
+  - "tests/infra/gateway/test_capability_gateway.py"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "uv run pytest tests/infra/gateway/ -v"
+    result: "passed"
+    output_snippet: "8 passed in 0.26s."
+  - command: "uv run ruff check app/infra/gateway/ tests/infra/gateway/"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/infra/gateway/"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file."
+  - command: "system python UniqueKeyLoader YAML validation"
+    result: "passed"
+    output_snippet: "YAML OK: safe_load + unique keys."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "passed"
+  evidence: "Forbidden staged path check returned PASSED; gateway forbidden integration scan returned PASSED."
+
+security_scan_result:
+  result: "passed"
+  evidence: "SECRET SCAN: no hits"
+
+weak_test_scan_result:
+  result: "not_applicable"
+  not_applicable_reason: "This execution prompt approved pytest, ruff, mypy, staged diff, and secret-scan validation only; no weak-test scan command was approved for this task turn."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "next task that explicitly requires weak-test checker evidence"
+  expiry_condition: "A task prompt or human approval includes scripts/check_weak_tests.py for this path."
+  evidence: "Gateway tests contain concrete assertions for status, data, error_code, trace_id, and ExecutionResult type; no broad skip, assert True, empty pass, or deleted assertion was introduced."
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "No GitHub push or merge was approved in this Stage 2+3 prompt, so remote CI was not triggered."
+  not_applicable_scope: "waiting_dependency"
+  blocked_by_task_id: "GATE2_push_or_merge_approval"
+  activation_task_id: "post-merge CI check after explicit Gate 2 approval"
+  expiry_condition: "Human grants Gate 2 approval to push or merge this task branch."
+  evidence: "Local validation commands passed before commit."
+
+review:
+  mode: "codex_review"
+  reviewed_by: "separate_session_pending"
+  reviewed_at: ""
+  notes: "Task prompt declares separate-session review; this execution created the implementation, tests, and task record only."
+
+remaining_risks:
+  - "ExecutionResult in the frozen port has no raw_payload_ref field, so this pass-through skeleton preserves AdapterResult.data and error_code as approved in the Stage 2+3 prompt and leaves port changes untouched."
+  - "Pre-existing tests/infra/gateway/__pycache__/ remains ignored and unstaged; deletion was not performed because delete operations were explicitly outside approval."
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing this file changes HEAD.
+  The authoritative commit SHA is the Git commit containing this Task Record and the branch history after commit.
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package artifact was created for this implementation task."
+package_scope: "No package produced; staged source, test, and task-record files only."
+package_evidence: "git diff --cached --name-only after staging task record lists app/infra/gateway/capability_gateway.py, docs/phase0/task_logs/P0-DOMAIN-003b0_20260605_084119_passed.yaml, and tests/infra/gateway/test_capability_gateway.py."
+
+artifact_lifecycle:
+  result: "passed"
+  evidence: "No temp/cache artifacts are staged. Existing ignored __pycache__ under tests/infra/gateway/ was left unstaged and not deleted due explicit delete red-line."
