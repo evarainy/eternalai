@@ -43,7 +43,7 @@ def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:
     command.upgrade(config, "head")
     assert _vector_extension_version() is not None
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, "base")
     assert _vector_extension_version() is None
 
     command.upgrade(config, "head")
