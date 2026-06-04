@@ -1,0 +1,46 @@
+task_id: P0-DOMAIN-008e
+title: Mock Adapter Error Injection Control Endpoint
+status: passed
+date: "2026-06-04"
+branch: phase0/P0-DOMAIN-008e
+commit_sha: 74da4643572a246ae822bd19089276f9088c1185
+merge_sha: ""
+
+changed_files:
+  - app/api/v1/mock_control.py
+  - app/execution_fabric/mock_adapters/error_injection.py
+  - tests/execution_fabric/mock_adapters/test_error_injection_guard.py
+  - tests/execution_fabric/mock_adapters/test_error_injection_lifecycle.py
+
+test_count: 22
+pytest_exit_code: 0
+
+validation_evidence:
+  pytest_guard: "11 passed in 0.61s"
+  pytest_lifecycle: "11 passed in 0.19s"
+  pytest_oa_regression: "21 passed in 0.21s"
+  weak_test_guard: "Weak-test check passed."
+  weak_test_lifecycle: "Weak-test check passed."
+  ruff: "no errors"
+  mypy: "no errors"
+  architecture_tests: "22 passed in 0.15s"
+  dep_check: "passed; manifests scanned: 7; dependencies checked: 49"
+
+plan_review_verdict: APPROVE
+diff_review_verdict: APPROVE_FOR_COMMIT
+
+judgment: >
+  P0-DOMAIN-008e introduces a deterministic error-injection control plane for Phase 0 mock
+  adapters. The InjectionAwareAdapter wrapper intercepts adapter.execute() calls and short-circuits
+  to an explicit AdapterResult(status="error") when an injection is active, without delegating to
+  the inner adapter or mutating execution_context. The should_register() guard ensures the FastAPI
+  router is only included when ENV=testing or PHASE0_MOCK_MODE=true. All three duration contracts
+  (next_1_call, next_3_calls, permanent) are implemented with a countdown-based module-level
+  registry. 22 tests cover: endpoint availability guard (6), endpoint guard+validation (5),
+  lifecycle duration contracts (6), end-to-end all-6-error-modes parametrization, and state-leak
+  prevention. Opus approved without changes. No forbidden paths touched; no new dependencies.
+
+depends_on:
+  - P0-DOMAIN-008b
+  - P0-DOMAIN-008c
+  - P0-DOMAIN-008d
