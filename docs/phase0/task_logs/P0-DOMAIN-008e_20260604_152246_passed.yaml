@@ -3,7 +3,7 @@ title: Mock Adapter Error Injection Control Endpoint
 status: passed
 date: "2026-06-04"
 branch: phase0/P0-DOMAIN-008e
-commit_sha: ""
+commit_sha: 74da4643572a246ae822bd19089276f9088c1185
 merge_sha: ""
 
 changed_files:
