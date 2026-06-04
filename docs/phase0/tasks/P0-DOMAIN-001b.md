@@ -91,16 +91,15 @@ constraints_to_carry_forward:
   - "Phase 1 user-value boundary is preserved: minimal persistence CRUD only, no full Phase 1 task orchestration."
 
 deliverable:
+  - alembic/versions/<rev>_task_session_schema.py
   - app/infra/persistence/task_store/
   - tests/infra/persistence/task_store/
 
 constraints:
   - Implement only under app/infra/persistence/task_store/ and tests/infra/persistence/task_store/.
   - Both TaskStorePort and SessionStorePort implementations may live in the same directory.
-  - Before writing any test or implementation code, inspect the existing INFRA-004 Alembic migration files and database schema to determine whether tasks/sessions tables already exist. If they do not exist and PostgreSQL CRUD cannot be implemented using the approved baseline without adding a new migration, stop immediately and report the schema gap; do not invent an in-memory workaround.
+  - Before writing any test or implementation code, inspect the existing INFRA-004 Alembic migration files and confirm that tasks/sessions/task_events tables do not yet exist. The INFRA-004 baseline contains only a pgvector extension migration; this is the expected state. Create exactly one hand-written Alembic migration (no autogenerate comment) under alembic/versions/ that adds the tasks, sessions, and task_events tables; this migration is the only permitted alembic/versions/ change for this task.
   - Use the existing P0-INFRA-004 PostgreSQL/Alembic database baseline and app.db session helpers where applicable.
-  - Do not add new Alembic migrations or modify alembic/versions/.
-  - If the existing INFRA-004 schema/database baseline cannot support PostgreSQL-backed TaskStore/SessionStore CRUD without a new migration or forbidden-path edit, stop and report the schema gap instead of inventing a workaround.
   - Do not use an in-memory dict, SQLite, Redis, file storage, or mock-only store as the production implementation.
   - No Phase 1 task orchestration, session management, intent routing, capability routing, LLM invocation, or event processing logic.
   - Do not implement Gateway, Runtime, Context Assembly, Policy, IdentityMapping, Adapter execution, or SDUI behavior.
@@ -111,6 +110,7 @@ constraints:
   - Duplicate create_task for an existing task_id must be handled deterministically and must not silently overwrite the existing record.
   - update_status and append_event for a missing task_id must raise a deterministic task-local not-found error; get_task for a missing task_id must return None.
   - TaskStatus Literal values must be validated on update_status; invalid values must not be persisted.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
 
 acceptance_criteria:
   - criterion: "create_task persists a TaskRecord in PostgreSQL, rejects duplicate task_id deterministically, and returns TaskRecord rather than a bare dict"
@@ -159,14 +159,18 @@ step_verification_points:
     result: "pending"
     command: "$missing = @(); if (-not (Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-001a_*_passed.yaml -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += 'P0-DOMAIN-001a' }; if (-not (Get-ChildItem docs/phase0/task_logs/P0-INFRA-004_*_passed.yaml -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += 'P0-INFRA-004' }; if ($missing.Count -gt 0) { throw \"Missing depends_on Task Record(s): $($missing -join ', ')\" } else { 'PASSED' }"
     evidence: ""
-  - step: "Inspect existing INFRA-004 Alembic/database baseline before choosing PostgreSQL table approach"
+  - step: "Inspect existing INFRA-004 Alembic/database baseline — confirm no task/session tables exist"
     result: "pending"
-    command: "$hits = Get-ChildItem alembic/versions -Filter '*.py' -ErrorAction Stop | Select-String -Pattern 'task','session','create_table' -List; if ($hits) { $hits | ForEach-Object { $_.Path } } else { 'No task/session Alembic table found; stop if PostgreSQL CRUD cannot be implemented using existing approved database baseline without adding a migration.' }"
+    command: "$hits = Get-ChildItem alembic/versions -Filter '*.py' -ErrorAction Stop | Select-String -Pattern 'task','session','create_table' -List; if ($hits) { $hits | ForEach-Object { $_.Path }; 'WARNING: unexpected task/session table already present — verify before proceeding' } else { 'CONFIRMED: no task/session tables in INFRA-004 baseline; one hand-written migration will be created as part of this task.' }"
     evidence: ""
   - step: "Create persistence tests first (TDD red phase)"
     result: "pending"
     command: "uv run pytest tests/infra/persistence/task_store/ -v"
     evidence: "Expected non-zero exit before implementation exists."
+  - step: "Create hand-written Alembic migration for tasks/sessions/task_events tables and run upgrade head"
+    result: "pending"
+    command: "Test-Path alembic/versions/*task_session*"
+    evidence: "Migration file must exist and contain no 'auto generated by Alembic' comment; uv run alembic upgrade head must exit 0."
   - step: "Implement PostgreSQL TaskStore and SessionStore"
     result: "pending"
     command: "Test-Path app/infra/persistence/task_store/"
@@ -183,9 +187,9 @@ step_verification_points:
     result: "pending"
     command: "$paths = @('app/infra/persistence/task_store','tests/infra/persistence/task_store'); $hits = foreach ($path in $paths) { if (Test-Path $path) { Get-ChildItem $path -Filter '__init__.py' -Recurse -ErrorAction SilentlyContinue } }; if ($hits) { $hits | ForEach-Object { $_.FullName }; throw '__init__.py detected' } else { 'PASSED' }"
     evidence: ""
-  - step: "Verify no new Alembic migration is staged"
+  - step: "Verify exactly one hand-written task/session Alembic migration is staged"
     result: "pending"
-    command: "$hits = git diff --cached --name-only | Select-String -Pattern '^alembic/versions/'; if ($hits) { $hits | ForEach-Object { $_.Line }; throw 'Alembic migration change detected' } else { 'PASSED' }"
+    command: "$staged = git diff --cached --name-only | Select-String -Pattern '^alembic/versions/'; $count = ($staged | Measure-Object).Count; if ($count -ne 1) { \"FAIL: expected 1 alembic/versions/ file staged, found $count\"; throw 'Migration count mismatch' } else { $file = $staged.Line; $content = Get-Content $file -Raw; if ($content -match 'auto generated by Alembic') { throw 'Autogenerate comment detected in migration file' } else { \"PASSED: $file staged and is hand-written\" } }"
     evidence: ""
   - step: "Verify staged diff has no plaintext credential values"
     result: "pending"
@@ -193,7 +197,7 @@ step_verification_points:
     evidence: ""
   - step: "Verify forbidden paths are not staged"
     result: "pending"
-    command: "$forbidden = @('app/ports/','app/runtime/','app/gateway/','app/control_plane/','app/api/','app/execution_fabric/','pyproject.toml','uv.lock','alembic/versions/'); $changed = git diff --cached --name-only; $hits = foreach ($path in $changed) { foreach ($prefix in $forbidden) { if ($path -like \"$prefix*\") { $path } } }; if ($hits) { $hits; throw 'Forbidden path staged' } else { 'PASSED' }"
+    command: "$forbidden = @('app/ports/','app/runtime/','app/gateway/','app/control_plane/','app/api/','app/execution_fabric/','pyproject.toml','uv.lock'); $changed = git diff --cached --name-only; $hits = foreach ($path in $changed) { foreach ($prefix in $forbidden) { if ($path -like \"$prefix*\") { $path } } }; if ($hits) { $hits; throw 'Forbidden path staged' } else { 'PASSED' }"
     evidence: ""
 
 final_test_commands:
@@ -202,6 +206,7 @@ final_test_commands:
   - "uv run mypy app/infra/persistence/task_store/"
 
 touched_paths:
+  - alembic/versions/
   - app/infra/persistence/task_store/
   - tests/infra/persistence/task_store/
 
@@ -214,14 +219,13 @@ forbidden_paths:
   - app/execution_fabric/
   - pyproject.toml
   - uv.lock
-  - alembic/versions/
 
 stop_conditions:
   - "Branch is not phase0/P0-DOMAIN-001b"
   - "Working tree is dirty at task start"
   - "P0-DOMAIN-001a passed Task Record is missing"
   - "P0-INFRA-004 passed Task Record is missing"
-  - "Existing INFRA-004 schema/database baseline cannot support PostgreSQL-backed TaskStore/SessionStore CRUD without a new Alembic migration or forbidden-path edit"
+  - "More than one alembic/versions/ file is staged, or any alembic/versions/ file other than the task/session schema migration is modified"
   - "Any forbidden path is modified"
   - "app/ports/task_store.py or any other port file would need to change"
   - "An in-memory dict, SQLite, Redis, file store, or mock-only store is introduced as the production implementation"
@@ -244,7 +248,7 @@ The implementation Plan and Task Record must explicitly confirm these carried-fo
 3. TaskRecord and SessionRecord remain the shared model boundary; the implementation returns Pydantic model objects, never bare dicts or raw database rows.
 4. TaskStatus Literal values remain unchanged: created/running/waiting_user/completed/failed/no_capability_found.
 5. TaskEventRecord fields remain unchanged: event_id, task_id, event_type, timestamp, payload.
-6. PostgreSQL persistence uses the existing P0-INFRA-004 database baseline; no new Alembic migration is created. If the existing schema cannot support the implementation, stop and report the schema gap.
+6. PostgreSQL persistence uses the existing P0-INFRA-004 database baseline; exactly one hand-written Alembic migration (no autogenerate comment) is created for the tasks/sessions/task_events tables. No other alembic/versions/ files are added or modified.
 7. No Phase 1 task orchestration, session management, intent routing, capability routing, LLM invocation, Gateway behavior, Runtime behavior, Context Assembly, Policy, IdentityMapping, Adapter execution, or SDUI behavior is implemented.
 8. Structured-output Plan B remains unchanged and this task does not reopen instructor or PydanticAI decisions.
 9. No plaintext credential, password, token, cookie, sessionid, access_token, or refresh_token values appear in fixtures, logs, reports, or Task Record evidence.

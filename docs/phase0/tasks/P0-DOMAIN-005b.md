@@ -95,6 +95,7 @@ constraints:
   - Verify opentelemetry-sdk is already declared in pyproject.toml before implementation; do not add it. If opentelemetry-sdk is absent from pyproject.toml, implement a no-op TraceWriter that logs at DEBUG level instead of creating OTel spans; the sanitizer must still run and enforce the no-plaintext-secret constraint in no-op mode.
   - Connect to the existing OTel/Langfuse path only if existing configuration and existing dependencies support it; otherwise keep external export as a documented soft no-op and prove local span creation in tests.
   - Do not add a Langfuse SDK dependency or any other unapproved dependency.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - Do not implement database persistence, trace query APIs, Runtime integration, Gateway integration, control-plane routes, or full observability pipeline behavior.
   - record_event must create an OTel span for valid TraceEvent input after sanitizer approval.
   - Wrapper methods must build TraceEvent instances using the frozen TraceEvent fields and delegate to record_event.
@@ -165,11 +166,11 @@ step_verification_points:
     result: "pending"
     command: "Get-Content docs/phase0/task_logs/P0-INFRA-006_*_passed.yaml | Select-String -Pattern 'OpenTelemetry','Langfuse','otel-collector','deferred','not implemented'"
     evidence: ""
-  - step: "Verify OTel SDK is already in pyproject.toml; no new dependency needed"
+  - step: "Detect OTel SDK presence and choose OTel or no-op TraceWriter implementation path"
     result: "pending"
     command: >
       $pyproject = Get-Content -LiteralPath pyproject.toml -Raw;
-      if ($pyproject -notmatch 'opentelemetry-sdk') { throw 'opentelemetry-sdk missing from pyproject.toml; stop, do not edit pyproject.toml or uv.lock in this task' } else { 'PASSED' }
+      if ($pyproject -notmatch 'opentelemetry-sdk') { 'opentelemetry-sdk NOT in pyproject.toml — implement no-op TraceWriter that logs at DEBUG level; do NOT add opentelemetry-sdk to pyproject.toml or uv.lock; sanitizer must still run in no-op mode.' } else { 'opentelemetry-sdk FOUND in pyproject.toml — implement OTel-backed TraceWriter.' }
     evidence: ""
   - step: "Create TraceWriter tests first (TDD red phase)"
     result: "pending"
@@ -232,7 +233,7 @@ stop_conditions:
   - "P0-DOMAIN-005a passed Task Record is missing"
   - "P0-INFRA-006 passed Task Record is missing"
   - "P0-INFRA-006 evidence contradicts the expected OTel/Langfuse deployment baseline"
-  - "opentelemetry-sdk is not already declared in pyproject.toml; do not edit pyproject.toml or uv.lock in this task"
+  - "pyproject.toml or uv.lock is modified to add opentelemetry-sdk or any other dependency; use the no-op TraceWriter path if opentelemetry-sdk is absent"
   - "Any forbidden path is modified"
   - "Plaintext secret/password/token/cookie/sessionid/access_token/refresh_token value is detected in Trace output, span attributes, expected output, logs, reports, or Task Record evidence"
   - "Sanitizer is missing, runs after write, or fails to cover Bearer/sessionid/access_token/refresh_token/cookie/set-cookie patterns"

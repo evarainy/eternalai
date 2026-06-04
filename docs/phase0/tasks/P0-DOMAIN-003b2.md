@@ -113,6 +113,7 @@ constraints:
   - target_system=None must return a deterministic error ExecutionResult, not raise an exception.
   - Do not add Alembic migrations or database schema changes.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py files.
   - Test each adapter dispatch path independently: OA, U8, Hikvision, and None.
   - Test each error injection mode for at least one adapter (the mode list is the same across all three).

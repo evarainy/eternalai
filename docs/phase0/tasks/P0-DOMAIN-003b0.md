@@ -107,6 +107,7 @@ constraints:
   - Do not modify app/ports/capability_gateway.py, app/ports/adapter.py, or any other port file.
   - Do not modify app/execution_fabric/mock_adapters/.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py files.
 
 acceptance_criteria:

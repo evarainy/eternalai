@@ -91,6 +91,7 @@ constraints:
   - Phase 0 minimal rule skeleton (implement at minimum): (1) arguments is None → deny(reason_code='policy_denied'); (2) capability_id.startswith('admin_') → deny(reason_code='role_not_allowed'); (3) capability_id.endswith('_confirm') → confirm(reason_code='high_risk_action_requires_confirm', required_action='confirm'); (4) otherwise → allow. These rules define testable TDD inputs and are sufficient for Gateway short-circuit integration.
   - This task must not call Adapter, write Trace, generate ResponseEnvelope, or modify Gateway behavior; Gateway denial short-circuit integration is downstream.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py (namespace packages throughout).
   - Do not modify app/ports/policy_guard.py or any other port file.
   - Do not modify app/runtime/, app/infra/gateway/, pyproject.toml, or uv.lock.

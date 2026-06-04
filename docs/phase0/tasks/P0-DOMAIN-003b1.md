@@ -116,6 +116,7 @@ constraints:
   - If CapabilitySpec.target_system is None, skip the IdentityMapping precheck and proceed directly to PolicyGuard.decide with target_system=None; do not raise an exception or return an error ExecutionResult for this case in 003b1 — target_system=None error handling is added in 003b2.
   - Do not add Alembic migrations or database schema changes.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py files.
   - Test each short-circuit path independently: (1) unknown capability_id, (2) identity binding failure, (3) policy_denied, (4) confirm_required, (5) happy-path through all checks.
   - All 003b0 tests must still pass after this task's changes.

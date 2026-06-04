@@ -101,6 +101,7 @@ constraints:
   - Do not implement a full SDUI renderer, dynamic form orchestrator, graph/table/file card, frontend renderer, or multi-turn confirmation loop.
   - Do not add database, Redis, MinIO, external service, HTTP client, or real business-system dependency.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py files (namespace packages throughout).
 
 acceptance_criteria:

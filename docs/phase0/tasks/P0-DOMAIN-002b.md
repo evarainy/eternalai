@@ -90,15 +90,14 @@ constraints_to_carry_forward:
   - "Phase 1 user-value boundary is preserved: minimal registry CRUD only, no full Phase 1 workflow."
 
 deliverable:
+  - alembic/versions/<rev>_capability_schema.py
   - app/infra/persistence/capability_registry/
   - tests/infra/persistence/capability_registry/
 
 constraints:
   - Implement only under app/infra/persistence/capability_registry/ and tests/infra/persistence/capability_registry/.
-  - Before writing any test or implementation code, inspect the existing INFRA-004 Alembic migration files and database schema to determine whether a capabilities table already exists. If it does not exist and PostgreSQL CRUD cannot be implemented without adding a new migration, stop immediately and report the schema gap; do not invent an in-memory workaround.
+  - Before writing any test or implementation code, inspect the existing INFRA-004 Alembic migration files and confirm that a capabilities table does not yet exist. The INFRA-004 baseline contains only a pgvector extension migration; this is the expected state. Create exactly one hand-written Alembic migration (no autogenerate comment) under alembic/versions/ that adds the capabilities table; this migration is the only permitted alembic/versions/ change for this task.
   - Use the existing P0-INFRA-004 PostgreSQL/Alembic database baseline and app.db session helpers where applicable.
-  - Do not add new Alembic migrations or modify alembic/versions/.
-  - If the existing INFRA-004 schema/database baseline cannot support PostgreSQL-backed CapabilityRegistry CRUD without a new migration or forbidden-path edit, stop and report the schema gap instead of inventing a workaround.
   - Do not use an in-memory dict, SQLite, Redis, file storage, or mock-only store as the production registry implementation.
   - No Phase 1 search, no pgvector similarity, no embeddings, no semantic ranking, no capability recommendation, and no full capability discovery.
   - Do not implement Gateway, Runtime, Context Assembly, Intent routing, Policy, IdentityMapping, Adapter execution, or SDUI behavior.
@@ -110,6 +109,7 @@ constraints:
   - update and disable for a missing capability_id must raise a deterministic task-local not-found error or equivalent existing persistence error; get for a missing capability_id must return None.
   - update must reject patch keys that do not exist in CapabilitySpec (unknown fields rejected via Pydantic validation) AND reject Literal values that violate the frozen boundaries for type, risk_level, status, target_system, and execution_identity; these are two distinct rejection cases, not a single check.
   - list filters are exact filters for target_system, type, and status only.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
 
 acceptance_criteria:
   - criterion: "create persists a CapabilitySpec in PostgreSQL, rejects duplicate capability_id deterministically, and returns CapabilitySpec rather than a bare dict"
@@ -155,14 +155,18 @@ step_verification_points:
     result: "pending"
     command: "$missing = @(); if (-not (Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-002a_*_passed.yaml -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += 'P0-DOMAIN-002a' }; if (-not (Get-ChildItem docs/phase0/task_logs/P0-INFRA-004_*_passed.yaml -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += 'P0-INFRA-004' }; if ($missing.Count -gt 0) { throw \"Missing depends_on Task Record(s): $($missing -join ', ')\" } else { 'PASSED' }"
     evidence: ""
-  - step: "Inspect existing INFRA-004 Alembic/database baseline before choosing PostgreSQL table approach"
+  - step: "Inspect existing INFRA-004 Alembic/database baseline — confirm no capabilities table exists"
     result: "pending"
-    command: "$hits = Get-ChildItem alembic/versions -Filter '*.py' -ErrorAction Stop | Select-String -Pattern 'capabil','create_table' -List; if ($hits) { $hits | ForEach-Object { $_.Path } } else { 'No capability-specific Alembic table found; stop if PostgreSQL CRUD cannot be implemented using existing approved database baseline without adding a migration.' }"
+    command: "$hits = Get-ChildItem alembic/versions -Filter '*.py' -ErrorAction Stop | Select-String -Pattern 'capabil','create_table' -List; if ($hits) { $hits | ForEach-Object { $_.Path }; 'WARNING: unexpected capabilities table already present — verify before proceeding' } else { 'CONFIRMED: no capabilities table in INFRA-004 baseline; one hand-written migration will be created as part of this task.' }"
     evidence: ""
   - step: "Create persistence tests first (TDD red phase)"
     result: "pending"
     command: "uv run pytest tests/infra/persistence/capability_registry/ -v"
     evidence: "Expected non-zero exit before implementation exists."
+  - step: "Create hand-written Alembic migration for capabilities table and run upgrade head"
+    result: "pending"
+    command: "Test-Path alembic/versions/*capabilit*"
+    evidence: "Migration file must exist and contain no 'auto generated by Alembic' comment; uv run alembic upgrade head must exit 0."
   - step: "Implement PostgreSQL CapabilityRegistry"
     result: "pending"
     command: "Test-Path app/infra/persistence/capability_registry/"
@@ -183,9 +187,9 @@ step_verification_points:
     result: "pending"
     command: "$paths = @('app/infra/persistence/capability_registry','tests/infra/persistence/capability_registry'); $files = foreach ($path in $paths) { if (Test-Path $path) { Get-ChildItem $path -Filter '*.py' -Recurse -ErrorAction SilentlyContinue } }; $hits = $files | Select-String -Pattern 'pgvector','embedding','similarity','cosine','nearest','vector' -ErrorAction SilentlyContinue; if ($hits) { $hits | ForEach-Object { $_.Path + ':' + $_.LineNumber + ': ' + $_.Line }; throw 'Phase 1 vector/similarity logic detected' } else { 'PASSED' }"
     evidence: ""
-  - step: "Verify no new Alembic migration is staged"
+  - step: "Verify exactly one hand-written capabilities Alembic migration is staged"
     result: "pending"
-    command: "$hits = git diff --cached --name-only | Select-String -Pattern '^alembic/versions/'; if ($hits) { $hits | ForEach-Object { $_.Line }; throw 'Alembic migration change detected' } else { 'PASSED' }"
+    command: "$staged = git diff --cached --name-only | Select-String -Pattern '^alembic/versions/'; $count = ($staged | Measure-Object).Count; if ($count -ne 1) { \"FAIL: expected 1 alembic/versions/ file staged, found $count\"; throw 'Migration count mismatch' } else { $file = $staged.Line; $content = Get-Content $file -Raw; if ($content -match 'auto generated by Alembic') { throw 'Autogenerate comment detected in migration file' } else { \"PASSED: $file staged and is hand-written\" } }"
     evidence: ""
   - step: "Verify staged diff has no plaintext credential values"
     result: "pending"
@@ -193,7 +197,7 @@ step_verification_points:
     evidence: ""
   - step: "Verify forbidden paths are not staged"
     result: "pending"
-    command: "$forbidden = @('app/ports/','app/runtime/','app/gateway/','app/control_plane/','app/api/','app/execution_fabric/','pyproject.toml','uv.lock','alembic/versions/'); $changed = git diff --cached --name-only; $hits = foreach ($path in $changed) { foreach ($prefix in $forbidden) { if ($path -like \"$prefix*\") { $path } } }; if ($hits) { $hits; throw 'Forbidden path staged' } else { 'PASSED' }"
+    command: "$forbidden = @('app/ports/','app/runtime/','app/gateway/','app/control_plane/','app/api/','app/execution_fabric/','pyproject.toml','uv.lock'); $changed = git diff --cached --name-only; $hits = foreach ($path in $changed) { foreach ($prefix in $forbidden) { if ($path -like \"$prefix*\") { $path } } }; if ($hits) { $hits; throw 'Forbidden path staged' } else { 'PASSED' }"
     evidence: ""
 
 final_test_commands:
@@ -202,6 +206,7 @@ final_test_commands:
   - "uv run mypy app/infra/persistence/capability_registry/"
 
 touched_paths:
+  - alembic/versions/
   - app/infra/persistence/capability_registry/
   - tests/infra/persistence/capability_registry/
 
@@ -214,14 +219,13 @@ forbidden_paths:
   - app/execution_fabric/
   - pyproject.toml
   - uv.lock
-  - alembic/versions/
 
 stop_conditions:
   - "Branch is not phase0/P0-DOMAIN-002b"
   - "Working tree is dirty at task start"
   - "P0-DOMAIN-002a passed Task Record is missing"
   - "P0-INFRA-004 passed Task Record is missing"
-  - "Existing INFRA-004 schema/database baseline cannot support PostgreSQL-backed CapabilityRegistry CRUD without a new Alembic migration or forbidden-path edit"
+  - "More than one alembic/versions/ file is staged, or any alembic/versions/ file other than the capabilities schema migration is modified"
   - "Any forbidden path is modified"
   - "app/ports/capability_registry.py or any other port file would need to change"
   - "An in-memory dict, SQLite, Redis, file store, or mock-only registry is introduced as the production implementation"
@@ -243,7 +247,7 @@ The implementation Plan and Task Record must explicitly confirm these carried-fo
 2. CapabilitySpec remains the shared model boundary; the implementation returns CapabilitySpec objects, never bare dicts or raw database rows.
 3. CapabilitySpec Literal boundaries remain unchanged for type, risk_level, status, target_system, and execution_identity.
 4. Minimal CRUD means create, read by capability_id, exact list filters, validated patch update, and disable-as-deactivate with status='disabled'; no hard delete is added because the Protocol has no delete method.
-5. PostgreSQL persistence uses the existing P0-INFRA-004 database baseline; no new Alembic migration is created. If the existing schema cannot support the implementation, stop and report the schema gap.
+5. PostgreSQL persistence uses the existing P0-INFRA-004 database baseline; exactly one hand-written Alembic migration (no autogenerate comment) is created for the capabilities table. No other alembic/versions/ files are added or modified.
 6. No Phase 1 search, pgvector similarity, embeddings, semantic ranking, recommendation, Gateway behavior, Runtime behavior, Context Assembly, or Intent routing is implemented.
 7. Context Assembly minimum input boundary, Capability Summary injection rules, Intent to Capability validation path, and downstream no_capability_found / clarification_needed / validation_failed / manual_review_needed states remain unchanged.
 8. Structured-output Plan B remains unchanged and this task does not reopen instructor or PydanticAI decisions.

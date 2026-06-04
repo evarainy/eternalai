@@ -97,6 +97,7 @@ constraints:
   - Do not import LDAP, ldap3, SSO, Active Directory, MSAL, OAuth, OAuthlib, Authlib, requests, httpx, aiohttp, subprocess, browser automation, or vendor IdP clients.
   - Do not add real credentials, token-like values, credential storage, login/session handling, browser cookies, or production identity-provider configuration.
   - Do not add new Python dependencies.
+  - Tests for async methods must use asyncio.run() in synchronous test functions; pytest-asyncio is not installed and cannot be added as a new dependency.
   - No __init__.py (namespace packages throughout).
   - Do not modify app/ports/identity_mapping.py or any other port file.
   - Do not modify app/runtime/ or implement Gateway/Runtime integration in this task.
