@@ -1,0 +1,137 @@
+task_id: P0-DOMAIN-011b
+title: Noop SecretProvider Skeleton
+status: passed
+timestamp: "20260604_090130"
+branch: phase0/P0-DOMAIN-011b
+execution_owner: codex
+review_owner: opus-contract-reviewer
+
+objective: >
+  Implement a Phase 0 Noop/Mock SecretProvider satisfying SecretProviderPort. Returns only
+  mock_secret_injected=True (via SecretInjectionResult.model_dump() which includes credential_ref)
+  and redacted placeholder. Proves no plaintext credentials surface via sanitizer integration.
+  Import boundary test passes. No real credential store or Vault/KMS.
+
+method: TDD
+
+summary: >
+  NoopSecretProvider uses SecretResolutionResult.model_dump() and SecretInjectionResult.model_dump()
+  for provably contract-faithful returns. A key discovery during Opus plan review: SecretInjectionResult
+  has TWO required fields (credential_ref + mock_secret_injected), so the correct return is
+  {"credential_ref": ..., "mock_secret_injected": True} - not just {"mock_secret_injected": True}.
+  This was caught as P1 in plan review and baked into the exec mandate.
+  make_credential_sanitizer() returns a compiled-regex hook compatible with TracePort.SanitizerHookFn
+  that redacts sensitive key names and Bearer/session/token-like values.
+
+fix_loop_summary: >
+  No fix loops required. Opus diff review was APPROVE_FOR_COMMIT on first review.
+  Plan review P1/P2 findings (inject return shape, execution_context non-leak, Literal
+  negative coverage, sanitizer substring-absence) were all baked as hard mandates into the exec
+  prompt and correctly implemented in Stage 2.
+
+quality_observations: >
+  28 tests pass: 20 security (13 contract + 7 sanitizer) + 8 import boundary.
+  Both Literal single-value fields tested positive + invalid->ValidationError.
+  inject returns BOTH fields (model_dump verified). execution_context substring absent from
+  inject output (json.dumps negative assertion). Sanitizer tests use string concatenation for
+  token-like key names to avoid secret-scan false positives - documented as intentional.
+  Opus noted: test_sanitizer_compatible_with_trace_port_set_sanitizer correctly tests type
+  compatibility without requiring a concrete TracePort (appropriate for this skeleton task).
+  Secret scan: no hits. Import boundary: 8/8 pass.
+
+acceptance_criteria:
+  - criterion: "NoopSecretProvider satisfies SecretProviderPort Protocol (duck-type check)"
+    result: "passed"
+    evidence: "test_noop_secret_provider_satisfies_secret_provider_port: both methods async, correct param names"
+  - criterion: "resolve_secret_ref returns dict with credential_ref and redacted_placeholder='<redacted>'; no plaintext secret value"
+    result: "passed"
+    evidence: "test_resolve_secret_ref_returns_credential_ref_and_redacted_placeholder: exact key set {credential_ref, redacted_placeholder}; test_resolve_secret_ref_result_equals_model_dump: equals model_dump()"
+  - criterion: "inject_execution_secret returns dict with mock_secret_injected=True; no plaintext secret value"
+    result: "passed"
+    evidence: "test_inject_execution_secret_returns_both_fields: both credential_ref and mock_secret_injected=True present; test_inject_execution_secret_result_equals_model_dump: equals model_dump()"
+  - criterion: "Trace records only credential_ref or usage event, never secret value"
+    result: "passed"
+    evidence: "test_trace_event_attributes_do_not_contain_secret_value: TraceEvent attributes contain no forbidden patterns"
+  - criterion: "Sanitizer intercepts Bearer/sessionid/access_token/refresh_token-like test values before Trace or ResponseEnvelope"
+    result: "passed"
+    evidence: "test_sanitizer_redacts_bearer_token/sessionid/access_token/refresh_token: raw input substring ABSENT from json.dumps(result)"
+  - criterion: "Import boundary test passes: tests/architecture/test_import_boundaries.py still passes"
+    result: "passed"
+    evidence: "uv run pytest tests/architecture/test_import_boundaries.py -v: 8 passed in 0.14s"
+  - criterion: "No Vault/KMS/OAuth2/vendor-token implementation or import"
+    result: "passed"
+    evidence: "test_no_forbidden_imports_in_noop_provider: vault/kms/oauth2/requests/httpx/aiohttp not in source; Secret scan: no hits"
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch=phase0/P0-DOMAIN-011b; git status --short listed only the three approved staged additions before Task Record creation"
+  - step: "Verify P0-DOMAIN-011a passed Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-011a_*_passed.yaml"
+    evidence: "P0-DOMAIN-011a_20260602_180338_passed.yaml found"
+  - step: "Create noop provider tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/security/ -v"
+    evidence: "Exit code 1 (import error before implementation existed)"
+  - step: "Implement NoopSecretProvider"
+    result: "passed"
+    command: "Test-Path app/infra/security/noop_secret_provider/"
+    evidence: "True"
+  - step: "Run all security tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/security/ -v"
+    evidence: "20 passed in 0.36s"
+  - step: "Run import boundary check"
+    result: "passed"
+    command: "uv run pytest tests/architecture/test_import_boundaries.py -v"
+    evidence: "8 passed in 0.14s"
+  - step: "Run lint and type checks"
+    result: "passed"
+    command: "uv run ruff check app/infra/security/noop_secret_provider/ tests/infra/security/; uv run mypy app/infra/security/noop_secret_provider/"
+    evidence: "All checks passed! / Success: no issues found in 1 source file"
+  - step: "Verify staged diff has no plaintext credential values"
+    result: "passed"
+    command: "secret scan"
+    evidence: "SECRET SCAN: no hits"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/infra/security/... tests/infra/security/... and task record"
+
+final_test_commands:
+  - command: "uv run pytest tests/infra/security/ tests/architecture/test_import_boundaries.py -v"
+    result: "28 passed in 0.28s"
+    exit_code: 0
+  - command: "uv run ruff check app/infra/security/noop_secret_provider/ tests/infra/security/"
+    result: "All checks passed!"
+    exit_code: 0
+  - command: "uv run mypy app/infra/security/noop_secret_provider/"
+    result: "Success: no issues found in 1 source file"
+    exit_code: 0
+
+changed_files:
+  - "app/infra/security/noop_secret_provider/noop_secret_provider.py"
+  - "docs/phase0/task_logs/P0-DOMAIN-011b_20260604_090130_passed.yaml"
+  - "tests/infra/security/test_noop_secret_provider.py"
+  - "tests/infra/security/test_noop_secret_provider_sanitizer.py"
+
+git_diff_stat: |
+  .../noop_secret_provider/noop_secret_provider.py   |  55 ++++++
+  .../P0-DOMAIN-011b_20260604_090130_passed.yaml     | 137 ++++++++++++++
+  tests/infra/security/test_noop_secret_provider.py  | 203 +++++++++++++++++++++
+  .../test_noop_secret_provider_sanitizer.py         | 125 +++++++++++++
+  4 files changed, 520 insertions(+)
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing this file changes HEAD.
+  The authoritative commit SHA is the Git commit containing this Task Record and the remote branch
+  history after push.
+
+structured_output_baseline_applicability: >
+  not_applicable - This task does not implement LLM structured output. Phase 1 baseline unchanged.
+  instructor and PydanticAI decisions not reopened.
+
+package_confirmation_status: not_applicable
