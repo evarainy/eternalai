@@ -115,7 +115,9 @@ def test_record_event_soft_fails_when_logger_raises() -> None:
     logger.raise_on_debug = True
     writer = NoopTraceWriter(logger=logger)
 
-    asyncio.run(writer.record_event(_trace_event({"safe": "value"})))
+    result = asyncio.run(writer.record_event(_trace_event({"safe": "value"})))
+
+    assert result is None
 
 
 def test_start_task_trace_delegates_task_created_event() -> None:
