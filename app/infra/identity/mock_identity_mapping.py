@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TypeAlias, cast
@@ -152,6 +151,20 @@ class MockIdentityMapping:
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
     ) -> IdentityCheckResult:
+        return self._resolve_identity_sync(
+            ai_user_id=ai_user_id,
+            target_system=target_system,
+            execution_identity=execution_identity,
+            request_context=request_context,
+        )
+
+    def _resolve_identity_sync(
+        self,
+        ai_user_id: str,
+        target_system: TargetSystem,
+        execution_identity: ExecutionIdentity,
+        request_context: RequestOrgContext,
+    ) -> IdentityCheckResult:
         matches = [
             row.result
             for row in self._rows
@@ -242,13 +255,11 @@ class MockIdentityMapping:
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
     ) -> bool:
-        result = asyncio.run(
-            self.resolve_execution_identity(
-                ai_user_id=ai_user_id,
-                target_system=target_system,
-                execution_identity=execution_identity,
-                request_context=request_context,
-            )
+        result = self._resolve_identity_sync(
+            ai_user_id=ai_user_id,
+            target_system=target_system,
+            execution_identity=execution_identity,
+            request_context=request_context,
         )
         return result.bind_status == "active"
 

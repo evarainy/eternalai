@@ -412,3 +412,15 @@ def test_invalid_bind_status_raises_validation_error() -> None:
             target_system="oa",
             execution_identity="user_delegated",
         )
+
+
+def test_precheck_callable_from_within_running_event_loop() -> None:
+    async def _inner() -> bool:
+        return _mapping().precheck(
+            ai_user_id="ai-user-001",
+            target_system="oa",
+            execution_identity="user_delegated",
+            request_context=_context(resource_scope="oa-finance"),
+        )
+
+    assert _run(_inner()) is True
