@@ -1,0 +1,94 @@
+task_id: P0-DOMAIN-007b
+title: Runtime Main Chain Minimal Skeleton
+type: implementation
+status: passed
+date: "2026-06-05"
+branch: phase0/P0-DOMAIN-007b
+base_commit: 4018ae5
+
+depends_on:
+  - P0-DOMAIN-007a
+  - P0-DOMAIN-001b
+  - P0-DOMAIN-003b2
+  - P0-DOMAIN-005b
+  - P0-DOMAIN-009b
+  - P0-DOMAIN-010b
+
+changed_files:
+  - app/api/v1/runtime.py
+  - app/runtime/models.py
+  - app/runtime/runtime.py
+  - docs/phase0/tasks/P0-DOMAIN-007b.md
+  - tests/runtime/test_runtime_api.py
+  - tests/runtime/test_runtime_gateway_result_mapping.py
+  - tests/runtime/test_runtime_response_envelope.py
+  - tests/runtime/test_task_creation.py
+  - docs/phase0/task_logs/P0-DOMAIN-007b_20260605_passed.yaml
+
+execution_results:
+  tests_runtime: "15/15 PASSED, exit code 0"
+  tests_architecture: "22/22 PASSED, exit code 0"
+  tests_port_regression: "8/8 PASSED"
+  ruff: "PASSED"
+  mypy: "PASSED"
+  no_execution_fabric_imports: "PASSED"
+  no_init_py: "PASSED"
+  main_py_untouched: "PASSED"
+  full_suite: "527 passed, 26 skipped, 3 failed (pre-existing DATABASE_URL failures in tests/db/ — unrelated to this task)"
+
+acceptance_criteria:
+  - criterion: "happy path: handle_user_message creates TaskRecord with status='running', calls parse_to_schema, calls execute_capability, updates TaskRecord status='completed', returns ResponseEnvelope(status='completed')"
+    result: passed
+    evidence: "test_handle_user_message_creates_running_task_executes_gateway_and_completes_task in tests/runtime/test_task_creation.py — asserts SpyTaskStore.created[0].status='running', SpyGateway.calls=1, isinstance(result, ResponseEnvelope), result.status='completed'"
+  - criterion: "no_capability_found path: when parse_to_schema returns error or unrecognized capability, TaskRecord.status='no_capability_found' and ResponseEnvelope.status='no_capability_found' (not 'failed')"
+    result: passed
+    evidence: "test_parse_error_skips_gateway_and_returns_no_capability_found_envelope in tests/runtime/test_runtime_response_envelope.py — asserts task_store.status_updates[-1][1]='no_capability_found', result.status='no_capability_found', gateway.calls=0"
+  - criterion: "policy_denied path: when Gateway returns ExecutionResult(status='denied'), ResponseEnvelope.status='blocked', task status='failed', Gateway is NOT called again"
+    result: passed
+    evidence: "test_denied_result_maps_to_failed_task_blocked_envelope_and_single_gateway_call in tests/runtime/test_runtime_gateway_result_mapping.py — asserts task_store.status_updates[-1][1]='failed', result.status='blocked', gateway.calls=1"
+  - criterion: "binding_required path: when Gateway returns ExecutionResult(status='binding_required', error_code='identity_unbound'), ResponseEnvelope.status='blocked' and ui.component_type is 'binding_required_card' or 'operator_handback_card'"
+    result: passed
+    evidence: "test_binding_required_result_maps_to_failed_task_blocked_envelope_with_operator_handback in tests/runtime/test_runtime_gateway_result_mapping.py — asserts task_store.status_updates[-1][1]='failed', result.status='blocked', result.ui.component_type in {'binding_required_card','operator_handback_card'}"
+  - criterion: "gateway_timeout path: when Gateway returns ExecutionResult(status='timeout'), ResponseEnvelope.status='failed' and ResponseEnvelope.trace_id is set"
+    result: passed
+    evidence: "test_timeout_result_maps_to_failed_task_failed_envelope_and_preserves_trace_id in tests/runtime/test_runtime_gateway_result_mapping.py — asserts result.status='failed', result.trace_id='gw-timeout-trace'"
+  - criterion: "full trace event sequence for happy path matches: task_created, intent_parsed, capability_selected, gateway_pre_recorded, gateway_post_recorded, response_envelope_created, task_completed"
+    result: passed
+    evidence: "test_happy_path_trace_event_sequence_matches_spec in tests/runtime/test_runtime_response_envelope.py — asserts list equality of event_type sequence"
+  - criterion: "full trace event sequence for no_capability_found matches: task_created, intent_parsed, no_capability_found, response_envelope_created"
+    result: passed
+    evidence: "test_parse_error_trace_event_sequence_matches_no_capability_found_spec in tests/runtime/test_runtime_response_envelope.py — asserts list equality of event_type sequence"
+  - criterion: "CapabilityRef model: extra field raises ValidationError; capability_id accessible; arguments defaults to empty dict"
+    result: passed
+    evidence: "test_capability_ref_rejects_extra_fields and test_capability_ref_accepts_required_fields_and_defaults_arguments in tests/runtime/test_task_creation.py"
+  - criterion: "app/api/v1/runtime.py: POST endpoint returns 200 with ResponseEnvelope-shaped JSON for a happy-path request (tested via TestClient with injected mock RuntimeImpl)"
+    result: passed
+    evidence: "test_handle_endpoint_returns_200_and_response_envelope_shaped_json in tests/runtime/test_runtime_api.py — TestClient, asserts 200 + body['status']='completed'"
+  - criterion: "RuntimeImpl does not import any symbol from app/execution_fabric/"
+    result: passed
+    evidence: "tests/architecture/test_import_boundaries.py runtime_no_execution_fabric rule: 22/22 PASSED"
+
+judgment: >
+  P0-DOMAIN-007b implements the Phase 0 Runtime main chain: handle_user_message wires TaskStore +
+  StructuredOutput + CapabilityGateway + TracePort + ResponseEnvelopeBuilder into a single async
+  flow. RuntimeImpl lives in app/runtime/ with constructor injection of all 6 ports; no
+  execution_fabric imports; ResponseEnvelope imported from app.ports.response_envelope. All 7
+  ExecutionResult status values are mapped per the approved table, with binding_required correctly
+  using build_operator_handback (per Opus P1 mandate from plan review). CapabilityRef.model_validate
+  is called explicitly to unwrap the Any-typed StructuredOutputResult.parsed field (per Opus P1
+  mandate). Trace event sequences for both happy path and no_capability_found match the spec exactly.
+  The router factory (make_router) is tested via a test-local FastAPI app without modifying
+  app/main.py, which is the approved Phase 0 pattern. 15/15 runtime tests, 22/22 architecture
+  boundary tests, 8/8 port regression tests all pass.
+
+reviewer_verdicts:
+  codex_self_review:
+    verdict: PASS
+    note: "21/21 contract and test-strength checks passed. REQUEST_CHANGES flag was solely due to false-positive secret scan hits on session_id variable names (session_id=body.session_id, session_id='session-1') — not actual credential values. Orchestrator assessed as false positive."
+  opus_diff_review:
+    verdict: APPROVE_FOR_COMMIT
+    findings: none
+    advisories:
+      - "P3: denied and binding_required both route to build_operator_handback with hardcoded action='clarify_scope' / reason_code='unclear_scope'. Approved minimal-skeleton behavior; contract only constrains status/component_type. Note for Phase 1 planner if distinct reason_codes are needed."
+
+commit_sha: b1cc4907538862e75ffd94ef57eed19e279021eb
