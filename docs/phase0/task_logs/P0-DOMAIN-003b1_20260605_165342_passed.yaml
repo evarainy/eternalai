@@ -1,0 +1,56 @@
+task_id: P0-DOMAIN-003b1
+title: Gateway Short-circuit Skeleton
+status: passed
+timestamp: "20260605_165342"
+branch: phase0/P0-DOMAIN-003b1
+commit_sha: "26d67a56437de28c154fdec379d3e3358206b1b9"
+
+changed_files:
+  - app/infra/gateway/capability_gateway.py
+  - tests/infra/gateway/test_capability_gateway.py
+
+validation:
+  tests_passed: 18
+  tests_failed: 0
+  ruff_exit: 0
+  mypy_exit: 0
+  red_phase_evidence: |
+    exit code 1 (before implementation):
+    FAILED test_capability_registry_missing_short_circuits_without_adapter_and_finalizes_trace
+    FAILED test_identity_unbound_short_circuits_with_identity_unbound_without_adapter_and_finalizes_trace
+    FAILED test_identity_expired_short_circuits_with_identity_expired_without_adapter_and_finalizes_trace
+    FAILED test_identity_revoked_short_circuits_with_identity_revoked_without_adapter_and_finalizes_trace
+    FAILED test_identity_needs_binding_scope_short_circuits_with_needs_binding_scope_without_adapter_and_finalizes_trace
+    5 failed (10 new tests red, others pending)
+  green_phase_evidence: |
+    18 passed in 0.29s
+    8 tests from P0-DOMAIN-003b0 remain passing
+    10 new short-circuit tests all green
+
+review:
+  codex_self_review: APPROVE_FOR_COMMIT
+  opus_plan_review: REQUEST_CHANGES (fixed in exec prompt — TracePort 4-arg signature, IdentityCheckResult target_system+execution_identity fields, call_log spy order mechanism, secret-attributes assertion target)
+  opus_diff_review_attempt_1: REQUEST_CHANGES P1 (packet integrity — test file diff was summarized, not verbatim)
+  opus_diff_review_attempt_2: REQUEST_CHANGES P1 (status="binding_required" not explicitly cited in spec; only error_code mapping specified at spec line 93)
+  opus_diff_review_attempt_3: APPROVE_FOR_COMMIT
+  opus_p3_findings: |
+    [P3] Optional-port seams: all 4 collaborator ports default to None; a gateway built as
+    CapabilityGateway(adapter) silently skips all prechecks. Acceptable for this incremental
+    skeleton (003b0 backward compat required), but downstream wiring task must make these mandatory.
+    [P3] Identity precheck gated on capability_spec is not None; partial-wiring case skips identity.
+    [P3] finalize status="failed" branch (error-adapter path) not covered by new tests; correct by inspection.
+
+judgment: |
+  Extends the 003b0 pass-through gateway into a 4-precheck short-circuit skeleton via TDD.
+  Short-circuit order (Registry → Identity → Policy → Trace pre → Adapter → Trace post) is
+  structurally enforced and tested independently per path. SentinelAdapter pattern (raises
+  AssertionError on .execute()) ensures adapter-not-called assertions are structurally enforced,
+  not just counted. call_log spy list verifies record_gateway_call precedes adapter call on
+  happy path. All 5 IdentityBindStatus mappings are tested independently (no collapsing).
+  verification_failed→identity_unbound mapping is explicitly tested.
+  binding_required status is the only ExecutionStatus member semantically valid for identity
+  failures (process of elimination from the 7-member TypeAlias); a comment cites this authority.
+  Optional-port defaults preserve 003b0 backward compat; the 3 Opus P3 advisory findings about
+  this forward-wiring seam are expected and deferred to the downstream wiring task.
+  TracePort receives no plaintext secrets/tokens anywhere; arguments dict is never forwarded to
+  trace attributes.
