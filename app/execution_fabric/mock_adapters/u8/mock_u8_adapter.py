@@ -32,6 +32,15 @@ class MockU8BalanceQueryData(BaseModel):
 class MockU8Adapter:
     """Deterministic U8 adapter returning AdapterResult without upstream I/O."""
 
+    def __init__(self) -> None:
+        self._mock_state: dict[str, Any] = {}
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        self._mock_state = state
+
+    def reset_state(self) -> None:
+        self._mock_state = {}
+
     async def execute(
         self,
         capability_id: str,
@@ -45,6 +54,9 @@ class MockU8Adapter:
                 data=None,
                 error_code=MOCK_ERROR_MODE_TO_ERROR_CODE.get(error_mode),
             )
+
+        if self._mock_state:
+            return self._build_from_state(capability_id, arguments)
 
         account_set_id = str(arguments.get("account_set_id", "mock-account-set-001"))
         cid = capability_id.lower()
@@ -82,3 +94,17 @@ class MockU8Adapter:
                 error_code="adapter_payload_invalid",
             )
         return AdapterResult(status="success", data=document_payload.model_dump())
+
+    def _build_from_state(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+    ) -> AdapterResult:
+        cid = capability_id.lower()
+        if "vendor" in cid or "balance" in cid:
+            key = "vendor_balance"
+        else:
+            key = "document"
+        if key not in self._mock_state:
+            return AdapterResult(status="error", data=None, error_code="adapter_error")
+        return AdapterResult(status="success", data=self._mock_state[key])

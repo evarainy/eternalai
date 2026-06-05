@@ -1,0 +1,130 @@
+{
+  "golden_task_id": "GT-003",
+  "title": "查询 U8 单据状态",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_finance_001",
+    "roles": [
+      "finance_user"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "u8",
+        "binding_id": "bind_u8_001",
+        "status": "active",
+        "account_set_id": "acctset_hunan_01",
+        "binding_scope": "acctset_hunan_01"
+      },
+      {
+        "target_system": "u8",
+        "binding_id": "bind_u8_002",
+        "status": "active",
+        "account_set_id": "acctset_factory_02",
+        "binding_scope": "acctset_factory_02"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "u8.get_document_status",
+        "target_system": "u8",
+        "type": "query",
+        "risk_level": "medium",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "account_set_id",
+            "document_no"
+          ],
+          "properties": {
+            "account_set_id": {
+              "type": "string"
+            },
+            "document_no": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "document_status"
+          ],
+          "properties": {
+            "document_status": {
+              "type": "string"
+            },
+            "amount": {
+              "type": "number"
+            },
+            "currency": {
+              "type": "string"
+            }
+          }
+        },
+        "input_schema_digest": "digest_u8_document_input",
+        "output_schema_digest": "digest_u8_document_output"
+      }
+    ],
+    "mock_u8_state": {
+      "document": {
+        "account_set_id": "acctset_hunan_01",
+        "document_no": "U8-AP-2026-0033",
+        "document_status": "posted",
+        "amount": 12800.50,
+        "currency": "CNY"
+      }
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "查湖南账套 U8-AP-2026-0033 单据状态",
+    "arguments": {
+      "account_set_id": "acctset_hunan_01",
+      "document_no": "U8-AP-2026-0033"
+    }
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "message_contains": [
+        "U8-AP-2026-0033",
+        "posted"
+      ],
+      "ui.component_type": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "gateway_pre_recorded",
+      "adapter_called",
+      "gateway_post_recorded",
+      "response_envelope_created"
+    ]
+  },
+  "then_forbidden": [
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": true,
+    "endpoint": "POST /mock/u8.get_document_status/inject",
+    "payload": {
+      "error_mode": "malformed_json",
+      "duration": "next_1_call",
+      "error_detail": {
+        "body": "{bad-json"
+      }
+    },
+    "expected_error_code": "adapter_payload_invalid"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false
+  }
+}

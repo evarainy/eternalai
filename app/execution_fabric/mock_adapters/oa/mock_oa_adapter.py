@@ -10,6 +10,15 @@ from app.ports.adapter import MOCK_ERROR_MODE_TO_ERROR_CODE, AdapterResult
 class MockOAAdapter:
     """Deterministic OA adapter that returns AdapterResult without upstream I/O."""
 
+    def __init__(self) -> None:
+        self._mock_state: dict[str, Any] = {}
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        self._mock_state = state
+
+    def reset_state(self) -> None:
+        self._mock_state = {}
+
     async def execute(
         self,
         capability_id: str,
@@ -23,6 +32,9 @@ class MockOAAdapter:
                 data=None,
                 error_code=MOCK_ERROR_MODE_TO_ERROR_CODE.get(error_mode),
             )
+
+        if self._mock_state:
+            return self._build_from_state(capability_id, arguments)
 
         if "workflow_status" in capability_id or "get_workflow" in capability_id:
             current_step = arguments.get("mock_current_step", "pending")
@@ -46,3 +58,26 @@ class MockOAAdapter:
                 "created_at": "2026-01-01T00:00:00",
             },
         )
+
+    def _build_from_state(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+    ) -> AdapterResult:
+        cid = capability_id.lower()
+        if "list_pending" in cid:
+            key = "pending_workflows"
+        elif "get_workflow" in cid or "workflow_status" in cid:
+            key = "workflow_status"
+        elif "submit" in cid:
+            key = "submit_result"
+        else:
+            return AdapterResult(status="success", data=self._mock_state)
+
+        if key not in self._mock_state:
+            return AdapterResult(status="error", data=None, error_code="adapter_error")
+
+        value = self._mock_state[key]
+        if key == "pending_workflows":
+            return AdapterResult(status="success", data={"workflows": value})
+        return AdapterResult(status="success", data=value)
