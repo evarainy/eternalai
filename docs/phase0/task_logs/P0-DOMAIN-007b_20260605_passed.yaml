@@ -91,4 +91,4 @@ reviewer_verdicts:
     advisories:
       - "P3: denied and binding_required both route to build_operator_handback with hardcoded action='clarify_scope' / reason_code='unclear_scope'. Approved minimal-skeleton behavior; contract only constrains status/component_type. Note for Phase 1 planner if distinct reason_codes are needed."
 
-commit_sha: PLACEHOLDER
+commit_sha: b1cc4907538862e75ffd94ef57eed19e279021eb
