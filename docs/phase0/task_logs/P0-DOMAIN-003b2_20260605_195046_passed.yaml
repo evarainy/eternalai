@@ -1,0 +1,47 @@
+task_id: P0-DOMAIN-003b2
+title: Gateway Adapter Execution Skeleton
+status: passed
+timestamp: "20260605_195046"
+branch: phase0/P0-DOMAIN-003b2
+commit_sha: "65fd85b9f1065e60bb0a7324b419cdd9e5b36a8d"
+
+changed_files:
+  - app/infra/gateway/capability_gateway.py
+  - tests/infra/gateway/test_capability_gateway.py
+
+validation:
+  tests_passed: 30
+  tests_failed: 0
+  ruff_exit: 0
+  mypy_exit: 0
+  red_phase_evidence: |
+    exit code 1 (before implementation):
+    CapabilityGateway.__init__() got an unexpected keyword argument 'adapters'
+    7 new tests failing (red phase confirmed)
+  green_phase_evidence: |
+    30 passed after implementation (18 original + 12 new)
+    uv run pytest tests/infra/gateway/ -v
+
+review:
+  codex_self_review: APPROVE_FOR_COMMIT (after one fix loop — added result capture + 4 assertions to test_adapters_path_calls_only_the_matching_adapter_not_others)
+  opus_plan_review: REQUEST_CHANGES (4 P2/P3 test-design/impl-detail findings baked into exec prompt as mandates; no re-plan needed)
+  opus_diff_review_attempt_1: REQUEST_CHANGES P1 (diff in first dispatch had indentation encoding artifact from context-summary; actual staged code was correct; re-dispatched with verbatim git diff --cached output)
+  opus_diff_review_attempt_2: APPROVE_FOR_COMMIT
+  opus_p3_findings: |
+    [P3] _map_adapter_status redundant explicit error-code set — returns "failed" same as fall-through default. Behavior-neutral; no change required.
+
+judgment: |
+  Extends the 003b1 short-circuit gateway into a multi-adapter dispatch skeleton via TDD.
+  Adapter injection is via a single dict[str, AdapterPort] parameter named "adapters",
+  keyed by target_system string (oa/u8/hikvision_ivms). Dispatch selection happens after
+  all 4 prechecks and before record_gateway_call, so target_system=None returns
+  no_capability_found without emitting a spurious trace entry.
+  Backward-compat dual-path constructor (legacy "adapter" positional param + new "adapters"
+  dict) preserves all 18 pre-003b2 tests unmodified, including the legacy target_system=None
+  to adapter-called behavior.
+  All 6 008e error injection modes (timeout/permission_denied/malformed_json/empty_response/
+  http_500/missing_required_field) are tested with exact status+error_code assertions;
+  mapping is exhaustive. SentinelAdapter guards non-target adapters in each dispatch test;
+  the matching-adapter-only test independently counts call_count for all three adapters.
+  Gateway production code imports no Mock adapter classes; enforced by an in-test scanner
+  that reads the gateway directory and asserts on exact class names.

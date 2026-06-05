@@ -24,6 +24,14 @@ def _map_adapter_status(adapter_result: AdapterResult) -> ExecutionStatus:
         return "timeout"
     if adapter_result.error_code == "upstream_permission_denied":
         return "denied"
+    if adapter_result.error_code in {
+        "adapter_payload_invalid",
+        "adapter_empty_response",
+        "adapter_http_500",
+        "adapter_missing_required_field",
+        "adapter_error",
+    }:
+        return "failed"
     return "failed"
 
 
@@ -39,17 +47,19 @@ def _map_identity_error(bind_status: str) -> str:
 
 
 class CapabilityGateway:
-    """Minimal Gateway -> MockOAAdapter -> ExecutionResult pass-through."""
+    """Minimal Gateway -> AdapterPort -> ExecutionResult pass-through."""
 
     def __init__(
         self,
-        adapter: AdapterPort,
+        adapter: AdapterPort | None = None,
         capability_registry: CapabilityRegistryPort | None = None,
         identity_mapping: IdentityMappingPort | None = None,
         policy_guard: PolicyGuardPort | None = None,
         trace_port: TracePort | None = None,
+        adapters: dict[str, AdapterPort] | None = None,
     ) -> None:
         self._adapter = adapter
+        self._adapters = adapters
         self._capability_registry = capability_registry
         self._identity_mapping = identity_mapping
         self._policy_guard = policy_guard
@@ -155,6 +165,24 @@ class CapabilityGateway:
                     trace_id=trace_id,
                 )
 
+        if self._adapters is not None:
+            target = capability_spec.target_system if capability_spec is not None else None
+            if target is None or target not in self._adapters:
+                return ExecutionResult(
+                    status="no_capability_found",
+                    error_code="capability_not_found",
+                    trace_id=trace_id,
+                )
+            selected_adapter = self._adapters[target]
+        else:
+            if self._adapter is None:
+                return ExecutionResult(
+                    status="no_capability_found",
+                    error_code="capability_not_found",
+                    trace_id=trace_id,
+                )
+            selected_adapter = self._adapter
+
         if self._trace_port is not None:
             await self._trace_port.record_gateway_call(
                 trace_id=trace_id,
@@ -169,7 +197,7 @@ class CapabilityGateway:
         if "mock_error_mode" in arguments:
             execution_context["mock_error_mode"] = arguments["mock_error_mode"]
 
-        adapter_result = await self._adapter.execute(
+        adapter_result = await selected_adapter.execute(
             capability_id,
             arguments,
             execution_context,
