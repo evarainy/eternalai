@@ -1,0 +1,89 @@
+{
+  "golden_task_id": "GT-007",
+  "title": "用户一次性确认后继续执行 Mock 动作",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_employee_001",
+    "roles": [
+      "employee"
+    ],
+    "prior_response_id": "resp_gt_006",
+    "user_action": {
+      "action_type": "confirm",
+      "response_id": "resp_gt_006",
+      "confirmed": true
+    },
+    "identity_mappings": [
+      {
+        "target_system": "oa",
+        "binding_id": "bind_oa_001",
+        "status": "active",
+        "binding_scope": "default"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.submit_leave_request.confirmed_mock",
+        "target_system": "oa",
+        "type": "action",
+        "risk_level": "high",
+        "execution_identity": "user_delegated",
+        "binding_required": true
+      }
+    ],
+    "mock_oa_state": {
+      "submit_result": {
+        "draft_id": "OA-DRAFT-2026-0009",
+        "submit_status": "mock_submitted",
+        "workflow_id": "OA-WF-2026-0099"
+      }
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "用户确认 resp_gt_006",
+    "arguments": {}
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "message_contains": [
+        "已提交",
+        "OA-DRAFT-2026-0009"
+      ],
+      "ui.component_type": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "policy_checked",
+      "gateway_pre_recorded",
+      "adapter_called",
+      "gateway_post_recorded",
+      "response_envelope_created",
+      "task_completed"
+    ]
+  },
+  "then_forbidden": [
+    "multi_turn_confirm_loop",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": true,
+    "endpoint": "POST /mock/oa.submit_leave_request.confirmed_mock/inject",
+    "payload": {
+      "error_mode": "timeout",
+      "duration": "next_1_call",
+      "error_detail": {
+        "status_code": 504,
+        "body": "submit timeout"
+      }
+    },
+    "expected_error_code": "adapter_timeout"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false
+  }
+}

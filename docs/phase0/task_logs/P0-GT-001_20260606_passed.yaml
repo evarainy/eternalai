@@ -1,0 +1,55 @@
+task_id: P0-GT-001
+title: Golden Task Fixture Materialization
+status: passed
+branch: phase0/P0-GT-001
+base_commit: 437a4fd
+completed_at: "2026-06-06"
+
+depends_on:
+  - task_id: P0-DOMAIN-007b
+    status: passed
+    passed_at: "2026-06-05"
+  - task_id: P0-DOMAIN-008e
+    status: passed
+    passed_at: "2026-06-04"
+
+changed_files:
+  - app/execution_fabric/mock_adapters/hikvision_ivms/mock_hikvision_ivms_adapter.py
+  - app/execution_fabric/mock_adapters/oa/mock_oa_adapter.py
+  - app/execution_fabric/mock_adapters/u8/mock_u8_adapter.py
+  - tests/golden_tasks/conftest.py
+  - tests/golden_tasks/fixtures/GT-001.json
+  - tests/golden_tasks/fixtures/GT-002.json
+  - tests/golden_tasks/fixtures/GT-003.json
+  - tests/golden_tasks/fixtures/GT-004.json
+  - tests/golden_tasks/fixtures/GT-005.json
+  - tests/golden_tasks/fixtures/GT-006.json
+  - tests/golden_tasks/fixtures/GT-007.json
+  - tests/golden_tasks/fixtures/GT-008.json
+  - tests/golden_tasks/fixtures/GT-009.json
+  - tests/golden_tasks/fixtures/GT-010.json
+  - tests/golden_tasks/fixtures/GT-012.json
+  - tests/golden_tasks/test_fixture_schema.py
+  - tests/golden_tasks/test_mock_state_loader.py
+
+validation_evidence:
+  test_fixture_schema: "74 passed, 0 failed"
+  test_mock_state_loader: "8 passed, 0 failed"
+  regression_execution_fabric: "81 passed, 0 failed"
+  regression_architecture: "22 passed, 0 failed"
+  ruff: "clean"
+  mypy: "clean"
+
+design_decisions:
+  - "Fixture files use JSON format (.json / json.load) instead of YAML: PyYAML not installed, pyproject.toml/uv.lock frozen. json is stdlib."
+  - "error_code adapter_state_missing → adapter_error: adapter_state_missing is not a valid ErrorCode in app/ports/capability_gateway.py."
+  - "apply_mock_state() sentinel helper in conftest: skips set_state when state == 'should_not_be_called' (GT-008/009/010/012 negative fixtures)."
+  - "No __init__.py in tests/golden_tasks/ or fixtures/: namespace package pattern per Phase 0 convention."
+
+advisory_carry_forward:
+  - "P0-GT-002: test_mock_state_loader.py L1764 has dead 'or result.data.get(pending_workflows)' fallback — consider tightening to assert result.data['workflows'] directly."
+
+reviews:
+  codex_self_review: PASS
+  opus_diff_review: APPROVE
+  opus_findings: "0 critical, 0 P1, 0 P2, 1 P3 advisory (dead fallback)"

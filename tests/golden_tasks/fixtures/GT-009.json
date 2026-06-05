@@ -1,0 +1,78 @@
+{
+  "golden_task_id": "GT-009",
+  "title": "Policy Guard 判定无权限",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_employee_001",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "u8",
+        "binding_id": "bind_u8_employee_001",
+        "status": "active",
+        "account_set_id": "acctset_hunan_01",
+        "binding_scope": "acctset_hunan_01"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "u8.get_salary_summary",
+        "target_system": "u8",
+        "type": "query",
+        "risk_level": "high",
+        "execution_identity": "user_delegated",
+        "binding_required": true
+      }
+    ],
+    "mock_u8_state": "should_not_be_called",
+    "policy_fixture": {
+      "decision": "deny",
+      "reason_code": "role_not_allowed"
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "查一下湖南账套员工薪资汇总",
+    "arguments": {
+      "account_set_id": "acctset_hunan_01"
+    }
+  },
+  "then_response": {
+    "status": "blocked",
+    "envelope": {
+      "message_contains": [
+        "无权限",
+        "拒绝"
+      ],
+      "ui.component_type": "operator_handback_card",
+      "ui.action": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "blocked_by_policy",
+      "response_envelope_created",
+      "task_failed"
+    ]
+  },
+  "then_forbidden": [
+    "mock_u8_was_called",
+    "response_data_not_null",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "policy_denied"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}

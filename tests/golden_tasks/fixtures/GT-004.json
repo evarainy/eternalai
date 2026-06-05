@@ -1,0 +1,117 @@
+{
+  "golden_task_id": "GT-004",
+  "title": "查询 U8 供应商余额摘要",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_finance_001",
+    "roles": [
+      "finance_viewer"
+    ],
+    "identity_mappings": [],
+    "registered_capabilities": [
+      {
+        "capability_id": "u8.get_vendor_balance_summary",
+        "target_system": "u8",
+        "type": "query",
+        "risk_level": "medium",
+        "execution_identity": "system_scope",
+        "binding_required": false,
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "account_set_id",
+            "vendor_id"
+          ],
+          "properties": {
+            "account_set_id": {
+              "type": "string"
+            },
+            "vendor_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "vendor_id",
+            "balance",
+            "currency"
+          ],
+          "properties": {
+            "vendor_id": {
+              "type": "string"
+            },
+            "balance": {
+              "type": "number"
+            },
+            "currency": {
+              "type": "string"
+            }
+          }
+        },
+        "input_schema_digest": "digest_u8_vendor_balance_input",
+        "output_schema_digest": "digest_u8_vendor_balance_output"
+      }
+    ],
+    "mock_u8_state": {
+      "vendor_balance": {
+        "account_set_id": "acctset_hunan_01",
+        "vendor_id": "VENDOR-0007",
+        "vendor_name": "湖南示例供应商有限公司",
+        "balance": 320000.00,
+        "currency": "CNY"
+      }
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "查湖南账套 VENDOR-0007 的供应商余额",
+    "arguments": {
+      "account_set_id": "acctset_hunan_01",
+      "vendor_id": "VENDOR-0007"
+    }
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "message_contains": [
+        "供应商",
+        "余额"
+      ],
+      "ui.component_type": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "capability_selected",
+      "policy_checked",
+      "gateway_pre_recorded",
+      "adapter_called",
+      "gateway_post_recorded",
+      "response_envelope_created"
+    ]
+  },
+  "then_forbidden": [
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": true,
+    "endpoint": "POST /mock/u8.get_vendor_balance_summary/inject",
+    "payload": {
+      "error_mode": "permission_denied",
+      "duration": "next_1_call",
+      "error_detail": {
+        "status_code": 403,
+        "body": "permission denied"
+      }
+    },
+    "expected_error_code": "upstream_permission_denied"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false
+  }
+}

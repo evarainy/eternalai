@@ -10,6 +10,15 @@ from app.ports.adapter import MOCK_ERROR_MODE_TO_ERROR_CODE, AdapterResult
 class MockHikvisionIVMSAdapter:
     """Deterministic iVMS adapter returning AdapterResult without upstream I/O."""
 
+    def __init__(self) -> None:
+        self._mock_state: dict[str, Any] = {}
+
+    def set_state(self, state: dict[str, Any]) -> None:
+        self._mock_state = state
+
+    def reset_state(self) -> None:
+        self._mock_state = {}
+
     async def execute(
         self,
         capability_id: str,
@@ -23,6 +32,9 @@ class MockHikvisionIVMSAdapter:
                 data=None,
                 error_code=MOCK_ERROR_MODE_TO_ERROR_CODE.get(error_mode),
             )
+
+        if self._mock_state:
+            return self._build_from_state(capability_id, arguments)
 
         device_domain_id = str(arguments.get("device_domain_id", "mock-domain-001"))
         cid = capability_id.lower()
@@ -50,3 +62,12 @@ class MockHikvisionIVMSAdapter:
                 "video_frame_included": False,
             },
         )
+
+    def _build_from_state(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+    ) -> AdapterResult:
+        if "device" not in self._mock_state:
+            return AdapterResult(status="error", data=None, error_code="adapter_error")
+        return AdapterResult(status="success", data=self._mock_state["device"])
