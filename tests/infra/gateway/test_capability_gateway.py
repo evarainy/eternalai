@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
+from app.execution_fabric.mock_adapters.hikvision_ivms.mock_hikvision_ivms_adapter import (
+    MockHikvisionIVMSAdapter,
+)
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.execution_fabric.mock_adapters.u8.mock_u8_adapter import MockU8Adapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -99,6 +103,24 @@ def _capability_spec(target_system: str | None = "oa") -> CapabilitySpec:
         target_system=target_system,
         execution_identity="user_delegated",
         binding_required=target_system is not None,
+    )
+
+
+def _capability_spec_for_system(target_system: str) -> CapabilitySpec:
+    return CapabilitySpec(
+        capability_id=f"{target_system}.mock.op",
+        name=f"Mock {target_system} op",
+        type="query",
+        input_schema_digest="input-digest",
+        output_schema_digest="output-digest",
+        risk_level="low",
+        owner="phase0",
+        version="0.1.0",
+        status="active",
+        short_description=f"Mock {target_system} operation",
+        target_system=target_system,
+        execution_identity="user_delegated",
+        binding_required=True,
     )
 
 
@@ -533,3 +555,228 @@ def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_a
     assert trace.record_gateway_call_count == 1
     _assert_trace_finalized(trace, "ok", None)
     assert result.status == "completed"
+
+
+def test_adapters_path_dispatches_oa_target_to_oa_adapter() -> None:
+    registry = FakeRegistry(_capability_spec(target_system="oa"))
+    oa_adapter = MockOAAdapter()
+    u8_sentinel = SentinelAdapter()
+    hik_sentinel = SentinelAdapter()
+    gateway = CapabilityGateway(
+        adapters={"oa": oa_adapter, "u8": u8_sentinel, "hikvision_ivms": hik_sentinel},
+        capability_registry=registry,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "oa.workflow_status.get",
+            {},
+            RequestOrgContext(request_id="t-oa-1"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.data is not None
+    assert "workflow_id" in result.data
+    assert "approver" in result.data
+
+
+def test_adapters_path_dispatches_u8_target_to_u8_adapter() -> None:
+    registry = FakeRegistry(_capability_spec_for_system("u8"))
+    oa_sentinel = SentinelAdapter()
+    u8_adapter = MockU8Adapter()
+    hik_sentinel = SentinelAdapter()
+    gateway = CapabilityGateway(
+        adapters={"oa": oa_sentinel, "u8": u8_adapter, "hikvision_ivms": hik_sentinel},
+        capability_registry=registry,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "u8.document.get",
+            {},
+            RequestOrgContext(request_id="t-u8-1"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.data is not None
+    assert "account_set_id" in result.data
+
+
+def test_adapters_path_dispatches_hikvision_target_to_hikvision_adapter() -> None:
+    registry = FakeRegistry(_capability_spec_for_system("hikvision_ivms"))
+    oa_sentinel = SentinelAdapter()
+    u8_sentinel = SentinelAdapter()
+    hik_adapter = MockHikvisionIVMSAdapter()
+    gateway = CapabilityGateway(
+        adapters={"oa": oa_sentinel, "u8": u8_sentinel, "hikvision_ivms": hik_adapter},
+        capability_registry=registry,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "hik.device.status",
+            {},
+            RequestOrgContext(request_id="t-hik-1"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.data is not None
+    assert "device_domain_id" in result.data
+
+
+def test_adapters_path_target_system_none_returns_no_capability_found_without_calling_adapter() -> None:  # noqa: E501
+    registry = FakeRegistry(_capability_spec(target_system=None))
+    sentinel = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapters={"oa": sentinel, "u8": sentinel, "hikvision_ivms": sentinel},
+        capability_registry=registry,
+        trace_port=trace,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "cap-1",
+            {},
+            RequestOrgContext(request_id="t-none-1"),
+        )
+    )
+
+    assert result.status == "no_capability_found"
+    assert result.error_code == "capability_not_found"
+    assert result.trace_id == "t-none-1"
+    assert trace.record_gateway_call_count == 0
+
+
+def test_adapters_path_calls_only_the_matching_adapter_not_others() -> None:
+    registry = FakeRegistry(_capability_spec_for_system("u8"))
+    oa_fake = FakeAdapter()
+    u8_fake = FakeAdapter(
+        AdapterResult(
+            status="success",
+            data={
+                "account_set_id": "x",
+                "document_no": "D1",
+                "document_status": "posted",
+                "amount": 1.0,
+                "currency": "CNY",
+            },
+            error_code=None,
+        )
+    )
+    hik_fake = FakeAdapter()
+    gateway = CapabilityGateway(
+        adapters={"oa": oa_fake, "u8": u8_fake, "hikvision_ivms": hik_fake},
+        capability_registry=registry,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "u8.doc",
+            {},
+            RequestOrgContext(request_id="t-only-1"),
+        )
+    )
+
+    assert u8_fake.call_count == 1
+    assert oa_fake.call_count == 0
+    assert hik_fake.call_count == 0
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.data is not None
+    assert "account_set_id" in result.data
+
+
+@pytest.mark.parametrize(
+    ("mock_error_mode", "expected_status", "expected_error_code"),
+    (
+        ("timeout", "timeout", "adapter_timeout"),
+        ("permission_denied", "denied", "upstream_permission_denied"),
+        ("malformed_json", "failed", "adapter_payload_invalid"),
+        ("empty_response", "failed", "adapter_empty_response"),
+        ("http_500", "failed", "adapter_http_500"),
+        ("missing_required_field", "failed", "adapter_missing_required_field"),
+    ),
+)
+def test_adapters_path_error_modes_return_mapped_status_and_error_code(
+    mock_error_mode: str,
+    expected_status: str,
+    expected_error_code: str,
+) -> None:
+    registry = FakeRegistry(_capability_spec_for_system("oa"))
+    gateway = CapabilityGateway(
+        adapters={
+            "oa": MockOAAdapter(),
+            "u8": SentinelAdapter(),
+            "hikvision_ivms": SentinelAdapter(),
+        },
+        capability_registry=registry,
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-1",
+            "session-1",
+            "ai-1",
+            "oa.workflow_status.get",
+            {"mock_error_mode": mock_error_mode},
+            RequestOrgContext(request_id="t-err-1"),
+        )
+    )
+
+    assert result.status == expected_status
+    assert result.error_code == expected_error_code
+    assert result.data is None
+
+
+def test_gateway_production_code_has_no_mock_adapter_imports() -> None:
+    import os
+
+    gateway_dir = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "..",
+        "..",
+        "app",
+        "infra",
+        "gateway",
+    )
+    gateway_dir = os.path.normpath(gateway_dir)
+    forbidden_patterns = [
+        "MockOAAdapter",
+        "MockU8Adapter",
+        "MockHikvisionIVMSAdapter",
+    ]
+    hits = []
+
+    for fname in os.listdir(gateway_dir):
+        if fname.endswith(".py"):
+            fpath = os.path.join(gateway_dir, fname)
+            with open(fpath) as gateway_file:
+                content = gateway_file.read()
+            for pat in forbidden_patterns:
+                if pat in content:
+                    hits.append(f"{fname}: contains {pat}")
+
+    assert not hits, f"Mock adapter imports found in production code: {hits}"
