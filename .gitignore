@@ -8,6 +8,11 @@
 _scratch/
 
 # ──────────────────────────────────────────────
+# Pipeline lane worktrees (claude-codex parallel lanes)
+# ──────────────────────────────────────────────
+.worktrees/
+
+# ──────────────────────────────────────────────
 # Python bytecode and tool caches
 # ──────────────────────────────────────────────
 __pycache__/
