@@ -33,6 +33,7 @@ EXPECTED_TRACE_EVENT_TYPE_VALUES = (
     "gateway_pre_recorded",
     "adapter_called",
     "adapter_error",
+    "adapter_error_mapped",  # adapter_error_mapped: §12.4.1-aligned addition (human-approved 2026-06-11), beyond §8.6.7's enum (spec §8.6.7↔§12.4.1 erratum).  # noqa: E501
     "adapter_result_invalid",
     "gateway_post_recorded",
     "response_envelope_created",

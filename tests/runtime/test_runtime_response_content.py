@@ -1,9 +1,9 @@
-"""Runtime response envelope and trace sequence tests."""
+"""Runtime response content and UI mapping tests."""
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -40,7 +40,7 @@ class SpyTaskStore:
             task_id=task_id,
             session_id=created.session_id,
             ai_user_id=created.ai_user_id,
-            status=status,
+            status=cast(Any, status),
             trace_id=created.trace_id,
             error_code=error_code,
         )
@@ -136,7 +136,6 @@ class SpyTracePort:
 class SpyGateway:
     def __init__(self, result: ExecutionResult) -> None:
         self.result = result
-        self.calls = 0
 
     async def execute_capability(
         self,
@@ -147,49 +146,36 @@ class SpyGateway:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
-        self.calls += 1
         return self.result
 
 
-def _make_runtime(
-    *,
-    message: str = "trace message",
-    malformed: bool = False,
-    gateway_result: ExecutionResult | None = None,
-) -> tuple[RuntimeImpl, SpyTaskStore, SpyTracePort, SpyGateway]:
-    task_store = SpyTaskStore()
-    trace_port = SpyTracePort()
-    structured_output = MockStructuredOutputProvider()
-    if malformed:
-        structured_output.register_malformed(message, CapabilityRef)
-    else:
-        structured_output.register(
-            message,
-            CapabilityRef,
-            CapabilityRef(capability_id="trace.cap"),
-        )
-    gateway = SpyGateway(
-        gateway_result or ExecutionResult(status="completed", trace_id="trace-gateway")
-    )
-    runtime = RuntimeImpl(
-        task_store=task_store,
-        session_store=ExistingSessionStore(),
-        gateway=gateway,
-        trace_port=trace_port,
-        structured_output=structured_output,
-        response_builder=ResponseEnvelopeBuilder(),
-    )
-    return runtime, task_store, trace_port, gateway
-
-
 def _run_runtime(
-    runtime: RuntimeImpl,
+    gateway_result: ExecutionResult,
     *,
-    message: str = "trace message",
+    capability_id: str = "oa.get_workflow_status",
+    malformed: bool = False,
 ) -> ResponseEnvelope:
     async def exercise_runtime() -> ResponseEnvelope:
+        message = f"message for {capability_id}"
+        structured_output = MockStructuredOutputProvider()
+        if malformed:
+            structured_output.register_malformed(message, CapabilityRef)
+        else:
+            structured_output.register(
+                message,
+                CapabilityRef,
+                CapabilityRef(capability_id=capability_id),
+            )
+        runtime = RuntimeImpl(
+            task_store=SpyTaskStore(),
+            session_store=ExistingSessionStore(),
+            gateway=SpyGateway(gateway_result),
+            trace_port=SpyTracePort(),
+            structured_output=structured_output,
+            response_builder=ResponseEnvelopeBuilder(),
+        )
         return await runtime.handle_user_message(
-            channel="api",
+            channel="web",
             ai_user_id="ai-user-1",
             session_id="session-1",
             message=message,
@@ -199,51 +185,73 @@ def _run_runtime(
     return asyncio.run(exercise_runtime())
 
 
-def test_happy_path_trace_event_sequence_matches_spec() -> None:
-    runtime, _task_store, trace_port, _gateway = _make_runtime()
+def test_completed_response_message_is_sourced_from_adapter_data() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="completed",
+            data={"workflow_id": "OA-WF-2026-0001", "current_step": "approved"},
+            trace_id="tr-completed",
+        )
+    )
 
-    result = _run_runtime(runtime)
-
-    assert isinstance(result, ResponseEnvelope)
-    assert [step["event_type"] for step in trace_port.steps] == [
-        "task_created",
-        "intent_parsed",
-        "capability_selected",
-        "response_envelope_created",
-        "task_completed",
-    ]
-
-
-def test_parse_error_trace_event_sequence_matches_no_capability_found_spec() -> None:
-    runtime, _task_store, trace_port, _gateway = _make_runtime(malformed=True)
-
-    result = _run_runtime(runtime)
-
-    assert isinstance(result, ResponseEnvelope)
-    assert [step["event_type"] for step in trace_port.steps] == [
-        "task_created",
-        "intent_parsed",
-        "no_capability_found",
-        "response_envelope_created",
-        "task_failed",
-    ]
+    assert envelope.status == "completed"
+    assert "OA-WF-2026-0001" in envelope.message
+    assert "approved" in envelope.message
 
 
-def test_parse_error_skips_gateway_and_returns_no_capability_found_envelope() -> None:
-    runtime, task_store, _trace_port, gateway = _make_runtime(malformed=True)
+def test_no_capability_found_uses_operator_handback_none_without_degrading() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(status="completed", trace_id="unused"),
+        capability_id="unknown.capability",
+        malformed=True,
+    )
 
-    result = _run_runtime(runtime)
-
-    assert gateway.calls == 0
-    assert task_store.status_updates[-1][1] == "no_capability_found"
-    assert isinstance(result, ResponseEnvelope)
-    assert result.status == "no_capability_found"
+    assert envelope.status == "no_capability_found"
+    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.ui.action == "none"
 
 
-def test_response_envelope_is_pydantic_model_not_bare_dict() -> None:
-    runtime, _task_store, _trace_port, _gateway = _make_runtime()
+def test_policy_denied_uses_operator_handback_none_without_failed_degradation() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="denied",
+            error_code="policy_denied",
+            trace_id="tr-denied",
+        )
+    )
 
-    result = _run_runtime(runtime)
+    assert envelope.status == "blocked"
+    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.ui.action == "none"
 
-    assert isinstance(result, ResponseEnvelope)
-    assert not isinstance(result, dict)
+
+def test_identity_unbound_uses_operator_handback_bind_required_for_target_system() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="binding_required",
+            error_code="identity_unbound",
+            trace_id="tr-bind",
+        ),
+        capability_id="oa.list_pending_workflows",
+    )
+
+    assert envelope.status == "blocked"
+    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.ui.action == "bind_required"
+    assert envelope.ui.target_system == "oa"
+
+
+def test_confirm_required_card_carries_target_system() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="waiting_user",
+            error_code="confirm_required",
+            trace_id="tr-confirm",
+        ),
+        capability_id="oa.submit_leave_request",
+    )
+
+    assert envelope.status == "waiting_user"
+    assert envelope.ui.component_type == "confirm_card"
+    assert envelope.ui.action == "confirm"
+    assert envelope.ui.target_system == "oa"

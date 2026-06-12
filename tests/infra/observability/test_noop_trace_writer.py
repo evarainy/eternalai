@@ -239,7 +239,8 @@ def test_trace_event_extra_field_raises_validation_error() -> None:
 
 
 def test_all_trace_event_type_values_construct_valid_events() -> None:
-    assert len(get_args(TraceEventType)) == 17
+    # 18 = 17 (§8.6.7) + adapter_error_mapped (§12.4.1, human-approved 2026-06-11).
+    assert len(get_args(TraceEventType)) == 18
     for event_type in get_args(TraceEventType):
         event = TraceEvent(
             trace_id="trace-1",
