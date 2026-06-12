@@ -65,6 +65,7 @@ class ResponseEnvelopeBuilder:
         data: dict[str, Any] | None = None,
         trace_summary: str | None = None,
         payload: dict[str, Any] | None = None,
+        target_system: TargetSystem | None = None,
     ) -> ResponseEnvelope:
         return self._build_envelope(
             response_id,
@@ -75,7 +76,11 @@ class ResponseEnvelopeBuilder:
             trace_id,
             "waiting_user",
             ConfirmCard,
-            {"action": "confirm", "payload": payload or {}},
+            {
+                "action": "confirm",
+                "target_system": target_system,
+                "payload": payload or {},
+            },
             data,
             trace_summary,
         )
@@ -123,6 +128,7 @@ class ResponseEnvelopeBuilder:
         data: dict[str, Any] | None = None,
         trace_summary: str | None = None,
         payload: dict[str, Any] | None = None,
+        target_system: TargetSystem | None = None,
     ) -> ResponseEnvelope:
         return self._build_envelope(
             response_id,
@@ -135,7 +141,82 @@ class ResponseEnvelopeBuilder:
             OperatorHandbackCard,
             {
                 "action": "clarify_scope",
+                "target_system": target_system,
                 "reason_code": "unclear_scope",
+                "payload": payload or {},
+            },
+            data,
+            trace_summary,
+        )
+
+    def build_no_capability_found(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        message: str,
+        fallback_text: str,
+        trace_id: str,
+        trace_summary: str | None = None,
+    ) -> ResponseEnvelope:
+        return self._build_operator_handback_none(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            "no_capability_found",
+            trace_summary=trace_summary,
+        )
+
+    def build_policy_denied(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        message: str,
+        fallback_text: str,
+        trace_id: str,
+        trace_summary: str | None = None,
+    ) -> ResponseEnvelope:
+        return self._build_operator_handback_none(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            "blocked",
+            trace_summary=trace_summary,
+        )
+
+    def build_operator_handback_bind_required(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        message: str,
+        fallback_text: str,
+        trace_id: str,
+        target_system: TargetSystem | None,
+        data: dict[str, Any] | None = None,
+        trace_summary: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> ResponseEnvelope:
+        return self._build_envelope(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            "blocked",
+            OperatorHandbackCard,
+            {
+                "action": "bind_required",
+                "target_system": target_system,
+                "reason_code": "identity_unbound",
                 "payload": payload or {},
             },
             data,
@@ -218,6 +299,35 @@ class ResponseEnvelopeBuilder:
             return ResponseEnvelope(**envelope_fields)
         except Exception:
             return _failed_envelope(context)
+
+    def _build_operator_handback_none(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        message: str,
+        fallback_text: str,
+        trace_id: str,
+        status: ResponseEnvelopeStatus,
+        trace_summary: str | None = None,
+    ) -> ResponseEnvelope:
+        return self._build_envelope(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            status,
+            UIComponent,
+            {
+                "component_type": "operator_handback_card",
+                "action": "none",
+                "payload": {},
+            },
+            None,
+            trace_summary,
+        )
 
 
 def _sanitize_envelope_fields(

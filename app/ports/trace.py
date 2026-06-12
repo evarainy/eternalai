@@ -22,6 +22,7 @@ TraceEventType: TypeAlias = Literal[
     "gateway_pre_recorded",
     "adapter_called",
     "adapter_error",
+    "adapter_error_mapped",
     "adapter_result_invalid",
     "gateway_post_recorded",
     "response_envelope_created",

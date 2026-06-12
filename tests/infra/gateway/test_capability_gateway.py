@@ -193,10 +193,37 @@ class FakePolicyGuard:
 class FakeTrace:
     def __init__(self, call_log: list[str] | None = None) -> None:
         self._call_log = call_log
+        self.steps: list[dict[str, Any]] = []
         self.record_gateway_call_count = 0
         self.finalize_task_trace_count = 0
         self.record_gateway_call_kwargs: dict[str, Any] | None = None
         self.finalize_task_trace_kwargs: dict[str, Any] | None = None
+
+    async def record_step(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        event_type: str,
+        status: str,
+        capability_id: str | None = None,
+        error_code: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self.steps.append(
+            {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "session_id": session_id,
+                "event_type": event_type,
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
+        if self._call_log is not None:
+            self._call_log.append(f"record_step:{event_type}")
 
     async def record_gateway_call(
         self,
@@ -317,7 +344,22 @@ def _assert_trace_finalized(
     assert "arguments" not in attributes
 
 
-def test_capability_registry_missing_short_circuits_without_adapter_and_finalizes_trace() -> None:
+def _assert_trace_not_finalized(trace: FakeTrace) -> None:
+    assert trace.finalize_task_trace_count == 0
+    assert trace.finalize_task_trace_kwargs is None
+
+
+def _assert_step_events(trace: FakeTrace, events: list[str]) -> None:
+    assert [step["event_type"] for step in trace.steps] == events
+    for step in trace.steps:
+        assert step["trace_id"] == "trace-short-001"
+        assert step["task_id"] == "task-001"
+        assert step["session_id"] == "session-001"
+        attributes = step.get("attributes") or {}
+        assert "arguments" not in attributes
+
+
+def test_capability_registry_missing_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(None)
     trace = FakeTrace()
     adapter = SentinelAdapter()
@@ -330,10 +372,11 @@ def test_capability_registry_missing_short_circuits_without_adapter_and_finalize
     assert result.trace_id == "trace-short-001"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "capability_not_found")
+    _assert_step_events(trace, ["no_capability_found"])
+    _assert_trace_not_finalized(trace)
 
 
-def test_identity_unbound_short_circuits_with_identity_unbound_without_adapter_and_finalizes_trace() -> None:  # noqa: E501
+def test_identity_unbound_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("unbound"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
@@ -353,11 +396,12 @@ def test_identity_unbound_short_circuits_with_identity_unbound_without_adapter_a
     assert result.error_code == "identity_unbound"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "identity_unbound")
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    _assert_trace_not_finalized(trace)
     assert policy_guard.call_count == 0
 
 
-def test_identity_expired_short_circuits_with_identity_expired_without_adapter_and_finalizes_trace() -> None:  # noqa: E501
+def test_identity_expired_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("expired"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
@@ -377,11 +421,12 @@ def test_identity_expired_short_circuits_with_identity_expired_without_adapter_a
     assert result.error_code == "identity_expired"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "identity_expired")
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    _assert_trace_not_finalized(trace)
     assert policy_guard.call_count == 0
 
 
-def test_identity_revoked_short_circuits_with_identity_revoked_without_adapter_and_finalizes_trace() -> None:  # noqa: E501
+def test_identity_revoked_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("revoked"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
@@ -401,11 +446,13 @@ def test_identity_revoked_short_circuits_with_identity_revoked_without_adapter_a
     assert result.error_code == "identity_revoked"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "identity_revoked")
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    _assert_trace_not_finalized(trace)
     assert policy_guard.call_count == 0
 
 
-def test_identity_needs_binding_scope_short_circuits_with_needs_binding_scope_without_adapter_and_finalizes_trace() -> None:  # noqa: E501
+def test_identity_needs_binding_scope_short_circuits_without_adapter_and_records_trace(
+) -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("needs_binding_scope"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
@@ -425,11 +472,12 @@ def test_identity_needs_binding_scope_short_circuits_with_needs_binding_scope_wi
     assert result.error_code == "needs_binding_scope"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "needs_binding_scope")
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    _assert_trace_not_finalized(trace)
     assert policy_guard.call_count == 0
 
 
-def test_identity_verification_failed_maps_to_identity_unbound_without_adapter_and_finalizes_trace() -> None:  # noqa: E501
+def test_identity_verification_failed_maps_to_identity_unbound_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("verification_failed"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
@@ -449,11 +497,12 @@ def test_identity_verification_failed_maps_to_identity_unbound_without_adapter_a
     assert result.error_code == "identity_unbound"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "identity_unbound")
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    _assert_trace_not_finalized(trace)
     assert policy_guard.call_count == 0
 
 
-def test_policy_deny_short_circuits_without_adapter_and_finalizes_trace() -> None:
+def test_policy_deny_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("active"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="deny"))
@@ -473,10 +522,14 @@ def test_policy_deny_short_circuits_without_adapter_and_finalizes_trace() -> Non
     assert result.error_code == "policy_denied"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "policy_denied")
+    _assert_step_events(
+        trace,
+        ["identity_check", "policy_checked", "blocked_by_policy"],
+    )
+    _assert_trace_not_finalized(trace)
 
 
-def test_policy_confirm_short_circuits_without_adapter_and_finalizes_trace() -> None:
+def test_policy_confirm_short_circuits_without_adapter_and_records_trace() -> None:
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("active"))
     policy_guard = FakePolicyGuard(PolicyDecision(decision="confirm"))
@@ -496,7 +549,11 @@ def test_policy_confirm_short_circuits_without_adapter_and_finalizes_trace() -> 
     assert result.error_code == "confirm_required"
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 0
-    _assert_trace_finalized(trace, "blocked", "confirm_required")
+    _assert_step_events(
+        trace,
+        ["identity_check", "policy_checked", "confirm_required"],
+    )
+    _assert_trace_not_finalized(trace)
 
 
 def test_happy_path_runs_prechecks_records_trace_before_adapter_and_finalizes_after_adapter() -> None:  # noqa: E501
@@ -520,6 +577,9 @@ def test_happy_path_runs_prechecks_records_trace_before_adapter_and_finalizes_af
     result = _execute_gateway_with_ports(gateway)
 
     assert call_log.index("record_gateway_call") < call_log.index("adapter")
+    assert call_log.index("record_step:gateway_pre_recorded") < call_log.index("adapter")
+    assert call_log.index("adapter") < call_log.index("record_step:adapter_called")
+    assert call_log.index("adapter") < call_log.index("record_step:gateway_post_recorded")
     assert result.status == "completed"
     assert result.error_code is None
     assert result.data == {"k": "v"}
@@ -553,6 +613,15 @@ def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_a
     assert policy_guard.call_count == 1
     assert adapter.call_count == 1
     assert trace.record_gateway_call_count == 1
+    _assert_step_events(
+        trace,
+        [
+            "policy_checked",
+            "gateway_pre_recorded",
+            "adapter_called",
+            "gateway_post_recorded",
+        ],
+    )
     _assert_trace_finalized(trace, "ok", None)
     assert result.status == "completed"
 
@@ -664,6 +733,7 @@ def test_adapters_path_target_system_none_returns_no_capability_found_without_ca
     assert result.error_code == "capability_not_found"
     assert result.trace_id == "t-none-1"
     assert trace.record_gateway_call_count == 0
+    assert [step["event_type"] for step in trace.steps] == ["no_capability_found"]
 
 
 def test_adapters_path_calls_only_the_matching_adapter_not_others() -> None:
