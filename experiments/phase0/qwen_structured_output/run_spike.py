@@ -263,8 +263,36 @@ def build_samples() -> list[Sample]:
 # Execution
 # ---------------------------------------------------------------------------
 
-# Explicit request timeout in seconds
-REQUEST_TIMEOUT_S = 30
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY: dict[str, Any] = (
+    {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+)
+THINKING_OFF_INJECTED = not ENABLE_THINKING
 
 @dataclass
 class SampleResult:
@@ -448,6 +476,9 @@ def run_spike() -> dict:
     print(f"Pydantic version: {pydantic_version}")
     print(f"Enum validation: Literal[...] types in Pydantic models (model_validate rejects invalid)")
     print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print(f"Self-check: PASSED")
     print("-" * 60)
 
@@ -464,6 +495,7 @@ def run_spike() -> dict:
                 response_format={"type": "json_object"},
                 temperature=0.1,
                 max_tokens=1024,
+                extra_body=EXTRA_BODY,
             )
             latency = (time.time() - t0) * 1000
             raw = resp.choices[0].message.content or ""
@@ -564,6 +596,9 @@ def run_spike() -> dict:
         "enum_validation_method": "Literal[type] in Pydantic model; rejected by model_validate as schema_fail",
         "self_check_passed": True,
         "request_timeout_s": REQUEST_TIMEOUT_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "avg_latency_ms": round(avg_latency, 1),
         "p50_latency_ms": round(p50_latency, 1),
         "type_stats": type_stats,

@@ -107,11 +107,59 @@ ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
 
 MIN_STRUCTURED_OUTPUT_SAMPLES = 50
 MIN_TOOL_CALLING_SAMPLES = 8
-REQUEST_TIMEOUT_S = 30
+
+
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be a number", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
 SHORT_TIMEOUT_S = 3
-REQUEST_DELAY_S = 2
-RATE_LIMIT_ABORT_THRESHOLD = 3
-INTER_RUN_PAUSE_S = 10
+REQUEST_DELAY_S = _parse_env_float("LLM_REQUEST_DELAY_S", 0.0)
+RATE_LIMIT_ABORT_THRESHOLD = _parse_env_int("LLM_RATE_LIMIT_ABORT", 3)
+INTER_RUN_PAUSE_S = _parse_env_float("LLM_INTER_RUN_PAUSE_S", 2.0)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY: dict[str, Any] = (
+    {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+)
+THINKING_OFF_INJECTED = not ENABLE_THINKING
+
+
+def _model_settings(timeout_s: int, **extra_settings: Any) -> dict[str, Any]:
+    settings: dict[str, Any] = {"timeout": timeout_s, "extra_body": EXTRA_BODY}
+    settings.update(extra_settings)
+    return settings
 
 REFUSAL_PATTERNS = [
     r"\bi can'?t\b", r"\bi cannot\b", r"\bi'?m not able\b",
@@ -537,7 +585,7 @@ def run_structured_output(
             t0 = time.time()
             result = agent.run_sync(
                 sample.user_msg,
-                model_settings={"timeout": timeout_s},
+                model_settings=_model_settings(timeout_s),
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -689,7 +737,7 @@ def run_tool_calling(
             t0 = time.time()
             result = tc_agent.run_sync(
                 sample.user_msg,
-                model_settings={"timeout": REQUEST_TIMEOUT_S, "tool_choice": "auto"},
+                model_settings=_model_settings(REQUEST_TIMEOUT_S, tool_choice="auto"),
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -889,7 +937,10 @@ def run_spike() -> dict:
     # Verify one agent works
     probe_agent = agent_map_a.get("Intent")
     try:
-        _probe_result = probe_agent.run_sync("test", model_settings={"timeout": 10})
+        _probe_result = probe_agent.run_sync(
+            "test",
+            model_settings=_model_settings(REQUEST_TIMEOUT_S),
+        )
     except Exception as e:
         print(f"ERROR: Agent probe failed: {type(e).__name__}", file=sys.stderr)
         sys.exit(1)
@@ -907,6 +958,11 @@ def run_spike() -> dict:
     print(f"Total samples: {total_samples}")
     print(f"Request timeout: {REQUEST_TIMEOUT_S}s (short: {SHORT_TIMEOUT_S}s)")
     print(f"Request pacing: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print(f"Self-check: PASSED")
     print()
 
@@ -927,6 +983,7 @@ def run_spike() -> dict:
             messages=[{"role": "system", "content": "Output only valid JSON."},
                        {"role": "user", "content": '{"answer":"ok"}'}],
             max_tokens=30, response_format={"type": "json_schema", "json_schema": schema},
+            extra_body=EXTRA_BODY,
         )
         pc = (p_resp.choices[0].message.content or "").strip()
         if pc.startswith("```"):
@@ -950,6 +1007,7 @@ def run_spike() -> dict:
             model=model_name,
             messages=[{"role": "user", "content": "Call probe_tool with q='test'"}],
             max_tokens=30, tools=tc_probe_tools, tool_choice="auto", timeout=REQUEST_TIMEOUT_S,
+            extra_body=EXTRA_BODY,
         )
         if tc_resp.choices[0].message.tool_calls:
             tool_calling_supported = True
@@ -1071,6 +1129,13 @@ def run_spike() -> dict:
     print(f"pydanticai version: {pydanticai_version}")
     print(f"Pydantic version: {pydantic_version}")
     print(f"output_type param: {output_type_param}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     print(f"Run A (default retry): {stats_a['passed']}/{stats_a['total']} ({stats_a['success_rate']}%)")
     print(f"  provider_rate_limit: {stats_a['provider_rate_limit_count']}, api_error: {stats_a['api_error_count']}")
@@ -1121,6 +1186,11 @@ def run_spike() -> dict:
         "self_check_passed": True,
         "request_timeout_s": REQUEST_TIMEOUT_S,
         "short_timeout_s": SHORT_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "run_a_default_retry": stats_a,
         "run_b_model_retries_3": stats_b,
         "retry_analysis": {
@@ -1136,7 +1206,6 @@ def run_spike() -> dict:
         "meets_threshold": overall_pass,
         "structured_output_threshold_met": so_threshold_met,
         "tool_calling_threshold_met": tc_threshold_met,
-        "request_delay_s": REQUEST_DELAY_S,
         "rate_limit_abort_threshold": RATE_LIMIT_ABORT_THRESHOLD,
         "execution_environment": "public_vendor_api",
         "internal_endpoint_validation": "deferred / not_executed",
@@ -1200,6 +1269,7 @@ def run_tc_only() -> dict:
             model=model_name,
             messages=[{"role": "user", "content": "Call probe_tool with q='test'"}],
             max_tokens=30, tools=tc_probe_tools, tool_choice="auto", timeout=REQUEST_TIMEOUT_S,
+            extra_body=EXTRA_BODY,
         )
         if tc_resp.choices[0].message.tool_calls:
             tool_calling_supported = True
@@ -1207,10 +1277,23 @@ def run_tc_only() -> dict:
         pass
 
     print(f"tool_calling_supported: {str(tool_calling_supported).lower()}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
 
     if not tool_calling_supported:
         print("Tool calling not supported by provider.")
-        return {"tool_calling_supported": False, "per_sample": []}
+        return {
+            "tool_calling_supported": False,
+            "request_timeout_s": REQUEST_TIMEOUT_S,
+            "request_delay_s": REQUEST_DELAY_S,
+            "enable_thinking": ENABLE_THINKING,
+            "thinking_off_injected": THINKING_OFF_INJECTED,
+            "extra_body": EXTRA_BODY,
+            "per_sample": [],
+        }
 
     print(f"TOOL CALLING: {len(tc_samples)} samples")
     probe_agent = Agent(model_obj, output_type=str) if False else None  # just for _extract_default_model_name
@@ -1270,6 +1353,11 @@ def run_tc_only() -> dict:
 
     return {
         "tool_calling_supported": True,
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "tc_stats": tc_stats,
         "per_sample": per_sample,
     }

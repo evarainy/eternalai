@@ -11,6 +11,40 @@ import os
 import sys
 
 
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY = {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+THINKING_OFF_INJECTED = not ENABLE_THINKING
+
+
+def _model_settings(timeout_s: int) -> dict:
+    return {"timeout": timeout_s, "extra_body": EXTRA_BODY}
+
+
 def _sanitize_error(e: Exception) -> str:
     """Return safe error detail — class name + status code only.
     Never prints URLs, tokens, headers, or provider details."""
@@ -104,7 +138,8 @@ def _probe_pydanticai_api(
         from pydantic_ai.output import PromptedOutput
         agent = Agent(model, output_type=PromptedOutput(outputs=ProbeResult))
         probe_result = agent.run_sync(
-            "Reply with exactly: {\"answer\": \"probe_ok\"}"
+            "Reply with exactly: {\"answer\": \"probe_ok\"}",
+            model_settings=_model_settings(REQUEST_TIMEOUT_S),
         )
         if isinstance(probe_result.output, ProbeResult):
             result["pydanticai_ok"] = True
@@ -128,7 +163,8 @@ def _probe_pydanticai_api(
         from pydantic_ai.output import NativeOutput
         agent = Agent(model, output_type=NativeOutput(outputs=ProbeResult))
         probe_result = agent.run_sync(
-            "Reply with exactly: {\"answer\": \"probe_ok\"}"
+            "Reply with exactly: {\"answer\": \"probe_ok\"}",
+            model_settings=_model_settings(REQUEST_TIMEOUT_S),
         )
         if isinstance(probe_result.output, ProbeResult):
             result["pydanticai_ok"] = True
@@ -151,7 +187,8 @@ def _probe_pydanticai_api(
     try:
         agent = Agent(model, output_type=ProbeResult)
         probe_result = agent.run_sync(
-            "Reply with exactly: {\"answer\": \"probe_ok\"}"
+            "Reply with exactly: {\"answer\": \"probe_ok\"}",
+            model_settings=_model_settings(REQUEST_TIMEOUT_S),
         )
         if isinstance(probe_result.output, ProbeResult):
             result["pydanticai_ok"] = True
@@ -180,7 +217,7 @@ def probe_openai_api(
     """Probe standard OpenAI API capabilities."""
     from openai import OpenAI
 
-    client = OpenAI(base_url=base_url, api_key=api_key, timeout=30)
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=REQUEST_TIMEOUT_S)
     probe: dict = {
         "api_reachable": False,
         "json_schema_supported": False,
@@ -191,6 +228,7 @@ def probe_openai_api(
     try:
         resp = client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": "hi"}], max_tokens=5,
+            extra_body=EXTRA_BODY,
         )
         if not resp.choices:
             return probe
@@ -223,6 +261,7 @@ def probe_openai_api(
             ],
             max_tokens=30,
             response_format={"type": "json_schema", "json_schema": schema},
+            extra_body=EXTRA_BODY,
         )
         c = (resp2.choices[0].message.content or "").strip()
         if c.startswith("```"):
@@ -241,6 +280,7 @@ def probe_openai_api(
             ],
             max_tokens=30,
             response_format={"type": "json_object"},
+            extra_body=EXTRA_BODY,
         )
         c3 = (resp3.choices[0].message.content or "").strip()
         if c3.startswith("```"):
@@ -267,6 +307,7 @@ def probe_openai_api(
             model=model,
             messages=[{"role": "user", "content": "Call probe_tool with query='test'"}],
             max_tokens=50, tools=tools, tool_choice="auto",
+            extra_body=EXTRA_BODY,
         )
         if resp4.choices[0].message.tool_calls:
             probe["tool_calling_supported"] = True
@@ -280,6 +321,10 @@ def main() -> None:
     env = check_env_vars()
     for var, status in env.items():
         print(f"{var}: {status}")
+    print(f"request_timeout_s: {REQUEST_TIMEOUT_S}")
+    print(f"enable_thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"thinking_off_injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"extra_body: {EXTRA_BODY}")
 
     missing = [v for v, s in env.items() if s == "missing"]
     if missing:
@@ -338,6 +383,10 @@ def main() -> None:
         **pai_probe,
         "version": pai_info["version"],
         "openai_extra": pai_info["openai_extra"],
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "api_reachable": openai_probe["api_reachable"],
         "json_schema_supported": openai_probe["json_schema_supported"],
         "json_object_supported": openai_probe["json_object_supported"],
