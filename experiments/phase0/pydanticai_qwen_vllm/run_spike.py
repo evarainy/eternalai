@@ -20,7 +20,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
 from pydantic import BaseModel, Field, ValidationError, __version__ as pydantic_version
 
@@ -35,7 +35,7 @@ class IntentResult(BaseModel):
         "chitchat", "complaint", "feedback",
     ]
     confidence: float
-    entities: list[str]
+    entities: List[str]
     language: str
 
 
@@ -53,13 +53,13 @@ class PlanStep(BaseModel):
     step_id: int
     action: str
     target: str
-    depends_on: list[int]
+    depends_on: List[int]
 
 
 class PlanDraftResult(BaseModel):
     plan_id: str
     goal: str
-    steps: list[PlanStep]
+    steps: List[PlanStep]
     estimated_cost: Literal["low", "medium", "high"]
     risk_level: Literal["low", "medium", "high"]
 
@@ -77,21 +77,21 @@ class ResponseEnvelopeResult(BaseModel):
     trace: TraceInfo
 
 
-SCHEMA_MAP: dict[str, type[BaseModel]] = {
+SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
     "Intent": IntentResult,
     "CapabilityRef": CapabilityRefResult,
     "PlanDraft": PlanDraftResult,
     "ResponseEnvelope": ResponseEnvelopeResult,
 }
 
-CRITICAL_FIELDS: dict[str, list[str]] = {
+CRITICAL_FIELDS: Dict[str, List[str]] = {
     "Intent": ["intent", "confidence", "language"],
     "CapabilityRef": ["capability_id", "domain", "description"],
     "PlanDraft": ["plan_id", "goal", "steps"],
     "ResponseEnvelope": ["status", "code", "message", "trace"],
 }
 
-ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
+ENUM_FIELD_DEFINITIONS: Dict[str, Dict[str, List[str]]] = {
     "Intent": {
         "intent": [
             "ask_question", "request_action", "provide_info",
@@ -150,14 +150,14 @@ REQUEST_DELAY_S = _parse_env_float("LLM_REQUEST_DELAY_S", 0.0)
 RATE_LIMIT_ABORT_THRESHOLD = _parse_env_int("LLM_RATE_LIMIT_ABORT", 3)
 INTER_RUN_PAUSE_S = _parse_env_float("LLM_INTER_RUN_PAUSE_S", 2.0)
 ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
-EXTRA_BODY: dict[str, Any] = (
+EXTRA_BODY: Dict[str, Any] = (
     {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
 )
 THINKING_OFF_INJECTED = not ENABLE_THINKING
 
 
-def _model_settings(timeout_s: int, **extra_settings: Any) -> dict[str, Any]:
-    settings: dict[str, Any] = {"timeout": timeout_s, "extra_body": EXTRA_BODY}
+def _model_settings(timeout_s: int, **extra_settings: Any) -> Dict[str, Any]:
+    settings: Dict[str, Any] = {"timeout": timeout_s, "extra_body": EXTRA_BODY}
     settings.update(extra_settings)
     return settings
 
@@ -192,7 +192,7 @@ class SampleResult:
     failure_category: str
     schema_validation_passed: bool = False
     raw_response: str = ""
-    parsed: dict | None = None
+    parsed: Optional[Dict] = None
     error: str = ""
     latency_ms: float = 0.0
 
@@ -212,7 +212,7 @@ class ToolCallResult:
     tool_selected: str = ""
     tool_selection_correct: bool = False
     arguments_valid: bool = False
-    called_tools_for_sample: list[str] = field(default_factory=list)
+    called_tools_for_sample: List[str] = field(default_factory=list)
     failure_category: str = "ok"
     provider_error: bool = False
     sanitized_error_type: str = ""
@@ -242,7 +242,7 @@ class QueryHikAccessLogInput(BaseModel):
     device_location: Literal["main_entrance", "office_floor", "parking", "server_room"]
 
 
-TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
+TOOL_SCHEMAS: Dict[str, Type[BaseModel]] = {
     "query_oa_leave_balance": QueryOALeaveBalanceInput,
     "query_u8_invoice_status": QueryU8InvoiceStatusInput,
     "query_hik_access_log": QueryHikAccessLogInput,
@@ -253,8 +253,8 @@ TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
 # Sample builders
 # ---------------------------------------------------------------------------
 
-def build_structured_output_samples() -> list[Sample]:
-    samples: list[Sample] = []
+def build_structured_output_samples() -> List[Sample]:
+    samples: List[Sample] = []
     system_hints = {
         "Intent": (
             'Classify user intent. Output JSON: '
@@ -381,7 +381,7 @@ def build_structured_output_samples() -> list[Sample]:
     return samples  # 15+9+8+6+6+6 = 50
 
 
-def build_tool_calling_samples() -> list[ToolCallSample]:
+def build_tool_calling_samples() -> List[ToolCallSample]:
     prompts = [
         ("TC-001", "Check my annual leave balance. My employee ID is EMP-042.", "query_oa_leave_balance"),
         ("TC-002", "What's the status of invoice INV-2026-078 from the finance department?", "query_u8_invoice_status"),
@@ -445,8 +445,8 @@ def _is_rate_limit_error(e: Exception) -> bool:
     )
 
 
-def _self_check(samples: list[Sample]) -> list[str]:
-    errors: list[str] = []
+def _self_check(samples: List[Sample]) -> List[str]:
+    errors: List[str] = []
     if len(samples) < MIN_STRUCTURED_OUTPUT_SAMPLES:
         errors.append(f"Sample count {len(samples)} < minimum {MIN_STRUCTURED_OUTPUT_SAMPLES}")
     for s in samples:
@@ -488,7 +488,7 @@ def _build_model(probe: dict, base_url: str, api_key: str, model_name: str):
     return OpenAIChatModel(model_name, provider=provider)
 
 
-def _build_output_spec(probe: dict, output_type: type[BaseModel]):
+def _build_output_spec(probe: dict, output_type: Type[BaseModel]):
     """Build the output_type spec based on probe's discovered output_mode."""
     output_mode = probe.get("output_mode", "")
     if "PromptedOutput" in output_mode:
@@ -501,14 +501,14 @@ def _build_output_spec(probe: dict, output_type: type[BaseModel]):
         return output_type
 
 
-def _build_agent(probe: dict, model_obj, output_type: type[BaseModel], tool_retries: int = 1):
+def _build_agent(probe: dict, model_obj, output_type: Type[BaseModel], tool_retries: int = 1):
     """Build Agent with discovered output mode."""
     from pydantic_ai import Agent
     output_spec = _build_output_spec(probe, output_type)
     return Agent(model_obj, output_type=output_spec, tool_retries=tool_retries)
 
 
-def _build_agent_map(probe: dict, model_obj, tool_retries: int = 1) -> dict[str, Any]:
+def _build_agent_map(probe: dict, model_obj, tool_retries: int = 1) -> Dict[str, Any]:
     """Build agents for each output type in SCHEMA_MAP."""
     agents = {}
     for type_name, model_cls in SCHEMA_MAP.items():
@@ -516,7 +516,7 @@ def _build_agent_map(probe: dict, model_obj, tool_retries: int = 1) -> dict[str,
     return agents
 
 
-def _validate_output(probe: dict, result, model_cls: type[BaseModel]) -> bool:
+def _validate_output(probe: dict, result, model_cls: Type[BaseModel]) -> bool:
     """Check if PydanticAI result.output is the expected Pydantic model."""
     output = getattr(result, "output", None)
     if output is None:
@@ -524,7 +524,7 @@ def _validate_output(probe: dict, result, model_cls: type[BaseModel]) -> bool:
     return isinstance(output, model_cls)
 
 
-def _extract_output_text(probe: dict, result, model_cls: type[BaseModel]) -> str:
+def _extract_output_text(probe: dict, result, model_cls: Type[BaseModel]) -> str:
     """Extract JSON text from result.output for fallback parsing."""
     output = getattr(result, "output", None)
     if output is not None and isinstance(output, model_cls):
@@ -553,11 +553,11 @@ def _extract_default_model_name(probe: dict, agent) -> str:
 # ---------------------------------------------------------------------------
 
 def run_structured_output(
-    agent_map: dict[str, Any],
+    agent_map: Dict[str, Any],
     probe: dict,
-    samples: list[Sample],
-) -> list[SampleResult]:
-    results: list[SampleResult] = []
+    samples: List[Sample],
+) -> List[SampleResult]:
+    results: List[SampleResult] = []
     consecutive_rate_limits = 0
 
     for i, sample in enumerate(samples):
@@ -682,9 +682,9 @@ def run_structured_output(
 def run_tool_calling(
     model_obj,
     probe: dict,
-    tool_samples: list[ToolCallSample],
+    tool_samples: List[ToolCallSample],
     default_model_name: str,
-) -> list[ToolCallResult]:
+) -> List[ToolCallResult]:
     """Run tool calling samples using PydanticAI @agent.tool decorator.
 
     Per-sample scoring: snapshots called_tools before each sample,
@@ -693,14 +693,14 @@ def run_tool_calling(
     from pydantic_ai import Agent
     from pydantic_ai.tools import RunContext
 
-    results: list[ToolCallResult] = []
+    results: List[ToolCallResult] = []
     consecutive_rate_limits = 0
 
     # Create a separate agent for tool calling (str output, no structured output)
     tc_agent = Agent(model_obj, output_type=str)
 
     # Shared tool call log — each entry is (tool_name, args_dict)
-    called_tools_log: list[tuple[str, dict]] = []
+    called_tools_log: List[Tuple[str, dict]] = []
 
     @tc_agent.tool
     def query_oa_leave_balance(ctx: RunContext[None], employee_id: str, leave_type: str, year: int) -> str:
@@ -855,12 +855,12 @@ def run_tool_calling(
 # Aggregate stats
 # ---------------------------------------------------------------------------
 
-def _aggregate_run(results: list[SampleResult], label: str) -> dict:
+def _aggregate_run(results: List[SampleResult], label: str) -> dict:
     total = len(results)
     passed = sum(1 for r in results if r.success)
     rate = round(passed / total * 100, 1) if total else 0.0
 
-    by_cat: dict[str, dict] = {}
+    by_cat: Dict[str, dict] = {}
     for r in results:
         if r.category not in by_cat:
             by_cat[r.category] = {"total": 0, "passed": 0}
@@ -871,7 +871,7 @@ def _aggregate_run(results: list[SampleResult], label: str) -> dict:
         c = by_cat[cat]
         c["success_rate"] = round(c["passed"] / c["total"] * 100, 1) if c["total"] else 0.0
 
-    failure_cats: dict[str, int] = {}
+    failure_cats: Dict[str, int] = {}
     for r in results:
         if r.failure_category != "ok":
             failure_cats[r.failure_category] = failure_cats.get(r.failure_category, 0) + 1
@@ -1038,7 +1038,7 @@ def run_spike() -> dict:
     print()
 
     # Tool calling
-    tc_results: list[ToolCallResult] = []
+    tc_results: List[ToolCallResult] = []
     if tool_calling_supported:
         print("=" * 60)
         print("TOOL CALLING RUN")
@@ -1070,7 +1070,7 @@ def run_spike() -> dict:
 
     # Tool calling stats with per-sample details
     tc_stats: dict = {}
-    tc_per_sample: list[dict] = []
+    tc_per_sample: List[dict] = []
     if tool_calling_supported and tc_results:
         tc_total = len(tc_results)
         tc_passed = sum(1 for r in tc_results if r.success)
@@ -1080,7 +1080,7 @@ def run_spike() -> dict:
         tc_args_valid = sum(1 for r in tc_results if r.arguments_valid)
         tc_args_fail = sum(1 for r in tc_results if r.tool_selection_correct and not r.arguments_valid)
         tc_provider_err = sum(1 for r in tc_results if r.provider_error)
-        tc_failure_cats: dict[str, int] = {}
+        tc_failure_cats: Dict[str, int] = {}
         for r in tc_results:
             if r.failure_category != "ok":
                 tc_failure_cats[r.failure_category] = tc_failure_cats.get(r.failure_category, 0) + 1
@@ -1223,7 +1223,7 @@ def _save_partial(data: dict, phase: str) -> None:
     print(f"Partial result saved to: {path}")
 
 
-def _load_partial(phase: str) -> dict | None:
+def _load_partial(phase: str) -> Optional[Dict]:
     path = os.path.join(os.environ.get("TEMP", "/tmp"), f"p0_spike_007_{phase}.json")
     if not os.path.exists(path):
         return None
@@ -1324,7 +1324,7 @@ def run_tc_only() -> dict:
     tc_args_valid = sum(1 for r in tc_results if r.arguments_valid)
     tc_args_fail = sum(1 for r in tc_results if r.tool_selection_correct and not r.arguments_valid)
     tc_provider_err = sum(1 for r in tc_results if r.provider_error)
-    tc_failure_cats: dict[str, int] = {}
+    tc_failure_cats: Dict[str, int] = {}
     for r in tc_results:
         if r.failure_category != "ok":
             tc_failure_cats[r.failure_category] = tc_failure_cats.get(r.failure_category, 0) + 1

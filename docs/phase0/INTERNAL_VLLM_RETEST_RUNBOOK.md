@@ -12,9 +12,10 @@ The retest is faithful and env-driven. Sample sets, prompts, Pydantic schemas, e
 
 ## Prerequisites
 
-- Python 3.12.
+- Target host: Windows 7 with Python 3.8.10. The harness files are kept Python 3.8-compatible.
 - Install each spike's dependencies from its own `requirements.txt`.
 - Air-gapped note: availability of `instructor` and `pydantic-ai` on the internal mirror is unconfirmed. Use the internal PyPI mirror or pre-downloaded wheels approved for the intranet environment.
+- PydanticAI caveat: `pydantic-ai` may not support Python 3.8 because its supported Python floor may be 3.9 or newer. If `python check_env.py` in `pydanticai_qwen_vllm` fails while importing `pydantic_ai`, report that result and run only the raw-SDK plus instructor spikes on the Windows 7 host. Defer the PydanticAI retest to a Python 3.9+ host.
 
 Do not install packages on the retest host by writing dependency state into this repository.
 

@@ -7,6 +7,7 @@ Exits 1 if any variable is missing or API is unreachable.
 
 import os
 import sys
+from typing import Dict, Tuple
 
 
 def _parse_env_int(name: str, default: int) -> int:
@@ -39,8 +40,8 @@ EXTRA_BODY = {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinki
 THINKING_OFF_INJECTED = not ENABLE_THINKING
 
 
-def check_env_vars() -> dict[str, str]:
-    results: dict[str, str] = {}
+def check_env_vars() -> Dict[str, str]:
+    results: Dict[str, str] = {}
     for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         val = os.environ.get(var)
         if var == "LLM_MODEL":
@@ -50,7 +51,7 @@ def check_env_vars() -> dict[str, str]:
     return results
 
 
-def probe_api() -> tuple[bool, bool]:
+def probe_api() -> Tuple[bool, bool]:
     """Return (api_reachable, json_schema_supported)."""
     from openai import OpenAI
 

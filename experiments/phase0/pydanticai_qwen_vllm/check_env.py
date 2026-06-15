@@ -9,6 +9,7 @@ Exits 1 if any critical check fails.
 
 import os
 import sys
+from typing import Dict, Optional
 
 
 def _parse_env_int(name: str, default: int) -> int:
@@ -55,8 +56,8 @@ def _sanitize_error(e: Exception) -> str:
     return cls
 
 
-def check_env_vars() -> dict[str, str]:
-    results: dict[str, str] = {}
+def check_env_vars() -> Dict[str, str]:
+    results: Dict[str, str] = {}
     for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         val = os.environ.get(var)
         if var == "LLM_MODEL":
@@ -95,7 +96,7 @@ def check_pydanticai() -> dict:
 
 
 def _probe_pydanticai_api(
-    base_url: str | None, api_key: str | None, model_name: str
+    base_url: Optional[str], api_key: Optional[str], model_name: str
 ) -> dict:
     """Probe PydanticAI structured output API.
 
