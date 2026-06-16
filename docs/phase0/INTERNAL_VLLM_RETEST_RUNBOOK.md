@@ -37,6 +37,7 @@ Optional:
 - `LLM_INTER_RUN_PAUSE_S` default `2`
 - `LLM_RATE_LIMIT_ABORT` default `3`
 - `LLM_MAX_TOKENS` default `2048` (instructor structured output only; raise if `IncompleteOutputException` recurs)
+- `LLM_REPORT_TAG` default = model slug (`qwen3.5-27b`->`qwen3.5_27b`, `glm-*`->`glm`); sets the `<tag>` in output filenames. Override only to disambiguate (e.g. two glm versions).
 
 > **Re-run required with this harness version.** Two harness fixes landed after the first internal run, so re-pull this branch before re-testing:
 > - **PydanticAI Run B retry is now real.** Run B previously passed `tool_retries=3`, which only governs tool-call retries and had **no** effect on structured-output recovery, so the earlier "Run B 80%" was effectively a no-retry number. It now uses `retries={"output": N}` (output-validation retry budget), the knob that actually re-asks the model on schema-invalid output.
@@ -143,13 +144,22 @@ Optional tool-calling-only execution remains available:
 python run_spike.py --run tc
 ```
 
+## Output Files (auto-saved next to each `run_spike.py`)
+
+Each `run_spike.py` now writes BOTH its JSON report and a full console log into the spike directory (no manual `> log.txt` redirect needed). Filenames carry a per-model tag, so qwen and glm runs no longer overwrite each other, and each report's JSON also records the `model` that was called:
+
+- `p0_spike_<id>_<tag>_report.json`
+- `p0_spike_<id>_<tag>_log.txt`
+
+`<id>` is `001`/`002`/`007`; `<tag>` defaults to `qwen3.5_27b` for qwen and `glm` for glm (override with `LLM_REPORT_TAG`). Files land next to the `run_spike.py` you launched (i.e. the directory you `cd` into).
+
+Example file set for this round (instructor + pydanticai, one qwen + one glm run each):
+
+- `p0_spike_002_qwen3.5_27b_report.json` + `p0_spike_002_qwen3.5_27b_log.txt`
+- `p0_spike_002_glm_report.json` + `p0_spike_002_glm_log.txt`
+- `p0_spike_007_qwen3.5_27b_report.json` + `p0_spike_007_qwen3.5_27b_log.txt`
+- `p0_spike_007_glm_report.json` + `p0_spike_007_glm_log.txt`
+
 ## What To Paste Back
 
-Paste back the full console output for all three `check_env.py` runs and all three `run_spike.py` runs, plus every generated report file under the shell temp directory:
-
-- `p0_spike_001_report.json`
-- `p0_spike_002_report.json`
-- `p0_spike_007_report.json`
-- Any phased partial report files produced by optional phased runs
-
-Do not redact by replacing real secret values, because the harnesses should never print them. If a secret appears in output, stop and report the leak path instead of continuing.
+Paste back all the `*_report.json` and `*_log.txt` files above, plus the `check_env.py` console output. Do not redact: the harnesses never print secrets. If a secret ever appears in output, stop and report the leak path instead of continuing.

@@ -621,13 +621,66 @@ def run_spike() -> dict:
     return report
 
 
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _report_tag():
+    """Filename tag from model: 'qwen3.5-27b'->'qwen3.5_27b', 'glm-4.7'->'glm'.
+
+    Override with LLM_REPORT_TAG (e.g. to disambiguate two glm versions).
+    """
+    import re as _re
+    override = os.environ.get("LLM_REPORT_TAG", "").strip()
+    if override:
+        return _re.sub(r"[^0-9A-Za-z._-]+", "_", override).strip("_")
+    model = os.environ.get("LLM_MODEL", "model").strip()
+    if model.lower().startswith("glm"):
+        return "glm"
+    return _re.sub(r"[^0-9A-Za-z.]+", "_", model).strip("_") or "model"
+
+
+REPORT_TAG = _report_tag()
+
+
+class _Tee:
+    """Write to console and a log file at the same time."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self):
+        for s in self._streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def _install_tee(spike_id):
+    """Tee stdout+stderr to OUTPUT_DIR/p0_spike_<id>_<tag>_log.txt."""
+    import atexit
+    log_path = os.path.join(OUTPUT_DIR, "p0_spike_%s_%s_log.txt" % (spike_id, REPORT_TAG))
+    fh = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _Tee(sys.__stdout__, fh)
+    sys.stderr = _Tee(sys.__stderr__, fh)
+    atexit.register(fh.close)
+    print("Log file: %s" % log_path)
+    return log_path
+
+
 if __name__ == "__main__":
+    _install_tee("001")
     report = run_spike()
-    # Write report to temp for ADR evidence capture
-    report_path = os.path.join(
-        os.environ.get("TEMP", "/tmp"),
-        "p0_spike_001_report.json",
-    )
+    # Write report next to this script for ADR evidence capture
+    report_path = os.path.join(OUTPUT_DIR, "p0_spike_001_%s_report.json" % REPORT_TAG)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"Report saved to: {report_path}")
