@@ -501,18 +501,26 @@ def _build_output_spec(probe: dict, output_type: Type[BaseModel]):
         return output_type
 
 
-def _build_agent(probe: dict, model_obj, output_type: Type[BaseModel], tool_retries: int = 1):
-    """Build Agent with discovered output mode."""
+def _build_agent(probe: dict, model_obj, output_type: Type[BaseModel], output_retries: int = 1):
+    """Build Agent with discovered output mode.
+
+    output_retries sets the OUTPUT-VALIDATION retry budget via pydantic-ai's
+    unified ``retries={"output": N}``. The previous ``tool_retries`` knob only
+    governed tool-call retries (deprecated in pydantic-ai >=1.x) and had no
+    effect on structured-output recovery, so Run B never actually re-asked the
+    model on schema-invalid output. These structured agents register no tools,
+    so only the output budget is relevant.
+    """
     from pydantic_ai import Agent
     output_spec = _build_output_spec(probe, output_type)
-    return Agent(model_obj, output_type=output_spec, tool_retries=tool_retries)
+    return Agent(model_obj, output_type=output_spec, retries={"output": output_retries})
 
 
-def _build_agent_map(probe: dict, model_obj, tool_retries: int = 1) -> Dict[str, Any]:
+def _build_agent_map(probe: dict, model_obj, output_retries: int = 1) -> Dict[str, Any]:
     """Build agents for each output type in SCHEMA_MAP."""
     agents = {}
     for type_name, model_cls in SCHEMA_MAP.items():
-        agents[type_name] = _build_agent(probe, model_obj, model_cls, tool_retries)
+        agents[type_name] = _build_agent(probe, model_obj, model_cls, output_retries)
     return agents
 
 
@@ -932,7 +940,7 @@ def run_spike() -> dict:
 
     # Build model + agents per output type
     model_obj = _build_model(probe, base_url, api_key, model_name)
-    agent_map_a = _build_agent_map(probe, model_obj, tool_retries=1)
+    agent_map_a = _build_agent_map(probe, model_obj, output_retries=1)
 
     # Verify one agent works
     probe_agent = agent_map_a.get("Intent")
@@ -1029,11 +1037,11 @@ def run_spike() -> dict:
     time.sleep(INTER_RUN_PAUSE_S)
     print()
 
-    # Run B: tool_retries=3
+    # Run B: output-validation retries=3
     print("=" * 60)
-    print("RUN B: PydanticAI tool_retries=3")
+    print("RUN B: PydanticAI output-validation retries=3 (retries={'output': 3})")
     print("=" * 60)
-    agent_map_b = _build_agent_map(probe, model_obj, tool_retries=3)
+    agent_map_b = _build_agent_map(probe, model_obj, output_retries=3)
     run_b_results = run_structured_output(agent_map_b, probe, so_samples)
     print()
 
@@ -1191,6 +1199,8 @@ def run_spike() -> dict:
         "enable_thinking": ENABLE_THINKING,
         "thinking_off_injected": THINKING_OFF_INJECTED,
         "extra_body": EXTRA_BODY,
+        "output_retry_budget": {"run_a": 1, "run_b": 3},
+        "retry_knob": "pydantic-ai retries={'output': N}; replaces deprecated tool_retries (tool-only) so Run B now actually retries schema-invalid output",
         "run_a_default_retry": stats_a,
         "run_b_model_retries_3": stats_b,
         "retry_analysis": {

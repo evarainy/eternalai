@@ -36,6 +36,11 @@ Optional:
 - `LLM_REQUEST_DELAY_S` default `0`
 - `LLM_INTER_RUN_PAUSE_S` default `2`
 - `LLM_RATE_LIMIT_ABORT` default `3`
+- `LLM_MAX_TOKENS` default `2048` (instructor structured output only; raise if `IncompleteOutputException` recurs)
+
+> **Re-run required with this harness version.** Two harness fixes landed after the first internal run, so re-pull this branch before re-testing:
+> - **PydanticAI Run B retry is now real.** Run B previously passed `tool_retries=3`, which only governs tool-call retries and had **no** effect on structured-output recovery, so the earlier "Run B 80%" was effectively a no-retry number. It now uses `retries={"output": N}` (output-validation retry budget), the knob that actually re-asks the model on schema-invalid output.
+> - **instructor `max_tokens` raised 1024 to 2048 (env-tunable).** The 4 qwen Run-B `api_error`s were `IncompleteOutputException` (output truncated at the token cap, not a network fault). The new default gives long structured output room; raise `LLM_MAX_TOKENS` further if it still appears.
 
 PowerShell:
 
@@ -48,6 +53,7 @@ $env:LLM_ENABLE_THINKING = "0"
 $env:LLM_REQUEST_DELAY_S = "0"
 $env:LLM_INTER_RUN_PAUSE_S = "2"
 $env:LLM_RATE_LIMIT_ABORT = "3"
+$env:LLM_MAX_TOKENS = "2048"
 ```
 
 Bash:
@@ -61,6 +67,7 @@ export LLM_ENABLE_THINKING="0"
 export LLM_REQUEST_DELAY_S="0"
 export LLM_INTER_RUN_PAUSE_S="2"
 export LLM_RATE_LIMIT_ABORT="3"
+export LLM_MAX_TOKENS="2048"
 ```
 
 Public-equivalent reference settings for context:

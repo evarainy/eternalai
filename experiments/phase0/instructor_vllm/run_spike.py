@@ -155,6 +155,11 @@ REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
 REQUEST_DELAY_S = _parse_env_float("LLM_REQUEST_DELAY_S", 0.0)
 RATE_LIMIT_ABORT_THRESHOLD = _parse_env_int("LLM_RATE_LIMIT_ABORT", 3)
 INTER_RUN_PAUSE_S = _parse_env_float("LLM_INTER_RUN_PAUSE_S", 2.0)
+# Raised from the original hard-coded 1024: 4 qwen Run-B failures were
+# IncompleteOutputException (output truncated at max_tokens, NOT a network
+# fault). 2048 gives legitimate-but-long structured output room; tunable via
+# LLM_MAX_TOKENS if IncompleteOutputException still appears.
+MAX_OUTPUT_TOKENS = _parse_env_int("LLM_MAX_TOKENS", 2048)
 ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
 EXTRA_BODY: Dict[str, Any] = (
     {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
@@ -675,7 +680,7 @@ def run_single_attempt(
                     {"role": "user", "content": sample.user_msg},
                 ],
                 max_retries=0,
-                max_tokens=1024,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 timeout=timeout_s,
                 extra_body=EXTRA_BODY,
             )
@@ -775,7 +780,7 @@ def run_with_retry(
                     {"role": "user", "content": sample.user_msg},
                 ],
                 max_retries=3,
-                max_tokens=1024,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 timeout=timeout_s,
                 extra_body=EXTRA_BODY,
             )
@@ -1004,6 +1009,7 @@ def run_spike() -> dict:
     print(f"Request delay: {REQUEST_DELAY_S}s")
     print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
     print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
     print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
     print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
     print(f"Extra body: {EXTRA_BODY}")
@@ -1262,6 +1268,7 @@ def run_spike() -> dict:
     print(f"Request delay: {REQUEST_DELAY_S}s")
     print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
     print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
     print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
     print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
     print(f"Extra body: {EXTRA_BODY}")
@@ -1331,6 +1338,7 @@ def run_spike() -> dict:
         "short_timeout_s": SHORT_TIMEOUT_S,
         "request_delay_s": REQUEST_DELAY_S,
         "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
         "enable_thinking": ENABLE_THINKING,
         "thinking_off_injected": THINKING_OFF_INJECTED,
         "extra_body": EXTRA_BODY,
@@ -1671,6 +1679,7 @@ def run_report() -> None:
         "short_timeout_s": SHORT_TIMEOUT_S,
         "request_delay_s": REQUEST_DELAY_S,
         "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
         "enable_thinking": ENABLE_THINKING,
         "thinking_off_injected": THINKING_OFF_INJECTED,
         "extra_body": EXTRA_BODY,
