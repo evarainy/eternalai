@@ -1,4 +1,4 @@
-# CLAUDE.md — Phase 0 Compact Claude Code Memory v1.0.12
+# CLAUDE.md — Phase 1 Compact Claude Code Memory v2.0.0
 
 Keep this file compact. Claude Code loads project memory at session start, so detailed rules must be read on demand instead of inlined here. Do not add `@import` links to long specs.
 
@@ -7,7 +7,7 @@ Keep this file compact. Claude Code loads project memory at session start, so de
 - **架构**: 六边形 (Ports/Adapters)，`app/ports/` = Protocol 接口，`app/infra/` = 实现
 - **后端**: Python + uv + FastAPI | **前端**: React 18 + Vite + Ant Design 5.x
 - **数据层**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: Qwen + vLLM raw JSON mode (instructor/PydanticAI 均 failed)
+- **LLM**: Qwen + vLLM raw JSON mode（基线；instructor/PydanticAI 非基线，内网复测结构化达标但 raw JSON 仍最优，详见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md`）
 - **可观测**: OpenTelemetry + Langfuse
 - **详细技术栈决策**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
 
@@ -27,10 +27,10 @@ infra/docker/       Docker Compose 模板
 ```
 
 ## Git workflow
-- **主分支**: `phase0/main` (不是 `main`)
-- **任务分支**: `phase0/<task_id>` (例: `phase0/P0-DOMAIN-004a`)
-- **Commit message**: `phase0(<task_id>): <简要描述>`
-- **Merge message**: `merge phase0(<task_id>): <简要描述>`
+- **主分支**: `phase0/main` (Phase 1 续用此主干；不是 `main`)
+- **任务分支**: `phase1/<task_id>` (例: `phase1/P1-XXX-001`；旧 `phase0/<task_id>` 仅历史/补丁)
+- **Commit message**: `phase1(<task_id>): <简要描述>`
+- **Merge message**: `merge phase1(<task_id>): <简要描述>`
 - 每次 merge 到 phase0/main 后检查 remote GitHub Actions CI
 
 ## Validation commands
@@ -54,14 +54,17 @@ git diff --cached --name-only && git diff --cached --stat && git diff --cached -
 git ls-files --others --exclude-standard
 ```
 
-## Phase 0 rules (当前阶段)
-- Phase 0 only; no Phase 1 implementation.
+## Phase 1 rules (当前阶段)
+- Phase 1 implementation in progress. Phase 0 interface contracts in `app/ports/` are FROZEN: do not edit without explicit task authorization + human approval.
+- Hexagonal boundary holds: `app/ports/` must not depend on `app/infra/`.
+- LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
+- Task Record: reuse the Phase 0 YAML format + `task_logs/INDEX` row (Phase 1 `docs/phase1/` layout TBD in the Phase 1 Plan).
 - One session turn = one `task_id`. Start with `/phase-task <task_id>`.
 - Plan first; wait for human approval before edits.
 - Use Explore/Plan/read-only behavior for investigation when possible.
 - If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
 - When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.
-- Skills/subagents are advisory aids only; they must not override Phase 0 rules or task prompts.
+- Skills/subagents are advisory aids only; they must not override Phase 1 rules or task prompts.
 
 ## Read on demand (not by default)
 - Context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
