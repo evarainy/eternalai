@@ -20,7 +20,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type
 
 from pydantic import BaseModel, Field, ValidationError, __version__ as pydantic_version
 
@@ -35,7 +35,7 @@ class IntentResult(BaseModel):
         "chitchat", "complaint", "feedback",
     ]
     confidence: float
-    entities: list[str]
+    entities: List[str]
     language: str
 
 
@@ -53,13 +53,13 @@ class PlanStep(BaseModel):
     step_id: int
     action: str
     target: str
-    depends_on: list[int]
+    depends_on: List[int]
 
 
 class PlanDraftResult(BaseModel):
     plan_id: str
     goal: str
-    steps: list[PlanStep]
+    steps: List[PlanStep]
     estimated_cost: Literal["low", "medium", "high"]
     risk_level: Literal["low", "medium", "high"]
 
@@ -77,21 +77,21 @@ class ResponseEnvelopeResult(BaseModel):
     trace: TraceInfo
 
 
-SCHEMA_MAP: dict[str, type[BaseModel]] = {
+SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
     "Intent": IntentResult,
     "CapabilityRef": CapabilityRefResult,
     "PlanDraft": PlanDraftResult,
     "ResponseEnvelope": ResponseEnvelopeResult,
 }
 
-CRITICAL_FIELDS: dict[str, list[str]] = {
+CRITICAL_FIELDS: Dict[str, List[str]] = {
     "Intent": ["intent", "confidence", "language"],
     "CapabilityRef": ["capability_id", "domain", "description"],
     "PlanDraft": ["plan_id", "goal", "steps"],
     "ResponseEnvelope": ["status", "code", "message", "trace"],
 }
 
-ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
+ENUM_FIELD_DEFINITIONS: Dict[str, Dict[str, List[str]]] = {
     "Intent": {
         "intent": [
             "ask_question", "request_action", "provide_info",
@@ -107,11 +107,59 @@ ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
 
 MIN_STRUCTURED_OUTPUT_SAMPLES = 50
 MIN_TOOL_CALLING_SAMPLES = 8
-REQUEST_TIMEOUT_S = 30
+
+
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be a number", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
 SHORT_TIMEOUT_S = 3
-REQUEST_DELAY_S = 2
-RATE_LIMIT_ABORT_THRESHOLD = 3
-INTER_RUN_PAUSE_S = 10
+REQUEST_DELAY_S = _parse_env_float("LLM_REQUEST_DELAY_S", 0.0)
+RATE_LIMIT_ABORT_THRESHOLD = _parse_env_int("LLM_RATE_LIMIT_ABORT", 3)
+INTER_RUN_PAUSE_S = _parse_env_float("LLM_INTER_RUN_PAUSE_S", 2.0)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY: Dict[str, Any] = (
+    {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+)
+THINKING_OFF_INJECTED = not ENABLE_THINKING
+
+
+def _model_settings(timeout_s: int, **extra_settings: Any) -> Dict[str, Any]:
+    settings: Dict[str, Any] = {"timeout": timeout_s, "extra_body": EXTRA_BODY}
+    settings.update(extra_settings)
+    return settings
 
 REFUSAL_PATTERNS = [
     r"\bi can'?t\b", r"\bi cannot\b", r"\bi'?m not able\b",
@@ -144,7 +192,7 @@ class SampleResult:
     failure_category: str
     schema_validation_passed: bool = False
     raw_response: str = ""
-    parsed: dict | None = None
+    parsed: Optional[Dict] = None
     error: str = ""
     latency_ms: float = 0.0
 
@@ -164,7 +212,7 @@ class ToolCallResult:
     tool_selected: str = ""
     tool_selection_correct: bool = False
     arguments_valid: bool = False
-    called_tools_for_sample: list[str] = field(default_factory=list)
+    called_tools_for_sample: List[str] = field(default_factory=list)
     failure_category: str = "ok"
     provider_error: bool = False
     sanitized_error_type: str = ""
@@ -194,7 +242,7 @@ class QueryHikAccessLogInput(BaseModel):
     device_location: Literal["main_entrance", "office_floor", "parking", "server_room"]
 
 
-TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
+TOOL_SCHEMAS: Dict[str, Type[BaseModel]] = {
     "query_oa_leave_balance": QueryOALeaveBalanceInput,
     "query_u8_invoice_status": QueryU8InvoiceStatusInput,
     "query_hik_access_log": QueryHikAccessLogInput,
@@ -205,8 +253,8 @@ TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
 # Sample builders
 # ---------------------------------------------------------------------------
 
-def build_structured_output_samples() -> list[Sample]:
-    samples: list[Sample] = []
+def build_structured_output_samples() -> List[Sample]:
+    samples: List[Sample] = []
     system_hints = {
         "Intent": (
             'Classify user intent. Output JSON: '
@@ -333,7 +381,7 @@ def build_structured_output_samples() -> list[Sample]:
     return samples  # 15+9+8+6+6+6 = 50
 
 
-def build_tool_calling_samples() -> list[ToolCallSample]:
+def build_tool_calling_samples() -> List[ToolCallSample]:
     prompts = [
         ("TC-001", "Check my annual leave balance. My employee ID is EMP-042.", "query_oa_leave_balance"),
         ("TC-002", "What's the status of invoice INV-2026-078 from the finance department?", "query_u8_invoice_status"),
@@ -397,8 +445,8 @@ def _is_rate_limit_error(e: Exception) -> bool:
     )
 
 
-def _self_check(samples: list[Sample]) -> list[str]:
-    errors: list[str] = []
+def _self_check(samples: List[Sample]) -> List[str]:
+    errors: List[str] = []
     if len(samples) < MIN_STRUCTURED_OUTPUT_SAMPLES:
         errors.append(f"Sample count {len(samples)} < minimum {MIN_STRUCTURED_OUTPUT_SAMPLES}")
     for s in samples:
@@ -440,7 +488,7 @@ def _build_model(probe: dict, base_url: str, api_key: str, model_name: str):
     return OpenAIChatModel(model_name, provider=provider)
 
 
-def _build_output_spec(probe: dict, output_type: type[BaseModel]):
+def _build_output_spec(probe: dict, output_type: Type[BaseModel]):
     """Build the output_type spec based on probe's discovered output_mode."""
     output_mode = probe.get("output_mode", "")
     if "PromptedOutput" in output_mode:
@@ -453,22 +501,30 @@ def _build_output_spec(probe: dict, output_type: type[BaseModel]):
         return output_type
 
 
-def _build_agent(probe: dict, model_obj, output_type: type[BaseModel], tool_retries: int = 1):
-    """Build Agent with discovered output mode."""
+def _build_agent(probe: dict, model_obj, output_type: Type[BaseModel], output_retries: int = 1):
+    """Build Agent with discovered output mode.
+
+    output_retries sets the OUTPUT-VALIDATION retry budget via pydantic-ai's
+    unified ``retries={"output": N}``. The previous ``tool_retries`` knob only
+    governed tool-call retries (deprecated in pydantic-ai >=1.x) and had no
+    effect on structured-output recovery, so Run B never actually re-asked the
+    model on schema-invalid output. These structured agents register no tools,
+    so only the output budget is relevant.
+    """
     from pydantic_ai import Agent
     output_spec = _build_output_spec(probe, output_type)
-    return Agent(model_obj, output_type=output_spec, tool_retries=tool_retries)
+    return Agent(model_obj, output_type=output_spec, retries={"output": output_retries})
 
 
-def _build_agent_map(probe: dict, model_obj, tool_retries: int = 1) -> dict[str, Any]:
+def _build_agent_map(probe: dict, model_obj, output_retries: int = 1) -> Dict[str, Any]:
     """Build agents for each output type in SCHEMA_MAP."""
     agents = {}
     for type_name, model_cls in SCHEMA_MAP.items():
-        agents[type_name] = _build_agent(probe, model_obj, model_cls, tool_retries)
+        agents[type_name] = _build_agent(probe, model_obj, model_cls, output_retries)
     return agents
 
 
-def _validate_output(probe: dict, result, model_cls: type[BaseModel]) -> bool:
+def _validate_output(probe: dict, result, model_cls: Type[BaseModel]) -> bool:
     """Check if PydanticAI result.output is the expected Pydantic model."""
     output = getattr(result, "output", None)
     if output is None:
@@ -476,7 +532,7 @@ def _validate_output(probe: dict, result, model_cls: type[BaseModel]) -> bool:
     return isinstance(output, model_cls)
 
 
-def _extract_output_text(probe: dict, result, model_cls: type[BaseModel]) -> str:
+def _extract_output_text(probe: dict, result, model_cls: Type[BaseModel]) -> str:
     """Extract JSON text from result.output for fallback parsing."""
     output = getattr(result, "output", None)
     if output is not None and isinstance(output, model_cls):
@@ -505,11 +561,11 @@ def _extract_default_model_name(probe: dict, agent) -> str:
 # ---------------------------------------------------------------------------
 
 def run_structured_output(
-    agent_map: dict[str, Any],
+    agent_map: Dict[str, Any],
     probe: dict,
-    samples: list[Sample],
-) -> list[SampleResult]:
-    results: list[SampleResult] = []
+    samples: List[Sample],
+) -> List[SampleResult]:
+    results: List[SampleResult] = []
     consecutive_rate_limits = 0
 
     for i, sample in enumerate(samples):
@@ -537,7 +593,7 @@ def run_structured_output(
             t0 = time.time()
             result = agent.run_sync(
                 sample.user_msg,
-                model_settings={"timeout": timeout_s},
+                model_settings=_model_settings(timeout_s),
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -634,9 +690,9 @@ def run_structured_output(
 def run_tool_calling(
     model_obj,
     probe: dict,
-    tool_samples: list[ToolCallSample],
+    tool_samples: List[ToolCallSample],
     default_model_name: str,
-) -> list[ToolCallResult]:
+) -> List[ToolCallResult]:
     """Run tool calling samples using PydanticAI @agent.tool decorator.
 
     Per-sample scoring: snapshots called_tools before each sample,
@@ -645,14 +701,14 @@ def run_tool_calling(
     from pydantic_ai import Agent
     from pydantic_ai.tools import RunContext
 
-    results: list[ToolCallResult] = []
+    results: List[ToolCallResult] = []
     consecutive_rate_limits = 0
 
     # Create a separate agent for tool calling (str output, no structured output)
     tc_agent = Agent(model_obj, output_type=str)
 
     # Shared tool call log — each entry is (tool_name, args_dict)
-    called_tools_log: list[tuple[str, dict]] = []
+    called_tools_log: List[Tuple[str, dict]] = []
 
     @tc_agent.tool
     def query_oa_leave_balance(ctx: RunContext[None], employee_id: str, leave_type: str, year: int) -> str:
@@ -689,7 +745,7 @@ def run_tool_calling(
             t0 = time.time()
             result = tc_agent.run_sync(
                 sample.user_msg,
-                model_settings={"timeout": REQUEST_TIMEOUT_S, "tool_choice": "auto"},
+                model_settings=_model_settings(REQUEST_TIMEOUT_S, tool_choice="auto"),
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -807,12 +863,12 @@ def run_tool_calling(
 # Aggregate stats
 # ---------------------------------------------------------------------------
 
-def _aggregate_run(results: list[SampleResult], label: str) -> dict:
+def _aggregate_run(results: List[SampleResult], label: str) -> dict:
     total = len(results)
     passed = sum(1 for r in results if r.success)
     rate = round(passed / total * 100, 1) if total else 0.0
 
-    by_cat: dict[str, dict] = {}
+    by_cat: Dict[str, dict] = {}
     for r in results:
         if r.category not in by_cat:
             by_cat[r.category] = {"total": 0, "passed": 0}
@@ -823,7 +879,7 @@ def _aggregate_run(results: list[SampleResult], label: str) -> dict:
         c = by_cat[cat]
         c["success_rate"] = round(c["passed"] / c["total"] * 100, 1) if c["total"] else 0.0
 
-    failure_cats: dict[str, int] = {}
+    failure_cats: Dict[str, int] = {}
     for r in results:
         if r.failure_category != "ok":
             failure_cats[r.failure_category] = failure_cats.get(r.failure_category, 0) + 1
@@ -884,12 +940,15 @@ def run_spike() -> dict:
 
     # Build model + agents per output type
     model_obj = _build_model(probe, base_url, api_key, model_name)
-    agent_map_a = _build_agent_map(probe, model_obj, tool_retries=1)
+    agent_map_a = _build_agent_map(probe, model_obj, output_retries=1)
 
     # Verify one agent works
     probe_agent = agent_map_a.get("Intent")
     try:
-        _probe_result = probe_agent.run_sync("test", model_settings={"timeout": 10})
+        _probe_result = probe_agent.run_sync(
+            "test",
+            model_settings=_model_settings(REQUEST_TIMEOUT_S),
+        )
     except Exception as e:
         print(f"ERROR: Agent probe failed: {type(e).__name__}", file=sys.stderr)
         sys.exit(1)
@@ -907,6 +966,11 @@ def run_spike() -> dict:
     print(f"Total samples: {total_samples}")
     print(f"Request timeout: {REQUEST_TIMEOUT_S}s (short: {SHORT_TIMEOUT_S}s)")
     print(f"Request pacing: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print(f"Self-check: PASSED")
     print()
 
@@ -927,6 +991,7 @@ def run_spike() -> dict:
             messages=[{"role": "system", "content": "Output only valid JSON."},
                        {"role": "user", "content": '{"answer":"ok"}'}],
             max_tokens=30, response_format={"type": "json_schema", "json_schema": schema},
+            extra_body=EXTRA_BODY,
         )
         pc = (p_resp.choices[0].message.content or "").strip()
         if pc.startswith("```"):
@@ -950,6 +1015,7 @@ def run_spike() -> dict:
             model=model_name,
             messages=[{"role": "user", "content": "Call probe_tool with q='test'"}],
             max_tokens=30, tools=tc_probe_tools, tool_choice="auto", timeout=REQUEST_TIMEOUT_S,
+            extra_body=EXTRA_BODY,
         )
         if tc_resp.choices[0].message.tool_calls:
             tool_calling_supported = True
@@ -971,16 +1037,16 @@ def run_spike() -> dict:
     time.sleep(INTER_RUN_PAUSE_S)
     print()
 
-    # Run B: tool_retries=3
+    # Run B: output-validation retries=3
     print("=" * 60)
-    print("RUN B: PydanticAI tool_retries=3")
+    print("RUN B: PydanticAI output-validation retries=3 (retries={'output': 3})")
     print("=" * 60)
-    agent_map_b = _build_agent_map(probe, model_obj, tool_retries=3)
+    agent_map_b = _build_agent_map(probe, model_obj, output_retries=3)
     run_b_results = run_structured_output(agent_map_b, probe, so_samples)
     print()
 
     # Tool calling
-    tc_results: list[ToolCallResult] = []
+    tc_results: List[ToolCallResult] = []
     if tool_calling_supported:
         print("=" * 60)
         print("TOOL CALLING RUN")
@@ -1012,7 +1078,7 @@ def run_spike() -> dict:
 
     # Tool calling stats with per-sample details
     tc_stats: dict = {}
-    tc_per_sample: list[dict] = []
+    tc_per_sample: List[dict] = []
     if tool_calling_supported and tc_results:
         tc_total = len(tc_results)
         tc_passed = sum(1 for r in tc_results if r.success)
@@ -1022,7 +1088,7 @@ def run_spike() -> dict:
         tc_args_valid = sum(1 for r in tc_results if r.arguments_valid)
         tc_args_fail = sum(1 for r in tc_results if r.tool_selection_correct and not r.arguments_valid)
         tc_provider_err = sum(1 for r in tc_results if r.provider_error)
-        tc_failure_cats: dict[str, int] = {}
+        tc_failure_cats: Dict[str, int] = {}
         for r in tc_results:
             if r.failure_category != "ok":
                 tc_failure_cats[r.failure_category] = tc_failure_cats.get(r.failure_category, 0) + 1
@@ -1071,6 +1137,13 @@ def run_spike() -> dict:
     print(f"pydanticai version: {pydanticai_version}")
     print(f"Pydantic version: {pydantic_version}")
     print(f"output_type param: {output_type_param}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     print(f"Run A (default retry): {stats_a['passed']}/{stats_a['total']} ({stats_a['success_rate']}%)")
     print(f"  provider_rate_limit: {stats_a['provider_rate_limit_count']}, api_error: {stats_a['api_error_count']}")
@@ -1108,6 +1181,7 @@ def run_spike() -> dict:
 
     # Build report
     report = {
+        "model": os.environ.get("LLM_MODEL", ""),
         "pydanticai_version": pydanticai_version,
         "pydantic_version": pydantic_version,
         "output_type_param": output_type_param,
@@ -1121,6 +1195,13 @@ def run_spike() -> dict:
         "self_check_passed": True,
         "request_timeout_s": REQUEST_TIMEOUT_S,
         "short_timeout_s": SHORT_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
+        "output_retry_budget": {"run_a": 1, "run_b": 3},
+        "retry_knob": "pydantic-ai retries={'output': N}; replaces deprecated tool_retries (tool-only) so Run B now actually retries schema-invalid output",
         "run_a_default_retry": stats_a,
         "run_b_model_retries_3": stats_b,
         "retry_analysis": {
@@ -1136,7 +1217,6 @@ def run_spike() -> dict:
         "meets_threshold": overall_pass,
         "structured_output_threshold_met": so_threshold_met,
         "tool_calling_threshold_met": tc_threshold_met,
-        "request_delay_s": REQUEST_DELAY_S,
         "rate_limit_abort_threshold": RATE_LIMIT_ABORT_THRESHOLD,
         "execution_environment": "public_vendor_api",
         "internal_endpoint_validation": "deferred / not_executed",
@@ -1154,7 +1234,7 @@ def _save_partial(data: dict, phase: str) -> None:
     print(f"Partial result saved to: {path}")
 
 
-def _load_partial(phase: str) -> dict | None:
+def _load_partial(phase: str) -> Optional[Dict]:
     path = os.path.join(os.environ.get("TEMP", "/tmp"), f"p0_spike_007_{phase}.json")
     if not os.path.exists(path):
         return None
@@ -1200,6 +1280,7 @@ def run_tc_only() -> dict:
             model=model_name,
             messages=[{"role": "user", "content": "Call probe_tool with q='test'"}],
             max_tokens=30, tools=tc_probe_tools, tool_choice="auto", timeout=REQUEST_TIMEOUT_S,
+            extra_body=EXTRA_BODY,
         )
         if tc_resp.choices[0].message.tool_calls:
             tool_calling_supported = True
@@ -1207,10 +1288,23 @@ def run_tc_only() -> dict:
         pass
 
     print(f"tool_calling_supported: {str(tool_calling_supported).lower()}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
 
     if not tool_calling_supported:
         print("Tool calling not supported by provider.")
-        return {"tool_calling_supported": False, "per_sample": []}
+        return {
+            "tool_calling_supported": False,
+            "request_timeout_s": REQUEST_TIMEOUT_S,
+            "request_delay_s": REQUEST_DELAY_S,
+            "enable_thinking": ENABLE_THINKING,
+            "thinking_off_injected": THINKING_OFF_INJECTED,
+            "extra_body": EXTRA_BODY,
+            "per_sample": [],
+        }
 
     print(f"TOOL CALLING: {len(tc_samples)} samples")
     probe_agent = Agent(model_obj, output_type=str) if False else None  # just for _extract_default_model_name
@@ -1241,7 +1335,7 @@ def run_tc_only() -> dict:
     tc_args_valid = sum(1 for r in tc_results if r.arguments_valid)
     tc_args_fail = sum(1 for r in tc_results if r.tool_selection_correct and not r.arguments_valid)
     tc_provider_err = sum(1 for r in tc_results if r.provider_error)
-    tc_failure_cats: dict[str, int] = {}
+    tc_failure_cats: Dict[str, int] = {}
     for r in tc_results:
         if r.failure_category != "ok":
             tc_failure_cats[r.failure_category] = tc_failure_cats.get(r.failure_category, 0) + 1
@@ -1270,9 +1364,69 @@ def run_tc_only() -> dict:
 
     return {
         "tool_calling_supported": True,
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "tc_stats": tc_stats,
         "per_sample": per_sample,
     }
+
+
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _report_tag():
+    """Filename tag from model: 'qwen3.5-27b'->'qwen3.5_27b', 'glm-4.7'->'glm'.
+
+    Override with LLM_REPORT_TAG (e.g. to disambiguate two glm versions).
+    """
+    import re as _re
+    override = os.environ.get("LLM_REPORT_TAG", "").strip()
+    if override:
+        return _re.sub(r"[^0-9A-Za-z._-]+", "_", override).strip("_")
+    model = os.environ.get("LLM_MODEL", "model").strip()
+    if model.lower().startswith("glm"):
+        return "glm"
+    return _re.sub(r"[^0-9A-Za-z.]+", "_", model).strip("_") or "model"
+
+
+REPORT_TAG = _report_tag()
+
+
+class _Tee:
+    """Write to console and a log file at the same time."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self):
+        for s in self._streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def _install_tee(spike_id):
+    """Tee stdout+stderr to OUTPUT_DIR/p0_spike_<id>_<tag>_log.txt."""
+    import atexit
+    log_path = os.path.join(OUTPUT_DIR, "p0_spike_%s_%s_log.txt" % (spike_id, REPORT_TAG))
+    fh = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _Tee(sys.__stdout__, fh)
+    sys.stderr = _Tee(sys.__stderr__, fh)
+    atexit.register(fh.close)
+    print("Log file: %s" % log_path)
+    return log_path
 
 
 if __name__ == "__main__":
@@ -1282,9 +1436,11 @@ if __name__ == "__main__":
                         help="Which phase: a (default retry), b (model_retries=3), tc (tool calling), all")
     args = parser.parse_args()
 
+    _install_tee("007")
+
     if args.run == "all":
         report = run_spike()
-        report_path = os.path.join(os.environ.get("TEMP", "/tmp"), "p0_spike_007_report.json")
+        report_path = os.path.join(OUTPUT_DIR, "p0_spike_007_%s_report.json" % REPORT_TAG)
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
         print(f"\nReport saved to: {report_path}")

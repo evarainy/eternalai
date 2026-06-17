@@ -78,3 +78,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P0-GT-002 | 2026-06-11 | passed | phase0/P0-GT-002 | ab504db | not_applicable | codex_review |
 | P0-DOMAIN-007c | 2026-06-12 | passed | phase0/P0-DOMAIN-007c | (see git log) | not_applicable | codex_review |
 | P0-GT-003 | 2026-06-12 | passed | phase0/P0-GT-003 | (see git log) | 27392168467 | codex_review_pending |
+| P0-SPIKE-INTERNAL-REVAL | 2026-06-17 | passed | phase0/P0-SPIKE-INTERNAL-REVAL | (see git log) | not_applicable | human_review_pending |

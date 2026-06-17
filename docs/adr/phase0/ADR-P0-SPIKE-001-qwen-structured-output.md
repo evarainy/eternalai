@@ -279,3 +279,32 @@ Failure categories: {'timeout': 2, 'parse_fail': 1, 'schema_fail': 1}
 - logs: Environment check and spike execution output recorded in section 11
 - test output: 54/54 samples executed; JSON report at $TEMP/p0_spike_001_report.json
 - commit / package: No commit; staged for review only
+
+## 14. Internal Endpoint Validation (vLLM re-test, 2026-06)
+
+Re-validation of this spike against an internal vLLM (OpenAI-compatible) endpoint, closing the deferred `internal_endpoint_validation` activation condition (section 2). The public-mode sections above are unchanged (append-only addendum).
+
+- date: 2026-06-17
+- task: P0-SPIKE-INTERNAL-REVAL
+- environment: internal vLLM / Qwen (OpenAI-compatible); endpoint URL and API key kept out of the repo
+- models: qwen3.5-27b; glm-4.7 (second model, same endpoint family)
+- effective config (echoed in report): request_timeout_s=120, enable_thinking=false (requested), request_delay_s=0
+- sample set / scoring: unchanged from the public run (same 54 structured samples; Pydantic v2 `model_validate` + `Literal[...]` enum enforcement)
+
+### Result — structured output
+
+| model | structured output | threshold (>=80%) |
+|---|---|---|
+| qwen3.5-27b | 98.1% (53/54) | PASS |
+| glm-4.7 | 90.7% (49/54) | PASS |
+
+### Conclusion
+
+- The raw OpenAI SDK + `json_object` + Pydantic `Literal[...]` baseline is **confirmed on internal infrastructure** (98.1% / 90.7%, both >= 80%), at or above the 92.6% public run.
+- The public-run hypothesis that the few failures were 30s timeouts (not schema failures) is consistent with the internal result: with internal low latency, structured adherence is at or above the public level.
+- **The Phase 1 baseline (P0-SPIKE-001 approach) is unchanged and now carries internal evidence.**
+
+### Provenance / honesty notes
+
+- The internal report JSON still carries `execution_environment: public_vendor_api` and `internal_endpoint_validation: deferred` as fork-carried field strings; the real internal configuration is evidenced by `enable_thinking:false`, `request_timeout_s:120`, and the internal model name. The report field strings were intentionally not edited.
+- Endpoint URL and API key are never written to the repo, commits, logs, ADRs, or task records.

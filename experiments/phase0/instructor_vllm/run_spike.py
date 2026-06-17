@@ -19,7 +19,7 @@ import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal, Optional, Type
 
 import instructor
 from openai import OpenAI
@@ -39,7 +39,7 @@ class IntentResult(BaseModel):
         "chitchat", "complaint", "feedback",
     ]
     confidence: float
-    entities: list[str]
+    entities: List[str]
     language: str
 
 
@@ -57,13 +57,13 @@ class PlanStep(BaseModel):
     step_id: int
     action: str
     target: str
-    depends_on: list[int]
+    depends_on: List[int]
 
 
 class PlanDraftResult(BaseModel):
     plan_id: str
     goal: str
-    steps: list[PlanStep]
+    steps: List[PlanStep]
     estimated_cost: Literal["low", "medium", "high"]
     risk_level: Literal["low", "medium", "high"]
 
@@ -82,7 +82,7 @@ class ResponseEnvelopeResult(BaseModel):
 
 
 # output_type -> Pydantic model mapping
-SCHEMA_MAP: dict[str, type[BaseModel]] = {
+SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
     "Intent": IntentResult,
     "CapabilityRef": CapabilityRefResult,
     "PlanDraft": PlanDraftResult,
@@ -90,7 +90,7 @@ SCHEMA_MAP: dict[str, type[BaseModel]] = {
 }
 
 # Business-critical fields that must be non-empty after Pydantic validation
-CRITICAL_FIELDS: dict[str, list[str]] = {
+CRITICAL_FIELDS: Dict[str, List[str]] = {
     "Intent": ["intent", "confidence", "language"],
     "CapabilityRef": ["capability_id", "domain", "description"],
     "PlanDraft": ["plan_id", "goal", "steps"],
@@ -99,7 +99,7 @@ CRITICAL_FIELDS: dict[str, list[str]] = {
 
 # Enum enforcement: Literal[...] types in Pydantic models above enforce enums
 # at model_validate() time. This dict is kept for documentation/self-check only.
-ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
+ENUM_FIELD_DEFINITIONS: Dict[str, Dict[str, List[str]]] = {
     "Intent": {
         "intent": [
             "ask_question", "request_action", "provide_info",
@@ -116,10 +116,55 @@ ENUM_FIELD_DEFINITIONS: dict[str, dict[str, list[str]]] = {
 MIN_STRUCTURED_OUTPUT_SAMPLES = 50
 MIN_TOOL_CALLING_SAMPLES = 8
 
-# Request pacing and rate limit handling
-REQUEST_DELAY_S = 2  # seconds between API requests
-RATE_LIMIT_ABORT_THRESHOLD = 3  # consecutive rate-limit errors before aborting a run
-INTER_RUN_PAUSE_S = 10  # seconds between Run A and Run B
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be a number", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
+REQUEST_DELAY_S = _parse_env_float("LLM_REQUEST_DELAY_S", 0.0)
+RATE_LIMIT_ABORT_THRESHOLD = _parse_env_int("LLM_RATE_LIMIT_ABORT", 3)
+INTER_RUN_PAUSE_S = _parse_env_float("LLM_INTER_RUN_PAUSE_S", 2.0)
+# Raised from the original hard-coded 1024: 4 qwen Run-B failures were
+# IncompleteOutputException (output truncated at max_tokens, NOT a network
+# fault). 2048 gives legitimate-but-long structured output room; tunable via
+# LLM_MAX_TOKENS if IncompleteOutputException still appears.
+MAX_OUTPUT_TOKENS = _parse_env_int("LLM_MAX_TOKENS", 2048)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY: Dict[str, Any] = (
+    {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+)
+THINKING_OFF_INJECTED = not ENABLE_THINKING
 
 # Refusal detection keywords
 REFUSAL_PATTERNS = [
@@ -197,8 +242,8 @@ class Sample:
     expected_behavior: str  # for documentation: what we expect to happen
 
 
-def build_structured_output_samples() -> list[Sample]:
-    samples: list[Sample] = []
+def build_structured_output_samples() -> List[Sample]:
+    samples: List[Sample] = []
 
     # --- success samples (15) ---
     success_prompts = [
@@ -358,11 +403,11 @@ class ToolCallSample:
     user_msg: str
     system_hint: str
     expected_tool: str
-    expected_schema: type[BaseModel]
+    expected_schema: Type[BaseModel]
 
 
-def build_tool_calling_samples() -> list[ToolCallSample]:
-    samples: list[ToolCallSample] = []
+def build_tool_calling_samples() -> List[ToolCallSample]:
+    samples: List[ToolCallSample] = []
 
     system_hint = (
         "You are an enterprise assistant. Use the available tools to answer user queries. "
@@ -393,7 +438,6 @@ def build_tool_calling_samples() -> list[ToolCallSample]:
 # Execution helpers
 # ---------------------------------------------------------------------------
 
-REQUEST_TIMEOUT_S = 30
 SHORT_TIMEOUT_S = 3  # for timeout adversarial samples
 
 
@@ -407,7 +451,7 @@ class SampleResult:
     adversarial_behavior: str
     schema_validation_passed: bool = False
     raw_response: str = ""
-    parsed: dict | None = None
+    parsed: Optional[Dict] = None
     error: str = ""
     latency_ms: float = 0.0
     retry_count: int = 0
@@ -443,9 +487,9 @@ def _detect_refusal(text: str) -> bool:
     return False
 
 
-def _self_check(samples: list[Sample]) -> list[str]:
+def _self_check(samples: List[Sample]) -> List[str]:
     """Run self-checks. Returns list of errors (empty = all passed)."""
-    errors: list[str] = []
+    errors: List[str] = []
 
     # 1. Sample count >= minimum
     if len(samples) < MIN_STRUCTURED_OUTPUT_SAMPLES:
@@ -603,14 +647,14 @@ def _is_rate_limit_error_str(exc_str: str) -> bool:
 def run_single_attempt(
     client: instructor.Instructor,
     model: str,
-    samples: list[Sample],
-) -> list[SampleResult]:
+    samples: List[Sample],
+) -> List[SampleResult]:
     """Run all samples with max_retries=0 (no instructor retry).
 
     Includes request pacing (REQUEST_DELAY_S) and early abort on
     consecutive rate limit errors (RATE_LIMIT_ABORT_THRESHOLD).
     """
-    results: list[SampleResult] = []
+    results: List[SampleResult] = []
     consecutive_rate_limits = 0
 
     for i, sample in enumerate(samples):
@@ -636,8 +680,9 @@ def run_single_attempt(
                     {"role": "user", "content": sample.user_msg},
                 ],
                 max_retries=0,
-                max_tokens=1024,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 timeout=timeout_s,
+                extra_body=EXTRA_BODY,
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0  # reset on success
@@ -703,14 +748,14 @@ def run_single_attempt(
 def run_with_retry(
     client: instructor.Instructor,
     model: str,
-    samples: list[Sample],
-) -> list[SampleResult]:
+    samples: List[Sample],
+) -> List[SampleResult]:
     """Run all samples with max_retries=3 (instructor auto-retry).
 
     Includes request pacing (REQUEST_DELAY_S) and early abort on
     consecutive rate limit errors (RATE_LIMIT_ABORT_THRESHOLD).
     """
-    results: list[SampleResult] = []
+    results: List[SampleResult] = []
     consecutive_rate_limits = 0
 
     for i, sample in enumerate(samples):
@@ -735,8 +780,9 @@ def run_with_retry(
                     {"role": "user", "content": sample.user_msg},
                 ],
                 max_retries=3,
-                max_tokens=1024,
+                max_tokens=MAX_OUTPUT_TOKENS,
                 timeout=timeout_s,
+                extra_body=EXTRA_BODY,
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -801,11 +847,11 @@ def run_with_retry(
 def run_tool_calling(
     client: instructor.Instructor,
     model: str,
-    tool_samples: list[ToolCallSample],
+    tool_samples: List[ToolCallSample],
     openai_client: OpenAI,
-) -> list[ToolCallResult]:
+) -> List[ToolCallResult]:
     """Run tool calling samples with pacing and rate limit handling."""
-    results: list[ToolCallResult] = []
+    results: List[ToolCallResult] = []
     consecutive_rate_limits = 0
 
     # Build OpenAI-format tools
@@ -838,6 +884,7 @@ def run_tool_calling(
                 tool_choice="auto",
                 max_tokens=256,
                 timeout=REQUEST_TIMEOUT_S,
+                extra_body=EXTRA_BODY,
             )
             latency = (time.time() - t0) * 1000
             consecutive_rate_limits = 0
@@ -959,6 +1006,13 @@ def run_spike() -> dict:
     print(f"Structured output samples: {len(so_samples)}")
     print(f"Tool calling samples: {len(tool_samples)}")
     print(f"Request timeout: {REQUEST_TIMEOUT_S}s (short timeout for adversarial: {SHORT_TIMEOUT_S}s)")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print(f"Self-check: PASSED")
     print()
 
@@ -992,6 +1046,7 @@ def run_spike() -> dict:
             ],
             max_tokens=30,
             response_format={"type": "json_schema", "json_schema": probe_schema},
+            extra_body=EXTRA_BODY,
         )
         probe_content = (probe_resp.choices[0].message.content or "").strip()
         if probe_content.startswith("```"):
@@ -1027,7 +1082,7 @@ def run_spike() -> dict:
     print()
 
     # --- Tool calling probe + run ---
-    tool_calling_results: list[ToolCallResult] = []
+    tool_calling_results: List[ToolCallResult] = []
     tc_probe_supported = False
     try:
         tc_probe_tools = [{
@@ -1049,6 +1104,7 @@ def run_spike() -> dict:
             tools=tc_probe_tools,
             tool_choice="auto",
             timeout=REQUEST_TIMEOUT_S,
+            extra_body=EXTRA_BODY,
         )
         if tc_resp.choices[0].message.tool_calls:
             tc_probe_supported = True
@@ -1068,12 +1124,12 @@ def run_spike() -> dict:
         print("Tool calling not supported by provider. Skipping tool calling tests.")
 
     # --- Aggregate Run A stats ---
-    def aggregate_run(results: list[SampleResult], label: str) -> dict:
+    def aggregate_run(results: List[SampleResult], label: str) -> dict:
         total = len(results)
         passed = sum(1 for r in results if r.success)
         rate = round(passed / total * 100, 1) if total else 0.0
 
-        by_cat: dict[str, dict] = {}
+        by_cat: Dict[str, dict] = {}
         for r in results:
             cat = r.category
             if cat not in by_cat:
@@ -1086,7 +1142,7 @@ def run_spike() -> dict:
             c = by_cat[cat]
             c["success_rate"] = round(c["passed"] / c["total"] * 100, 1) if c["total"] else 0.0
 
-        failure_cats: dict[str, int] = {}
+        failure_cats: Dict[str, int] = {}
         for r in results:
             if r.failure_category != "ok":
                 failure_cats[r.failure_category] = failure_cats.get(r.failure_category, 0) + 1
@@ -1099,7 +1155,7 @@ def run_spike() -> dict:
         non_rate_limit_passed = sum(1 for r in results if r.success)
         clean_success_rate = round(non_rate_limit_passed / non_rate_limit_total * 100, 1) if non_rate_limit_total else 0.0
 
-        exception_types: dict[str, int] = {}
+        exception_types: Dict[str, int] = {}
         for r in results:
             if r.error:
                 exc_type = r.error.split(" (")[0] if " (" in r.error else r.error
@@ -1150,7 +1206,7 @@ def run_spike() -> dict:
             retry_exhausted += 1  # treat as regression
 
     # --- Adversarial behavior classification for Run B ---
-    adversarial_behavior_counts: dict[str, int] = {}
+    adversarial_behavior_counts: Dict[str, int] = {}
     for r in run_b_results:
         if r.category != "success":
             adversarial_behavior_counts[r.adversarial_behavior] = (
@@ -1208,7 +1264,14 @@ def run_spike() -> dict:
     print(f"instructor version: {instructor_version}")
     print(f"Pydantic version: {pydantic_version}")
     print(f"Structured output samples: {len(so_samples)}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
     print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Rate-limit abort threshold: {RATE_LIMIT_ABORT_THRESHOLD}")
+    print(f"Max output tokens: {MAX_OUTPUT_TOKENS}")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     print(f"Run A (max_retries=0): {stats_a['passed']}/{stats_a['total']} passed ({stats_a['success_rate']}%)")
     print(f"  clean rate (excl rate_limit): {stats_a['clean_success_rate_excluding_rate_limit']}% ({stats_a['non_rate_limit_total']} non-rate-limit samples)")
@@ -1273,6 +1336,12 @@ def run_spike() -> dict:
         "self_check_passed": True,
         "request_timeout_s": REQUEST_TIMEOUT_S,
         "short_timeout_s": SHORT_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "run_a_max_retries_0": stats_a,
         "run_b_max_retries_3": stats_b,
         "retry_analysis": {
@@ -1291,7 +1360,6 @@ def run_spike() -> dict:
         "structured_output_threshold_met": so_threshold_met,
         "tool_calling_threshold_met": tc_threshold_met if tool_calling_supported else "not_applicable",
         "rate_limit_contaminated": rate_limit_contaminated,
-        "request_delay_s": REQUEST_DELAY_S,
         "rate_limit_abort_threshold": RATE_LIMIT_ABORT_THRESHOLD,
         "execution_environment": "public_vendor_api",
         "internal_endpoint_validation": "deferred / not_executed",
@@ -1310,7 +1378,7 @@ def _save_partial(result: dict, phase: str) -> None:
     print(f"Partial result saved to: {path}")
 
 
-def _load_partial(phase: str) -> dict | None:
+def _load_partial(phase: str) -> Optional[Dict]:
     """Load partial results from temp."""
     path = os.path.join(os.environ.get("TEMP", "/tmp"), f"p0_spike_002_{phase}.json")
     if not os.path.exists(path):
@@ -1340,6 +1408,11 @@ def run_phase_a() -> None:
     inst_client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
 
     print(f"RUN A: max_retries=0, {len(so_samples)} samples")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s (short timeout for adversarial: {SHORT_TIMEOUT_S}s)")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print(f"Self-check: PASSED")
     print()
     run_a_results = run_single_attempt(inst_client, model, so_samples)
@@ -1356,7 +1429,15 @@ def run_phase_a() -> None:
             "error": r.error, "latency_ms": round(r.latency_ms, 1),
             "max_retries_config": r.max_retries_config,
         })
-    _save_partial({"phase": "a", "results": results_data}, "run_a")
+    _save_partial({
+        "phase": "a",
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
+        "results": results_data,
+    }, "run_a")
     print(f"\nRun A complete: {sum(1 for r in run_a_results if r.success)}/{len(run_a_results)} passed")
 
 
@@ -1374,6 +1455,11 @@ def run_phase_b() -> None:
     inst_client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
 
     print(f"RUN B: max_retries=3, {len(so_samples)} samples")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s (short timeout for adversarial: {SHORT_TIMEOUT_S}s)")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     run_b_results = run_with_retry(inst_client, model, so_samples)
 
@@ -1388,7 +1474,15 @@ def run_phase_b() -> None:
             "error": r.error, "latency_ms": round(r.latency_ms, 1),
             "max_retries_config": r.max_retries_config,
         })
-    _save_partial({"phase": "b", "results": results_data}, "run_b")
+    _save_partial({
+        "phase": "b",
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
+        "results": results_data,
+    }, "run_b")
     print(f"\nRun B complete: {sum(1 for r in run_b_results if r.success)}/{len(run_b_results)} passed")
 
 
@@ -1406,6 +1500,11 @@ def run_phase_tc() -> None:
     inst_client = instructor.from_openai(openai_client, mode=instructor.Mode.JSON)
 
     print(f"TOOL CALLING: {len(tool_samples)} samples")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     tc_results = run_tool_calling(inst_client, model, tool_samples, openai_client)
 
@@ -1418,7 +1517,16 @@ def run_phase_tc() -> None:
             "arguments_valid": r.arguments_valid,
             "error": r.error, "latency_ms": round(r.latency_ms, 1),
         })
-    _save_partial({"phase": "tc", "results": tc_data, "tool_calling_supported": True}, "tool_calling")
+    _save_partial({
+        "phase": "tc",
+        "request_timeout_s": REQUEST_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
+        "results": tc_data,
+        "tool_calling_supported": True,
+    }, "tool_calling")
     print(f"\nTool calling complete: {sum(1 for r in tc_results if r.success)}/{len(tc_results)} passed")
 
 
@@ -1460,6 +1568,7 @@ def run_report() -> None:
             ],
             max_tokens=30,
             response_format={"type": "json_schema", "json_schema": probe_schema},
+            extra_body=EXTRA_BODY,
         )
         pc = (probe_resp.choices[0].message.content or "").strip()
         if pc.startswith("```"):
@@ -1469,11 +1578,11 @@ def run_report() -> None:
         pass
 
     # Aggregate stats helper
-    def agg(data: list[dict], label: str) -> dict:
+    def agg(data: List[dict], label: str) -> dict:
         total = len(data)
         passed = sum(1 for r in data if r["success"])
         rate = round(passed / total * 100, 1) if total else 0.0
-        by_cat: dict[str, dict] = {}
+        by_cat: Dict[str, dict] = {}
         for r in data:
             cat = r["category"]
             if cat not in by_cat:
@@ -1484,11 +1593,11 @@ def run_report() -> None:
         for cat in by_cat:
             c = by_cat[cat]
             c["success_rate"] = round(c["passed"] / c["total"] * 100, 1) if c["total"] else 0.0
-        failure_cats: dict[str, int] = {}
+        failure_cats: Dict[str, int] = {}
         for r in data:
             if r["failure_category"] != "ok":
                 failure_cats[r["failure_category"]] = failure_cats.get(r["failure_category"], 0) + 1
-        exception_types: dict[str, int] = {}
+        exception_types: Dict[str, int] = {}
         for r in data:
             if r.get("error"):
                 et = r["error"].split(" (")[0] if " (" in r["error"] else r["error"]
@@ -1526,7 +1635,7 @@ def run_report() -> None:
     )
 
     # Adversarial behavior counts from Run B
-    adv_counts: dict[str, int] = {}
+    adv_counts: Dict[str, int] = {}
     for r in run_b_data["results"]:
         if r["category"] != "success":
             adv_counts[r["adversarial_behavior"]] = adv_counts.get(r["adversarial_behavior"], 0) + 1
@@ -1568,6 +1677,12 @@ def run_report() -> None:
         "self_check_passed": True,
         "request_timeout_s": REQUEST_TIMEOUT_S,
         "short_timeout_s": SHORT_TIMEOUT_S,
+        "request_delay_s": REQUEST_DELAY_S,
+        "inter_run_pause_s": INTER_RUN_PAUSE_S,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "enable_thinking": ENABLE_THINKING,
+        "thinking_off_injected": THINKING_OFF_INJECTED,
+        "extra_body": EXTRA_BODY,
         "run_a_max_retries_0": stats_a,
         "run_b_max_retries_3": stats_b,
         "retry_analysis": {
@@ -1590,7 +1705,7 @@ def run_report() -> None:
         "recommendation_scope": "client-side compatibility only",
     }
 
-    report_path = os.path.join(os.environ.get("TEMP", "/tmp"), "p0_spike_002_report.json")
+    report_path = os.path.join(OUTPUT_DIR, "p0_spike_002_%s_report.json" % REPORT_TAG)
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2, default=str)
 
@@ -1602,6 +1717,12 @@ def run_report() -> None:
     print(f"Pydantic version: {pydantic_version}")
     print(f"Structured output samples: {len(run_a_data['results'])}")
     print(f"Tool calling supported: {tool_calling_supported}")
+    print(f"Request timeout: {REQUEST_TIMEOUT_S}s")
+    print(f"Request delay: {REQUEST_DELAY_S}s")
+    print(f"Inter-run pause: {INTER_RUN_PAUSE_S}s")
+    print(f"Enable thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"Thinking-off injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"Extra body: {EXTRA_BODY}")
     print()
     print(f"Run A (max_retries=0): {stats_a['passed']}/{stats_a['total']} ({stats_a['success_rate']}%)")
     print(f"Run B (max_retries=3): {stats_b['passed']}/{stats_b['total']} ({stats_b['success_rate']}%)")
@@ -1627,12 +1748,69 @@ def run_report() -> None:
         sys.exit(1)
 
 
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _report_tag():
+    """Filename tag from model: 'qwen3.5-27b'->'qwen3.5_27b', 'glm-4.7'->'glm'.
+
+    Override with LLM_REPORT_TAG (e.g. to disambiguate two glm versions).
+    """
+    import re as _re
+    override = os.environ.get("LLM_REPORT_TAG", "").strip()
+    if override:
+        return _re.sub(r"[^0-9A-Za-z._-]+", "_", override).strip("_")
+    model = os.environ.get("LLM_MODEL", "model").strip()
+    if model.lower().startswith("glm"):
+        return "glm"
+    return _re.sub(r"[^0-9A-Za-z.]+", "_", model).strip("_") or "model"
+
+
+REPORT_TAG = _report_tag()
+
+
+class _Tee:
+    """Write to console and a log file at the same time."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self):
+        for s in self._streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+
+def _install_tee(spike_id):
+    """Tee stdout+stderr to OUTPUT_DIR/p0_spike_<id>_<tag>_log.txt."""
+    import atexit
+    log_path = os.path.join(OUTPUT_DIR, "p0_spike_%s_%s_log.txt" % (spike_id, REPORT_TAG))
+    fh = open(log_path, "w", encoding="utf-8")
+    sys.stdout = _Tee(sys.__stdout__, fh)
+    sys.stderr = _Tee(sys.__stderr__, fh)
+    atexit.register(fh.close)
+    print("Log file: %s" % log_path)
+    return log_path
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="P0-SPIKE-002 instructor stability spike")
     parser.add_argument("--run", choices=["a", "b", "tc", "report", "all"], default="all",
                         help="Which phase to run: a (max_retries=0), b (max_retries=3), tc (tool calling), report (generate final report), all (full run)")
     args = parser.parse_args()
+
+    _install_tee("002")
 
     if args.run == "a":
         run_phase_a()
@@ -1644,7 +1822,7 @@ if __name__ == "__main__":
         run_report()
     else:
         report = run_spike()
-        report_path = os.path.join(os.environ.get("TEMP", "/tmp"), "p0_spike_002_report.json")
+        report_path = os.path.join(OUTPUT_DIR, "p0_spike_002_%s_report.json" % REPORT_TAG)
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2, default=str)
         print(f"\nReport saved to: {report_path}")

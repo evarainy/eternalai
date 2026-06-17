@@ -7,10 +7,41 @@ Exits 1 if any variable is missing or API is unreachable.
 
 import os
 import sys
+from typing import Dict, Tuple
 
 
-def check_env_vars() -> dict[str, str]:
-    results: dict[str, str] = {}
+def _parse_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ERROR: {name} must be an integer", file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    print(f"ERROR: {name} must be one of 0/1/false/true/no/yes/off/on", file=sys.stderr)
+    sys.exit(1)
+
+
+REQUEST_TIMEOUT_S = _parse_env_int("LLM_TIMEOUT_S", 120)
+ENABLE_THINKING = _parse_env_bool("LLM_ENABLE_THINKING", False)
+EXTRA_BODY = {} if ENABLE_THINKING else {"chat_template_kwargs": {"enable_thinking": False}}
+THINKING_OFF_INJECTED = not ENABLE_THINKING
+
+
+def check_env_vars() -> Dict[str, str]:
+    results: Dict[str, str] = {}
     for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
         val = os.environ.get(var)
         if var == "LLM_MODEL":
@@ -20,7 +51,7 @@ def check_env_vars() -> dict[str, str]:
     return results
 
 
-def probe_api() -> tuple[bool, bool]:
+def probe_api() -> Tuple[bool, bool]:
     """Return (api_reachable, json_schema_supported)."""
     from openai import OpenAI
 
@@ -28,7 +59,7 @@ def probe_api() -> tuple[bool, bool]:
     api_key = os.environ.get("LLM_API_KEY")
     model = os.environ.get("LLM_MODEL")
 
-    client = OpenAI(base_url=base_url, api_key=api_key)
+    client = OpenAI(base_url=base_url, api_key=api_key, timeout=REQUEST_TIMEOUT_S)
 
     # Probe 1: minimal request to check reachability
     try:
@@ -36,6 +67,7 @@ def probe_api() -> tuple[bool, bool]:
             model=model,
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=5,
+            extra_body=EXTRA_BODY,
         )
         if not resp.choices:
             return False, False
@@ -65,6 +97,7 @@ def probe_api() -> tuple[bool, bool]:
             messages=[{"role": "user", "content": 'Reply with {"answer":"ok"}'}],
             max_tokens=20,
             response_format={"type": "json_schema", "json_schema": schema},
+            extra_body=EXTRA_BODY,
         )
         content = resp2.choices[0].message.content or ""
         if content.strip().startswith("{"):
@@ -79,6 +112,10 @@ def main() -> None:
     env = check_env_vars()
     for var, status in env.items():
         print(f"{var}: {status}")
+    print(f"request_timeout_s: {REQUEST_TIMEOUT_S}")
+    print(f"enable_thinking: {str(ENABLE_THINKING).lower()}")
+    print(f"thinking_off_injected: {str(THINKING_OFF_INJECTED).lower()}")
+    print(f"extra_body: {EXTRA_BODY}")
 
     missing = [v for v, s in env.items() if s == "missing"]
     if missing:

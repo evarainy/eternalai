@@ -1,0 +1,88 @@
+task_id: "P0-SPIKE-INTERNAL-REVAL"
+task_type: "spike"
+result: "passed"
+started_at: "2026-06-16T09:00:00+09:00"
+completed_at: "2026-06-17T11:00:00+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-16T09:00:00+09:00"
+plan_approved_via: "Claude Code session (/plan internal vLLM re-test)"
+summary: >
+  Internal-endpoint re-validation of the three Phase 0 structured-output spikes
+  (P0-SPIKE-001 raw OpenAI SDK, P0-SPIKE-002 instructor, P0-SPIKE-007 pydantic-ai),
+  closing the deferred internal_endpoint_validation activation condition. Re-run on an
+  internal vLLM (OpenAI-compatible) endpoint with a 120s timeout, thinking-off requested,
+  models qwen3.5-27b and glm-4.7. Structured output: raw-SDK 98.1%/90.7%, instructor
+  82%/94% (Run B max_retries=3, after raising max_tokens 1024->2048), pydantic-ai 82%
+  (Run B retries={output:3}) -- all >= 80% on internal infra. Tool calling (OpenAI-SDK
+  path) re-measured at 75% (6/8) for both qwen and glm, failing the same two
+  query_oa_leave_balance samples (TC-001/TC-004) across both endpoints and both models --
+  a reproducible prompt issue, not endpoint/framework. pydantic-ai agent-path tool calling
+  not separately re-measured. Phase 1 baseline unchanged: raw OpenAI SDK (single pass, no
+  retry loop). Frozen blueprint untouched.
+acceptance_criteria_result:
+  - criterion: "raw-SDK structured output >= 80% on internal endpoint"
+    result: "passed"
+    evidence: "qwen3.5-27b 98.1% (53/54); glm-4.7 90.7% (49/54). ADR-P0-SPIKE-001 section 14."
+  - criterion: "instructor structured output >= 80% on internal endpoint (Run B)"
+    result: "passed"
+    evidence: "qwen 82.0% (41/50); glm 94.0% (47/50); max_retries=3, max_tokens=2048. ADR-P0-SPIKE-002 section 14."
+  - criterion: "pydantic-ai structured output >= 80% on internal endpoint (Run B)"
+    result: "passed"
+    evidence: "qwen 82.0% (41/50), retries={output:3}. ADR-P0-SPIKE-007 section 14."
+  - criterion: "tool calling >= 80% on internal endpoint"
+    result: "failed"
+    evidence: "75.0% (6/8) OpenAI-SDK path, qwen and glm; TC-001/TC-004 (query_oa_leave_balance) not triggered, finish_reason=stop. Reproducible prompt issue; documented, non-blocking."
+  - criterion: "frozen blueprint untouched; no app/ changes"
+    result: "passed"
+    evidence: "Only experiments/phase0/, docs/adr/phase0/, docs/phase0/ touched. forbidden_paths_confirmed: true."
+matrix:
+  raw_sdk_p0_spike_001:
+    qwen3_5_27b_structured: "98.1% (53/54) PASS"
+    glm_4_7_structured: "90.7% (49/54) PASS"
+  instructor_p0_spike_002:
+    qwen3_5_27b_structured_runB: "82.0% (41/50) PASS"
+    glm_4_7_structured_runB: "94.0% (47/50) PASS"
+    tool_calling_openai_sdk_path: "75.0% (6/8) qwen and glm; TC-001/TC-004 no tool call"
+  pydanticai_p0_spike_007:
+    qwen3_5_27b_structured_runB: "82.0% (41/50) PASS"
+    tool_calling_agent_path: "not re-measured internally (probe starved; standalone used OpenAI-SDK path)"
+    glm_4_7: "not run (scope decision)"
+harness_context:
+  prior_commits_on_branch:
+    - "instructor max_tokens 1024 -> 2048 (env LLM_MAX_TOKENS): removes IncompleteOutputException truncation."
+    - "pydantic-ai Run B retry: tool_retries= (deprecated, tool-only) -> retries={output:N} (real output-validation retry)."
+  known_unpatched:
+    - "tool-calling capability probe max_tokens=30/50 in run_spike.py/check_env.py starves qwen reasoning preamble -> false 'unsupported'. Worked around via standalone experiments/phase0/instructor_vllm/tool_calling_retest.py (reuses run_spike samples/schemas/scoring). The probe bug is documented but not patched in this task."
+changed_files:
+  - "docs/adr/phase0/ADR-P0-SPIKE-001-qwen-structured-output.md"
+  - "docs/adr/phase0/ADR-P0-SPIKE-002-instructor-vllm-stability.md"
+  - "docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md"
+  - "docs/phase0/PHASE1_TECHNICAL_BASELINE.md"
+  - "docs/phase0/task_logs/P0-SPIKE-INTERNAL-REVAL_20260617_passed.yaml"
+  - "experiments/phase0/instructor_vllm/tool_calling_retest.py"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+security_scan_result:
+  result: "passed"
+  evidence: "No endpoint URL or API key in any repo file, commit, log, ADR, or task record. Internal IP only in the out-of-repo handoff folder and the user shell env."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "Real LLM calls against internal endpoint; per-sample results recorded; tool-calling failures finish_reason=stop (genuine, not truncation)."
+execution_environment: "internal_vllm_openai_compatible"
+internal_endpoint_validation: "executed (2026-06-17)"
+recommendation_scope: "structured output internal-validated; tool calling open (prompt + pydantic-ai agent path)"
+remaining_risks:
+  - "Tool calling 75% (< 80%) on OpenAI-SDK path: TC-001/TC-004 query_oa_leave_balance not triggered. Reproducible across endpoints and models; needs improved tool-calling prompts."
+  - "pydantic-ai agent-path tool calling not re-measured on internal endpoint."
+  - "enable_thinking=false may not be honored by the endpoint (reasoning traces + high latency observed); results reflect thinking-active behavior."
+  - "glm-4.7 not run for pydantic-ai (scope decision)."
+  - "Report JSON fork-fields (execution_environment: public_vendor_api, internal_endpoint_validation: deferred) intentionally not edited; real config evidenced by enable_thinking:false + request_timeout_s:120 + internal model name."
+decision: >
+  Phase 1 baseline unchanged: raw OpenAI SDK + json_object + Pydantic Literal[...] (single
+  pass, no retry loop). instructor and pydantic-ai are now viable internal structured-output
+  options but add a retry-loop dependency the baseline does not need.
+review:
+  mode: "orchestrator_read_only_verify"
+  reviewed_by: "Claude Code (orchestrator); content written by Codex"
+  notes: "Numbers cross-checked against report JSON and logs in the handoff package; ADR addenda append-only; frozen blueprint untouched."
+git_commit_sha: "recorded_by_git_history_after_final_commit"

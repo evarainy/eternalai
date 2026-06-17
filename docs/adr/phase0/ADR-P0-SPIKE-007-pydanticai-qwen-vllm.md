@@ -328,3 +328,40 @@ provider_error_count: 0
 - actual_provider_request_count: not_measured
 - JSON report: $TEMP/p0_spike_007_report.json
 - commit / package: No commit; staged for review only
+
+## 14. Internal Endpoint Validation (vLLM re-test, 2026-06)
+
+Re-validation against an internal vLLM (OpenAI-compatible) endpoint, closing the deferred `internal_endpoint_validation` activation condition (section 2). The public-mode sections above are unchanged (append-only addendum).
+
+- date: 2026-06-17
+- task: P0-SPIKE-INTERNAL-REVAL
+- environment: internal vLLM / Qwen (OpenAI-compatible); endpoint URL and API key kept out of the repo
+- model: qwen3.5-27b (pydantic-ai 1.107.0; glm-4.7 not run for this framework — scope decision)
+- effective config: request_timeout_s=120, enable_thinking=false (requested), request_delay_s=0
+- harness fix applied before re-run: Run B retry now uses `retries={"output": N}` (output-validation retry budget) instead of the deprecated `tool_retries=` (tool-call-only, no effect on structured-output recovery). The earlier public "Run B" was effectively a no-retry number for structured output.
+
+### Result — structured output
+
+| run | qwen3.5-27b | threshold (>=80%, Run B) |
+|---|---|---|
+| Run A (default retry) | 72.0% (36/50) | — |
+| Run B (retries={"output": 3}) | **82.0% (41/50)** | PASS |
+
+pydanticai structured output now meets the threshold on internal infrastructure. The public run (Run B 66%) was dominated by DashScope `ModelAPIError` provider noise (16-20/50 samples); the public ADR already noted ~97% model success excluding provider errors. On the internal endpoint that provider noise is gone and the real output-retry knob lifts Run B to 82%. Remaining failures are the 6 deliberate 3s-timeout adversarial samples (counted as api_error) plus 2 `critical_empty`.
+
+### Result — tool calling
+
+pydanticai tool-calling path (`@agent.tool` agent loop) was **not separately re-measured** on the internal endpoint in this round: the in-harness capability probe was starved by `max_tokens=30` (qwen reasoning preamble) and skipped the samples, and the standalone retest used the OpenAI-SDK + tools path (instructor path), not the pydanticai agent loop. For reference, the public pydanticai run scored 62.5% (5/8) with 100% tool selection accuracy and 3 argument-validation failures (TC-002/003/005) — a different failure layer from the OpenAI-SDK path "no tool call" failures. The OpenAI-SDK-path internal tool-calling result (75%) is recorded in ADR-P0-SPIKE-002 section 14.
+
+### Conclusion
+
+- pydanticai **structured output now meets the threshold on internal infrastructure** (qwen 82%), confirming the public failure was provider noise, not framework capability.
+- pydanticai **tool-calling (agent path) was not re-validated internally**; this remains open (documented, non-blocking).
+- glm-4.7 was not run for pydanticai (scope decision).
+- **The Phase 1 baseline is unchanged: raw OpenAI SDK (P0-SPIKE-001) remains recommended.** pydanticai is a viable Phase-2 structured-output candidate on internal infra; the Phase-2 caveats in section 12 still apply.
+
+### Provenance / honesty notes
+
+- Internal report JSON carries fork-fields `execution_environment: public_vendor_api` / `internal_endpoint_validation: deferred`; real config evidenced by `enable_thinking:false`, `request_timeout_s:120`, and the internal model name. Field strings intentionally not edited.
+- `enable_thinking:false` requested but possibly not honored by the endpoint (reasoning traces observed); does not change the threshold conclusion.
+- Endpoint URL / API key never written to repo, commits, logs, ADRs, or task records.
