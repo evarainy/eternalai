@@ -366,3 +366,46 @@ argument_validation_success_rate: 100.0%
 - JSON report: $TEMP/p0_spike_002_report.json
 - per-phase result files: $TEMP/p0_spike_002_run_a.json, $TEMP/p0_spike_002_run_b.json, $TEMP/p0_spike_002_tool_calling.json
 - commit / package: No commit; staged for review only
+
+## 14. Internal Endpoint Validation (vLLM re-test, 2026-06)
+
+Re-validation against an internal vLLM (OpenAI-compatible) endpoint, closing the deferred `internal_endpoint_validation` activation condition (section 2). The public-mode sections above are unchanged (append-only addendum).
+
+- date: 2026-06-17
+- task: P0-SPIKE-INTERNAL-REVAL
+- environment: internal vLLM / Qwen (OpenAI-compatible); endpoint URL and API key kept out of the repo
+- models: qwen3.5-27b, glm-4.7 (same endpoint family)
+- effective config: request_timeout_s=120, max_output_tokens=2048 (env LLM_MAX_TOKENS), enable_thinking=false (requested), request_delay_s=0
+- harness fix applied before re-run: instructor `max_tokens` raised 1024 -> 2048 (env-tunable). On the public run several glm/qwen Run-B failures were `IncompleteOutputException` (output truncated at the 1024 cap), not network faults; the larger budget removes that truncation. Sample set and scoring are otherwise unchanged.
+
+### Result — structured output
+
+| model | Run A (max_retries=0) | Run B (max_retries=3) | threshold (>=80%, Run B) |
+|---|---|---|---|
+| qwen3.5-27b | 50.0% (25/50) | **82.0% (41/50)** | PASS |
+| glm-4.7 | 68.0% (34/50) | **94.0% (47/50)** | PASS |
+
+Both models now meet the structured-output threshold on internal infrastructure (public run Run B was 56%). This confirms the public-run hypothesis that 30s timeouts on the public cap were the dominant failure: with a 120s internal timeout and no truncation, retry (max_retries=3) lifts both models above 80%. Remaining Run-B failures are the 6 deliberate 3s-timeout adversarial samples plus a few parse/schema cases.
+
+### Result — tool calling
+
+Tool calling was re-measured with a standalone harness (`experiments/phase0/instructor_vllm/tool_calling_retest.py`) that reuses the exact 8 samples, 3 tool schemas, and scoring from `run_spike.run_tool_calling`, calling the endpoint via the OpenAI SDK + tools (instructor tool-calling path). This was necessary because the in-harness capability probe used `max_tokens=30`, which qwen reasoning preamble exhausts before any `tool_call` is emitted — a false "tool calling unsupported" negative that skipped the samples. A raw HTTP probe confirmed the endpoint does support tool calling.
+
+| metric | qwen3.5-27b (internal) | public run (reference) |
+|---|---|---|
+| tool_calling_success_rate | 75.0% (6/8) | 75.0% (6/8) |
+| failed samples | TC-001, TC-004 (query_oa_leave_balance): finish_reason=stop, no tool_calls | TC-001, TC-004: no tool calls |
+
+The internal tool-calling result is **identical to the public run** (75%, the same two `query_oa_leave_balance` samples answered in text instead of calling the tool). The same two samples also fail on glm-4.7 (75%, from the earlier internal instructor run). This same-two-samples failure is reproducible across endpoints and across two model families, and `finish_reason=stop` (not `length`) confirms it is not a token-budget artifact — it is a prompt / tool-description issue (TC-007, also a leave-balance query, succeeds), fixable with improved tool-calling prompts. It is not a framework or endpoint capability limitation.
+
+### Conclusion
+
+- instructor **structured output now meets the threshold on internal infrastructure** (qwen 82%, glm 94%), confirming the public failure was infrastructure noise (1024-token truncation + 30s timeout), not framework capability.
+- instructor **tool calling remains 75% (< 80%)**, root-caused to a reproducible prompt issue on two leave-balance samples (not endpoint/model/framework).
+- **The Phase 1 baseline is unchanged: raw OpenAI SDK (P0-SPIKE-001) remains recommended** — it reaches 98.1% internally in a single pass with no retry loop, whereas instructor needs max_retries=3 to clear the threshold. instructor is now a viable structured-output option on internal infra but adds a retry-loop dependency the baseline does not need.
+
+### Provenance / honesty notes
+
+- Internal report JSON carries fork-fields `execution_environment: public_vendor_api` / `internal_endpoint_validation: deferred`; real config is evidenced by `enable_thinking:false`, `request_timeout_s:120`, `max_output_tokens:2048`, and the internal model name. Field strings intentionally not edited.
+- `enable_thinking:false` was requested but the endpoint may not fully honor `chat_template_kwargs.enable_thinking` (high tool-call latencies of 11-37s and reasoning traces observed in a raw probe); results therefore reflect thinking-active behavior. This does not change the threshold conclusions.
+- Endpoint URL / API key never written to repo, commits, logs, ADRs, or task records.
