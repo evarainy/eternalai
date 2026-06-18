@@ -1,0 +1,197 @@
+task_id: P0-INFRA-002A
+task_name: Backend dependency allowlist and task-scope correction
+task_type: infrastructure
+branch: phase0/p0-infra-002a-deps
+planning_owner: Codex
+implementation_owner: Codex
+review_owner: "Codex staged-diff review"
+result: passed
+status: passed
+started_at: "2026-05-16T23:08:24+08:00"
+completed_at: "2026-05-16T23:08:24+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-16T23:08:24+08:00"
+plan_approved_via: Codex session
+summary: >
+  Completed the P0-INFRA-002A prerequisite documentation and dependency-policy
+  correction only. P0-INFRA-002 was blocked because dependency manifests would
+  add backend dependencies, but the P0-INFRA-002 task prompt did not authorize
+  docs/dev/dependency_policy.md and required backend/test/tooling dependencies
+  were not properly allowlisted. This task updated the allowlist and task prompt
+  so the later P0-INFRA-002 backend skeleton can proceed under dependency
+  governance without implementing the backend skeleton here.
+
+scope: >
+  Documentation/dependency-policy correction only. No backend skeleton
+  implementation, dependency manifest update, lockfile update, app code, tests,
+  CI, migrations, frontend, runtime, gateway, business adapter, Docker Compose,
+  README, frozen blueprint, or unrelated task prompt changes were performed.
+
+implementation_summary:
+  - "docs/dev/dependency_policy.md updated with backend allowlist entries for fastapi, pytest, ruff, and mypy."
+  - "docs/dev/dependency_policy.md widened existing pydantic, sqlalchemy, alembic, and httpx spike rows for backend usage while preserving original spike approval history and appending P0-INFRA-002 backend approval context."
+  - "docs/phase0/tasks/P0-INFRA-002.md updated to authorize docs/dev/dependency_policy.md and add pre-manifest dependency-governance constraints."
+
+acceptance_criteria_result:
+  - criterion: "Backend dependency allowlist contains direct dependencies required by P0-INFRA-002 before manifest or lockfile changes"
+    result: passed
+    evidence: "docs/dev/dependency_policy.md contains P0-INFRA-002 backend skeleton allowlist context for fastapi, pytest, ruff, mypy, pydantic, sqlalchemy, alembic, and httpx; python scripts\\check_dependencies.py passed."
+  - criterion: "P0-INFRA-002 task prompt authorizes docs/dev/dependency_policy.md for dependency allowlist alignment"
+    result: passed
+    evidence: "docs/phase0/tasks/P0-INFRA-002.md touched_paths includes docs/dev/dependency_policy.md."
+  - criterion: "Existing spike allowlist history is preserved when rows are widened for backend use"
+    result: passed
+    evidence: "Existing pydantic, sqlalchemy, alembic, and httpx rows retain their P0-SPIKE approval text and append P0-INFRA-002 backend skeleton context."
+  - criterion: "No P0-INFRA-002 backend skeleton implementation is performed"
+    result: passed
+    evidence: "Final staged diff contains no pyproject.toml, uv.lock, app/, tests/, CI, migrations, frontend, runtime/gateway/business adapter, Docker Compose, README, or frozen blueprint paths."
+
+failure_examples_tested:
+  - example: "P0-INFRA-002 begins with backend manifest changes before dependency policy authorization"
+    result: not_triggered
+    evidence: "P0-INFRA-002 task prompt now contains a pre-manifest dependency-governance step and authorizes docs/dev/dependency_policy.md only for allowlist alignment."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Backend implementation files are changed during prerequisite correction"
+    result: not_triggered
+    evidence: "Final staged file list contains only dependency policy, P0-INFRA-002 prompt, task log index, and this Task Record."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Confirm branch"
+    result: passed
+    command: "git branch --show-current"
+    evidence: "phase0/p0-infra-002a-deps"
+  - step: "Confirm approved implementation staged files before closeout metadata"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "docs/dev/dependency_policy.md; docs/phase0/tasks/P0-INFRA-002.md"
+  - step: "Confirm uv version"
+    result: passed
+    command: "uv --version"
+    evidence: "uv 0.11.14 (3fdfdc7d4 2026-05-12 x86_64-pc-windows-msvc)"
+  - step: "Run dependency allowlist checker"
+    result: passed
+    command: "python scripts\\check_dependencies.py"
+    evidence: "Dependency check passed. Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests scanned: 5. Dependencies checked: 16."
+  - step: "Review staged implementation diff"
+    result: passed
+    command: "Codex staged-diff implementation review"
+    evidence: "Review verdict approved; no blocking issues; no required corrections."
+  - step: "Inspect MANIFEST.md convention"
+    result: passed
+    command: "Get-Content -Raw MANIFEST.md"
+    evidence: "MANIFEST.md inspected. No update required because no new canonical execution-pack document was added; the changed P0-INFRA-002 task prompt is already listed, and comparable recent task records are not individually registered there."
+  - step: "Stage closeout metadata and verify final staged diff"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "Final staged file list is recorded in changed_files."
+
+changed_files:
+  - docs/dev/dependency_policy.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-INFRA-002A_20260516_230824_passed.yaml
+  - docs/phase0/tasks/P0-INFRA-002.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git branch --show-current"
+    result: passed
+    output_snippet: "phase0/p0-infra-002a-deps"
+  - command: "git status --short"
+    result: passed
+    output_snippet: "Before closeout metadata: only docs/dev/dependency_policy.md and docs/phase0/tasks/P0-INFRA-002.md were staged; no unstaged or untracked files."
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "Before closeout metadata: docs/dev/dependency_policy.md; docs/phase0/tasks/P0-INFRA-002.md"
+  - command: "uv --version"
+    result: passed
+    output_snippet: "uv 0.11.14 (3fdfdc7d4 2026-05-12 x86_64-pc-windows-msvc)"
+  - command: "python scripts\\check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed. Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests scanned: 5. Dependencies checked: 16."
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "Final staged file list recorded in changed_files."
+
+dependency_changes:
+  added:
+    - "Allowlist only: fastapi >=0.115,<1.0 as backend-runtime"
+    - "Allowlist only: pytest >=8,<9 as backend-test"
+    - "Allowlist only: ruff >=0.8,<1 as backend-tooling"
+    - "Allowlist only: mypy >=1.13,<2 as backend-tooling"
+  changed:
+    - "Allowlist only: pydantic kept >=2,<3 and widened from spike to spike; backend-runtime"
+    - "Allowlist only: sqlalchemy kept >=2.0,<3.0 and widened from spike to spike; backend-runtime"
+    - "Allowlist only: alembic kept >=1.13,<2.0 and widened from spike to spike; backend-migration"
+    - "Allowlist only: httpx kept >=0.24.0 and widened from spike to spike; backend-test"
+  lockfiles_changed: []
+  evidence: "No production dependency manifest or lockfile was changed; dependency_policy.md only records approved allowlist policy."
+
+import_boundary_check:
+  result: passed
+  evidence: "Final staged diff contains no app/, runtime, gateway, execution_fabric, business adapter, or concrete adapter paths."
+
+security_scan_result:
+  result: passed
+  evidence: "No plaintext password/token/cookie/sessionid/access_token/refresh_token values, mirror URLs, private registry credentials, or internal network endpoints were added."
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "P0-INFRA-002A is a documentation/dependency-policy correction and adds no test files."
+  not_applicable_reason: "No test implementation was in scope for this prerequisite metadata/policy correction."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-002"
+  expiry_condition: "P0-INFRA-002 performs backend skeleton TDD validations."
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "No CI workflow files were changed and no CI run was required for this closeout metadata task."
+  not_applicable_reason: "CI wiring is outside P0-INFRA-002A scope."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "P0-INFRA-007 wires dependency and test checks into CI."
+
+review:
+  mode: codex_review
+  reviewed_by: "Codex staged-diff review"
+  reviewed_at: "2026-05-16T23:08:24+08:00"
+  notes: "Verdict approved. Blocking issues: none. Required corrections: none."
+
+explicit_exclusions:
+  - "no pyproject.toml"
+  - "no uv.lock"
+  - "no app/"
+  - "no tests/"
+  - "no docker-compose.yml"
+  - "no README.md"
+  - "no CI files"
+  - "no migrations"
+  - "no frontend files"
+  - "no runtime/gateway/business adapter files"
+  - "no frozen blueprint changes"
+  - "no backend skeleton implementation"
+
+remaining_risks:
+  - "P0-INFRA-002 must still verify actual internal mirror/offline-cache availability before running uv sync; this task records pending_internal_mirror_confirmation only."
+rollback_or_failure_record: ""
+
+git_commit_sha: "not_committed"
+git_commit_sha_note: "No commit was requested or performed during P0-INFRA-002A closeout metadata."
+
+package_confirmation_status: not_applicable
+package_confirmation: "No archive or deployable package was required or created for P0-INFRA-002A."
+package_scope: "Task closeout staged repository files only: dependency policy, P0-INFRA-002 task prompt, task log index, and this Task Record."
+package_evidence: "The task deliverable is repository metadata/policy correction; no package creation command was specified or run."

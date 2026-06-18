@@ -20,8 +20,11 @@ Files:
 - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
 - docs/phase0/CONTEXT_LOADING_STRATEGY.md
 - docs/phase0/FIRST_BATCH_TASKS.md
-docs/phase0/FRONTEND_MOCK_FIXTURES.md
+- docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md
+- docs/phase0/FRONTEND_MOCK_FIXTURES.md
+- docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md
 - docs/phase0/README_FOR_CODEX.md
+- docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md
 - docs/phase0/TASK_INDEX.md
 - docs/phase0/self_checks/README.md
 - docs/phase0/task_logs/INDEX.md
@@ -34,8 +37,54 @@ docs/phase0/FRONTEND_MOCK_FIXTURES.md
 - docs/phase0/tasks/P0-SPIKE-004.md
 - docs/phase0/tasks/P0-SPIKE-005.md
 - docs/phase0/tasks/P0-SPIKE-006.md
+- docs/phase0/tasks/P0-RULES-001.md
+- docs/phase0/tasks/P0-RULES-002.md
 - docs/phase0/tasks/P0-SPIKE-007.md
+- docs/phase0/tasks/P0-STYLE-001.md
+- docs/phase0/CODING_STYLE_BASELINE.md
 - docs/phase0/tasks/README_TASK_PROMPTS.md
+- docs/phase0/tasks/P0-NAV-001.md
+- docs/phase0/REPOSITORY_CONTEXT_MAP.md
+- docs/adr/phase0/ADR-P0-SPIKE-001-qwen-structured-output.md
+- docs/adr/phase0/ADR-P0-SPIKE-002-instructor-vllm-stability.md
+- docs/adr/phase0/ADR-P0-SPIKE-003-postgresql-pgvector.md
+- docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md
+- docs/phase0/PHASE1_TECHNICAL_BASELINE.md
+- docs/phase0/tasks/P0-TEMPLATE-001.md
+- docs/phase0/tasks/P0-SCHEMA-001.md
+- docs/dev/AI_AGENT_ENGINEERING_LESSONS.md
+- docs/phase0/tasks/P0-EXPERIENCE-001.md
+- docs/phase0/tasks/P0-BATCH2-PROMPTS-001.md
+- docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md
+- docs/phase0/tasks/P0-INFRA-001.md
+- docs/phase0/tasks/P0-INFRA-002.md
+- docs/phase0/tasks/P0-INFRA-003.md
+- docs/phase0/tasks/P0-INFRA-003A.md
+- docs/phase0/tasks/P0-INFRA-003B.md
+- docs/phase0/tasks/P0-INFRA-004.md
+- docs/phase0/tasks/P0-INFRA-004A.md
+- docs/phase0/tasks/P0-INFRA-005.md
+- docs/phase0/tasks/P0-INFRA-006.md
+- docs/phase0/tasks/P0-INFRA-007.md
+- docs/phase0/tasks/P0-INFRA-007A.md
+- docs/phase0/tasks/P0-INFRA-008.md
+- docs/phase0/tasks/P0-DOC-SYNC-001.md
+- docs/phase0/tasks/P0-FE-SPIKE-001.md
+- docs/phase0/tasks/P0-FE-GUIDE-001.md
+- docs/phase0/tasks/P0-FE-ARCH-001.md
+- docs/phase0/tasks/P0-BATCH3-PROMPTS-001.md
+- docs/phase0/tasks/P0-DOMAIN-001a.md
+- docs/phase0/tasks/P0-DOMAIN-002a.md
+- docs/phase0/tasks/P0-DOMAIN-003a.md
+- docs/phase0/tasks/P0-DOMAIN-004a.md
+- docs/phase0/tasks/P0-DOMAIN-005a.md
+- docs/phase0/tasks/P0-DOMAIN-006a.md
+- docs/phase0/tasks/P0-DOMAIN-007a.md
+- docs/phase0/tasks/P0-DOMAIN-008a.md
+- docs/phase0/tasks/P0-DOMAIN-009a.md
+- docs/phase0/tasks/P0-DOMAIN-010a.md
+- docs/phase0/tasks/P0-DOMAIN-011a.md
+- docs/phase0/task_logs/P0-BATCH2-PROMPTS-001_20260515_151040_passed.yaml
 
 Start from `docs/phase0/README_FOR_CODEX.md`.
 

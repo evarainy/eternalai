@@ -1,0 +1,205 @@
+task_id: "P0-DOMAIN-011a"
+task_type: "interface_contract"
+result: "passed"
+started_at: "2026-06-02T16:30:00+09:00"
+completed_at: "2026-06-02T18:03:38+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-02T17:00:00+09:00"
+plan_approved_via: "Claude Code orchestrator session; Codex-generated Plan v2 after Claude Code adversarial review"
+summary: >
+  Defined the Phase 0 SecretProvider interface contract only. Added
+  RedactedSecretPlaceholder, MockSecretInjected, SecretResolutionResult,
+  SecretInjectionResult, and SecretProviderPort under
+  app/ports/secret_provider.py with focused TDD contract tests. The
+  resolve_secret_ref and inject_execution_secret signatures follow frozen spec
+  section 8.6.8 exactly. Protocol methods return dict[str, Any]; the two helper
+  models are Phase 0 safe return-shape contracts only and are not the method
+  return types. No concrete Vault/OAuth2/vendor secret provider, credential
+  storage, gateway integration, adapter integration, or real secret retrieval
+  was introduced. This task was executed via the Orchestrator-Worker pipeline:
+  Codex generated the Plan, Claude Code performed adversarial Plan review, Codex
+  implemented via TDD, then Claude Code and Codex performed cross-review of the
+  diff. Codex review caught a P1 (SecretInjectionResult.execution_context could
+  serialize arbitrary plaintext credentials); the field was removed and
+  re-review passed.
+acceptance_criteria_result:
+  - criterion: "resolve_secret_ref and inject_execution_secret method signatures are defined from spec section 8.6.8"
+    result: "passed"
+    evidence: "tests/ports/test_secret_provider_port.py asserts resolve_secret_ref params (self, credential_ref, task_id, capability_id) and inject_execution_secret params (self, execution_context, credential_ref), both returning dict[str, Any]; uv run pytest tests/ports/test_secret_provider_port.py => 15 passed"
+  - criterion: "Return structures do not contain plaintext secret, password, token, cookie, or sessionid values"
+    result: "passed"
+    evidence: "SecretResolutionResult fields = {credential_ref, redacted_placeholder}; SecretInjectionResult fields = {credential_ref, mock_secret_injected} after P1 fix; both use model_config extra=forbid; tests 6-11 assert field-name disjointness and dump-value safety; staged secret scan returned PASSED"
+  - criterion: "Mock credential_ref may return mock_secret_injected=true or redacted placeholder only"
+    result: "passed"
+    evidence: "RedactedSecretPlaceholder = Literal['<redacted>'] (get_args == ('<redacted>',)); MockSecretInjected = Literal[True] (get_args == (True,)); tests 12-13 assert the constrained value sets"
+  - criterion: "Tests or validation prove no concrete Secret provider implementation or import is introduced"
+    result: "passed"
+    evidence: "test_secret_provider_module_imports_no_concrete_secret_dependencies scans source for Vault/OAuth/requests/httpx/boto/azure/gcloud/keyring/open(; passes. uv run mypy app/ports/secret_provider.py => Success: no issues found in 1 source file"
+  - criterion: "No concrete Secret provider implementation is introduced"
+    result: "passed"
+    evidence: "Source defines only TypeAliases, two Pydantic helper models, and a Protocol; AST/handler scan test passes; no implementation methods or bodies present"
+  - criterion: "Forbidden runtime/real_adapters/control_plane identity paths are untouched"
+    result: "passed"
+    evidence: "test_secret_provider_module_defines_no_gateway_adapter_or_concrete_provider_handler scans for app.runtime/app.execution_fabric.real_adapters/app.control_plane.identity; passes. git diff --cached --name-only shows only the two task files plus this Task Record"
+failure_examples_tested:
+  - example: "SecretProviderPort returns plaintext credential values"
+    result: "triggered"
+    evidence: "Initial SecretInjectionResult.execution_context could serialize {'password': 'x'}; Codex review flagged it as P1; after removing the field, SecretInjectionResult.model_validate({'execution_context': {'password': 'x'}, ...}) raises ValidationError extra_forbidden"
+  - example: "Concrete Vault, OAuth2, or vendor secret provider is imported"
+    result: "triggered"
+    evidence: "test_secret_provider_module_imports_no_concrete_secret_dependencies would fail if any of Vault/OAuth/requests/httpx/boto/azure/gcloud/keyring/open( appeared in source; scan passes clean"
+  - example: "Gateway or Adapter handles credentials without SecretProviderPort"
+    result: "triggered"
+    evidence: "Forbidden-path scan test and staged diff confirm no Gateway/Adapter code modified; task touched only app/ports/secret_provider.py and its test"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch: phase0/P0-DOMAIN-011a; only the two untracked task files present"
+  - step: "Verify dependency Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml | Select-Object -First 1"
+    evidence: "P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml present"
+  - step: "Create contract tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_secret_provider_port.py"
+    evidence: "Codex reported red phase failed as expected: missing module app.ports.secret_provider"
+  - step: "Implement abstract SecretProviderPort contract"
+    result: "passed"
+    command: "Test-Path app/ports/secret_provider.py"
+    evidence: "True"
+  - step: "Run contract tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/ports/test_secret_provider_port.py"
+    evidence: "15 passed in 0.17s; after P1 fix re-run 15 passed in 0.19s"
+  - step: "Run lint/type checks for task-owned files"
+    result: "passed"
+    command: "uv run ruff check app/ports/secret_provider.py tests/ports/test_secret_provider_port.py; uv run mypy app/ports/secret_provider.py"
+    evidence: "ruff: All checks passed!; mypy: Success: no issues found in 1 source file"
+  - step: "Verify no concrete secret provider import was introduced"
+    result: "passed"
+    command: "Select-String -Path app/ports/secret_provider.py -Pattern 'Vault','OAuth','requests','httpx','boto','azure','gcloud','keyring','open\\(' -Quiet"
+    evidence: "no match; source contains only typing/pydantic imports"
+  - step: "Verify no plaintext credential values are staged"
+    result: "passed"
+    command: "git diff --cached -U0 | Select-String -Pattern '(?i)(password|token|cookie|sessionid|access_token|refresh_token|api_key|private_key)\\s*[:=]\\s*[\"''][^\"''<][^\"''\\s]{6,}' -Quiet"
+    evidence: "PASSED (no match); the only credential-like tokens are field-name string literals in negative-assertion test sets, not assigned plaintext values"
+  - step: "Verify import boundaries"
+    result: "passed"
+    command: "uv run pytest tests/architecture/"
+    evidence: "22 passed in 0.14s (includes test_import_boundaries.py 8 passed)"
+  - step: "Verify weak-test checker"
+    result: "passed"
+    command: "uv run python scripts/check_weak_tests.py tests/ports/test_secret_provider_port.py"
+    evidence: "Weak-test check passed."
+  - step: "Cross-review fix verification (P1 leak closure)"
+    result: "passed"
+    command: "SecretInjectionResult.model_validate({'execution_context': {'password': 'x'}, 'credential_ref': 'r', 'mock_secret_injected': True})"
+    evidence: "raises pydantic ValidationError extra_forbidden for execution_context; leak closed"
+changed_files:
+  - app/ports/secret_provider.py
+  - docs/phase0/task_logs/P0-DOMAIN-011a_20260602_180338_passed.yaml
+  - tests/ports/test_secret_provider_port.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_secret_provider_port.py"
+    result: "passed"
+    output_snippet: "15 passed in 0.17s (final re-run after P1 fix: 15 passed in 0.19s)"
+  - command: "uv run ruff check app/ports/secret_provider.py tests/ports/test_secret_provider_port.py"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/secret_provider.py"
+    result: "passed"
+    output_snippet: "Success: no issues found in 1 source file"
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.14s"
+  - command: "uv run python scripts/check_weak_tests.py tests/ports/test_secret_provider_port.py"
+    result: "passed"
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest"
+    result: "failed"
+    output_snippet: "105 passed, 3 failed; failures are tests/db/test_db_health.py (x2) and tests/db/test_migrations.py (x1), all DATABASE_URL/Postgres environment dependencies unrelated to this contract task"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+carried_forward_constraints:
+  - constraint: "Context Assembly minimum input boundary"
+    result: "preserved"
+    evidence: "Interface-only task; no context assembly code or inputs were implemented or changed."
+  - constraint: "Capability Summary injection rules"
+    result: "not_changed"
+    evidence: "No Capability Summary injection code was implemented or changed."
+  - constraint: "Intent to Capability minimum validation path"
+    result: "not_changed"
+    evidence: "No intent validation path was implemented or changed."
+  - constraint: "structured-output failure Plan B"
+    result: "not_changed"
+    evidence: "No LLM structured-output code was changed; raw SDK plus response_format json_object plus Pydantic model_validate plus Literal enum baseline remains unchanged."
+  - constraint: "no_capability_found terminal state"
+    result: "not_redefined"
+    evidence: "No ExecutionStatus or terminal-state model was implemented or changed in this task."
+  - constraint: "clarification_needed terminal state"
+    result: "not_redefined"
+    evidence: "Not added or redefined; downstream runtime tasks remain responsible."
+  - constraint: "validation_failed outcome"
+    result: "not_redefined"
+    evidence: "No validation outcome model was implemented or changed."
+  - constraint: "manual_review_needed outcome"
+    result: "not_redefined"
+    evidence: "No policy or identity outcome model was implemented or changed."
+  - constraint: "Phase 1 user-value boundary"
+    result: "preserved"
+    evidence: "Contracts only; no full Phase 1 workflow or real secret retrieval was implemented."
+contract_model_decisions:
+  secret_provider_port: "SecretProviderPort.resolve_secret_ref and inject_execution_secret follow frozen spec section 8.6.8 exactly; both return dict[str, Any]."
+  helper_models: "SecretResolutionResult and SecretInjectionResult are Phase 0 safe return-shape contracts only, not Protocol method return types. Both use model_config extra=forbid."
+  injection_result_field_removal: "execution_context was removed from SecretInjectionResult during cross-review because dict[str, Any] could serialize arbitrary nested plaintext credentials, defeating the no-plaintext boundary. The model now exposes only credential_ref and mock_secret_injected, making it safe-by-construction. Note: the Protocol method inject_execution_secret still takes execution_context as an input parameter per spec 8.6.8; only the helper return-shape model dropped the field."
+  literal_aliases: "RedactedSecretPlaceholder = Literal['<redacted>']; MockSecretInjected = Literal[True]. These constrain mock return signals to safe values only."
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/ => 22 passed; source-scan tests confirm no forbidden-path or concrete-provider imports."
+security_scan_result:
+  result: "passed"
+  evidence: "Staged secret scan returned PASSED. No plaintext credential values appear in source, tests, or this Task Record. Credential-like tokens present are field-name string literals used in negative assertions only. Post-fix SecretInjectionResult cannot serialize arbitrary nested credentials."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "uv run python scripts/check_weak_tests.py tests/ports/test_secret_provider_port.py => Weak-test check passed. 15 tests each assert concrete conditions; no assert True / empty pass / broad skip."
+ci_evidence:
+  result: "pending"
+  run_id: "to_be_recorded_after_push"
+  url_or_log_path: "to_be_recorded_after_push"
+  not_applicable_reason: "not_applicable"
+  not_applicable_scope: "not_applicable"
+  blocked_by_task_id: "not_applicable"
+  activation_task_id: "not_applicable"
+  expiry_condition: "Replace with GitHub Actions run id and conclusion after merge to phase0/main and push."
+  evidence: "Local required validation commands passed and are recorded in tests_run; remote CI to be checked after push per project workflow."
+review:
+  mode: "cross_review"
+  reviewed_by: "Claude Code (Opus) adversarial checklist review + Codex (gpt-5.5) codex review"
+  reviewed_at: "2026-06-02T17:50:00+09:00"
+  notes: >
+    Plan review: Claude Code v1 review missed structural gaps that Codex App
+    review caught (4 P1: missing Plan sections, staged-diff vs working-tree diff,
+    missing staged secret scan, helper-model return semantics); Plan v2 addressed
+    all four and passed re-review. Code review: Claude Code review passed; Codex
+    review returned FAIL on a real P1 (SecretInjectionResult.execution_context
+    plaintext leak). The field was removed and Codex re-review returned PASS.
+    Cross-review demonstrably added value: a real defect was caught that the
+    single Claude Code review missed.
+remaining_risks:
+  - "RedactedSecretPlaceholder, MockSecretInjected, SecretResolutionResult, and SecretInjectionResult are local to the secret provider port; shared-contract consolidation across ports remains out of scope unless a later task authorizes it."
+  - "The Phase 0 helper return-shape models are advisory contracts; downstream Noop/Mock SecretProvider implementation (depends_on P0-DOMAIN-011a) must honor the no-plaintext boundary when it constructs actual return dicts."
+rollback_or_failure_record: >
+  One in-task fix cycle: cross-review found a P1 plaintext-leak path via
+  SecretInjectionResult.execution_context; resolved by removing the field and
+  updating three tests; re-review passed. No rollback of the task was required.
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package was created for this interface-contract task."
+package_scope: "not_applicable"
+package_evidence: "not_applicable"

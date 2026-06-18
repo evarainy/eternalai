@@ -1,0 +1,285 @@
+task_id: "P0-BATCH2-FE-PROMPTS-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-18T16:42:46+08:00"
+completed_at: "2026-05-18T17:16:22+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-18T16:42:46+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Synchronized frontend Batch 2 task sequence and prompt materials, then
+  refreshed the package after staged Codex review. The review-fix pass removed
+  premature MANIFEST registration of a future frontend guidelines file, expanded
+  P0-INFRA-003 forbidden-path coverage, replaced Unix-only validation examples
+  with PowerShell/Python-friendly checks, clarified the P0-FE-ARCH-001 SDUI
+  architecture baseline deliverable, and added final staged-diff closeout checks
+  to all affected future prompts.
+
+generated_prompt_files:
+  - docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md
+  - docs/phase0/tasks/P0-FE-SPIKE-001.md
+  - docs/phase0/tasks/P0-INFRA-003A.md
+  - docs/phase0/tasks/P0-FE-GUIDE-001.md
+  - docs/phase0/tasks/P0-FE-ARCH-001.md
+
+review_fix_items:
+  - "Task Record refreshed against final staged evidence."
+  - "MANIFEST.md no longer registers docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md before the owning future task creates it."
+  - "P0-INFRA-003.md forbids blueprint, dependency policy, backend/app, CI, Docker, dependency/lockfile, unrelated infra, and unrelated task-log paths while allowing only web/package.json and web/pnpm-lock.yaml for the frontend skeleton."
+  - "P0-INFRA-003.md uses PowerShell/Python-friendly validation commands and preserves deterministic generate:api drift validation."
+  - "All affected prompts include final closeout checks for branch, status, staged names, staged stat, diff check, untracked files, forbidden paths, and changed_files matching the staged diff."
+  - "P0-FE-ARCH-001.md now defines docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md as the future PDR deliverable with ComponentRegistry, ActionDispatcher, FallbackRenderer, schema_version, user_action, and minimal architecture acceptance checks."
+
+acceptance_criteria_result:
+  - criterion: "TASK_INDEX.md updated with frontend task sequence: P0-FE-SPIKE-001, P0-INFRA-003A, P0-FE-GUIDE-001, P0-FE-ARCH-001 with correct depends_on"
+    result: "passed"
+    evidence: "Staged TASK_INDEX.md keeps the sequence P0-FE-SPIKE-001 -> P0-INFRA-003A -> P0-FE-GUIDE-001 -> P0-INFRA-003 -> P0-FE-ARCH-001."
+  - criterion: "P0-BATCH2-FE-PROMPTS-001.md task prompt file created"
+    result: "passed"
+    evidence: "File exists in final staged diff."
+  - criterion: "P0-FE-SPIKE-001.md created with Ant Design X spike scope, no web/ creation, no dependency_policy.md modification"
+    result: "passed"
+    evidence: "Prompt contains Ant Design X spike scope, explicit owners, no web/ creation, no dependency_policy.md modification, and final closeout checks."
+  - criterion: "P0-INFRA-003A.md created with frontend dependency policy scope, gates on P0-FE-SPIKE-001"
+    result: "passed"
+    evidence: "Prompt depends_on P0-FE-SPIKE-001, owns dependency_policy.md updates for the future task only, and forbids web/package/lockfile creation."
+  - criterion: "P0-FE-GUIDE-001.md created with FRONTEND_AI_CODING_GUIDELINES.md deliverable path"
+    result: "passed"
+    evidence: "Prompt defines docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md and future MANIFEST registration as its deliverables."
+  - criterion: "P0-FE-ARCH-001.md created with execution_owner=claude_code_mimo, review_owner=codex, method=PDR, SDUI architecture scope"
+    result: "passed"
+    evidence: "Prompt uses method=PDR, execution_owner=claude_code_mimo, review_owner=codex, and explicit PDR deliverable docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md."
+  - criterion: "P0-INFRA-003.md updated: depends_on changed to P0-INFRA-003A and P0-FE-GUIDE-001, scope narrowed to exclude Ant Design X decision and npm allowlist"
+    result: "passed"
+    evidence: "Prompt depends_on P0-INFRA-003A and P0-FE-GUIDE-001 and keeps only web skeleton, health page, basic layout, mock API sample, deterministic generate:api, TypeScript strict, and Vitest test scope."
+  - criterion: "Each new prompt contains method_profile, depends_on, structured-output baseline section, acceptance_criteria, failure_examples, step_verification_points, touched_paths, forbidden_paths, stop_conditions"
+    result: "passed"
+    evidence: "Prompt-quality scan confirmed method_profile, explicit owners, final staged diff checks, and changed_files checks across all affected prompts."
+  - criterion: "README_TASK_PROMPTS.md updated with new prompt entries"
+    result: "passed"
+    evidence: "File remains staged with new prompt entries from the original implementation."
+  - criterion: "MANIFEST.md updated with new prompt files only"
+    result: "passed"
+    evidence: "Select-String -Path MANIFEST.md -Pattern 'FRONTEND_AI_CODING_GUIDELINES' returned no matches."
+  - criterion: "REPOSITORY_CONTEXT_MAP.md minimally updated for frontend task sequence"
+    result: "passed"
+    evidence: "File remains staged with the frontend sequence context from the original implementation."
+  - criterion: "No forbidden files modified"
+    result: "passed"
+    evidence: "Forbidden staged-path scan returned: no forbidden staged paths."
+  - criterion: "No dependency files, lockfiles, web/, backend app/, blueprint, or .github/ paths changed"
+    result: "passed"
+    evidence: "Dependency/web scan returned: no dependency, lockfile, web, docker, or dependency-policy staged paths; Test-Path web returned absent."
+
+failure_examples_tested:
+  - example: "Generated prompt missing method_profile field"
+    result: "not_applicable"
+    evidence: "Prompt-quality validation is documentation-structure validation, not a runtime failure path. Select-String checks confirmed method_profile and explicit owner fields."
+    not_applicable_reason: "Documentation-generation task verifies required fields through step_verification_points; no independent runtime failure path."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "TASK_INDEX.md dependency order inconsistent with prompt depends_on"
+    result: "not_applicable"
+    evidence: "Review-fix confirmation preserved the staged TASK_INDEX sequence and did not alter the approved ordering."
+    not_applicable_reason: "Verified through cross-comparison in step_verification_points."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    exit_code: 0
+    evidence: "phase0/P0-BATCH2-FE-PROMPTS-001"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    exit_code: 0
+    evidence: |
+      M  MANIFEST.md
+      M  docs/phase0/REPOSITORY_CONTEXT_MAP.md
+      M  docs/phase0/TASK_INDEX.md
+      M  docs/phase0/task_logs/INDEX.md
+      A  docs/phase0/task_logs/P0-BATCH2-FE-PROMPTS-001_20260518_164246_passed.yaml
+      A  docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md
+      A  docs/phase0/tasks/P0-FE-ARCH-001.md
+      A  docs/phase0/tasks/P0-FE-GUIDE-001.md
+      A  docs/phase0/tasks/P0-FE-SPIKE-001.md
+      M  docs/phase0/tasks/P0-INFRA-003.md
+      A  docs/phase0/tasks/P0-INFRA-003A.md
+      M  docs/phase0/tasks/README_TASK_PROMPTS.md
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    exit_code: 0
+    evidence: |
+      MANIFEST.md
+      docs/phase0/REPOSITORY_CONTEXT_MAP.md
+      docs/phase0/TASK_INDEX.md
+      docs/phase0/task_logs/INDEX.md
+      docs/phase0/task_logs/P0-BATCH2-FE-PROMPTS-001_20260518_164246_passed.yaml
+      docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md
+      docs/phase0/tasks/P0-FE-ARCH-001.md
+      docs/phase0/tasks/P0-FE-GUIDE-001.md
+      docs/phase0/tasks/P0-FE-SPIKE-001.md
+      docs/phase0/tasks/P0-INFRA-003.md
+      docs/phase0/tasks/P0-INFRA-003A.md
+      docs/phase0/tasks/README_TASK_PROMPTS.md
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    exit_code: 0
+    evidence: |
+       MANIFEST.md                                        |   5 +
+       docs/phase0/REPOSITORY_CONTEXT_MAP.md              |   5 +-
+       docs/phase0/TASK_INDEX.md                          |   6 +-
+       docs/phase0/task_logs/INDEX.md                     |   1 +
+       ...TCH2-FE-PROMPTS-001_20260518_164246_passed.yaml | 285 +++++++++++++++++++++
+       docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md      | 281 ++++++++++++++++++++
+       docs/phase0/tasks/P0-FE-ARCH-001.md                | 259 +++++++++++++++++++
+       docs/phase0/tasks/P0-FE-GUIDE-001.md               | 216 ++++++++++++++++
+       docs/phase0/tasks/P0-FE-SPIKE-001.md               | 226 ++++++++++++++++
+       docs/phase0/tasks/P0-INFRA-003.md                  |  98 ++++++-
+       docs/phase0/tasks/P0-INFRA-003A.md                 | 226 ++++++++++++++++
+       docs/phase0/tasks/README_TASK_PROMPTS.md           |   7 +-
+       12 files changed, 1603 insertions(+), 12 deletions(-)
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    exit_code: 0
+    evidence: "No output."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    exit_code: 0
+    evidence: "No output."
+  - step: "Final forbidden-file scan"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String forbidden path patterns"
+    exit_code: 0
+    evidence: "no forbidden staged paths"
+  - step: "Final dependency/web scan"
+    result: "passed"
+    command: "git diff --cached --name-only | Select-String dependency/web path patterns; Test-Path web"
+    exit_code: 0
+    evidence: "no dependency, lockfile, web, docker, or dependency-policy staged paths; web directory absent"
+  - step: "Prompt-quality fixes applied"
+    result: "passed"
+    command: "Select-String prompt-quality spot checks across affected prompts"
+    exit_code: 0
+    evidence: "prompt-quality checks present; P0-INFRA-003 forbidden paths covered; P0-FE-ARCH-001 SDUI baseline markers present; MANIFEST frontend guidelines search returned no matches."
+  - step: "Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: "Manual comparison against git diff --cached --name-only"
+    exit_code: 0
+    evidence: "changed_files below is in the exact order returned by git diff --cached --name-only."
+
+changed_files:
+  - MANIFEST.md
+  - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+  - docs/phase0/TASK_INDEX.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-BATCH2-FE-PROMPTS-001_20260518_164246_passed.yaml
+  - docs/phase0/tasks/P0-BATCH2-FE-PROMPTS-001.md
+  - docs/phase0/tasks/P0-FE-ARCH-001.md
+  - docs/phase0/tasks/P0-FE-GUIDE-001.md
+  - docs/phase0/tasks/P0-FE-SPIKE-001.md
+  - docs/phase0/tasks/P0-INFRA-003.md
+  - docs/phase0/tasks/P0-INFRA-003A.md
+  - docs/phase0/tasks/README_TASK_PROMPTS.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "git branch --show-current"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "phase0/P0-BATCH2-FE-PROMPTS-001"
+  - command: "git status --short"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "12 staged files; no unstaged or untracked entries shown"
+  - command: "git diff --cached --name-only"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "12 staged files, all approved"
+  - command: "git diff --cached --stat"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "12 files changed, 1603 insertions(+), 12 deletions(-)"
+  - command: "git diff --cached --check"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No output"
+  - command: "git ls-files --others --exclude-standard"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "No output"
+  - command: "Forbidden staged-path scan"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "no forbidden staged paths"
+  - command: "Dependency/web staged-path scan"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "no dependency, lockfile, web, docker, or dependency-policy staged paths; web directory absent"
+  - command: "Prompt-quality spot checks"
+    result: "passed"
+    exit_code: 0
+    output_snippet: "prompt-quality checks present"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; documentation/prompt files only."
+  not_applicable_reason: "No app/ modules created or modified; prompt generation task only."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: "passed"
+  evidence: "No plaintext credentials, tokens, cookies, session IDs, access tokens, or refresh tokens added to prompt files or Task Record."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "No test files created; prompt generation and documentation task only."
+  not_applicable_reason: "No test files created in this documentation task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_doc_task_no_ci_run_requested"
+  url_or_log_path: "local file evidence recorded in this Task Record"
+  not_applicable_reason: "P0-BATCH2-FE-PROMPTS-001 is a local documentation/prompt-generation task and no CI run was requested."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "A future task requires CI execution for prompt validation."
+  evidence: "All acceptance criteria were validated by local command output in this execution."
+review:
+  mode: "codex_review"
+  reviewed_by: "pending"
+  reviewed_at: "pending"
+  notes: "Ready for independent Codex staged review."
+remaining_risks:
+  - "Frontend prompts are templates only; actual implementation quality depends on future execution-phase TDD/PDR adherence."
+  - "P0-FE-SPIKE-001 assumes npm registry or enterprise mirror access for @ant-design/x compatibility checks."
+rollback_or_failure_record: "not_applicable_task_passed_no_failure_record_generated"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package created; documentation/prompt-generation task only."
+package_scope: "not_applicable"
+package_evidence: "No package-manager commands were run during this task."

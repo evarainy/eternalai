@@ -1,0 +1,294 @@
+task_id: P0-INFRA-002B
+task_name: Scratch/temp workspace and artifact cleanup rules
+task_type: documentation
+branch: phase0/p0-infra-002b-cleanup
+planning_owner: Codex
+implementation_owner: Claude Code / MiMo
+review_owner: Codex
+result: passed
+status: passed
+started_at: "2026-05-18T12:39:00+08:00"
+completed_at: "2026-05-18T12:39:41+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-18T12:39:00+08:00"
+plan_approved_via: Claude Code session
+summary: >
+  Completed P0-INFRA-002B scratch/temp workspace and artifact cleanup rules.
+  Defined _scratch/ as the single repository-local scratch/temp workspace.
+  Extended .gitignore with clear commented sections for scratch, Python
+  bytecode/tool caches, virtual environments, root-level temp files,
+  build/coverage/package artifacts, and frontend caches. Added compact
+  implementation-agent rules to CLAUDE.md and review-agent rules to AGENTS.md
+  covering scratch/temp usage, artifact lifecycle recording, cache cleanup,
+  and .venv/ out-of-scope treatment. No _tmp/ synonym was introduced. No
+  source files, tests, docs, Task Records, dependency manifests, or lockfiles
+  are ignored. No runtime code, frontend, database, CI, or business logic
+  changes were made.
+
+context:
+  - "P0-INFRA-002 Task Record (docs/phase0/task_logs/P0-INFRA-002_20260518_104453_passed.yaml) recorded a deferred_cleanup_followup: 'open a separate foundation/cleanup task to define _scratch/ and/or _tmp/ conventions, add .gitignore rules, and document rules in CLAUDE.md and AGENTS.md.'"
+  - "P0-INFRA-002 validation/review repeatedly created temporary cache artifacts (__pycache__/, *.pyc, .pytest_cache/, .mypy_cache/, .ruff_cache/) that were manually cleaned before closeout."
+  - "This task establishes repository-level rules so future tasks do not require manual cache cleanup."
+
+method_profile:
+  execution_role: documentation
+  execution_owner: claude_code_mimo
+  review_owner: codex
+  review_mode: codex_review
+  method: not_applicable
+  reason: >
+    Repository hygiene/rules task with no runtime behavior change.
+    Claude Code / MiMo owns documentation implementation because the task
+    modifies only .gitignore, CLAUDE.md, AGENTS.md, and creates a task prompt.
+    Codex performs independent staged-diff review. Method is not_applicable
+    because no code, test, or interface contract is produced.
+
+implementation_summary:
+  - "Created docs/phase0/tasks/P0-INFRA-002B.md as a bounded task contract with method_profile, touched_paths, allowed_paths, forbidden_paths, acceptance criteria, and stop conditions."
+  - "Extended .gitignore from 2 lines to 59 lines with commented sections for _scratch/, Python caches, venvs, root-level temp files, build/coverage/package artifacts, and frontend caches."
+  - "Added 'Scratch/temp and artifact cleanup' section to CLAUDE.md with 6 compact implementation-agent rules."
+  - "Added 'Scratch/temp and artifact review rules' section to AGENTS.md with 6 compact review-agent rules."
+
+acceptance_criteria_result:
+  - criterion: ".gitignore has clear commented sections for _scratch/, Python bytecode/tool caches, venvs, root-level temp files, root-level build/coverage/package artifacts, and frontend caches"
+    result: passed
+    evidence: "git diff .gitignore shows 57 lines added with 6 clearly commented sections."
+  - criterion: ".gitignore does NOT ignore source files, tests, docs, Task Records, pyproject.toml, uv.lock, or frontend lockfiles"
+    result: passed
+    evidence: >
+      git check-ignore -v for pyproject.toml, uv.lock, package.json,
+      package-lock.json, pnpm-lock.yaml, yarn.lock, docs/, tests/,
+      docs/phase0/tasks/P0-INFRA-002B.md,
+      docs/phase0/task_logs/P0-INFRA-002B_dummy_passed.yaml, and
+      tests/test_health.py all returned exit 1 (not ignored).
+  - criterion: "CLAUDE.md contains compact implementation-agent scratch/temp rules"
+    result: passed
+    evidence: "git diff CLAUDE.md shows 8 lines added with 'Scratch/temp and artifact cleanup' section containing 6 rules."
+  - criterion: "AGENTS.md contains compact review-agent scratch/temp verification rules"
+    result: passed
+    evidence: "git diff AGENTS.md shows 8 lines added with 'Scratch/temp and artifact review rules' section containing 6 rules."
+  - criterion: "docs/phase0/tasks/P0-INFRA-002B.md exists with valid method_profile"
+    result: passed
+    evidence: "File created with 209 lines; contains method_profile with execution_role, execution_owner, review_owner, review_mode, method, and reason_for_owner_choice."
+
+failure_examples_tested:
+  - example: ".gitignore accidentally ignores pyproject.toml or uv.lock"
+    result: not_triggered
+    evidence: "git check-ignore -v pyproject.toml and uv.lock both returned exit 1 (not ignored)."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "_scratch/.gitkeep is created"
+    result: not_triggered
+    evidence: "Test-Path _scratch/.gitkeep confirmed file does not exist."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "_tmp/ introduced as synonym"
+    result: not_triggered
+    evidence: ".gitignore contains no _tmp/ pattern. CLAUDE.md and AGENTS.md contain no _tmp/ as allowed workspace; prohibition text only."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Cache artifacts remain staged at closeout"
+    result: not_triggered
+    evidence: "git diff --cached --name-only contains exactly 6 files: .gitignore, AGENTS.md, CLAUDE.md, docs/phase0/task_logs/INDEX.md, docs/phase0/task_logs/P0-INFRA-002B_20260518_043941_passed.yaml, docs/phase0/tasks/P0-INFRA-002B.md; no cache artifacts staged."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Confirm branch, clean tree, and e814609 ancestry"
+    result: passed
+    command: "git branch --show-current; git status --short; git merge-base --is-ancestor e814609 HEAD"
+    evidence: "Branch: phase0/p0-infra-002b-cleanup. Working tree clean. e814609 is ancestor of HEAD."
+  - step: "Create docs/phase0/tasks/P0-INFRA-002B.md"
+    result: passed
+    command: "Test-Path docs/phase0/tasks/P0-INFRA-002B.md"
+    evidence: "File created successfully."
+  - step: "Extend .gitignore"
+    result: passed
+    command: "git diff .gitignore"
+    evidence: "57 lines added; 6 commented sections; original 2 lines preserved."
+  - step: "Add rules to CLAUDE.md"
+    result: passed
+    command: "git diff CLAUDE.md"
+    evidence: "8 lines added; 'Scratch/temp and artifact cleanup' section with 6 rules."
+  - step: "Add rules to AGENTS.md"
+    result: passed
+    command: "git diff AGENTS.md"
+    evidence: "8 lines added; 'Scratch/temp and artifact review rules' section with 6 rules."
+  - step: "Fix touched_paths/allowed_paths/forbidden_paths and _tmp/ validation wording"
+    result: passed
+    command: "Codex implementation review returned needs_changes; both blocking issues fixed."
+    evidence: "Added touched_paths, allowed_paths, forbidden_paths fields to task YAML. Rewrote _tmp/ validation to distinguish prohibition text from allowed convention."
+  - step: "Run git check-ignore spot checks (negative — must not match)"
+    result: passed
+    command: "git check-ignore -v pyproject.toml uv.lock package.json package-lock.json pnpm-lock.yaml yarn.lock docs/ tests/ docs/phase0/tasks/P0-INFRA-002B.md docs/phase0/task_logs/P0-INFRA-002B_dummy_passed.yaml tests/test_health.py"
+    evidence: "All returned exit 1 (not ignored)."
+  - step: "Run git check-ignore spot check (positive — must match)"
+    result: passed
+    command: "git check-ignore -v _scratch/test-ignore.tmp"
+    evidence: "Matched .gitignore:8:_scratch/. Exit 0."
+  - step: "Verify no _scratch/.gitkeep"
+    result: passed
+    command: "Test-Path _scratch/.gitkeep"
+    evidence: "File does not exist."
+  - step: "Verify no temp/cache artifacts staged or untracked"
+    result: passed
+    command: "git ls-files --others --exclude-standard; git diff --cached --name-only"
+    evidence: "No untracked files. Staged files match expected implementation files only."
+  - step: "Stage closeout metadata and verify final staged diff"
+    result: passed
+    command: "git status --short; git diff --cached --name-only; git diff --cached --stat; git diff --cached --check"
+    evidence: "Final staged file list recorded in changed_files. git diff --cached --check exit 0."
+
+changed_files:
+  - .gitignore
+  - AGENTS.md
+  - CLAUDE.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-INFRA-002B_20260518_043941_passed.yaml
+  - docs/phase0/tasks/P0-INFRA-002B.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git branch --show-current"
+    result: passed
+    output_snippet: "phase0/p0-infra-002b-cleanup"
+  - command: "git status --short"
+    result: passed
+    output_snippet: "M  .gitignore; M  AGENTS.md; M  CLAUDE.md; M  docs/phase0/task_logs/INDEX.md; A  docs/phase0/task_logs/P0-INFRA-002B_20260518_043941_passed.yaml; A  docs/phase0/tasks/P0-INFRA-002B.md"
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: ".gitignore; AGENTS.md; CLAUDE.md; docs/phase0/task_logs/INDEX.md; docs/phase0/task_logs/P0-INFRA-002B_20260518_043941_passed.yaml; docs/phase0/tasks/P0-INFRA-002B.md"
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "6 files changed, 576 insertions(+), 1 deletion(-)"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "exit=0"
+  - command: "git check-ignore -v _scratch/test-ignore.tmp"
+    result: passed
+    output_snippet: ".gitignore:8:_scratch/	_scratch/test-ignore.tmp (exit 0)"
+  - command: "git check-ignore -v pyproject.toml uv.lock package.json package-lock.json pnpm-lock.yaml yarn.lock docs/ tests/ docs/phase0/tasks/P0-INFRA-002B.md docs/phase0/task_logs/P0-INFRA-002B_dummy_passed.yaml tests/test_health.py"
+    result: passed
+    output_snippet: "All returned exit 1 (not ignored)."
+  - command: "test -f _scratch/.gitkeep"
+    result: passed
+    output_snippet: "DOES NOT EXIST (PASS)"
+  - command: "git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "No untracked files (empty output)."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  evidence: "P0-INFRA-002B is a documentation/rules task; no import boundaries are introduced or modified."
+  not_applicable_reason: "No production code or import paths were changed."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+security_scan_result:
+  result: passed
+  evidence: "No plaintext password/token/cookie/sessionid/access_token/refresh_token values introduced. No mirror URLs, credentials, or internal endpoints added."
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "P0-INFRA-002B is a documentation/rules task; no test files were created or modified."
+  not_applicable_reason: "No test implementation was in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "No CI workflow files were changed and no CI run was required for P0-INFRA-002B."
+  not_applicable_reason: "CI wiring is outside P0-INFRA-002B scope."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "P0-INFRA-007 wires checks into CI."
+
+review:
+  mode: codex_review
+  reviewed_by: Codex
+  reviewed_at: "2026-05-18T12:39:41+08:00"
+  notes: >
+    Codex implementation review returned needs_changes on first pass
+    (missing touched_paths/allowed_paths/forbidden_paths; contradictory
+    _tmp/ validation wording). Both blocking issues fixed. Second review
+    returned approved. Blocking issues after fix: none. Required
+    corrections after fix: none.
+
+artifact_lifecycle:
+  persistent_foundation_artifacts:
+    - .gitignore
+    - AGENTS.md
+    - CLAUDE.md
+    - docs/phase0/tasks/P0-INFRA-002B.md
+  persistent_closeout_artifacts:
+    - docs/phase0/task_logs/INDEX.md
+    - docs/phase0/task_logs/P0-INFRA-002B_20260518_043941_passed.yaml
+  persistent_regression_tests: []
+  temporary_validation_artifacts:
+    - path: _scratch/test-ignore.tmp
+      purpose: "Ignore-effectiveness validation: verify git check-ignore matches _scratch/ contents."
+      created_at: "2026-05-18T12:39:00+08:00"
+      removed_at: "2026-05-18T12:39:41+08:00"
+  cleanup_timing: >
+    _scratch/test-ignore.tmp created for ignore-effectiveness validation
+    only. Removed before review/closeout. _scratch/ directory removed
+    before closeout.
+  explicitly_out_of_scope:
+    - ".venv/ internal caches"
+    - "app/ and tests/ runtime caches (handled by .gitignore patterns, not manual cleanup)"
+
+explicit_exclusions:
+  - "no runtime code changes"
+  - "no app/ or tests/ modifications"
+  - "no pyproject.toml or uv.lock changes"
+  - "no docker-compose.yml or README.md changes"
+  - "no frontend implementation"
+  - "no database migrations"
+  - "no CI workflow changes"
+  - "no runtime/gateway/business adapter code"
+  - "no frozen blueprint changes"
+  - "no historical Task Record rewrites"
+  - "no _tmp/ synonym introduced"
+  - "no _scratch/.gitkeep created"
+  - "no commit was performed"
+  - "no push was performed"
+  - "no merge was performed"
+
+remaining_risks:
+  - "Future tasks must follow the _scratch/ convention; enforcement depends on CLAUDE.md and AGENTS.md rules being loaded."
+  - ".gitignore patterns only cover root-level temp files (/*.tmp); nested temp files in subdirectories are not covered by root-level patterns but _scratch/ provides the designated workspace."
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "not_committed"
+git_commit_sha_note: "No commit, push, or merge was performed during P0-INFRA-002B closeout. The authoritative commit SHA will be the future commit containing this Task Record after final closeout approval."
+
+package_confirmation_status: not_applicable
+package_confirmation: "No archive or deployable package was required or created for P0-INFRA-002B."
+package_scope: "Task closeout staged repository files only: .gitignore, AGENTS.md, CLAUDE.md, task prompt, task log index, and this Task Record."
+package_evidence: "The task deliverables are repository metadata files; no package creation command was specified or run."

@@ -1,0 +1,114 @@
+{
+  "golden_task_id": "GT-012",
+  "title": "U8 多账套绑定但未指定 account_set_id",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_finance_001",
+    "roles": [
+      "finance_user"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "u8",
+        "binding_id": "bind_u8_001",
+        "status": "active",
+        "account_set_id": "acctset_hunan_01",
+        "binding_scope": "acctset_hunan_01"
+      },
+      {
+        "target_system": "u8",
+        "binding_id": "bind_u8_002",
+        "status": "active",
+        "account_set_id": "acctset_factory_02",
+        "binding_scope": "acctset_factory_02"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "u8.get_document_status",
+        "target_system": "u8",
+        "type": "query",
+        "risk_level": "medium",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "account_set_id",
+            "document_no"
+          ],
+          "properties": {
+            "account_set_id": {
+              "type": "string"
+            },
+            "document_no": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "document_status"
+          ],
+          "properties": {
+            "document_status": {
+              "type": "string"
+            }
+          }
+        },
+        "input_schema_digest": "digest_u8_document_input",
+        "output_schema_digest": "digest_u8_document_output"
+      }
+    ],
+    "mock_u8_state": "should_not_be_called"
+  },
+  "when": {
+    "channel": "web",
+    "message": "查一下 U8-AP-2026-0033 单据状态",
+    "arguments": {
+      "document_no": "U8-AP-2026-0033"
+    }
+  },
+  "then_response": {
+    "status": "blocked",
+    "envelope": {
+      "message_contains": [
+        "账套",
+        "选择"
+      ],
+      "ui.component_type": "operator_handback_card",
+      "ui.action": "clarify_scope",
+      "ui.target_system": "u8",
+      "data": null
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "capability_selected",
+      "identity_check",
+      "blocked_by_identity",
+      "response_envelope_created"
+    ],
+    "reason": "needs_binding_scope"
+  },
+  "then_forbidden": [
+    "mock_u8_was_called",
+    "fallback_to_first_binding",
+    "fallback_to_system_scope",
+    "response_data_not_null",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "needs_binding_scope"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}

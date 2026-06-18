@@ -1,0 +1,242 @@
+task_id: P0-GT-003
+title: Phase 0 Acceptance Run
+task_type: review
+result: passed
+status: passed
+branch: phase0/P0-GT-003
+base_commit: 4090b03
+base_commit_full: 4090b03c0d9477112f0c3e4513921eb6ef6b32c9
+started_at: "2026-06-12T11:58:27+09:00"
+completed_at: "2026-06-12T12:07:00+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-06-12T00:00:00+09:00"
+plan_approved_via: "Codex session prompt GATE 1 approval"
+
+summary: >-
+  Phase 0 acceptance run completed on phase0/P0-GT-003 at
+  4090b03c0d9477112f0c3e4513921eb6ef6b32c9. Spike ADRs and Task Records were
+  reconciled against spec §5.1/§5.2. Golden Task summary passed 11/11
+  (positive 7/7, negative 4/4), including GT-006 as both positive fixture and
+  zero-tolerance boundary path. Backend architecture, trace/sanitizer, ruff,
+  mypy, dependency, frontend lint/build, Alembic guard, CI reconciliation, and
+  spike-code disposal checks were executed. Full local pytest had exactly three
+  DATABASE_URL-related DB failures, recorded as local_only not_applicable per
+  task instructions and reconciled against successful CI run 27392168467.
+
+summary_judgment: >-
+  go. Phase 1 spec may start. The only local non-zero command is covered by the
+  approved DATABASE_URL local-only exception. Known non-blocking gaps remain:
+  Golden Task is not yet wired into ci.yml and review rerun contract §10 remains
+  pending for the Codex review stage.
+
+acceptance_criteria_result:
+  - criterion: "All Spike ADRs exist and provide passed / failed / conditionally_passed conclusion"
+    result: passed
+    evidence: "Acceptance report §5.1 cites ADR-P0-SPIKE-001 through ADR-P0-SPIKE-007 and target-system ADRs 005a/005b/005c."
+  - criterion: "Golden Task total >= 10, positive pass rate >= 80%, negative/boundary/safety paths 100%"
+    result: passed
+    evidence: "uv run python scripts/run_golden_tasks.py --summary exit 0: total=11 passed=11 failed=0 skipped=0 not_applicable=0 positive_passed=7 negative_passed=4; GT-006 boundary fixture passed."
+  - criterion: "Import boundary check passes"
+    result: passed
+    evidence: "uv run pytest tests/architecture/ -v: 22 passed in 0.15s."
+  - criterion: "Trace sanitizer test passes"
+    result: passed
+    evidence: "uv run pytest -k \"sanitizer or trace\" -v: 94 passed, 587 deselected."
+  - criterion: "Dependency allowlist and Alembic autogenerate checks pass"
+    result: passed
+    evidence: "check_dependencies.py passed; Alembic guard output no_alembic_autogenerate_comments."
+  - criterion: "Clear go/no-go conclusion"
+    result: passed
+    evidence: "docs/phase0/phase0_acceptance_report.md concludes Phase 1 spec may start."
+
+failure_examples_tested:
+  - example: "positive_threshold_not_met"
+    result: not_triggered
+    evidence: "Golden Task positive_passed=7/7."
+  - example: "negative_boundary_failed"
+    result: not_triggered
+    evidence: "Golden Task negative_passed=4/4 and GT-006 passed as zero-tolerance boundary fixture."
+  - example: "missing_adr"
+    result: not_triggered
+    evidence: "All required Spike ADR files exist and were read."
+  - example: "boundary_check_failed"
+    result: not_triggered
+    evidence: "Architecture tests passed; app spike-code scan output empty."
+  - example: "local DATABASE_URL missing"
+    result: triggered
+    evidence: "uv run pytest failed only on two DB health tests and one Alembic migration test requiring DATABASE_URL."
+    not_applicable_reason: "DATABASE_URL not set in local environment"
+    not_applicable_scope: "local_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "DATABASE_URL available in environment"
+
+step_verification_points:
+  - step: "Full test suite"
+    result: not_applicable
+    command: "uv run pytest 2>&1"
+    evidence: "3 DATABASE_URL-related failures; 652 passed, 26 skipped. CI run 27392168467 success."
+    not_applicable_reason: "DATABASE_URL not set in local environment"
+    not_applicable_scope: "local_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "DATABASE_URL available in environment"
+  - step: "Import boundary"
+    result: passed
+    command: "uv run pytest tests/architecture/ -v 2>&1"
+    evidence: "22 passed in 0.15s"
+  - step: "Trace sanitizer"
+    result: passed
+    command: "uv run pytest -k \"sanitizer or trace\" -v 2>&1"
+    evidence: "94 passed, 587 deselected"
+  - step: "Golden Task summary"
+    result: passed
+    command: "uv run python scripts/run_golden_tasks.py --summary 2>&1"
+    evidence: "total=11 passed=11 failed=0 skipped=0 not_applicable=0 positive_passed=7 negative_passed=4"
+  - step: "Lint"
+    result: passed
+    command: "uv run ruff check app/ tests/ 2>&1"
+    evidence: "All checks passed!"
+  - step: "Type check"
+    result: passed
+    command: "uv run mypy app/ 2>&1"
+    evidence: "Success: no issues found in 46 source files"
+  - step: "Dependency compliance"
+    result: passed
+    command: "uv run python scripts/check_dependencies.py 2>&1"
+    evidence: "Dependency check passed. Manifests scanned: 7. Dependencies checked: 49."
+  - step: "Frontend lint and build"
+    result: passed
+    command: "pnpm --version 2>&1; pnpm --dir web lint 2>&1; pnpm --dir web build 2>&1"
+    evidence: "pnpm 11.4.0; eslint exit 0; vite build exit 0 with non-blocking chunk-size warning."
+  - step: "Alembic autogenerate guard"
+    result: passed
+    command: "Get-ChildItem alembic/versions/ -Filter \"*.py\" | Select-String -Pattern \"auto generated by Alembic\""
+    evidence: "no_alembic_autogenerate_comments"
+  - step: "CI reconciliation"
+    result: passed
+    command: "git rev-parse HEAD; gh run list --branch phase0/main --limit 5 2>&1"
+    evidence: "HEAD 4090b03c0d9477112f0c3e4513921eb6ef6b32c9; run 27392168467 completed success."
+  - step: "Spike code disposal"
+    result: passed
+    command: "Get-ChildItem app/ -Recurse -Filter \"*.py\" | Select-String -Pattern \"spike|instructor|pydantic_ai|PydanticAI\""
+    evidence: "app scan output empty; experiments Python file count 15."
+
+changed_files:
+  - docs/phase0/phase0_acceptance_report.md
+  - docs/phase0/task_logs/P0-GT-003_20260612_120700_passed.yaml
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "uv run pytest 2>&1"
+    result: not_applicable
+    output_snippet: "3 failed, 652 passed, 26 skipped; failures require DATABASE_URL."
+    not_applicable_reason: "DATABASE_URL not set in local environment"
+    not_applicable_scope: "local_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "DATABASE_URL available in environment"
+  - command: "uv run pytest tests/architecture/ -v 2>&1"
+    result: passed
+    output_snippet: "22 passed in 0.15s"
+  - command: "uv run pytest -k \"sanitizer or trace\" -v 2>&1"
+    result: passed
+    output_snippet: "94 passed, 587 deselected"
+  - command: "uv run python scripts/run_golden_tasks.py --summary 2>&1"
+    result: passed
+    output_snippet: "total=11 passed=11 failed=0 skipped=0 not_applicable=0 positive_passed=7 negative_passed=4"
+  - command: "uv run ruff check app/ tests/ 2>&1"
+    result: passed
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ 2>&1"
+    result: passed
+    output_snippet: "Success: no issues found in 46 source files"
+  - command: "uv run python scripts/check_dependencies.py 2>&1"
+    result: passed
+    output_snippet: "Dependency check passed. Manifests scanned: 7. Dependencies checked: 49."
+  - command: "pnpm --version 2>&1"
+    result: passed
+    output_snippet: "11.4.0"
+  - command: "pnpm --dir web lint 2>&1"
+    result: passed
+    output_snippet: "eslint exit 0"
+  - command: "pnpm --dir web build 2>&1"
+    result: passed
+    output_snippet: "built in 7.78s; non-blocking chunk-size warning"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+validation:
+  pytest_exit_code: 1
+  pytest_result: "local_only not_applicable due to DATABASE_URL missing"
+  architecture_exit_code: 0
+  trace_sanitizer_exit_code: 0
+  golden_tasks_exit_code: 0
+  ruff_exit_code: 0
+  mypy_exit_code: 0
+  dependency_exit_code: 0
+  frontend_lint_exit_code: 0
+  frontend_build_exit_code: 0
+  alembic_guard_exit_code: 0
+  ci_run_id: "27392168467"
+  ci_conclusion: success
+  golden_summary:
+    total: 11
+    passed: 11
+    failed: 0
+    skipped: 0
+    not_applicable: 0
+    positive_passed: 7
+    negative_passed: 4
+    gt_006_boundary: passed
+
+known_gaps:
+  - "P0-INFRA-007: ci.yml does not yet contain Golden Task CI not_applicable placeholder."
+  - "P0-GT-002 pending_action: ci.yml Golden Task CI step not yet executed; P0-GT-003 is review-only and cannot modify CI."
+  - "Full local pytest requires DATABASE_URL for DB/Alembic tests; local-only not_applicable, CI run 27392168467 success."
+  - "Frontend build emits non-blocking chunk-size warning."
+  - "review_rerun_contract §10 pending — Codex review stage will rerun pytest + golden tasks and reconcile."
+
+pending_review: "review_rerun_contract §10 pending — Codex review stage will rerun pytest + golden tasks and reconcile"
+
+import_boundary_check:
+  result: passed
+  evidence: "uv run pytest tests/architecture/ -v: 22 passed; app spike-code scan output empty."
+
+security_scan_result:
+  result: passed
+  evidence: "No plaintext credential values were written to report or Task Record; sanitizer tests passed."
+
+weak_test_scan_result:
+  result: passed
+  evidence: "Architecture weak-test checker tests included in tests/architecture/ result: 22 passed."
+
+ci_evidence:
+  result: passed
+  run_id: "27392168467"
+  url_or_log_path: "gh run list --branch phase0/main --limit 5"
+  evidence: "completed success on phase0/main push at 2026-06-12T03:16:06Z"
+
+review:
+  mode: "codex_review_pending"
+  reviewed_by: "pending"
+  reviewed_at: ""
+  notes: "Execution artifacts staged for later review rerun reconciliation."
+
+remaining_risks:
+  - "Golden Task CI wiring remains deferred to a CI repair task or later approved gate."
+  - "Local DB tests need DATABASE_URL to pass outside CI/disposable DB environment."
+  - "P0-SPIKE-001 and P0-SPIKE-002 were provider API mode; internal vLLM re-validation remains an activation condition."
+  - "PydanticAI remains Phase 2-only pending internal vLLM re-validation."
+
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+package_confirmation_status: not_created
+package_confirmation: "No package created; P0-GT-003 produces report and Task Record only."
+package_scope: "docs/phase0/phase0_acceptance_report.md and docs/phase0/task_logs/P0-GT-003_20260612_120700_passed.yaml"
+package_evidence: "No archive or distributable package command was run."

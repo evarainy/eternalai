@@ -1,0 +1,366 @@
+task_id: "P0-INFRA-004A"
+task_type: "infrastructure"
+result: "passed"
+started_at: "2026-05-21T07:00:00+08:00"
+completed_at: "2026-05-21T15:10:00+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-21T07:00:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Unblock P0-INFRA-004 by adding psycopg[binary] as a backend-runtime dependency
+  in pyproject.toml, expanding the dependency policy allowlist scope from spike
+  to spike; backend-runtime, switching Docker Compose postgres service from
+  postgres:17-alpine to pgvector/pgvector:0.8.2-pg18, adjusting the volume
+  target from /var/lib/postgresql/data to /var/lib/postgresql, and validating
+  pgvector extension availability via Docker runtime test. No app/, alembic/,
+  tests/db/, web/, or blueprint changes.
+
+decision: "passed"
+decision_rationale: >
+  All acceptance criteria met. psycopg[binary] 3.3.4 installed and importable.
+  Dependency checker passes (49 deps, 7 manifests). uv lock --check passes.
+  uv sync --locked passes. docker manifest inspect confirms pgvector/pgvector:0.8.2-pg18
+  exists (amd64 + arm64). Compose config renders correctly with pgvector image
+  and /var/lib/postgresql volume target. PostgreSQL reaches ready state.
+  pg_available_extensions returns vector 0.8.2. CREATE EXTENSION IF NOT EXISTS
+  vector succeeds with extversion 0.8.2. Compose containers, volumes, and
+  network cleaned up. No forbidden paths modified. No .env.example change
+  needed. Task Record changed_files matches staged diff exactly.
+
+blocking_conditions: []
+
+acceptance_criteria_result:
+  - criterion: "dependency_policy.md psycopg row includes backend-runtime scope"
+    result: "passed"
+    evidence: >
+      grep 'psycopg' docs/dev/dependency_policy.md shows:
+      | python | psycopg | >=3.1,<4.0 | spike; backend-runtime | ...
+  - criterion: "pyproject.toml includes psycopg[binary]>=3.1,<4.0"
+    result: "passed"
+    evidence: >
+      grep 'psycopg' pyproject.toml shows:
+      "psycopg[binary]>=3.1,<4.0",
+  - criterion: "uv.lock regenerated and uv lock --check passes"
+    result: "passed"
+    evidence: >
+      uv lock: exit 0, resolved 34 packages, added psycopg v3.3.4,
+      psycopg-binary v3.3.4, tzdata v2026.2.
+      uv lock --check: exit 0, resolved 34 packages in 2ms.
+  - criterion: "uv sync --locked succeeds"
+    result: "passed"
+    evidence: >
+      uv sync --locked: exit 0, installed psycopg==3.3.4,
+      psycopg-binary==3.3.4, tzdata==2026.2.
+  - criterion: "psycopg import succeeds and prints version"
+    result: "passed"
+    evidence: >
+      uv run python -c "import psycopg; print(psycopg.__version__)":
+      exit 0, output: 3.3.4
+  - criterion: "dependency checker passes"
+    result: "passed"
+    evidence: >
+      python scripts/check_dependencies.py: exit 0.
+      Dependency check passed. Manifests scanned: 7. Dependencies checked: 49.
+  - criterion: "docker-compose.yml postgres service uses pgvector/pgvector:0.8.2-pg18 image"
+    result: "passed"
+    evidence: >
+      grep 'image.*pgvector' docker-compose.yml shows:
+      image: pgvector/pgvector:0.8.2-pg18
+  - criterion: "docker-compose.yml postgres volume target is /var/lib/postgresql"
+    result: "passed"
+    evidence: >
+      grep 'postgres-data' docker-compose.yml shows:
+      - postgres-data:/var/lib/postgresql
+  - criterion: "docker manifest inspect for pgvector/pgvector:0.8.2-pg18 succeeds"
+    result: "passed"
+    evidence: >
+      docker manifest inspect pgvector/pgvector:0.8.2-pg18: exit 0.
+      OCI image index with amd64 and arm64 manifests.
+  - criterion: "Compose config renders cleanly with pgvector image"
+    result: "passed"
+    evidence: >
+      docker compose -p eternalai_p0_infra_004a --env-file .env.example
+      --profile core-infra config: exit 0. Rendered image:
+      pgvector/pgvector:0.8.2-pg18, volume target: /var/lib/postgresql.
+  - criterion: "PostgreSQL reaches ready state (pg_isready)"
+    result: "passed"
+    evidence: >
+      docker compose exec -T postgres pg_isready -U eternalai -d eternalai:
+      exit 0. Output: /var/run/postgresql:5432 - accepting connections
+  - criterion: "pg_available_extensions returns vector extension"
+    result: "passed"
+    evidence: >
+      psql -c "SELECT name, default_version FROM pg_available_extensions
+      WHERE name = 'vector'": exit 0. Output: vector | 0.8.2
+  - criterion: "CREATE EXTENSION IF NOT EXISTS vector succeeds"
+    result: "passed"
+    evidence: >
+      psql -c "CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion
+      FROM pg_extension WHERE extname = 'vector'": exit 0.
+      Output: CREATE EXTENSION, extversion 0.8.2
+  - criterion: "pg_extension.extversion recorded"
+    result: "passed"
+    evidence: "extversion = 0.8.2"
+  - criterion: "No forbidden paths modified"
+    result: "passed"
+    evidence: >
+      Staged diff scanned for forbidden paths (app/, alembic/, alembic.ini,
+      tests/db/, web/, docs/blueprint/, .env.example): none found.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      git diff --cached --name-only: 11 files. changed_files has 11 entries.
+      Order and count match exactly.
+
+failure_examples_tested:
+  - example: "Docker daemon unavailable for runtime validation"
+    result: "not_applicable"
+    evidence: >
+      Docker Desktop daemon was initially unavailable but became available
+      during follow-up. Full runtime validation completed successfully:
+      pg_isready, pg_available_extensions, CREATE EXTENSION all passed.
+    not_applicable_reason: "Docker daemon became available; full runtime validation completed and passed."
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Confirm branch is phase0/P0-INFRA-004A"
+    result: "passed"
+    command: "git branch --show-current"
+    evidence: "phase0/P0-INFRA-004A"
+  - step: "Confirm working tree clean at task start"
+    result: "passed"
+    command: "git status --short"
+    evidence: "No output — clean working tree."
+  - step: "Update dependency_policy.md psycopg scope"
+    result: "passed"
+    command: "grep 'psycopg' docs/dev/dependency_policy.md"
+    evidence: "dependency_group changed from 'spike' to 'spike; backend-runtime'"
+  - step: "Add psycopg[binary] to pyproject.toml"
+    result: "passed"
+    command: "grep 'psycopg' pyproject.toml"
+    evidence: "psycopg[binary]>=3.1,<4.0 added to project dependencies"
+  - step: "Regenerate uv.lock"
+    result: "passed"
+    command: "uv lock"
+    evidence: "exit 0, resolved 34 packages, added psycopg v3.3.4"
+  - step: "Run dependency checker"
+    result: "passed"
+    command: "python scripts/check_dependencies.py"
+    evidence: "exit 0, 49 dependencies checked, passed"
+  - step: "Verify uv.lock in sync"
+    result: "passed"
+    command: "uv lock --check"
+    evidence: "exit 0, resolved 34 packages in 2ms"
+  - step: "Sync dependencies from lockfile"
+    result: "passed"
+    command: "uv sync --locked"
+    evidence: "exit 0, installed psycopg==3.3.4, psycopg-binary==3.3.4, tzdata==2026.2"
+  - step: "Verify psycopg import"
+    result: "passed"
+    command: "uv run python -c \"import psycopg; print(psycopg.__version__)\""
+    evidence: "exit 0, output: 3.3.4"
+  - step: "Update docker-compose.yml postgres image to pgvector/pgvector:0.8.2-pg18"
+    result: "passed"
+    command: "grep 'image.*pgvector' docker-compose.yml"
+    evidence: "image: pgvector/pgvector:0.8.2-pg18"
+  - step: "Update docker-compose.yml volume target to /var/lib/postgresql"
+    result: "passed"
+    command: "grep 'postgres-data' docker-compose.yml"
+    evidence: "postgres-data:/var/lib/postgresql"
+  - step: "Docker manifest inspect for pgvector image"
+    result: "passed"
+    command: "docker manifest inspect pgvector/pgvector:0.8.2-pg18"
+    evidence: "exit 0, OCI image index with amd64 and arm64 manifests"
+  - step: "Compose config renders cleanly"
+    result: "passed"
+    command: "docker compose -p eternalai_p0_infra_004a --env-file .env.example --profile core-infra config"
+    evidence: "exit 0, image=pgvector/pgvector:0.8.2-pg18, volume=/var/lib/postgresql"
+  - step: "Start pgvector postgres container"
+    result: "passed"
+    command: "docker compose -p eternalai_p0_infra_004a --env-file .env.example --profile core-infra up -d postgres"
+    evidence: "exit 0, Container eternalai_p0_infra_004a-postgres-1 Started"
+  - step: "Verify PostgreSQL ready"
+    result: "passed"
+    command: "docker compose exec -T postgres pg_isready -U eternalai -d eternalai"
+    evidence: "exit 0, /var/run/postgresql:5432 - accepting connections"
+  - step: "Check pg_available_extensions for vector"
+    result: "passed"
+    command: "psql -c \"SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector'\""
+    evidence: "exit 0, vector | 0.8.2"
+  - step: "Create vector extension and get extversion"
+    result: "passed"
+    command: "psql -c \"CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion FROM pg_extension WHERE extname = 'vector'\""
+    evidence: "exit 0, CREATE EXTENSION, extversion 0.8.2"
+  - step: "Tear down Compose containers and volumes"
+    result: "passed"
+    command: "docker compose -p eternalai_p0_infra_004a --env-file .env.example --profile core-infra down -v"
+    evidence: "exit 0, Container Removed, Volume Removed, Network eternalai_internal Removed"
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: "git diff --cached --name-only | grep forbidden patterns"
+    evidence: "NO_FORBIDDEN_PATHS — no app/, alembic/, tests/db/, web/, docs/blueprint/, .env.example"
+  - step: "Final staged file list matches changed_files"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "11 files. Matches changed_files count and entries exactly."
+
+changed_files:
+  - "MANIFEST.md"
+  - "docker-compose.yml"
+  - "docs/dev/dependency_policy.md"
+  - "docs/phase0/TASK_INDEX.md"
+  - "docs/phase0/task_logs/INDEX.md"
+  - "docs/phase0/task_logs/P0-INFRA-004A_20260521_070654_passed.yaml"
+  - "docs/phase0/tasks/P0-INFRA-004.md"
+  - "docs/phase0/tasks/P0-INFRA-004A.md"
+  - "docs/phase0/tasks/README_TASK_PROMPTS.md"
+  - "pyproject.toml"
+  - "uv.lock"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "Dependency check passed. Manifests scanned: 7. Dependencies checked: 49."
+  - command: "uv lock --check"
+    result: "passed"
+    output_snippet: "Resolved 34 packages in 2ms."
+  - command: "uv sync --locked"
+    result: "passed"
+    output_snippet: "Checked 33 packages in 1ms."
+  - command: "uv run python -c \"import psycopg; print(psycopg.__version__)\""
+    result: "passed"
+    output_snippet: "3.3.4"
+  - command: "docker manifest inspect pgvector/pgvector:0.8.2-pg18"
+    result: "passed"
+    output_snippet: "OCI image index with amd64 and arm64 manifests."
+  - command: "docker compose -p eternalai_p0_infra_004a --env-file .env.example --profile core-infra config"
+    result: "passed"
+    output_snippet: "image: pgvector/pgvector:0.8.2-pg18, volume: /var/lib/postgresql"
+  - command: "docker compose exec -T postgres pg_isready -U eternalai -d eternalai"
+    result: "passed"
+    output_snippet: "/var/run/postgresql:5432 - accepting connections"
+  - command: "psql -c \"SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector'\""
+    result: "passed"
+    output_snippet: "vector | 0.8.2"
+  - command: "psql -c \"CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion FROM pg_extension WHERE extname = 'vector'\""
+    result: "passed"
+    output_snippet: "CREATE EXTENSION, extversion 0.8.2"
+
+dependency_changes:
+  added:
+    - "python:psycopg[binary] (>=3.1,<4.0, resolved 3.3.4)"
+  changed:
+    - "python:psycopg dependency_group: spike -> spike; backend-runtime"
+  lockfiles_changed:
+    - "uv.lock (regenerated, added psycopg v3.3.4, psycopg-binary v3.3.4, tzdata v2026.2)"
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; dependency policy and Docker Compose changes only."
+  not_applicable_reason: "Infrastructure unblock task produces no backend Python module code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "Import boundary checks become applicable when backend application modules are created or CI boundary checks are wired."
+
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, or passwords beyond existing .env.example
+    placeholders (POSTGRES_PASSWORD=change_me). No secrets in pyproject.toml,
+    docker-compose.yml, or dependency_policy.md. Docker Compose uses
+    environment variable substitution with defaults only.
+
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "Infrastructure unblock task; no test code produced."
+  not_applicable_reason: "No test code exists to scan for weakness."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+ci_evidence:
+  result: "not_applicable"
+  evidence: "Infrastructure dependency unblock task; CI not in scope for Phase 0 local validation."
+  run_id: "not_applicable_local_infra_unblock_no_ci_run_requested"
+  url_or_log_path: "local command evidence in this Task Record"
+  not_applicable_reason: "Infrastructure unblock task; CI not in scope for Phase 0 local dev/build."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "A future CI task wires and requires CI execution."
+
+review:
+  mode: "codex_review"
+  reviewed_by: "codex_review"
+  reviewed_at: "2026-05-21T15:10:00+08:00"
+  notes: >
+    Ready for independent Codex staged review. All acceptance criteria met.
+    psycopg[binary] 3.3.4 installed and importable. Dependency checker passes.
+    uv lock/sync validated. pgvector Docker image manifest verified.
+    Runtime pgvector validation passed (pg_isready, CREATE EXTENSION, extversion
+    0.8.2). No forbidden paths modified. No .env.example change needed.
+
+remaining_risks:
+  - "Enterprise PyPI mirror/offline cache remains unconfigured (deferred per dependency policy)."
+  - "pgvector extension creation in production will be managed by Alembic migration in P0-INFRA-004, not by manual psql commands."
+
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package artifact created; infrastructure unblock is source code and configuration only."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager pack, archive, or Docker build command was run."
+
+artifact_lifecycle:
+  temporary_artifacts_created: []
+  cleanup_evidence: >
+    docker compose -p eternalai_p0_infra_004a --env-file .env.example
+    --profile core-infra down -v: Container eternalai_p0_infra_004a-postgres-1
+    Removed, Volume eternalai_p0_infra_004a_postgres-data Removed,
+    Network eternalai_internal Removed. No cache artifacts or temp files created.
+  package_artifact_created: false
+  package_artifact_reason: "Package creation is out of scope unless the task prompt explicitly requires one."
+
+docker_manifest_evidence:
+  image: "pgvector/pgvector:0.8.2-pg18"
+  manifest_inspect: "passed — OCI image index with amd64 and arm64 manifests"
+  manifest_digest_amd64: "sha256:2ac2c62ac8f030b414b19ea633a6d1d4d37c03abe52ce91887a4e5b4fbb5c73c"
+  manifest_digest_arm64: "sha256:ce08de03bf31a99aca4678ce9862f626348047f9058d46bc3bcca8c2bb72fbb9"
+
+docker_config_evidence:
+  rendered_image: "pgvector/pgvector:0.8.2-pg18"
+  rendered_volume_target: "/var/lib/postgresql"
+  service_name_preserved: "postgres"
+  profile_preserved: "core-infra"
+  healthcheck_preserved: true
+  network_shape_preserved: true
+
+docker_runtime_evidence:
+  pg_isready: "/var/run/postgresql:5432 - accepting connections"
+  pg_available_extensions_vector: "vector | 0.8.2"
+  create_extension_vector: "CREATE EXTENSION"
+  pg_extension_extversion: "0.8.2"
+
+env_example_decision:
+  changed: false
+  rationale: "Existing POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT placeholders in .env.example are sufficient for this unblock task. No new environment variables required."
+
+staged_stat_evidence: "11 files changed, 637 insertions(+), 9 deletions(-). MANIFEST.md | 1 +, docker-compose.yml | 4 +-, docs/dev/dependency_policy.md | 2 +-, docs/phase0/TASK_INDEX.md | 3 +-, docs/phase0/task_logs/INDEX.md | 1 +, docs/phase0/task_logs/P0-INFRA-004A_20260521_070654_passed.yaml | 366 +++++++++++++, docs/phase0/tasks/P0-INFRA-004.md | 12 +-, docs/phase0/tasks/P0-INFRA-004A.md | 184 +++++++++++, docs/phase0/tasks/README_TASK_PROMPTS.md | 3 +-, pyproject.toml | 1 +, uv.lock | 69 ++++"
+
+tool_versions:
+  python: "3.12"
+  uv: "uv (available in PATH)"
+  docker: "29.4.0"
+  os: "Windows 10 Pro 10.0.19045"

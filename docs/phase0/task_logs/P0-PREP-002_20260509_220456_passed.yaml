@@ -1,0 +1,163 @@
+# Unified Phase 0 Task Record — P0-PREP-002
+
+task_id: P0-PREP-002
+task_type: preparation
+result: passed
+started_at: "2026-05-09T22:00:00+08:00"
+completed_at: "2026-05-09T22:04:56+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-09T22:00:00+08:00"
+plan_approved_via: "Claude Code session"
+
+summary: |
+  Created docs/adr/phase0/ directory with README.md for Spike ADR storage.
+  Verified that docs/phase0/task_logs/, docs/phase0/self_checks/,
+  docs/phase0/ADR_TEMPLATE.md, and docs/phase0/BOUNDARY_CHECKLIST.md
+  already exist from P0-PREP-001. All 5 acceptance criteria satisfied.
+
+acceptance_criteria_result:
+  - criterion: "docs/adr/phase0/ exists"
+    result: passed
+    evidence: "ls docs/adr/phase0/ → README.md"
+
+  - criterion: "docs/phase0/task_logs/ exists"
+    result: passed
+    evidence: "ls docs/phase0/task_logs/ → INDEX.md, P0-PREP-001_20260509_205000_passed.yaml"
+
+  - criterion: "docs/phase0/self_checks/ exists"
+    result: passed
+    evidence: "ls docs/phase0/self_checks/ → README.md"
+
+  - criterion: "ADR_TEMPLATE.md can be copied and used directly"
+    result: passed
+    evidence: "docs/phase0/ADR_TEMPLATE.md is 88 lines, covers all Spike ADR fields including v1.0.11 spike evidence and business system reconnaissance fields"
+
+  - criterion: "BOUNDARY_CHECKLIST.md can be executed directly"
+    result: passed
+    evidence: "docs/phase0/BOUNDARY_CHECKLIST.md is 153 lines, covers all 12 check sections with commands and YAML self-check template"
+
+failure_examples_tested:
+  - example: "docs_adr_phase0_directory_missing_before_task"
+    result: triggered
+    evidence: "docs/adr/phase0/ did not exist before P0-PREP-002; directory created during this task"
+
+  - example: "task_logs_directory_missing"
+    result: not_triggered
+    evidence: "docs/phase0/task_logs/ already existed from P0-PREP-001"
+
+  - example: "self_checks_directory_missing"
+    result: not_triggered
+    evidence: "docs/phase0/self_checks/ already existed from P0-PREP-001"
+
+  - example: "template_files_unreadable"
+    result: not_triggered
+    evidence: "ADR_TEMPLATE.md and BOUNDARY_CHECKLIST.md were readable and complete before this task"
+
+step_verification_points:
+  - step: "Create docs/adr/phase0/ directory and README.md"
+    result: passed
+    command: "mkdir -p docs/adr/phase0 && Write docs/adr/phase0/README.md"
+    evidence: "ls docs/adr/phase0/ → README.md"
+
+  - step: "Verify docs/phase0/task_logs/ exists and is populated"
+    result: passed
+    command: "ls docs/phase0/task_logs/"
+    evidence: "INDEX.md and P0-PREP-001_20260509_205000_passed.yaml present"
+
+  - step: "Verify docs/phase0/self_checks/ exists"
+    result: passed
+    command: "ls docs/phase0/self_checks/"
+    evidence: "README.md present"
+
+  - step: "Verify ADR_TEMPLATE.md is complete and usable"
+    result: passed
+    command: "head -3 docs/phase0/ADR_TEMPLATE.md"
+    evidence: "Template header, frontmatter fields, and all 10 sections present including v1.0.11 spike evidence fields"
+
+  - step: "Verify BOUNDARY_CHECKLIST.md is complete and executable"
+    result: passed
+    command: "head -3 docs/phase0/BOUNDARY_CHECKLIST.md"
+    evidence: "Checklist has 12 sections covering import boundary, secret scan, forbidden paths, dependency allowlist, test coverage, trace sanitizer, golden task regression, migration guard, CI commands, self-check log template, not_applicable rules, and golden task CI evidence"
+
+  - step: "Generate Task Record"
+    result: passed
+    command: "Write tool → docs/phase0/task_logs/P0-PREP-002_20260509_220456_passed.yaml"
+    evidence: "This file"
+
+changed_files:
+  - docs/adr/phase0/README.md
+  - docs/phase0/task_logs/P0-PREP-002_20260509_220456_passed.yaml
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "N/A — preparation task, no unit tests"
+    result: not_applicable
+    output_snippet: "Only directory and template verification; no code produced"
+    not_applicable_reason: "Preparation task creates directories and verifies existing templates; no testable code produced"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: none
+    activation_task_id: none
+    expiry_condition: "No later activation required for this preparation check."
+    evidence: "P0-PREP-002 is a preparation task; CI/runtime/golden-task checks are outside scope. Current diff is limited to docs/adr/phase0/README.md and Task Record. No testable code produced."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  not_applicable_reason: "No code files modified; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this preparation check."
+  evidence: "P0-PREP-002 is a preparation task; CI/runtime/golden-task checks are outside scope. No importable code in changed_files."
+
+security_scan_result:
+  result: not_applicable
+  not_applicable_reason: "No code or secrets introduced; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this preparation check."
+  evidence: "P0-PREP-002 is a preparation task; CI/runtime/golden-task checks are outside scope. README.md contains only directory naming conventions and template path reference."
+
+weak_test_scan_result:
+  result: not_applicable
+  not_applicable_reason: "No tests written or modified; preparation task only"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this preparation check."
+  evidence: "P0-PREP-002 is a preparation task; CI/runtime/golden-task checks are outside scope. No test files in changed_files."
+
+ci_evidence:
+  result: not_applicable
+  run_id: not_applicable
+  url_or_log_path: not_applicable
+  not_applicable_reason: "Phase 0 P0-PREP-002 has not triggered CI; no production code changes. Current evidence is staged diff + Codex/Claude Code review."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: "No later activation required for this preparation check."
+  evidence: "P0-PREP-002 is a preparation task; CI/runtime/golden-task checks are outside scope. Only documentation files changed; staged diff + Codex review used as evidence."
+
+review:
+  mode: self_check
+  reviewed_by: "Claude Code (agent)"
+  reviewed_at: "2026-05-09T22:04:56+08:00"
+  notes: "All 5 acceptance criteria verified via ls and head commands. Only 1 new directory and 1 new README created; remaining 4 criteria already satisfied by P0-PREP-001."
+
+remaining_risks: []
+
+rollback_or_failure_record: ""
+
+git_commit_sha: ""
+
+package_confirmation_status: not_applicable
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "Preparation task only; no code or package produced. docs/adr/phase0/README.md and Task Record generated from current repo state."
+package_evidence: "docs/adr/phase0/README.md exists; Task Record at docs/phase0/task_logs/P0-PREP-002_20260509_220456_passed.yaml"

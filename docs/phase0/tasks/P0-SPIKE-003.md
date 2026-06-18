@@ -4,8 +4,7 @@ Use this instead of pasting the full Phase 0 spec.
 
 ## Required context
 
-- AGENTS.md
-- CLAUDE.md when using Claude Code
+- Your tool's boot file: AGENTS.md (Codex) or CLAUDE.md (Claude Code)
 - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
 - docs/phase0/BOUNDARY_CHECKLIST.md
 - docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md only as source of truth; do not paste it in full.

@@ -1,0 +1,88 @@
+task_id: P0-DOMAIN-001b
+title: Task and Session Minimal Skeleton
+branch: phase0/P0-DOMAIN-001b
+timestamp: "20260604_234421"
+status: passed
+depends_on:
+  - task_id: P0-DOMAIN-001a
+    log: docs/phase0/task_logs/P0-DOMAIN-001a_20260601_154107_passed.yaml
+  - task_id: P0-INFRA-004
+    log: docs/phase0/task_logs/P0-INFRA-004_20260521_163533_passed.yaml
+
+changed_files:
+  - alembic/versions/20260604_090000_task_session_schema.py
+  - app/infra/persistence/task_store/errors.py
+  - app/infra/persistence/task_store/postgresql.py
+  - tests/infra/persistence/task_store/test_postgresql_task_session_store.py
+
+acceptance_criteria:
+  - criterion: "create_task persists a TaskRecord in PostgreSQL, rejects duplicate task_id deterministically, and returns TaskRecord rather than a bare dict"
+    result: passed
+    evidence: "test_create_task_returns_task_record_and_round_trips_arbitrary_strings: isinstance(result, TaskRecord) asserted; test_create_task_duplicate_rejection_preserves_original_record: DuplicateTaskError raised, original record unchanged. 11 passed in 2.11s."
+  - criterion: "get_task returns TaskRecord for an existing task_id and returns None for a missing task_id"
+    result: passed
+    evidence: "Round-trip in test_create_task_returns_task_record_and_round_trips_arbitrary_strings (all 7 fields verified); test_get_task_returns_none_for_unknown_task_id: None returned. 11 passed."
+  - criterion: "update_status updates TaskStatus and optional error_code for an existing task, validates the TaskStatus Literal, raises the correct missing-task error, and returns TaskRecord"
+    result: passed
+    evidence: "test_update_status_round_trips_all_task_status_values: all 6 Literal values (created/running/waiting_user/completed/failed/no_capability_found) round-trip via update_status+get_task; test_update_status_sets_error_code_correctly; test_update_status_raises_task_not_found_error_for_unknown_task_id; test_update_status_raises_value_error_for_invalid_status_before_db_write: ValueError raised before DB call (unknown task_id used to prove ordering). 11 passed."
+  - criterion: "append_event persists a TaskEventRecord for an existing task and raises the correct missing-task error for an unknown task_id; returns None"
+    result: passed
+    evidence: "test_append_event_returns_none_and_verifies_event_id_type_payload: result is None; direct SQL SELECT verified event_id, event_type, payload. Implementation uses method param task_id (not event.task_id) for INSERT. test_append_event_raises_task_not_found_error_for_unknown_task_id: TaskNotFoundError raised. 11 passed."
+  - criterion: "create_session persists a SessionRecord in PostgreSQL and returns SessionRecord rather than a bare dict"
+    result: passed
+    evidence: "test_create_session_returns_session_record_and_round_trips: isinstance(result, SessionRecord) asserted; session_id round-trips. 11 passed."
+  - criterion: "get_session returns SessionRecord for an existing session_id and returns None for a missing session_id"
+    result: passed
+    evidence: "test_create_session_returns_session_record_and_round_trips (get_session after create_session returns SessionRecord); test_get_session_returns_none_for_unknown_session_id: None returned. 11 passed."
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: passed
+    command: "git branch --show-current; git status --short"
+    evidence: "phase0/P0-DOMAIN-001b; unstaged: docs/phase0/tasks/ patch files only (not in forbidden paths)"
+  - step: "Verify depends_on passed Task Records exist"
+    result: passed
+    command: "PowerShell depends_on check"
+    evidence: "P0-DOMAIN-001a_20260601_154107_passed.yaml and P0-INFRA-004_20260521_163533_passed.yaml both found. PASSED."
+  - step: "Inspect existing INFRA-004 Alembic/database baseline — confirm no task/session tables exist"
+    result: passed
+    command: "rg -n -i tasks|sessions alembic/versions"
+    evidence: "NO_TASKS_OR_SESSIONS_TEXT_HITS in existing baseline. Confirmed: one hand-written migration created for this task."
+  - step: "Create persistence tests first (TDD red phase)"
+    result: passed
+    command: "uv run pytest tests/infra/persistence/task_store/ -v"
+    evidence: "Exit code 1. ERROR: ModuleNotFoundError: No module named 'app.infra.persistence'. Expected non-zero."
+  - step: "Create hand-written Alembic migration for tasks/sessions/task_events tables and run upgrade head"
+    result: passed
+    command: "uv run alembic upgrade head"
+    evidence: "Exit code 0. Migration 20260604_090000 applied. Tables: sessions, tasks, task_events created."
+  - step: "Implement PostgreSQL TaskStore and SessionStore"
+    result: passed
+    command: "Test-Path app/infra/persistence/task_store/"
+    evidence: "Directory exists: app/infra/persistence/task_store/ with errors.py and postgresql.py."
+  - step: "Run task/session persistence tests (TDD green phase)"
+    result: passed
+    command: "uv run pytest tests/infra/persistence/task_store/ -v (with DATABASE_URL=postgresql+psycopg://phase0_spike@127.0.0.1:55432/phase0_spike)"
+    evidence: "Exit code 0. 11 passed in 2.11s. DATABASE_URL must use 127.0.0.1 (not localhost) on Windows — localhost resolves to IPv6 ::1 which times out against Docker IPv4-bound PostgreSQL."
+  - step: "Run lint and type checks"
+    result: passed
+    command: "uv run ruff check; uv run mypy app/infra/persistence/task_store/"
+    evidence: "Ruff: All checks passed! exit 0. Mypy: Success: no issues found in 2 source files. exit 0."
+  - step: "Verify no __init__.py files were created"
+    result: passed
+    command: "Get-ChildItem -Recurse -Filter __init__.py"
+    evidence: "PASSED: no __init__.py in app/infra/persistence/task_store/ or tests/infra/persistence/task_store/"
+
+judgment: |
+  Implementation: PostgreSQLTaskStore and PostgreSQLSessionStore use sqlalchemy.text() exclusively (no ORM mapped classes). Sessions are opened per-method-call via async_sessionmaker. TaskStatus runtime validation uses frozenset(get_args(TaskStatus)) at module level, validated before any DB call. update_status uses RETURNING to atomically fetch the updated row without a second SELECT. append_event was fixed during Codex self-review: the INSERT uses the method parameter task_id (not event.task_id), preventing potential event misbinding. create_session is intentionally idempotent — the SessionStorePort contract has no duplicate-rejection requirement for sessions, unlike the TaskStorePort.
+
+  Cross-review outcomes: (1) Codex self-review found P2 (event.task_id vs task_id misbind in append_event INSERT) — fixed before Opus review. (2) Opus diff review P1 was a false positive: the dispatch prompt contained a transcription error ('tasks_events' instead of 'task_events'); the actual migration and code consistently use 'task_events', which the 11-test green pass confirms. Opus P2 was a minor type preference note (sa.JSON() vs postgresql.JSONB()) — the migration uses sa.JSON() while the INSERT casts to JSONB; PostgreSQL performs an implicit JSONB→JSON downcast on insert; tests pass. No behavioral defect; noted here for future schema alignment if JSONB indexing or operators are needed.
+
+  Environment note: On Windows, `localhost` resolves to IPv6 ::1 first; Docker PostgreSQL is bound to IPv4. All DATABASE_URL values for this environment should use 127.0.0.1 rather than localhost to avoid connection timeouts.
+
+  Phase 1 boundary respected: no Gateway, Runtime, orchestration, intent routing, LLM invocation, or pgvector similarity implemented. Structured-output baseline not applicable (no LLM methods).
+
+remaining_risks:
+  - "task_events.payload column declared as sa.JSON() in migration; INSERT uses CAST(:payload AS JSONB). Implicit PostgreSQL downcast works but JSONB type would be preferred for indexing and operator support. Future schema migration can align if needed."
+  - "No row-level cleanup in tests — each run inserts UUID-keyed records that persist in the spike database. Acceptable for Phase 0 dev; CI runs should use a separate ephemeral database."
+  - "create_task uses SELECT-then-INSERT with IntegrityError fallback for race safety. Under high concurrency the SELECT check is advisory; the PK constraint is the real guard. Acceptable for Phase 0 skeleton."

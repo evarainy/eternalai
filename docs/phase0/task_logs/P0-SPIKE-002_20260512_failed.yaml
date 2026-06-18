@@ -1,0 +1,226 @@
+task_id: "P0-SPIKE-002"
+task_type: "spike"
+result: "failed"
+started_at: "2026-05-12T21:40:00+08:00"
+completed_at: "2026-05-12T23:50:00+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-12T21:30:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: "P0-SPIKE-002 provider API mode. instructor 1.15.1 with Mode.JSON on qwen3.6-27b via DashScope public API. 108 logical samples (Run A: 50 + Run B: 50 + tool calling: 8). Request pacing 2s. Run A (max_retries=0): 18/50 = 36.0%. Run B (max_retries=3): 28/50 = 56.0%. Tool calling: 6/8 = 75.0%. All below 80% threshold. Primary failure mode: timeout. Retry recovers 10 samples (36% -> 56%). Instructor not recommended for Phase 1; raw OpenAI SDK + Pydantic (P0-SPIKE-001, 92.6%) is the baseline."
+acceptance_criteria_result:
+  - criterion: "cover success, missing_fields, type_error, refusal, timeout, non_json scenarios"
+    result: "passed"
+    evidence: "50 samples across 6 categories: success(15), missing_fields(9), type_error(8), refusal(6), non_json(6), timeout(6). All categories executed."
+  - criterion: "record retry success rate, failure types, and suggested parameters"
+    result: "passed"
+    evidence: "Run A: 18/50=36.0%. Run B: 28/50=56.0%. Retry recovered 10 samples. Primary failure: timeout. Suggested: max_retries=3, REQUEST_DELAY_S=2."
+  - criterion: "Phase 1 recommendation for instructor as default structured output implementation"
+    result: "passed"
+    evidence: "Not recommended. Run B 56% < 80%, tool calling 75% < 80%. Raw OpenAI SDK + Pydantic (P0-SPIKE-001, 92.6%) is the recommended baseline."
+  - criterion: "structured output success_rate >= 80%"
+    result: "failed"
+    evidence: "Run A (max_retries=0): 18/50 = 36.0% < 80%. Run B (max_retries=3): 28/50 = 56.0% < 80%."
+  - criterion: "tool calling response parsing stability"
+    result: "failed"
+    evidence: "6/8 = 75.0% < 80%. TC-001 and TC-004 (query_oa_leave_balance) failed: model did not call tool. argument_validation_success_rate: 100.0%."
+failure_examples_tested:
+  - example: "SUC-010: timeout (success/PlanDraft, 30s)"
+    result: "triggered"
+    evidence: "Category: timeout. Request exceeded 30s timeout."
+  - example: "MIS-002: schema_fail (missing_fields adversarial)"
+    result: "triggered"
+    evidence: "Category: schema_fail. Model output missing required fields."
+  - example: "TYP-005: timeout (type_error/PlanDraft, 30s)"
+    result: "triggered"
+    evidence: "Category: timeout. Request exceeded 30s timeout."
+  - example: "NJS-001: provider_permission_or_rate_limit (non_json/Intent, provider 403)"
+    result: "triggered"
+    evidence: "Category: provider_permission_or_rate_limit. Provider returned 403 (exact cause: quota/rate-limit/permission-denied not distinguishable from sanitized error)."
+  - example: "TC-001: no_tool_calls (query_oa_leave_balance)"
+    result: "triggered"
+    evidence: "Model did not invoke any tool. Returned text response instead."
+step_verification_points:
+  - step: "Check environment variables and instructor"
+    result: "passed"
+    command: "python experiments/phase0/instructor_vllm/check_env.py"
+    evidence: "LLM_BASE_URL: set, LLM_API_KEY: set, LLM_MODEL: qwen3.6-27b, instructor_importable: true, instructor_version: 1.15.1"
+  - step: "Probe API reachability and mode support"
+    result: "passed"
+    command: "python experiments/phase0/instructor_vllm/check_env.py"
+    evidence: "api_reachable: true, json_schema_supported: true, json_object_supported: true, tool_calling_supported: true"
+  - step: "Self-check"
+    result: "passed"
+    command: "python experiments/phase0/instructor_vllm/run_spike.py --run a (internal _self_check)"
+    evidence: "Self-check: PASSED. 50 samples >= 50. All output_types mapped. All enum fields Literal[...]. All 6 categories."
+  - step: "Run A: max_retries=0"
+    result: "failed"
+    command: "python experiments/phase0/instructor_vllm/run_spike.py --run a"
+    evidence: "18/50 passed (36.0%). Per-sample final failures (sums to 32): timeout:15, parse_fail:10, schema_fail:5, provider_permission_or_rate_limit:1, refusal:1."
+  - step: "Run B: max_retries=3"
+    result: "failed"
+    command: "python experiments/phase0/instructor_vllm/run_spike.py --run b"
+    evidence: "28/50 passed (56.0%). Per-sample final failures (sums to 22): timeout:13, schema_fail:4, parse_fail:2, provider_permission_or_rate_limit:1, other:2."
+  - step: "Tool calling"
+    result: "failed"
+    command: "python experiments/phase0/instructor_vllm/run_spike.py --run tc"
+    evidence: "6/8 passed (75.0%). Per-sample final failures (sums to 2): no_tool_calls_in_response:2. argument_validation: 100%."
+  - step: "Cleanup temp venv and repo residuals"
+    result: "passed"
+    command: "repo residual scan"
+    evidence: "NO_REPO_DOT_VENV; NO_REPO_PYCACHE; NO_REPO_PYC"
+changed_files:
+  - "docs/adr/phase0/ADR-P0-SPIKE-002-instructor-vllm-stability.md"
+  - "docs/phase0/task_logs/P0-SPIKE-002_20260512_failed.yaml"
+  - "experiments/phase0/instructor_vllm/README.md"
+  - "experiments/phase0/instructor_vllm/check_env.py"
+  - "experiments/phase0/instructor_vllm/requirements.txt"
+  - "experiments/phase0/instructor_vllm/run_spike.py"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python experiments/phase0/instructor_vllm/check_env.py"
+    result: "passed"
+    output_snippet: "LLM_BASE_URL: set, LLM_API_KEY: set, LLM_MODEL: qwen3.6-27b, instructor_version: 1.15.1, api_reachable: true, json_schema_supported: true, json_object_supported: true, tool_calling_supported: true"
+  - command: "python experiments/phase0/instructor_vllm/run_spike.py --run a"
+    result: "failed"
+    output_snippet: "Run A complete: 18/50 passed (36.0%). provider_permission_or_rate_limit_count: 1."
+  - command: "python experiments/phase0/instructor_vllm/run_spike.py --run b"
+    result: "failed"
+    output_snippet: "Run B complete: 28/50 passed (56.0%). provider_permission_or_rate_limit_count: 1."
+  - command: "python experiments/phase0/instructor_vllm/run_spike.py --run tc"
+    result: "failed"
+    output_snippet: "Tool calling complete: 6/8 passed (75.0%). provider_permission_or_rate_limit_count: 0."
+  - command: "repo residual scan"
+    result: "passed"
+    output_snippet: "NO_REPO_DOT_VENV; NO_REPO_PYCACHE; NO_REPO_PYC"
+dependency_changes:
+  added:
+    - "experiments/phase0/instructor_vllm/requirements.txt (spike-only; not a production dependency decision)"
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "passed"
+  evidence: "No app/, runtime/, gateway/, or execution_fabric/ paths modified; spike code under experiments/phase0/instructor_vllm/."
+security_scan_result:
+  result: "passed"
+  evidence: "No plaintext credentials in any repo file. Exception output sanitized (class name + status code only). No URLs, keys, tokens in ADR, Task Record, or fixtures."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "108 logical samples (Run A: 50 + Run B: 50 + tool calling: 8) with real instructor response_model + Pydantic v2 Literal[...] validation. Results honest: 36% (no retry), 56% (with retry), 75% (tool calling)."
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_spike_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record and ADR-P0-SPIKE-002"
+  not_applicable_reason: "Local spike execution; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked_local_spike_execution"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "self_check"
+  reviewed_by: "Claude Code"
+  reviewed_at: "2026-05-12T23:50:00+08:00"
+  notes: "Codex review corrections applied: stale partial evidence removed, API call totals corrected, failure categories reconciled, validation path clarified, 403 classification clarified. All checks passed."
+remaining_risks:
+  - "Tool calling 75% < 80%. OA leave balance queries need better prompting or tool descriptions."
+  - "instructor TOOLS mode blocked by DashScope thinking mode. Internal deployment may allow disabling thinking mode."
+  - "Timeout is the primary failure mode (30s). Internal vLLM latency expected to be significantly lower."
+  - "Provider 403 classification: exact cause (quota/rate-limit/permission) not distinguishable from sanitized error."
+  - "Internal mirror for instructor dependency not confirmed."
+rollback_or_failure_record: "Task failed: Run A 36% < 80%, Run B 56% < 80%, tool calling 75% < 80%. See ADR-P0-SPIKE-002."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No fresh package/archive was created for P0-SPIKE-002."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package/archive command was run; final deliverables are staged repository files only."
+execution_environment: "public_vendor_api"
+internal_endpoint_validation: "deferred / not_executed"
+activation_condition: "rerun against internal vLLM/Qwen server when intranet access is available, with longer timeout, thinking mode disabled, and improved tool calling prompts"
+recommendation_scope: "client-side compatibility only"
+instructor_mode_evidence:
+  instructor_version: "1.15.1"
+  instructor_mode_attempted: "JSON (explicit mode=instructor.Mode.JSON); TOOLS (default, failed: thinking mode blocks tool_choice=required)"
+  effective_instructor_mode: "JSON"
+  underlying_response_format_if_observable: "json_object (instructor Mode.JSON sends response_format json_object)"
+  json_schema_supported_by_provider: true
+  json_object_supported_by_provider: true
+  tool_calling_supported_by_provider: true
+structured_output_mode_tracking:
+  structured_output_mode_attempted: "json_schema (probe) + json_object (instructor Mode.JSON)"
+  effective_mode_used_for_acceptance: "json_object (via instructor Mode.JSON)"
+  success_rate_by_mode: "json_object via instructor: max_retries=0: 18/50=36.0%; max_retries=3: 28/50=56.0%"
+  json_schema_not_supported_by_provider: false
+validation_path:
+  structured_output: "instructor response_model backed by Pydantic v2 BaseModel; validation performed internally by instructor, not by spike harness"
+  tool_argument: "explicit Pydantic model_validate on tool call arguments"
+  enum: "Literal[type] in Pydantic BaseModel; rejected by instructor internal validation as schema_fail; self_check verifies Literal types"
+sample_counts:
+  logical_sample_count: 108
+  run_a: 50
+  run_b: 50
+  tool_calling: 8
+  actual_provider_request_count: "not_measured (instructor retries issue additional API calls per logical sample)"
+retry_metrics:
+  max_retries_0:
+    first_pass_success_rate: 36.0
+    first_pass_passed: 18
+    first_pass_total: 50
+    per_sample_final_failure_categories:
+      timeout: 15
+      parse_fail: 10
+      schema_fail: 5
+      provider_permission_or_rate_limit: 1
+      refusal: 1
+      total_failed: 32
+  max_retries_3:
+    final_success_rate: 56.0
+    final_passed: 28
+    final_total: 50
+    retry_recovered_count: 10
+    retry_exhausted_count: 22
+    per_sample_final_failure_categories:
+      timeout: 13
+      schema_fail: 4
+      parse_fail: 2
+      provider_permission_or_rate_limit: 1
+      other: 2
+      total_failed: 22
+    retry_exception_events: "not_measured (instructor internal retry events not individually logged)"
+  retry_improvement: "10 samples recovered (36.0% -> 56.0%)"
+  retry_trigger_insufficient: false
+  provider_permission_or_rate_limit_count:
+    run_a: 1
+    run_b: 1
+    tool_calling: 0
+    total: 2
+  api_error_count:
+    run_a: 0
+    run_b: 0
+    tool_calling: 0
+tool_calling_evidence:
+  tool_calling_mode_attempted: "OpenAI tools API with tool_choice=auto"
+  tool_calling_supported_by_provider: true
+  tool_calling_success_rate: 75.0
+  tool_calling_passed: 6
+  tool_calling_total: 8
+  tool_selection_accuracy: 75.0
+  argument_validation_success_rate: 100.0
+  per_sample_final_failure_categories:
+    no_tool_calls_in_response: 2
+    total_failed: 2
+  failed_samples: "TC-001 (query_oa_leave_balance): no tool calls; TC-004 (query_oa_leave_balance): no tool calls"
+  provider_permission_or_rate_limit_count: 0
+adversarial_behavior_counts:
+  model_still_valid: 28
+  instructor_retried_and_recovered: 10
+  instructor_retried_and_failed: 12
+  instructor_raised_exception: 22
+  note: "Run B complete. 10 samples recovered by retry, 12 failed despite retry."
+request_pacing:
+  request_delay_s: 2
+  rate_limit_abort_threshold: 3
+  inter_run_pause_s: 10
+  effectiveness: "2 provider_permission_or_rate_limit errors across 108 logical samples. Pacing effectively mitigated provider errors."
+fallback_strategy: "TOOLS mode blocked by thinking mode restriction; json_object via Mode.JSON is effective mode; no semantic repair; no output auto-fix; no business fallback"
+previous_contamination_note: "Previous execution attempt (without pacing) was contaminated by mass 403 errors. This clean rerun replaces that result."

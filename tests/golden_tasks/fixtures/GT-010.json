@@ -1,0 +1,85 @@
+{
+  "golden_task_id": "GT-010",
+  "title": "OA 未绑定用户尝试查询待办",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_unbound",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.list_pending_workflows",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "workflows"
+          ],
+          "properties": {
+            "workflows": {
+              "type": "array"
+            }
+          }
+        },
+        "input_schema_digest": "digest_oa_list_pending_input",
+        "output_schema_digest": "digest_oa_list_pending_output"
+      }
+    ],
+    "mock_oa_state": "should_not_be_called"
+  },
+  "when": {
+    "channel": "web",
+    "message": "查我的OA待办",
+    "arguments": {}
+  },
+  "then_response": {
+    "status": "blocked",
+    "envelope": {
+      "message_contains": [
+        "绑定"
+      ],
+      "ui.component_type": "operator_handback_card",
+      "ui.action": "bind_required",
+      "ui.target_system": "oa",
+      "data": null
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "capability_selected",
+      "identity_check",
+      "blocked_by_identity",
+      "response_envelope_created"
+    ],
+    "bind_status": "unbound",
+    "reason": "unbound"
+  },
+  "then_forbidden": [
+    "mock_oa_was_called",
+    "response_data_not_null",
+    "trace_contains_token",
+    "response_contains_internal_url"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "identity_unbound"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}

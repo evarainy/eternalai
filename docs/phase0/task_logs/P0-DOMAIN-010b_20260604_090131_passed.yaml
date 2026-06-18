@@ -1,0 +1,158 @@
+task_id: P0-DOMAIN-010b
+title: Mock Structured Output Implementation
+status: passed
+timestamp: "20260604_090131"
+branch: phase0/P0-DOMAIN-010b
+execution_owner: codex
+review_owner: opus-contract-reviewer
+
+objective: >
+  Implement a deterministic MockStructuredOutputProvider satisfying StructuredOutputPort.parse_to_schema.
+  Returns predictable StructuredOutputResult for registered intents, uses schema_error for unknown inputs,
+  and allows Runtime/Gateway tests without a real LLM. Phase 1 baseline unchanged.
+
+method: TDD
+
+## Claude-supplied judgment paragraphs:
+summary: >
+  MockStructuredOutputProvider implements a registry-based deterministic mock for StructuredOutputPort.
+  The registry maps (raw_response_key, schema_type) -> StructuredOutputResult, ensuring determinism.
+  Unknown inputs return error_code='schema_error' (a valid StructuredOutputErrorCode value - the
+  failure example's suggestion of 'no_capability_found'/'structured_output_failed' was caught by
+  Opus plan review as invalid and corrected in the exec mandate). Malformed sentinels trigger
+  parse_error via a separate set. Implementation imports only port types; no real SDK or network code.
+
+fix_loop_summary: >
+  One fix loop applied after Stage 3b Opus diff review: (1) dead `if result.parsed is not None:`
+  guard removed from test_unknown_input_returns_error_not_first_registered - guard was unreachable
+  since parsed=None was already asserted. (2) Tautological `assert port_contract is StructuredOutputPort`
+  replaced with real structural checks: return annotation verified via get_type_hints, parameter order
+  verified via list(sig.parameters.keys()). Both fixes confirmed in re-review: APPROVE_FOR_COMMIT.
+
+quality_observations: >
+  All 17 tests pass. Parametrized coverage: all 4 StructuredOutputErrorCode values constructible,
+  two invalid-code ValidationError tests (guarding against the no_capability_found/structured_output_failed
+  failure example). Open-str raw_response tested on both StructuredOutputError and StructuredOutputResult.
+  extra="forbid" verified on both models. Protocol conformance now uses get_type_hints + param order
+  (not a tautology). Codex self-review + Opus reviewer both APPROVE_FOR_COMMIT.
+  P3 observation from Opus: stored raw_response in registry entry is unused (parse_to_schema rebuilds
+  from live call params). Not a contract violation; behavioral correctness confirmed.
+
+acceptance_criteria:
+  - criterion: "MockStructuredOutputProvider satisfies StructuredOutputPort Protocol (duck-type check)"
+    result: "passed"
+    evidence: "test_mock_provider_satisfies_structured_output_port: return annotation verified via get_type_hints, param order verified"
+  - criterion: "Registered test input deterministically returns expected StructuredOutputResult with parsed field"
+    result: "passed"
+    evidence: "test_registered_input_returns_expected_result + test_registered_input_is_deterministic: PASSED"
+  - criterion: "Unknown/unregistered input returns StructuredOutputResult with error (not default to first registered)"
+    result: "passed"
+    evidence: "test_unknown_input_returns_error_not_first_registered: error_code='schema_error', parsed=None asserted; test_unknown_input_error_code_is_valid_literal: in get_args(StructuredOutputErrorCode)"
+  - criterion: "Malformed-model-output simulation returns StructuredOutputResult with error, no uncaught exception"
+    result: "passed"
+    evidence: "test_malformed_model_output_returns_error_not_raises + test_malformed_model_output_no_exception_propagation: PASSED"
+  - criterion: "Runtime tests can run in no-LLM environment using this mock"
+    result: "passed"
+    evidence: "Implementation imports: typing, pydantic.BaseModel, app.ports.structured_output only. No SDK, no network."
+  - criterion: "No real model SDK import in implementation files"
+    result: "passed"
+    evidence: "SDK import scan: SDK IMPORT SCAN PASSED"
+  - criterion: "No dependency manifest or lockfile changes"
+    result: "passed"
+    evidence: "git diff --name-only -- pyproject.toml uv.lock: no output"
+
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: "passed"
+    command: "git branch --show-current; git status --short"
+    evidence: "branch=phase0/P0-DOMAIN-010b, clean"
+  - step: "Verify P0-DOMAIN-010a passed Task Record exists"
+    result: "passed"
+    command: "Get-ChildItem docs/phase0/task_logs/P0-DOMAIN-010a_*_passed.yaml"
+    evidence: "P0-DOMAIN-010a_20260603_231602_passed.yaml found"
+  - step: "Create mock structured output tests first (TDD red phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/llm/test_mock_structured_output_provider.py -q"
+    evidence: "Exit code 1 (17 collection errors before implementation existed)"
+  - step: "Implement MockStructuredOutputProvider"
+    result: "passed"
+    command: "Test-Path app/infra/llm/mock_structured_output/mock_structured_output_provider.py"
+    evidence: "True"
+  - step: "Run all tests (TDD green phase)"
+    result: "passed"
+    command: "uv run pytest tests/infra/llm/test_mock_structured_output_provider.py -v"
+    evidence: |
+      ============================= test session starts =============================
+      platform win32 -- Python 3.12.10, pytest-8.4.2, pluggy-1.6.0 -- E:\code\eternalai_010b\.venv\Scripts\python.exe
+      cachedir: .pytest_cache
+      rootdir: E:\code\eternalai_010b
+      configfile: pyproject.toml
+      plugins: anyio-4.13.0
+      collecting ... collected 17 items
+
+      tests/infra/llm/test_mock_structured_output_provider.py::test_mock_provider_satisfies_structured_output_port PASSED [  5%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_registered_input_returns_expected_result PASSED [ 11%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_registered_input_is_deterministic PASSED [ 17%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_unknown_input_returns_error_not_first_registered PASSED [ 23%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_unknown_input_error_code_is_valid_literal PASSED [ 29%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_malformed_model_output_returns_error_not_raises PASSED [ 35%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_malformed_model_output_no_exception_propagation PASSED [ 41%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_all_structured_output_error_codes_constructible[parse_error] PASSED [ 47%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_all_structured_output_error_codes_constructible[validation_error] PASSED [ 52%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_all_structured_output_error_codes_constructible[schema_error] PASSED [ 58%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_all_structured_output_error_codes_constructible[empty_response] PASSED [ 64%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_invalid_structured_output_error_code_raises_validation_error PASSED [ 70%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_another_invalid_error_code_raises PASSED [ 76%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_structured_output_error_extra_forbid PASSED [ 82%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_structured_output_result_extra_forbid PASSED [ 88%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_structured_output_error_raw_response_accepts_arbitrary_string PASSED [ 94%]
+      tests/infra/llm/test_mock_structured_output_provider.py::test_structured_output_result_raw_response_accepts_arbitrary_string PASSED [100%]
+
+      ============================= 17 passed in 0.18s ==============================
+  - step: "Run lint and type checks"
+    result: "passed"
+    command: "uv run ruff check app/infra/llm/mock_structured_output/ tests/infra/llm/; uv run mypy app/infra/llm/mock_structured_output/"
+    evidence: "All checks passed! / Success: no issues found in 1 source file"
+  - step: "Verify no real SDK imports"
+    result: "passed"
+    command: "SDK import scan"
+    evidence: "SDK IMPORT SCAN PASSED"
+  - step: "Verify forbidden paths are not staged"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "Only app/infra/llm/... and tests/infra/llm/... and task record"
+
+final_test_commands:
+  - command: "uv run pytest tests/infra/llm/test_mock_structured_output_provider.py -v"
+    result: "17 passed in 0.18s"
+    exit_code: 0
+  - command: "uv run ruff check app/infra/llm/mock_structured_output/ tests/infra/llm/"
+    result: "All checks passed!"
+    exit_code: 0
+  - command: "uv run mypy app/infra/llm/mock_structured_output/mock_structured_output_provider.py"
+    result: "Success: no issues found in 1 source file"
+    exit_code: 0
+
+changed_files:
+  - "app/infra/llm/mock_structured_output/mock_structured_output_provider.py"
+  - "docs/phase0/task_logs/P0-DOMAIN-010b_20260604_090131_passed.yaml"
+  - "tests/infra/llm/test_mock_structured_output_provider.py"
+
+git_diff_stat: |
+   .../mock_structured_output_provider.py             |  81 +++++++
+   .../P0-DOMAIN-010b_20260604_090131_passed.yaml     | 158 ++++++++++++++
+   .../llm/test_mock_structured_output_provider.py    | 243 +++++++++++++++++++++
+   3 files changed, 482 insertions(+)
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing this file changes HEAD.
+  The authoritative commit SHA is the Git commit containing this Task Record and the remote branch
+  history after push.
+
+structured_output_baseline_applicability: >
+  applicable_as_mock_implementation - This mock implements StructuredOutputPort without binding to
+  real SDKs. The Phase 1 baseline (raw OpenAI SDK + json_object + model_validate) is unchanged.
+  instructor and PydanticAI decisions are not reopened.
+
+package_confirmation_status: not_applicable

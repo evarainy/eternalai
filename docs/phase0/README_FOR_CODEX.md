@@ -6,14 +6,13 @@ v1.0.11 keeps the existing architecture, task split, and acceptance rules. It pr
 
 ## Start here
 
-1. Read root `AGENTS.md`.
-2. If using Claude Code, also read root `CLAUDE.md`.
-3. Read `docs/phase0/CONTEXT_LOADING_STRATEGY.md` once.
-4. Choose one task from `docs/phase0/FIRST_BATCH_TASKS.md`.
-5. Open only that task prompt: `docs/phase0/tasks/<task_id>.md`.
-6. Wrap the task with `docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`.
-7. Produce a Plan first; wait for confirmation before modifying files.
-8. Save the Unified Task Record using `docs/dev/task_record_schema.yaml`.
+1. Read your tool's boot rules: Codex reads root `AGENTS.md`; Claude Code reads root `CLAUDE.md`.
+2. Read `docs/phase0/CONTEXT_LOADING_STRATEGY.md` once.
+3. Choose one task from `docs/phase0/FIRST_BATCH_TASKS.md`.
+4. Open only that task prompt: `docs/phase0/tasks/<task_id>.md`.
+5. Wrap the task with `docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`.
+6. Produce a Plan first; wait for confirmation before modifying files.
+7. Save the Unified Task Record using `docs/dev/task_record_schema.yaml`.
 
 ## Do not over-load context
 

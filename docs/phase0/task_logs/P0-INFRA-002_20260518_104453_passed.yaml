@@ -1,0 +1,275 @@
+task_id: P0-INFRA-002
+task_name: Python / FastAPI backend skeleton
+task_type: infrastructure
+branch: phase0/p0-infra-002
+planning_owner: Codex
+implementation_owner: Claude Code / MiMo
+review_owner: "Codex staged-diff review"
+result: passed
+status: passed
+started_at: "2026-05-17T00:37:00+08:00"
+completed_at: "2026-05-18T10:44:53+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-17T00:37:00+08:00"
+plan_approved_via: Codex session
+summary: >
+  Completed the P0-INFRA-002 Python / FastAPI backend skeleton after
+  P0-INFRA-002A resolved dependency-policy and task-scope alignment. The task
+  created a minimal Python 3.12 uv/FastAPI backend baseline, a v1 health router,
+  package marker files under app/, a uv lockfile, and concrete health endpoint
+  regression tests. No runtime, gateway, business adapter, migration, frontend,
+  CI, Docker Compose, observability, Redis/ARQ production, README, frozen
+  blueprint, navigation, MANIFEST, scratch, or tmp scope was implemented.
+
+context:
+  - "P0-INFRA-002A was completed first to align docs/dev/dependency_policy.md and P0-INFRA-002 touched_paths."
+  - "P0-INFRA-002 implementation started only after the dependency-policy scope conflict was resolved."
+  - "This task implemented a minimal backend skeleton only."
+
+implementation_summary:
+  - "Created pyproject.toml with backend dependencies and tool configuration for pytest, ruff, and mypy."
+  - "Generated uv.lock with uv."
+  - "Created app/main.py with a minimal FastAPI app and v1 health router registration."
+  - "Created app/api/v1/health.py with a minimal GET /health endpoint returning {'status': 'ok'}."
+  - "Created package marker files under app/."
+  - "Created tests/test_health.py with concrete health endpoint status and response-shape tests."
+
+acceptance_criteria_result:
+  - criterion: "uv sync succeeds under approved dependency policy"
+    result: passed
+    evidence: "uv sync exited 0 and generated uv.lock."
+  - criterion: "uv run pytest succeeds"
+    result: passed
+    evidence: "uv run pytest exited 0 with 2 passed."
+  - criterion: "uv run ruff check succeeds for task-owned app/ and tests/ paths"
+    result: passed
+    evidence: "uv run ruff check app/ tests/ exited 0 with all checks passed. Repo-wide ruff was not claimed because pre-existing out-of-scope issues exist outside the staged implementation."
+  - criterion: "uv run mypy app succeeds"
+    result: passed
+    evidence: "uv run mypy app exited 0 with no issues found in 5 source files."
+
+failure_examples_tested:
+  - example: "Health endpoint route or app package is missing before implementation"
+    result: triggered
+    evidence: "TDD red phase: uv run pytest tests/test_health.py -x exited 2 with ModuleNotFoundError: No module named 'app', expected before implementation."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+  - example: "Dependency checker rejects manifests after pyproject.toml and uv.lock exist"
+    result: not_triggered
+    evidence: "python scripts\\check_dependencies.py after implementation passed with 6 manifests and 24 dependencies checked."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A"
+
+step_verification_points:
+  - step: "Confirm branch"
+    result: passed
+    command: "git branch --show-current"
+    evidence: "phase0/p0-infra-002"
+  - step: "Confirm dependency checker before implementation"
+    result: passed
+    command: "python scripts\\check_dependencies.py"
+    evidence: "Dependency check passed before implementation; 5 manifests scanned; 16 dependencies checked."
+  - step: "Confirm Python version"
+    result: passed
+    command: "python --version"
+    evidence: "Python 3.12.10"
+  - step: "Confirm uv version"
+    result: passed
+    command: "uv --version"
+    evidence: "uv 0.11.14"
+  - step: "Run uv sync"
+    result: passed
+    command: "uv sync"
+    evidence: "Exit 0; uv.lock generated."
+  - step: "Run TDD red phase before implementation"
+    result: passed
+    command: "uv run pytest tests/test_health.py -x"
+    evidence: "Exit 2; ModuleNotFoundError: No module named 'app'; expected before implementation."
+  - step: "Run TDD green phase after implementation"
+    result: passed
+    command: "uv run pytest"
+    evidence: "Exit 0; 2 passed."
+  - step: "Run scoped ruff check"
+    result: passed
+    command: "uv run ruff check app/ tests/"
+    evidence: "Exit 0; all checks passed. Repo-wide ruff not claimed."
+  - step: "Run mypy on app"
+    result: passed
+    command: "uv run mypy app"
+    evidence: "Exit 0; no issues found in 5 source files."
+  - step: "Confirm dependency checker after implementation"
+    result: passed
+    command: "python scripts\\check_dependencies.py"
+    evidence: "Dependency check passed after implementation; 6 manifests scanned; 24 dependencies checked."
+  - step: "Confirm Docker Compose compatibility"
+    result: passed
+    command: "docker compose --env-file .env.example config --quiet"
+    evidence: "Exit 0."
+  - step: "Review staged implementation diff"
+    result: passed
+    command: "Codex staged-diff review"
+    evidence: "Implementation review verdict approved after cleanup verification; blocking issues none; required corrections none."
+  - step: "Confirm cleanup before closeout"
+    result: passed
+    command: "git ls-files --others --exclude-standard; Test-Path .\\.pytest_cache; Test-Path .\\.mypy_cache; Test-Path .\\.ruff_cache; Get-ChildItem -Path .\\app,.\\tests -Directory -Recurse -Force -Filter '__pycache__'; Get-ChildItem -Path .\\app,.\\tests -File -Recurse -Force -Filter '*.pyc'"
+    evidence: "No untracked files; root cache checks returned False; no __pycache__ directories or *.pyc files remained under app/ or tests/. .venv/ internal caches explicitly out of scope."
+  - step: "Inspect MANIFEST.md convention"
+    result: passed
+    command: "Get-Content MANIFEST.md"
+    evidence: "MANIFEST.md inspected and not changed; repository convention does not require individual recent task records to be registered there."
+  - step: "Stage closeout metadata and verify final staged diff"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "Final staged file list is recorded in changed_files."
+
+changed_files:
+  - app/__init__.py
+  - app/api/__init__.py
+  - app/api/v1/__init__.py
+  - app/api/v1/health.py
+  - app/main.py
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-INFRA-002_20260518_104453_passed.yaml
+  - pyproject.toml
+  - tests/test_health.py
+  - uv.lock
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "python --version"
+    result: passed
+    output_snippet: "Python 3.12.10"
+  - command: "uv --version"
+    result: passed
+    output_snippet: "uv 0.11.14"
+  - command: "python scripts\\check_dependencies.py before implementation"
+    result: passed
+    output_snippet: "Dependency check passed; 5 manifests scanned; 16 dependencies checked."
+  - command: "uv sync"
+    result: passed
+    output_snippet: "Exit 0; lockfile generated."
+  - command: "uv run pytest tests/test_health.py -x"
+    result: passed
+    output_snippet: "TDD red phase exited 2 with ModuleNotFoundError: No module named 'app'; expected before implementation."
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "Exit 0; 2 passed."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "Exit 0; all checks passed."
+  - command: "uv run mypy app"
+    result: passed
+    output_snippet: "Exit 0; no issues in 5 source files."
+  - command: "python scripts\\check_dependencies.py after implementation"
+    result: passed
+    output_snippet: "Dependency check passed; 6 manifests scanned; 24 dependencies checked."
+  - command: "docker compose --env-file .env.example config --quiet"
+    result: passed
+    output_snippet: "Exit 0."
+  - command: "post-cleanup Codex review"
+    result: passed
+    output_snippet: "Verdict approved; no blocking issues; no required corrections."
+
+dependency_changes:
+  added:
+    - "fastapi >=0.115,<1.0"
+    - "pydantic >=2,<3"
+    - "sqlalchemy >=2.0,<3.0"
+    - "alembic >=1.13,<2.0"
+    - "pytest >=8,<9"
+    - "httpx >=0.24.0"
+    - "ruff >=0.8,<1"
+    - "mypy >=1.13,<2"
+  changed: []
+  lockfiles_changed:
+    - uv.lock
+  evidence: "All direct dependencies were approved by docs/dev/dependency_policy.md after P0-INFRA-002A; python scripts\\check_dependencies.py passed after implementation."
+
+import_boundary_check:
+  result: passed
+  evidence: "Staged diff contains only minimal app package, health route, pyproject.toml, uv.lock, test, and closeout metadata paths; no runtime, gateway, control_plane, ports, execution_fabric, domain, real_adapter, frontend, migration, CI, or frozen blueprint paths were modified."
+
+security_scan_result:
+  result: passed
+  evidence: "Codex staged-diff review found no plaintext password/token/cookie/sessionid/access_token/refresh_token values in the staged implementation diff."
+
+weak_test_scan_result:
+  result: passed
+  evidence: "tests/test_health.py contains concrete HTTP status and response-shape assertions; no assert True, empty pass, broad skip, or deleted assertion pattern was introduced."
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "No CI workflow files were changed and no CI run was required for P0-INFRA-002 closeout."
+  not_applicable_reason: "CI wiring is outside P0-INFRA-002 scope."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "P0-INFRA-007 wires dependency and backend checks into CI."
+
+review:
+  mode: codex_review
+  reviewed_by: "Codex staged-diff review"
+  reviewed_at: "2026-05-18T10:44:53+08:00"
+  notes: "Verdict approved after cleanup verification. Blocking issues: none. Required corrections: none."
+
+artifact_lifecycle:
+  persistent_foundation_artifacts:
+    - pyproject.toml
+    - uv.lock
+    - app/main.py
+    - app/api/v1/health.py
+    - app/__init__.py
+    - app/api/__init__.py
+    - app/api/v1/__init__.py
+  persistent_regression_tests:
+    - tests/test_health.py
+  temporary_artifacts_removed_before_closeout:
+    - app/**/__pycache__/
+    - tests/**/__pycache__/
+    - app/**/*.pyc
+    - tests/**/*.pyc
+    - .pytest_cache/
+    - .mypy_cache/
+    - .ruff_cache/
+  explicitly_out_of_scope:
+    - .venv/ internal caches
+  cleanup_timing: "Validation generated cache artifacts; they were removed before Task Record and INDEX closeout."
+  deferred_cleanup_followups:
+    - "After P0-INFRA-002 is completed and merged, open a separate foundation/cleanup task to define _scratch/ and/or _tmp/ conventions, add .gitignore rules, and document rules in CLAUDE.md and AGENTS.md."
+    - "After P0-INFRA-002 is merged, consider a separate navigation/supporting-doc update for app/ and tests/ existence if needed."
+
+explicit_exclusions:
+  - "no Docker Compose edits"
+  - "no README edits"
+  - "no CI wiring"
+  - "no database migrations"
+  - "no frontend implementation"
+  - "no runtime/gateway/business adapter implementation"
+  - "no observability instrumentation"
+  - "no Redis/ARQ production adoption"
+  - "no navigation docs updated"
+  - "no MANIFEST update"
+  - "no _scratch/ or _tmp/ created"
+  - "no frozen blueprint changes"
+
+remaining_risks:
+  - "Repo-wide ruff still has pre-existing out-of-scope issues outside the staged implementation; only uv run ruff check app/ tests/ is claimed for P0-INFRA-002."
+  - "Future tasks may refine the backend app shape after Phase 0 skeleton dependencies are committed."
+rollback_or_failure_record: ""
+
+git_commit_sha: "not_committed"
+git_commit_sha_note: "No commit was requested or performed during P0-INFRA-002 closeout metadata. The authoritative commit SHA will be the future commit containing this Task Record."
+
+package_confirmation_status: not_applicable
+package_confirmation: "No archive or deployable package was required or created for P0-INFRA-002."
+package_scope: "Task closeout staged repository files only: backend skeleton files, pyproject.toml, uv.lock, test file, task log index, and this Task Record."
+package_evidence: "The task deliverables are repository files; no package creation command was specified or run."

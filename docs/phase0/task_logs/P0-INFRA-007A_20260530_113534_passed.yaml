@@ -1,0 +1,225 @@
+task_id: P0-INFRA-007A
+task_type: infrastructure
+result: passed
+started_at: "2026-05-30T20:30:00+09:00"
+completed_at: "2026-05-30T20:35:34+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-30T20:30:00+09:00"
+plan_approved_via: Claude Code session
+summary: >
+  Hotfix for GitHub Actions Frontend CI failure after P0-INFRA-007 merge.
+  pnpm 11 strictDepBuilds blocked esbuild@0.25.12 build scripts with
+  ERR_PNPM_IGNORED_BUILDS. Minimal fix: added web/pnpm-workspace.yaml
+  with allowBuilds: esbuild: true. This is a targeted supply-chain
+  approval for the Vite/esbuild build chain, not a blanket allowance
+  for all dependency install scripts.
+
+root_cause:
+  description: >
+    P0-INFRA-007 merged to phase0/main. GitHub Actions Frontend job
+    failed at Install dependencies step. pnpm 11.5.0 strictDepBuilds
+    (default: true) blocks build scripts for any dependency not
+    explicitly listed in allowBuilds. esbuild@0.25.12 is required by
+    Vite (vite depends on esbuild for pre-bundling) but was not
+    approved in pnpm-workspace.yaml.
+  error_message: "[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: esbuild@0.25.12"
+  ci_job: Frontend
+  ci_step: "Install dependencies"
+  ci_runner: ubuntu-latest
+  pnpm_version_ci: "11.5.0"
+  pnpm_version_local: "11.4.0"
+
+changed_files:
+  - web/pnpm-workspace.yaml
+  - docs/phase0/tasks/P0-INFRA-007A.md
+  - docs/phase0/task_logs/P0-INFRA-007A_20260530_113534_passed.yaml
+  - docs/phase0/TASK_INDEX.md
+  - MANIFEST.md
+
+not_changed_files:
+  - package.json
+  - pnpm-lock.yaml
+  - "dependency versions (no additions, removals, or version bumps)"
+  - backend (app/): no changes
+  - runtime: no changes
+  - gateway: no changes
+  - adapters: no changes
+  - database / Alembic: no changes
+  - SDUI: no changes
+  - ".github/workflows/ci.yml: no changes"
+  - "tests/: no changes"
+
+acceptance_criteria_result:
+  - criterion: "web/pnpm-workspace.yaml contains only explicitly reviewed allowBuilds entries"
+    result: passed
+    evidence: >
+      File contains exactly: allowBuilds: esbuild: true
+      No dangerouslyAllowAllBuilds. No strictDepBuilds: false.
+      No placeholder or unreviewed entries.
+
+  - criterion: "pnpm install --frozen-lockfile succeeds"
+    result: passed
+    evidence: "Lockfile is up to date, resolution step is skipped. Done in 2.6s using pnpm v11.4.0"
+
+  - criterion: "Frontend lint / typecheck / build pass"
+    result: passed
+    evidence: >
+      pnpm lint: $ eslint . (exit 0);
+      pnpm typecheck: $ tsc -b --noEmit (exit 0);
+      pnpm build: built in 14.08s, 1485 modules transformed (exit 0)
+
+  - criterion: "No dependency versions changed"
+    result: passed
+    evidence: >
+      pnpm-lock.yaml not modified. package.json not modified.
+      No new dependencies added or removed.
+      git diff --cached --name-only shows only 2 files
+      (pnpm-workspace.yaml and this Task Record).
+
+  - criterion: "No forbidden paths modified"
+    result: passed
+    evidence: >
+      Backend, runtime, gateway, adapters, database, SDUI,
+      .github/workflows/ci.yml, tests/ all untouched.
+      git diff --check: no whitespace errors.
+      git ls-files --others --exclude-standard: only web/pnpm-workspace.yaml
+      (before staging this Task Record).
+
+step_verification_points:
+  - step: "Create web/pnpm-workspace.yaml with allowBuilds: esbuild: true"
+    result: passed
+    command: "Write web/pnpm-workspace.yaml"
+    evidence: "File created with correct content, no placeholder entries"
+
+  - step: "Run pnpm install --frozen-lockfile"
+    result: passed
+    command: "cd web && pnpm install --frozen-lockfile"
+    evidence: "Lockfile is up to date. Done in 2.6s. No ERR_PNPM_IGNORED_BUILDS error."
+
+  - step: "Run pnpm lint"
+    result: passed
+    command: "cd web && pnpm lint"
+    evidence: "$ eslint . (exit 0)"
+
+  - step: "Run pnpm typecheck"
+    result: passed
+    command: "cd web && pnpm typecheck"
+    evidence: "$ tsc -b --noEmit (exit 0)"
+
+  - step: "Run pnpm build"
+    result: passed
+    command: "cd web && pnpm build"
+    evidence: "built in 14.08s, 1485 modules transformed (exit 0)"
+
+  - step: "Check whitespace errors"
+    result: passed
+    command: "git diff --check"
+    evidence: "No whitespace errors"
+
+  - step: "Check untracked files before staging"
+    result: passed
+    command: "git ls-files --others --exclude-standard"
+    evidence: "Only web/pnpm-workspace.yaml before staging (Task Record not yet written)"
+
+  - step: "Check untracked files after staging"
+    result: passed
+    command: "git ls-files --others --exclude-standard"
+    evidence: "Empty — all intended files staged, no residual untracked files"
+
+tests_run:
+  - command: "cd web && pnpm install --frozen-lockfile"
+    result: passed
+    output_snippet: "Done in 2.6s using pnpm v11.4.0"
+  - command: "cd web && pnpm lint"
+    result: passed
+    output_snippet: "$ eslint . (exit 0)"
+  - command: "cd web && pnpm typecheck"
+    result: passed
+    output_snippet: "$ tsc -b --noEmit (exit 0)"
+  - command: "cd web && pnpm build"
+    result: passed
+    output_snippet: "built in 14.08s; 1485 modules transformed (exit 0)"
+  - command: "git diff --check"
+    result: passed
+    output_snippet: "(no output — no whitespace errors)"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+security_scan_result:
+  result: passed
+  evidence: >
+    No secrets, tokens, or credentials introduced.
+    allowBuilds permits only esbuild (known, audited build tool).
+    No dangerouslyAllowAllBuilds or strictDepBuilds bypass.
+
+supply_chain_approval:
+  scope: "esbuild only"
+  justification: >
+    esbuild@0.25.12 is required by Vite for pre-bundling (vite depends
+    on esbuild). esbuild's postinstall script downloads a platform-specific
+    binary. This is a well-known, audited dependency. Approval is limited
+    to esbuild only; other dependencies with build scripts are not approved.
+  does_not_include:
+    - "dangerouslyAllowAllBuilds"
+    - "strictDepBuilds: false"
+    - "blanket approval for all dependency install scripts"
+
+review:
+  mode: "human_review_pending"
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Hotfix follows minimal-change principle. Only web/pnpm-workspace.yaml
+    added. No lockfile or dependency changes. Awaiting human review
+    before commit, push, and merge.
+
+remaining_risks:
+  - >
+    pnpm may auto-append placeholder entries for other dependencies
+    with build scripts on future pnpm install runs. These placeholders
+    must be reviewed and set to true/false before committing.
+  - >
+    This fix targets pnpm 11 strictDepBuilds; if pnpm version changes,
+    behavior may differ.
+
+artifact_lifecycle:
+  persistent_artifacts:
+    - artifact: "web/pnpm-workspace.yaml"
+      reason: "Intentional persistent config; approves esbuild build script for Vite/esbuild build chain"
+    - artifact: "docs/phase0/task_logs/P0-INFRA-007A_20260530_113534_passed.yaml"
+      reason: "Task Record; required by Phase 0 process"
+  temporary_artifacts_created: []
+  cleanup_timing: >
+    No temp fixtures or generated package artifacts were retained.
+    _scratch/phase-task-runs/.active_task stale P0-INFRA-007 lock was
+    removed before starting P0-INFRA-007A session.
+  ignored_workspace: >
+    _scratch/ and __pycache__/ caches treated as out of scope;
+    no web/pnpm-workspace.yaml residue beyond the intentional config file.
+  final_untracked_scan: "git ls-files --others --exclude-standard returned empty after staging all intended files"
+
+rollback_or_failure_record: ""
+
+git_commit_sha: "pending_review"
+git_commit_sha_note: >
+  Not yet committed. Awaiting targeted human review of staged diff.
+
+package_confirmation_status: not_applicable
+package_confirmation: "No package created; hotfix does not produce distributable packages"
+
+package_scope: >
+  web frontend package only. Affected package files: web/pnpm-workspace.yaml
+  (new allowBuilds entry for esbuild). No changes to web/package.json.
+  No changes to web/pnpm-lock.yaml. No dependency version changes.
+  No backend, runtime, gateway, adapter, database, or SDUI changes.
+
+package_evidence: >
+  GitHub Actions Frontend install failed due to pnpm 11 strictDepBuilds
+  blocking esbuild@0.25.12 build script (ERR_PNPM_IGNORED_BUILDS).
+  web/pnpm-workspace.yaml explicitly approves only esbuild build script:
+  allowBuilds: esbuild: true.
+  Does not use dangerouslyAllowAllBuilds. Does not set strictDepBuilds: false.
+  package.json and pnpm-lock.yaml unchanged. No dependency versions changed.

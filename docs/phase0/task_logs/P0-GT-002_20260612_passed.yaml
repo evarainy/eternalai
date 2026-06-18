@@ -1,0 +1,197 @@
+task_id: P0-GT-002
+title: Golden Task Test Runner
+status: passed
+branch: phase0/P0-GT-002
+base_commit: 2cb917f
+base_commit_full: 2cb917f39d6e2b78ddbf8d4d51a5848086d831aa
+completed_at: "2026-06-11"
+passed_at: "2026-06-12"
+
+supersedes_blocked_record: "docs/phase0/task_logs/P0-GT-002_20260611_blocked.yaml"
+unblocking_change:
+  task_id: P0-DOMAIN-007c
+  description: "Runtime/Gateway 主链补链——emit identity_check/policy_checked/adapter_called 事件，修正 response 文案与 ui 字段"
+  merge_commit: ab504db
+  merged_at: "2026-06-12"
+
+depends_on:
+  - task_id: P0-GT-001
+    status: passed
+    passed_at: "2026-06-06"
+  - task_id: P0-INFRA-007
+    status: passed
+    passed_at: "2026-05-28"
+
+summary_judgment: >-
+  Runner 机制完整交付（双 review APPROVE，findings none）。blocked 根因为 Runtime 主链缺口：不产出 identity_check/policy_checked/adapter_called 等事件，response 文案不符。P0-DOMAIN-007c（merge ab504db）补全主链后，在 phase0/main 重跑 runner 得到 11/11 通过（正向 7/7，负向 4/4），§7 happy_path_acceptance 达标，任务转为 passed。
+
+pending_actions:
+  - description: "按 GATE-1 已批准的 step 设计，在 ci.yml 加 golden task CI step（条件：positive_passed>=1 且 negative_passed>=1 已满足）"
+    owner: "GT-003 验收或独立修补任务"
+    note: "ci.yml 未在本任务合并分支改动；blocked 记录中 ci_activation_judgment 的闭环动作尚未执行"
+
+changed_files:
+  - docs/phase0/task_logs/P0-GT-002_20260611_blocked.yaml
+  - scripts/run_golden_tasks.py
+  - tests/golden_tasks/assertions.py
+  - tests/golden_tasks/test_golden_tasks.py
+  - tests/golden_tasks/test_runner_assertions.py
+  - tests/golden_tasks/test_runner_negative_assertions.py
+
+delivered:
+  files:
+    - scripts/run_golden_tasks.py
+    - tests/golden_tasks/assertions.py
+    - tests/golden_tasks/test_golden_tasks.py
+    - tests/golden_tasks/test_runner_assertions.py
+    - tests/golden_tasks/test_runner_negative_assertions.py
+    - docs/phase0/task_logs/P0-GT-002_20260611_blocked.yaml
+  runner_coverage:
+    - "§12.2 response/trace assertions"
+    - "§12.4.1 both-sided terminal matrix"
+    - "§12.5 negative set"
+    - "§12.6 error-injection companion phase: fresh-runtime, non-vacuous"
+    - "§12.7 SDUI confirm boundary checks"
+    - "all four §8 failure_examples have real bidirectional meta-tests"
+    - "forbidden-item unknown-vocabulary guard"
+    - "frozen 11-id discovery assertion"
+
+golden_summary:
+  command: "uv run python scripts/run_golden_tasks.py --summary"
+  run_date: "2026-06-12"
+  run_context: "phase0/main HEAD ab504db (after P0-DOMAIN-007c merge)"
+  exit_code: 0
+  total: 11
+  passed: 11
+  failed: 0
+  skipped: 0
+  not_applicable: 0
+  positive_passed: 7
+  negative_passed: 4
+
+per_gt_ledger:
+  - golden_task_id: GT-001
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-002
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-003
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-004
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-005
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-006
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-007
+    category: positive
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-008
+    category: negative
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-009
+    category: negative
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-010
+    category: negative
+    status: passed
+    first_reason: ""
+  - golden_task_id: GT-012
+    category: negative
+    status: passed
+    first_reason: ""
+
+validation_commands:
+  - command: "uv run pytest tests/golden_tasks/test_runner_assertions.py tests/golden_tasks/test_runner_negative_assertions.py -v"
+    result: passed
+    exit_code: 0
+    evidence: "16 passed in 0.16s"
+  - command: "uv run python scripts/check_weak_tests.py tests/golden_tasks/test_golden_tasks.py"
+    result: passed
+    exit_code: 0
+    evidence: "Weak-test check passed."
+  - command: "uv run python scripts/check_weak_tests.py tests/golden_tasks/test_runner_assertions.py"
+    result: passed
+    exit_code: 0
+    evidence: "Weak-test check passed."
+  - command: "uv run python scripts/check_weak_tests.py tests/golden_tasks/test_runner_negative_assertions.py"
+    result: passed
+    exit_code: 0
+    evidence: "Weak-test check passed."
+  - command: "uv run pytest tests/golden_tasks/ -v"
+    result: passed
+    exit_code: 0
+    evidence: "110 passed in ~0.6s (including test_happy_minimum_positive_and_negative_goldens_pass)"
+  - command: "uv run ruff check tests/golden_tasks/ scripts/run_golden_tasks.py"
+    result: passed
+    exit_code: 0
+    evidence: "All checks passed!"
+  - command: "uv run mypy tests/golden_tasks/ scripts/run_golden_tasks.py"
+    result: passed
+    exit_code: 0
+    evidence: "Success: no issues found in 8 source files"
+  - command: "uv run python scripts/run_golden_tasks.py --summary"
+    result: passed
+    exit_code: 0
+    evidence: "total=11 passed=11 failed=0 skipped=0 not_applicable=0 positive_passed=7 negative_passed=4"
+    run_date: "2026-06-12"
+    run_context: "phase0/main HEAD ab504db"
+
+validation_evidence:
+  runner_meta_tests: "16 passed, 0 failed"
+  weak_test_checks: "3 files checked, all passed"
+  golden_tasks_suite: "110 passed, 0 failed (including happy path gate)"
+  ruff: "clean"
+  mypy: "clean"
+  golden_summary: "11 passed, 0 failed, 0 skipped, 0 not_applicable, positive_passed=7, negative_passed=4"
+  golden_run_date: "2026-06-12"
+  golden_run_context: "phase0/main HEAD ab504db (P0-DOMAIN-007c merged)"
+
+reviews:
+  plan_review: "Fable/Opus APPROVE (4 findings baked to exec)"
+  diff_review_round1: "REQUEST_CHANGES (F-1 P1 injection-companion missing + F-3/F-4)"
+  diff_review_round2: "APPROVE findings none"
+  codex_self_review: "FAIL→fixed→consistent"
+  final_human_decision: "commit on branch, record blocked, do not merge (2026-06-11); converted to passed 2026-06-12 after P0-DOMAIN-007c unblock"
+
+recorded_risks:
+  - "F-2 (P2): GT-007 一次性 confirm 上下文无法传入 Runtime（handle_user_message 无 user-action 参数，RuntimeImpl API 形状所限，超本任务可写范围）。GT-003 gate 时 GT-007 失败不得误判为 Runtime 缺口，需 runner+API 支持 confirm replay 后再评。"
+  - "F-5 (P3): assert_adapter_calls 的 must_be_called 按三个 spy 总数判定，非按目标系统 spy；must-not 侧已按系统经 mock_*_was_called 覆盖。spec §4 item 8 未强制 per-target，列为 hardening。"
+
+secret_scan_note: "broad staged secret scan flags synthetic credential strings in test_runner_negative_assertions.py (Authorization: Bearer live-secret-token; cookie: sessionid=abc123) — these are deliberate detector INPUTS proving forbidden_trace_token coverage (next line asserts 'Bearer' present); plus two session_id= code field references. Confirmed false positives; narrowed scan = no other hits. No real secret."
+
+path_contract:
+  touched_paths_confirmed: true
+  forbidden_paths_confirmed: true
+  ci_yml_modified: false
+  app_modified: false
+  fixtures_modified: false
+  dependency_files_modified: false
+
+known_debt_reference: >-
+  P0-INFRA-007 缺 Golden Task CI not_applicable 占位（spec 假设有占位可「激活」，实际 ci.yml 零命中，§0 deviation B 已如实记录）。ci.yml golden task CI step 尚未添加，待 pending_actions 项目闭环。
+
+artifact_lifecycle:
+  scratch_artifacts:
+    - "_scratch/context_packet_P0-GT-002.md"
+    - "_scratch/review_packet_P0-GT-002.md"
+    - "_scratch/run_summary_P0-GT-002.yaml"
+    - "_scratch/closeout_packet_P0-GT-002.md"
+  cleanup_note: "Cache/temp artifacts are not staged; _scratch/ is gitignored."
+
+package_confirmation_status: not_created
+package_scope: "Runner and test files only; no runtime package or deployable artifact."

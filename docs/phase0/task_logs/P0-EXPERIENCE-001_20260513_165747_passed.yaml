@@ -1,0 +1,198 @@
+task_id: "P0-EXPERIENCE-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-14T01:30:00+09:00"
+completed_at: "2026-05-14T01:57:00+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-14T01:30:00+09:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Created an independent engineering lessons-learned reference file
+  (docs/dev/AI_AGENT_ENGINEERING_LESSONS.md) with 11 sections covering
+  Phase 0 pitfalls and anti-patterns. Updated REPOSITORY_CONTEXT_MAP.md,
+  MANIFEST.md, and task_logs/INDEX.md to register it as an on-demand
+  resource. File includes prominent loading policy stating it must not
+  be loaded as default full context.
+
+acceptance_criteria_result:
+  - criterion: "docs/dev/AI_AGENT_ENGINEERING_LESSONS.md created with prominent loading policy header"
+    result: "passed"
+    evidence: "File exists at docs/dev/AI_AGENT_ENGINEERING_LESSONS.md; header contains 'Do NOT load this full file by default' on line 4"
+  - criterion: "Lessons file contains at least 10 of 11 planned sections with actionable rules"
+    result: "passed"
+    evidence: "File contains all 11 sections: Task Record Evidence Rules, Git/Review Workflow, Environment/Runtime, Security/Secret Hygiene, Provider API Boundary, Spike/Test Design, Documentation/Index Sync, Scope/Context Hygiene, Tool Assignment, When to Update, plus the Purpose/Loading Policy header section"
+  - criterion: "Loading policy states: do not load full file by default, load only relevant sections"
+    result: "passed"
+    evidence: "Lines 4-5: 'Do NOT load this full file by default.' and 'Load only relevant sections based on current task type.'"
+  - criterion: "docs/phase0/REPOSITORY_CONTEXT_MAP.md updated with lessons file as on-demand entry"
+    result: "passed"
+    evidence: "Section 3 docs/dev/ table has new row for AI_AGENT_ENGINEERING_LESSONS.md with 'On demand' and 'Do not load full file by default' guidance; Section 5 progressive loading guide updated for task types 1, 7, 8"
+  - criterion: "MANIFEST.md registers new files (lessons file + task prompt)"
+    result: "passed"
+    evidence: "MANIFEST.md contains exactly one entry each for docs/dev/AI_AGENT_ENGINEERING_LESSONS.md and docs/phase0/tasks/P0-EXPERIENCE-001.md"
+  - criterion: "docs/phase0/task_logs/INDEX.md has exactly one P0-EXPERIENCE-001 row"
+    result: "passed"
+    evidence: "grep -c P0-EXPERIENCE-001 docs/phase0/task_logs/INDEX.md returns 1"
+  - criterion: "INDEX data row count equals actual YAML file count in task_logs/"
+    result: "passed"
+    evidence: "INDEX data rows: 19 (18 existing + 1 new P0-EXPERIENCE-001); YAML files: 19 (18 existing + this record)"
+  - criterion: "Task Record YAML passes safe_load and UniqueKeyLoader checks"
+    result: "passed"
+    evidence: "python -c 'import yaml; yaml.safe_load(open(path))' succeeded; no duplicate keys detected"
+  - criterion: "changed_files matches git diff --cached --name-only exactly"
+    result: "passed"
+    evidence: "git diff --cached --name-only output matches changed_files list exactly including order"
+  - criterion: "No forbidden paths or historical records modified"
+    result: "passed"
+    evidence: "git diff --cached --name-only | grep -E '(docs/blueprint/|app/|experiments/|docs/adr/)' returns no match; no historical task_logs/*.yaml modified"
+  - criterion: "Lessons file does not exceed 280 lines"
+    result: "passed"
+    evidence: "wc -l docs/dev/AI_AGENT_ENGINEERING_LESSONS.md returns 222"
+
+failure_examples_tested:
+  - example: "Lessons file becomes vague or too broad to use as a searchable reference"
+    result: "not_applicable"
+    evidence: "Documentation quality verified by content review during execution; each section contains specific actionable rules with 'Why' explanations tied to real Phase 0 incidents"
+    not_applicable_reason: "Documentation quality is verified by content review, not by automated test"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A — content quality is assessed by human/Codex review, not by automated test"
+  - example: "Context map implies lessons file is mandatory full-load"
+    result: "not_applicable"
+    evidence: "REPOSITORY_CONTEXT_MAP.md Section 3 entry explicitly says 'Do not load full file by default' and 'Not a mandatory context file'; grep -c 'on demand' on updated context map confirms on-demand labeling"
+    not_applicable_reason: "Verified by grep check during execution; no automated test needed"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "N/A — loading policy verification is a one-time documentation check"
+
+step_verification_points:
+  - step: "Create docs/dev/AI_AGENT_ENGINEERING_LESSONS.md"
+    result: "passed"
+    command: "test -f docs/dev/AI_AGENT_ENGINEERING_LESSONS.md"
+    evidence: "File exists; 222 lines; 11 sections"
+  - step: "Create docs/phase0/tasks/P0-EXPERIENCE-001.md"
+    result: "passed"
+    command: "test -f docs/phase0/tasks/P0-EXPERIENCE-001.md"
+    evidence: "File exists; 172 lines; contains method_profile and full task definition"
+  - step: "Update REPOSITORY_CONTEXT_MAP.md"
+    result: "passed"
+    command: "grep 'AI_AGENT_ENGINEERING_LESSONS' docs/phase0/REPOSITORY_CONTEXT_MAP.md"
+    evidence: "Section 3 table and Section 5 progressive loading guide updated"
+  - step: "Update MANIFEST.md"
+    result: "passed"
+    command: "grep 'AI_AGENT_ENGINEERING_LESSONS' MANIFEST.md && grep 'P0-EXPERIENCE-001' MANIFEST.md"
+    evidence: "Both entries present, each exactly once"
+  - step: "Update task_logs/INDEX.md"
+    result: "passed"
+    command: "grep 'P0-EXPERIENCE-001' docs/phase0/task_logs/INDEX.md"
+    evidence: "Exactly one P0-EXPERIENCE-001 row added after P0-SCHEMA-001"
+  - step: "Stage all files and verify diff"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "6 files staged: MANIFEST.md, docs/dev/AI_AGENT_ENGINEERING_LESSONS.md, docs/phase0/REPOSITORY_CONTEXT_MAP.md, docs/phase0/task_logs/INDEX.md, docs/phase0/task_logs/P0-EXPERIENCE-001_20260513_165747_passed.yaml, docs/phase0/tasks/P0-EXPERIENCE-001.md"
+  - step: "YAML validation"
+    result: "passed"
+    command: "python yaml.safe_load + no duplicate keys"
+    evidence: "Task Record YAML passes safe_load; no duplicate keys"
+
+changed_files:
+  - MANIFEST.md
+  - docs/dev/AI_AGENT_ENGINEERING_LESSONS.md
+  - docs/phase0/REPOSITORY_CONTEXT_MAP.md
+  - docs/phase0/task_logs/INDEX.md
+  - docs/phase0/task_logs/P0-EXPERIENCE-001_20260513_165747_passed.yaml
+  - docs/phase0/tasks/P0-EXPERIENCE-001.md
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git diff --cached --check"
+    result: "passed"
+    output_snippet: "No whitespace errors in staged diff"
+  - command: "python -c 'import yaml; yaml.safe_load(open(task_record_path))'"
+    result: "passed"
+    output_snippet: "YAML parsed successfully, no exception raised"
+  - command: "grep -c 'P0-EXPERIENCE-001' docs/phase0/task_logs/INDEX.md"
+    result: "passed"
+    output_snippet: "1"
+  - command: "grep -c 'AI_AGENT_ENGINEERING_LESSONS' MANIFEST.md"
+    result: "passed"
+    output_snippet: "1"
+  - command: "grep -inE '(sk-[a-zA-Z0-9]{20,}|AKIA[A-Z0-9]{16}|ghp_[a-zA-Z0-9]{36})' docs/dev/AI_AGENT_ENGINEERING_LESSONS.md"
+    result: "passed"
+    output_snippet: "No real secrets found (exit code 1 = no match)"
+  - command: "git diff --cached --name-only | grep -E '(docs/blueprint/|app/|experiments/|docs/adr/)'"
+    result: "passed"
+    output_snippet: "No forbidden paths modified (exit code 1 = no match)"
+  - command: "wc -l docs/dev/AI_AGENT_ENGINEERING_LESSONS.md"
+    result: "passed"
+    output_snippet: "222"
+  - command: "grep 'Do not load' docs/dev/AI_AGENT_ENGINEERING_LESSONS.md"
+    result: "passed"
+    output_snippet: "Do NOT load this full file by default."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "Documentation-only task; no code imports to check; all changed files are markdown (.md) and YAML (.yaml) documentation"
+  not_applicable_reason: "No production code files were created or modified"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_task_if_code_file_added"
+  expiry_condition: "Relevant if a future task adds Python/JS/TS imports to the changed files in this task"
+
+security_scan_result:
+  result: "passed"
+  evidence: "Ran grep for real API key patterns (sk-*, AKIA*, ghp_*, xoxb-*, xoxp-*) on all staged files; no matches. Verified all sensitive keywords in lessons file appear only in policy context (telling agents not to use real values) and env var name references, never as actual secret values."
+  not_applicable_reason: "N/A — security scan was executed and passed"
+  not_applicable_scope: "N/A — security scan was executed and passed"
+  blocked_by_task_id: "N/A — not blocked"
+  activation_task_id: "N/A — already executed"
+  expiry_condition: "N/A — scan already completed"
+
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "Documentation-only task; no test code was created or modified; all changed files are documentation (.md/.yaml)"
+  not_applicable_reason: "No test files were created or modified in this documentation task"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_task_if_test_file_added"
+  expiry_condition: "Relevant if a future task adds test files to the changed files in this task"
+
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  evidence: "No CI run was applicable for this documentation-only lessons reference task; local validation covered git diff --cached --check, YAML safe_load, UniqueKeyLoader duplicate-key checks, changed_files exact comparison, INDEX row count vs YAML task-record count, MANIFEST duplicate check, forbidden-path check, secret scan, and loading-policy content checks."
+  not_applicable_reason: "Phase 0 documentation task; no CI pipeline configured for Phase 0 docs"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "future_task_when_ci_configured"
+  expiry_condition: "Relevant when CI pipeline is configured for Phase 0 documentation tasks"
+
+review:
+  mode: "codex_review"
+  reviewed_by: "codex"
+  reviewed_at: "2026-05-14T02:00:00+09:00"
+  notes: "Codex review completed; initial review returned changes_requested with 3 blocking findings (empty not_applicable fields, duplicate evidence keys, missing no-commit rule); findings addressed"
+
+remaining_risks:
+  - "Lessons file may need updates as Batch 2 tasks surface new patterns"
+  - "Section content derived from Phase 0 experience; Phase 1 may introduce new categories"
+
+rollback_or_failure_record: "none — task completed successfully"
+
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package/archive was created for this documentation-only lessons reference task."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package/archive command was run; staged diff contains documentation, index, manifest, context map, task prompt, and Task Record only."

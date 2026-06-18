@@ -1,0 +1,288 @@
+task_id: P0-RULES-002
+task_type: documentation
+result: passed
+started_at: '2026-05-11T10:40:00+08:00'
+completed_at: '2026-05-11T10:43:25+08:00'
+plan_approved_by: evarainy
+plan_approved_at: '2026-05-11T10:40:00+08:00'
+plan_approved_via: Claude Code session
+summary: Added shared role-based guardrails document covering Execution Guardrails, Review Guardrails, Engineering Method
+  Selection, Code Style Discipline, Superpowers Usage, and External Guideline Handling. Added lightweight references in CLAUDE.md,
+  AGENTS.md, and CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md. Updated MANIFEST.md. Created P0-RULES-002 task prompt. Did not commit
+  or push.
+acceptance_criteria_result:
+- criterion: 'AC-1: ROLE_AND_METHOD_GUARDRAILS.md exists with all required sections'
+  result: passed
+  evidence: 'Select-String confirmed all 6 sections present: ## Execution Guardrails (line 13), ## Review Guardrails (line
+    39), ## Engineering Method Selection (line 70), ## Code Style Discipline (line 98), ## Superpowers Usage (line 109), ##
+    External Guideline Handling (line 116)'
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-2: CLAUDE.md references guardrails without AGENTS.md'
+  result: passed
+  evidence: 'Select-String -Path CLAUDE.md -Pattern ''AGENTS\.md'' returned no output. CLAUDE.md contains ''Role and method
+    guardrails: docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md''.'
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-3: AGENTS.md references guardrails without CLAUDE.md'
+  result: passed
+  evidence: Select-String -Path AGENTS.md -Pattern 'CLAUDE\.md' returned no output. AGENTS.md contains rule 13 referencing
+    ROLE_AND_METHOD_GUARDRAILS.md.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-4: Template references guardrails'
+  result: passed
+  evidence: Select-String -Path docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md -Pattern 'ROLE_AND_METHOD_GUARDRAILS' returned
+    match at line 28.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-5: MANIFEST.md updated'
+  result: passed
+  evidence: MANIFEST.md contains 'docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md' and 'docs/phase0/tasks/P0-RULES-002.md'.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-6: Task Record YAML valid'
+  result: passed
+  evidence: python yaml.safe_load exited without error.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-7: changed_files match git diff'
+  result: passed
+  evidence: 'git diff --cached --name-only: 7 files in order (AGENTS.md, CLAUDE.md, MANIFEST.md, docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md,
+    docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md, docs/phase0/task_logs/P0-RULES-002_20260511_104325_passed.yaml, docs/phase0/tasks/P0-RULES-002.md).
+    git diff --cached --stat: 7 files changed, 523 insertions(+).'
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-8: No forbidden paths modified'
+  result: passed
+  evidence: git diff --cached --name-only filtered against forbidden pattern returned no output.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-9: No existing task prompts modified'
+  result: passed
+  evidence: git diff --cached --name-only tasks path filtered for non-P0-RULES-002 returned no output.
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- criterion: 'AC-10: package_confirmation is real not_applicable'
+  result: passed
+  evidence: 'package_confirmation_status: not_applicable; package_confirmation explains no artifact requested.'
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+failure_examples_tested:
+- example: 'Cross-read violation: CLAUDE.md contains AGENTS.md reference'
+  result: not_triggered
+  evidence: Select-String -Path CLAUDE.md -Pattern 'AGENTS\.md' returned no output
+  not_applicable_reason: Not a code task; cross-read check is a structural verification
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- example: 'Cross-read violation: AGENTS.md contains CLAUDE.md reference'
+  result: not_triggered
+  evidence: Select-String -Path AGENTS.md -Pattern 'CLAUDE\.md' returned no output
+  not_applicable_reason: Not a code task; cross-read check is a structural verification
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+step_verification_points:
+- step: Create P0-RULES-002.md
+  result: passed
+  command: Test-Path docs/phase0/tasks/P0-RULES-002.md
+  evidence: File exists with task_id, objective, acceptance_criteria, touched_paths, forbidden_paths, validation, out-of-band
+    statement
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Create ROLE_AND_METHOD_GUARDRAILS.md
+  result: passed
+  command: Select-String required sections
+  evidence: All 6 sections confirmed present
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Update CLAUDE.md
+  result: passed
+  command: Select-String -Path CLAUDE.md -Pattern guardrails
+  evidence: Reference added; no AGENTS.md string present
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Update AGENTS.md
+  result: passed
+  command: Select-String -Path AGENTS.md -Pattern guardrails
+  evidence: Rule 13 added; no CLAUDE.md string present
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Update template
+  result: passed
+  command: Select-String -Path docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md -Pattern ROLE_AND_METHOD_GUARDRAILS
+  evidence: Short role/method section added at line 22-28
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Update MANIFEST.md
+  result: passed
+  command: Select-String -Path MANIFEST.md -Pattern ROLE_AND_METHOD_GUARDRAILS,P0-RULES-002
+  evidence: Both entries present
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Generate Task Record
+  result: passed
+  command: python yaml.safe_load
+  evidence: YAML parsed successfully
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- step: Stage and validate
+  result: passed
+  command: git diff --cached --name-only
+  evidence: 7 files staged; changed_files match
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+changed_files:
+- AGENTS.md
+- CLAUDE.md
+- MANIFEST.md
+- docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
+- docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md
+- docs/phase0/task_logs/P0-RULES-002_20260511_104325_passed.yaml
+- docs/phase0/tasks/P0-RULES-002.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+- command: Select-String -Path CLAUDE.md -Pattern 'AGENTS\.md'
+  result: passed
+  output_snippet: (no output - expected)
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- command: Select-String -Path AGENTS.md -Pattern 'CLAUDE\.md'
+  result: passed
+  output_snippet: (no output - expected)
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- command: Select-String -Path docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md -Pattern sections
+  result: passed
+  output_snippet: 6 matches found on lines 13, 39, 70, 98, 109, 116
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+- command: Select-String -Path docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md -Pattern ROLE_AND_METHOD_GUARDRAILS
+  result: passed
+  output_snippet: Match at line 28
+  not_applicable_reason: none
+  not_applicable_scope: none
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: Documentation-only task; no code imports changed
+  not_applicable_reason: Documentation-only task with no code changes
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+security_scan_result:
+  result: not_applicable
+  evidence: Documentation-only task; no code or secrets introduced
+  not_applicable_reason: No code or credentials introduced
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+weak_test_scan_result:
+  result: not_applicable
+  evidence: No tests modified or introduced
+  not_applicable_reason: No tests in this documentation-only task
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+ci_evidence:
+  result: not_applicable
+  run_id: none
+  url_or_log_path: none
+  not_applicable_reason: No CI run triggered; no code changes
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: none
+  activation_task_id: none
+  expiry_condition: none
+review:
+  mode: self_check
+  reviewed_by: Claude Code (self-check)
+  reviewed_at: '2026-05-11T10:43:25+08:00'
+  notes: Self-check passed. CLAUDE.md has no AGENTS.md reference; AGENTS.md has no CLAUDE.md reference; guardrails document
+    has all 6 required sections; template has lightweight reference; MANIFEST updated; changed_files match staged diff; no
+    forbidden paths touched; no existing task prompts modified.
+remaining_risks: []
+rollback_or_failure_record: none; documentation-only rules maintenance task, no rollback or failure record generated
+git_commit_sha: recorded_by_git_history_after_final_commit
+git_commit_sha_note: The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The
+  authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push.
+package_confirmation_status: not_applicable
+package_confirmation: No package artifact was generated for this out-of-band rules maintenance task.
+package_scope: none
+package_evidence: P0-RULES-002 only updates role/method guardrail documentation, boot-file references, template reference,
+  MANIFEST, task prompt, and Task Record; no package artifact was requested or created.

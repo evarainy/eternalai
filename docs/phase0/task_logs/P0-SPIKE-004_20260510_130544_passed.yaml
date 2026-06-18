@@ -1,0 +1,313 @@
+task_id: P0-SPIKE-004
+task_type: spike
+result: passed
+started_at: "2026-05-10T12:47:00+09:00"
+completed_at: "2026-05-10T13:05:44+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-10T12:47:00+09:00"
+plan_approved_via: Claude Code session
+summary: >
+  Redis + ARQ baseline spike passed. AC-1/2/3 all verified in real execution
+  against Docker Redis 7-alpine with arq 0.28.0. ADR recommends ARQ as Phase 1
+  L1 candidate with production-readiness prerequisites documented.
+
+acceptance_criteria_result:
+  - criterion: "AC-1: Minimal task can be enqueued and executed"
+    result: passed
+    evidence: "test_spike.py AC-1 output: PASS — result={'status': 'ok', 'input': 'hello-spike', 'output': 'processed: hello-spike'}"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - criterion: "AC-2: Failed task records exception"
+    result: passed
+    evidence: "test_spike.py AC-2 output: PASS — assert isinstance(exc, RuntimeError) and 'simulated spike failure for AC-2' in str(exc)"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - criterion: "AC-3: Timeout task produces timeout error"
+    result: passed
+    evidence: "test_spike.py AC-3 output: PASS — timeout detected, exception=TimeoutError (5.01s)"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - criterion: "AC-4: ADR clarifies Phase 1 ARQ recommendation"
+    result: passed
+    evidence: "docs/adr/phase0/ADR-P0-SPIKE-004-redis-arq.md — status: accepted, recommendation: ARQ as L1 candidate with production prerequisites"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+failure_examples_tested:
+  - example: "Docker daemon unavailable (initial run)"
+    result: triggered
+    evidence: "First run: docker compose up -d returned exit code 1 — failed to connect to docker API. Re-run after Docker restored succeeded."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - example: "IPv6 localhost resolution on Windows"
+    result: triggered
+    evidence: "Initial test_spike.py used host='localhost' which resolved to ::1 (IPv6) while Docker binds 127.0.0.1 (IPv4). Fixed to explicit 127.0.0.1."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - example: "ARQ 0.28 uses zset not list for queue"
+    result: triggered
+    evidence: "Initial _drain_jobs used lpop on a zset key, causing WRONGTYPE. Rewritten to use ARQ native Worker burst mode instead of manual queue draining."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+step_verification_points:
+  - step: "S1 — Docker Compose config validation"
+    result: passed
+    command: "docker compose -f infra/docker/docker-compose.redis-spike.yml config"
+    evidence: "Config output valid — Redis 7-alpine, port 6379, healthcheck, volume"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S2 — Spike code syntax check"
+    result: passed
+    command: "python -m py_compile worker.py && python -m py_compile test_spike.py"
+    evidence: "Both files pass py_compile"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S3 — Start Redis container"
+    result: passed
+    command: "docker compose -f infra/docker/docker-compose.redis-spike.yml up -d"
+    evidence: "Container docker-redis-1 started, health: healthy, port 127.0.0.1:6379->6379/tcp"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S4 — Install spike dependencies in temp venv"
+    result: passed
+    command: >-
+      python -m venv "$env:TEMP/eternalai-p0-spike-004-venv" &&
+      "$env:TEMP/eternalai-p0-spike-004-venv/Scripts/pip" install -r experiments/phase0/redis_arq/requirements.txt
+    evidence: "Successfully installed arq-0.28.0 redis-5.3.1 hiredis-3.3.1 click-8.3.3 pyjwt-2.12.1 colorama-0.4.6"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S5 — Execute spike tests"
+    result: passed
+    command: >-
+      "$env:TEMP/eternalai-p0-spike-004-venv/Scripts/python" experiments/phase0/redis_arq/test_spike.py
+    evidence: "AC1: PASS, AC2: PASS, AC3: PASS — Overall: ALL PASSED"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S6 — Write ADR"
+    result: passed
+    command: "none"
+    evidence: "docs/adr/phase0/ADR-P0-SPIKE-004-redis-arq.md — status: accepted, real test results documented"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S7 — Cleanup resources"
+    result: passed
+    command: >-
+      docker compose -f infra/docker/docker-compose.redis-spike.yml down -v &&
+      Remove-Item -Recurse -Force "$env:TEMP/eternalai-p0-spike-004-venv" -ErrorAction SilentlyContinue
+    evidence: "Container removed, volume removed, temp venv deleted, docker ps shows no containers"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - step: "S8 — Verify git status clean"
+    result: passed
+    command: "git status --short"
+    evidence: "No .venv / __pycache__ / .pyc files; only expected task artifacts"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+changed_files:
+  - docs/adr/phase0/ADR-P0-SPIKE-004-redis-arq.md
+  - docs/phase0/task_logs/P0-SPIKE-004_20260510_130544_passed.yaml
+  - experiments/phase0/redis_arq/README.md
+  - experiments/phase0/redis_arq/requirements.txt
+  - experiments/phase0/redis_arq/test_spike.py
+  - experiments/phase0/redis_arq/worker.py
+  - infra/docker/docker-compose.redis-spike.yml
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "docker compose -f infra/docker/docker-compose.redis-spike.yml config"
+    result: passed
+    output_snippet: "name: docker / services: redis: image: redis:7-alpine, ports: 6379, healthcheck, volume"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: "python -m py_compile experiments/phase0/redis_arq/worker.py"
+    result: passed
+    output_snippet: "OK"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: "python -m py_compile experiments/phase0/redis_arq/test_spike.py"
+    result: passed
+    output_snippet: "OK"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: "docker compose -f infra/docker/docker-compose.redis-spike.yml up -d"
+    result: passed
+    output_snippet: "Container docker-redis-1 Started"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: >-
+      "$env:TEMP/eternalai-p0-spike-004-venv/Scripts/pip" install -r experiments/phase0/redis_arq/requirements.txt
+    result: passed
+    output_snippet: "Successfully installed arq-0.28.0 redis-5.3.1 hiredis-3.3.1 click-8.3.3 pyjwt-2.12.1 colorama-0.4.6"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: >-
+      "$env:TEMP/eternalai-p0-spike-004-venv/Scripts/python" experiments/phase0/redis_arq/test_spike.py
+    result: passed
+    output_snippet: "AC1: PASS, AC2: PASS, AC3: PASS — Overall: ALL PASSED"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: "docker compose -f infra/docker/docker-compose.redis-spike.yml down -v"
+    result: passed
+    output_snippet: "Container removed, Volume removed, Network removed"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+  - command: "git status --short"
+    result: passed
+    output_snippet: "No .venv / __pycache__ / .pyc files in output"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none for this spike task"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  evidence: "Spike code is in experiments/phase0/ — no app/ modules created or modified"
+  not_applicable_reason: "No app/ modules created or modified; spike code only in experiments/phase0/"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none for this spike task"
+
+security_scan_result:
+  result: passed
+  evidence: "No plaintext secrets in spike code; requirements.txt contains no credentials; ADR contains no sensitive values; test_spike.py uses no real credentials"
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none for this spike task"
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Spike test uses custom test_spike.py with ARQ Worker burst mode; no pytest-based test suite in this spike"
+  not_applicable_reason: "Spike test uses custom test_spike.py, not pytest; no weak-test patterns applicable"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none for this spike task"
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "No CI job configured for Phase 0 spike tasks"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none for this spike task"
+  evidence: "Phase 0 spike tasks run locally, not in CI"
+
+review:
+  mode: self_check
+  reviewed_by: Claude Code
+  reviewed_at: "2026-05-10T13:05:44+09:00"
+  notes: "All AC-1/2/3 passed in real execution. ARQ native Worker burst mode used for job processing. IPv6/localhost and zset/list compatibility issues found and fixed during execution."
+
+remaining_risks:
+  - "Multi-worker concurrency not tested — Phase 1 must verify"
+  - "Redis persistence/backup not configured — Phase 1 requirement"
+  - "ARQ job timeout is asyncio.wait_for based — not distributed timeout coordination"
+
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: created
+package_confirmation: "confirmation that a fresh package was created from the current repository state"
+package_scope: "All spike artifacts staged: ADR, spike code, Docker Compose, Task Record"
+package_evidence: "git diff --cached --name-only verified"

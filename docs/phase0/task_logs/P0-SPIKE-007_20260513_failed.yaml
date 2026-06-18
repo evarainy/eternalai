@@ -1,0 +1,262 @@
+task_id: "P0-SPIKE-007"
+task_type: "spike"
+result: "failed"
+started_at: "2026-05-13T10:00:00+08:00"
+completed_at: "2026-05-13T13:30:00+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-13T09:30:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: "P0-SPIKE-007 provider API mode. PydanticAI 1.94.0 with PromptedOutput on qwen3.6-27b via DashScope public API. 108 logical samples (Run A: 50 + Run B: 50 + tool calling: 8). Run A (default retry): 29/50 = 58.0%. Run B (tool_retries=3): 33/50 = 66.0%. Tool calling (per-sample scoring): 5/8 = 62.5% (selection 100%, argument validation 62.5%). All below 80% threshold. Primary failure: DashScope ModelAPIError (16-20 provider errors per run). Excluding provider errors, model success ~97%. PydanticAI not recommended for Phase 1; raw OpenAI SDK + Pydantic (P0-SPIKE-001, 92.6%) is the baseline."
+acceptance_criteria_result:
+  - criterion: "record compatibility conclusion"
+    result: "passed"
+    evidence: "ADR-P0-SPIKE-007 section 6: failed with caveat. PydanticAI framework capability strong (~97% excluding provider errors) but overall threshold not met."
+  - criterion: "cover structured output, tool calling, exception handling, retry, observability"
+    result: "passed"
+    evidence: "Structured output: 50 samples across 6 categories. Tool calling: 8 samples. Exception: ModelAPIError, UnexpectedModelBehavior, critical_empty. Retry: Run A vs Run B comparison. Observability: local latency tracking."
+  - criterion: "Phase 2 recommendation"
+    result: "passed"
+    evidence: "ADR section 12: PydanticAI may be considered for Phase 2 if re-validated against internal vLLM with lower latency and thinking mode disabled."
+  - criterion: "limitation conditions documented"
+    result: "passed"
+    evidence: "ADR section 8: DashScope ModelAPIError, PromptedOutput vs ToolOutput, tool calling accuracy, OpenAIChatModel rename, observability."
+  - criterion: "structured output success_rate >= 80%"
+    result: "failed"
+    evidence: "Run A: 29/50 = 58.0% < 80%. Run B: 33/50 = 66.0% < 80%. Excluding provider errors: ~97%."
+  - criterion: "tool calling success_rate >= 80%"
+    result: "failed"
+    evidence: "5/8 = 62.5% < 80%. Selection accuracy 100%. 3 argument validation failures: TC-002, TC-003, TC-005."
+failure_examples_tested:
+  - example: "TC-002: argument_validation_failed (query_u8_invoice_status)"
+    result: "triggered"
+    evidence: "Tool correctly selected but arguments did not validate against schema."
+  - example: "TC-003: argument_validation_failed (query_hik_access_log)"
+    result: "triggered"
+    evidence: "Tool correctly selected but arguments did not validate against schema."
+  - example: "MIS-005: critical_empty (missing_fields/PlanDraft)"
+    result: "triggered"
+    evidence: "Model returned PlanDraft with empty steps array."
+  - example: "TMO-001 through TMO-006: api_error (timeout samples)"
+    result: "triggered"
+    evidence: "DashScope ModelAPIError on timeout adversarial samples."
+step_verification_points:
+  - step: "Check environment variables and PydanticAI"
+    result: "passed"
+    command: "python experiments/phase0/pydanticai_qwen_vllm/check_env.py"
+    evidence: "LLM_BASE_URL: set, LLM_API_KEY: set, LLM_MODEL: qwen3.6-27b, pydanticai_version: 1.94.0, pydanticai_ok: true"
+  - step: "Probe PydanticAI structured output API"
+    result: "passed"
+    command: "python experiments/phase0/pydanticai_qwen_vllm/check_env.py"
+    evidence: "output_type_param: output_type, output_mode: PromptedOutput, result_output_accessible: true"
+  - step: "Run structured output spike with 50 samples (Run A)"
+    result: "failed"
+    command: "python experiments/phase0/pydanticai_qwen_vllm/run_spike.py --run all"
+    evidence: "29/50 passed (58.0%). 20 api_error (ModelAPIError), 1 critical_empty."
+  - step: "Run structured output spike with 50 samples (Run B)"
+    result: "failed"
+    command: "python experiments/phase0/pydanticai_qwen_vllm/run_spike.py --run all"
+    evidence: "33/50 passed (66.0%). 16 api_error, 1 critical_empty. Retry recovered 5."
+  - step: "Run tool calling spike"
+    result: "failed"
+    command: "python experiments/phase0/pydanticai_qwen_vllm/run_spike.py --run all"
+    evidence: "5/8 passed (62.5%). Selection accuracy 100%. 3 argument validation failures: TC-002, TC-003, TC-005."
+  - step: "Cleanup temp venv and repo residuals"
+    result: "passed"
+    command: "repo residual scan"
+    evidence: "NO_REPO_DOT_VENV; NO_REPO_PYCACHE; NO_REPO_PYC"
+changed_files:
+  - "docs/adr/phase0/ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md"
+  - "docs/phase0/task_logs/P0-SPIKE-007_20260513_failed.yaml"
+  - "experiments/phase0/pydanticai_qwen_vllm/README.md"
+  - "experiments/phase0/pydanticai_qwen_vllm/check_env.py"
+  - "experiments/phase0/pydanticai_qwen_vllm/requirements.txt"
+  - "experiments/phase0/pydanticai_qwen_vllm/run_spike.py"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python experiments/phase0/pydanticai_qwen_vllm/check_env.py"
+    result: "passed"
+    output_snippet: "LLM_BASE_URL: set, LLM_API_KEY: set, LLM_MODEL: qwen3.6-27b, pydanticai_version: 1.94.0, pydanticai_ok: true, output_type_param: output_type, output_mode: PromptedOutput"
+  - command: "python experiments/phase0/pydanticai_qwen_vllm/run_spike.py --run all"
+    result: "failed"
+    output_snippet: "Run A: 29/50 (58.0%), Run B: 33/50 (66.0%), Tool calling: 5/8 (62.5%), Overall: FAIL"
+  - command: "repo residual scan"
+    result: "passed"
+    output_snippet: "NO_REPO_DOT_VENV; NO_REPO_PYCACHE; NO_REPO_PYC"
+dependency_changes:
+  added:
+    - "experiments/phase0/pydanticai_qwen_vllm/requirements.txt (spike-only; not a production dependency decision)"
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "passed"
+  evidence: "No app/, runtime/, gateway/, or execution_fabric/ paths modified; spike code under experiments/phase0/pydanticai_qwen_vllm/."
+security_scan_result:
+  result: "passed"
+  evidence: "No plaintext credentials in any repo file. Exception output sanitized (class name + status code only). No URLs, keys, tokens in ADR, Task Record, or fixtures."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "108 logical samples (Run A: 50 + Run B: 50 + tool calling: 8) with real PydanticAI PromptedOutput + Pydantic v2 Literal[...] validation. Results honest: 58% (Run A), 66% (Run B), 62.5% (tool calling, per-sample scoring)."
+ci_evidence:
+  result: "not_applicable"
+  run_id: "not_applicable_local_spike_no_ci_run_requested"
+  url_or_log_path: "local command evidence in Task Record and ADR-P0-SPIKE-007"
+  not_applicable_reason: "Local spike execution; CI not in scope."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked_local_spike_execution"
+  activation_task_id: "future_ci_integration_task"
+  expiry_condition: "A future task requires CI execution."
+review:
+  mode: "self_check"
+  reviewed_by: "Claude Code"
+  reviewed_at: "2026-05-13T13:30:00+08:00"
+  notes: "Self-check: scope, paths, failed status, cleanup, YAML validity, changed_files, forbidden paths, Literal enum enforcement, security scan. All checks passed."
+remaining_risks:
+  - "DashScope ModelAPIError: 16-20/50 samples hit intermittent provider errors. Internal vLLM expected to be more stable."
+  - "PydanticAI PromptedOutput vs ToolOutput: Default uses ToolOutput (tool_choice=required), conflicts with thinking mode."
+  - "Tool calling 62.5% < 80%. Selection accuracy 100% but argument validation fails on 3 samples."
+  - "PydanticAI output_type param confirmed as 'output_type' in v1.94.0 but may change."
+  - "PydanticAI 1.94.0 runtime used OpenAIChatModel. OpenAIModel was deprecated."
+  - "Observability: Logfire not tested (no SaaS token)."
+  - "Internal endpoint validation: must re-run against internal vLLM/Qwen."
+rollback_or_failure_record: "Task failed: Run A 58% < 80%, Run B 66% < 80%, tool calling 62.5% < 80%. Primary failure: DashScope ModelAPIError. See ADR-P0-SPIKE-007."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: "not_applicable"
+package_confirmation: "No fresh package/archive was created for P0-SPIKE-007."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package/archive command was run; final deliverables are staged repository files only."
+execution_environment: "public_vendor_api"
+internal_endpoint_validation: "deferred / not_executed"
+activation_condition: "rerun against internal vLLM/Qwen server when intranet access is available, with thinking mode disabled and improved tool calling prompts"
+recommendation_scope: "client-side compatibility only"
+pydanticai_mode_evidence:
+  pydanticai_version: "1.94.0"
+  pydanticai_output_mode_attempted: "PromptedOutput (prompt-based JSON, no tool_choice conflict); default ToolOutput blocked by DashScope thinking mode"
+  effective_pydanticai_output_mode: "PromptedOutput"
+  output_type_param: "output_type"
+  openai_model_class: "OpenAIChatModel (PydanticAI 1.94.0 runtime used OpenAIChatModel; OpenAIModel was deprecated with a warning)"
+  json_schema_supported_by_provider: true
+  json_object_supported_by_provider: true
+  tool_calling_supported_by_provider: true
+structured_output_mode_tracking:
+  structured_output_mode_attempted: "PromptedOutput (prompt-based JSON extraction)"
+  effective_mode_used_for_acceptance: "PromptedOutput"
+  success_rate_by_mode: "PromptedOutput: default_retry: 29/50=58.0%; tool_retries=3: 33/50=66.0%"
+  json_schema_not_supported_by_provider: false
+validation_path:
+  structured_output: "PydanticAI Agent output_type=PromptedOutput(outputs=PydanticModel); validation performed internally by PydanticAI against output model"
+  tool_argument: "PydanticAI @agent.tool decorator with RunContext[None] as first parameter"
+  enum: "Literal[type] in Pydantic BaseModel; PydanticAI validates output against model including Literal constraints"
+sample_counts:
+  logical_sample_count: 108
+  run_a: 50
+  run_b: 50
+  tool_calling: 8
+  actual_provider_request_count: "not_measured (PydanticAI retries issue additional API calls per logical sample)"
+retry_metrics:
+  default_retry:
+    first_pass_success_rate: 58.0
+    first_pass_passed: 29
+    first_pass_total: 50
+    per_sample_final_failure_categories:
+      api_error: 20
+      critical_empty: 1
+      total_failed: 21
+  tool_retries_3:
+    final_success_rate: 66.0
+    final_passed: 33
+    final_total: 50
+    retry_recovered_count: 5
+    retry_exhausted_count: 16
+    per_sample_final_failure_categories:
+      api_error: 16
+      critical_empty: 1
+      total_failed: 17
+  retry_improvement: "5 samples recovered (58.0% -> 66.0%)"
+  provider_error_count:
+    run_a: 20
+    run_b: 16
+    tool_calling: 0
+tool_calling_evidence:
+  tool_calling_mode_attempted: "PydanticAI @agent.tool with tool_choice='auto'"
+  tool_calling_supported_by_provider: true
+  tool_calling_success_rate: 62.5
+  tool_calling_passed: 5
+  tool_calling_failed: 3
+  tool_calling_total: 8
+  tool_selection_accuracy: 100.0
+  tool_selection_fail_count: 0
+  argument_validation_success_rate: 62.5
+  argument_validation_fail_count: 3
+  per_sample_final_failure_categories:
+    argument_validation_failed: 3
+    total_failed: 3
+  failed_samples: "TC-002 (query_u8_invoice_status): argument_validation_failed; TC-003 (query_hik_access_log): argument_validation_failed; TC-005 (query_u8_invoice_status): argument_validation_failed"
+  provider_error_count: 0
+  per_sample_results:
+    - sample_id: "TC-001"
+      expected_tool: "query_oa_leave_balance"
+      called_tools_for_sample: ["query_oa_leave_balance"]
+      selected_correct_tool: true
+      arguments_valid: true
+      provider_error: false
+      failure_category: "ok"
+      passed: true
+    - sample_id: "TC-002"
+      expected_tool: "query_u8_invoice_status"
+      called_tools_for_sample: ["query_u8_invoice_status"]
+      selected_correct_tool: true
+      arguments_valid: false
+      provider_error: false
+      failure_category: "argument_validation_failed"
+      passed: false
+    - sample_id: "TC-003"
+      expected_tool: "query_hik_access_log"
+      called_tools_for_sample: ["query_hik_access_log"]
+      selected_correct_tool: true
+      arguments_valid: false
+      provider_error: false
+      failure_category: "argument_validation_failed"
+      passed: false
+    - sample_id: "TC-004"
+      expected_tool: "query_oa_leave_balance"
+      called_tools_for_sample: ["query_oa_leave_balance"]
+      selected_correct_tool: true
+      arguments_valid: true
+      provider_error: false
+      failure_category: "ok"
+      passed: true
+    - sample_id: "TC-005"
+      expected_tool: "query_u8_invoice_status"
+      called_tools_for_sample: ["query_u8_invoice_status"]
+      selected_correct_tool: true
+      arguments_valid: false
+      provider_error: false
+      failure_category: "argument_validation_failed"
+      passed: false
+    - sample_id: "TC-006"
+      expected_tool: "query_hik_access_log"
+      called_tools_for_sample: ["query_hik_access_log"]
+      selected_correct_tool: true
+      arguments_valid: true
+      provider_error: false
+      failure_category: "ok"
+      passed: true
+    - sample_id: "TC-007"
+      expected_tool: "query_oa_leave_balance"
+      called_tools_for_sample: ["query_oa_leave_balance"]
+      selected_correct_tool: true
+      arguments_valid: true
+      provider_error: false
+      failure_category: "ok"
+      passed: true
+    - sample_id: "TC-008"
+      expected_tool: "query_u8_invoice_status"
+      called_tools_for_sample: ["query_u8_invoice_status"]
+      selected_correct_tool: true
+      arguments_valid: true
+      provider_error: false
+      failure_category: "ok"
+      passed: true
+fallback_strategy: "PromptedOutput mode (prompt-based JSON, no tool_choice conflict); tool_choice='auto' for tool calling; no semantic repair; no output auto-fix; no business fallback"

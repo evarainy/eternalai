@@ -1,0 +1,347 @@
+task_id: P0-RULES-001
+task_type: documentation
+result: passed
+started_at: "2026-05-11T07:50:00+08:00"
+completed_at: "2026-05-11T08:08:13+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-11T07:50:00+08:00"
+plan_approved_via: Claude Code session
+summary: >
+  P0-RULES-001 is an out-of-band rules maintenance task, not part of Batch DAG,
+  and intentionally not added to TASK_INDEX.md because TASK_INDEX currently
+  tracks only batch execution tasks. Aligned tool-specific rule loading behavior:
+  Claude Code / MiMo reads CLAUDE.md only; Codex / generic coding agent reads
+  AGENTS.md only. Removed all cross-read requirements from boot files, template,
+  context loading strategy, entry guides, and future task prompts.
+
+acceptance_criteria_result:
+  - criterion: "AC-1: CLAUDE.md no longer references AGENTS.md"
+    result: passed
+    evidence: "Select-String -Path CLAUDE.md -Pattern 'AGENTS\\.md' returned no output"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-2: CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md uses tool-specific split wording"
+    result: passed
+    evidence: "Line 17 replaced with two separate bullet lines: 'Codex / generic coding agent: read AGENTS.md' and 'Claude Code / MiMo: read CLAUDE.md'. No line contains both 'Claude Code' and 'AGENTS.md'."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-3: CONTEXT_LOADING_STRATEGY.md Tier 0 distinguishes tool-specific boot files"
+    result: passed
+    evidence: "Tier 0 now lists 'AGENTS.md — Codex / generic coding agent boot rules' and 'CLAUDE.md — Claude Code / MiMo boot rules' with explicit per-tool ownership. Per-task execution rule step 1 updated to 'Codex → AGENTS.md; Claude Code → CLAUDE.md'. v1.0.11 Note updated to 'tool-appropriate boot file (AGENTS.md or CLAUDE.md)'."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-4: Uncompleted task prompts (P0-SPIKE-001/002/003/007) Required context changed to tool-specific"
+    result: passed
+    evidence: "Select-String on P0-SPIKE-001/002/003/007 matched 'Your tool's boot file' in each file. Original two-line AGENTS.md + CLAUDE.md entries replaced with single tool-specific line."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-5: FIRST_BATCH_TASKS.md / README_FOR_CODEX.md use tool-specific wording"
+    result: passed
+    evidence: "FIRST_BATCH_TASKS.md step 1 now reads 'Codex reads AGENTS.md; Claude Code reads CLAUDE.md'. README_FOR_CODEX.md steps 1-2 merged into single tool-specific step with step numbers renumbered 1-7."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-6: MANIFEST.md includes P0-RULES-001.md"
+    result: passed
+    evidence: "MANIFEST.md updated with '- docs/phase0/tasks/P0-RULES-001.md' entry"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "AC-7: Task Record generated and YAML valid"
+    result: passed
+    evidence: "python -c 'import yaml; yaml.safe_load(open(...))' completed without exception"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+failure_examples_tested:
+  - example: "CLAUDE.md references AGENTS.md (cross-read)"
+    result: triggered
+    evidence: "Original CLAUDE.md line 6 '- General hard rules: AGENTS.md' identified and removed"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - example: "Template line 17 bundles both tools into single cross-read instruction"
+    result: triggered
+    evidence: "Original line 17 '优先读取紧凑根约束 AGENTS.md；Claude Code 还应读取紧凑 CLAUDE.md' identified and split into tool-specific lines"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+step_verification_points:
+  - step: "S1 — Create task prompt P0-RULES-001.md"
+    result: passed
+    command: "none (file creation)"
+    evidence: "docs/phase0/tasks/P0-RULES-001.md created with out-of-band notice, acceptance criteria, touched_paths, forbidden_paths"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S2 — Remove AGENTS.md reference from CLAUDE.md"
+    result: passed
+    command: "Select-String -Path CLAUDE.md -Pattern 'AGENTS\\.md'"
+    evidence: "No output — reference removed"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S3 — Split template line 17 into tool-specific lines"
+    result: passed
+    command: "Select-String -Path docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md -Pattern '(?=.*Claude Code)(?=.*AGENTS\\.md)'"
+    evidence: "No output — no line contains both Claude Code and AGENTS.md"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S4 — Update CONTEXT_LOADING_STRATEGY.md Tier 0"
+    result: passed
+    command: "Select-String -Path docs/phase0/CONTEXT_LOADING_STRATEGY.md -Pattern 'Codex.*AGENTS|Claude Code.*CLAUDE'"
+    evidence: "Matches found in Tier 0, per-task execution rule, and v1.0.11 Note — tool-specific ownership established"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S5 — Update FIRST_BATCH_TASKS.md and README_FOR_CODEX.md"
+    result: passed
+    command: "Select-String -Path docs/phase0/FIRST_BATCH_TASKS.md -Pattern 'Codex reads.*AGENTS|Claude Code reads.*CLAUDE'"
+    evidence: "Tool-specific wording present in both files"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S6 — Update 4 uncompleted task prompts"
+    result: passed
+    command: "Select-String -Path docs/phase0/tasks/P0-SPIKE-001.md,docs/phase0/tasks/P0-SPIKE-002.md,docs/phase0/tasks/P0-SPIKE-003.md,docs/phase0/tasks/P0-SPIKE-007.md -Pattern \"Your tool's boot file\""
+    evidence: "Each file matched 1 line"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S7 — Update MANIFEST.md"
+    result: passed
+    command: "Select-String -Path MANIFEST.md -Pattern 'P0-RULES-001'"
+    evidence: "Entry present"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S8 — Generate Task Record and stage all files"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "git diff --cached --name-only output: CLAUDE.md, MANIFEST.md, docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md, docs/phase0/CONTEXT_LOADING_STRATEGY.md, docs/phase0/FIRST_BATCH_TASKS.md, docs/phase0/README_FOR_CODEX.md, docs/phase0/task_logs/P0-RULES-001_20260511_080813_passed.yaml, docs/phase0/tasks/P0-RULES-001.md, docs/phase0/tasks/P0-SPIKE-001.md, docs/phase0/tasks/P0-SPIKE-002.md, docs/phase0/tasks/P0-SPIKE-003.md, docs/phase0/tasks/P0-SPIKE-007.md — 12 files total, matches changed_files"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+changed_files:
+  - CLAUDE.md
+  - MANIFEST.md
+  - docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md
+  - docs/phase0/CONTEXT_LOADING_STRATEGY.md
+  - docs/phase0/FIRST_BATCH_TASKS.md
+  - docs/phase0/README_FOR_CODEX.md
+  - docs/phase0/task_logs/P0-RULES-001_20260511_080813_passed.yaml
+  - docs/phase0/tasks/P0-RULES-001.md
+  - docs/phase0/tasks/P0-SPIKE-001.md
+  - docs/phase0/tasks/P0-SPIKE-002.md
+  - docs/phase0/tasks/P0-SPIKE-003.md
+  - docs/phase0/tasks/P0-SPIKE-007.md
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "Select-String -Path CLAUDE.md -Pattern 'AGENTS\\.md'"
+    result: passed
+    output_snippet: "No output — reference removed"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "Select-String -Path AGENTS.md -Pattern 'CLAUDE\\.md'"
+    result: passed
+    output_snippet: "No output — no reverse cross-read exists"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "Select-String -Path docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md -Pattern '(?=.*Claude Code)(?=.*AGENTS\\.md)'"
+    result: passed
+    output_snippet: "No output — no line contains both"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "Select-String -Path docs/phase0/tasks/P0-SPIKE-001.md,docs/phase0/tasks/P0-SPIKE-002.md,docs/phase0/tasks/P0-SPIKE-003.md,docs/phase0/tasks/P0-SPIKE-007.md -Pattern \"Your tool's boot file\""
+    result: passed
+    output_snippet: "4 matches, one per file"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "Select-String -Path docs/phase0/tasks/P0-PREP-001.md -Pattern 'AGENTS\\.md'"
+    result: passed
+    output_snippet: "Match found — completed task prompt unchanged"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "Test-Path docs/phase0/tasks/P0-RULES-001.md"
+    result: passed
+    output_snippet: "True"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "python -c \"import yaml; yaml.safe_load(open('docs/phase0/task_logs/P0-RULES-001_20260511_080813_passed.yaml'))\""
+    result: passed
+    output_snippet: "No exception"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "12 files (11 source + Task Record) — matches changed_files"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "12 files changed, 446 insertions(+), 24 deletions(-)"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation-only task; no app/ modules created or modified"
+  not_applicable_reason: "Documentation-only task modifying boot files, templates, and task prompts; no app/ modules touched"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+security_scan_result:
+  result: passed
+  evidence: "No plaintext secrets, credentials, or sensitive values introduced in any modified file"
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no test code created or modified"
+  not_applicable_reason: "Documentation-only task; no test files involved"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "No CI job configured for Phase 0 documentation tasks"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "Phase 0 documentation tasks run locally, not in CI"
+
+review:
+  mode: self_check
+  reviewed_by: Claude Code
+  reviewed_at: "2026-05-11T08:08:13+08:00"
+  notes: >
+    All 7 acceptance criteria passed. Cross-read references removed from CLAUDE.md,
+    template, context loading strategy, entry guides, and future task prompts.
+    Completed task prompts (P0-PREP-001/002/003, P0-SPIKE-004/005/006) left unchanged.
+    AGENTS.md and docs/blueprint/ not modified. No reverse cross-read introduced.
+
+remaining_risks: []
+
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: not_applicable
+package_confirmation: "No package artifact was generated for this out-of-band rules maintenance task."
+package_scope: "none"
+package_evidence: "P0-RULES-001 only updates rule-loading documentation, future task prompts, MANIFEST, and Task Record; no package artifact was requested or created."
+not_applicable_reason: "P0-RULES-001 is a documentation-only rules maintenance task; no package artifact was generated"
+not_applicable_scope: "current_phase_only"
+blocked_by_task_id: "none"
+activation_task_id: "none"
+expiry_condition: "none"

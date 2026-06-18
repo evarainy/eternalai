@@ -1,0 +1,59 @@
+task_id: "P0-DOMAIN-008c"
+title: "Mock U8 Adapter"
+timestamp: "20260604_143659"
+status: "passed"
+branch: "phase0/P0-DOMAIN-008c"
+commit_sha: "bebc30b8bdb33a07c87ba26b79e8774083f441da"
+depends_on_verified:
+  - task_id: "P0-DOMAIN-008a"
+    record: "docs/phase0/task_logs/P0-DOMAIN-008a_20260602_221527_passed.yaml"
+
+changed_files:
+  - app/execution_fabric/mock_adapters/u8/mock_u8_adapter.py
+  - tests/execution_fabric/mock_adapters/u8/test_mock_u8_adapter.py
+
+test_count: 21
+test_command: "uv run pytest tests/execution_fabric/mock_adapters/u8/ -v"
+test_result: "21 passed"
+
+validation_evidence:
+  pytest_targeted: "21 passed in 0.21s"
+  weak_test_checker: "passed"
+  ruff: "no errors"
+  mypy: "no errors"
+  architecture_tests: "passed"
+  dep_check: "passed"
+  pytest_full: "skipped - pre-existing DATABASE_URL requirement in DB tests unrelated to this task"
+  secret_scan: "no hits"
+
+plan_review:
+  verdict: "REQUEST_CHANGES (3 test-design findings baked into exec prompt)"
+  reviewer: "opus-contract-reviewer"
+  findings_baked:
+    - "P1: execute() with invalid mock_document_status must return error result (swallow-to-error path)"
+    - "P2: MockU8DocumentQueryData and MockU8BalanceQueryData both need extra=forbid + rejection tests"
+    - "P3: currency open-str lock test required"
+
+diff_review:
+  verdict: "APPROVE_FOR_COMMIT"
+  reviewer: "opus-contract-reviewer"
+  findings: "Advisory only - unmapped mock_error_mode yields error_code=None (consistent with 008b baseline, not a blocker)"
+
+constraints_confirmed:
+  - "AdapterPort contract satisfied - MockU8Adapter.execute is async and returns AdapterResult"
+  - "All 6 mock_error_mode values map to exact ErrorCode from MOCK_ERROR_MODE_TO_ERROR_CODE"
+  - "No real U8 system calls; no HTTP client imports"
+  - "MockU8DocumentQueryData and MockU8BalanceQueryData both carry extra=forbid"
+  - "document_status Literal[draft,posted,voided] validated by Pydantic model"
+  - "account_set_id routing reflected in both document and balance query responses"
+  - "No plaintext credentials in any fixture or test"
+  - "No new Python dependencies. No __init__.py files"
+
+judgment: >
+  MockU8Adapter follows the established MockOAAdapter pattern and extends it with two
+  Pydantic payload models (MockU8DocumentQueryData, MockU8BalanceQueryData) that enforce
+  Literal document_status and extra=forbid at the model layer. The three Opus plan-review
+  findings (P1 swallow-to-error path, P2 payload model extra-forbid tests, P3 currency
+  open-str lock) were all baked into the exec prompt and confirmed present in the diff
+  by the Opus diff reviewer. The 21-test suite covers all 11 acceptance criteria including
+  adversarial cases.

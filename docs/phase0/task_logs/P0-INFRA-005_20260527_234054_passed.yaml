@@ -1,0 +1,309 @@
+task_id: P0-INFRA-005
+task_type: infrastructure
+result: passed
+started_at: "2026-05-27T23:40:00+09:00"
+completed_at: "2026-05-27T23:40:54+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-27T22:21:47+09:00"
+plan_approved_via: Claude Code session
+plan_approval_corrections: "C1: async test strategy check (anyio marker used); C2: __init__.py survey (new dirs created); C3: get_result returns None for failed; C4: duplicate task_id raises ValueError; C5: Protocol without runtime_checkable; C6: app/infra/ existence verified as new"
+summary: >
+  JobQueuePort Protocol baseline and InMemoryJobQueue deterministic adapter
+  implemented. TDD red-green cycle verified. Redis/ARQ remains candidate-only;
+  no new dependencies added. All 13 tests pass, ruff clean, mypy clean,
+  dependency check clean, no forbidden imports, no weak tests.
+
+acceptance_criteria_result:
+  - criterion: "JobQueuePort interface defined"
+    result: passed
+    evidence: "app/ports/job_queue.py defines JobQueuePort(Protocol) with enqueue, get_status, get_result async methods and JobStatus Literal type. mypy passes with 0 errors."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "In-memory/mock implementation satisfies JobQueuePort without new dependencies"
+    result: passed
+    evidence: "app/infra/job_queue/in_memory.py implements InMemoryJobQueue with constructor-injected handlers, deterministic inline execution, uuid job IDs, duplicate ValueError. Dependency check: 'Dependency check passed. Dependencies checked: 49'. No new deps in pyproject.toml."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "Minimal task enqueue, execute, and failure tests pass"
+    result: passed
+    evidence: "13/13 tests passed: 5 protocol contract tests + 8 behavior tests (async handler, sync handler, async/sync exception, missing handler, not_found status, not_found result, duplicate task_id ValueError)."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - criterion: "Redis/ARQ remains candidate-only: no arq/redis imports and no dependency or lockfile changes"
+    result: passed
+    evidence: "Forbidden import scan: no_redis_arq_imports. Negative validation: _scratch/P0-INFRA-005_forbidden_import_check.py:1:import arq detected, file deleted. Re-scan after cleanup: no_redis_arq_imports. No pyproject.toml or uv.lock changes staged."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+failure_examples_tested:
+  - example: "JobQueuePort contract or enqueue-dequeue test fails before implementation"
+    result: triggered
+    evidence: "Red phase: ImportError — ModuleNotFoundError: No module named 'app.ports.job_queue'. Exit code non-zero. Expected TDD red-phase evidence."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - example: "P0-SPIKE-004 evidence missing or failed"
+    result: not_applicable
+    evidence: "P0-SPIKE-004 task record: result=passed. ADR-P0-SPIKE-004: status=accepted. INDEX match confirmed."
+    not_applicable_reason: "Spike evidence gate verified: P0-SPIKE-004 passed, ADR accepted"
+    not_applicable_scope: "current_phase_only"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - example: "Task accidentally introduces Redis/ARQ dependency or import"
+    result: triggered
+    evidence: "Negative validation created _scratch/P0-INFRA-005_forbidden_import_check.py with 'import arq'. Scan detected it. File removed. Re-scan clean."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+step_verification_points:
+  - step: "S1 — Verify P0-SPIKE-004 evidence gate"
+    result: passed
+    command: "Select-String -Path docs/phase0/task_logs/INDEX.md -Pattern 'P0-SPIKE-004.*passed'; Select-String -Path docs/phase0/task_logs/P0-SPIKE-004_20260510_130544_passed.yaml -Pattern 'result:\\s*passed'; Select-String -Path docs/adr/phase0/ADR-P0-SPIKE-004-redis-arq.md -Pattern 'status:\\s*accepted'"
+    evidence: "INDEX: P0-SPIKE-004 | 2026-05-10 | passed. Task record: result: passed (multiple matches). ADR: status: accepted."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S2 — Survey package layout"
+    result: passed
+    command: "Get-ChildItem app; Get-ChildItem tests; Test-Path app/ports; Test-Path app/infra; Test-Path tests/infra"
+    evidence: "app/: __init__.py, main.py, api/, db/. tests/: test_health.py, db/. app/ports=False, app/infra=False, tests/infra=False. All three directories created as new."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S3 — TDD red phase"
+    result: passed
+    command: "uv run pytest tests/infra/job_queue/ -x"
+    evidence: "1 error collected. ModuleNotFoundError: No module named 'app.ports.job_queue'. Exit code non-zero. TDD red-phase confirmed."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S4 — TDD green phase"
+    result: passed
+    command: "uv run pytest tests/infra/job_queue/ -v"
+    evidence: "13 passed in 0.08s. All 13 tests green after implementation."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S5 — Ruff lint check"
+    result: passed
+    command: "uv run ruff check app/ports/job_queue.py app/infra/job_queue tests/infra/job_queue"
+    evidence: "All checks passed!"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S6 — Mypy type check"
+    result: passed
+    command: "uv run mypy app"
+    evidence: "Success: no issues found in 12 source files"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S7 — Dependency check"
+    result: passed
+    command: "uv run python scripts/check_dependencies.py"
+    evidence: "Dependency check passed. Deterministic allowlist source: docs/dev/dependency_policy.md. Manifests scanned: 7. Dependencies checked: 49."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S8 — Forbidden import scan"
+    result: passed
+    command: "$files = Get-ChildItem -Path app,tests -Recurse -File -Filter *.py; $hits = $files | Select-String -SimpleMatch -Pattern 'import arq','from arq','import redis','from redis','redis.asyncio'; if ($hits) { ... throw 'forbidden import found' } else { 'no_redis_arq_imports' }"
+    evidence: "no_redis_arq_imports"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S9 — Negative forbidden import validation"
+    result: passed
+    command: "Create _scratch/P0-INFRA-005_forbidden_import_check.py with 'import arq', scan, verify trigger, delete temp file"
+    evidence: "_scratch/P0-INFRA-005_forbidden_import_check.py:1:import arq -- scan triggered. File deleted. negative_import_scan_triggered_and_temp_removed."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S10 — Re-scan after cleanup"
+    result: passed
+    command: "$files = Get-ChildItem -Path app,tests -Recurse -File -Filter *.py; $hits = $files | Select-String -SimpleMatch -Pattern 'import arq','from arq','import redis','from redis','redis.asyncio'"
+    evidence: "no_redis_arq_imports"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S11 — Weak test scan"
+    result: passed
+    command: "$testFiles = Get-ChildItem -Path tests/infra/job_queue -Recurse -File -Filter *.py; $weak = $testFiles | Select-String -Pattern 'assert\\s+True|^\\s*pass\\s*$|pytest\\.mark\\.skip|pytest\\.skip\\('"
+    evidence: "no_weak_tests"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - step: "S12 — Final staged-file verification"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "5 files staged: app/infra/job_queue/__init__.py, app/infra/job_queue/in_memory.py, app/ports/job_queue.py, docs/phase0/task_logs/P0-INFRA-005_20260527_234054_passed.yaml, tests/infra/job_queue/test_in_memory_job_queue.py"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+changed_files:
+  - app/infra/job_queue/__init__.py
+  - app/infra/job_queue/in_memory.py
+  - app/ports/job_queue.py
+  - docs/phase0/task_logs/P0-INFRA-005_20260527_234054_passed.yaml
+  - tests/infra/job_queue/test_in_memory_job_queue.py
+
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "uv run pytest tests/infra/job_queue/"
+    result: passed
+    output_snippet: "13 passed in 0.08s"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "uv run ruff check app/ports/job_queue.py app/infra/job_queue tests/infra/job_queue"
+    result: passed
+    output_snippet: "All checks passed!"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "uv run mypy app"
+    result: passed
+    output_snippet: "Success: no issues found in 12 source files"
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed. Manifests scanned: 7. Dependencies checked: 49."
+    not_applicable_reason: "none"
+    not_applicable_scope: "none"
+    blocked_by_task_id: "none"
+    activation_task_id: "none"
+    expiry_condition: "none"
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: passed
+  evidence: "Forbidden import scan: no_redis_arq_imports in app/ and tests/. Negative validation confirmed scan works. Re-scan after cleanup: no_redis_arq_imports."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+security_scan_result:
+  result: passed
+  evidence: "No secrets, credentials, or sensitive values in new files. No external network calls. No hardcoded keys or tokens."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+weak_test_scan_result:
+  result: passed
+  evidence: "no_weak_tests — no assert True, empty pass, pytest.mark.skip, or pytest.skip() found in tests/infra/job_queue/."
+  not_applicable_reason: "none"
+  not_applicable_scope: "none"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "No CI job configured for Phase 0 infrastructure tasks"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "none"
+  evidence: "Phase 0 infrastructure tasks run locally, not in CI"
+
+review:
+  mode: codex_review
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: "Repair round 1 applied: removed task_type/payload from _JobRecord (D.12), fixed plan_approved_at timestamp and added C1-C6 record, corrected changed_files to match staged files (removed INDEX.md), fixed tests_run red/green phase evidence."
+
+remaining_risks:
+  - "InMemoryJobQueue is not thread-safe — acceptable for Phase 0 single-threaded baseline"
+  - "No persistence — jobs lost on process restart, by design for Phase 0"
+
+rollback_or_failure_record: ""
+git_commit_sha: ""
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+
+package_confirmation_status: not_applicable
+package_confirmation: ""
+package_scope: "No package artifact required for P0-INFRA-005"
+package_evidence: "Validation commands and staged diff recorded in this Task Record."

@@ -1,0 +1,156 @@
+task_id: P0-DOMAIN-010a
+task_type: interface_contract
+result: passed
+started_at: "2026-06-03T23:16:02+09:00"
+completed_at: "2026-06-03T23:16:02+09:00"
+plan_approved_by: human
+plan_approved_at: "2026-06-03T23:16:02+09:00"
+plan_approved_via: "Claude Code orchestrator session (run 5 parallel lanes)"
+summary: >
+  Added LLMProviderPort interface contract (app/ports/llm_provider.py) and
+  StructuredOutputPort interface contract (app/ports/structured_output.py) with
+  56 contract tests (tests/ports/test_llm_structured_output_ports.py).
+  LLMProviderPort defines complete and chat methods (satisfying complete/chat/equivalent
+  AC). StructuredOutputPort defines parse_to_schema (raw_response str + schema_type
+  type[BaseModel]). Return structures LLMCompletionResponse and StructuredOutputResult
+  include error_code/error_message and trace_metadata fields. No concrete SDK binding
+  (no openai/instructor/PydanticAI/DashScope/vLLM import). Phase 1 baseline preserved:
+  raw OpenAI SDK + json_object + Pydantic model_validate + Literal enum validation.
+  LLMProviderErrorCode is a new type (separate domain from ErrorCode; LLM-specific
+  error codes: timeout, rate_limited, context_length_exceeded, provider_error,
+  invalid_request, model_not_available).
+acceptance_criteria_result:
+  - criterion: "LLMProviderPort supports complete, chat, or equivalent abstraction"
+    result: passed
+    evidence: "test_llm_provider_port_supports_complete_or_chat_abstraction and test_llm_provider_port_defines_complete_and_chat passed; both complete and chat in __protocol_attrs__"
+  - criterion: "StructuredOutputPort supports parse_to_schema"
+    result: passed
+    evidence: "test_structured_output_port_defines_parse_to_schema passed; parse_to_schema in __protocol_attrs__"
+  - criterion: "Return structures support error type and trace metadata"
+    result: passed
+    evidence: "LLMCompletionResponse has error_code + error_message + trace_metadata fields; StructuredOutputResult has error + trace_metadata fields; all confirmed by model field tests"
+  - criterion: "No concrete provider SDK binding is introduced"
+    result: passed
+    evidence: "test_phase1_baseline_preserved_no_sdk_imports_in_llm_provider and test_phase1_baseline_preserved_no_sdk_imports_in_structured_output passed; source scan for openai/instructor/pydantic_ai/dashscope/vllm returned PROVIDER CHECK: PASSED"
+  - criterion: "No dependency manifest or lockfile changes are made"
+    result: passed
+    evidence: "git diff --cached --name-only shows only 3 port/test files; MANIFEST CHECK: PASSED"
+  - criterion: "Phase 1 structured-output baseline is preserved"
+    result: passed
+    evidence: "test_structured_output_port_supports_pydantic_model_validate_pattern passed: json.loads + schema_type.model_validate + isinstance(_TestCapabilityRef) verified"
+failure_examples_tested:
+  - example: "openai, instructor, pydantic_ai, DashScope, or vLLM SDK implementation is imported in app/ports"
+    result: not_triggered
+    evidence: "Source scan for forbidden provider imports returned PROVIDER CHECK: PASSED for both port files"
+  - example: "StructuredOutputPort bypasses Pydantic model_validate and Literal enum baseline"
+    result: not_triggered
+    evidence: "parse_to_schema takes raw_response + schema_type; baseline narrative test uses json.loads + model_validate"
+  - example: "Dependency manifests or lockfiles are changed"
+    result: not_triggered
+    evidence: "git diff --cached --name-only shows no pyproject.toml, uv.lock, package.json, pnpm-lock.yaml; MANIFEST CHECK: PASSED"
+step_verification_points:
+  - step: "Preflight branch and clean tree"
+    result: passed
+    command: "git branch --show-current; git status --short"
+    evidence: "phase0/P0-DOMAIN-010a; clean tree"
+  - step: "Verify dependency evidence"
+    result: passed
+    command: "Get-ChildItem docs/phase0/task_logs/P0-BATCH3-PROMPTS-001_*_passed.yaml; Get-ChildItem docs/phase0/task_logs/P0-SPIKE-001_*_passed.yaml; Get-ChildItem docs/phase0/task_logs/P0-SPIKE-002_*_failed.yaml; Get-ChildItem docs/phase0/task_logs/P0-SPIKE-007_*_failed.yaml"
+    evidence: "P0-BATCH3-PROMPTS-001_20260601_014914_passed.yaml, P0-SPIKE-001_20260512_passed.yaml, P0-SPIKE-002_20260512_failed.yaml, P0-SPIKE-007_20260513_failed.yaml all present"
+  - step: "Create LLM/structured-output port tests first (TDD red phase)"
+    result: passed
+    command: "uv run pytest tests/ports/test_llm_structured_output_ports.py"
+    evidence: "exit 1 — ModuleNotFoundError: No module named 'app.ports.llm_provider' (expected non-zero)"
+  - step: "Implement abstract LLMProviderPort and StructuredOutputPort contracts"
+    result: passed
+    command: "Test-Path app/ports/llm_provider.py; Test-Path app/ports/structured_output.py"
+    evidence: "True, True — both port files created"
+  - step: "Run contract tests (TDD green phase)"
+    result: passed
+    command: "uv run pytest tests/ports/test_llm_structured_output_ports.py"
+    evidence: "exit 0 — 56 passed in 0.38s (54 original + 2 added during Stage 3 fix)"
+  - step: "Run lint/type checks"
+    result: passed
+    command: "uv run ruff check app/ports/llm_provider.py app/ports/structured_output.py tests/ports/test_llm_structured_output_ports.py; uv run mypy app/ports/llm_provider.py app/ports/structured_output.py"
+    evidence: "ruff: All checks passed! (exit 0); mypy: Success: no issues found in 2 source files (exit 0)"
+  - step: "Verify no concrete provider imports"
+    result: passed
+    command: "Select-String -Path app/ports/llm_provider.py,app/ports/structured_output.py -Pattern '^import openai','^from openai','instructor','pydantic_ai','dashscope','vllm'"
+    evidence: "PROVIDER CHECK: PASSED"
+  - step: "Verify no dependency manifests changed"
+    result: passed
+    command: "git diff --cached --name-only | Select-String -Pattern '(^|/)package.json$','uv.lock','pyproject.toml','pnpm-lock'"
+    evidence: "MANIFEST CHECK: PASSED"
+  - step: "Verify forbidden paths not staged"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "Only app/ports/llm_provider.py, app/ports/structured_output.py, tests/ports/test_llm_structured_output_ports.py — no app/runtime/, app/infra/llm/, or manifest files"
+changed_files:
+  - app/ports/llm_provider.py
+  - app/ports/structured_output.py
+  - tests/ports/test_llm_structured_output_ports.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/ports/test_llm_structured_output_ports.py"
+    result: passed
+    output_snippet: "56 passed in 0.38s"
+  - command: "uv run ruff check app/ports/llm_provider.py app/ports/structured_output.py tests/ports/test_llm_structured_output_ports.py"
+    result: passed
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/ports/llm_provider.py app/ports/structured_output.py"
+    result: passed
+    output_snippet: "Success: no issues found in 2 source files"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "app/ports/llm_provider.py and app/ports/structured_output.py import only from typing and pydantic; no infra, no external SDK, no cross-boundary import"
+security_scan_result:
+  result: passed
+  evidence: "No credential-like values in staged diff. LLMProviderErrorCode literal values (rate_limited etc.) and test model names (qwen-72b) are not credentials."
+weak_test_scan_result:
+  result: passed
+  evidence: >
+    56 tests cover all contract aspects. Two tests added in Stage 3 fix round:
+    test_llm_completion_response_content_accepts_arbitrary_string and
+    test_structured_output_result_raw_response_accepts_arbitrary_string.
+    All open str fields have explicit arbitrary-value lock tests.
+ci_evidence:
+  result: not_applicable
+  not_applicable_reason: "CI runs post-merge; this record covers pre-merge validation"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: "after merge to phase0/main and CI completes"
+  evidence: ""
+review:
+  mode: codex_review
+  reviewed_by: "Codex self-review (Stage 3, after fix) + opus-contract-reviewer subagent (Stage 3b)"
+  reviewed_at: "2026-06-03"
+  notes: >
+    Plan review (REQUEST_CHANGES): Finding 1 P2 TEST_DESIGN — missing arbitrary-str lock
+    tests for LLMCompletionResponse.error_message/model_used, StructuredOutputError.error_message/
+    raw_response; baked into exec prompt. Finding 2 P3 — StructuredOutputResult.parsed Any
+    openness not locked; test_structured_output_result_parsed_accepts_non_model_value added.
+    Finding 3 P3 — response_format param hint not in signature tests; test_complete/chat_signature
+    extended. Finding 4 informational — LLMProviderErrorCode vs ErrorCode separation is correct.
+    Stage 3 fix: added test_llm_completion_response_content_accepts_arbitrary_string and
+    test_structured_output_result_raw_response_accepts_arbitrary_string (Codex self-review found gaps).
+    Diff review (APPROVE_FOR_COMMIT): P3 hygiene — sonnet_reconciliation PLACEHOLDER remained
+    in packet body; reconciliation was confirmed out-of-band. Baseline preservation confirmed.
+remaining_risks:
+  - "LLMProviderPort.complete and .chat have identical signatures — a future implementer may inadvertently implement one using the other. A type-checking integration test would catch this but is out of Phase 0 interface-contract scope."
+rollback_or_failure_record: ""
+git_commit_sha: ""
+package_confirmation_status: not_applicable
+package_confirmation: "not applicable for interface-contract tasks in this pipeline"
+package_scope: ""
+package_evidence: ""
+structured_output_baseline_applicability: >
+  applicable_as_contract_boundary — this task defines the structured-output port boundary
+  but does not implement an SDK/provider binding. Phase 1 baseline preserved: raw OpenAI SDK,
+  response_format json_object, Pydantic model_validate, Literal enum validation.
+  Instructor and PydanticAI are not adopted as the default wrapper.

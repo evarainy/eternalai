@@ -1,0 +1,20 @@
+# spike-only: This Docker Compose file is for P0-SPIKE-004 evaluation only.
+# It is NOT a production deployment configuration.
+# Phase 1 must design Redis auth, ACL, persistence (RDB/AOF), backup,
+# monitoring, and resource limits separately if Redis + ARQ is adopted.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-spike-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis-spike-data:

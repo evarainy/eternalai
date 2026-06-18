@@ -1,0 +1,56 @@
+task_id: "P0-DOMAIN-008d"
+title: "Mock Hikvision iVMS Adapter"
+timestamp: "20260604_143635"
+status: "passed"
+branch: "phase0/P0-DOMAIN-008d"
+commit_sha: "1fdb99255a2feb07b0aa66de1e6be9a5e045583e"
+depends_on_verified:
+  - task_id: "P0-DOMAIN-008a"
+    record: "docs/phase0/task_logs/P0-DOMAIN-008a_20260602_221527_passed.yaml"
+
+changed_files:
+  - app/execution_fabric/mock_adapters/hikvision_ivms/mock_hikvision_ivms_adapter.py
+  - tests/execution_fabric/mock_adapters/hikvision_ivms/test_mock_hikvision_ivms_adapter.py
+
+test_count: 17
+test_command: "uv run pytest tests/execution_fabric/mock_adapters/hikvision_ivms/ -v"
+test_result: "17 passed"
+
+validation_evidence:
+  pytest_targeted: "17 passed in 0.25s"
+  weak_test_checker: "passed"
+  ruff: "no errors"
+  mypy: "no errors"
+  architecture_tests: "passed"
+  dep_check: "passed"
+  pytest_full: "skipped - pre-existing DATABASE_URL requirement in DB tests unrelated to this task"
+  secret_scan: "no hits"
+
+plan_review:
+  verdict: "APPROVE_FOR_EXEC"
+  reviewer: "opus-contract-reviewer"
+  findings: "none"
+
+diff_review:
+  verdict: "APPROVE_FOR_COMMIT"
+  reviewer: "opus-contract-reviewer"
+  findings: "P3 advisory only - @pytest.mark.anyio has no backend wired (pre-existing repo-wide condition from 008b baseline). P3 advisory - unmapped mock_error_mode yields error_code=None (consistent with baseline)."
+
+constraints_confirmed:
+  - "AdapterPort contract satisfied - MockHikvisionIVMSAdapter.execute is async and returns AdapterResult"
+  - "All 6 mock_error_mode values map to exact ErrorCode from MOCK_ERROR_MODE_TO_ERROR_CODE"
+  - "video_frame_included=False is a hardcoded literal - never read from arguments (LLM context safety constraint)"
+  - "Adversarial test confirms video_frame_included=False even when caller passes truthy video flags"
+  - "Alarm summary excludes all video/heartbeat data keys"
+  - "device_domain_id routing reflected in both device-status and alarm-summary responses"
+  - "No real Hikvision system calls; no HTTP client imports"
+  - "No plaintext credentials in any fixture or test"
+  - "No new Python dependencies. No __init__.py files"
+
+judgment: >
+  MockHikvisionIVMSAdapter satisfies AdapterPort and enforces the critical LLM-context
+  safety constraint: video_frame_included=False is hardcoded as a literal and never
+  forwarded from arguments. The adversarial test (passing video_frame_included=True in
+  arguments still gets False in the response) provides the strongest possible structural
+  guarantee. The 17-test suite covers all 12 acceptance criteria including the alarm-summary
+  exclusion check and the open-str lock for last_seen_at.

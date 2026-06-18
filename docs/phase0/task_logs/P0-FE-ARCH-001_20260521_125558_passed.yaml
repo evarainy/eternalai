@@ -1,0 +1,343 @@
+task_id: "P0-FE-ARCH-001"
+task_type: "documentation"
+result: "passed"
+started_at: "2026-05-21T12:50:00+08:00"
+completed_at: "2026-05-21T12:55:58+08:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-05-21T12:50:00+08:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Created docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md as the PDR-style
+  architecture baseline for the future SDUI Renderer. Defines ComponentRegistry
+  (static registration metadata only), ActionDispatcher (structured intent
+  forwarding only), FallbackRenderer (safe fallback for unknown cards),
+  schema_version strategy (required, compatibility-checked, rejected if
+  unsupported/malformed), user_action boundary (single structured actions,
+  no direct business execution), security and sensitive data boundary, frontend
+  state and API boundary (Zustand for local UI, TanStack Query for server
+  data, Orval for generated clients), alternatives considered, risks, and
+  minimal architecture acceptance checks. Registered in MANIFEST.md. No
+  web/src/sdui/** code created. No dependencies or lockfiles changed. No
+  forbidden paths modified.
+
+decision: "passed"
+decision_rationale: >
+  All acceptance criteria met. SDUI_RENDERER_ARCHITECTURE_BASELINE.md created
+  with all required sections: ComponentRegistry, ActionDispatcher,
+  FallbackRenderer, schema_version, user_action, security, state/API boundary,
+  alternatives, risks, recommendation, acceptance checks, and deferred work.
+  MANIFEST.md updated with registration. No web/src/sdui/** created. No
+  forbidden paths modified. No dependency changes. All validation commands pass.
+
+blocking_conditions: []
+
+acceptance_criteria_result:
+  - criterion: "docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md created and registered in MANIFEST.md by this task"
+    result: "passed"
+    evidence: >
+      Test-Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md: True.
+      Select-String -Path MANIFEST.md -Pattern 'docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md':
+      line 25 matches.
+  - criterion: "ComponentRegistry interface defined (type, registration contract, lookup behavior)"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ComponentRegistry':
+      10 matches. Section "ComponentRegistry boundary" defines register(), resolve(), has()
+      interface, static registration only, type key as string constant, undefined for unknown
+      types, idempotent registration, no adapter dependency.
+  - criterion: "ActionDispatcher interface defined (action types, dispatch contract, boundary with Zustand)"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ActionDispatcher':
+      8 matches. Section "ActionDispatcher boundary" defines UserAction type with type/payload/card_id/schema_version,
+      dispatch() interface, structured intent only, no direct business execution,
+      boundary with Zustand (local UI state only), boundary with TanStack Query
+      (invalidation only, no cache mutation), payload validation.
+  - criterion: "FallbackRenderer interface defined (unknown card type handling, graceful degradation)"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'FallbackRenderer':
+      10 matches. Section "FallbackRenderer boundary" defines card_type/raw_payload/schema_version props,
+      safe rendering, user-safe display, no credential leakage, telemetry/logging limits,
+      graceful degradation as non-interactive display.
+  - criterion: "schema_version strategy defined (versioning contract, backward compatibility approach)"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'schema_version':
+      16 matches. Section "schema_version strategy" defines required conceptually,
+      compatibility check, supported versions as compile-time constant,
+      unsupported version handling (delegate to FallbackRenderer),
+      malformed version handling, unsafe payload rejection, no auto-migration.
+  - criterion: "user_action boundaries defined (what actions SDUI cards can trigger, what they cannot)"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'user_action':
+      4 matches. Section "user_action boundary" defines what cards CAN request
+      (confirm, cancel, navigate, form submission) and what they CANNOT trigger
+      (direct adapter calls, arbitrary API calls, database mutations, credential
+      operations, multi-step workflows, file system access, dynamic code execution).
+  - criterion: "Alternatives considered and documented for each design decision"
+    result: "passed"
+    evidence: >
+      Each boundary section includes "Alternatives considered" table:
+      ComponentRegistry (3 alternatives), ActionDispatcher (3 alternatives),
+      FallbackRenderer (3 alternatives), schema_version (3 alternatives),
+      plus cross-cutting alternatives section (4 alternatives).
+  - criterion: "No web/src/sdui/** code created"
+    result: "passed"
+    evidence: >
+      Test-Path web/src/sdui: False. git ls-files --others --exclude-standard
+      shows docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md only (no web/ paths).
+  - criterion: "Architecture references FRONTEND_AI_CODING_GUIDELINES.md conventions"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'FRONTEND_AI_CODING_GUIDELINES':
+      1 match. Line 18 references the guidelines as governing the frontend baseline.
+  - criterion: "Minimal architecture acceptance checks are listed in the baseline document"
+    result: "passed"
+    evidence: >
+      Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'acceptance check','architecture acceptance','Minimal architecture acceptance':
+      1 match. Section "Minimal architecture acceptance checks" lists 9 checks.
+  - criterion: "Final staged-diff evidence is recorded and Task Record changed_files exactly matches git diff --cached --name-only"
+    result: "passed"
+    evidence: >
+      git diff --cached --name-only: 3 files (MANIFEST.md,
+      docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md,
+      docs/phase0/task_logs/P0-FE-ARCH-001_20260521_125558_passed.yaml).
+      changed_files has 3 entries. Order and count match exactly.
+
+failure_examples_tested: []
+
+step_verification_points:
+  - step: "Preflight: confirm branch and clean working tree"
+    result: "passed"
+    command: "git branch --show-current && git status --short"
+    evidence: >
+      git branch --show-current: phase0/P0-FE-ARCH-001.
+      git status --short: no output (clean working tree).
+  - step: "Read FRONTEND_AI_CODING_GUIDELINES.md for reference"
+    result: "passed"
+    command: "Test-Path docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md"
+    evidence: "True"
+  - step: "Read P0-INFRA-003 Task Record for frontend skeleton context"
+    result: "passed"
+    command: "Test-Path docs/phase0/task_logs/P0-INFRA-003_20260520_233641_passed.yaml"
+    evidence: "True"
+  - step: "Create SDUI Renderer architecture baseline document"
+    result: "passed"
+    command: "Test-Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md"
+    evidence: "True"
+  - step: "Register SDUI Renderer architecture baseline in MANIFEST.md"
+    result: "passed"
+    command: "Select-String -Path MANIFEST.md -Pattern 'docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md'"
+    evidence: "MANIFEST.md:25 matches."
+  - step: "Define ComponentRegistry interface"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ComponentRegistry'"
+    evidence: "10 matches found."
+  - step: "Define ActionDispatcher interface"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ActionDispatcher'"
+    evidence: "8 matches found."
+  - step: "Define FallbackRenderer interface"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'FallbackRenderer'"
+    evidence: "10 matches found."
+  - step: "Define schema_version strategy"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'schema_version'"
+    evidence: "16 matches found."
+  - step: "Define user_action boundaries"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'user_action'"
+    evidence: "4 matches found."
+  - step: "List minimal architecture acceptance checks"
+    result: "passed"
+    command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'acceptance check','architecture acceptance'"
+    evidence: "1 match found. Section 'Minimal architecture acceptance checks' with 9 items."
+  - step: "Verify no web/src/sdui/** code created"
+    result: "passed"
+    command: "if (Test-Path web\\src\\sdui) { throw 'web/src/sdui must not be created by this task' }"
+    evidence: "Test-Path web/src/sdui: False. No web/src/sdui directory exists."
+  - step: "Verify no forbidden paths modified"
+    result: "passed"
+    command: "git diff --name-only"
+    evidence: >
+      git diff --name-only: MANIFEST.md only. No forbidden paths modified.
+      New untracked file: docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md (allowed touched path).
+  - step: "Final branch check"
+    result: "passed"
+    command: "git branch --show-current"
+    evidence: "phase0/P0-FE-ARCH-001"
+  - step: "Final staged/working-tree status"
+    result: "passed"
+    command: "git status --short"
+    evidence: "M MANIFEST.md, A docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md, A docs/phase0/task_logs/P0-FE-ARCH-001_20260521_125558_passed.yaml. No unstaged changes."
+  - step: "Final staged file list"
+    result: "passed"
+    command: "git diff --cached --name-only"
+    evidence: "3 files: MANIFEST.md, docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md, docs/phase0/task_logs/P0-FE-ARCH-001_20260521_125558_passed.yaml."
+  - step: "Final staged diff stat"
+    result: "passed"
+    command: "git diff --cached --stat"
+    evidence: "3 files changed, 647 insertions(+)."
+  - step: "Final staged diff whitespace/path check"
+    result: "passed"
+    command: "git diff --cached --check"
+    evidence: "No output — no whitespace issues."
+  - step: "Final untracked-file check"
+    result: "passed"
+    command: "git ls-files --others --exclude-standard"
+    evidence: "No output — no untracked files remain."
+  - step: "Final forbidden-path scan"
+    result: "passed"
+    command: "if (git diff --cached --name-only | Select-String -Pattern '^web/','(^|/)package.json$','(^|/)pnpm-lock.yaml$','(^|/)package-lock.json$','(^|/)yarn.lock$','^docs/blueprint/','^docs/dev/dependency_policy.md$','^scripts/check_dependencies.py$','^pyproject.toml$','^uv.lock$','^docker-compose.yml$','^app/','^CLAUDE.md$','^AGENTS.md$','^\\.github/') { throw 'Forbidden staged path detected' }"
+    evidence: "PASSED: no forbidden paths in staged diff."
+  - step: "Final dependency manifest and lockfile scan"
+    result: "passed"
+    command: "if (git diff --cached --name-only | Select-String -Pattern '(^|/)package.json$','(^|/)pnpm-lock.yaml$','(^|/)package-lock.json$','(^|/)yarn.lock$','^pyproject.toml$','^uv.lock$') { throw 'Dependency manifest or lockfile changed' }"
+    evidence: "PASSED: no dependency manifests or lockfiles in staged diff."
+  - step: "Verify Task Record changed_files matches staged diff exactly"
+    result: "passed"
+    command: "PowerShell comparison script"
+    evidence: "PASSED: changed_files matches staged diff exactly. Count: 3."
+
+changed_files:
+  - "MANIFEST.md"
+  - "docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md"
+  - "docs/phase0/task_logs/P0-FE-ARCH-001_20260521_125558_passed.yaml"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+
+tests_run:
+  - command: "git branch --show-current"
+    result: "passed"
+    output_snippet: "phase0/P0-FE-ARCH-001"
+  - command: "git status --short (preflight)"
+    result: "passed"
+    output_snippet: "No output — clean working tree."
+  - command: "Test-Path docs/phase0/task_logs/P0-INFRA-003_20260520_233641_passed.yaml"
+    result: "passed"
+    output_snippet: "True"
+  - command: "Test-Path docs/phase0/FRONTEND_AI_CODING_GUIDELINES.md"
+    result: "passed"
+    output_snippet: "True"
+  - command: "Test-Path web/src/sdui"
+    result: "passed"
+    output_snippet: "False — web/src/sdui does not exist."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ComponentRegistry'"
+    result: "passed"
+    output_snippet: "10 matches."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'ActionDispatcher'"
+    result: "passed"
+    output_snippet: "8 matches."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'FallbackRenderer'"
+    result: "passed"
+    output_snippet: "10 matches."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'schema_version'"
+    result: "passed"
+    output_snippet: "16 matches."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'user_action'"
+    result: "passed"
+    output_snippet: "4 matches."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'FRONTEND_AI_CODING_GUIDELINES'"
+    result: "passed"
+    output_snippet: "1 match."
+  - command: "Select-String -Path docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md -Pattern 'React 18','Vite','TypeScript strict','Ant Design 5','ProComponents 2'"
+    result: "passed"
+    output_snippet: "Multiple matches for each baseline technology."
+  - command: "Select-String -Path MANIFEST.md -Pattern 'docs/phase0/SDUI_RENDERER_ARCHITECTURE_BASELINE.md'"
+    result: "passed"
+    output_snippet: "MANIFEST.md:25 matches."
+  - command: "git diff --name-only"
+    result: "passed"
+    output_snippet: "MANIFEST.md"
+  - command: "git diff --check"
+    result: "passed"
+    output_snippet: "No output — no whitespace issues."
+
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+
+import_boundary_check:
+  result: "not_applicable"
+  evidence: "No app/ modules created or modified; architecture documentation only."
+  not_applicable_reason: "Architecture documentation task produces no backend Python module code and no frontend implementation code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "Import boundary checks become applicable when backend application modules are created or CI boundary checks are wired."
+
+security_scan_result:
+  result: "passed"
+  evidence: >
+    No plaintext credentials, tokens, passwords, or sensitive values in any
+    created file. Architecture document defines security boundaries and
+    sensitive data filtering rules. No .env files, no secrets, no API keys.
+
+weak_test_scan_result:
+  result: "not_applicable"
+  evidence: "Architecture documentation task; no test code produced."
+  not_applicable_reason: "Architecture documentation task; no test code exists to scan for weakness."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+
+ci_evidence:
+  result: "not_applicable"
+  evidence: "This task produces only markdown architecture documentation (SDUI_RENDERER_ARCHITECTURE_BASELINE.md) and a MANIFEST.md registration. No code, no build, no tests, no CI pipeline is triggered or required. CI validation becomes applicable when implementation tasks produce compilable/testable artifacts."
+  run_id: "not_applicable_architecture_documentation_no_ci_run_requested"
+  url_or_log_path: "local command evidence in this Task Record"
+  not_applicable_reason: "Architecture documentation task; CI not in scope for Phase 0 documentation work."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "A future CI task wires and requires CI execution."
+
+review:
+  mode: "codex_review"
+  notes: >
+    Ready for independent Codex staged review. All acceptance criteria met.
+    Architecture baseline document covers all required sections:
+    ComponentRegistry, ActionDispatcher, FallbackRenderer, schema_version,
+    user_action, security, state/API boundary, alternatives, risks,
+    recommendation, acceptance checks, deferred work. No forbidden paths
+    modified. No web/src/sdui/** created. No dependencies changed.
+
+remaining_risks:
+  - "Architecture decisions may need refinement when implementation tasks begin; this baseline is a starting point, not a final specification."
+  - "schema_version compatibility set is defined as a compile-time constant but the actual version values and update process are deferred to implementation tasks."
+  - "ActionDispatcher integration with Runtime/Capability Gateway is deferred; the exact forwarding mechanism will be defined when those components exist."
+
+rollback_or_failure_record: "not_applicable_task_passed_no_rollback_needed"
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: >
+  The final commit SHA is not embedded in this Task Record because committing
+  this file changes HEAD. The authoritative commit SHA is the Git commit
+  containing this Task Record and remote branch history after push.
+
+package_confirmation_status: "not_applicable"
+package_confirmation: "No package artifact created; architecture documentation is a markdown file only."
+package_scope: "not_applicable_no_package_or_archive_created"
+package_evidence: "No package-manager pack, archive, or Docker build command was run."
+
+artifact_lifecycle:
+  temporary_artifacts_created: []
+  cleanup_evidence: "No temporary artifacts created. Architecture documentation only."
+  package_artifact_created: false
+  package_artifact_reason: "Package creation is out of scope unless the task prompt explicitly requires one."
+
+tool_versions:
+  os: "Windows 10 Pro 10.0.19045"
+
+excluded_technologies_confirmed:
+  - "Ant Design X: NOT adopted. Excluded per FRONTEND_AI_CODING_GUIDELINES.md."
+  - "Ant Design 6: NOT adopted. Ant Design 5.x is the baseline."
+  - "React 19: NOT adopted. React 18 is the baseline."
+  - "Next.js: NOT adopted. Vite + React 18 SPA is the model."
+  - "Tailwind: NOT adopted. AntD tokens + CSS Modules per guidelines."
+  - "shadcn/ui: NOT adopted. Not in the frontend baseline."
+  - "msw: NOT adopted. Not in the dependency allowlist."

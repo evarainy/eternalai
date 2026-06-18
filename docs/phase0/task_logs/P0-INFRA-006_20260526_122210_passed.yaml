@@ -1,0 +1,148 @@
+task_id: P0-INFRA-006
+task_type: infrastructure
+result: passed
+started_at: "2026-05-26T20:15:00+08:00"
+completed_at: "2026-05-26T20:22:10+08:00"
+plan_approved_by: human
+plan_approved_at: "2026-05-26T19:39:45+08:00"
+plan_approved_via: "Codex execution-spec window"
+summary: >
+  Established OpenTelemetry Collector + Langfuse deployment baseline via
+  Docker Compose observability profile. Created infra/observability/README.md
+  documenting deployment scope, deferred instrumentation, and validation
+  commands. Updated README.md with observability baseline section. docker-compose.yml
+  and .env.example preserved unchanged — all required observability wiring and
+  placeholder keys already present from P0-INFRA-001.
+acceptance_criteria_result:
+  - criterion: "docker compose --profile observability config passes without starting containers"
+    result: passed
+    evidence: "docker compose --profile observability config exited 0; full service config output shows langfuse and otel-collector under observability profile"
+  - criterion: "infra/observability/ contains OTel Collector and Langfuse deployment baseline config or documented config placeholders"
+    result: passed
+    evidence: "infra/observability/README.md created; references infra/docker/otel-collector-config.yaml and documents observability profile services"
+  - criterion: "docker-compose.yml observability profile references OTel Collector and Langfuse services/configuration"
+    result: passed
+    evidence: "grep output confirms langfuse (profiles: [observability]) and otel-collector (profiles: [observability]) services present with correct mount and ports"
+  - criterion: ".env.example preserves existing LANGFUSE_ and OTEL_ placeholders and only adds OTel Collector-specific variables if P0-INFRA-001 did not already cover them"
+    result: passed
+    evidence: "all 7 required keys (LANGFUSE_PORT, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_NEXTAUTH_SECRET, LANGFUSE_SALT, OTEL_COLLECTOR_PORT, OTEL_COLLECTOR_HTTP_PORT) present; no changes needed"
+  - criterion: "README.md documents local config validation and smoke-ready deployment notes"
+    result: passed
+    evidence: "README.md updated with observability baseline section including docker compose config command and link to infra/observability/README.md"
+  - criterion: "README.md explicitly defers app instrumentation, API trace_id behavior, Gateway/Runtime/Tool spans, and end-to-end tracing to later TDD tasks"
+    result: passed
+    evidence: "infra/observability/README.md 'Deferred (not implemented)' section lists all deferred items; README.md states 'Runtime tracing and app instrumentation are deferred'"
+  - criterion: "No app/observability/, tests/observability/, Gateway, Runtime, Tool, or app trace instrumentation files are created"
+    result: passed
+    evidence: "git diff --cached --name-only shows only infra/observability/README.md and README.md; forbidden path scan found no violations"
+failure_examples_tested:
+  - example: "Observability Compose profile is missing or invalid"
+    result: triggered
+    evidence: "Created _scratch/P0-INFRA-006-invalid-compose.yml with malformed YAML; docker compose -f _scratch/P0-INFRA-006-invalid-compose.yml config exited 1 with 'yaml: while parsing a flow node at line 3: did not find expected node content'; temp file deleted; scratch dir cleaned"
+  - example: "Prompt or docs claim API trace_id, Gateway span, Runtime span, Tool span, or end-to-end trace behavior exists"
+    result: triggered
+    evidence: "grep for forbidden runtime trace claims across infra/observability/README.md, README.md, docker-compose.yml, .env.example returned no matches — 'no_active_runtime_trace_claims'"
+step_verification_points:
+  - step: "Create infra/observability/ with deployment config or documented placeholders"
+    result: passed
+    command: "ls infra/observability && grep -i 'otel\\|collector\\|langfuse' infra/observability/README.md"
+    evidence: "infra/observability/README.md created with OpenTelemetry, OTel, Langfuse, collector references"
+  - step: "Add OTel Collector and Langfuse service wiring to observability profile"
+    result: passed
+    command: "docker compose --profile observability config"
+    evidence: "config output shows langfuse and otel-collector services under observability profile"
+  - step: "Negative Compose validation proves config failure is detected"
+    result: passed
+    command: "docker compose -f _scratch/P0-INFRA-006-invalid-compose.yml config"
+    evidence: "exit code 1; error: 'yaml: while parsing a flow node at line 3: did not find expected node content'"
+  - step: "Verify existing LANGFUSE_ and OTEL_ env placeholders from P0-INFRA-001 are complete"
+    result: passed
+    command: "grep -cE 'LANGFUSE_|OTEL_' .env.example"
+    evidence: "7 keys found: LANGFUSE_PORT, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_NEXTAUTH_SECRET, LANGFUSE_SALT, OTEL_COLLECTOR_PORT, OTEL_COLLECTOR_HTTP_PORT"
+  - step: "Verify .env.example changes are incremental and only add OTel Collector-specific gaps"
+    result: passed
+    command: "git diff --cached -- .env.example"
+    evidence: "no diff — .env.example unchanged, all keys already present from P0-INFRA-001"
+  - step: "Verify deployment documentation exists and records deferred instrumentation scope"
+    result: passed
+    command: "grep -i 'observability\\|OpenTelemetry\\|Langfuse\\|deferred\\|not implemented' README.md"
+    evidence: "README.md observability section with deferred statement; infra/observability/README.md has full deferred list"
+  - step: "Verify no app instrumentation or observability test paths are staged"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "staged files: README.md, docs/phase0/task_logs/P0-INFRA-006_20260526_122210_passed.yaml, infra/observability/README.md — no app/observability, tests/observability, app/runtime, or app/gateway paths"
+  - step: "Verify no active runtime trace claims are introduced"
+    result: passed
+    command: "grep for forbidden claims in changed files"
+    evidence: "no matches — 'no_active_runtime_trace_claims'"
+  - step: "Stage all files and verify diff"
+    result: passed
+    command: "git diff --cached --name-only"
+    evidence: "README.md, docs/phase0/task_logs/P0-INFRA-006_20260526_122210_passed.yaml, infra/observability/README.md"
+changed_files:
+  - README.md
+  - docs/phase0/task_logs/P0-INFRA-006_20260526_122210_passed.yaml
+  - infra/observability/README.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "docker compose --profile observability config"
+    result: passed
+    output_snippet: "name: eternalai\nservices:\n  langfuse:\n    profiles:\n      - observability\n  otel-collector:\n    profiles:\n      - observability"
+  - command: "docker compose --env-file .env.example --profile observability config"
+    result: passed
+    output_snippet: "name: eternalai\nservices:\n  langfuse:\n    profiles:\n      - observability\n  otel-collector:\n    profiles:\n      - observability"
+  - command: "docker compose -f _scratch/P0-INFRA-006-invalid-compose.yml config"
+    result: passed
+    output_snippet: "yaml: while parsing a flow node at line 3: did not find expected node content (exit 1)"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "No Python/JS source code changes; deployment config only"
+  not_applicable_reason: "No source code or import changes in this deployment-only task"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+security_scan_result:
+  result: passed
+  evidence: "No secrets, credentials, or tokens in changed files; all values are placeholders"
+  not_applicable_reason: ""
+  not_applicable_scope: ""
+  blocked_by_task_id: ""
+  activation_task_id: ""
+  expiry_condition: ""
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "No test files created or modified"
+  not_applicable_reason: "No test files in this deployment-only task"
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "none"
+  activation_task_id: "none"
+  expiry_condition: "N/A"
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "No CI pipeline wired for docker compose config validation yet; local parse-only validation passed"
+  not_applicable_reason: "CI not wired for observability profile validation yet (P0-INFRA-007)"
+  not_applicable_scope: "waiting_dependency"
+  blocked_by_task_id: "P0-INFRA-007"
+  activation_task_id: "P0-INFRA-007"
+  expiry_condition: "CI pipeline includes docker compose config validation for observability profile"
+review:
+  mode: codex_review
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: "Awaiting Codex independent review"
+remaining_risks: []
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "No package created — deployment/config-only task with no source code deliverable"
+package_scope: "No package created; deployment config/docs baseline only"
+package_evidence: "No package or archive produced — task deliverables are docker-compose config, .env.example placeholders, and documentation files only"

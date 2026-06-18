@@ -1,0 +1,26 @@
+# spike-only: This Docker Compose file is for P0-SPIKE-003 evaluation only.
+# It is NOT a production deployment configuration.
+# Phase 1 must separately design credentials, backup, monitoring,
+# resource limits, network exposure, and persistence operations.
+
+name: eternalai-p0-spike-003
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18
+    environment:
+      POSTGRES_DB: phase0_spike
+      POSTGRES_USER: phase0_spike
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-pgvector-spike-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phase0_spike -d phase0_spike"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-pgvector-spike-data:
