@@ -1,0 +1,174 @@
+task_id: P1-SKEL-001
+task_type: documentation
+result: passed
+started_at: "2026-06-18T09:00:00+09:00"
+completed_at: "2026-06-18T10:00:00+09:00"
+plan_approved_by: "human"
+plan_approved_at: "2026-06-18T08:58:13+09:00"
+plan_approved_via: "Claude Code session"
+summary: >
+  Created docs/phase1/ skeleton: PHASE1_PLAN.md (exact copy of approved Plan
+  _SCRATCH/phase1_plan_draft_v4.md), TASK_PROMPT_TEMPLATE.md (Phase 1 derived
+  template with all 21 Phase 0->Phase 1 substitutions per Plan §B.2), TASK_INDEX.md
+  (B1-B5 DAG with P1-SPEC-001 as B2 hard gate), PHASE1_SPEC.md (placeholder),
+  task_logs/INDEX.md (header only, no Phase 0 history), and B1 per-task prompts:
+  P1-GATE-001.md, P1-ERRATA-001.md, P1-PARAM-001.md, P1-SPEC-001.md.
+  P1-TOOLCALL-002.md left absent (optional, no human confirmation to create).
+  method=not_applicable; pure documentation scaffolding task.
+method: not_applicable
+method_not_applicable_reason: >
+  Pure documentation/scaffolding task: directory creation, Plan archival,
+  Phase 1 template derivation per 21-point §B.2 checklist, B1 per-task prompt
+  authoring. No production code, no runtime logic, no test assertions.
+method_not_applicable_scope: "documentation-only; all changed files are under docs/phase1/"
+method_not_applicable_evidence: >
+  git diff --cached --name-only shows only docs/phase1/** files; no app/,
+  tests/, scripts/ changes. Task type = documentation per task YAML.
+acceptance_criteria_result:
+  - criterion: "AC-1: docs/phase1/ directory tree consistent with Plan §B"
+    result: passed
+    evidence: "docs/phase1/tasks/ and docs/phase1/task_logs/ exist; PHASE1_PLAN.md, TASK_INDEX.md, TASK_PROMPT_TEMPLATE.md all present"
+  - criterion: "AC-2: PHASE1_PLAN.md content == _scratch/phase1_plan_draft_v4.md"
+    result: passed
+    evidence: "PowerShell: [bool]($src -eq $dst) = True (validation 7)"
+  - criterion: "AC-3: TASK_PROMPT_TEMPLATE.md 21 Phase 0 literals addressed per §B.2"
+    result: passed
+    evidence: "All (a) replacements applied (title/source_spec/task_index/current_task_prompt/commit-prefix/task_logs/batch); all (b) retained with 跨阶段沿用 annotations"
+  - criterion: "AC-4: No should-have-changed Phase 0 residue in derived template"
+    result: passed
+    evidence: "Validation 9: Select-String no output; Validation 10: OK (all Phase 0 refs match allowed-list)"
+  - criterion: "AC-5 & AC-5b: TASK_INDEX.md has B1-B5 DAG; P1-SPEC-001 as B2 hard gate"
+    result: passed
+    evidence: "TASK_INDEX.md contains P1-GATE-001, P1-SKEL-001, P1-ERRATA-001, P1-PARAM-001, P1-SPEC-001; B2 prerequisite = P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed"
+  - criterion: "AC-6: task_logs/INDEX.md header matches Phase 0 format; no history rows"
+    result: passed
+    evidence: "Validation 8: True; file has header and blank table only"
+  - criterion: "AC-7: P1-GATE-001.md from §C.3; threshold sources; AC-7 semantics"
+    result: passed
+    evidence: "P1-GATE-001.md includes §20.1 L4501-4503 (authority), §14.5 L3951-3954 (cross-ref), §12.5 L3496 (negative list only); not_applicable/skipped/failed>0 semantics explicit; type=infrastructure/test; method=TDD"
+  - criterion: "AC-8: P1-ERRATA-001.md with 3 formal entries + 1 legacy note"
+    result: passed
+    evidence: "E-001 (instructor, §6.11 L1332 + §12.1.3 L2505), E-002 (ARQ, §12.1.4 L2517-2525), E-003 (adapter_error_mapped, §8.6.7 L878-903 + §12.4.1 L3490 + trace.py L25); L-001 legacy note marked project-memory"
+  - criterion: "AC-9: P1-PARAM-001.md with method=PDR scope=research-only; blocked until infra"
+    result: passed
+    evidence: "P1-PARAM-001.md has 'AC-9 method=PDR scope=research-only: true', method: PDR, scope: research-only, readiness: ready only after infra values arrive"
+  - criterion: "AC-10: P1-SPEC-001.md defines Phase 1 spec task and B2 hard gate"
+    result: passed
+    evidence: "P1-SPEC-001.md states deliverable=docs/phase1/PHASE1_SPEC.md; B2 not before P1-SPEC-001 landed and approved"
+  - criterion: "AC-11: P1-TOOLCALL-002.md (optional) - absent, left absent"
+    result: not_applicable
+    evidence: "File absent before task start; left absent per exec prompt step 20 and 48"
+  - criterion: "AC-12: PHASE1_SPEC.md placeholder with correct heading and warning"
+    result: passed
+    evidence: "docs/phase1/PHASE1_SPEC.md has '# PHASE1_SPEC — PLACEHOLDER'; states P1-SPEC-001 produces content; B2 gate stated"
+  - criterion: "AC-13: git diff --cached --check clean; no cache files staged"
+    result: passed
+    evidence: "Validation 4: exit 0 no output; Validation 5: no untracked files"
+  - criterion: "AC-14: No app/ docs/phase0/ docs/blueprint/ touched"
+    result: passed
+    evidence: "Validation 12: all staged paths under docs/phase1/"
+  - criterion: "AC-15: Task Record valid YAML; method=not_applicable fields non-empty; package_confirmation_status=not_applicable; changed_files matches staged"
+    result: passed
+    evidence: "This record; method_not_applicable_reason/scope/evidence all non-empty; package_confirmation_status=not_applicable; changed_files list matches final git diff --cached --name-only"
+failure_examples_tested:
+  - example: "Phase 0 residue in derived template (should-replace paths not replaced)"
+    result: not_triggered
+    evidence: "Validation 9 + 10: Select-String returned no bad lines; OK"
+  - example: "PHASE1_PLAN.md content mismatch with source"
+    result: not_triggered
+    evidence: "Validation 7: PowerShell content comparison = True"
+  - example: "Staged files outside docs/phase1/"
+    result: not_triggered
+    evidence: "Validation 2: git diff --cached --name-only shows only docs/phase1/ paths"
+  - example: "P1-TOOLCALL-002.md created without human confirmation"
+    result: not_triggered
+    evidence: "File left absent; not created"
+step_verification_points:
+  - step: "Branch pre-check"
+    result: passed
+    command: "git status --short --branch"
+    evidence: "## phase1/P1-SKEL-001"
+  - step: "PHASE1_PLAN.md exact copy verification"
+    result: passed
+    command: "PowerShell: [bool]($src -eq $dst)"
+    evidence: "True"
+  - step: "Template Phase 0 residue check (validation 9)"
+    result: passed
+    command: "Select-String -Pattern 'phase0\\(|docs/phase0/tasks|docs/phase0/TASK_INDEX|docs/phase0/task_logs|source_spec.*docs/blueprint|Batch 0/1'"
+    evidence: "No output"
+  - step: "Template allowed-list check (validation 10)"
+    result: passed
+    command: "Select-String + phase0 allowed-list filter"
+    evidence: "OK"
+  - step: "INDEX.md header check (validation 8)"
+    result: passed
+    command: "Select-String -SimpleMatch on expected header"
+    evidence: "True"
+  - step: "Directories exist (validation 6)"
+    result: passed
+    command: "Test-Path docs\\phase1\\tasks; Test-Path docs\\phase1\\task_logs"
+    evidence: "True True"
+  - step: "git diff --cached --check (validation 4)"
+    result: passed
+    command: "git diff --cached --check"
+    evidence: "Exit 0, no output"
+  - step: "Untracked files check (validation 5)"
+    result: passed
+    command: "git ls-files --others --exclude-standard"
+    evidence: "No output"
+changed_files:
+  - docs/phase1/PHASE1_PLAN.md
+  - docs/phase1/PHASE1_SPEC.md
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/TASK_PROMPT_TEMPLATE.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-SKEL-001_20260618_100000_passed.yaml
+  - docs/phase1/tasks/P1-ERRATA-001.md
+  - docs/phase1/tasks/P1-GATE-001.md
+  - docs/phase1/tasks/P1-PARAM-001.md
+  - docs/phase1/tasks/P1-SPEC-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "(no output, exit 0)"
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "docs/phase1/PHASE1_PLAN.md docs/phase1/PHASE1_SPEC.md docs/phase1/TASK_INDEX.md docs/phase1/TASK_PROMPT_TEMPLATE.md docs/phase1/task_logs/INDEX.md docs/phase1/tasks/P1-ERRATA-001.md docs/phase1/tasks/P1-GATE-001.md docs/phase1/tasks/P1-PARAM-001.md docs/phase1/tasks/P1-SPEC-001.md"
+  - command: "git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "(no output)"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation task; no app/ or tests/ files changed"
+security_scan_result:
+  result: not_applicable
+  evidence: "Documentation task; no production code, credentials, or sensitive values in docs/phase1/ files"
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "method=not_applicable; no test code produced"
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  evidence: "CI not triggered for documentation-only staged changes"
+review:
+  mode: codex_review
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: "Pending Codex review of staged diff"
+remaining_risks:
+  - "P1-TOOLCALL-002.md not created (optional; create only after human confirmation)"
+  - "PHASE1_SPEC.md is placeholder; B2 blocked until P1-SPEC-001 landed and approved"
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: documentation task; no package created"
+package_scope: ""
+package_evidence: ""
