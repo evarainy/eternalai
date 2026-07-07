@@ -18,11 +18,11 @@ app/infra/          接口实现
 app/api/v1/         FastAPI 路由
 app/db/             数据库配置/会话/健康检查
 tests/              镜像 app/ 结构 + tests/architecture/ (import boundary, weak test checker)
-docs/phase0/        Phase 0 任务 prompt、规则、样式基线、上下文加载策略
-docs/phase0/tasks/  每个任务的 prompt 文件
-docs/phase0/task_logs/  统一 Task Record (YAML)
+docs/phase1/        Phase 1 plan, spec, task index, task template, task logs
+docs/phase1/tasks/  Phase 1 per-task prompts
+docs/phase1/task_logs/  Phase 1 unified Task Records (YAML)
 web/                前端 (React 18 + Vite + Ant Design 5.x)
-experiments/phase0/ Spike 实验代码 (不进生产)
+experiments/        Spike 实验代码 (不进生产)
 infra/docker/       Docker Compose 模板
 ```
 
@@ -58,22 +58,30 @@ git ls-files --others --exclude-standard
 - Phase 1 implementation in progress. Phase 0 interface contracts in `app/ports/` are FROZEN: do not edit without explicit task authorization + human approval.
 - Hexagonal boundary holds: `app/ports/` must not depend on `app/infra/`.
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
-- Task Record: reuse the Phase 0 YAML format + `task_logs/INDEX` row (Phase 1 `docs/phase1/` layout TBD in the Phase 1 Plan).
+- `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
+- Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
+- Current mainline order: `P1-ERRATA-001 -> P1-WORKFLOW-001 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
+- Task Record: use the unified YAML format under `docs/phase1/task_logs/` and schema `docs/dev/task_record_schema.yaml`.
 - One session turn = one `task_id`. Start with `/phase-task <task_id>`.
 - Plan first; wait for human approval before edits.
+- No commit, no push, no merge unless a human explicitly approves.
 - Use Explore/Plan/read-only behavior for investigation when possible.
 - If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
 - When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.
 - Skills/subagents are advisory aids only; they must not override Phase 1 rules or task prompts.
 
 ## Read on demand (not by default)
-- Context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
-- Task template: `docs/phase0/CODEX_SINGLE_TASK_PROMPT_TEMPLATE.md`
+- Phase 1 task template: `docs/phase1/TASK_PROMPT_TEMPLATE.md`
+- Phase 1 task index / dependency DAG: `docs/phase1/TASK_INDEX.md`
+- Phase 1 task prompt: `docs/phase1/tasks/<task_id>.md`
+- Phase 1 task logs: `docs/phase1/task_logs/`
+- Task record schema: `docs/dev/task_record_schema.yaml`
+- Cross-stage context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md` (supporting guidance, not Phase 1 task authority)
 - Role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 - Repository navigation map: `docs/phase0/REPOSITORY_CONTEXT_MAP.md`
-- Task index / dependency DAG: `docs/phase0/TASK_INDEX.md`
 - Coding style baseline: `docs/phase0/CODING_STYLE_BASELINE.md` (load relevant sections only)
-- Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md` (every 3 tasks)
+- Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md` (cross-stage support every 3 tasks; not Phase 1 task authority)
+- Fable5 review backlog: `/Users/evarainy/Downloads/fable-review.md` (local reference only, not repo authority)
 
 ## Scratch/temp cleanup
 - Temp files go in `_scratch/` only. Not in `app/`, `tests/`, `docs/`, or repo root.

@@ -1,9 +1,17 @@
-# AGENTS.md — Phase 0 Compact Agent Boot Rules v1.0.12
+# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.0.0
 
-This file is intentionally short. It is the always-loaded boot context for Codex and other coding agents. Do not expand it into a full spec.
+This file is intentionally short. It is the always-loaded compact boot context for Codex and other generic coding agents. Do not expand it into a full spec.
 
 ## Phase
-Phase 0 only. Do not implement Phase 1 features or modify the frozen blueprint.
+Phase 1 active. The main branch is still `phase0/main`; Phase 1 task branches use `phase1/<task_id>`.
+
+Phase 1 rule authority, highest first:
+1. Current task prompt: `docs/phase1/tasks/<task_id>.md`
+2. `CLAUDE.md`
+3. `docs/phase1/*`
+4. `docs/dev/task_record_schema.yaml`
+
+Phase 0 context-loading, style, boundary, and role/method files may be reused only when the Phase 1 prompt or docs say they are cross-stage support. They are not the current Phase 1 task authority.
 
 ## Project at a glance
 - **EternalAI**: Government/enterprise AI Agent runtime — natural language driven, integrates OA, Yonyou U8, Hikvision iVMS
@@ -21,19 +29,20 @@ app/infra/          Interface implementations
 app/api/v1/         FastAPI routes
 app/db/             Database config/session/health check
 tests/              Mirrors app/ structure + tests/architecture/ (import boundary, weak test checker)
-docs/phase0/        Phase 0 task prompts, rules, style baselines, context loading strategy
-docs/phase0/tasks/  Per-task prompt files
-docs/phase0/task_logs/  Unified Task Records (YAML)
+docs/phase1/        Phase 1 plan, spec, task index, task template, task logs
+docs/phase1/tasks/  Phase 1 per-task prompt files
+docs/phase1/task_logs/  Phase 1 unified Task Records (YAML)
 web/                Frontend (React 18 + Vite + Ant Design 5.x)
-experiments/phase0/ Spike experiment code (never enters production)
+experiments/        Spike experiment code (never enters production)
 infra/docker/       Docker Compose templates
 ```
 
 ## Git workflow
 - **Main branch**: `phase0/main` (not `main`)
-- **Task branch**: `phase0/<task_id>` (e.g. `phase0/P0-DOMAIN-004a`)
-- **Commit message**: `phase0(<task_id>): <short description>`
-- **Merge message**: `merge phase0(<task_id>): <short description>`
+- **Task branch**: `phase1/<task_id>` (e.g. `phase1/P1-SPEC-001`)
+- **Commit message**: `phase1(<task_id>): <short description>`
+- **Merge message**: `merge phase1(<task_id>): <short description>`
+- **No commit, no push, no merge** unless a human explicitly approves.
 - Check remote GitHub Actions CI after every merge to phase0/main
 
 ## Validation commands
@@ -52,31 +61,34 @@ uv run python scripts/check_dependencies.py
 uv run pytest tests/architecture/
 # Weak test single file
 uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
+# Golden task gate after P1-GATE-001
+uv run python scripts/run_golden_tasks.py --gate
 ```
 
 ## Source pointers
-- Context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
-- Task DAG: `docs/phase0/TASK_INDEX.md`
-- Per-task prompts: `docs/phase0/tasks/<task_id>.md`
-- Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md`
+- Phase 1 task template: `docs/phase1/TASK_PROMPT_TEMPLATE.md`
+- Phase 1 task DAG: `docs/phase1/TASK_INDEX.md`
+- Phase 1 per-task prompts: `docs/phase1/tasks/<task_id>.md`
+- Phase 1 task logs: `docs/phase1/task_logs/`
 - Task record schema: `docs/dev/task_record_schema.yaml`
+- Cross-stage context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
+- Cross-stage boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md`
+- Cross-stage role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 - Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
-- Role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 
 ## Non-negotiable hard rules
 1. Execute exactly one `task_id` per session turn; stop after Task Record and wait for human confirmation.
 2. Start with the matching per-task prompt. Do not load or paste the full spec unless resolving a contradiction.
 3. Output a Plan first. Do not modify files until a human approves the Plan.
 4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
-5. `P0-PREP-*` tasks are execution-pack-only preparation tasks; they create no Runtime/Gateway/Adapter capability.
-6. Spike code must not enter `app/`; use `experiments/phase0/`, `docs/adr/`, `docs/research/`, or reusable `tests/utils/` only.
-7. `app/runtime/` must not import `app/execution_fabric/` or concrete adapters.
-8. Dependency source policy is task-scoped. Phase 0 internet-connected local development/build may use public registries only when explicitly allowed by the task prompt and dependency policy; intranet runtime uses prebuilt Docker images and must not require npm/pnpm registry access. Internal mirror/offline-cache remains required for intranet source build, intranet CI, or stricter supply-chain tasks.
-9. Do not weaken tests to pass: no `assert True`, empty `pass`, broad skip, or deleted assertions.
-10. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
-11. Work on one task branch: `phase0/<task_id>`.
-12. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-13. Use the shared role/method guardrails (`docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`) according to the current role (execution or review). Do not cross-read another tool-specific boot file unless the current task or review prompt explicitly requires it.
+5. `app/ports/` is frozen; do not edit it unless the task explicitly authorizes it and a human approves.
+6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
+7. `P1-GATE-001` has landed. Later implementation tasks must run `scripts/run_golden_tasks.py --gate`.
+8. Do not weaken tests to pass: no `assert True`, empty `pass`, broad skip, or deleted assertions.
+9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
+10. Work on one task branch: `phase1/<task_id>`.
+11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
+12. Current mainline order: `P1-ERRATA-001 -> P1-WORKFLOW-001 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
 
 ## Scratch/temp and artifact review rules
 - Verify no temp/cache artifacts (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_scratch/` contents) are staged.
@@ -87,6 +99,6 @@ uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
 - Treat `.venv/` internals as out of scope unless task scope explicitly says otherwise.
 
 ## Completion
-Use the unified Task Record. Package confirmation is not tied to mandatory human diff review in v1.0.11. Record `package_confirmation_status`, `package_scope`, and `package_evidence`.
+Use the unified Task Record unless the current task explicitly narrows allowed paths and forbids creating one. Package confirmation is not tied to mandatory human diff review. Record `package_confirmation_status`, `package_scope`, and `package_evidence` when applicable.
 
 - Golden Task negative/boundary paths must pass 100%, including GT-012 multi-binding scope clarification.
