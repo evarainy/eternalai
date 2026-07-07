@@ -6,3 +6,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 |---|---|---|---|---|---|---|
 | P1-SKEL-001 | 2026-06-18 | passed | phase1/P1-SKEL-001 | (see git log) | not_applicable | codex_review |
 | P1-GATE-001 | 2026-07-07 | passed | phase1/P1-GATE-001 | recorded_by_git_history_after_final_commit | deferred_merge_after_human_review | codex_review |
+| P1-ERRATA-001 | 2026-07-07 | passed | phase1/P1-ERRATA-001 | recorded_by_git_history_after_final_commit | not_applicable | codex_self_check |

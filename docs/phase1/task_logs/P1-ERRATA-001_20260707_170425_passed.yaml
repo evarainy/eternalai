@@ -1,0 +1,219 @@
+task_id: P1-ERRATA-001
+task_type: documentation
+result: passed
+started_at: "2026-07-07T17:04:25+09:00"
+completed_at: "2026-07-07T17:19:55+09:00"
+plan_approved_by: "evarainy"
+plan_approved_at: "2026-07-07T17:04:25+09:00"
+plan_approved_via: "Codex session with Codex read-only review and external Opus review feedback"
+summary: >
+  Created docs/phase1/BLUEPRINT_ERRATA.md with three formal Phase 1
+  errata/clarification entries: E-001 instructor is not baseline, E-002 ARQ is
+  an L1 candidate rather than mandatory Phase 1 infrastructure, and E-003
+  adapter_error_mapped is omitted from MVP spec §8.6.7 while the frozen port is
+  already correct. The frozen blueprint, MVP spec, Phase 0 baseline, and ports
+  were read only. docs/phase1/task_logs/INDEX.md was updated and this Task
+  Record records the execution evidence.
+method: not_applicable
+method_not_applicable_reason: >
+  Pure documentation errata registration. This task changes no production code,
+  no tests, no runtime behavior, and no app/ or app/ports/ files, so TDD/BDD/PDR
+  is not applicable to the execution method.
+method_not_applicable_scope: "current_phase_only; documentation-only P1-ERRATA-001 execution"
+method_not_applicable_blocked_by_task_id: "not_blocked"
+method_not_applicable_activation_task_id: "next_task_that_changes_production_code_or_tests"
+method_not_applicable_expiry_condition: "Engineering-method selection must be re-evaluated for the next non-documentation task."
+method_not_applicable_evidence: >
+  Staged paths are limited to docs/phase1/BLUEPRINT_ERRATA.md,
+  docs/phase1/task_logs/INDEX.md, and this Task Record. Formal entries are
+  backed by line-number anchors re-verified at execution time.
+human_overlay:
+  applied: true
+  summary: >
+    The original task prompt and Phase 1 plan mentioned a jsjy legacy note.
+    The human owner confirmed jsjy is obsolete and should not affect this
+    project. The legacy note was therefore removed from BLUEPRINT_ERRATA.md to
+    avoid introducing non-authoritative memory content into the later
+    P1-SPEC-001 authority chain.
+  errata_document_effect: "BLUEPRINT_ERRATA.md contains only E-001, E-002, and E-003."
+review_evidence:
+  codex_read_only_review:
+    verdict: APPROVE
+    blocking_findings: []
+    confidence: high
+  opus_review:
+    verdict: APPROVE_WITH_NON_BLOCKING_NOTES
+    blocking_findings: []
+    non_blocking_notes:
+      - "Task Record YAML must include a human_overlay field documenting the jsjy removal."
+      - "Codex should re-verify anchors at execution time."
+      - "Consider adding CLAUDE.md / MANIFEST.md to forbidden paths as optional hardening."
+  second_round_review:
+    codex_clean_subwindow:
+      verdict_before_fix: BLOCK
+      blocking_findings:
+        - "Task Record declared method: not_applicable but lacked top-level method_not_applicable reason/scope/evidence fields."
+    agy_claude_opus_4_6:
+      verdict_before_fix: BLOCK
+      blocking_findings:
+        - "Confirmed missing method_not_applicable_reason, method_not_applicable_scope, and method_not_applicable_evidence fields."
+      resolution: "Added method-level not_applicable explanation fields and re-ran staged diff/YAML checks."
+acceptance_criteria_result:
+  - criterion: "AC-1: docs/phase1/BLUEPRINT_ERRATA.md lands with Errata & Clarifications"
+    result: passed
+    evidence: "docs/phase1/BLUEPRINT_ERRATA.md created with title 'Blueprint Errata & Clarifications'."
+  - criterion: "AC-2: E-001, E-002, and E-003 each include id, type, title, source anchors, original/problem, correction/clarification, and authority/rationale"
+    result: passed
+    evidence: "docs/phase1/BLUEPRINT_ERRATA.md includes table rows for every required field in E-001, E-002, and E-003."
+  - criterion: "AC-3: E-001 protects P1-SPEC-001 from inheriting obsolete instructor baseline"
+    result: passed
+    evidence: "E-001 authority/rationale explicitly says the erratum must be applied by P1-SPEC-001 so PHASE1_SPEC.md does not inherit the obsolete instructor decision."
+  - criterion: "AC-4: E-002 clarifies ARQ as L1 candidate and not Phase 1 mandatory infrastructure"
+    result: passed
+    evidence: "E-002 correction states ARQ is an L1 candidate and Phase 1 mainline L0 remains BackgroundTasks / in-process executor."
+  - criterion: "AC-5: E-003 points to the MVP spec omission and does not modify the frozen port"
+    result: passed
+    evidence: "E-003 says app/ports/trace.py is correct and the erratum points to MVP spec §8.6.7."
+  - criterion: "AC-6: No frozen blueprint, Phase 0 baseline, app, app/ports, task prompt, template, task index, plan, spec, CLAUDE.md, AGENTS.md, or MANIFEST.md file was modified"
+    result: passed
+    evidence: "Final staged diff contains only the three allowed docs/phase1 paths recorded in changed_files."
+  - criterion: "AC-7: Task Record lands and task log index is updated"
+    result: passed
+    evidence: "docs/phase1/task_logs/P1-ERRATA-001_20260707_170425_passed.yaml created; docs/phase1/task_logs/INDEX.md updated with a P1-ERRATA-001 row."
+  - criterion: "AC-8: changed_files matches git diff --cached --name-only exactly"
+    result: passed
+    evidence: "Reconciled after final staging; see tests_run entry for git diff --cached --name-only."
+failure_examples_tested:
+  - example: "Formal anchor cannot be verified"
+    result: not_triggered
+    evidence: "rg anchor checks passed for instructor/OpenAI SDK, ARQ/BackgroundTasks, and adapter_error_mapped/TraceEvent/event_type."
+  - example: "PHASE1_TECHNICAL_BASELINE.md does not support raw OpenAI SDK / no instructor / no PydanticAI"
+    result: not_triggered
+    evidence: "rg output shows docs/phase0/PHASE1_TECHNICAL_BASELINE.md L15 raw OpenAI SDK and L22 not in baseline: instructor, PydanticAI, or any other wrapper library."
+  - example: "Task requires modifying frozen blueprint or app/ports/trace.py"
+    result: not_triggered
+    evidence: "No docs/blueprint/, docs/phase0/, app/, or app/ports/ path appears in staged diff."
+  - example: "jsjy legacy material pollutes BLUEPRINT_ERRATA.md"
+    result: not_triggered
+    evidence: "Human overlay removed jsjy from BLUEPRINT_ERRATA.md; only this Task Record documents the overlay decision."
+  - example: "Staged diff exceeds allowed paths"
+    result: not_triggered
+    evidence: "Final git diff --cached --name-only contains only BLUEPRINT_ERRATA.md, task_logs/INDEX.md, and this Task Record."
+step_verification_points:
+  - step: "Workspace preflight"
+    result: passed
+    command: "git branch --show-current; git status --short; git diff --cached --name-only; git ls-files --others --exclude-standard"
+    evidence: "Initial branch was phase0/main; status, staged diff, and untracked output were clean before branch creation."
+  - step: "Task branch creation"
+    result: passed
+    command: "git switch -c phase1/P1-ERRATA-001"
+    evidence: "Switched to a new branch 'phase1/P1-ERRATA-001'."
+  - step: "Anchor verification"
+    result: passed
+    command: "rg -n anchor checks for instructor/OpenAI SDK, ARQ/BackgroundTasks/in-process, adapter_error_mapped/TraceEvent/event_type"
+    evidence: "All required formal anchors were found at execution time."
+  - step: "Documentation creation"
+    result: passed
+    command: "manual edit via apply_patch"
+    evidence: "docs/phase1/BLUEPRINT_ERRATA.md created with E-001, E-002, and E-003 only."
+  - step: "Task log update"
+    result: passed
+    command: "manual edit via apply_patch"
+    evidence: "docs/phase1/task_logs/INDEX.md updated with P1-ERRATA-001 row."
+  - step: "Final staged diff verification"
+    result: passed
+    command: "git diff --cached --name-only; git diff --cached --stat; git diff --cached --check; git ls-files --others --exclude-standard"
+    evidence: "Final verification commands run after staging and Task Record reconciliation."
+changed_files:
+  - docs/phase1/BLUEPRINT_ERRATA.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-ERRATA-001_20260707_170425_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "git branch --show-current"
+    result: passed
+    output_snippet: "phase1/P1-ERRATA-001"
+  - command: "git status --short"
+    result: passed
+    output_snippet: "clean before edits; final status contains only staged allowed paths"
+  - command: "rg -n \"instructor|PydanticAI|OpenAI SDK\" docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md docs/phase0/PHASE1_TECHNICAL_BASELINE.md"
+    result: passed
+    output_snippet: "baseline L15 raw OpenAI SDK; L22 instructor/PydanticAI not in baseline; blueprint L1332 and L2505 OpenAI SDK + instructor text"
+  - command: "rg -n \"ARQ|BackgroundTasks|in-process\" docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md"
+    result: passed
+    output_snippet: "L2517 L0 BackgroundTasks / in-process executor; L2518 L1 Redis + ARQ; L2525-L2526 final conclusion; L2580 upgrade route"
+  - command: "rg -n \"adapter_error_mapped|TraceEvent|event_type\" docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md app/ports/trace.py"
+    result: passed
+    output_snippet: "MVP spec L878/L885 TraceEvent.event_type, L3490 adapter_error_mapped reference, app/ports/trace.py L25 adapter_error_mapped"
+  - command: "rg -n \"jsjy\" docs app tests CLAUDE.md AGENTS.md MANIFEST.md pyproject.toml"
+    result: passed
+    output_snippet: "Existing references found only in docs/phase1/PHASE1_PLAN.md and docs/phase1/tasks/P1-ERRATA-001.md; neither file was modified."
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "docs/phase1/BLUEPRINT_ERRATA.md; docs/phase1/task_logs/INDEX.md; docs/phase1/task_logs/P1-ERRATA-001_20260707_170425_passed.yaml"
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "3 files changed; staged stat recorded after final staging"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "no output, exit 0"
+  - command: "git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "no output, exit 0"
+  - command: "uv run --with PyYAML python - <<'PY' ... yaml.load(..., Loader=UniqueKeyLoader) ... PY"
+    result: passed
+    output_snippet: "yaml_ok human_overlay=True changed_files=3"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation-only task; no app/ or import graph changes."
+  not_applicable_reason: "No Python import boundary was changed or exercised by this documentation-only task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_implementation_task_requiring_import_boundary_check"
+  expiry_condition: "Run import boundary checks again for the next implementation task that changes app/ or tests/."
+security_scan_result:
+  result: passed
+  evidence: "No plaintext password/token/cookie/sessionid/access_token/refresh_token values were added. Changes are documentation and task-log evidence only."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no tests were added or modified."
+  not_applicable_reason: "Weak-test scan applies to test files; this task changed no tests."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_task_that_adds_or_modifies_tests"
+  expiry_condition: "Run weak-test scan when a task adds or modifies tests."
+ci_evidence:
+  result: not_applicable
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No commit, push, merge, or GitHub Actions run was requested or performed for this documentation-only task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "human_review_before_commit"
+  activation_task_id: "post_commit_or_post_merge_ci_observation_if_human_requests_it"
+  expiry_condition: "If this branch is later pushed or merged, CI evidence can be recorded by the human-controlled integration step."
+  evidence: "Local staged diff verification passed; no remote CI was triggered."
+review:
+  mode: self_check
+  reviewed_by: "codex"
+  reviewed_at: "2026-07-07T17:19:55+09:00"
+  notes: >
+    External Opus review and a separate Codex read-only review both approved
+    Plan v2 with no blocking findings. Non-blocking procedural notes were
+    folded into execution: human_overlay is included, anchors were re-verified
+    at execution time, CLAUDE.md and MANIFEST.md were included in the jsjy
+    forbidden-surface check, and changed_files was reconciled after staging.
+remaining_risks:
+  - "The original task prompt and Phase 1 plan still mention 3 formal entries plus 1 legacy note, but the human overlay intentionally removes jsjy from BLUEPRINT_ERRATA.md."
+  - "Independent Claude/Opus or human review remains available before commit/push/merge."
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: no package or archive created for this documentation-only task"
+package_scope: ""
+package_evidence: ""
