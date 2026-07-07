@@ -61,6 +61,7 @@ git ls-files --others --exclude-standard
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
 - Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
 - Current mainline order: `P1-ERRATA-001 -> P1-WORKFLOW-001 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
+- Phase 1 role / review / risk policy: `docs/phase1/ROLE_POLICY.md`.
 - Task Record: use the unified YAML format under `docs/phase1/task_logs/` and schema `docs/dev/task_record_schema.yaml`.
 - One session turn = one `task_id`. Start with `/phase-task <task_id>`.
 - Plan first; wait for human approval before edits.
