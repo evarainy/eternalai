@@ -1,0 +1,194 @@
+task_id: P1-GATE-001
+task_type: test
+result: passed
+started_at: "2026-07-07T12:20:00+09:00"
+completed_at: "2026-07-07T12:46:54+09:00"
+plan_approved_by: "evarainy"
+plan_approved_at: "2026-07-07T12:20:00+09:00"
+plan_approved_via: "Codex session"
+summary: >
+  Implemented the Golden Task regression gate. scripts/run_golden_tasks.py now
+  supports --gate, prints the same JSON summary as --summary, returns 1 for
+  threshold gate failures, and preserves infrastructure failure exit 2. The
+  gate uses evaluate_gate(summary) and covers failed>0, skipped default-fail
+  with an initially empty exemption set, positive >=80% by integer
+  cross-multiplication, negative ==100%, unknown category fail-closed, and
+  empty effective denominators fail-closed. build_summary keeps existing keys
+  and adds only positive_total, negative_total, positive_not_applicable, and
+  negative_not_applicable. CI Golden tasks step now invokes --gate.
+method: TDD
+acceptance_criteria_result:
+  - criterion: "AC-1: failed synthetic summary drives evaluate_gate failure and main(['--gate']) returns 1"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: test_failed_count_fails_gate_with_r1_reason and test_main_gate_returns_one_for_threshold_failure passed"
+  - criterion: "AC-2: positive 7/10 fails and exact 80 percent does not fail R4"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: test_positive_rate_below_80_percent_fails_and_exact_80_passes passed"
+  - criterion: "AC-3: negative effective denominator requires all passed"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: test_negative_effective_denominator_must_all_pass passed"
+  - criterion: "AC-4: failed > 0 fails independently"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: R1 assertion passed"
+  - criterion: "AC-5: not_applicable does not directly fail and JSON exposes positive_not_applicable/negative_not_applicable"
+    result: passed
+    evidence: "uv run python scripts/run_golden_tasks.py --gate output included positive_not_applicable=0 and negative_not_applicable=0; synthetic NA test passed"
+  - criterion: "AC-6: unexempt skipped fails; exemption set initially empty frozenset and only waives R2"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: test_unexempt_skipped_fails_and_exemption_only_waives_r2 passed; GATE_SKIP_EXEMPT_GT_IDS is frozenset()"
+  - criterion: "AC-7: not_applicable is excluded from denominator and no boundary/security summary fields are referenced"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py passed; rg -n 'boundary_|security_' scripts/run_golden_tasks.py tests/golden_tasks/test_golden_gate.py tests/golden_tasks/test_golden_tasks.py produced no output"
+  - criterion: "AC-8: CI Golden tasks step command is exactly uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    evidence: ".github/workflows/ci.yml diff changes only the Golden tasks step command from --summary to --gate"
+  - criterion: "AC-9: tests/architecture/ passes and was not modified"
+    result: passed
+    evidence: "uv run pytest tests/architecture/: 22 passed"
+  - criterion: "AC-10: new tests cover R1-R6, exemption semantics, fail-closed empty denominator, and pass weak-test checker"
+    result: passed
+    evidence: "uv run pytest tests/golden_tasks/test_golden_gate.py: 9 passed; uv run python scripts/check_weak_tests.py tests/golden_tasks/test_golden_gate.py: Weak-test check passed"
+  - criterion: "AC-11: --summary remains backward compatible and happy golden test assertions were not weakened"
+    result: passed
+    evidence: "uv run python scripts/run_golden_tasks.py --summary returned exit 0 with existing keys plus allowed additive keys; uv run pytest tests/golden_tasks/: 119 passed"
+failure_examples_tested:
+  - example: "F1: runner masks failed > 0 with exit 0"
+    result: not_triggered
+    evidence: "test_main_gate_returns_one_for_threshold_failure asserts exit_code == 1 for failed summary"
+  - example: "F2: not_applicable counted in denominator"
+    result: not_triggered
+    evidence: "test_not_applicable_is_excluded_from_denominator_without_failing_gate asserts R4 is not emitted when NA is excluded"
+  - example: "F3: boundary/security ghost summary fields referenced"
+    result: not_triggered
+    evidence: "rg -n 'boundary_|security_' on touched Python files produced no output"
+  - example: "F4: skipped silently counted as pass or ignored"
+    result: not_triggered
+    evidence: "test_unexempt_skipped_fails_and_exemption_only_waives_r2 asserts unexempt skipped emits R2"
+  - example: "F5: fixtures or FROZEN_GT_IDS modified to make gate green"
+    result: not_triggered
+    evidence: "git diff --cached --name-only contains no tests/golden_tasks/fixtures/ path and no FROZEN_GT_IDS change"
+  - example: "F6: gate failure swallowed by infrastructure exception path"
+    result: not_triggered
+    evidence: "test_main_gate_returns_one_for_threshold_failure returns 1 while test_main_infrastructure_failure_returns_two returns 2"
+  - example: "F7: only CI or only runner changed"
+    result: not_triggered
+    evidence: "staged diff includes scripts/run_golden_tasks.py and .github/workflows/ci.yml"
+  - example: "F8: forged test output or CI conclusion in Task Record"
+    result: not_triggered
+    evidence: "Task Record includes real local command output snippets; CI is explicitly deferred"
+  - example: "F9: commit/push/--no-verify used to trigger CI"
+    result: not_triggered
+    evidence: "No commit, push, merge, or --no-verify command was run; staged only for review"
+  - example: "F10: floating-point rate comparison"
+    result: not_triggered
+    evidence: "scripts/run_golden_tasks.py uses positive_passed * 5 < positive_effective * 4"
+step_verification_points:
+  - step: "SVP-1 TDD red"
+    result: passed
+    command: "uv run pytest tests/golden_tasks/test_golden_gate.py"
+    evidence: "Initial run failed with AttributeError: module 'scripts.run_golden_tasks' has no attribute 'evaluate_gate' and argparse unrecognized --gate"
+  - step: "SVP-2 TDD green"
+    result: passed
+    command: "uv run pytest tests/golden_tasks/"
+    evidence: "119 passed"
+  - step: "SVP-3 runner layer verification"
+    result: passed
+    command: "uv run pytest tests/golden_tasks/test_golden_gate.py"
+    evidence: "main(['--gate']) synthetic tests returned 1 for failed summary, 0 for passing summary, and 2 for loader failure"
+  - step: "SVP-4 current fixture rehearsal"
+    result: passed
+    command: "uv run python scripts/run_golden_tasks.py --gate"
+    evidence: "exit 0; summary reported total=11, passed=11, failed=0, skipped=0"
+  - step: "SVP-5 architecture, weak-test, lint, type"
+    result: passed
+    command: "uv run pytest tests/architecture/ && uv run python scripts/check_weak_tests.py tests/golden_tasks/test_golden_gate.py && uv run ruff check app/ tests/ scripts/run_golden_tasks.py scripts/check_weak_tests.py && uv run mypy app/"
+    evidence: "22 passed; Weak-test check passed; All checks passed; Success: no issues found in 46 source files"
+  - step: "SVP-6 staged diff and untracked check"
+    result: passed
+    command: "git diff --cached --name-only; git ls-files --others --exclude-standard"
+    evidence: "Staged paths are only allowed touched paths; untracked output contains pre-existing .DS_Store files, recorded as local OS noise and not staged"
+changed_files:
+  - .github/workflows/ci.yml
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-GATE-001_20260707_123030_passed.yaml
+  - scripts/run_golden_tasks.py
+  - tests/golden_tasks/test_golden_gate.py
+  - tests/golden_tasks/test_golden_tasks.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/golden_tasks/test_golden_gate.py"
+    result: passed
+    output_snippet: "collected 9 items; tests/golden_tasks/test_golden_gate.py .........; 9 passed in 0.01s"
+  - command: "uv run pytest tests/golden_tasks/"
+    result: passed
+    output_snippet: "collected 119 items; 119 passed in 0.08s"
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "exit 0; failed=0, passed=11, positive_total=7, negative_total=4, skipped=0"
+  - command: "uv run python scripts/run_golden_tasks.py --summary"
+    result: passed
+    output_snippet: "exit 0; failed=0, passed=11, positive_not_applicable=0, negative_not_applicable=0"
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "collected 22 items; 22 passed in 0.03s"
+  - command: "uv run python scripts/check_weak_tests.py tests/golden_tasks/test_golden_gate.py"
+    result: passed
+    output_snippet: "Weak-test check passed."
+  - command: "uv run ruff check app/ tests/ scripts/run_golden_tasks.py scripts/check_weak_tests.py"
+    result: passed
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 46 source files"
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: ".github/workflows/ci.yml; docs/phase1/task_logs/INDEX.md; docs/phase1/task_logs/P1-GATE-001_20260707_123030_passed.yaml; scripts/run_golden_tasks.py; tests/golden_tasks/test_golden_gate.py; tests/golden_tasks/test_golden_tasks.py"
+  - command: "git diff --cached --stat"
+    result: passed
+    output_snippet: "6 files changed; staged stat recorded after final staging"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "no output, exit 0"
+  - command: "git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "pre-existing .DS_Store files remain untracked and unstaged"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "uv run pytest tests/architecture/: 22 passed"
+security_scan_result:
+  result: passed
+  evidence: "No fixture, Trace, ResponseEnvelope expected output, log, or task prompt sensitive-value changes. Task Record contains no plaintext secrets."
+weak_test_scan_result:
+  result: passed
+  evidence: "uv run python scripts/check_weak_tests.py tests/golden_tasks/test_golden_gate.py: Weak-test check passed."
+ci_evidence:
+  result: not_applicable
+  run_id: "deferred_merge_after_human_review"
+  url_or_log_path: "deferred"
+  not_applicable_reason: "Real GitHub Actions CI red/green observation is deferred until after human review and merge."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "human_review_and_merge"
+  activation_task_id: "post_merge_human_ci_observation"
+  expiry_condition: "After the reviewed branch is merged and CI runs on GitHub."
+  evidence: "Local gate rehearsal passed; no commit, push, or merge was performed in this task."
+review:
+  mode: codex_review
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: "Independent read-only review found and remediation fixed Task Record not_applicable metadata and exact 80 percent/NA denominator test coverage before final review."
+remaining_risks:
+  - "Real GitHub Actions CI evidence is deferred until after human review and merge."
+  - "Pre-existing local forbidden-path modification docs/phase1/tasks/P1-GATE-001.md remains unstaged and was not touched by this execution."
+  - "Pre-existing .DS_Store files remain untracked and unstaged as local OS noise."
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: no package or archive created for this test/CI gate task"
+package_scope: ""
+package_evidence: ""
