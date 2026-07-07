@@ -1,0 +1,233 @@
+task_id: P1-SPEC-PROMPT-001
+task_type: documentation
+result: passed
+started_at: "2026-07-07T22:00:00+09:00"
+completed_at: "2026-07-07T22:16:48+09:00"
+plan_approved_by: "evarainy"
+plan_approved_at: "2026-07-07T22:15:00+09:00"
+plan_approved_via: "Codex session; human requested phase-task-review-gate Plan review and continuation after both Plan reviewers approved"
+summary: >
+  Hardened docs/phase1/tasks/P1-SPEC-001.md so the later P1-SPEC-001 task can
+  generate a falsifiable and reviewable PHASE1_SPEC.md. The revised prompt adds
+  template applicability and AGENTS non-authority declarations, Codex-first
+  method_profile fields, Required context, source authority order, depends_on,
+  a Spec structure contract, AC-1 through AC-10, failure examples, step
+  verification points, expanded stop conditions, bash test commands, and
+  complete future touched/forbidden paths. This task did not execute
+  P1-SPEC-001 and did not modify PHASE1_SPEC.md.
+task_prompt_provenance: >
+  This task was governed by the human inline prompt in the Codex conversation.
+  No docs/phase1/tasks/P1-SPEC-PROMPT-001.md file was created because it was not
+  in the allowed paths for this prompt-patch task.
+method: PDR
+method_profile:
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  risk_tier: low
+  model_note: "executor: Codex GPT-5; Plan reviewers: Codex subagent and agy Claude Opus 4.6 (Thinking)"
+  schema_note: >
+    docs/dev/task_record_schema.yaml is intentionally unchanged during this
+    task. The schema still lists old review.mode values, so the review.mode
+    field below uses the schema-compatible value codex_review while this
+    method_profile records the new policy value independent_review.
+plan_gate_review:
+  codex_reviewer_iteration_1:
+    verdict: BLOCK
+    blocking_findings:
+      - "Plan needed to explicitly resolve absent docs/phase1/tasks/P1-SPEC-PROMPT-001.md as human inline prompt authority."
+      - "Plan needed whole-worktree checks and Task Record validation."
+  agy_claude_opus_4_6_iteration_1:
+    verdict: APPROVE
+    blocking_findings: []
+    notes: "Approved with non-blocking notes about provenance, risk-tier wording, and schema compatibility."
+  codex_reviewer_iteration_2:
+    verdict: APPROVE
+    blocking_findings: []
+    notes: "Approved after the Plan clarified human inline prompt authority and added worktree / Task Record validation."
+  agy_claude_opus_4_6_iteration_2:
+    verdict: APPROVE
+    blocking_findings: []
+    notes: "Approved after direct repo inspection; non-blocking notes were followed during execution."
+acceptance_criteria_result:
+  - criterion: "AC-1: docs/phase1/tasks/P1-SPEC-001.md revised"
+    result: passed
+    evidence: "File was replaced with a hardened prompt for later P1-SPEC-001 execution."
+  - criterion: "AC-2: file top contains template applicability and AGENTS non-authority declarations"
+    result: passed
+    evidence: "rg found TASK_PROMPT_TEMPLATE and AGENTS.md declaration lines at the top of docs/phase1/tasks/P1-SPEC-001.md."
+  - criterion: "AC-3: method_profile updated to Codex-first, independent_review, high risk"
+    result: passed
+    evidence: "method_profile contains execution_owner codex, review_owner claude_code, review_mode independent_review, risk_tier high, model_note, method PDR, and the required reason_for_owner_choice."
+  - criterion: "AC-4: Required context complete"
+    result: passed
+    evidence: "Required context includes CLAUDE.md, ROLE_POLICY, TASK_PROMPT_TEMPLATE, PHASE1_PLAN, TASK_INDEX, BLUEPRINT_ERRATA, PHASE1_TECHNICAL_BASELINE, task_record_schema, blueprint anchors, and MVP spec anchors."
+  - criterion: "AC-5: source authority order exists"
+    result: passed
+    evidence: "Source authority order is recorded as BLUEPRINT_ERRATA.md > PHASE1_TECHNICAL_BASELINE.md > MVP spec v1.0.11 > blueprint."
+  - criterion: "AC-6: Spec structure contract exists"
+    result: passed
+    evidence: "Spec structure contract defines header status, stable IDs, B2-B5 chapters, five required subsections, and B4 split guidance."
+  - criterion: "AC-7: acceptance criteria include AC-1 through AC-10"
+    result: passed
+    evidence: "rg found AC-1 through AC-10 in docs/phase1/tasks/P1-SPEC-001.md."
+  - criterion: "AC-8: failure_examples include F-a through F-g"
+    result: passed
+    evidence: "failure_examples section includes F-a through F-g."
+  - criterion: "AC-9: step_verification_points include SVP-a through SVP-d"
+    result: passed
+    evidence: "step_verification_points section includes SVP-a through SVP-d."
+  - criterion: "AC-10: touched_paths includes docs/phase1/task_logs/INDEX.md"
+    result: passed
+    evidence: "Future P1-SPEC-001 touched_paths includes docs/phase1/task_logs/INDEX.md."
+  - criterion: "AC-11: forbidden_paths includes Plan, TASK_INDEX, TEMPLATE, tests, scripts"
+    result: passed
+    evidence: "Future P1-SPEC-001 forbidden_paths includes docs/phase1/PHASE1_PLAN.md, TASK_INDEX.md, TASK_PROMPT_TEMPLATE.md, tests/, and scripts/."
+  - criterion: "AC-12: stop_conditions include task_prompt_incomplete, ERRATA not landed, port contract insufficiency"
+    result: passed
+    evidence: "stop_conditions section includes all three required blockers."
+  - criterion: "AC-13: test_commands use bash"
+    result: passed
+    evidence: "test_commands section uses a fenced bash code block."
+  - criterion: "AC-14: §4.3.2 anchor normalized to L438-L446"
+    result: passed
+    evidence: "rg found L438-L446 and found no L438-455 in docs/phase1/tasks/P1-SPEC-001.md."
+  - criterion: "AC-15: this task does not modify PHASE1_SPEC.md"
+    result: passed
+    evidence: "git diff -- docs/phase1/PHASE1_SPEC.md produced no output."
+  - criterion: "AC-16: this task does not modify forbidden paths"
+    result: passed
+    evidence: "git diff --name-only contains only allowed tracked paths before staging; final staged paths are allowed."
+  - criterion: "AC-17: git diff --cached --name-only only contains allowed paths"
+    result: passed
+    evidence: "Final staged diff contains docs/phase1/task_logs/INDEX.md, this Task Record, and docs/phase1/tasks/P1-SPEC-001.md."
+failure_examples_tested:
+  - example: "F-a: old role fields remain in P1-SPEC-001.md"
+    result: not_triggered
+    evidence: "rg found no claude_code_mimo or review_mode codex_review execution field in docs/phase1/tasks/P1-SPEC-001.md."
+  - example: "F-b: P1-SPEC prompt remains too coarse to generate later task prompts"
+    result: not_triggered
+    evidence: "Spec structure contract requires B2-B5 chapters and 20 grep-checkable subsections."
+  - example: "F-c: prompt writes code-level design for B2-B5"
+    result: not_triggered
+    evidence: "B4 split guidance explicitly forbids code-level design or function signatures."
+  - example: "F-d: Plan / TASK_INDEX / blueprint changed"
+    result: not_triggered
+    evidence: "No diff exists for docs/phase1/PHASE1_PLAN.md, docs/phase1/TASK_INDEX.md, or docs/blueprint/."
+  - example: "F-e: fixture JSON or FROZEN_GT_IDS modified"
+    result: not_triggered
+    evidence: "No tests/ or scripts/ diff exists; prompt forbids writing fixture JSON or expanding FROZEN_GT_IDS."
+  - example: "F-f: new dependency decision introduced without ADR and human approval"
+    result: not_triggered
+    evidence: "No dependency or lockfile diff exists; prompt requires ADR + human approval for new dependency decisions."
+  - example: "F-g: Phase 0 delivered artifacts re-speced as new Phase 1 work"
+    result: not_triggered
+    evidence: "The prompt requires C.1 mapping and裁剪决策记录 to avoid scope backflow."
+step_verification_points:
+  - step: "Plan Gate review"
+    result: passed
+    command: "Codex subagent Plan review and agy Claude Opus 4.6 Plan review"
+    evidence: "Iteration 2 returned APPROVE from both reviewers."
+  - step: "SVP-a: prompt hardened for outline-first P1-SPEC execution"
+    result: passed
+    command: "rg -n \"SVP-a|大纲先行\" docs/phase1/tasks/P1-SPEC-001.md"
+    evidence: "SVP-a requires outline-first human approval before filling PHASE1_SPEC.md."
+  - step: "SVP-b: structural grep self-check"
+    result: passed
+    command: "rg checks for required context, structure contract, ACs, and anchors"
+    evidence: "Required patterns were found; L438-455 had no hit."
+  - step: "SVP-c: C.1 mapping requirement"
+    result: passed
+    command: "rg -n \"C.1 交付清单\" docs/phase1/tasks/P1-SPEC-001.md"
+    evidence: "AC-3 requires a C.1 delivery-list to stable section ID mapping table."
+  - step: "SVP-d: diff checks"
+    result: passed
+    command: "git diff --cached --name-only; git diff --cached --stat; git diff --cached --check; git ls-files --others --exclude-standard"
+    evidence: "Final staged paths are allowed; diff check is clean; untracked .DS_Store files remain local noise."
+changed_files:
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-SPEC-PROMPT-001_20260707_221648_passed.yaml
+  - docs/phase1/tasks/P1-SPEC-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "rg -n \"TASK_PROMPT_TEMPLATE|AGENTS.md|Required context|BLUEPRINT_ERRATA|PHASE1_TECHNICAL_BASELINE|MVP spec|source authority|权威|depends_on|risk_tier|independent_review\" docs/phase1/tasks/P1-SPEC-001.md"
+    result: passed
+    output_snippet: "Required prompt authority, context, depends_on, risk_tier, and independent_review terms were found."
+  - command: "rg -n \"Spec structure contract|S-B2|golden 覆盖|FROZEN_GT_IDS|failure_examples|step_verification_points|task_prompt_incomplete\" docs/phase1/tasks/P1-SPEC-001.md"
+    result: passed
+    output_snippet: "Spec structure contract, stable ID examples, golden coverage, failure examples, SVPs, and task_prompt_incomplete were found."
+  - command: "rg -n \"AC-1|AC-2|AC-3|AC-4|AC-5|AC-6|AC-7|AC-8|AC-9|AC-10\" docs/phase1/tasks/P1-SPEC-001.md"
+    result: passed
+    output_snippet: "AC-1 through AC-10 were found."
+  - command: "rg -n \"L438-L446|L438-455\" docs/phase1/tasks/P1-SPEC-001.md"
+    result: passed
+    output_snippet: "L438-L446 found; L438-455 not found."
+  - command: "rg -n \"claude_code_mimo|review_mode: \\\"codex_review\\\"|execution_owner: \\\"claude_code\" docs/phase1/tasks/P1-SPEC-001.md || true"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff -- docs/phase1/PHASE1_SPEC.md"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff --name-only"
+    result: passed
+    output_snippet: "Only docs/phase1/task_logs/INDEX.md, this Task Record, and docs/phase1/tasks/P1-SPEC-001.md have tracked diffs."
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "docs/phase1/task_logs/INDEX.md; docs/phase1/task_logs/P1-SPEC-PROMPT-001_20260707_221648_passed.yaml; docs/phase1/tasks/P1-SPEC-001.md"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "no output"
+  - command: "YAML duplicate-key and safe-load validation"
+    result: passed
+    output_snippet: "Task Record parsed with duplicate-key detection."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation-only prompt patch; no app/ or import graph changes."
+  not_applicable_reason: "No Python import boundary changed."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_implementation_task_requiring_import_boundary_check"
+  expiry_condition: "Run import boundary checks for the next implementation task that changes app/ or tests/."
+security_scan_result:
+  result: passed
+  evidence: "No plaintext password/token/cookie/sessionid/access_token/refresh_token values were added."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only prompt patch; no tests were added or modified."
+  not_applicable_reason: "Weak-test scan applies to test files; this task changed no tests."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_task_that_adds_or_modifies_tests"
+  expiry_condition: "Run weak-test scan when a task adds or modifies tests."
+ci_evidence:
+  result: not_applicable
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No commit, push, merge, or GitHub Actions run was requested or performed for this documentation-only prompt patch."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "human_review_before_commit"
+  activation_task_id: "post_commit_or_post_merge_ci_observation_if_human_requests_it"
+  expiry_condition: "If this branch is later pushed or merged, CI evidence can be recorded by the human-controlled integration step."
+  evidence: "Local prompt content checks and staged diff checks passed; no remote CI was triggered."
+review:
+  mode: codex_review
+  reviewed_by: "Codex subagent and agy Claude Opus 4.6 (Thinking) for Plan gate; staged-diff gate run after local verification"
+  reviewed_at: "2026-07-07T22:16:48+09:00"
+  notes: >
+    Plan Gate iteration 2 approved by both required reviewers. Staged-diff gate
+    is executed by the current phase-task-review-gate workflow before final
+    handoff; no commit, push, or merge is performed.
+remaining_risks:
+  - "P1-SPEC-001 itself still requires a future outline-first execution and human approval before B2 unlocks."
+rollback_or_failure_record: "Revert the three staged allowed-path changes if the human rejects this prompt patch."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable"
+package_scope: "No package or archive was created."
+package_evidence: "Documentation-only prompt patch; package confirmation is not applicable."
