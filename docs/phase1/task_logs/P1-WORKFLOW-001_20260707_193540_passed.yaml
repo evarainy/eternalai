@@ -1,0 +1,238 @@
+task_id: P1-WORKFLOW-001
+task_type: documentation
+result: passed
+started_at: "2026-07-07T18:09:00+09:00"
+completed_at: "2026-07-07T19:35:40+09:00"
+plan_approved_by: "evarainy"
+plan_approved_at: "2026-07-07T19:30:00+09:00"
+plan_approved_via: "Codex session after Codex reviewer approval and agy Claude Opus 4.6 Plan review approval"
+summary: >
+  Established docs/phase1/ROLE_POLICY.md as the Phase 1 role, review, and risk
+  policy source of truth. Updated TASK_PROMPT_TEMPLATE.md to use Codex-first
+  Phase 1 defaults, tool-neutral review_mode values, risk_tier guidance,
+  legacy migration/grandfather notes, and prompt detail policy. Updated
+  TASK_INDEX.md section 7 with the new review.mode values and historical-value
+  interpretation note. Added a minimal CLAUDE.md pointer and updated the task
+  log index row. No schema, task prompt, code, test, CI, Phase 0, blueprint, or
+  AGENTS.md files were modified.
+method: not_applicable
+method_not_applicable_reason: >
+  Pure documentation and workflow policy task. It changes no production code,
+  tests, runtime behavior, CI workflow, dependency graph, or schema.
+method_not_applicable_scope: "current_phase_only; documentation-only workflow policy update"
+method_not_applicable_blocked_by_task_id: "not_blocked"
+method_not_applicable_activation_task_id: "next_task_that_changes_production_code_tests_ci_or_schema"
+method_not_applicable_expiry_condition: "Engineering method selection must be re-evaluated for the next implementation, test, CI, or schema task."
+method_not_applicable_evidence: "Staged paths are limited to allowed documentation and task-log paths."
+method_profile:
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  risk_tier: low
+  model_note: "executor: Codex GPT-5; plan reviewers: Codex subagent and agy Claude Opus 4.6 (Thinking); staged reviewer per gate"
+  schema_note: >
+    docs/dev/task_record_schema.yaml is intentionally unchanged during this
+    task. The schema still lists old review.mode values, so the review.mode
+    field below uses the schema-compatible value codex_review while this
+    method_profile records the new policy value independent_review.
+plan_gate_review:
+  codex_reviewer:
+    verdict: APPROVE
+    blocking_findings: []
+    notes: >
+      Approved Plan v2 after it clarified that the pasted human prompt is the
+      task authority because docs/phase1/tasks/P1-WORKFLOW-001.md is absent and
+      forbidden to create.
+  agy_claude_opus_4_6:
+    verdict: APPROVE
+    blocking_findings: []
+    notes: >
+      Approved Plan v2. Non-blocking notes were folded into execution:
+      historical self_check and human_optional values are covered by migration
+      notes, the unchanged schema divergence is explicit, and .DS_Store files
+      are treated as untracked local noise.
+acceptance_criteria_result:
+  - criterion: "AC-1: docs/phase1/ROLE_POLICY.md exists"
+    result: passed
+    evidence: "Created docs/phase1/ROLE_POLICY.md."
+  - criterion: "AC-2: ROLE_POLICY.md contains all six required sections"
+    result: passed
+    evidence: "rg found Roles & canonical agent ids, Default assignment for Phase 1, review_mode enum, risk_tier, Legacy migration table, and AGENTS.md status."
+  - criterion: "AC-3: TASK_PROMPT_TEMPLATE.md no longer makes Claude/MiMo the Phase 1 default executor"
+    result: passed
+    evidence: "Template defaults now state execution_owner: codex and review_owner: claude_code; old owner values appear only in migration/grandfather notes."
+  - criterion: "AC-4: New default method_profile uses codex, claude_code, independent_review, and risk_tier"
+    result: passed
+    evidence: "docs/phase1/TASK_PROMPT_TEMPLATE.md method_profile example includes execution_owner: codex, review_owner: claude_code, review_mode: independent_review, and risk_tier."
+  - criterion: "AC-5: Template includes legacy migration and grandfather notes"
+    result: passed
+    evidence: "docs/phase1/TASK_PROMPT_TEMPLATE.md includes Legacy migration / grandfather covering codex_review, self_check, human_optional, and claude_code_mimo."
+  - criterion: "AC-6: Template includes prompt detail policy"
+    result: passed
+    evidence: "docs/phase1/TASK_PROMPT_TEMPLATE.md includes Prompt detail policy."
+  - criterion: "AC-7: TASK_INDEX.md review.mode enum is updated"
+    result: passed
+    evidence: "docs/phase1/TASK_INDEX.md section 7 now lists none | self_review | independent_review | human_review and a historical-value note."
+  - criterion: "AC-8: CLAUDE.md only has a minimal pointer update"
+    result: passed
+    evidence: "git diff -- CLAUDE.md shows one added line pointing to docs/phase1/ROLE_POLICY.md."
+  - criterion: "AC-9: docs/dev/task_record_schema.yaml has no diff"
+    result: passed
+    evidence: "git diff -- docs/dev/task_record_schema.yaml produced no output."
+  - criterion: "AC-10: docs/phase1/tasks/ has no diff"
+    result: passed
+    evidence: "git diff -- docs/phase1/tasks/ produced no output."
+  - criterion: "AC-11: AGENTS.md has no diff"
+    result: passed
+    evidence: "git diff -- AGENTS.md produced no output."
+  - criterion: "AC-12: scripts, tests, .github, app, and web have no diff"
+    result: passed
+    evidence: "git diff -- scripts/ tests/ .github/ app/ web/ produced no output."
+  - criterion: "AC-13: git diff --cached --name-only contains only allowed paths"
+    result: passed
+    evidence: "Final staged diff contains only CLAUDE.md, docs/phase1/ROLE_POLICY.md, docs/phase1/TASK_INDEX.md, docs/phase1/TASK_PROMPT_TEMPLATE.md, docs/phase1/task_logs/INDEX.md, and this Task Record."
+  - criterion: "AC-14: git diff --cached --check is clean"
+    result: passed
+    evidence: "git diff --cached --check produced no output."
+failure_examples_tested:
+  - example: "Schema was modified to add model/version fields"
+    result: not_triggered
+    evidence: "git diff -- docs/dev/task_record_schema.yaml produced no output."
+  - example: "task_record_lint or scripts/tests were added"
+    result: not_triggered
+    evidence: "No scripts/ or tests/ diff; no new lint script was created."
+  - example: "Historical B1 prompts were back-migrated"
+    result: not_triggered
+    evidence: "git diff -- docs/phase1/tasks/ produced no output."
+  - example: "AGENTS.md was modified"
+    result: not_triggered
+    evidence: "git diff -- AGENTS.md produced no output."
+  - example: "TASK_PROMPT_TEMPLATE.md was broadly rewritten beyond role/review/risk policy"
+    result: not_triggered
+    evidence: "Diff is limited to version/pointer, role/review/risk policy blocks, review boundary wording, and B2+ review_mode generation rule."
+  - example: "Code, tests, CI, Phase 0, blueprint, plan, spec, or errata files were modified"
+    result: not_triggered
+    evidence: "Forbidden diff checks produced no output."
+step_verification_points:
+  - step: "SVP-1: ROLE_POLICY sections"
+    result: passed
+    command: "rg -n \"Roles & canonical agent ids|Default assignment for Phase 1|review_mode enum|risk_tier|Legacy migration table|AGENTS.md status\" docs/phase1/ROLE_POLICY.md"
+    evidence: "All six section headings were found."
+  - step: "SVP-2: Template residual old-value check"
+    result: passed
+    command: "rg -ni \"mimo|Claude Code / MiMo|默认.*Claude|codex_review|human_optional|self_check\" docs/phase1/TASK_PROMPT_TEMPLATE.md docs/phase1/TASK_INDEX.md docs/phase1/ROLE_POLICY.md"
+    evidence: "Old values appear only in migration/grandfather or historical interpretation notes."
+  - step: "SVP-3: review_mode enum consistency"
+    result: passed
+    command: "rg -n \"self_review|independent_review|human_review|none\" docs/phase1/TASK_PROMPT_TEMPLATE.md docs/phase1/TASK_INDEX.md docs/phase1/ROLE_POLICY.md"
+    evidence: "New enum appears in ROLE_POLICY.md, TASK_PROMPT_TEMPLATE.md, and TASK_INDEX.md."
+  - step: "SVP-4: CLAUDE.md minimal diff"
+    result: passed
+    command: "git diff -- CLAUDE.md"
+    evidence: "One line added; no deletion."
+  - step: "SVP-5: Boundary confirmation"
+    result: passed
+    command: "git diff --cached --name-only; git diff --cached --stat; git ls-files --others --exclude-standard"
+    evidence: "Staged paths are allowed; untracked .DS_Store files are local noise and not staged."
+  - step: "SVP-6: Task Record YAML validation"
+    result: passed
+    command: "uv run --with PyYAML python - <<'PY' ... UniqueKeyLoader ... PY"
+    evidence: "YAML parsed with duplicate-key detection."
+changed_files:
+  - CLAUDE.md
+  - docs/phase1/ROLE_POLICY.md
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/TASK_PROMPT_TEMPLATE.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-WORKFLOW-001_20260707_193540_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "git branch --show-current; git status --short; git diff --cached --name-only; git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "branch phase1/P1-WORKFLOW-001; no staged files before execution; untracked docs/.DS_Store and docs/phase1/.DS_Store noted as local noise and not staged"
+  - command: "rg -n \"Roles & canonical agent ids|Default assignment for Phase 1|review_mode enum|risk_tier|Legacy migration table|AGENTS.md status\" docs/phase1/ROLE_POLICY.md"
+    result: passed
+    output_snippet: "All six required ROLE_POLICY.md headings found."
+  - command: "rg -n \"claude_code_mimo|codex_review|independent_review|self_review|human_review|risk_tier|ROLE_POLICY|grandfather|migration|self_check|human_optional\" docs/phase1/TASK_PROMPT_TEMPLATE.md docs/phase1/TASK_INDEX.md docs/phase1/ROLE_POLICY.md"
+    result: passed
+    output_snippet: "New policy terms found; historical terms limited to migration/grandfather notes."
+  - command: "rg -n \"ROLE_POLICY\" CLAUDE.md"
+    result: passed
+    output_snippet: "CLAUDE.md contains the single ROLE_POLICY pointer line."
+  - command: "rg -n \"No commit, no push, no merge|--no-verify|changed_files|Task Record 中所有证据|失败后处理|Failure Record\" docs/phase1/TASK_PROMPT_TEMPLATE.md"
+    result: passed
+    output_snippet: "No-commit, --no-verify, changed_files, evidence, and failure-handling anchors remain present."
+  - command: "git diff -- docs/dev/task_record_schema.yaml"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff -- AGENTS.md"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff -- docs/phase1/tasks/"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff -- scripts/ tests/ .github/ app/ web/"
+    result: passed
+    output_snippet: "no output"
+  - command: "git diff --cached --name-only"
+    result: passed
+    output_snippet: "CLAUDE.md; docs/phase1/ROLE_POLICY.md; docs/phase1/TASK_INDEX.md; docs/phase1/TASK_PROMPT_TEMPLATE.md; docs/phase1/task_logs/INDEX.md; docs/phase1/task_logs/P1-WORKFLOW-001_20260707_193540_passed.yaml"
+  - command: "git diff --cached --check"
+    result: passed
+    output_snippet: "no output"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation-only task; no app/ or import graph changes."
+  not_applicable_reason: "No Python import boundary changed."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_implementation_task_requiring_import_boundary_check"
+  expiry_condition: "Run import boundary checks for the next implementation task that changes app/ or tests/."
+security_scan_result:
+  result: passed
+  evidence: "No plaintext password/token/cookie/sessionid/access_token/refresh_token values were added."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no tests were added or modified."
+  not_applicable_reason: "Weak-test scan applies to test files; this task changed no tests."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next_task_that_adds_or_modifies_tests"
+  expiry_condition: "Run weak-test scan when a task adds or modifies tests."
+ci_evidence:
+  result: not_applicable
+  run_id: "not_applicable"
+  url_or_log_path: "not_applicable"
+  not_applicable_reason: "No commit, push, merge, or GitHub Actions run was requested or performed for this documentation-only task."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "human_review_before_commit"
+  activation_task_id: "post_commit_or_post_merge_ci_observation_if_human_requests_it"
+  expiry_condition: "If this branch is later pushed or merged, CI evidence can be recorded by the human-controlled integration step."
+  evidence: "Local content and staged diff checks passed; no remote CI was triggered."
+review:
+  mode: codex_review
+  reviewed_by: "codex subagent and agy Claude Opus 4.6 (Thinking) for Plan gate; staged-diff gate pending before commit"
+  reviewed_at: "2026-07-07T19:35:40+09:00"
+  notes: >
+    Schema-compatible review.mode is codex_review because
+    docs/dev/task_record_schema.yaml is intentionally unchanged in this task.
+    The new policy value for this task is independent_review, recorded in
+    method_profile.review_mode_policy. docs/phase1/task_logs/INDEX.md says
+    humans approve rows; the P1-WORKFLOW-001 row is included under the current
+    human-approved task execution and remains subject to human review before
+    commit/merge.
+remaining_risks:
+  - "docs/dev/task_record_schema.yaml still carries historical review.mode values by design; schema/lint work is deferred to P1-WORKFLOW-002."
+  - "Untracked docs/.DS_Store and docs/phase1/.DS_Store are local machine noise and were not staged."
+rollback_or_failure_record: ""
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: no package or archive created for this documentation-only task"
+package_scope: ""
+package_evidence: ""

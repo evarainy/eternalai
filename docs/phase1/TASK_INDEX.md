@@ -103,5 +103,6 @@ docs/dev/task_record_schema.yaml
 
 关键要求（沿用 Phase 0 v1.0.11 规范）：
 - `not_applicable` 必须包含 reason、scope、blocked_by_task_id、activation_task_id、expiry_condition 和 evidence。
-- `review.mode` 可为 `none | self_check | human_optional | codex_review`。
+- `review.mode` 可为 `none | self_review | independent_review | human_review`。
+- 旧 `codex_review`、`self_check`、`human_optional` 只用于历史记录解释，按 `docs/phase1/ROLE_POLICY.md` 的 migration table 处理。
 - `package_confirmation_status` 可为 `created | not_created | not_applicable`。

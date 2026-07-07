@@ -1,6 +1,8 @@
-# TASK_PROMPT_TEMPLATE — Phase 1 v1.0.0
+# TASK_PROMPT_TEMPLATE — Phase 1 v1.1.0
 
 将下面模板复制给 Codex / Claude Code。每次只替换一个 `task_id` 和对应任务内容。不要一次性执行整个 Batch。
+
+Phase 1 role / review / risk policy 见 `docs/phase1/ROLE_POLICY.md`。
 
 ````markdown
 你现在只允许执行一个任务：
@@ -15,7 +17,7 @@
 ## 全局硬约束
 
 - Codex / generic coding agent: read `AGENTS.md`
-- Claude Code / MiMo: read `CLAUDE.md`
+- Claude Code: read `CLAUDE.md`
 
 按 `docs/phase0/CONTEXT_LOADING_STRATEGY.md` 只加载当前工具需要的文件；不要把整份 Phase 1 spec 粘贴进本任务上下文。本模板仍是每次单任务执行的直接约束。（`docs/phase0/CONTEXT_LOADING_STRATEGY.md` 跨阶段沿用）
 
@@ -31,16 +33,20 @@
 
 ## 角色与工程方法
 
+Phase 1 role / review / risk policy 见 `docs/phase1/ROLE_POLICY.md`。
+
 B2+ per-task prompt 的 Task YAML 必须包含 `method_profile` 字段：
 
 ```yaml
 method_profile:
   execution_role: "execution | review | mixed | documentation"
-  execution_owner: "claude_code_mimo | codex | human | mixed"
-  review_owner: "codex | claude_code_mimo | human | separate_session | none"
-  review_mode: "none | codex_review | human_optional"
+  execution_owner: "codex"
+  review_owner: "claude_code"
+  review_mode: "independent_review"
+  risk_tier: "low | medium | high"
   method: "PDR | BDD | TDD | mixed | not_applicable"
-  reason_for_owner_choice: "<why this owner/reviewer/method is appropriate>"
+  model_note: "<temporary free text for executor/reviewer model names until schema support lands>"
+  reason_for_owner_choice: "<why this owner/reviewer/method is appropriate; one line is enough when using defaults>"
 ```
 
 ### Engineering Method Selection（速查）
@@ -53,21 +59,49 @@ method_profile:
 | 一个任务同时含代码实现和行为闭环 | mixed | 必须说明哪部分 TDD、哪部分 BDD/PDR；不允许用 mixed 逃避证据要求 |
 | 文档同步 / cleanup / research-only / 索引同步 | not_applicable | 必须写明 reason / scope / evidence；不能留空 |
 
-### execution_owner 选择
+### Phase 1 role defaults
 
-- **默认**: Claude Code / MiMo 执行，Codex 独立审查。适用于 documentation、cleanup、repo-navigation、prompt/template maintenance、environment-heavy spike。
-- **Codex 执行覆盖**: 复杂/核心 implementation、架构敏感 production code、API contract、parser/validator/schema/runtime logic、test-heavy/regression-sensitive、安全敏感逻辑。
-- **审查独立性**: executor 不能作为唯一 approver。Claude Code 执行 → Codex 默认审查。Codex 执行 → Claude Code / human / separate review session 审查。Self-review 可作为 first pass，但不替代独立审查。
+- **默认**: Codex 执行并自审；Claude Code / Opus 做独立只读 review；human 负责 Plan 批准、merge、deferred evidence。
+- **审查独立性**: executor 不能作为唯一 approver。Self-review 可作为 first pass；`high` risk task 必须有 `independent_review`。
+- 具体策略以 `docs/phase1/ROLE_POLICY.md` 为准；本模板只保留 prompt 生成所需的最小字段示例。
 
 ### review_mode 规则
 
-- repository-changing Phase 1 tasks default to `codex_review`（包括 implementation / test / infrastructure / documentation / template / cleanup / baseline summary / navigation sync）。
-- `none` 或 `human_optional` 仅用于：纯讨论、纯草稿、不修改文件、不产生 staged diff、不生成 Task Record。
+- 新 prompt 只能使用工具中立枚举：`self_review` / `independent_review` / `human_review` / `none`。
+- `review_mode` 记录审查过程形态，不记录工具名；具体执行者记录在 `execution_owner` / `review_owner`。
+- `codex_review`、`self_check`、`human_optional`、`claude_code_mimo` 等旧值只用于解读历史 artifacts，不回写历史 prompts / task logs。
 - Review session 必须只读，不修改代码。
+
+### risk_tier 规则
+
+- `risk_tier` 取值：`low | medium | high`。
+- 触及 CI / gate / 阈值 / frozen ids / fixtures / schema = `high`。
+- 触及 app 代码或测试 = `medium`。
+- 纯 docs = `low`。
+- 未声明时默认 `medium`。
+- 人工可上调，不得下调已判定为 `high` 的任务。
+- `high` 必须 `independent_review`。
+
+### Legacy migration / grandfather
+
+| 旧值 | 新解释 |
+|---|---|
+| `codex_review` | reviewer 独立于 executor 时解释为 `independent_review`；同一 executor 自审时解释为 `self_review`。 |
+| `self_check` | 解释为 `self_review`。 |
+| `human_optional` | 有人工审查证据时解释为 `human_review`；否则按证据解释为 `none` 或 `self_review`。 |
+| `claude_code_mimo` | 解释为 `claude_code`。 |
+
+已执行或在飞的 B1 artifacts 旧枚举值按历史上下文解释，不批量迁移。新生成的 prompts 必须使用 `docs/phase1/ROLE_POLICY.md` 中的新枚举和 canonical owner ids。
+
+### Prompt detail policy
+
+- Task prompt 约束结果契约，不约束实现步骤。
+- 必须保留 acceptance criteria、allowed paths、forbidden paths、evidence requirements、stop conditions。
+- Step-by-step SOP 只允许在 `risk_tier: high` 且步骤本身是验收对象时出现。
 
 详细 guardrails 见 `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md` "Engineering Method Selection" 章节。（跨阶段沿用）
 
-## v1.0.0 执行规则
+## v1.1.0 执行规则
 
 - `P1-PREP-*` 是 execution-pack-only preparation tasks，不属于业务实现任务。
 - `not_applicable` 必须写明 reason、scope、blocked_by_task_id、activation_task_id、expiry_condition 和 evidence；不得掩盖失败。
@@ -224,16 +258,15 @@ phase1(<task_id>): <one-line summary>
 
 ### 角色分工
 - Roles are assigned per task, not hard-coded by tool.
-- Claude Code / MiMo: 默认执行角色，适用于 documentation、cleanup、repo-navigation、prompt/template maintenance、environment-heavy spike。
-- Codex: 默认独立审查角色（当 `review_mode: codex_review` 时）。
-- Codex 可作为执行角色覆盖，适用于 complex/core implementation、architecture-sensitive code、API contract、parser/validator/schema/runtime、test-heavy、security-sensitive。
+- Phase 1 默认 `execution_owner: codex`；默认 `review_owner: claude_code`。
+- Codex 执行并自审；Claude Code / Opus 做独立只读 review；human 负责 Plan 批准、merge、deferred evidence。
 - 不管谁执行，executor 不能作为唯一 approver。
-- repository-changing tasks 必须有独立审查，除非 task prompt 明确说明豁免理由。
+- repository-changing tasks 的 review 要求由 `risk_tier` 和 `docs/phase1/ROLE_POLICY.md` 决定。
 - Review session 必须只读，不修改代码。
 - Self-review 可作为 first pass，但不替代独立审查。
 
-### Codex review 流程（当 review_mode: codex_review 时）
-1. 执行者（Claude Code / MiMo 或 Codex）完成代码实现并生成 Task Record。
+### Independent review 流程（当 review_mode: independent_review 时）
+1. 执行者完成代码或文档实现并生成 Task Record。
 2. 审查者审查 staged diff、Task Record 和 acceptance criteria。
 3. 审查使用 `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md` 中 Review Guardrails。（跨阶段沿用）
 4. 审查结果为 PASS 或 FAIL + blocking issues；审查不自动修改代码。
@@ -254,10 +287,11 @@ phase1(<task_id>): <one-line summary>
 
 6. 任务完成后可选执行 Human Review Checklist（非阻断）。
 
-## v1.0.0 Golden Task and Review Clarification
+## v1.1.0 Golden Task and Review Clarification
 
 - Golden Task 正向任务通过率必须 >= 80%；负向路径 / 边界路径 / 安全拒绝路径必须 100% 通过；GT-012 多 active 绑定但未指定 scope 必须通过。
 - Human Review Checklist 是 optional / recommended；任务完成不因缺少人工 diff review 阻断，但必须有 self-check、Task Record 和可引用证据。
+- v1.1.0 起新 prompts 使用 `docs/phase1/ROLE_POLICY.md`。已执行或在飞的 B1 artifacts grandfather，按其生成时上下文解释，不批量迁移。
 
 
 ## B2+ prompt gate
@@ -269,7 +303,7 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 1. B2-B5 启动前必须生成对应 `docs/phase1/tasks/<task_id>.md`。
 2. 每个 per-task prompt 必须包含 method_profile 字段（格式见上方 "角色与工程方法" 章节）。
 3. method 选择参考本文档 "Engineering Method Selection" 速查表。
-4. review_mode 默认值：repository-changing tasks → `codex_review`；纯讨论/草稿/不修改文件 → `none` 或 `human_optional`。
+4. review_mode 使用 `none | self_review | independent_review | human_review`；默认按 `docs/phase1/ROLE_POLICY.md` 和 `risk_tier` 判定。
 5. 每个 task 必须声明 allowed_paths / forbidden_paths、evidence requirements、review_mode / execution_owner / review_owner。
 6. 每个 task 必须引用当前 Phase 1 技术基线（如果相关）。
 7. 缺失 per-task prompt 或 method_profile 时，停止并输出 `task_prompt_incomplete`。
