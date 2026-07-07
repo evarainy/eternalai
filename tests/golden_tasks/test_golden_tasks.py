@@ -571,6 +571,18 @@ def build_summary(results: Sequence[GoldenTaskResult]) -> dict[str, Any]:
             for result in results
             if result.category == "negative" and result.status == "passed"
         ),
+        "positive_total": sum(1 for result in results if result.category == "positive"),
+        "negative_total": sum(1 for result in results if result.category == "negative"),
+        "positive_not_applicable": sum(
+            1
+            for result in results
+            if result.category == "positive" and result.status == "not_applicable"
+        ),
+        "negative_not_applicable": sum(
+            1
+            for result in results
+            if result.category == "negative" and result.status == "not_applicable"
+        ),
         "results": [result.to_summary_item() for result in results],
     }
 
