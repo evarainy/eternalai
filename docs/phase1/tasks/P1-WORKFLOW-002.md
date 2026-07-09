@@ -3,10 +3,10 @@
 ```yaml
 task_id: "P1-WORKFLOW-002"
 task_type: "documentation"
-goal: "把 role/review/risk 政策收敛为单一事实源，按 risk_tier 分级仪式，清除废弃枚举与死引用，使仓库文档只承载结果契约、过程编排全部归 claude-codex skill"
+goal: "把 role/review/risk 政策收敛为单一事实源，按 risk_tier 分级仪式，清除废弃枚举与死引用，使仓库文档只承载结果契约、过程编排全部归 codex-claude skill"
 non_goals:
   - "不修改任何 app/、tests/、web/、scripts/ 代码"
-  - "不修改 claude-codex skill 本身（skill 移植走 _scratch/V8_PORT_RUNBOOK_20260708.md，不在本任务内）"
+  - "不修改 codex-claude skill 本身（skill 移植走 _scratch/V8_PORT_RUNBOOK_20260708.md，不在本任务内）"
   - "不批量回填历史 task prompts / task logs 的旧枚举（grandfather 原则）"
   - "不做 PHASE1_PLAN.md 修订史归档（记入 backlog，批次间隙处理）"
 method_profile:
@@ -43,7 +43,7 @@ branch: "phase1/P1-WORKFLOW-002"
 
 ## 决策背景（本任务书编码了 2026-07-08 的人工决策，Gate 1 批准本任务 Plan 即视为决策生效）
 
-- D1 唯一编排：全局 `claude-codex` skill（Codex-first v8 Windows 移植版）是唯一 workflow SOP。仓库文档只写**结果契约**（关闭任务时什么必须为真），不写**过程编排**（谁在哪一步做什么）。项目内 `phase-task` skill 及其 hooks 已于 2026-07-08 人工批准后本地删除。
+- D1 唯一编排：全局 `codex-claude` skill（Codex-first v8 Windows 移植版）是唯一 workflow SOP。仓库文档只写**结果契约**（关闭任务时什么必须为真），不写**过程编排**（谁在哪一步做什么）。项目内 `phase-task` skill 及其 hooks 已于 2026-07-08 人工批准后本地删除。
 - D2 通用评审底线：**所有改动仓库的任务，不论 risk_tier，一律要求 `independent_review`**。原因：人工只读方案与报告、不读代码，独立评审是唯一缺陷网。降级必须在 task prompt 显式写明理由并经人工批准。
 - D3 模型约束：评审模型 pin `claude-opus-4-8`。**Fable 5 不进入工作流**（2026-07-07 起在订阅内烧 usage credits）。
 - D4 本地 commit 放宽：low/medium 任务在 independent review PASS 后允许本地 commit；high 任务 commit 前需人工确认。**push / merge 永远需要人工批准（Gate 2），不放宽**。
@@ -61,7 +61,7 @@ branch: "phase1/P1-WORKFLOW-002"
 
 This file is the Phase 1 source of truth for role assignment, review shape, and risk-tier ceremony.
 
-Layering rule: repository docs define **result contracts** (what must be true when a task closes). **Process choreography** (who runs which step, packets, gate mechanics) lives in the `claude-codex` workflow skill and is not duplicated here.
+Layering rule: repository docs define **result contracts** (what must be true when a task closes). **Process choreography** (who runs which step, packets, gate mechanics) lives in the `codex-claude` workflow skill and is not duplicated here.
 
 ## Roles & canonical agent ids
 
@@ -128,7 +128,7 @@ Slim vs full Task Record field sets are defined in `docs/dev/task_record_schema.
 # TASK_PROMPT_TEMPLATE — Phase 1 v2.0.0
 
 本文件定义 per-task prompt（`docs/phase1/tasks/<task_id>.md`）的**任务契约**形状。
-执行编排（Plan/Review/gate 的操作步骤、packet 格式、汇报模板）由 `claude-codex` workflow skill 负责，不写在本文件。
+执行编排（Plan/Review/gate 的操作步骤、packet 格式、汇报模板）由 `codex-claude` workflow skill 负责，不写在本文件。
 Role / review / risk 政策唯一来源：`docs/phase1/ROLE_POLICY.md`。
 
 ## Per-task prompt 必备结构
@@ -277,7 +277,7 @@ references: []                # 只引用不复述；引用 spec 用稳定小节
 ```
 新：
 ```
-- One session turn = one `task_id`, run through the global `claude-codex` workflow skill (sole process SOP; repo docs are result contracts only).
+- One session turn = one `task_id`, run through the global `codex-claude` workflow skill (sole process SOP; repo docs are result contracts only).
 - Plan gate per ROLE_POLICY ceremony table: medium/high need a human-approved Plan before edits; low may proceed directly against the task prompt.
 - Every repo-changing task requires `independent_review` (universal review floor, see ROLE_POLICY).
 - No push, no merge unless a human explicitly approves (Gate 2). Local commit follows the ROLE_POLICY ceremony table (low/medium: after review PASS; high: human ack).
@@ -311,7 +311,7 @@ references: []                # 只引用不复述；引用 spec 用稳定小节
 
 6.2 头部第 3 行（"This file is intentionally short..."）之后新增一行：
 ```
-Process choreography (plan/review/gate mechanics) lives in the `claude-codex` workflow skill; this file is boot context plus fail-closed floor only.
+Process choreography (plan/review/gate mechanics) lives in the `codex-claude` workflow skill; this file is boot context plus fail-closed floor only.
 ```
 
 6.3 Git workflow 节，旧：
