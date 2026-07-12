@@ -1,0 +1,265 @@
+schema_version: "1.2.0"
+task_id: P1-CI-ALIGN-001
+task_type: infrastructure
+result: passed
+method_profile:
+  risk_tier: high
+  method: PDR
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "CI workflow control-plane task; Claude Plan/final review is bounded read-only."
+controller_risk:
+  tier: R2
+  classification_reason: "CI event matrix, quality gates, frontend test coverage, and merge evidence are governance contracts."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: standard
+  required_stops: []
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "P1-OBS-001 is never auto-started; it requires a new lane after this task's result evidence."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No delete, credential/env, database, global/system, publish, rebase, reset-hard, or force-push action is proposed or performed."
+started_at: "2026-07-13T04:37:00+09:00"
+completed_at: "2026-07-13T04:51:40+09:00"
+plan_approved_by: "user delegated standing authorization under exact descriptor scope"
+plan_approved_at: "2026-07-13T04:47:00+09:00"
+plan_approved_via: "fresh v3 controller Gate 1 evidence"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      output_tokens: 21643
+    claude-haiku-4-5-20251001:
+      output_tokens: 15
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "b559cce1ded91ffe67e3decd8cb957ed4d2bf423636f00c9b1adbcc2c7f9069d"
+  prompt_sha256: "3cec4089a8b6f8abc96c2d870e2bb43b179b6b55d5be8e35694bb4c21eda67ec"
+  output_sha256: "38202071357cc4f834c56b0dbafe98c0b9574348a25f289c83f4c152fb35b8b2"
+  meta_sha256: "acc44e8988339f47dfe46503f9a023b54d67e073175b3a24a33a212c787200ce"
+  external_packet_audit: CLEAR
+  sanity_sha256: "9ed9408713fe795ac8eb026abaf73cbb93cad92f5bc39e59b7cce49314513015"
+  gate1_evidence_sha256: "055c615af64f414342e2242fbf05efe7d23f875e568c3ec8a5d51cb00a6c4ce0"
+summary: >
+  CI now runs on phase1 task-branch pushes, phase0/main pushes including merges,
+  and pull requests targeting phase0/main. Both jobs retain read-only token scope;
+  frontend runs frozen install, lint, typecheck, test, and build. Backend gates are
+  retained without pytest deduplication because no proposed deletion has node-ID proof.
+acceptance_criteria_result:
+  - criterion: "CI-AC-01 event matrix"
+    result: passed
+    evidence: "Candidate ci.yml changes push branches to phase1/** and phase0/main and pull_request base to phase0/main; obsolete main/phase0/** patterns removed."
+  - criterion: "CI-AC-02 frontend frozen install and four gates"
+    result: passed
+    evidence: "Existing test script is vitest --run; frozen install, lint, typecheck, test (1 passed), and build passed without package or lockfile changes."
+  - criterion: "CI-AC-03 backend gates and dedup semantics"
+    result: passed
+    evidence: "Ruff, mypy, dependency, architecture, weak-test, Alembic guard, full pytest (690 passed, exit 0), and Golden gate passed against an isolated temporary pgvector test service; no pytest job was removed, and Golden/weak-test commands remain."
+  - criterion: "CI-AC-04 remote SHA-bound CI"
+    result: not_applicable
+    evidence: "Task-branch/PR and post-merge CI cannot exist before record-inclusive Review, commit, push, PR, merge, and merge-SHA run."
+    not_applicable_reason: "Intentionally deferred remote integration evidence; no untriggered check is claimed green."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-CI-ALIGN-001
+    activation_task_id: P1-CI-ALIGN-001
+    expiry_condition: "Bind current task head and merge SHA to live completed CI runs before final result."
+  - criterion: "CI-AC-05 trusted events and least privilege"
+    result: passed
+    evidence: "No pull_request_target, secrets, credential output, or write permission added; top-level contents: read is explicit."
+  - criterion: "CI-AC-06 record and exact staged names"
+    result: not_applicable
+    evidence: "Exact staged-name equality is closed at four allowed paths; final Review, commit, task/PR CI, merge, and post-merge CI remain intentionally deferred until those artifacts physically exist."
+    not_applicable_reason: "Record-inclusive Review and remote integration are later controller stages; staged-name equality is already proven."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-CI-ALIGN-001
+    activation_task_id: P1-CI-ALIGN-001
+    expiry_condition: "Stage exact allowed paths, bind candidate/validation, obtain final Review PASS, and preserve the reviewed tree through commit."
+failure_examples_tested:
+  - example: event_matrix_incomplete
+    result: not_triggered
+    evidence: "Candidate trigger matrix explicitly covers phase1/** push, phase0/main push, and phase0/main-base pull request."
+  - example: coverage_regression
+    result: not_triggered
+    evidence: "No pytest command was removed; separate architecture checks, weak-test scan, full pytest, and Golden CLI remain."
+  - example: fail_closed
+    result: not_triggered
+    evidence: "Frontend test script pre-existed; no dependency/lockfile change, pull_request_target, secret, or write permission appears in candidate diff."
+  - example: ci_evidence_stale
+    result: not_applicable
+    evidence: "Remote evidence is deliberately deferred and not claimed before current task/merge SHAs exist."
+    not_applicable_reason: "Pre-integration record."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-CI-ALIGN-001
+    activation_task_id: P1-CI-ALIGN-001
+    expiry_condition: "Current task and merge-SHA CI evidence recorded."
+  - example: scope_expansion_required
+    result: not_triggered
+    evidence: "Exact staged paths remain four descriptor-allowed paths; no app/tests/scripts/web/dependency/lockfile/DB/settings/R3 path is changed."
+step_verification_points:
+  - step: preflight
+    result: passed
+    command: "dependency, descriptor, current workflow/event history, auth/protection, base/head checks"
+    evidence: "Dependency merge bce81d0111db674492b0f96874aff661ac75f204 and CI run 29205276520 were verified; descriptor, DAG, GitHub auth, unprotected phase0/main state, and base/head identity were recorded."
+  - step: candidate
+    result: passed
+    command: "pytest collection plus candidate workflow inspection"
+    evidence: "690 full-suite node IDs collected; no dedup change proposed; backend semantic gates retained."
+  - step: pre-review
+    result: passed
+    command: "exact staged diff, workflow YAML, all descriptor local commands, permissions and secret scan"
+    evidence: "Four exact allowed staged paths; YAML/diff/quality gates passed; full pytest 690 passed with isolated pgvector; frontend test 1/1 and build passed; no secret or write-permission expansion."
+  - step: pre-integration
+    result: not_applicable
+    command: "current task-head/PR CI, final Review freshness, and mergeability"
+    evidence: "Intentionally deferred until final Review PASS and reviewed commit exist; no check is claimed green."
+    not_applicable_reason: "Task commit and PR do not physically exist before final Review."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-CI-ALIGN-001
+    activation_task_id: P1-CI-ALIGN-001
+    expiry_condition: "Bind final Review, current task-head CI/PR checks, and mergeability before merge."
+  - step: post-integration
+    result: not_applicable
+    command: "merge-SHA phase0/main CI and no auto-start of P1-OBS-001"
+    evidence: "Intentionally deferred until ordinary merge exists; auto-next is already blocked."
+    not_applicable_reason: "Merge SHA and post-merge run cannot exist before integration."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-CI-ALIGN-001
+    activation_task_id: P1-CI-ALIGN-001
+    expiry_condition: "Bind merge SHA and successful post-merge CI, then close Gate2 without starting P1-OBS-001."
+changed_files:
+  - .github/workflows/ci.yml
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-CI-ALIGN-001_20260713_045140_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "C:/Users/Administrator/.claude-codex-scratch/candidates/P1-CI-ALIGN-001-20260713"
+  reviewed_parent_sha: "bce81d0111db674492b0f96874aff661ac75f204"
+  reviewed_tree_oid: "deferred_to_exact_stage"
+  staged_diff_sha256: "deferred_to_exact_stage"
+  changed_paths_sha256: "deferred_to_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "deferred_to_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "python YAML safe-load; git diff --check"
+    result: passed
+    output_snippet: "YAML_OK; diff check clean."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 46 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed; 49 dependencies checked."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed."
+  - command: "uv run python scripts/check_weak_tests.py tests"
+    result: passed
+    output_snippet: "Weak-test check passed."
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "690 passed in 11.53s; exit 0 using a fully isolated temporary pgvector test container, stopped after validation."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "Golden Gate: 11/11 PASS."
+  - command: "pnpm --dir web install --frozen-lockfile; lint; typecheck; test; build"
+    result: passed
+    output_snippet: "Frozen install passed; lint/typecheck passed; vitest 1/1 passed; Vite build passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "22 architecture tests passed."
+security_scan_result:
+  result: passed
+  evidence: "Candidate workflow has no pull_request_target, no credential value, no write permission, and explicit contents: read."
+weak_test_scan_result:
+  result: passed
+  evidence: "Repository weak-test scanner passed; no test files changed."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote CI is pending after final Review and integration."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-CI-ALIGN-001
+  activation_task_id: P1-CI-ALIGN-001
+  expiry_condition: "Current task/PR and post-merge merge-SHA runs complete."
+  evidence: "Base run 29205276520 is historical dependency evidence only, never claimed as this task's CI."
+review:
+  mode: independent_review
+  reviewed_by: "pending record-inclusive Claude final review"
+  reviewed_at: ""
+  notes: "Plan Review is bound; final raw staged diff, validation evidence, and task record require fresh external packet audit plus model-verified Claude PASS."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "deferred_to_record_inclusive_review"
+  prompt_sha256: "deferred_to_record_inclusive_review"
+  output_sha256: "deferred_to_record_inclusive_review"
+  meta_sha256: "deferred_to_record_inclusive_review"
+  validation_evidence_sha256: "deferred_to_record_inclusive_review"
+remote_integration:
+  policy_sha256: "deferred_to_post_review_integration"
+  task_commit_sha: "deferred_to_git_history_after_final_review"
+  task_branch: phase1/P1-CI-ALIGN-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No current task commit exists before final Review."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: not_evaluated_pre_commit
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind merge SHA."
+  integration_freshness_sha256: "deferred_to_integration"
+remaining_risks:
+  - "Final packet audit, model-verified Claude final Review, fresh task-head CI, mergeability, and merge-SHA CI remain mandatory."
+  - "P1-OBS-001 must not auto-start."
+rollback_or_failure_record: "Stop and preserve candidate/scratch; no deletion, reset, rebase, or force push. Any post-merge change is a new authorized repair or revert task."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: CI alignment creates no package artifact."
+package_scope: ""
+package_evidence: ""

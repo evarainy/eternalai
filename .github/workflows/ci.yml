@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, "phase0/**"]
+    branches: ["phase1/**", "phase0/main"]
   pull_request:
-    branches: [main]
+    branches: [phase0/main]
+
+permissions:
+  contents: read
 
 env:
   UV_SYSTEM: "1"
@@ -86,7 +89,7 @@ jobs:
         run: uv run python scripts/run_golden_tasks.py --gate
 
   frontend:
-    name: Frontend (lint, typecheck, build)
+    name: Frontend (lint, typecheck, test, build)
     runs-on: ubuntu-latest
 
     steps:
@@ -115,6 +118,10 @@ jobs:
       - name: TypeScript check
         working-directory: web
         run: pnpm typecheck
+
+      - name: Test
+        working-directory: web
+        run: pnpm test
 
       - name: Build
         working-directory: web
