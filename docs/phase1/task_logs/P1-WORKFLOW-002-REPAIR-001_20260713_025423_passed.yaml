@@ -1,0 +1,315 @@
+schema_version: "1.2.0"
+task_id: P1-WORKFLOW-002-REPAIR-001
+task_type: documentation
+result: passed
+method_profile:
+  risk_tier: high
+  method: not_applicable
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "executor: Codex; independent reviewer: Claude claude-opus-4-8, bounded read-only and model-verified"
+  not_applicable_reason: "Governance-documentation repair only; no production runtime, test, CI workflow, database, dependency, or executable-schema change."
+controller_risk:
+  tier: R2
+  classification_reason: "Governance control-plane repair with Git integration and mandatory post-merge CI; no R3 action is in scope."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: human_pre_apply
+  authorization_mode: standard
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "fresh v3 controller Gate 1 evidence SHA-256 bffa4e1e8e47f871592ca8025e7225a76474db3cab062db1d2e9ec86d13d01e8"
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "Gate 2 remains mandatory after merge-bound CI and companion no-op freshness evidence."
+    - kind: final_result_only
+      phase: final_result_only
+      status: satisfied
+      evidence: "P1-CI-ALIGN-001, P1-OBS-001, and P1-RUNTIME-ENTRY-001 remain dependency-blocked and are not started."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "The descriptor forbids starting tasks 03-05 before or after Gate 2."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No delete, credential/env, database, global/system, publish, rebase, reset-hard, or force-push action was requested or performed."
+started_at: "2026-07-13T02:54:23+09:00"
+completed_at: "2026-07-13T03:33:18+09:00"
+plan_approved_by: "user (standing standard-workflow authorization under exact task scope)"
+plan_approved_at: "2026-07-13T03:17:00+09:00"
+plan_approved_via: "Codex parent session; fresh v3 standard Gate 1 controller binding"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      output_tokens: 21156
+    claude-haiku-4-5-20251001:
+      output_tokens: 17
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "38f8825235245a655ec1b83097bfbf69207b9cea424ab083268c2cf0e76156c3"
+  prompt_sha256: "c6cd51622f099894e8568313c389fbf46a3d071a25969fe3f974ad163197c44a"
+  output_sha256: "74f22966968efc5d12231436678fad524a847bec1042061fbc12032920be2469"
+  meta_sha256: "6cad462e9ca34f9c9399c225d6f0c20643a217c69f6a617aa3f3904cc6ae6c08"
+  external_packet_audit: CLEAR
+  sanity_sha256: "e6a187a7d209a1ebdbf784ee4fed1fc0ff90abae0967731dd12780933ec2c011"
+  gate1_evidence_sha256: "bffa4e1e8e47f871592ca8025e7225a76474db3cab062db1d2e9ec86d13d01e8"
+summary: >
+  Repaired the active Phase 1 workflow control plane without rewriting W002
+  history. The governance documents now separate method risk, controller risk,
+  automation class, and human stops; three compact downstream task contracts
+  and their dependency chain are registered but not started. The Git-excluded
+  phase-task companion was absent in both canonical and candidate checkouts, so
+  its reviewed operation is an explicit no-op rather than a recreated file.
+acceptance_criteria_result:
+  - criterion: "REPAIR-AC-01: W002 scope omission and immutable historical evidence boundary are explicit"
+    result: passed
+    evidence: "repair descriptor remains byte-identical; active AGENTS.md, CLAUDE.md, ROLE_POLICY.md, and TASK_INDEX.md route through the repair chain and reject legacy authorization reuse"
+  - criterion: "REPAIR-AC-02: compact hash-derived contracts for P1-CI-ALIGN-001, P1-OBS-001, and P1-RUNTIME-ENTRY-001 exist"
+    result: passed
+    evidence: "strict goal_contract parsing passed for all three descriptors; source hashes and stable acceptance IDs are retained"
+  - criterion: "REPAIR-AC-03: unique repair-to-03-to-04-to-05 dependency chain is registered and blocked correctly"
+    result: passed
+    evidence: "candidate_contract_validation.json confirms the unique DAG and TASK_INDEX order; downstream rows state dependency-blocked"
+  - criterion: "REPAIR-AC-04: filesystem companion is accounted for separately and truthfully"
+    result: passed
+    evidence: "filesystem_companion_manifest.json SHA-256 4dc9ccdd007591e1daf7f71fd238d1cb1a6caf51e2891b5c9071a0462aa3cf5a records already_absent, excluded, no-op, and git_claimed=false"
+  - criterion: "REPAIR-AC-05: historical W002 descriptor and Task Record remain byte-identical"
+    result: passed
+    evidence: "historical descriptor SHA-256 f1cbea58dbb9cadaa945231dae024117f09f86b80af508c82f8c3655eac4d8a0 and record SHA-256 1f5c1335839a43e7849ae8db5571511049e3098f7bd4c170498a27579ab027b1 matched"
+  - criterion: "REPAIR-AC-06: active governance files are aligned to the canonical v3 controller"
+    result: passed
+    evidence: "content validation passed routing, role-axis, enum, schema, and stale-gate scans across all five allowed governance surfaces"
+  - criterion: "REPAIR-AC-07: Git and filesystem candidate boundaries contain no third path class, history rewrite, or R3"
+    result: passed
+    evidence: "exact Git path validation found ten authorized staged paths including this record; the companion remains repo-external evidence only; redline action lists are empty"
+  - criterion: "REPAIR-AC-08: repair descriptor remains exactly one strict parseable task contract"
+    result: passed
+    evidence: "goal_contract.parse_task_contract returned P1-WORKFLOW-002-REPAIR-001 and the validator found exactly one BEGIN/END block with all five strict fields"
+  - criterion: "REPAIR-AC-09: artifact, YAML/schema, routing, DAG, architecture, Golden, weak-test, diff/status/untracked, and secret validations pass"
+    result: passed
+    evidence: "required_artifact_manifest.json and candidate validation evidence are hash-bound; architecture 22 passed; Golden 11/11; weak-test passed; final exact-stage checks are controller-bound before Review"
+  - criterion: "REPAIR-AC-10: independent CLEAR audits precede model-verified Claude Plan and final Review calls"
+    result: not_applicable
+    evidence: "Plan audit CLEAR and model-verified PLAN_READY are complete; record-inclusive final packet audit and Claude PASS occur only after this self-referential record is frozen"
+    not_applicable_reason: "The record must exist before its complete staged diff can be audited and reviewed."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: "P1-WORKFLOW-002-REPAIR-001 record-inclusive final review"
+    activation_task_id: P1-WORKFLOW-002-REPAIR-001
+    expiry_condition: "The controller must bind a fresh full packet, obtain external CLEAR, and obtain model-verified Claude PASS before commit."
+  - criterion: "REPAIR-AC-11: ordinary integration is freshness-bound and post-merge phase0/main CI is green at the merge SHA"
+    result: not_applicable
+    evidence: "remote integration is intentionally unclaimed in this pre-commit record; controller integration evidence becomes authoritative after final Review PASS"
+    not_applicable_reason: "A commit, pull request, merge SHA, and merge-bound CI cannot exist before record-inclusive Review."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: "P1-WORKFLOW-002-REPAIR-001 final review and integration"
+    activation_task_id: P1-WORKFLOW-002-REPAIR-001
+    expiry_condition: "Before Gate 2, bind commit, PR/merge, post-merge CI run, head SHA, and every triggered job conclusion."
+  - criterion: "REPAIR-AC-12: Gate 2 separates Git and companion evidence and never auto-starts tasks 03-05"
+    result: not_applicable
+    evidence: "auto_next is already blocked and the companion manifest is separate; human result acceptance remains pending until integration finishes"
+    not_applicable_reason: "Gate 2 is the required post-integration result stop."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: "P1-WORKFLOW-002-REPAIR-001 post-merge validation"
+    activation_task_id: P1-WORKFLOW-002-REPAIR-001
+    expiry_condition: "Present the final Git/CI/Review and companion no-op evidence, then stop for human result acceptance without starting a downstream lane."
+failure_examples_tested:
+  - example: "A required artifact, descriptor, TASK_INDEX, HEAD, remote, or canonical/mirror hash drifts"
+    result: not_triggered
+    evidence: "18-entry preflight artifact manifest, governance drift evidence, and canonical/mirror check all passed against ea57bfe926a24adcdd67503fd3d4c47575d429bd"
+  - example: "A repo, personal, or historical path outside the exact boundaries is required"
+    result: not_triggered
+    evidence: "exact path validation found only the ten authorized Git paths and one separate absent companion manifest"
+  - example: "The absent phase-task companion is recreated, deleted, or claimed as Git content"
+    result: not_triggered
+    evidence: "both checkout probes are absent; operation and rollback are no-op; git_claimed=false"
+  - example: "Old v2 state, bounded Gate 1, old Review/candidate, or GCR-008 authorization is reused"
+    result: not_triggered
+    evidence: "fresh schema-v3 state, fresh standard Gate 1, independent candidate, and fresh Plan review hashes are bound"
+  - example: "Packet audit/model/meta/hash, validation, secret scan, or CI fails closed"
+    result: not_triggered
+    evidence: "Plan call is closed and local validations pass; final Review and remote integration remain mandatory fail-closed stages"
+step_verification_points:
+  - step: "Preflight and governance drift check"
+    result: passed
+    command: "hash required artifacts; compare canonical/mirror; verify HEAD, remote, descriptor, TASK_INDEX, historical W002, frozen lane"
+    evidence: "preflight_evidence.json SHA-256 4824507582176489d282cc811c347574443665d01df815fc48e20466dc9829ce; governance_drift_evidence.md SHA-256 2136dbd32732ffc476c253a9adaf1b8e0db3c8311f08c4e23345c350f6078378"
+  - step: "Strict contract, schema, routing, DAG, and path validation"
+    result: passed
+    command: "python evidence/validate_candidate_contracts.py"
+    evidence: "candidate_contract_validation.json SHA-256 0911e990ac09ffd6c36f964077bd57204d99c45b5e8a48f6fe8d444a71a2a37e before record inclusion; final record-inclusive rerun is bound before Review"
+  - step: "Architecture regression"
+    result: passed
+    command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    evidence: "22 passed in 0.17s; candidate_architecture.log SHA-256 7c61c2530f557b97359a1ad6144701e414692d831e06070a5272a2c03bc8db85"
+  - step: "Golden task gate"
+    result: passed
+    command: "uv run python scripts/run_golden_tasks.py --gate"
+    evidence: "11/11 passed (7 positive, 4 negative); candidate_golden_gate.log SHA-256 c6c299805b4d6915cf4d4d752cf541f85911114033ca02e6efeee0696b18ec71"
+  - step: "Weak-test scan"
+    result: passed
+    command: "uv run python scripts/check_weak_tests.py tests"
+    evidence: "candidate_weak_test.log SHA-256 bb9c04c2f6dff23ccb617d191af22c79794583007cb069afaaf2f6708267643c"
+  - step: "Secret and credential-pattern scan"
+    result: passed
+    command: "scan exact candidate diff for credential values and private-key material"
+    evidence: "NO_SECRET_HITS; candidate_secret_scan.log SHA-256 e8c866327b0555cb3f9ecff78ccc6442de1a6d1b3b308f1c8cfeb87ba414bd37"
+  - step: "Record-inclusive exact stage"
+    result: passed
+    command: "git diff --cached --name-only; git diff --cached --check; git diff --name-only; git ls-files --others --exclude-standard"
+    evidence: "exactly ten allowed paths including this record, clean cached diff, no unstaged paths, and no non-ignored untracked paths; controller candidate binding follows"
+changed_files:
+  - AGENTS.md
+  - CLAUDE.md
+  - docs/dev/task_record_schema.yaml
+  - docs/phase1/ROLE_POLICY.md
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/TASK_PROMPT_TEMPLATE.md
+  - docs/phase1/task_logs/P1-WORKFLOW-002-REPAIR-001_20260713_025423_passed.yaml
+  - docs/phase1/tasks/P1-CI-ALIGN-001.md
+  - docs/phase1/tasks/P1-OBS-001.md
+  - docs/phase1/tasks/P1-RUNTIME-ENTRY-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "C:/tmp/p1-workflow-002-repair-001-git-candidate-20260713"
+  reviewed_parent_sha: "ea57bfe926a24adcdd67503fd3d4c47575d429bd"
+  reviewed_tree_oid: "deferred_to_controller_after_exact_stage"
+  staged_diff_sha256: "deferred_to_controller_after_exact_stage"
+  changed_paths_sha256: "deferred_to_controller_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "deferred_to_controller_after_exact_stage"
+filesystem_companion_evidence:
+  path: ".agents/skills/phase-task/SKILL.md"
+  disposition: already_absent
+  git_tracking: excluded
+  baseline_sha256: "not_applicable_absent"
+  candidate_sha256: "not_applicable_absent"
+  operation_manifest_sha256: "4dc9ccdd007591e1daf7f71fd238d1cb1a6caf51e2891b5c9071a0462aa3cf5a"
+  rollback_sha256: "4dc9ccdd007591e1daf7f71fd238d1cb1a6caf51e2891b5c9071a0462aa3cf5a"
+  freshness_result: passed
+  git_claimed: false
+tests_run:
+  - command: "python validate_candidate_contracts.py"
+    result: passed
+    output_snippet: "strict contracts, YAML/schema, routing, DAG, source hashes, historical hashes, companion boundary, and allowed paths passed"
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed in 0.17s"
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "Golden Gate: 11/11 PASS"
+  - command: "uv run python scripts/check_weak_tests.py tests"
+    result: passed
+    output_snippet: "Weak-test scan passed"
+  - command: "git diff --cached --name-only; git diff --cached --check; git diff --name-only; git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "exact ten staged paths; clean diff; no unstaged or non-ignored untracked paths"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "No app, test, import graph, or runtime code changed; architecture regression still passed."
+  not_applicable_reason: "Documentation-only repair."
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: not_blocked
+  activation_task_id: "next implementation task that changes application imports"
+  expiry_condition: "Run the import-boundary check when application imports change."
+security_scan_result:
+  result: passed
+  evidence: "Exact candidate diff scan returned NO_SECRET_HITS; .env, credential, and secret paths are forbidden."
+  not_applicable_reason: ""
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: not_blocked
+  activation_task_id: "every candidate and final review packet"
+  expiry_condition: "Re-scan the exact final packet and integration candidate before commit."
+weak_test_scan_result:
+  result: passed
+  evidence: "Repository weak-test scanner passed; no test file changed."
+  not_applicable_reason: ""
+  not_applicable_scope: current_phase_only
+  blocked_by_task_id: not_blocked
+  activation_task_id: "next task that changes tests"
+  expiry_condition: "Run again for every test-changing candidate."
+ci_evidence:
+  result: not_applicable
+  run_id: not_applicable_pre_commit
+  url_or_log_path: not_applicable_pre_commit
+  not_applicable_reason: "No task-branch or post-merge run exists before record-inclusive Review and integration."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: "P1-WORKFLOW-002-REPAIR-001 integration"
+  activation_task_id: P1-WORKFLOW-002-REPAIR-001
+  expiry_condition: "Bind live task-branch event evidence and mandatory merge-SHA phase0/main CI before Gate 2."
+  evidence: "Bootstrap post-merge run 29202180749 was green at base ea57bfe926a24adcdd67503fd3d4c47575d429bd; it is baseline evidence only and is not reused as repair CI."
+review:
+  mode: independent_review
+  reviewed_by: "pending record-inclusive Claude review; controller state and final meta are authoritative"
+  reviewed_at: ""
+  notes: >
+    The full staged packet must include this Task Record, the complete raw
+    diff, all local validation logs, and the companion no-op manifest. An
+    independent external audit must return CLEAR before the single canonical
+    Claude final call. No PASS is claimed in this pre-review record.
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "deferred_to_record_inclusive_review"
+  prompt_sha256: "deferred_to_record_inclusive_review"
+  output_sha256: "deferred_to_record_inclusive_review"
+  meta_sha256: "deferred_to_record_inclusive_review"
+  validation_evidence_sha256: "deferred_to_record_inclusive_review"
+remote_integration:
+  policy_sha256: "deferred_to_post_review_integration"
+  task_commit_sha: "deferred_to_git_history_after_final_review"
+  task_branch: "phase1/P1-WORKFLOW-002-REPAIR-001"
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No pre-merge workflow run is claimed; live event and policy evidence must distinguish not-triggered from green."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: "phase0/main"
+    mergeability: "not_evaluated_pre_commit"
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Mandatory post-merge phase0/main CI is pending and must bind the eventual merge SHA."
+  integration_freshness_sha256: "deferred_to_integration"
+remaining_risks:
+  - "Record-inclusive external packet audit CLEAR and model-verified Claude PASS remain mandatory before commit."
+  - "Remote auth, protection/rulesets, target freshness, mergeability, required-check event state, merge SHA, and post-merge CI must be refreshed and bound at integration."
+  - "The companion is an absent/no-op filesystem surface; freshness must be rechecked after green post-merge CI without creating or deleting it."
+  - "P1-CI-ALIGN-001, P1-OBS-001, and P1-RUNTIME-ENTRY-001 remain blocked and must not auto-start."
+rollback_or_failure_record: >
+  Before merge, stop and preserve the independent candidate and scratch
+  evidence; do not delete, reset, rebase, or force-push. After merge, Git
+  rollback is a separately authorized ordinary git revert task. The absent
+  companion has no mutation to roll back.
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: no package or archive is produced by this governance-documentation repair"
+package_scope: ""
+package_evidence: ""

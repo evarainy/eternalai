@@ -1,4 +1,4 @@
-# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.0.0
+# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.1.0
 
 This file is intentionally short. It is the always-loaded compact boot context for Codex and other generic coding agents. Do not expand it into a full spec.
 Process choreography (plan/review/gate mechanics) lives in the `codex-claude` workflow skill; this file is boot context plus fail-closed floor only.
@@ -43,7 +43,8 @@ infra/docker/       Docker Compose templates
 - **Task branch**: `phase1/<task_id>` (e.g. `phase1/P1-SPEC-001`)
 - **Commit message**: `phase1(<task_id>): <short description>`
 - **Merge message**: `merge phase1(<task_id>): <short description>`
-- **No push, no merge** unless a human explicitly approves (Gate 2). Local commit only per `docs/phase1/ROLE_POLICY.md` ceremony table (low/medium: after independent review PASS; high: human ack).
+- There is no separate local-commit human Gate. Ordinary non-force push, PR/merge, and CI may proceed only when the current task contract and repo policy allow them, deterministic validation and required independent Review pass, freshness remains bound, and branch protection/required checks are satisfied. Gate 2 is post-integration result acceptance, not Git/CI authorization.
+- Exact authorization is mandatory for every R3 operation — file/directory or history deletion, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push. Never bypass hooks or branch protection.
 - Check remote GitHub Actions CI after every merge to phase0/main
 
 ## Validation commands
@@ -78,9 +79,9 @@ uv run python scripts/run_golden_tasks.py --gate
 - Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
 
 ## Non-negotiable hard rules
-1. Execute exactly one `task_id` per session turn; ceremony (plan gate, record detail, commit policy) follows `docs/phase1/ROLE_POLICY.md`.
+1. Execute exactly one `task_id` per lane/state. Auto-next may only open a new lane from a user-approved finite queue after dependencies and required result stops are satisfied.
 2. Start with the matching per-task prompt. Do not load or paste the full spec unless resolving a contradiction.
-3. Plan gate per ROLE_POLICY: medium/high tasks need a human-approved Plan before file edits; low tasks may proceed directly against the task prompt.
+3. Keep review/detail tier (`method_profile.risk_tier`) separate from controller risk (`R0`-`R3`) and `automation_class`; human stops come from the current task's `required_stops`, not from habit or the low/medium/high label alone.
 4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
 5. `app/ports/` is frozen; do not edit it unless the task explicitly authorizes it and a human approves.
 6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
@@ -89,7 +90,7 @@ uv run python scripts/run_golden_tasks.py --gate
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 10. Work on one task branch: `phase1/<task_id>`.
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-12. Current mainline order: `P1-WORKFLOW-002 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
+12. Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. A downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` remains the independent B2 hard prerequisite.
 
 ## Scratch/temp and artifact review rules
 - Workflow-skill runtime scratch lives outside the repo (`$CLAUDE_CODEX_SCRATCH_ROOT`); repo-local `_scratch/` is for manual/non-skill temp files only.

@@ -1,8 +1,8 @@
-# TASK_INDEX — Phase 1 Dependency DAG v1.0.0
+# TASK_INDEX — Phase 1 Dependency DAG v1.1.0
 
 本文件是 Phase 1 的任务依赖 DAG。Codex / Claude Code 必须按批次和 `depends_on` 执行，不得跳过前置任务。
 
-**强制单任务执行：每次只能执行一个 `task_id`。完成该 task 并输出统一 Task Record 后，等待人工确认，再进入下一个 task。**
+**强制单任务执行：每个 lane/state 只能执行一个 `task_id`。下一任务必须同时满足 DAG、当前 task contract 的 `auto_next_policy` 与全部 required stops；R2 的 post-integration result acceptance 未闭合时不得 auto-next。**
 
 ## 0. 批次总览
 
@@ -44,9 +44,9 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 | task_id | title | depends_on | deliverable / start gate |
 |---|---|---|---|
 | P1-WORKFLOW-002-REPAIR-001 | W002 完整范围修复与活动控制面收敛 | P1-WORKFLOW-002 completed；P1-WORKFLOW-002-REPAIR-BOOTSTRAP-001 landed | 正式 03—05 task contracts、活动治理规则核对、repo-local phase-task companion 边界证据；完成集成并通过 post-integration Gate 2 后才释放下一项 |
-| P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed + Gate 2 accepted | `docs/phase1/tasks/P1-CI-ALIGN-001.md`；descriptor 由 repair 创建，在此前不得启动 |
-| P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | `docs/phase1/tasks/P1-OBS-001.md`；descriptor 由 repair 创建，在此前不得启动 |
-| P1-RUNTIME-ENTRY-001 | Runtime Composition Root 与 Golden Harness 解耦 | P1-OBS-001 completed | `docs/phase1/tasks/P1-RUNTIME-ENTRY-001.md`；descriptor 由 repair 创建，在此前不得启动 |
+| P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed + Gate 2 accepted | `docs/phase1/tasks/P1-CI-ALIGN-001.md`；contract 已登记，但依赖满足前不得启动 |
+| P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | `docs/phase1/tasks/P1-OBS-001.md`；contract 已登记，但依赖满足前不得启动 |
+| P1-RUNTIME-ENTRY-001 | Runtime Composition Root 与 Golden Harness 解耦 | P1-OBS-001 completed | `docs/phase1/tasks/P1-RUNTIME-ENTRY-001.md`；contract 已登记，但依赖满足前不得启动 |
 
 ```text
 P1-WORKFLOW-002-REPAIR-001
@@ -56,6 +56,8 @@ P1-WORKFLOW-002-REPAIR-001
 ```
 
 **硬门**：`P1-WORKFLOW-002-REPAIR-001` 未完成集成且其 post-integration Gate 2 未通过前，`P1-CI-ALIGN-001`、`P1-OBS-001`、`P1-RUNTIME-ENTRY-001` 均不可启动；每次仍只执行一个 `task_id`。
+
+正式 descriptor 存在只表示结果契约已登记，不表示 task prompt-ready 等于 dependency-ready。普通 commit/push/PR/merge/CI 是否自动由各 task contract 的 controller risk、automation、Review/validation/freshness 与 repo policy 决定；Gate 2 只验收集成结果。
 
 ### B1 可选任务
 
@@ -100,8 +102,14 @@ P1-WORKFLOW-002-REPAIR-001
 ## 6. 硬顺序摘要
 
 ```text
-B1 启动准备（P1-GATE-001 先完成）
-→ P1-SPEC-001 落盘并批准（B2 硬前置）
+B1 治理修复链：
+P1-WORKFLOW-002-REPAIR-001
+→ P1-CI-ALIGN-001
+→ P1-OBS-001
+→ P1-RUNTIME-ENTRY-001
+
+产品实现链（独立硬门）：
+P1-GATE-001 passed + P1-SPEC-001 approved/landed
 → B2 Intent → Capability 选择闭环
 → B3 Identity / Policy 预检闭环
 → B4 Workflow 轻量引擎 + 执行
@@ -122,8 +130,9 @@ docs/phase1/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
 docs/dev/task_record_schema.yaml
 ```
 
-关键要求（统一 schema v1.1.0；Phase 0 旧记录按其当时版本解释）：
+关键要求（统一 schema v1.2.0；Phase 0 与既有 Phase 1 记录按其原版本解释）：
 - `not_applicable` 必须包含 reason、scope、blocked_by_task_id、activation_task_id、expiry_condition 和 evidence。
 - `review.mode` 可为 `none | self_review | independent_review | human_review`。
 - 旧 `codex_review`、`self_check`、`human_optional` 只用于历史记录解释，按 `docs/phase1/ROLE_POLICY.md` 的 migration table 处理。
 - `package_confirmation_status` 可为 `created | not_created | not_applicable`。
+- 新 high-tier records 分开记录 controller risk/automation/required stops、Plan/final Review、task-branch/PR checks、merge SHA、post-merge CI、R3 authorization、auto-next 与 filesystem companion（如适用）；未触发检查不得写成 passed。
