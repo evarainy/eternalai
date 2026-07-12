@@ -37,6 +37,26 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 
 > **P1-SPEC-001（pre-B2 硬门）**：`docs/phase1/PHASE1_SPEC.md` 未落盘并经人类批准前，**不得进入 B2**。B2 前置条件 = `P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed`。
 
+### B1 治理修复控制链
+
+本链只登记 W002 治理修复及其后续任务依赖，不改写已完成的 `P1-WORKFLOW-002` 历史状态，也不表示 03—05 已具备执行条件。
+
+| task_id | title | depends_on | deliverable / start gate |
+|---|---|---|---|
+| P1-WORKFLOW-002-REPAIR-001 | W002 完整范围修复与活动控制面收敛 | P1-WORKFLOW-002 completed；P1-WORKFLOW-002-REPAIR-BOOTSTRAP-001 landed | 正式 03—05 task contracts、活动治理规则核对、repo-local phase-task companion 边界证据；完成集成并通过 post-integration Gate 2 后才释放下一项 |
+| P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed + Gate 2 accepted | `docs/phase1/tasks/P1-CI-ALIGN-001.md`；descriptor 由 repair 创建，在此前不得启动 |
+| P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | `docs/phase1/tasks/P1-OBS-001.md`；descriptor 由 repair 创建，在此前不得启动 |
+| P1-RUNTIME-ENTRY-001 | Runtime Composition Root 与 Golden Harness 解耦 | P1-OBS-001 completed | `docs/phase1/tasks/P1-RUNTIME-ENTRY-001.md`；descriptor 由 repair 创建，在此前不得启动 |
+
+```text
+P1-WORKFLOW-002-REPAIR-001
+→ P1-CI-ALIGN-001
+→ P1-OBS-001
+→ P1-RUNTIME-ENTRY-001
+```
+
+**硬门**：`P1-WORKFLOW-002-REPAIR-001` 未完成集成且其 post-integration Gate 2 未通过前，`P1-CI-ALIGN-001`、`P1-OBS-001`、`P1-RUNTIME-ENTRY-001` 均不可启动；每次仍只执行一个 `task_id`。
+
 ### B1 可选任务
 
 | task_id | title | depends_on | 备注 |
