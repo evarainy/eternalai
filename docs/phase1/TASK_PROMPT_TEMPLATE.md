@@ -1,4 +1,4 @@
-# TASK_PROMPT_TEMPLATE — Phase 1 v2.0.0
+# TASK_PROMPT_TEMPLATE — Phase 1 v2.1.0
 
 本文件定义 per-task prompt（`docs/phase1/tasks/<task_id>.md`）的**任务契约**形状。
 执行编排（Plan/Review/gate 的操作步骤、packet 格式、汇报模板）由 `codex-claude` workflow skill 负责，不写在本文件。
@@ -20,6 +20,12 @@ method_profile:
   method: "PDR | BDD | TDD | mixed | not_applicable"
   model_note: ""
   reason_for_owner_choice: ""          # 使用默认分工时一行即可
+controller_risk_tier: "R0 | R1 | R2 | R3"
+risk_classification_reason: ""         # 按真实变更面分类；风险只能自动升级
+automation_class: "auto | human_pre_apply | human_pre_action"
+authorization_mode: "standard | bounded_goal_preapproval"
+required_stops: []                     # 例：human_pre_apply / human_result_acceptance / human_pre_action
+r3_authorization: []                    # 仅列人类明确授权的具体 R3 动作；默认空
 touched_paths: []
 forbidden_paths: []
 acceptance_criteria: []       # 每条必须机器可验证，或声明明确的证据形态
@@ -28,15 +34,24 @@ step_verification_points: []  # 可选；high 任务建议提供
 validation_commands: []       # 本任务要实际运行的验证命令
 evidence_requirements: []     # 每条 acceptance criterion 对应的证据形态
 stop_conditions: []           # 任务级停手条件（全局停手条件见 AGENTS.md）
-local_commit_policy: "after_review_pass | human_ack_required"   # 默认按 ROLE_POLICY tier 表
+local_commit_policy: "after_review_pass | not_applicable"      # 无独立 local-commit 人工 Gate；仍受 Review/validation/freshness 约束
+integration_policy:
+  mode: "git | filesystem_only"
+  remote_strategy: "task_branch_pr_merge | direct_none | not_applicable"
+  task_branch_ci: "required | if_triggered | not_applicable"
+  post_merge_ci: "required | if_triggered | not_applicable"
+auto_next_policy: "allowed | blocked"
 depends_on: []
 branch: "phase1/<task_id>"
 references: []                # 只引用不复述；引用 spec 用稳定小节 ID + 行号锚点
 ```
 
-- 缺 `method_profile` 或必备字段时，执行方必须停止并输出 `task_prompt_incomplete`。
+- 缺 `method_profile`、controller risk/automation、scope、AC、evidence 或 stop 字段时，执行方必须停止并输出 `task_prompt_incomplete`。
 - Task prompt 约束**结果契约**，不约束实现步骤；step-by-step SOP 只允许在 `risk_tier: high` 且步骤本身是验收对象时出现。
 - 通用规则一律引用（ROLE_POLICY / AGENTS.md / CLAUDE.md / schema），不复述。增量式范例：`docs/phase1/tasks/P1-SPEC-001.md`。
+- `method_profile.risk_tier` 控制 Review/Task Record 详略；`controller_risk_tier` 决定技术风险审查；`automation_class`/`required_stops` 决定人工停点。三者不得混用。
+- R2 默认 `human_pre_apply`；只有当前机器可读 task contract 明确保留 R2 Review/验证并移除人工停点时才可写 `automation_class: auto`。R3 必须列出具体授权动作，不能用宽泛类别代替。
+- Gate 2 只表示 post-integration result acceptance；不得把它写成 commit/push/merge/CI 授权。普通非强制 Git/CI 是否自动由当前 task contract、repo policy、Review、validation、freshness 和 required checks 共同决定。
 
 ## Engineering Method Selection（速查）
 
@@ -71,7 +86,8 @@ references: []                # 只引用不复述；引用 spec 用稳定小节
 3. Task Record 必须通过 `yaml.safe_load` 且无重复 key。
 4. `not_applicable` 六件套字段只对 implementation / test 任务强制；documentation 任务写明 reason 一行即可，但不得用 `not_applicable` 掩盖失败。
 5. `git_commit_sha` 使用 deferred convention（见 schema）。
-6. Task Record 详略按 risk_tier 分级：low = TASK_INDEX 一行；medium = slim YAML；high = full YAML（字段集见 schema）。
+6. Task Record 详略按 `method_profile.risk_tier` 分级：low = TASK_INDEX 指针或 task-required YAML；medium = slim YAML；high = full YAML（字段集见 schema）。
+7. full record 必须分开记录 controller risk/automation/required stops、Plan 与 final Review、Task/PR checks、merge SHA、post-merge CI、R3 authorization、auto-next 和 filesystem companion（如适用）。未触发检查写 `not_triggered`，不得写绿色。
 
 ## Golden Task 阈值（结果契约）
 

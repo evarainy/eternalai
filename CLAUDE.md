@@ -1,4 +1,4 @@
-# CLAUDE.md — Phase 1 Compact Claude Code Memory v2.0.0
+# CLAUDE.md — Phase 1 Compact Claude Code Memory v2.1.0
 
 Keep this file compact. Claude Code loads project memory at session start, so detailed rules must be read on demand instead of inlined here. Do not add `@import` links to long specs.
 
@@ -60,13 +60,14 @@ git ls-files --others --exclude-standard
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
 - Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
-- Current mainline order: `P1-WORKFLOW-002 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2` (P1-ERRATA-001 / P1-WORKFLOW-001 landed).
+- Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. Descriptor presence alone never releases a dependency. `P1-SPEC-001` remains the independent B2 hard prerequisite.
 - Phase 1 role / review / risk policy: `docs/phase1/ROLE_POLICY.md`.
 - Task Record: use the unified YAML format under `docs/phase1/task_logs/` and schema `docs/dev/task_record_schema.yaml`.
 - One session turn = one `task_id`, run through the global `codex-claude` workflow skill (sole process SOP; repo docs are result contracts only).
-- Plan gate per ROLE_POLICY ceremony table: medium/high need a human-approved Plan before edits; low may proceed directly against the task prompt.
+- Review/detail tier (`method_profile.risk_tier`), controller risk (`R0`-`R3`), and `automation_class` are separate. Human stops come from the current task's explicit `required_stops`; risk may only stay equal or increase.
 - Every repo-changing task requires `independent_review` (universal review floor, see ROLE_POLICY).
-- No push, no merge unless a human explicitly approves (Gate 2). Local commit follows the ROLE_POLICY ceremony table (low/medium: after review PASS; high: human ack).
+- There is no separate local-commit Gate. Ordinary non-force push, PR/merge, and CI may proceed only when the current task/repo policy explicitly allows them and validation, required Review, freshness, branch protection, and required checks pass. Gate 2 is post-integration result acceptance, not Git/CI authorization.
+- Delete/history rewrite, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push are R3 and need exact authorization. Never bypass hooks or branch protection.
 - Use Explore/Plan/read-only behavior for investigation when possible.
 - If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
 - When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.

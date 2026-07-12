@@ -1,10 +1,10 @@
-# Unified Task Record schema v1.1.0 (Phase 0 + Phase 1).
+# Unified Task Record schema v1.2.0 (Phase 0 + Phase 1).
 # Store task records as: docs/phase<N>/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
-# Record detail is tiered by risk_tier (see docs/phase1/ROLE_POLICY.md):
+# Record detail is tiered by method_profile.risk_tier (see docs/phase1/ROLE_POLICY.md):
 #   low    -> no YAML record; one line in TASK_INDEX.md + pointer to review verdict
 #   medium -> slim record: task_id, task_type, result, summary, acceptance_criteria_result,
 #             changed_files, tests_run, review, git_commit_sha (deferred convention)
-#   high   -> full record: all fields below
+#   high   -> full record: all applicable fields below, including controller and remote evidence
 # not_applicable six-field template is mandatory only for implementation/test tasks;
 # documentation tasks may give a one-line reason instead (never to mask a failure).
 
@@ -16,14 +16,52 @@ not_applicable_template: &not_applicable_template
   expiry_condition: ""
   evidence: ""
 
+schema_version: "1.2.0"
 task_id: ""
 task_type: "spike | preparation | infrastructure | interface_contract | implementation | test | documentation | review"
 result: "passed | failed | blocked"
+method_profile:
+  risk_tier: "low | medium | high"
+  method: "PDR | BDD | TDD | mixed | not_applicable"
+controller_risk:
+  tier: "R0 | R1 | R2 | R3"
+  classification_reason: ""
+  prior_tier: ""
+  downgrade_attempted: false
+automation:
+  class: "auto | human_pre_apply | human_pre_action"
+  authorization_mode: "standard | bounded_goal_preapproval"
+  required_stops:
+    - kind: "human_pre_apply | human_result_acceptance | human_pre_action | final_result_only"
+      phase: "pre_apply | pre_action | post_integration | final_result_only"
+      status: "pending | satisfied | not_applicable"
+      evidence: ""
+  auto_next_policy: "allowed | blocked"
+  auto_next_result: "not_started | started_new_lane | blocked"
+  auto_next_reason: ""
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: ""
 started_at: "YYYY-MM-DDTHH:MM:SS+09:00"
 completed_at: "YYYY-MM-DDTHH:MM:SS+09:00"
 plan_approved_by: "human name or handle"
 plan_approved_at: "YYYY-MM-DDTHH:MM:SS+09:00"
 plan_approved_via: "Codex session | Claude Code session | GitHub comment | other"
+plan_review:
+  required: true
+  provider: "claude | deterministic_audit | not_applicable"
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: "PLAN_READY | PLAN_NEEDS_PACKET_REBUILD | PLAN_BLOCKED | not_applicable"
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: "CLEAR | not_clear | not_applicable"
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
 summary: ""
 acceptance_criteria_result:
   - criterion: ""
@@ -44,6 +82,25 @@ step_verification_points:
 changed_files: []
 touched_paths_confirmed: true
 forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: "git | filesystem_only"
+  candidate_root: ""
+  reviewed_parent_sha: ""
+  reviewed_tree_oid: ""
+  staged_diff_sha256: ""
+  changed_paths_sha256: ""
+  changed_blob_oids: []
+  freshness_sha256: ""
+filesystem_companion_evidence:
+  path: ""
+  disposition: "not_applicable | already_absent | reviewed_apply"
+  git_tracking: "not_applicable | excluded"
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: "not_applicable | passed | failed"
+  git_claimed: false
 tests_run:
   - command: ""
     result: "passed | failed | not_applicable"
@@ -66,6 +123,7 @@ weak_test_scan_result:
   evidence: ""
   <<: *not_applicable_template
 ci_evidence:
+  # Legacy single-CI view. New Phase 1 records also fill remote_integration below.
   result: "passed | failed | not_applicable"
   run_id: ""
   url_or_log_path: ""
@@ -76,8 +134,46 @@ review:
   reviewed_by: ""
   reviewed_at: ""
   notes: ""
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: "PASS | REQUEST_CHANGES | PACKET_INVALID | BLOCKED | not_applicable"
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: ""
+  task_branch_ci:
+    status: "passed | failed | not_triggered | not_applicable"
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: ""
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: ""
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: "merged | not_merged | not_applicable"
+    merge_sha: ""
+    method: "merge | squash | not_applicable"
+  post_merge_ci:
+    status: "passed | failed | not_triggered | not_applicable"
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: ""
+  integration_freshness_sha256: ""
 remaining_risks: []
 rollback_or_failure_record: ""
+local_commit_policy: "after_review_pass | not_applicable"
 git_commit_sha: ""
 package_confirmation_status: "created | not_created | not_applicable"
 package_confirmation: "confirmation that a fresh package was created from the current repository state"
