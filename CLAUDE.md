@@ -60,12 +60,13 @@ git ls-files --others --exclude-standard
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
 - Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
-- Current mainline order: `P1-ERRATA-001 -> P1-WORKFLOW-001 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
+- Current mainline order: `P1-WORKFLOW-002 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2` (P1-ERRATA-001 / P1-WORKFLOW-001 landed).
 - Phase 1 role / review / risk policy: `docs/phase1/ROLE_POLICY.md`.
 - Task Record: use the unified YAML format under `docs/phase1/task_logs/` and schema `docs/dev/task_record_schema.yaml`.
-- One session turn = one `task_id`. Start with `/phase-task <task_id>`.
-- Plan first; wait for human approval before edits.
-- No commit, no push, no merge unless a human explicitly approves.
+- One session turn = one `task_id`, run through the global `codex-claude` workflow skill (sole process SOP; repo docs are result contracts only).
+- Plan gate per ROLE_POLICY ceremony table: medium/high need a human-approved Plan before edits; low may proceed directly against the task prompt.
+- Every repo-changing task requires `independent_review` (universal review floor, see ROLE_POLICY).
+- No push, no merge unless a human explicitly approves (Gate 2). Local commit follows the ROLE_POLICY ceremony table (low/medium: after review PASS; high: human ack).
 - Use Explore/Plan/read-only behavior for investigation when possible.
 - If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
 - When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.
@@ -82,9 +83,8 @@ git ls-files --others --exclude-standard
 - Repository navigation map: `docs/phase0/REPOSITORY_CONTEXT_MAP.md`
 - Coding style baseline: `docs/phase0/CODING_STYLE_BASELINE.md` (load relevant sections only)
 - Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md` (cross-stage support every 3 tasks; not Phase 1 task authority)
-- Fable5 review backlog: `/Users/evarainy/Downloads/fable-review.md` (local reference only, not repo authority)
 
 ## Scratch/temp cleanup
-- Temp files go in `_scratch/` only. Not in `app/`, `tests/`, `docs/`, or repo root.
+- Workflow-skill runtime scratch lives outside the repo (`$CLAUDE_CODEX_SCRATCH_ROOT`). Manual / non-skill temp files go in `_scratch/` only. Neither goes in `app/`, `tests/`, `docs/`, or repo root.
 - Before staging: remove `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`.
 - Do not scan/clean inside `.venv/`.

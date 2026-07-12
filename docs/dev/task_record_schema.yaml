@@ -1,5 +1,12 @@
-# Unified Phase 0 Task Record schema v1.0.11.
-# Store task records as: docs/phase0/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
+# Unified Task Record schema v1.1.0 (Phase 0 + Phase 1).
+# Store task records as: docs/phase<N>/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
+# Record detail is tiered by risk_tier (see docs/phase1/ROLE_POLICY.md):
+#   low    -> no YAML record; one line in TASK_INDEX.md + pointer to review verdict
+#   medium -> slim record: task_id, task_type, result, summary, acceptance_criteria_result,
+#             changed_files, tests_run, review, git_commit_sha (deferred convention)
+#   high   -> full record: all fields below
+# not_applicable six-field template is mandatory only for implementation/test tasks;
+# documentation tasks may give a one-line reason instead (never to mask a failure).
 
 not_applicable_template: &not_applicable_template
   not_applicable_reason: ""
@@ -64,7 +71,8 @@ ci_evidence:
   url_or_log_path: ""
   <<: *not_applicable_template
 review:
-  mode: "none | self_check | human_optional | codex_review"
+  mode: "none | self_review | independent_review | human_review"
+  # legacy values (self_check / human_optional / codex_review) are historical-only; see ROLE_POLICY.md
   reviewed_by: ""
   reviewed_at: ""
   notes: ""

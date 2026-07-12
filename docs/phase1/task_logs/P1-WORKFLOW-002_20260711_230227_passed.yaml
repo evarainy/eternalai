@@ -1,0 +1,172 @@
+task_id: P1-WORKFLOW-002
+task_type: documentation
+result: passed
+started_at: "2026-07-11T19:40:43+09:00"
+completed_at: "2026-07-11T23:02:27+09:00"
+plan_approved_by: "user (bounded Goal preapproval)"
+plan_approved_at: "2026-07-11T19:40:43+09:00"
+plan_approved_via: "attached bounded Goal authorization; controller Gate 1 evidence bound in external scratch"
+summary: >
+  Converged the Phase 1 governance contract: ROLE_POLICY is now the concise
+  policy source, TASK_PROMPT_TEMPLATE v2.0.0 contains result contracts rather
+  than process SOPs, the Task Record schema is v1.1.0, and boot documents
+  consistently point to the global codex-claude workflow skill. The only
+  forward migration of a pending B1 task is the two enum replacements in
+  P1-PARAM-001. No production code, tests, CI configuration, or frozen
+  blueprint/spec files changed.
+method: not_applicable
+method_not_applicable_reason: >
+  Governance-documentation task with a documentation schema contract; it makes
+  no production runtime, database, dependency, executable-schema, or CI change.
+method_not_applicable_scope: "current_phase_only; P1-WORKFLOW-002 governed documentation surface"
+method_not_applicable_blocked_by_task_id: "not_blocked"
+method_not_applicable_activation_task_id: "next implementation, test, CI, or executable-schema task"
+method_not_applicable_expiry_condition: >
+  Re-evaluate the method profile before the next task that changes production
+  code, tests, CI, database schema/data, dependencies, or executable schemas.
+method_not_applicable_evidence: "Final staged paths contain only the seven authorized governance files and this required Task Record."
+method_profile:
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  risk_tier: high
+  model_note: "executor: Codex GPT-5.6; independent reviewer: Claude claude-opus-4-8, read-only, model verified"
+  schema_note: "High tier follows the full Task Record field set in schema v1.1.0."
+plan_gate_review:
+  verdict: PLAN_READY
+  reviewed_by: "Claude claude-opus-4-8"
+  review_meta_path: "C:\\tmp\\p1-workflow-002-git-run-20260711\\plan_review_attempt_2\\claude_P1-WORKFLOW-002_plan_meta.json"
+  review_meta_hash: "386a64fafe82e7703b9bfcd7a0ca250f2f460ac5d50eb64e72ae360d0782969b"
+  gate1_evidence_hash: "8ff172296bd1024b273efa499be71bc13959a5a9c1443a6c17989048bddf78d5"
+acceptance_criteria_result:
+  - criterion: "AC-1: ROLE_POLICY.md <= 70 lines and TASK_PROMPT_TEMPLATE.md <= 140 lines"
+    result: passed
+    evidence: "content-stage validation: ROLE_POLICY=61 lines; TASK_PROMPT_TEMPLATE=87 lines"
+  - criterion: "AC-2: ROLE_POLICY declares the universal independent_review floor"
+    result: passed
+    evidence: "content-stage validation found Universal review floor and six independent_review occurrences"
+  - criterion: "AC-3: removed process-SOP headings are absent from TASK_PROMPT_TEMPLATE.md"
+    result: passed
+    evidence: "content-stage validation found zero occurrences of all five prohibited headings/phrases"
+  - criterion: "AC-4: legacy enum residues in the four specified files are only allowed migration references"
+    result: passed
+    evidence: "content-stage validation and independent Review confirmed ROLE_POLICY migration table plus schema legacy comment only"
+  - criterion: "AC-5: CLAUDE.md contains no phase-task or fable-review reference"
+    result: passed
+    evidence: "content-stage validation: CLAUDE phase-task=0; CLAUDE fable-review=0"
+  - criterion: "AC-6: P1-WORKFLOW-002 mainline context appears in CLAUDE.md, AGENTS.md, and TASK_INDEX.md"
+    result: passed
+    evidence: "content-stage validation confirmed all three required references"
+  - criterion: "AC-7: task_record_schema.yaml parses and uses the current review enum"
+    result: passed
+    evidence: "python YAML parse returned YAML_OK; mode line contains independent_review and no old mode value"
+  - criterion: "AC-8: P1-PARAM-001 changes only the two authorized pending-task enum replacements"
+    result: passed
+    evidence: "git diff --cached --numstat reported 2 additions and 2 deletions only"
+  - criterion: "AC-9: final staged paths equal touched_paths plus this Task Record and diff check is clean"
+    result: passed
+    evidence: "verified after this record was staged by final-stage validation evidence bound before integration"
+failure_examples_tested:
+  - example: "A forbidden app/, tests/, web/, scripts/, .github/, blueprint, phase0, or spec path enters the staged diff"
+    result: not_triggered
+    evidence: "candidate binding and final-stage exact path assertion reject out-of-scope staged paths"
+  - example: "A removed SOP heading remains in TASK_PROMPT_TEMPLATE.md"
+    result: not_triggered
+    evidence: "content-stage residual phrase scan reported zero for each prohibited phrase"
+  - example: "Schema YAML is malformed or retains an old review.mode value"
+    result: not_triggered
+    evidence: "PyYAML parse passed; current mode enum validated"
+  - example: "P1-PARAM-001 receives an unauthorized historical migration"
+    result: not_triggered
+    evidence: "cached numstat is 2 additions / 2 deletions, limited to the owner and review enum replacements"
+step_verification_points:
+  - step: "Content-stage contract validation"
+    result: passed
+    command: "line-count, residual phrase/enum scans, schema YAML parse, P1-PARAM cached numstat, and staged path checks"
+    evidence: "C:\\tmp\\p1-workflow-002-git-run-20260711\\validation_content_stage.json"
+  - step: "Architecture regression validation"
+    result: passed
+    command: "uv run pytest tests/architecture/"
+    evidence: "22 passed in 0.27s"
+  - step: "Content-stage independent review"
+    result: passed
+    command: "Claude final-diff review of the seven staged content files"
+    evidence: "Claude claude-opus-4-8 PASS; output hash 16740d2d425e7b9a6cc2c8815722792092f40eb4510befe5c2a5e0deef4c07eb"
+changed_files:
+  - AGENTS.md
+  - CLAUDE.md
+  - docs/dev/task_record_schema.yaml
+  - docs/phase1/ROLE_POLICY.md
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/TASK_PROMPT_TEMPLATE.md
+  - docs/phase1/task_logs/P1-WORKFLOW-002_20260711_230227_passed.yaml
+  - docs/phase1/tasks/P1-PARAM-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "python -c \"import yaml; yaml.safe_load(open('docs/dev/task_record_schema.yaml', encoding='utf-8')); print('OK')\""
+    result: passed
+    output_snippet: "YAML_OK"
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "22 passed in 0.27s"
+  - command: "git diff --cached --name-only; git diff --cached --check; git ls-files --others --exclude-standard"
+    result: passed
+    output_snippet: "content stage: exactly seven allowed content paths; clean diff check; no non-ignored untracked files; final stage re-runs this assertion with this record included"
+  - command: "git diff --cached --numstat -- docs/phase1/tasks/P1-PARAM-001.md"
+    result: passed
+    output_snippet: "2 additions, 2 deletions"
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: not_applicable
+  evidence: "Documentation-only task; no app/ module or import graph changed."
+  not_applicable_reason: "No Python import boundary changed."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next implementation task changing app/ or tests/"
+  expiry_condition: "Run the import-boundary check for the next task that changes application imports."
+security_scan_result:
+  result: passed
+  evidence: "Review packet and prompt secret scan reported no hits; final staged diff is scanned again before integration."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "No test files were added or modified."
+  not_applicable_reason: "Weak-test scanning applies to test code."
+  not_applicable_scope: "current_phase_only"
+  blocked_by_task_id: "not_blocked"
+  activation_task_id: "next task that adds or modifies tests"
+  expiry_condition: "Run weak-test scanning when a task changes tests."
+ci_evidence:
+  result: not_applicable
+  run_id: "not_applicable_pre_commit"
+  url_or_log_path: "not_applicable_pre_commit"
+  not_applicable_reason: "This is the pre-commit Task Record; no remote CI run exists at record creation."
+  not_applicable_scope: "pre_commit_local_validation"
+  blocked_by_task_id: "integration_after_record_inclusive_review"
+  activation_task_id: "P1-WORKFLOW-002 integration"
+  expiry_condition: "Replace with remote CI evidence in the final result evidence after push/merge if integration proceeds."
+  evidence: "No CI was implicitly triggered; remote integration remains controller-gated."
+review:
+  mode: independent_review
+  reviewed_by: "Claude claude-opus-4-8 (content-stage); record-inclusive final review is controller-required before commit"
+  reviewed_at: "2026-07-11T22:58:15+09:00"
+  notes: >
+    Content-stage Claude Review PASS is bound by the controller with model
+    verification. It reported no P0/P1; its P2 note identifies a preexisting
+    AGENTS.md not_applicable floor that is outside the task's precise
+    replacement list, so it is recorded as a governance debt rather than
+    expanded into this task. This record is included in a second final Review.
+remaining_risks:
+  - "AGENTS.md retains a stricter global not_applicable six-field rule than the documentation-task relaxation in the new schema/template; this was a non-blocking P2 finding outside the exact task replacement list."
+  - "Local phase0/main and observed origin/phase0/main differ; mergeability and required-check evidence must be refreshed at integration."
+  - "The record-inclusive Review PASS, commit, push/merge, and any remote CI result are not claimed by this pre-commit record and remain controller-gated."
+rollback_or_failure_record: "If the record-inclusive Review or integration check fails, retain this candidate for diagnosis and do not commit or modify the target worktree."
+git_commit_sha: "recorded_by_git_history_after_final_commit"
+git_commit_sha_note: "The final commit SHA is not embedded in this Task Record because committing this file changes HEAD. The authoritative commit SHA is the Git commit containing this Task Record and the remote branch history after push."
+package_confirmation_status: not_applicable
+package_confirmation: "not_applicable: no package or archive is created for this documentation-only task"
+package_scope: ""
+package_evidence: ""

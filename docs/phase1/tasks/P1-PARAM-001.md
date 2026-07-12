@@ -11,9 +11,9 @@
 ```yaml
 method_profile:
   execution_role: "documentation"
-  execution_owner: "claude_code_mimo"
+  execution_owner: "claude_code"
   review_owner: "codex"
-  review_mode: "codex_review"
+  review_mode: "independent_review"
   method: "PDR"
   reason_for_owner_choice: >
     scope=research-only；向 infra 确认部署参数后登记为基线表。

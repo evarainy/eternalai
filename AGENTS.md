@@ -1,6 +1,7 @@
 # AGENTS.md - Phase 1 Compact Agent Boot Rules v1.0.0
 
 This file is intentionally short. It is the always-loaded compact boot context for Codex and other generic coding agents. Do not expand it into a full spec.
+Process choreography (plan/review/gate mechanics) lives in the `codex-claude` workflow skill; this file is boot context plus fail-closed floor only.
 
 ## Phase
 Phase 1 active. The main branch is still `phase0/main`; Phase 1 task branches use `phase1/<task_id>`.
@@ -18,7 +19,7 @@ Phase 0 context-loading, style, boundary, and role/method files may be reused on
 - **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations
 - **Backend**: Python + uv + FastAPI | **Frontend**: React 18 + Vite + Ant Design 5.x
 - **Data**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: Qwen + vLLM raw JSON mode (instructor/PydanticAI both failed)
+- **LLM**: Qwen + vLLM raw JSON mode (baseline; instructor/PydanticAI rejected by ADR — do not introduce; see docs/phase0/PHASE1_TECHNICAL_BASELINE.md §3.1)
 - **Observability**: OpenTelemetry + Langfuse
 - **Full tech stack decisions**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
 
@@ -42,7 +43,7 @@ infra/docker/       Docker Compose templates
 - **Task branch**: `phase1/<task_id>` (e.g. `phase1/P1-SPEC-001`)
 - **Commit message**: `phase1(<task_id>): <short description>`
 - **Merge message**: `merge phase1(<task_id>): <short description>`
-- **No commit, no push, no merge** unless a human explicitly approves.
+- **No push, no merge** unless a human explicitly approves (Gate 2). Local commit only per `docs/phase1/ROLE_POLICY.md` ceremony table (low/medium: after independent review PASS; high: human ack).
 - Check remote GitHub Actions CI after every merge to phase0/main
 
 ## Validation commands
@@ -77,9 +78,9 @@ uv run python scripts/run_golden_tasks.py --gate
 - Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
 
 ## Non-negotiable hard rules
-1. Execute exactly one `task_id` per session turn; stop after Task Record and wait for human confirmation.
+1. Execute exactly one `task_id` per session turn; ceremony (plan gate, record detail, commit policy) follows `docs/phase1/ROLE_POLICY.md`.
 2. Start with the matching per-task prompt. Do not load or paste the full spec unless resolving a contradiction.
-3. Output a Plan first. Do not modify files until a human approves the Plan.
+3. Plan gate per ROLE_POLICY: medium/high tasks need a human-approved Plan before file edits; low tasks may proceed directly against the task prompt.
 4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
 5. `app/ports/` is frozen; do not edit it unless the task explicitly authorizes it and a human approves.
 6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
@@ -88,9 +89,10 @@ uv run python scripts/run_golden_tasks.py --gate
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 10. Work on one task branch: `phase1/<task_id>`.
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-12. Current mainline order: `P1-ERRATA-001 -> P1-WORKFLOW-001 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
+12. Current mainline order: `P1-WORKFLOW-002 -> patch P1-SPEC-001 -> execute P1-SPEC-001 -> B2`.
 
 ## Scratch/temp and artifact review rules
+- Workflow-skill runtime scratch lives outside the repo (`$CLAUDE_CODEX_SCRATCH_ROOT`); repo-local `_scratch/` is for manual/non-skill temp files only.
 - Verify no temp/cache artifacts (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_scratch/` contents) are staged.
 - Verify untracked files are either intentionally ignored or cleaned before closeout.
 - Verify `git ls-files --others --exclude-standard` is clean, or only shows intentional files that are explicitly explained.
