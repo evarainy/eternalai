@@ -7,17 +7,40 @@ from typing import Any
 
 REDACTED_TRACE_VALUE = "[REDACTED]"
 
-_CREDENTIAL_KEY_PATTERN = re.compile(
-    r"(session[-_]?id|access[_-]?token|refresh[_-]?token|set-cookie|cookie|bearer|authorization)",
-    re.IGNORECASE,
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "authorization",
+        "bearer",
+        "cookie",
+        "set_cookie",
+        "setcookie",
+        "session",
+        "session_id",
+        "sessionid",
+        "access_token",
+        "accesstoken",
+        "refresh_token",
+        "refreshtoken",
+        "password",
+        "passwd",
+        "api_key",
+        "apikey",
+        "secret",
+        "client_secret",
+        "clientsecret",
+        "private_key",
+        "privatekey",
+    }
 )
 _CREDENTIAL_VALUE_PATTERNS = (
     re.compile(r"bearer\s+\S+", re.IGNORECASE),
-    re.compile(r"session[-_]?id\s*=\s*\S+", re.IGNORECASE),
-    re.compile(r"access[_-]?token\s*=\s*\S+", re.IGNORECASE),
-    re.compile(r"refresh[_-]?token\s*=\s*\S+", re.IGNORECASE),
-    re.compile(r"cookie\s*=\s*\S+", re.IGNORECASE),
-    re.compile(r"set-cookie\s*=\s*\S+", re.IGNORECASE),
+    re.compile(
+        r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
+        r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
+        r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key)"
+        r"\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
 )
 
 
@@ -41,7 +64,8 @@ def _redact_value(value: Any) -> Any:
 
 
 def _is_credential_key(key: str) -> bool:
-    return bool(_CREDENTIAL_KEY_PATTERN.search(key))
+    normalized = re.sub(r"[\s_-]+", "_", key.strip().lower())
+    return normalized in _CREDENTIAL_KEYS
 
 
 def _is_credential_value(value: str) -> bool:

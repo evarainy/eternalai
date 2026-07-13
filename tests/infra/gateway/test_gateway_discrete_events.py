@@ -103,6 +103,18 @@ class FakeTrace:
                 "attributes": attributes or {},
             }
         )
+        self.steps.append(
+            {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "session_id": session_id,
+                "event_type": "gateway_pre_recorded",
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
 
     async def finalize_task_trace(
         self,
@@ -179,6 +191,7 @@ def test_gateway_emits_discrete_success_events_around_adapter_call() -> None:
         "gateway_post_recorded",
     ]
     assert len(trace.gateway_calls) == 1
+    assert trace.finalizes == []
 
 
 def test_gateway_timeout_sub_order_maps_adapter_error_after_post_record() -> None:
@@ -193,3 +206,4 @@ def test_gateway_timeout_sub_order_maps_adapter_error_after_post_record() -> Non
         "adapter_error_mapped",
     ]
     assert "task_completed" not in _events(trace)
+    assert trace.finalizes == []

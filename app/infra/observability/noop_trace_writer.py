@@ -49,16 +49,7 @@ class NoopTraceWriter:
         task_id: str,
         session_id: str,
     ) -> None:
-        await self.record_event(
-            TraceEvent(
-                trace_id=trace_id,
-                task_id=task_id,
-                session_id=session_id,
-                event_type="task_created",
-                status="ok",
-                attributes={},
-            )
-        )
+        return None
 
     async def record_step(
         self,
@@ -140,15 +131,4 @@ class NoopTraceWriter:
         error_code: ErrorCode | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        await self.record_event(
-            TraceEvent(
-                trace_id=trace_id,
-                task_id=task_id,
-                session_id=session_id,
-                event_type="task_completed",
-                status=status,
-                capability_id=capability_id,
-                error_code=error_code,
-                attributes=attributes or {},
-            )
-        )
+        return None

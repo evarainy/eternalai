@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
+import pytest
+
 from app.infra.observability.sanitizer import redact_trace_attributes
 
 
@@ -66,3 +70,82 @@ def test_non_str_value_passes_through() -> None:
 
     assert result == {"count": 42}
     assert result["count"] is payload["count"]
+
+
+@pytest.mark.parametrize(
+    "credential_key",
+    (
+        "Authorization",
+        "PASSWORD",
+        "passwd",
+        "Api-Key",
+        "api_key",
+        "SECRET",
+        "Client_Secret",
+        "PRIVATE-KEY",
+        "SessionID",
+        "accessToken",
+        "refreshToken",
+        "apiKey",
+        "clientSecret",
+        "privateKey",
+    ),
+)
+def test_redacts_all_required_credential_key_families(credential_key: str) -> None:
+    payload = {credential_key: "synthetic-" + "credential-value"}
+
+    assert redact_trace_attributes(payload) == {credential_key: "[REDACTED]"}
+
+
+@pytest.mark.parametrize(
+    "credential_assignment",
+    (
+        "password=" + "synthetic-value",
+        "passwd=" + "synthetic-value",
+        "api_key=" + "synthetic-value",
+        "client-secret=" + "synthetic-value",
+        "private_key=" + "synthetic-value",
+    ),
+)
+def test_redacts_credential_assignments_under_safe_key(
+    credential_assignment: str,
+) -> None:
+    payload = {"message": credential_assignment}
+
+    assert redact_trace_attributes(payload) == {"message": "[REDACTED]"}
+
+
+def test_nested_redaction_does_not_mutate_input() -> None:
+    payload = {
+        "safe": [
+            {"Password": "synthetic-" + "password-value"},
+            {"nested": {"client_secret": "synthetic-" + "secret-value"}},
+        ],
+        "token_count": 42,
+    }
+    original = deepcopy(payload)
+
+    result = redact_trace_attributes(payload)
+
+    assert result == {
+        "safe": [
+            {"Password": "[REDACTED]"},
+            {"nested": {"client_secret": "[REDACTED]"}},
+        ],
+        "token_count": 42,
+    }
+    assert payload == original
+    assert result is not payload
+    assert result["safe"] is not payload["safe"]
+
+
+def test_safe_telemetry_names_are_not_over_redacted() -> None:
+    payload = {
+        "token_count": 512,
+        "session_duration": 12.5,
+        "secretary_name": "synthetic assistant",
+        "password_policy": "minimum length twelve",
+        "capability_id": "oa.synthetic.query",
+    }
+
+    assert redact_trace_attributes(payload) == payload

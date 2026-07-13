@@ -245,6 +245,18 @@ class FakeTrace:
             "error_code": error_code,
             "attributes": attributes,
         }
+        self.steps.append(
+            {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "session_id": session_id,
+                "event_type": "gateway_pre_recorded",
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
         if self._call_log is not None:
             self._call_log.append("record_gateway_call")
 
@@ -556,7 +568,7 @@ def test_policy_confirm_short_circuits_without_adapter_and_records_trace() -> No
     _assert_trace_not_finalized(trace)
 
 
-def test_happy_path_runs_prechecks_records_trace_before_adapter_and_finalizes_after_adapter() -> None:  # noqa: E501
+def test_happy_path_runs_prechecks_and_records_trace_without_task_finalize() -> None:
     call_log: list[str] = []
     registry = FakeRegistry(_capability_spec())
     identity_mapping = FakeIdentityMapping(_identity_result("active"))
@@ -577,7 +589,6 @@ def test_happy_path_runs_prechecks_records_trace_before_adapter_and_finalizes_af
     result = _execute_gateway_with_ports(gateway)
 
     assert call_log.index("record_gateway_call") < call_log.index("adapter")
-    assert call_log.index("record_step:gateway_pre_recorded") < call_log.index("adapter")
     assert call_log.index("adapter") < call_log.index("record_step:adapter_called")
     assert call_log.index("adapter") < call_log.index("record_step:gateway_post_recorded")
     assert result.status == "completed"
@@ -590,7 +601,7 @@ def test_happy_path_runs_prechecks_records_trace_before_adapter_and_finalizes_af
     assert trace.record_gateway_call_kwargs["error_code"] is None
     record_attributes = trace.record_gateway_call_kwargs.get("attributes") or {}
     assert "arguments" not in record_attributes
-    _assert_trace_finalized(trace, "ok", None)
+    _assert_trace_not_finalized(trace)
 
 
 def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_adapter() -> None:
@@ -622,7 +633,7 @@ def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_a
             "gateway_post_recorded",
         ],
     )
-    _assert_trace_finalized(trace, "ok", None)
+    _assert_trace_not_finalized(trace)
     assert result.status == "completed"
 
 

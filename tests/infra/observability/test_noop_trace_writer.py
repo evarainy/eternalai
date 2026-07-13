@@ -120,18 +120,12 @@ def test_record_event_soft_fails_when_logger_raises() -> None:
     assert result is None
 
 
-def test_start_task_trace_delegates_task_created_event() -> None:
+def test_start_task_trace_is_a_non_semantic_lifecycle_hook() -> None:
     writer = _CapturingTraceWriter()
 
     asyncio.run(writer.start_task_trace("trace-1", "task-1", "session-1"))
 
-    event = writer.events[0]
-    assert event.event_type == "task_created"
-    assert event.status == "ok"
-    assert event.trace_id == "trace-1"
-    assert event.task_id == "task-1"
-    assert event.session_id == "session-1"
-    assert event.attributes == {}
+    assert writer.events == []
 
 
 def test_record_step_delegates_with_all_fields() -> None:
@@ -203,7 +197,7 @@ def test_record_gateway_call_delegates_gateway_pre_recorded() -> None:
     assert event.attributes == {"gateway": "pre"}
 
 
-def test_finalize_task_trace_forwards_caller_status() -> None:
+def test_finalize_task_trace_is_a_non_semantic_lifecycle_hook() -> None:
     writer = _CapturingTraceWriter()
 
     asyncio.run(
@@ -218,12 +212,7 @@ def test_finalize_task_trace_forwards_caller_status() -> None:
         )
     )
 
-    event = writer.events[0]
-    assert event.event_type == "task_completed"
-    assert event.status == "failed"
-    assert event.capability_id == "oa.leave.apply"
-    assert event.error_code == "internal_error"
-    assert event.attributes == {"summary": "failed"}
+    assert writer.events == []
 
 
 def test_trace_event_extra_field_raises_validation_error() -> None:
