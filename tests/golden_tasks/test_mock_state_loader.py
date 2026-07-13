@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     apply_mock_state: Callable[[object, object], None]
     load_fixture: Callable[[str], dict[str, Any]]
 else:
-    from tests.golden_tasks.conftest import apply_mock_state, load_fixture
+    from scripts.golden_task_fixture_support import apply_mock_state, load_fixture
 
 
 def test_gt001_oa_state_can_be_injected_and_returned(

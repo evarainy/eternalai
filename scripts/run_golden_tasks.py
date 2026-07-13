@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import sys
 from collections.abc import Callable, Sequence
@@ -194,11 +193,9 @@ def _load_runner() -> tuple[
     Callable[[], list[Any]],
     Callable[[Sequence[Any]], dict[str, Any]],
 ]:
-    module = importlib.import_module("tests.golden_tasks.test_golden_tasks")
-    return (
-        cast(Callable[[], list[Any]], getattr(module, "evaluate_all_golden_tasks")),
-        cast(Callable[[Sequence[Any]], dict[str, Any]], getattr(module, "build_summary")),
-    )
+    from scripts.golden_task_evaluator import build_summary, evaluate_all_golden_tasks
+
+    return evaluate_all_golden_tasks, build_summary
 
 
 if __name__ == "__main__":
