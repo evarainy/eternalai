@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.ports.response_envelope import ResponseEnvelope
@@ -21,11 +21,19 @@ class HandleRequest(BaseModel):
     client_capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
-def make_router(runtime: RuntimePort) -> APIRouter:
+def make_router(runtime: RuntimePort | None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/handle")
     async def handle(body: HandleRequest) -> dict[str, Any]:
+        if runtime is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "runtime_unavailable",
+                    "message": "Runtime provider is not configured.",
+                },
+            )
         envelope: ResponseEnvelope = await runtime.handle_user_message(
             channel=body.channel,
             ai_user_id=body.ai_user_id,

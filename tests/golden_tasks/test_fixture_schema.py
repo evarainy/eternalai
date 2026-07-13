@@ -8,7 +8,7 @@ import pytest
 if TYPE_CHECKING:
     load_fixture: Callable[[str], dict[str, Any]]
 else:
-    from tests.golden_tasks.conftest import load_fixture
+    from scripts.golden_task_fixture_support import load_fixture
 
 GT_IDS = [
     "GT-001",

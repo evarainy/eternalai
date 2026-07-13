@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     assert_trace_sequence_contains: Callable[[Iterable[Any], Iterable[str]], None]
     judge_assertions: Callable[..., _AssertionJudgement]
 else:
-    from tests.golden_tasks.assertions import (
+    from scripts.golden_task_assertions import (
         assert_adapter_calls,
         assert_forbidden_absent,
         assert_response_matches,
@@ -164,7 +164,7 @@ def test_unknown_forbidden_item_raises_assertion_error() -> None:
 
 
 def test_injection_companion_judgement_rejects_absent_or_mismatched_error_code() -> None:
-    runner = importlib.import_module("tests.golden_tasks.test_golden_tasks")
+    runner = importlib.import_module("scripts.golden_task_evaluator")
     helper = getattr(runner, "judge_injection_companion_assertions", None)
     assert helper is not None, "injection companion assertion helper is missing"
     base_trace = [

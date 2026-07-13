@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     assert_terminal_state_matrix: Callable[[Iterable[Any], str | None], None]
     assert_trace_sequence_contains: Callable[[Iterable[Any], Iterable[str]], None]
 else:
-    from tests.golden_tasks.assertions import (
+    from scripts.golden_task_assertions import (
         assert_adapter_calls,
         assert_forbidden_absent,
         assert_response_matches,
@@ -26,7 +26,7 @@ else:
 
 
 def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> None:
-    runner = importlib.import_module("tests.golden_tasks.test_golden_tasks")
+    runner = importlib.import_module("scripts.golden_task_evaluator")
     helper = getattr(runner, "judge_injection_companion_assertions", None)
     assert helper is not None, "injection companion assertion helper is missing"
     trace = [

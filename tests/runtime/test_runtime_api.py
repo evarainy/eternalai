@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.runtime import make_router
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.main import create_app
 from app.ports.response_envelope import ResponseEnvelope
 
 
@@ -65,5 +66,32 @@ def test_runtime_handle_endpoint_rejects_extra_fields() -> None:
     body["extra_field"] = "not allowed"
 
     response = _client().post("/api/v1/runtime/handle", json=body)
+
+    assert response.status_code == 422
+
+
+def test_formal_app_runtime_route_fails_closed_without_provider() -> None:
+    response = TestClient(create_app()).post(
+        "/api/v1/runtime/handle",
+        json=_valid_body(),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "runtime_unavailable",
+            "message": "Runtime provider is not configured.",
+        }
+    }
+
+
+def test_formal_app_runtime_route_validates_before_unavailable() -> None:
+    body = _valid_body()
+    body["extra_field"] = "not allowed"
+
+    response = TestClient(create_app()).post(
+        "/api/v1/runtime/handle",
+        json=body,
+    )
 
     assert response.status_code == 422

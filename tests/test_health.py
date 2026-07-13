@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, create_app
 
 client = TestClient(app)
 
@@ -15,3 +15,10 @@ def test_health_response_shape() -> None:
     body = response.json()
     assert "status" in body
     assert body["status"] == "ok"
+
+
+def test_formal_app_and_factory_register_health_and_runtime_routes() -> None:
+    expected_paths = {"/api/v1/health", "/api/v1/runtime/handle"}
+
+    assert expected_paths <= set(app.openapi()["paths"])
+    assert expected_paths <= set(create_app().openapi()["paths"])

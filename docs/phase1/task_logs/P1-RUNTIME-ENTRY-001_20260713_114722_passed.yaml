@@ -1,0 +1,299 @@
+schema_version: "1.2.0"
+task_id: P1-RUNTIME-ENTRY-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: TDD
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "Runtime composition, application entry, and Golden gate behavior are R2; Claude Opus is the bounded read-only Plan/final-diff reviewer."
+controller_risk:
+  tier: R2
+  classification_reason: "Cross-layer Runtime composition, formal HTTP entry, and Golden gate/CLI failure semantics."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: human_pre_apply
+  authorization_mode: standard
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "Controller Gate1 evidence b97308100d90844d53ad4e750a9633256ae63cc2bb778ce586d22bb0371340ed binds Plan 0b92f77d..., verified PLAN_READY, packet audit CLEAR, and ACCEPT_PLAN_WITH_P3_LEDGER."
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "Required after ordinary merge and merge-SHA CI; controller final-result evidence closes it."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "R2 post-integration result acceptance blocks auto-next."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No delete/history rewrite, credential/env, DB schema or real-data, global/system, publish/deploy, rebase, reset-hard, or force-push action was requested or performed."
+started_at: "2026-07-13T09:47:46+09:00"
+completed_at: "2026-07-13T11:47:22+09:00"
+plan_approved_by: "total scheduler conditional standing authorization"
+plan_approved_at: "2026-07-13T09:47:46+09:00"
+plan_approved_via: "Codex delegated control thread plus canonical v3 Gate1 evidence"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      input_tokens: 2
+      cache_creation_input_tokens: 37640
+      output_tokens: 19713
+    claude-haiku-4-5-20251001:
+      input_tokens: 25873
+      output_tokens: 19
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "35228e88901a7738327aeb6112d965e1740a8774016684dd696b41f969a659eb"
+  prompt_sha256: "b2a66fa361788bf8bf1cad5a28bbe650d060bd36b277904c520fb91d2187e796"
+  output_sha256: "d686a7c6446aafa59524e15416a69d89f91f2615aa4a5d7bdc9ccfaf6e987985"
+  meta_sha256: "140762cca053805234bee64ddd4837fd30ac3bdf3808d4245753b033196b4336"
+  external_packet_audit: CLEAR
+  sanity_sha256: "ef09ed555157762c52c827b13800fb3442affe4da1f86efaf4567436b8e9218e"
+  gate1_evidence_sha256: "b97308100d90844d53ad4e750a9633256ae63cc2bb778ce586d22bb0371340ed"
+summary: >
+  A canonical Runtime builder now owns the frozen six-dependency assembly knowledge;
+  the formal FastAPI app exposes health and Runtime routes with stable 422/503 behavior;
+  Golden evaluation is hosted in shared script modules with no tests/pytest dependency,
+  preserves byte-exact Golden output, and maps threshold/infrastructure failures to exits
+  1/2 without tracebacks. The accepted constructor/OBS relocation/architecture P3 ledger
+  remains CLEAR after the bounded import-boundary repair.
+acceptance_criteria_result:
+  - criterion: "RUNTIME-AC-01 formal health and Runtime routes with 200/422/503 behavior"
+    result: passed
+    evidence: "Runtime/formal app suite 9 passed; OpenAPI contains /api/v1/health and /api/v1/runtime/handle; unconfigured runtime returns the exact non-leaking 503 envelope."
+  - criterion: "RUNTIME-AC-02 HTTP smoke uses canonical builder-backed RuntimeImpl"
+    result: passed
+    evidence: "test_formal_http_smoke_uses_builder_backed_runtime verifies HTTP 200, legal ResponseEnvelope, TaskStore/SessionStore writes, and trace lifecycle events."
+  - criterion: "RUNTIME-AC-03 application and Golden composition knowledge is canonical"
+    result: passed
+    evidence: "app/composition.py forwards the frozen task_store/session_store/gateway/trace_port/structured_output/response_builder shape; Golden calls build_runtime rather than RuntimeImpl."
+  - criterion: "RUNTIME-AC-04 import-safe app and fail-closed unconfigured provider"
+    result: passed
+    evidence: "create_app() and module app import without DB/external access; valid runtime request without provider returns stable HTTP 503 and never selects a mock."
+  - criterion: "RUNTIME-AC-05 shared runner statically imports evaluator with zero tests/pytest dependency"
+    result: passed
+    evidence: "Direct ImportFrom is inside _load_runner for infrastructure containment; AST/static scans find no tests.*, pytest, importlib, or dynamic test import in shared scripts."
+  - criterion: "RUNTIME-AC-06 thin pytest and fixture wrappers"
+    result: passed
+    evidence: "test_golden_tasks.py retains parameterization/assertions only; conftest.py contains fixtures only; general helpers live in scripts modules."
+  - criterion: "RUNTIME-AC-07 byte-exact Golden behavior equivalence"
+    result: passed
+    evidence: "Pre/post --summary and --gate raw SHA-256 are c6c299805b4d6915cf4d4d752cf541f85911114033ca02e6efeee0696b18ec71; parsed objects and per-GT IDs/status/reasons/counts are equal."
+  - criterion: "RUNTIME-AC-08 real runner is cwd-independent"
+    result: passed
+    evidence: "Real candidate venv subprocess from C:/Users/Administrator/.claude-codex-scratch/candidates returns exit 0 and 11/11 passed."
+  - criterion: "RUNTIME-AC-09 import, fixture, dependency, and frozen-path boundaries"
+    result: passed
+    evidence: "No app-to-tests or shared-script-to-tests/pytest import; fixtures, ports, dependencies, DB/env/CI/lockfiles and forbidden paths are unchanged."
+  - criterion: "RUNTIME-AC-10 negative HTTP/assertion/gate/infrastructure behavior"
+    result: passed
+    evidence: "Malformed HTTP remains 422; Golden negative meta-tests pass; real child processes return 0/1/2; evaluator import-hook failure returns 2, empty stdout, stable stderr, and no traceback."
+failure_examples_tested:
+  - example: application_entry_incomplete
+    result: triggered
+    evidence: "Initial RED could not collect formal app tests because create_app/composition were missing; GREEN Runtime/formal app suite is 9 passed."
+  - example: composition_duplication
+    result: triggered
+    evidence: "Initial Golden assembly directly constructed RuntimeImpl; final evaluator calls the canonical builder and constructor source remains frozen."
+  - example: harness_not_decoupled
+    result: triggered
+    evidence: "Initial RED lacked shared fixture/assertion/evaluator modules; final CLI/gate targeted suite is 12 passed and forbidden import scan is empty."
+  - example: golden_equivalence_failure
+    result: not_triggered
+    evidence: "Pre/post raw bytes and parsed JSON are exactly equal, including 11 IDs, statuses, reasons, thresholds, and 7/4 category counts."
+    not_applicable_reason: "The failure condition did not occur; exact equivalence checks passed."
+    not_applicable_scope: current_phase_only
+    blocked_by_task_id: P1-RUNTIME-ENTRY-001
+    activation_task_id: P1-RUNTIME-ENTRY-001
+    expiry_condition: "Any later Golden output, threshold, per-GT, or exit-semantic drift reactivates this failure."
+  - example: scope_expansion_required
+    result: not_triggered
+    evidence: "All changed paths are descriptor-allowed; no R3, forbidden path, dependency, fixture, DB, env, CI, port, threshold, sanitizer, or writer production path changed."
+    not_applicable_reason: "The implementation and bounded repair stayed within the formal allowlist."
+    not_applicable_scope: current_phase_only
+    blocked_by_task_id: P1-RUNTIME-ENTRY-001
+    activation_task_id: P1-RUNTIME-ENTRY-001
+    expiry_condition: "Any need for a forbidden or unlisted path stops this lane."
+step_verification_points:
+  - step: preflight
+    result: passed
+    command: "clean/frozen-lane/mirror/base/dependency/Plan/Gate1 checks"
+    evidence: "Base/head/remote d8b729d, frozen governance lane 18/A76B2..., mirror parity, packet audit CLEAR, verified PLAN_READY, and conditional Gate1 were bound before edits."
+  - step: red
+    result: passed
+    command: "initial Runtime/Golden collection RED plus import-hook subprocess RED"
+    evidence: "Expected missing entry/shared-module failures were captured; bounded repair RED observed child exit 1 with uncaught evaluator ImportError."
+  - step: green
+    result: passed
+    command: "targeted Runtime/Golden/CLI, Golden equivalence, architecture, static, full suite"
+    evidence: "Runtime 9, Golden 122, CLI/gate 12, architecture 22, full isolated DB suite 728; summary/gate raw bytes match pre-change."
+  - step: pre-review
+    result: passed
+    command: "exact paths, weak tests, secret adjudication, P3 ledger, record and packet preparation"
+    evidence: "All 11 changed tests pass weak checks; candidate-owned ruff is clear; five redacted scanner candidates were manually classified as session_id forwarding or synthetic negative input."
+  - step: integration
+    result: not_applicable
+    command: "reviewed commit, task/PR CI, merge-SHA CI, Gate2"
+    evidence: "Not triggered before record-inclusive final Review and reviewed commit."
+    not_applicable_reason: "Final Review, task commit, remote checks, merge, and post-merge result do not yet exist."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-RUNTIME-ENTRY-001
+    activation_task_id: P1-RUNTIME-ENTRY-001
+    expiry_condition: "Bind final Review PASS, reviewed commit, task/PR CI, ordinary merge, merge-SHA CI, and Gate2 result."
+changed_files:
+  - app/api/v1/runtime.py
+  - app/composition.py
+  - app/main.py
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-RUNTIME-ENTRY-001_20260713_114722_passed.yaml
+  - scripts/golden_task_assertions.py
+  - scripts/golden_task_evaluator.py
+  - scripts/golden_task_fixture_support.py
+  - scripts/run_golden_tasks.py
+  - tests/golden_tasks/assertions.py
+  - tests/golden_tasks/conftest.py
+  - tests/golden_tasks/test_fixture_schema.py
+  - tests/golden_tasks/test_golden_tasks.py
+  - tests/golden_tasks/test_mock_state_loader.py
+  - tests/golden_tasks/test_runner_assertions.py
+  - tests/golden_tasks/test_runner_cli.py
+  - tests/golden_tasks/test_runner_negative_assertions.py
+  - tests/runtime/test_runtime_api.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/test_health.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "C:/Users/Administrator/.claude-codex-scratch/candidates/P1-RUNTIME-ENTRY-001-20260713"
+  reviewed_parent_sha: "d8b729dc92c4887ad6527aa9a026f44c711f30de"
+  reviewed_tree_oid: "bound_by_controller_after_exact_stage"
+  staged_diff_sha256: "bound_by_controller_after_exact_stage"
+  changed_paths_sha256: "bound_by_controller_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_controller_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest tests/test_health.py tests/runtime/test_runtime_api.py tests/runtime/test_runtime_composition.py -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "9 passed."
+  - command: "uv run pytest tests/golden_tasks/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "122 passed."
+  - command: "uv run pytest tests/golden_tasks/test_runner_cli.py tests/golden_tasks/test_golden_gate.py -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "12 passed, including real evaluator-import infrastructure exit 2."
+  - command: "uv run python scripts/run_golden_tasks.py --summary and --gate"
+    result: passed
+    output_snippet: "Both exit 0; raw SHA-256 c6c29980... equals pre-change; 11/11 with 7 positive and 4 negative."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed; architecture source hash unchanged."
+  - command: "uv run ruff check app/ scripts/ tests/"
+    result: failed
+    output_snippet: "Inherited I001 at scripts/check_dependencies.py:4 only; clean parent produces the exact same single finding; all 18 candidate-owned paths pass ruff."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues in 47 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run python scripts/check_weak_tests.py <each changed test file>"
+    result: passed
+    output_snippet: "All 11 changed test files passed individually."
+  - command: "uv run pytest with isolated test-only pgvector PostgreSQL"
+    result: passed
+    output_snippet: "728 passed in 11.41s; retained container was stopped, not removed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "22 architecture tests passed; frozen rule hash f337b815... and Runtime source hash c679bea1... are unchanged."
+security_scan_result:
+  result: passed
+  evidence: "Redacted scan candidates were manually inspected: four are session_id forwarding and one is the synthetic sessionid=abc123 negative assertion input; no actual secret or persisted credential value."
+weak_test_scan_result:
+  result: passed
+  evidence: "All 11 changed test files passed the repository weak-test checker; original tmp_path meta-test semantics were preserved."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Task/PR and post-merge runs are not triggered before final Review and reviewed commit."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-RUNTIME-ENTRY-001
+  activation_task_id: P1-RUNTIME-ENTRY-001
+  expiry_condition: "Bind successful task/PR runs to task commit and successful post-merge push run to merge SHA."
+  evidence: "Dependency runs are prerequisites only and are not claimed as this task's CI."
+review:
+  mode: independent_review
+  reviewed_by: "pending fresh record-inclusive packet audit and Claude final-diff review"
+  reviewed_at: ""
+  notes: "Plan Review and bounded P2 repair are closed; final raw staged diff, validation evidence, P3 ledger, policy, packet audit, and verified-model Claude PASS remain mandatory."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "bound_after_exact_stage"
+  prompt_sha256: "bound_after_exact_stage"
+  output_sha256: "bound_after_exact_stage"
+  meta_sha256: "bound_after_exact_stage"
+  validation_evidence_sha256: "68113c33cbf8475d7e47cc3805411ac56a0e8f462644865b1239fdc1ae35eb1c"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "recorded_by_git_history_after_final_review"
+  task_branch: phase1/P1-RUNTIME-ENTRY-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No reviewed task commit exists before final Review."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: not_evaluated_pre_commit
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind the merge SHA."
+  integration_freshness_sha256: "bound_after_final_review"
+remaining_risks:
+  - "Exact full ruff inherits one unchanged I001 in out-of-allowlist scripts/check_dependencies.py; the candidate-owned lint set is clear and the clean parent comparison is retained."
+  - "Fresh record-inclusive packet audit, verified-model Claude final Review, exact reviewed commit, task/PR CI, mergeability, merge-SHA CI, Gate2, and closeout audit remain mandatory."
+rollback_or_failure_record: "Stop and preserve candidate/scratch on any drift/failure. No deletion, reset, rebase, force push, or automatic post-merge repair; any repair/revert is a new authorized run."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "No package artifact is produced by this Runtime composition and Golden harness task."
+package_scope: ""
+package_evidence: ""
