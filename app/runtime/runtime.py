@@ -312,14 +312,6 @@ def _map_exec_to_task_status(status: ExecutionStatus) -> TaskStatus:
     return "failed"
 
 
-def _map_exec_to_trace_status(status: ExecutionStatus) -> TraceEventStatus:
-    if status == "completed":
-        return "ok"
-    if status in {"denied", "binding_required", "no_capability_found", "waiting_user"}:
-        return "blocked"
-    return "failed"
-
-
 def _terminal_event_for_exec_status(status: ExecutionStatus) -> TraceEventType | None:
     if status == "completed":
         return "task_completed"

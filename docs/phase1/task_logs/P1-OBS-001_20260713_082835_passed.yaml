@@ -1,0 +1,281 @@
+schema_version: "1.2.0"
+task_id: P1-OBS-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: TDD
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "Runtime/Trace/security behavior is R2; Claude Opus is bounded read-only Plan/final-diff reviewer."
+controller_risk:
+  tier: R2
+  classification_reason: "Cross-layer Runtime lifecycle, Gateway event ownership, failure semantics, and sensitive telemetry redaction."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: human_pre_apply
+  authorization_mode: standard
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "Gate1 evidence edda6e546c1874acfb1f1beb8cb64e9d4f10c3d14fd3ce35c49ab181f0092d59 binds Plan 39f642311a63f4f125bbca5e38841aa37fe95731e0dc52dc8e3588c9d8d56acf and verified PLAN_READY."
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "Required after ordinary merge and merge-SHA CI; controller final-result evidence closes it."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "R2 result acceptance blocks auto-next; P1-RUNTIME-ENTRY-001 is not started."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No delete/history rewrite, credential/env, DB schema or real-data, global/system, publish/deploy, rebase, reset-hard, or force-push action was requested or performed."
+started_at: "2026-07-13T06:58:58+09:00"
+completed_at: "2026-07-13T08:28:35+09:00"
+plan_approved_by: "human standing conditional authorization"
+plan_approved_at: "2026-07-13T08:18:17+09:00"
+plan_approved_via: "Codex delegated control thread plus canonical v3 Gate1 evidence"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      input_tokens: 2
+      cache_creation_input_tokens: 17945
+      cache_read_input_tokens: 1738
+      output_tokens: 15274
+    claude-haiku-4-5-20251001:
+      input_tokens: 12198
+      output_tokens: 22
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "df11522cd9fe14215c7360401e6972ed2ed4bde824165f79f6b2d73b70c99d12"
+  prompt_sha256: "12b89652e420f9491584662587b9337c5712487640ef73da389e7eb4e6079e42"
+  output_sha256: "29b186a980eacd0560efbe0f813191eabd6a320eebe0afe6f07b814389581d59"
+  meta_sha256: "8800154de2f04986c5066ac7968a47b135a2c8596e3a76b18cdd6b1709af9cd8"
+  external_packet_audit: CLEAR
+  sanity_sha256: "3944f10985275abd3df016308ceb37b3bff9c1debaa4466a82536a1c1e3b644f"
+  gate1_evidence_sha256: "edda6e546c1874acfb1f1beb8cb64e9d4f10c3d14fd3ce35c49ab181f0092d59"
+summary: >
+  Runtime now owns all task-level semantic lifecycle events. NoopTraceWriter start/finalize
+  methods are non-semantic hooks; CapabilityGateway emits one canonical gateway pre-event
+  and never finalizes a task. Real writer, Runtime double, and Golden double sequences agree.
+  The Trace sanitizer redacts required credential families with exact normalized keys and
+  bounded value signatures while preserving safe telemetry and input objects.
+acceptance_criteria_result:
+  - criterion: "OBS-AC-01 real writer exact success lifecycle"
+    result: passed
+    evidence: "Real NoopTraceWriter cross-layer observation is task_created, intent_parsed, capability_selected, gateway_pre_recorded, adapter_called, gateway_post_recorded, response_envelope_created, task_completed; exact counts are 1/1/1/0. Evidence SHA 5c5e6fb67aef326ccf3af423d63ec8be17f18c1f6b48f96b74be8cb44c57adac."
+  - criterion: "OBS-AC-02 exact terminal matrix"
+    result: passed
+    evidence: "completed ends in one task_completed; waiting_user ends at response_envelope_created; denied/binding_required/timeout/failed/no_capability_found/parse failure end in one task_failed after the envelope. Matrix is captured in trace_observation.json."
+  - criterion: "OBS-AC-03 Runtime lifecycle owner and Gateway no-finalize"
+    result: passed
+    evidence: "Gateway success, timeout/error, and short-circuit tests require no task finalize; rg reports no finalize_task_trace reference in capability_gateway.py."
+  - criterion: "OBS-AC-04 real writer/double/Golden equivalence"
+    result: passed
+    evidence: "Golden trace equivalence regression compares the same representative sequence against NoopTraceWriter; Runtime and Golden suites pass."
+  - criterion: "OBS-AC-05 precise non-mutating sanitizer"
+    result: passed
+    evidence: "46 observability tests pass across Authorization/Bearer, cookie/session, access/refresh token, password/passwd, api key, secret/client_secret/private_key, case/separator/camel variants, nested lists/maps, input non-mutation, and safe telemetry."
+  - criterion: "OBS-AC-06 business and Golden results unchanged"
+    result: passed
+    evidence: "Full pytest 721 passed; Runtime 32 passed; Gateway 37 passed; Golden tests 119 passed and Golden gate 11/11 including GT-012."
+  - criterion: "OBS-AC-07 narrow dead mapper removal"
+    result: passed
+    evidence: "Pre-change and final rg found no caller for _map_exec_to_trace_status; only that unused private mapper was removed, with no response-formatting or Gateway business refactor."
+failure_examples_tested:
+  - example: trace_lifecycle_duplicate
+    result: triggered
+    evidence: "RED lifecycle run failed on duplicate task_created/gateway_pre_recorded/task_completed; corrected RED artifact is retained, then 25/25 lifecycle/writer tests passed."
+  - example: terminal_matrix_violation
+    result: triggered
+    evidence: "RED run observed task_completed on waiting/failure paths and duplicate completion; GREEN matrix assertions pass for all eight paths."
+  - example: lifecycle_ownership_violation
+    result: triggered
+    evidence: "RED Gateway run had four no-finalize assertion failures; GREEN Gateway run passed 37/37 and source scan has no finalize reference."
+  - example: sanitizer_contract_failure
+    result: triggered
+    evidence: "RED sanitizer run had 13 unsupported-family failures; GREEN sanitizer/writer run passes 46/46 with non-mutation and false-positive boundaries."
+  - example: scope_expansion_required
+    result: not_triggered
+    evidence: "All changed paths are descriptor-allowed; no port/contract/fixture/threshold/CI/DB/env/dependency/lockfile or R3 path changed."
+step_verification_points:
+  - step: preflight
+    result: passed
+    command: "descriptor/base/dependency CI/frozen lane/mirror/worktree checks"
+    evidence: "Descriptor 0c734ad2..., base/head/origin cdfd9eb..., three dependency CI events and both jobs success, frozen lane 18/A76B2..., mirror parity exit 0, worktree clean."
+  - step: red
+    result: passed
+    command: "targeted lifecycle, Gateway, and sanitizer tests before implementation"
+    evidence: "Intended RED artifacts retained under run scratch; one test-construction error was corrected before the authoritative RED rerun."
+  - step: green
+    result: passed
+    command: "targeted, Runtime, Gateway, observability, Golden, architecture, static, dependency, and full-suite commands"
+    evidence: "All applicable commands passed; full isolated DB run is 721 passed."
+  - step: pre-review
+    result: passed
+    command: "exact paths, diff check, weak scans, secret/forbidden checks, full Task Record"
+    evidence: "Seven changed-test weak scans pass; ruff/mypy/dependency/architecture pass; exact staging and packet checks are bound by controller candidate/final review evidence."
+  - step: integration
+    result: not_applicable
+    command: "current task commit CI, PR CI, final Review freshness, merge-SHA post-CI, Gate2"
+    evidence: "Not triggered before reviewed commit/integration; no remote check is claimed green here."
+    not_applicable_reason: "Task commit, PR runs, merge SHA, and post-merge run do not exist before final Review."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-OBS-001
+    activation_task_id: P1-OBS-001
+    expiry_condition: "Bind final Review PASS, reviewed commit, task/PR CI, ordinary merge, merge-SHA CI, and Gate2 final result."
+changed_files:
+  - app/infra/gateway/capability_gateway.py
+  - app/infra/observability/noop_trace_writer.py
+  - app/infra/observability/sanitizer.py
+  - app/runtime/runtime.py
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-OBS-001_20260713_082835_passed.yaml
+  - tests/golden_tasks/test_golden_tasks.py
+  - tests/infra/gateway/test_capability_gateway.py
+  - tests/infra/gateway/test_gateway_discrete_events.py
+  - tests/infra/observability/test_noop_trace_writer.py
+  - tests/infra/observability/test_trace_sanitizer.py
+  - tests/runtime/test_runtime_trace_lifecycle.py
+  - tests/runtime/test_runtime_trace_threading.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "C:/Users/Administrator/.claude-codex-scratch/candidates/P1-OBS-001-20260713"
+  reviewed_parent_sha: "cdfd9eb2371abe986aaab7d8e4141fd80460af6d"
+  reviewed_tree_oid: "bound_by_controller_after_exact_stage"
+  staged_diff_sha256: "bound_by_controller_after_exact_stage"
+  changed_paths_sha256: "bound_by_controller_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_controller_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest tests/runtime/test_runtime_trace_lifecycle.py tests/infra/observability/test_noop_trace_writer.py -q"
+    result: passed
+    output_snippet: "25 passed."
+  - command: "uv run pytest tests/infra/observability/test_trace_sanitizer.py tests/infra/observability/test_noop_trace_writer.py -q"
+    result: passed
+    output_snippet: "46 passed."
+  - command: "uv run pytest tests/infra/gateway/ -q"
+    result: passed
+    output_snippet: "37 passed."
+  - command: "uv run pytest tests/runtime/ -q"
+    result: passed
+    output_snippet: "32 passed."
+  - command: "uv run pytest tests/ports/test_trace_port.py -q"
+    result: passed
+    output_snippet: "36 passed."
+  - command: "uv run pytest tests/golden_tasks/ -q"
+    result: passed
+    output_snippet: "119 passed before the added equivalence test; focused final Golden file run 13 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "11 passed; 7 positive and 4 negative, GT-012 passed."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 46 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed; 49 dependencies checked."
+  - command: "uv run python scripts/check_weak_tests.py <each changed test file>"
+    result: passed
+    output_snippet: "Seven changed test files passed individually."
+  - command: "uv run pytest with isolated test-only PostgreSQL using repository-standard psycopg URL"
+    result: passed
+    output_snippet: "721 passed in 12.05s; retained task03 container was restored to exited state. Evidence SHA c02eba397acea1c7f436c6ceca706ef804186a88bdcd2f0a0166aea7e20f35b0."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "22 architecture tests passed; frozen ports remain unchanged."
+security_scan_result:
+  result: passed
+  evidence: "Synthetic-only test values are constructed from fragments; sanitizer preserves [REDACTED]; no forbidden credential/env path changed. Final staged packet secret scan remains mandatory."
+weak_test_scan_result:
+  result: passed
+  evidence: "All seven changed test files passed the repository weak-test checker; no skip/xfail/empty/deleted assertion was introduced."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Current task/PR and post-merge runs are not triggered before reviewed commit and integration."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-OBS-001
+  activation_task_id: P1-OBS-001
+  expiry_condition: "Bind successful push and pull_request runs to task commit and successful post-merge push run to merge SHA."
+  evidence: "Dependency runs are historical prerequisites only and are not claimed as this task's CI."
+review:
+  mode: independent_review
+  reviewed_by: "pending record-inclusive Claude final-diff review"
+  reviewed_at: ""
+  notes: "Plan Review is bound; final raw staged diff, validation evidence, policy, external packet audit, and verified-model Claude PASS remain mandatory."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "bound_after_exact_stage"
+  prompt_sha256: "bound_after_exact_stage"
+  output_sha256: "bound_after_exact_stage"
+  meta_sha256: "bound_after_exact_stage"
+  validation_evidence_sha256: "bound_after_exact_stage"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "recorded_by_git_history_after_final_review"
+  task_branch: phase1/P1-OBS-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No task commit exists before final Review."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: not_evaluated_pre_commit
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind the merge SHA."
+  integration_freshness_sha256: "bound_after_final_review"
+remaining_risks:
+  - "Record-inclusive final packet audit, verified-model Claude final Review, exact reviewed commit, task/PR CI, mergeability, merge-SHA CI, Gate2, and closeout audit remain mandatory."
+rollback_or_failure_record: "Stop and preserve candidate/scratch on any drift/failure. No deletion, reset, rebase, force push, or automatic post-merge repair; any repair/revert is a new authorized run."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "No package artifact is produced by this Runtime/Trace implementation task."
+package_scope: ""
+package_evidence: ""

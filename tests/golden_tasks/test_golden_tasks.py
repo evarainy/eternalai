@@ -26,6 +26,7 @@ from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterPort, AdapterResult, MockErrorMode
 from app.ports.capability_gateway import RequestChannel, RequestOrgContext
@@ -204,7 +205,16 @@ class SpyTracePort:
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        await self.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            "gateway_pre_recorded",
+            status,
+            capability_id,
+            error_code,
+            attributes,
+        )
 
     async def finalize_task_trace(
         self,
@@ -217,6 +227,70 @@ class SpyTracePort:
         attributes: dict[str, Any] | None = None,
     ) -> None:
         return None
+
+
+class CapturingTraceLogger:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def debug(self, _message: str, *, extra: dict[str, Any]) -> None:
+        self.events.append(cast(dict[str, Any], extra["trace_event"]))
+
+
+async def _record_representative_semantic_sequence(trace_port: Any) -> None:
+    await trace_port.start_task_trace("trace-equivalence", "task-equivalence", "session")
+    await trace_port.record_step(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        "task_created",
+        "ok",
+    )
+    await trace_port.record_gateway_call(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        "ok",
+        "oa.synthetic.query",
+    )
+    await trace_port.record_step(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        "response_envelope_created",
+        "ok",
+    )
+    await trace_port.record_step(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        "task_completed",
+        "ok",
+    )
+    await trace_port.finalize_task_trace(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        "ok",
+    )
+
+
+def test_golden_trace_double_matches_real_writer_semantic_sequence() -> None:
+    golden_trace = SpyTracePort()
+    logger = CapturingTraceLogger()
+    real_writer = NoopTraceWriter(logger=cast(Any, logger))
+
+    asyncio.run(_record_representative_semantic_sequence(golden_trace))
+    asyncio.run(_record_representative_semantic_sequence(real_writer))
+
+    assert [step["event_type"] for step in golden_trace.steps] == [
+        event["event_type"] for event in logger.events
+    ] == [
+        "task_created",
+        "gateway_pre_recorded",
+        "response_envelope_created",
+        "task_completed",
+    ]
 
 
 class AdapterSpy:

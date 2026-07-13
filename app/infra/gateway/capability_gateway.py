@@ -258,14 +258,6 @@ class CapabilityGateway:
         if "mock_error_mode" in arguments:
             execution_context["mock_error_mode"] = arguments["mock_error_mode"]
 
-        await self._record_step(
-            trace_id,
-            task_id,
-            session_id,
-            "gateway_pre_recorded",
-            "ok",
-            capability_id=capability_id,
-        )
         adapter_result = await selected_adapter.execute(
             capability_id,
             arguments,
@@ -303,16 +295,6 @@ class CapabilityGateway:
                 session_id,
                 "adapter_error_mapped",
                 "failed",
-                capability_id=capability_id,
-                error_code=result.error_code,
-            )
-
-        if self._trace_port is not None:
-            await self._trace_port.finalize_task_trace(
-                trace_id=trace_id,
-                task_id=task_id,
-                session_id=session_id,
-                status="ok" if result.status == "completed" else "failed",
                 capability_id=capability_id,
                 error_code=result.error_code,
             )

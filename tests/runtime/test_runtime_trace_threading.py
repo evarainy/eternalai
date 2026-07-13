@@ -126,7 +126,16 @@ class SpyTracePort:
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        await self.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            "gateway_pre_recorded",
+            status,
+            capability_id,
+            error_code,
+            attributes,
+        )
 
     async def finalize_task_trace(
         self,
