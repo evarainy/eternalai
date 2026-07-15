@@ -12,3 +12,4 @@ This file is maintained by the human reviewer. AI agents may propose a row, but 
 | P1-CI-ALIGN-001 | 2026-07-13 | passed (remote evidence deferred) | phase1/P1-CI-ALIGN-001 | recorded_by_git_history_after_final_review | required: task/PR and merge-SHA CI | claude_code independent_review |
 | P1-OBS-001 | 2026-07-13 | passed (remote evidence pending) | phase1/P1-OBS-001 | recorded_by_git_history_after_final_review | required: task/PR and merge-SHA CI | claude_code independent_review |
 | P1-RUNTIME-ENTRY-001 | 2026-07-13 | passed (remote evidence pending) | phase1/P1-RUNTIME-ENTRY-001 | recorded_by_git_history_after_final_review | required: task/PR and merge-SHA CI | claude_code independent_review |
+| P1-SPEC-CONTRACT-ALIGN | 2026-07-15 | passed (remote evidence pending) | phase1/P1-SPEC-CONTRACT-ALIGN | recorded_by_git_history_after_final_review | required: task/PR if triggered and merge-SHA CI | claude_code independent_review |

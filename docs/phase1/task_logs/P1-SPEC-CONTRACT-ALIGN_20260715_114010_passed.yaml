@@ -1,0 +1,241 @@
+schema_version: "1.2.0"
+task_id: P1-SPEC-CONTRACT-ALIGN
+task_type: preparation
+result: passed
+method_profile:
+  risk_tier: high
+  method: PDR
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "The P1-SPEC-001 public result contract is R2; Opus performs declared Plan and final-diff Reviews only."
+controller_risk:
+  tier: R2
+  classification_reason: "High-impact repository task contract and B2 release gate."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: standard
+  required_stops:
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "Required after ordinary merge and merge-SHA CI; the 20-line result summary closes it."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "P1-SPEC-001 must start in a new lane after this task's result acceptance."
+redline_authorization:
+  requested_actions:
+    - "Delete the accidental worktree-local .venv."
+    - "Run Alembic upgrade/downgrade and pytest writes only against the confirmed dedicated phase0_spike test database."
+  authorized_actions:
+    - "The human authorized exact deletion of E:/code/eternalai/.worktrees/P1-SPEC-CONTRACT-ALIGN/.venv; deletion completed after path and reparse-point checks."
+    - "The human authorized reuse of phase0_spike for the migration cycle and pytest writes; no other database was touched."
+  evidence: "Conversation authorization plus validation evidence retained under C:/Users/Administrator/.claude-codex-scratch/runs/P1-SPEC-CONTRACT-ALIGN."
+started_at: "2026-07-15T10:02:14+09:00"
+completed_at: "2026-07-15T11:40:10+09:00"
+plan_approved_by: "not_applicable (automation_class=auto; no human_pre_apply stop)"
+plan_approved_at: "2026-07-15T10:02:14+09:00"
+plan_approved_via: "task declaration and user instruction"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      input_tokens: 2
+      output_tokens: 4711
+      cache_read_input_tokens: 1872
+      cache_creation_input_tokens: 6076
+    claude-haiku-4-5-20251001:
+      input_tokens: 3620
+      output_tokens: 22
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "4cd263bd8e9f14a6096772bbe2037f38d36879bded8c717af7296033061b0fcd"
+  prompt_sha256: "fb71593042f1d7ddbbdd88b78db0c6977ad98e4d6dbd1c97b8102d7f1740959c"
+  output_sha256: "79a870f95911c99b02a0ca26be3bf97cdcc150fd2ab53c37beb98dec4d4ff530"
+  meta_sha256: "59ef298269d7ce0be8d7379ab7b77b7c25abe94dc59f65b6372c7f543540cc40"
+  external_packet_audit: not_applicable
+  sanity_sha256: "not_applicable_v4_semantic_filter"
+  gate1_evidence_sha256: "not_applicable_no_human_pre_apply_stop"
+summary: >
+  P1-SPEC-001 now starts with one canonical current-template contract using standard authorization,
+  explicit R2/Plan/final Review settings, outline and result stops, Git integration, and blocked
+  auto-next. The source-authority order and B2 hard gate remain present; spec_scope restores five
+  in-scope and four out-of-scope entries from the base descriptor. Ten acceptance criteria, six YAML
+  failure-example bullets covering the seven original cases, and outline-first approval remain present.
+  TASK_INDEX registers this alignment before P1-SPEC-001 without executing the downstream task.
+acceptance_criteria_result:
+  - criterion: "ALIGN-AC-01 single canonical YAML contract with all template fields and plan_review_required"
+    result: passed
+    evidence: "PyYAML parsed exactly one YAML block with all 25 template fields plus plan_review_required; P1-SPEC-001 contains 26 top-level keys."
+  - criterion: "ALIGN-AC-02 standard authorization and explicit controller/automation/integration policy"
+    result: passed
+    evidence: "Mechanical assertions confirm authorization_mode=standard, R2, human_pre_apply plus result acceptance, Git integration, and auto_next_policy=blocked."
+  - criterion: "ALIGN-AC-03 remove stale workflow/template and AGENTS non-authority claims"
+    result: passed
+    evidence: "Case-insensitive scan has zero Plan-first/no commit/no push/no merge/AGENTS-not-authority/bounded_goal_preapproval matches."
+  - criterion: "ALIGN-AC-04 preserve source authority, B2 gate, scope, ten ACs, failures, and outline approval"
+    result: passed
+    evidence: |-
+      Actual `rg -n` output from docs/phase1/tasks/P1-SPEC-001.md:
+      source authority: 152:## Source authority order / 来源权威序; 157:BLUEPRINT_ERRATA.md > PHASE1_TECHNICAL_BASELINE.md > MVP spec v1.0.11（阈值/验收语言） > blueprint（方向）
+      B2 hard gate: 128:**P1-SPEC-001 是 B2 的硬前置。`docs/phase1/PHASE1_SPEC.md` 未落盘并经人类批准前，不得进入 B2。**
+      scope: 28:spec_scope; 29:in_scope; entries 30-34 = 5; 35:out_of_scope; entries 36-39 = 4. Anchors present: §13 at 30/31/33/36/38, §10.1 at 32, §4.3.2 at 34, §4.3.3 at 37/39.
+      acceptance criteria: lines 58-67 contain AC-1 through AC-10 = 10.
+      failure examples: 68:failure_examples; lines 69-74 contain 6 YAML bullets covering all seven original F-a..F-g cases; line 72 combines the original Plan/TASK_INDEX/blueprint and fixture/FROZEN_GT_IDS violations.
+      outline first: 76:  - "Outline-first: present headings plus one scope sentence per chapter and wait for human_pre_apply approval before body fill"
+  - criterion: "ALIGN-AC-05 register alignment descriptor and TASK_INDEX dependency"
+    result: passed
+    evidence: "New descriptor is canonical and TASK_INDEX places P1-SPEC-CONTRACT-ALIGN before P1-SPEC-001 with result acceptance required."
+  - criterion: "ALIGN-AC-06 exact scope and no forbidden/R3 drift"
+    result: passed
+    evidence: "Final candidate path reconciliation is restricted to the five declared documentation/log surfaces; no forbidden repository path changed."
+failure_examples_tested:
+  - example: "removed bounded-goal or stale no-commit choreography remains"
+    result: not_triggered
+    evidence: "Dead-reference and stale-wording scans are empty."
+  - example: "B2/outline/AC/source-authority semantics are weakened"
+    result: not_triggered
+    evidence: "Mechanical preservation counts and semantic self-review pass."
+  - example: "forbidden implementation/template/policy/schema path changes"
+    result: not_triggered
+    evidence: "Changed-path reconciliation contains documentation/task-log surfaces only."
+step_verification_points:
+  - step: baseline
+    result: passed
+    command: "fetch/clean/base/template/descriptor/dependency evidence"
+    evidence: "Base and origin/phase0/main were 869647f with ahead/behind 0/0; P1-RUNTIME PR #12 and merge-SHA CI passed."
+  - step: plan
+    result: passed
+    command: "semantic filter, secret scan, Opus Plan Review"
+    evidence: "Filter clear after notes were resolved; verified claude-opus-4-8 PLAN_READY meta is bound above."
+  - step: apply
+    result: passed
+    command: "canonical contract rewrite and preservation checks"
+    evidence: "Only declared docs/log surfaces changed; P1-SPEC-001 itself was not executed."
+  - step: validate
+    result: passed
+    command: "dependency check, architecture suite, exact DB tests, full pytest"
+    evidence: "Dependency 7 manifests/49 packages; architecture 22; DB 5; full pytest 728, all passed."
+  - step: integration
+    result: not_applicable
+    command: "final Review, reviewed commit, PR/merge, merge-SHA CI, result acceptance"
+    evidence: "Not triggered before record-inclusive final Review."
+changed_files:
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-SPEC-CONTRACT-ALIGN_20260715_114010_passed.yaml
+  - docs/phase1/tasks/P1-SPEC-001.md
+  - docs/phase1/tasks/P1-SPEC-CONTRACT-ALIGN.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-SPEC-CONTRACT-ALIGN"
+  reviewed_parent_sha: "869647f40c6c50a1537789190e1b53d73acf29c1"
+  reviewed_tree_oid: "bound_by_controller_after_exact_stage"
+  staged_diff_sha256: "bound_by_controller_after_exact_stage"
+  changed_paths_sha256: "bound_by_controller_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_controller_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest tests/db/test_db_health.py tests/db/test_migrations.py -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "5 passed against the authorized dedicated phase0_spike PostgreSQL 18.3 test database."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "7 manifests and 49 dependencies checked."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed."
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "728 passed, 0 failed, 0 skipped."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "22 architecture tests passed."
+security_scan_result:
+  result: passed
+  evidence: "Final packet secret scan is mandatory before Claude; no credential or .env value is included in repository changes."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no test file changed."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Task/PR and post-merge CI are not triggered before final Review and reviewed commit."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-SPEC-CONTRACT-ALIGN
+  activation_task_id: P1-SPEC-CONTRACT-ALIGN
+  expiry_condition: "Bind task/PR checks if triggered and successful post-merge CI to their actual SHAs."
+  evidence: "Dependency CI is baseline evidence only and is not claimed as this task's CI."
+review:
+  mode: independent_review
+  reviewed_by: "pending record-inclusive Opus final-diff Review"
+  reviewed_at: ""
+  notes: "This record freezes before the single final Review; verified meta remains external controller evidence."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "bound_after_exact_stage"
+  prompt_sha256: "bound_after_exact_stage"
+  output_sha256: "bound_after_exact_stage"
+  meta_sha256: "bound_after_exact_stage"
+  validation_evidence_sha256: "bound_after_final_candidate_validation"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "recorded_by_git_history_after_final_review"
+  task_branch: phase1/P1-SPEC-CONTRACT-ALIGN
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No reviewed task commit exists before final Review."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: not_evaluated_pre_commit
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind the merge SHA."
+  integration_freshness_sha256: "bound_after_final_review"
+remaining_risks:
+  - "P1-RUNTIME-ENTRY-001's checked-in Task Record and task-log index still contain stale pre-integration wording; repair is a separate task."
+  - "P1-SPEC-001 must not start until this task is integrated, merge-SHA CI passes, and human result acceptance is recorded."
+rollback_or_failure_record: "Stop and preserve worktree/scratch on failure. Any cleanup or post-integration revert requires separate exact authorization; never reset/rebase/force."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "No package artifact is produced by this documentation alignment task."
+package_scope: ""
+package_evidence: ""

@@ -30,7 +30,8 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 | P1-SKEL-001 | docs/phase1/ 目录 + 派生模板 + INDEX 骨架 + B1 per-task prompts | 人类批准 Phase 1 Plan | 本文件所在目录结构、PHASE1_PLAN.md、TASK_PROMPT_TEMPLATE.md、各 B1 per-task prompt |
 | P1-ERRATA-001 | BLUEPRINT_ERRATA.md 勘误 + 澄清登记 | none | docs/phase1/BLUEPRINT_ERRATA.md（3 条正式条目 + 1 legacy note） |
 | P1-PARAM-001 | Context Budget / vLLM 部署参数登记 | infra 提供实际部署参数（**blocked until infra values arrive**） | 部署参数基线表（等 infra 回值前天然 blocked） |
-| P1-SPEC-001 | Phase 1 详细 spec 产出（**B2 硬前置**） | P1-GATE-001 passed（建议）；人类批准 | docs/phase1/PHASE1_SPEC.md（B2-B5 实现型任务的必要前提） |
+| P1-SPEC-CONTRACT-ALIGN | P1-SPEC-001 现行契约对齐 | P1-RUNTIME-ENTRY-001 integrated + merge-SHA CI passed；LOCAL-WF-V4-001 complete | 对齐后的 `P1-SPEC-001.md`、本任务 descriptor 与审查/集成证据；结果验收后才可启动 P1-SPEC-001 |
+| P1-SPEC-001 | Phase 1 详细 spec 产出（**B2 硬前置**） | P1-SPEC-CONTRACT-ALIGN integrated + result accepted；P1-GATE-001 passed | docs/phase1/PHASE1_SPEC.md（B2-B5 实现型任务的必要前提） |
 | P1-WORKFLOW-002 | 治理文档收敛与流程分级落地 | none | ROLE_POLICY / TASK_PROMPT_TEMPLATE v2.0.0 / schema v1.1.0 收敛，ceremony 按 risk_tier 分级 |
 
 > **P1-PARAM-001 说明**：此任务依赖 infra 提供生产/内网 vLLM 实际部署参数（`max_model_len`、量化方式、`request_timeout`、`max_tokens`、`enable_thinking` 行为）。infra 未回值前该任务天然 blocked，不与其他 B1 任务并列为"无条件可做"。
@@ -109,7 +110,8 @@ P1-WORKFLOW-002-REPAIR-001
 → P1-RUNTIME-ENTRY-001
 
 产品实现链（独立硬门）：
-P1-GATE-001 passed + P1-SPEC-001 approved/landed
+P1-SPEC-CONTRACT-ALIGN integrated/result accepted
+→ P1-GATE-001 passed + P1-SPEC-001 approved/landed
 → B2 Intent → Capability 选择闭环
 → B3 Identity / Policy 预检闭环
 → B4 Workflow 轻量引擎 + 执行

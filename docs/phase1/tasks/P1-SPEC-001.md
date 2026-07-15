@@ -1,7 +1,125 @@
-# P1-SPEC-001 — Single-task Prompt (hardened)
+# P1-SPEC-001 — Phase 1 详细 spec 产出（B2 硬前置）
 
-> **适用范围声明**: 本文件与 `docs/phase1/TASK_PROMPT_TEMPLATE.md` 配套使用。模板中的 Plan-first 流程、执行中工作流规则(no commit / no push / no merge、仅 stage for review、禁用 `--no-verify`)、Task Record 与证据规则**全量适用**。本文件只补充任务专属内容; 两者冲突时停手并请求 task-prompt 补丁(`task_prompt_incomplete`)。
-> **权威声明**: Phase 1 规则以当前任务 prompt、repo root `CLAUDE.md`、`docs/phase1/*` 和明确标注跨阶段沿用的文档为准; `AGENTS.md` 只是 generic coding agent compact boot file, **不是 Phase 1 任务权威**。
+```yaml
+task_id: "P1-SPEC-001"
+task_type: "documentation"
+goal: "基于已落地的 Phase 1 勘误、技术基线和上游冻结文档，整体替换 PHASE1_SPEC.md placeholder，形成 B2-B5 可追溯、可验收的正式结果契约"
+non_goals:
+  - "不执行 B2-B5，不生成 B2-B5 task prompts，不修改 frozen ports、blueprint、PHASE1_PLAN、TASK_INDEX、模板、应用代码、测试或 CI"
+  - "不引入新依赖决策，不直接编写或修改 golden fixture/FROZEN_GT_IDS"
+method_profile:
+  execution_role: "documentation"
+  execution_owner: "codex"
+  review_owner: "claude_code"
+  review_mode: "independent_review"
+  risk_tier: "high"
+  method: "PDR"
+  model_note: "Opus read-only Plan and final-diff reviews; Codex owns execution"
+  reason_for_owner_choice: "PHASE1_SPEC.md is the public acceptance source for all B2-B5 implementation tasks"
+controller_risk_tier: "R2"
+risk_classification_reason: "High-impact public result contract and B2 release gate"
+plan_review_required: true
+automation_class: "human_pre_apply"
+authorization_mode: "standard"
+required_stops:
+  - "human_pre_apply: approve the chapter outline before body fill"
+  - "human_result_acceptance: approve the integrated spec before B2 unlock"
+r3_authorization: []
+spec_scope:
+  in_scope:
+    - "Web/CLI 入口 → Intent Router → Workflow/Tool 执行 → Policy Precheck → Trace → Evaluator（§13 L2685-L2690）"
+    - "Admin Lite：Registry / Policy / Trace / 基础用户角色 / Binding 状态（§13 L2691）"
+    - "Session Memory + 基础 Semantic/System Knowledge（§10.1 L2166-L2168：Phase 1 只实现最小层）"
+    - "IdentityMapping Mock 表；Policy Guard 绑定状态预检；未绑定返回 SDUI operator_handback_card；无能力返回 no_capability_found（§13 L2693-L2696）"
+    - "Workflow Engine 轻量版：线性步骤、简单分支、step IO 映射、step 级 Policy、有限重试、human_gate、版本锁定、全链路 Trace（§4.3.2 L438-L446）"
+  out_of_scope:
+    - "真实业务系统写操作（§13 L2697-L2698）"
+    - "生产级 Controlled Exploration（§4.3.3 L468）"
+    - "动态 Tool Composition（§13 L2697）"
+    - "复杂 DAG/长事务（§4.3.3 L468）"
+touched_paths:
+  - "docs/phase1/PHASE1_SPEC.md"
+  - "docs/phase1/task_logs/P1-SPEC-001_*.yaml"
+  - "docs/phase1/task_logs/INDEX.md"
+forbidden_paths:
+  - "app/**"
+  - "docs/phase0/**"
+  - "docs/blueprint/**"
+  - "docs/phase1/PHASE1_PLAN.md"
+  - "docs/phase1/TASK_INDEX.md"
+  - "docs/phase1/TASK_PROMPT_TEMPLATE.md"
+  - "docs/phase1/tasks/**"
+  - "tests/**"
+  - "scripts/**"
+  - ".github/workflows/**"
+  - "web/**"
+  - "AGENTS.md"
+acceptance_criteria:
+  - "AC-1: docs/phase1/PHASE1_SPEC.md is an overall replacement of PLACEHOLDER, not an append"
+  - "AC-2: B2-B5 each contain the five required subsections, for 20 grep-enumerable subsection headings"
+  - "AC-3: a complete mapping table links every PHASE1_PLAN C.1 deliverable to a stable spec section ID"
+  - "AC-4: app/ports is unchanged"
+  - "AC-5: docs/blueprint is unchanged"
+  - "AC-6: B2 unlocks only after human approval and consistent spec status, Task Record, and task_logs INDEX evidence"
+  - "AC-7: instructor appears only in forbidden/errata/non-baseline context, or not at all"
+  - "AC-8: the placeholder declaration has zero matches after replacement"
+  - "AC-9: every batch chapter has a golden-extension authorization statement in its fourth subsection"
+  - "AC-10: staged paths contain only touched_paths"
+failure_examples:
+  - "Copy instructor, PydanticAI, or ARQ from the blueprint without applying BLUEPRINT_ERRATA"
+  - "Describe a batch too coarsely to generate downstream task contracts"
+  - "Write function signatures or code-level design in place of an implementation Plan"
+  - "Modify PHASE1_PLAN, TASK_INDEX, blueprint, fixtures, or FROZEN_GT_IDS"
+  - "Introduce a dependency decision without an ADR and human approval"
+  - "Respecify Phase 0 deliverables and pull them back into Phase 1 scope"
+step_verification_points:
+  - "Outline-first: present headings plus one scope sentence per chapter and wait for human_pre_apply approval before body fill"
+  - "After fill: verify chapter/subsection counts, instructor context, and zero placeholder matches"
+  - "Verify the complete C.1-to-stable-section-ID mapping"
+  - "Verify exact staged names/stat/check and untracked files before final Review"
+validation_commands:
+  - "grep -R '不得将本文件的任何内容视为正式 Phase 1 spec' docs/phase1/PHASE1_SPEC.md || true"
+  - "grep -i instructor docs/phase1/PHASE1_SPEC.md || true"
+  - "git diff --cached --name-only"
+  - "git diff --cached --stat"
+  - "git diff --cached --check"
+  - "git ls-files --others --exclude-standard"
+evidence_requirements:
+  - "Human outline approval note bound to the resumed task history"
+  - "Stable-section and C.1 mapping enumeration"
+  - "Context review for every instructor match and zero placeholder matches"
+  - "Candidate-bound Plan/final Review meta and exact staged-path evidence"
+  - "Post-integration spec status, Task Record, task_logs INDEX, merge SHA, CI, and human result acceptance"
+stop_conditions:
+  - "Current descriptor conflicts with a higher-authority repository rule or lacks information: task_prompt_incomplete"
+  - "BLUEPRINT_ERRATA is absent/unlanded, required source anchors cannot be verified, or P1-GATE is not passed before approval/landing"
+  - "A frozen port appears insufficient, a new dependency needs decision, or any forbidden path is required"
+  - "Fixture JSON/FROZEN_GT_IDS changes or a stable B2-B5 traceability map would be required but cannot be authorized"
+  - "PHASE1_SPEC.md cannot replace the placeholder without Phase 0 scope backflow"
+local_commit_policy: "after_review_pass"
+integration_policy:
+  mode: "git"
+  remote_strategy: "task_branch_pr_merge"
+  task_branch_ci: "if_triggered"
+  post_merge_ci: "required"
+auto_next_policy: "blocked"
+depends_on:
+  - "P1-SPEC-CONTRACT-ALIGN integrated and human_result_acceptance satisfied"
+  - "P1-GATE-001 passed"
+  - "P1-ERRATA-001 landed"
+  - "P1-WORKFLOW-001 landed"
+branch: "phase1/P1-SPEC-001"
+references:
+  - "AGENTS.md"
+  - "CLAUDE.md"
+  - "docs/phase1/ROLE_POLICY.md"
+  - "docs/phase1/TASK_PROMPT_TEMPLATE.md"
+  - "docs/phase1/PHASE1_PLAN.md"
+  - "docs/phase1/TASK_INDEX.md"
+  - "docs/phase1/BLUEPRINT_ERRATA.md"
+  - "docs/phase0/PHASE1_TECHNICAL_BASELINE.md"
+  - "docs/dev/task_record_schema.yaml"
+```
 
 ## Background / 任务由来
 
@@ -15,9 +133,10 @@
 
 执行者必须按需读取以下上下文; 不要把整份长 spec 粘贴进 session:
 
-- `CLAUDE.md` — Phase 1 governance, mainline order, no-commit/no-push/no-merge discipline
+- `AGENTS.md` — repository-wide authority, red lines, validation and integration rules
+- `CLAUDE.md` — Phase 1 governance and mainline order
 - `docs/phase1/ROLE_POLICY.md` — Phase 1 role / review / risk policy
-- `docs/phase1/TASK_PROMPT_TEMPLATE.md` — Plan-first, evidence, Task Record, staged-diff rules
+- `docs/phase1/TASK_PROMPT_TEMPLATE.md` — current task result-contract fields and evidence rules
 - `docs/phase1/PHASE1_PLAN.md` — C.1/C.2 scope and vertical-slice plan; subordinate to this spec after approval
 - `docs/phase1/TASK_INDEX.md` — B2 hard gate and dependency DAG
 - `docs/phase1/BLUEPRINT_ERRATA.md` — errata and clarifications that override frozen source documents
@@ -42,80 +161,6 @@ BLUEPRINT_ERRATA.md > PHASE1_TECHNICAL_BASELINE.md > MVP spec v1.0.11（阈值/�
 - `instructor` / `PydanticAI` 不得被写成 Phase 1 基线。Phase 1 baseline = raw OpenAI SDK + vLLM raw JSON mode + Pydantic v2 validation.
 - ARQ 只能作为 L1 候选 / 澄清项出现, 不得被写成 Phase 1 L0 必装主线。
 - MVP spec v1.0.11 §20.1 是 golden threshold / acceptance language 的主要来源; §12.5 只作为负向 / 边界场景清单来源。
-
-## method_profile
-
-```yaml
-method_profile:
-  execution_role: "documentation"
-  execution_owner: "codex"
-  review_owner: "claude_code"
-  review_mode: "independent_review"
-  risk_tier: "high"
-  model_note: "Record actual executor/reviewer model in Task Record notes until schema has model fields."
-  method: "PDR"
-  reason_for_owner_choice: >
-    PHASE1_SPEC.md 是 B2-B5 全部验收面的来源。虽然本任务是 docs-only，
-    但其错误会向下游所有实现型任务扩散，因此按 ROLE_POLICY 手工升为 high，
-    需要 independent_review + human approval。
-```
-
-## Task YAML
-
-```yaml
-task_id: P1-SPEC-001
-title: "Phase 1 详细 spec 产出（B2 硬前置）"
-type: documentation
-method: PDR
-depends_on:
-  - "human approval of this prompt patch"
-  - "P1-ERRATA-001 landed"
-  - "P1-GATE-001 passed"
-  - "P1-WORKFLOW-001 landed"
-depends_on_note: >
-  可并行起草 PHASE1_SPEC.md, 但 PHASE1_SPEC.md 被批准前,
-  P1-GATE-001 必须 passed, P1-ERRATA-001 / P1-WORKFLOW-001 必须 landed。
-objective: >
-  承接 blueprint §13（Phase 1：MVP 主链 L2680-L2699）+
-  §4.3 Workflow（§4.3.2 L438-L446、§4.3.3 L468）+
-  Phase 1 Errata / Technical Baseline / MVP spec 验收语言,
-  裁剪为可执行的 Phase 1 详细 spec，整体替换 docs/phase1/PHASE1_SPEC.md。
-  B2-B5 每个纵切的 acceptance criteria 必须可追溯到本 spec 的稳定小节 ID。
-deliverable: "docs/phase1/PHASE1_SPEC.md"
-b2_gate: >
-  B2 不得在本任务落盘并人类批准前启动。
-  B2 前置条件 = P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed。
-spec_scope:
-  in_scope:
-    - "Web/CLI 入口 → Intent Router → Workflow/Tool 执行 → Policy Precheck → Trace → Evaluator（§13 L2685-L2690）"
-    - "Admin Lite：Registry / Policy / Trace / 基础用户角色 / Binding 状态（§13 L2691）"
-    - "Session Memory + 基础 Semantic/System Knowledge（§10.1 L2166-L2168：Phase 1 只实现最小层）"
-    - "IdentityMapping Mock 表；Policy Guard 绑定状态预检；未绑定返回 SDUI operator_handback_card；无能力返回 no_capability_found（§13 L2693-L2696）"
-    - "Workflow Engine 轻量版：线性步骤、简单分支、step IO 映射、step 级 Policy、有限重试、human_gate、版本锁定、全链路 Trace（§4.3.2 L438-L446）"
-  out_of_scope:
-    - "真实业务系统写操作（§13 L2697-L2698）"
-    - "生产级 Controlled Exploration（§4.3.3 L468）"
-    - "动态 Tool Composition（§13 L2697）"
-    - "复杂 DAG/长事务（§4.3.3 L468）"
-touched_paths:
-  - docs/phase1/PHASE1_SPEC.md
-  - docs/phase1/task_logs/P1-SPEC-001_*.yaml
-  - docs/phase1/task_logs/INDEX.md
-forbidden_paths:
-  - app/
-  - app/ports/
-  - docs/phase0/
-  - docs/blueprint/
-  - docs/phase1/PHASE1_PLAN.md
-  - docs/phase1/TASK_INDEX.md
-  - docs/phase1/TASK_PROMPT_TEMPLATE.md
-  - docs/phase1/tasks/
-  - tests/
-  - scripts/
-  - .github/workflows/
-  - web/
-  - AGENTS.md
-```
 
 ## Spec structure contract
 
@@ -228,9 +273,8 @@ git ls-files --others --exclude-standard
 
 ## Workflow and Task Record
 
-- 先输出 Plan, 等人类批准后再执行。
-- 按 SVP-a 先提交 `PHASE1_SPEC.md` 大纲（标题 + 每章一句范围）给人类批准; 未批准不得填充正文。
-- 完成后仅 stage for review, 不 commit / push / merge。
+- 按契约先完成 Plan Review，再提交 `PHASE1_SPEC.md` 大纲（标题 + 每章一句范围）给人类批准；未批准不得填充正文。
+- 完成验证和 candidate-bound final Review 后，按仓库 Git integration policy 执行非强制集成，不使用 rebase/reset-hard/force。
 - Task Record 保存到 `docs/phase1/task_logs/P1-SPEC-001_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml`。
-- `changed_files` 必须在最终 stage 之后、commit 之前更新, 并与 `git diff --cached --name-only` 完全一致。
-- 更新 `docs/phase1/task_logs/INDEX.md`; spec status、Task Record、INDEX 三处批准状态必须一致后, B2 才能解锁。
+- `changed_files` 必须与最终 candidate 的精确 changed paths 一致。
+- 更新 `docs/phase1/task_logs/INDEX.md`；spec status、Task Record、INDEX、merge/CI 和 human result acceptance 一致后，B2 才能解锁。
