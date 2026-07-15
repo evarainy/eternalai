@@ -1,0 +1,296 @@
+schema_version: "1.2.0"
+task_id: P1-SPEC-001
+task_type: documentation
+result: passed
+method_profile:
+  risk_tier: high
+  method: PDR
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "Opus performs the declared read-only Plan Review and candidate-bound final-diff Review; the human explicitly authorized one replacement final Review after overturning the record-layer BLOCKED mischaracterization."
+controller_risk:
+  tier: R2
+  classification_reason: "High-impact public result contract and B2 release gate."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: human_pre_apply
+  authorization_mode: standard
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >-
+        Controller state revision 7 contains the resumed event at
+        2026-07-15T22:17:08.720+09:00: 批准 P1-SPEC-001 四章大纲，按当前 5 in/4 out 范围填充正文。
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "The integrated 20-line result summary has not yet been accepted; B2 remains locked."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "B2 cannot unlock while spec status is draft and human_result_acceptance is pending."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No red-line operation was requested or performed in this lane."
+started_at: "2026-07-15T22:02:07+09:00"
+completed_at: "2026-07-15T23:35:04+09:00"
+plan_approved_by: "human reviewer"
+plan_approved_at: "2026-07-15T22:17:08+09:00"
+plan_approved_via: "Codex session"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      input_tokens: 2
+      output_tokens: 6668
+      cache_read_input_tokens: 0
+      cache_creation_input_tokens: 7587
+    claude-haiku-4-5-20251001:
+      input_tokens: 3380
+      output_tokens: 17
+      cache_read_input_tokens: 0
+      cache_creation_input_tokens: 0
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "c28cc08419d0d35174a85e397bc5c6d070796348aa12a4037277ed320d3f077c"
+  prompt_sha256: "4de2cfa1077865eeb4ed4d88bdc9fade1811468cfaf6b77d591c8f29abaffc88"
+  output_sha256: "715cf64892a989439e8de1cf56621914aa7bf4aa8e5ad24ab0292ea73f2fb8c5"
+  meta_sha256: "ccd8fb89c3cbbc77e4548d8f8e2ff70599681584b50221460e4de139789c93ce"
+  external_packet_audit: not_applicable
+  sanity_sha256: "not_applicable_v4_semantic_filter"
+  gate1_evidence_sha256: "controller_state_revision_7_outline_resume_event"
+task_prompt_patch:
+  trigger: task_prompt_incomplete
+  status: satisfied
+  requested_at: "2026-07-15T22:36:49+09:00"
+  approved_at: "2026-07-15T23:16:12+09:00"
+  evidence_path: "C:/Users/Administrator/.claude-codex-scratch/runs/P1-SPEC-001/contract/task-prompt-patch-evidence.md"
+  evidence_sha256: "1eb4fc014cd7c5dbaec15d0c35763fde3d45d4bbfe9b9cab3142b3835f8ed54a"
+  controller_evidence: "run_state.json revision 7 resumed event and human_note"
+  approved_interpretation:
+    controlled_exploration: "blueprint §13 L2697"
+    dynamic_tool_composition: "blueprint §2.3 L103 and §6.5 L1138"
+    scope_effect: "No semantic change to the approved 5 in-scope / 4 out-of-scope boundary."
+    descriptor_disposition: >-
+      The two wrong descriptor anchors are in forbidden docs/phase1/tasks/** and remain unchanged;
+      correct them only within a later already-authorized task that touches tasks/, without a new lane
+      and without blocking this candidate.
+summary: >-
+  The approved four-chapter outline was filled into a complete B2-B5 draft result contract. It has
+  exactly twenty stable-ID subsections, a complete five-deliverable/four-exclusion C.1 mapping, frozen
+  Port usage, acceptance-source boundaries, per-batch golden authorization language, and PDR cuts.
+  Controlled Exploration and Dynamic Tool Composition use the human-approved corrected blueprint
+  anchors without changing the 5 in/4 out semantics or editing the forbidden descriptor. Structural,
+  dependency-policy, architecture, scope, and candidate checks pass. Human result acceptance is a
+  design-delayed post-integration Gate 2 and does not negate this pre-integration deliverable result.
+  The spec remains draft and B2 remains locked until a later authorized task records approval, fixes
+  the descriptor anchors, synchronizes status/Task Record/INDEX, and explicitly unlocks B2.
+acceptance_criteria_result:
+  - criterion: "AC-1 PHASE1_SPEC is an overall replacement of PLACEHOLDER, not an append"
+    result: passed
+    evidence: "The prior four-line placeholder is replaced by the full specification; the exact placeholder declaration has zero matches."
+  - criterion: "AC-2 B2-B5 each contain five required subsections"
+    result: passed
+    evidence: "Deterministic structure check reports chapters=4, sections=20, unique_heading_ids=20."
+  - criterion: "AC-3 complete PHASE1_PLAN C.1 deliverable-to-stable-ID mapping"
+    result: passed
+    evidence: "The opening mapping table enumerates all five C.1 deliverables and all four C.1 exclusions, each bound to stable IDs."
+  - criterion: "AC-4 app/ports is unchanged"
+    result: passed
+    evidence: "Working-tree path reconciliation contains no app/ path; 12 Protocols are direct acceptance surfaces, while JobQueuePort is explicitly accounted for as frozen and not directly required. No Port modification is proposed."
+  - criterion: "AC-5 docs/blueprint is unchanged"
+    result: passed
+    evidence: "Working-tree path reconciliation contains no docs/blueprint/ path."
+  - criterion: "AC-6 B2 unlocks only after human approval and consistent spec status, Task Record, and INDEX evidence"
+    result: not_applicable
+    status: pending
+    phase: post_integration
+    evidence: >-
+      The safety invariant currently holds: human_result_acceptance is pending, status remains draft,
+      INDEX keeps Gate 2 pending, and B2 stays locked. Completion is intentionally deferred until after
+      integration and belongs to the later authorized task that also fixes the descriptor anchors.
+    not_applicable_reason: "Design-delayed post-integration Gate 2; the pre-integration deliverable is complete while B2 remains locked."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-SPEC-001
+    activation_task_id: P1-SPEC-001
+    expiry_condition: "Integrated draft receives human_result_acceptance and the later authorized task synchronizes spec status, Task Record, INDEX, descriptor anchors, and B2 unlock."
+  - criterion: "AC-7 instructor is absent or only in forbidden/errata/non-baseline context"
+    result: passed
+    evidence: "Case-insensitive instructor count is zero."
+  - criterion: "AC-8 placeholder declaration has zero matches"
+    result: passed
+    evidence: "Exact placeholder declaration count is zero."
+  - criterion: "AC-9 every batch chapter contains the required golden-extension authorization sentence"
+    result: passed
+    evidence: "Exact authorization sentence count is four, one in every S-B2.4 through S-B5.4 subsection."
+  - criterion: "AC-10 staged paths contain only touched_paths"
+    result: passed
+    evidence: "Exact stage contains only PHASE1_SPEC.md, task_logs/INDEX.md, and this P1-SPEC-001 Task Record; staged diff check is clean and untracked output is empty."
+failure_examples_tested:
+  - example: "Copy instructor, PydanticAI, or ARQ from the blueprint without applying BLUEPRINT_ERRATA"
+    result: not_triggered
+    evidence: "No instructor match; structured-output and dependency language follows the errata/baseline authority order."
+  - example: "Describe a batch too coarsely to generate downstream task contracts"
+    result: not_triggered
+    evidence: "Each batch has five stable subsections with outcomes, boundaries, evidence sources, negative golden coverage, and PDR cuts."
+  - example: "Write function signatures or code-level design in place of an implementation Plan"
+    result: not_triggered
+    evidence: "No function signature or code-level implementation design is specified; B4 splits are outcome-level only."
+  - example: "Modify PHASE1_PLAN, TASK_INDEX, blueprint, fixtures, or FROZEN_GT_IDS"
+    result: not_triggered
+    evidence: "None of those paths changed; FROZEN_GT_IDS and fixtures appear only in the mandatory future-authorization rule."
+  - example: "Introduce a dependency decision without an ADR and human approval"
+    result: not_triggered
+    evidence: "The spec explicitly declines new dependency decisions and requires later ADR plus human approval where needed."
+  - example: "Respecify Phase 0 deliverables and pull them back into Phase 1 scope"
+    result: not_triggered
+    evidence: "Phase 0 Runtime/Gateway/Trace/Mock foundations are named only as inherited baselines, not new Phase 1 deliverables."
+step_verification_points:
+  - step: outline_first
+    result: passed
+    command: "controller human_pre_apply stop and resume"
+    evidence: "Outline approval is present in run_state.json revision 7 at 2026-07-15T22:17:08.720+09:00."
+  - step: body_structure
+    result: passed
+    command: "PowerShell regex counts equivalent to the descriptor grep checks"
+    evidence: "chapters=4 sections=20 unique_heading_ids=20 golden_auth=4 instructor=0 placeholder=0 bad_ce=0 bad_dtc=0 jobqueue_accounting=1 status=1"
+  - step: c1_mapping
+    result: passed
+    command: "Compare PHASE1_PLAN C.1 five deliverables and four exclusions to PHASE1_SPEC opening mapping table"
+    evidence: "All nine entries are present and bound to existing stable section IDs."
+  - step: fresh_semantic_precheck
+    result: passed
+    command: "Fresh clean-context read-only Codex subagent checks scope, anchors, mapping, Ports, B4 split, and locked lifecycle"
+    evidence: "PASS; external report C:/Users/Administrator/.claude-codex-scratch/runs/P1-SPEC-001/contract/fresh_semantic_precheck.md sha256=bcb8ae6fc852e6debfbb65895249fa1db1e70cf21653bc3bfcf01b17dbc7d708."
+  - step: dependency_and_architecture
+    result: passed
+    command: "uv run python scripts/check_dependencies.py; uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    evidence: "Dependency policy: 7 manifests/49 dependencies passed; architecture: 22 passed in 0.69s."
+  - step: final_candidate_reconciliation
+    result: passed
+    command: "git diff --cached --name-only; git diff --cached --stat; git diff --cached --check; git ls-files --others --exclude-standard"
+    evidence: "Three allowed paths; 243 spec lines plus one INDEX row plus the full record; diff check clean; zero untracked files after stage."
+changed_files:
+  - docs/phase1/PHASE1_SPEC.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-SPEC-001_20260715_233504_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-SPEC-001"
+  reviewed_parent_sha: "90e1878744bc3d68cb5084ff30eba9907e3b8ebe"
+  reviewed_tree_oid: "bound_by_external_candidate_evidence_after_exact_stage"
+  staged_diff_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+  changed_paths_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "PowerShell structural contract assertion over docs/phase1/PHASE1_SPEC.md"
+    result: passed
+    output_snippet: "chapters=4 sections=20 unique_heading_ids=20 golden_auth=4 instructor=0 placeholder=0 bad_ce=0 bad_dtc=0 jobqueue_accounting=1 status=1"
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed; 7 manifests and 49 dependencies checked."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed in 0.69s."
+  - command: "full pytest and DB-backed validation"
+    result: not_applicable
+    output_snippet: "Documentation descriptor requires grep/diff validation only; no database-write authorization was requested for this lane."
+    not_applicable_reason: "Proportional documentation validation avoids unauthorized database writes."
+    not_applicable_scope: current_phase_only
+    blocked_by_task_id: ""
+    activation_task_id: ""
+    expiry_condition: "Run only if a later code/database task explicitly requires and authorizes it."
+    evidence: "Descriptor validation_commands are documentation grep/diff checks; dependency and architecture suites already passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "tests/architecture: 22 passed."
+security_scan_result:
+  result: passed
+  evidence: "redacted_secret_scan.py over all three candidate files reports SECRET SCAN: no hits; call_claude must separately scan the final packet and guarded prompt before invocation."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no test file changed."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Task/PR and post-merge CI are not triggered before final Review."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-SPEC-001
+  activation_task_id: P1-SPEC-001
+  expiry_condition: "Bind actual branch/PR/merge-SHA CI evidence after non-force integration."
+  evidence: "Dependency CI is baseline evidence only and is not claimed as this task's CI."
+review:
+  mode: independent_review
+  reviewed_by: "external candidate-bound Opus final meta; replacement Review pending"
+  reviewed_at: ""
+  notes: "The human overturned the initial BLOCKED as a record-layer lifecycle mischaracterization and authorized one bounded replacement final Review; verified final evidence remains in external controller meta."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "external_review_meta"
+  prompt_sha256: "external_review_meta"
+  output_sha256: "external_review_meta"
+  meta_sha256: "external_review_meta"
+  validation_evidence_sha256: "external_controller_validation_evidence"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "recorded_by_git_history_after_final_review"
+  task_branch: phase1/P1-SPEC-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Pending reviewed commit and push."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after merge; not triggered before final Review."
+  integration_freshness_sha256: "bound_before_integration"
+remaining_risks:
+  - "B2 remains locked; status is draft and human_result_acceptance is pending."
+  - "The later authorized tasks/ edit must correct the descriptor's two wrong anchors, flip spec status to approved after Gate 2 acceptance, synchronize Task Record/INDEX, and explicitly unlock B2."
+rollback_or_failure_record: "No rollback required. The candidate is documentation-only; retain draft/passed-with-Gate-2-pending status and do not unlock B2."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is required for a repository documentation task."
+package_scope: ""
+package_evidence: ""
