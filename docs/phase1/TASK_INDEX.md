@@ -9,7 +9,7 @@
 ```text
 B1（首批）：启动准备
   ↓
-B2：Intent → Capability 选择闭环     ← 前置：P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed
+B2：Intent → Capability 选择闭环     ← 产品硬门已满足：P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed
   ↓
 B3：Identity / Policy 预检闭环
   ↓
@@ -31,7 +31,8 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 | P1-ERRATA-001 | BLUEPRINT_ERRATA.md 勘误 + 澄清登记 | none | docs/phase1/BLUEPRINT_ERRATA.md（3 条正式条目 + 1 legacy note） |
 | P1-PARAM-001 | Context Budget / vLLM 部署参数登记 | infra 提供实际部署参数（**blocked until infra values arrive**） | 部署参数基线表（等 infra 回值前天然 blocked） |
 | P1-SPEC-CONTRACT-ALIGN | P1-SPEC-001 现行契约对齐 | P1-RUNTIME-ENTRY-001 integrated + merge-SHA CI passed；LOCAL-WF-V4-001 complete | 对齐后的 `P1-SPEC-001.md`、本任务 descriptor 与审查/集成证据；结果验收后才可启动 P1-SPEC-001 |
-| P1-SPEC-001 | Phase 1 详细 spec 产出（**B2 硬前置**） | P1-SPEC-CONTRACT-ALIGN integrated + result accepted；P1-GATE-001 passed | docs/phase1/PHASE1_SPEC.md（B2-B5 实现型任务的必要前提） |
+| P1-SPEC-001 | Phase 1 详细 spec 产出（**B2 硬前置**） | P1-SPEC-CONTRACT-ALIGN integrated + result accepted；P1-GATE-001 passed | `PHASE1_SPEC.md` 已 approved/landed，P1-SPEC-001 Gate 2 accepted；B2 产品硬门已满足 |
+| P1-SPEC-001-APPROVE-001 | 批准 P1-SPEC-001 并解锁 B2 | P1-SPEC-001 integrated at `10c5993d` + merge-SHA CI passed + Gate 2 accepted | `docs/phase1/tasks/P1-SPEC-001-APPROVE-001.md`；同步 spec/Task Record/INDEX；不生成或启动 B2 |
 | P1-WORKFLOW-002 | 治理文档收敛与流程分级落地 | none | ROLE_POLICY / TASK_PROMPT_TEMPLATE v2.0.0 / schema v1.1.0 收敛，ceremony 按 risk_tier 分级 |
 
 > **P1-PARAM-001 说明**：此任务依赖 infra 提供生产/内网 vLLM 实际部署参数（`max_model_len`、量化方式、`request_timeout`、`max_tokens`、`enable_thinking` 行为）。infra 未回值前该任务天然 blocked，不与其他 B1 任务并列为"无条件可做"。
@@ -68,13 +69,13 @@ P1-WORKFLOW-002-REPAIR-001
 
 ## 2. B2 — Intent → Capability 选择闭环
 
-**前置（硬门）：`P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed`**
+**前置（硬门，已满足）：`P1-GATE-001 passed + PHASE1_SPEC (P1-SPEC-001) approved/landed`**
 
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
 | （B2 任务 TBD，由 P1-SPEC-001 产出后生成 per-task prompt） | Intent → Capability 选择闭环 | P1-GATE-001, P1-SPEC-001 | Intent Router 实现 + Capability Preselector 轻量版 + `no_capability_found` 路径 |
 
-> B2 per-task prompt 必须在 P1-SPEC-001 落盘并批准后才能生成。缺少 per-task prompt 不得执行。
+> P1-SPEC-001 产品硬门已满足并标记 B2 unlocked；本任务不生成 per-task prompt、不启动 B2。`P1-SPEC-001-APPROVE-001` 集成并通过其自身 post-integration result acceptance 后，才可在新的 task lane 生成 B2 per-task prompt；缺少 prompt 仍不得执行。
 
 ## 3. B3 — Identity / Policy 预检闭环
 
@@ -111,7 +112,8 @@ P1-WORKFLOW-002-REPAIR-001
 
 产品实现链（独立硬门）：
 P1-SPEC-CONTRACT-ALIGN integrated/result accepted
-→ P1-GATE-001 passed + P1-SPEC-001 approved/landed
+→ P1-GATE-001 passed + P1-SPEC-001 approved/landed + Gate 2 accepted
+→ P1-SPEC-001-APPROVE-001 integrated/result accepted
 → B2 Intent → Capability 选择闭环
 → B3 Identity / Policy 预检闭环
 → B4 Workflow 轻量引擎 + 执行

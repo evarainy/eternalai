@@ -1,6 +1,6 @@
 # Phase 1 详细规格 — B2-B5
 
-status: draft
+status: approved
 
 本文件是 B2-B5 范围与验收的权威结果契约；当本文件与 `docs/phase1/PHASE1_PLAN.md` C.1/C.2 冲突时，以本文件为准。下游 task prompt、Task Record 与 Review 必须引用稳定小节 ID，行号只作定位辅助。文字修订不得复用已删除 ID；删除 ID 时必须在修订记录中保留 tombstone。
 
@@ -24,7 +24,7 @@ Golden 总量不得少于 10，正向总体通过率必须 `>= 80%`，负向、�
 | Dynamic Tool Composition | 排除 | `S-B2.1`, `S-B2.5`, `S-B4.1`, `S-B4.5` | 只允许 Workflow/Published Skill 明示的静态链；正确承重锚为 blueprint §2.3 L103、§6.5 L1138。 |
 | 复杂 DAG / 长事务 | 排除 | `S-B4.1`, `S-B4.5` | B4 仅实现轻量 Workflow；来源为 blueprint §4.3.3 L468。 |
 
-在 spec status、P1-SPEC-001 Task Record、`task_logs/INDEX.md`、集成与 CI 证据、human result acceptance 全部一致前，B2 不得解锁；`draft` 状态本身不构成批准。
+批准门：三方一致、B2 可解锁。
 
 ## B2 — Intent → Capability 选择闭环
 
