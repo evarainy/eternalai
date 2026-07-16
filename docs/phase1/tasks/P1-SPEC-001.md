@@ -34,8 +34,8 @@ spec_scope:
     - "Workflow Engine 轻量版：线性步骤、简单分支、step IO 映射、step 级 Policy、有限重试、human_gate、版本锁定、全链路 Trace（§4.3.2 L438-L446）"
   out_of_scope:
     - "真实业务系统写操作（§13 L2697-L2698）"
-    - "生产级 Controlled Exploration（§4.3.3 L468）"
-    - "动态 Tool Composition（§13 L2697）"
+    - "生产级 Controlled Exploration（§13 L2697）"
+    - "动态 Tool Composition（§2.3 L103、§6.5 L1138）"
     - "复杂 DAG/长事务（§4.3.3 L468）"
 touched_paths:
   - "docs/phase1/PHASE1_SPEC.md"

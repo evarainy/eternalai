@@ -1,0 +1,236 @@
+schema_version: "1.2.0"
+task_id: P1-SPEC-001-APPROVE-001
+task_type: preparation
+result: passed
+method_profile:
+  risk_tier: high
+  method: PDR
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "Opus performs the declared read-only Plan Review and one candidate-bound final-diff Review; Codex owns execution."
+controller_risk:
+  tier: R2
+  classification_reason: "Approval of the Phase 1 public result contract and release of the B2 product gate."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: standard
+  required_stops:
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "After integration and required post-merge CI, stop at Gate 2 for human result acceptance."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "This task does not generate or start B2; B2 requires a separate prompt and new lane after this task's result acceptance."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No R3 repository action is requested. Full pytest used only the repository-documented disposable test PostgreSQL and no real database."
+started_at: "2026-07-16T15:43:25+09:00"
+completed_at: "2026-07-16T15:56:25+09:00"
+plan_approved_by: "not_applicable; automation_class auto has no human pre-apply stop"
+plan_approved_at: "2026-07-16T15:48:27+09:00"
+plan_approved_via: "Claude Opus task-declared Plan Review"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    dominant: claude-opus-4-8
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "e95f6a9df37d5c1633a1fcaa493edf01d4cb5e0bb2d481a6bcadfd8a99c4c5ff"
+  prompt_sha256: "b5e6d7c474fcbb648012f43138b6f6e9768982634b4b63b089a1c0ca17b52e9c"
+  output_sha256: "40c42ad471e6fb5f05d16ea3788b65df11b21acd27429a199ccc0069891ea2ec"
+  meta_sha256: "cc4c37a07afc7d796c6fd6dfc310a0b6829feae145eb9952e21a8cff47b33073"
+  external_packet_audit: not_applicable
+  sanity_sha256: "deferred_to_external_fresh_semantic_precheck"
+  gate1_evidence_sha256: "cc4c37a07afc7d796c6fd6dfc310a0b6829feae145eb9952e21a8cff47b33073"
+summary: >-
+  The candidate copies the human/Claude-authored approval descriptor verbatim, corrects exactly two
+  P1-SPEC-001 out-of-scope anchors, changes only the PHASE1_SPEC status and approval-gate sentence,
+  reconciles the existing SPEC-001 Task Record and log index to the already-proven merge/CI/Gate 2
+  result, and marks the B2 product prerequisite satisfied. It does not generate a B2 per-task prompt,
+  start B2, modify implementation/tests/policy/schema/blueprint, or perform an R3 Git action.
+acceptance_criteria_result:
+  - criterion: "APPROVE-AC-01 two SPEC-001 anchors corrected and all other descriptor bytes unchanged"
+    result: passed
+    evidence: "Unified-zero diff contains only CE §4.3.3 L468 -> §13 L2697 and DTC §13 L2697 -> §2.3 L103、§6.5 L1138; the other two anchors are unchanged."
+  - criterion: "APPROVE-AC-02 spec status approved and approval note changed with all other spec bytes unchanged"
+    result: passed
+    evidence: "Unified-zero diff contains only status: draft -> approved and the line replacement to 批准门：三方一致、B2 可解锁。; normalized remainder hash equality is bound externally."
+  - criterion: "APPROVE-AC-03 spec status, SPEC-001 Task Record, and INDEX are consistent"
+    result: passed
+    evidence: "Spec status=approved; Task Record approval_reconciliation records accepted/approved/unlocked; log INDEX says approved + Gate 2 accepted + B2 unlocked."
+  - criterion: "APPROVE-AC-04 B2 hard gate is marked satisfied without prompt generation or B2 start"
+    result: passed
+    evidence: "TASK_INDEX marks the product hard gate satisfied, retains the B2 task as TBD, and requires a later new lane after this task's own result acceptance."
+  - criterion: "APPROVE-AC-05 task is reproducible from the verbatim descriptor and index row"
+    result: passed
+    evidence: "Descriptor source/candidate SHA-256 both equal 62b7a218781c32c290e0ec78f0dac65a76e97aa9f8a4188ab90395b74a3878a0; TASK_INDEX registers the task."
+  - criterion: "APPROVE-AC-06 exact candidate scope, no forbidden path and no R3 change"
+    result: passed
+    evidence: "Exact changed_files list contains the seven declared docs/log paths; forbidden-path and secret checks are external validation gates."
+failure_examples_tested:
+  - example: "Spec body, 5-in/4-out mapping, 20 stable-ID subsections, or B2-B5 chapters changed"
+    result: not_triggered
+    evidence: "Only spec lines 3 and 27 differ; normalized remainder bytes are identical."
+  - example: "Either of the two already-correct P1-SPEC-001 anchors changed"
+    result: not_triggered
+    evidence: "真实业务系统写操作 §13 L2697-L2698 and 复杂 DAG/长事务 §4.3.3 L468 remain unchanged."
+  - example: "B2 prompt generated or B2 started"
+    result: not_triggered
+    evidence: "No B2 per-task file or implementation path is present; TASK_INDEX retains the TBD row."
+  - example: "Implementation, test, template, policy, schema, blueprint, or CI path changed"
+    result: not_triggered
+    evidence: "Exact path reconciliation contains only the seven declared docs/log paths."
+step_verification_points:
+  - step: baseline_and_dependencies
+    result: passed
+    command: "git log origin/phase0/main; inspect P1-SPEC-001 run_state complete@revision16"
+    evidence: "Baseline 10c5993d contains task commit 8b0b8e3; external state records PR 14, CI 29434748864 success, and Gate 2 accepted."
+  - step: blueprint_recheck
+    result: passed
+    command: "Read blueprint L103, L468, L1138, and L2697 with nearest section headings"
+    evidence: "§2.3/L103 DTC; §4.3.3/L468 complex DAG; §6.5/L1138 DTC Phase 3+; §13 MVP/L2697 production CE disabled."
+  - step: plan_review_binding
+    result: passed
+    command: "codex-claude resume --evidence plan-review-evidence.json"
+    evidence: "Controller advanced planning -> working at revision 3 with PLAN_READY, model_verified=true."
+  - step: exact_apply
+    result: passed
+    command: "SHA-256 equality plus unified-zero diff checks"
+    evidence: "Verbatim descriptor hash equality; two anchor lines and two spec lines are the only protected-file edits."
+  - step: full_validation
+    result: passed
+    command: "dependency, architecture, full pytest, YAML, byte/scope, staged diff and secret checks"
+    evidence: "Detailed command outputs are listed below and bound in external validation evidence."
+  - step: final_review_and_integration
+    result: not_applicable
+    command: "External candidate binding, Opus final Review, then later non-force PR/merge/CI"
+    evidence: "Final Review and future integration evidence are external/deferred to avoid self-reference; current stop is before integration."
+    not_applicable_reason: "Candidate snapshot is created before final Review and integration."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-SPEC-001-APPROVE-001
+    activation_task_id: P1-SPEC-001-APPROVE-001
+    expiry_condition: "Bind the unchanged staged candidate, obtain final PASS, then integrate and close Gate 2."
+changed_files:
+  - docs/phase1/PHASE1_SPEC.md
+  - docs/phase1/TASK_INDEX.md
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-SPEC-001-APPROVE-001_20260716_154325_passed.yaml
+  - docs/phase1/task_logs/P1-SPEC-001_20260715_233504_passed.yaml
+  - docs/phase1/tasks/P1-SPEC-001-APPROVE-001.md
+  - docs/phase1/tasks/P1-SPEC-001.md
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-SPEC-001-APPROVE-001"
+  reviewed_parent_sha: "10c5993d18b3d5d2bd3e5b6eafd846dc04b84941"
+  reviewed_tree_oid: "bound_by_external_candidate_evidence_after_exact_stage"
+  staged_diff_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+  changed_paths_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "Dependency check passed; 7 manifests and 49 dependencies checked."
+  - command: "uv run pytest tests/architecture/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "22 passed in 0.59s."
+  - command: "DATABASE_URL=<disposable-test-db> uv run pytest"
+    result: passed
+    output_snippet: "728 passed, 6 warnings in 64.06s."
+  - command: "YAML safe-load and deterministic byte/scope checks"
+    result: passed
+    output_snippet: "Both Task Records parse; descriptor/spec anchor and three-way consistency checks pass."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "tests/architecture: 22 passed."
+security_scan_result:
+  result: passed
+  evidence: "Candidate secret scan and guarded final packet/prompt scan are hard gates; no secret value is introduced."
+weak_test_scan_result:
+  result: not_applicable
+  evidence: "Documentation-only task; no test file changed."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "This candidate is intentionally stopped before integration; task-branch/PR and post-merge CI have not run."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-SPEC-001-APPROVE-001
+  activation_task_id: P1-SPEC-001-APPROVE-001
+  expiry_condition: "Integration resumes only with unchanged PASS evidence and repository guards."
+  evidence: "No current-task CI is claimed green."
+review:
+  mode: independent_review
+  reviewed_by: "external candidate-bound Opus final Review"
+  reviewed_at: ""
+  notes: "Final Review evidence is deliberately external; this reviewed candidate record is not patched after PASS."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "external_final_review_meta"
+  prompt_sha256: "external_final_review_meta"
+  output_sha256: "external_final_review_meta"
+  meta_sha256: "external_final_review_meta"
+  validation_evidence_sha256: "external_validation_evidence"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "deferred_after_review_pass"
+  task_branch: phase1/P1-SPEC-001-APPROVE-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Candidate is stopped before commit/push/PR."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after merge; not triggered for the staged candidate."
+  integration_freshness_sha256: "bound_before_integration"
+remaining_risks:
+  - "Current-task commit/push/PR/merge/post-merge CI and Gate 2 remain pending; the task-required stop is post-integration human result acceptance."
+  - "B2 product hard gate is marked unlocked, but no B2 prompt exists and no B2 task may start from this lane."
+rollback_or_failure_record: "No rollback required. Freeze and report if exact scope, validation, final Review, protection, CI, or result acceptance fails."
+local_commit_policy: after_review_pass
+git_commit_sha: "deferred_after_review_pass"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is required for a repository documentation task."
+package_scope: ""
+package_evidence: ""

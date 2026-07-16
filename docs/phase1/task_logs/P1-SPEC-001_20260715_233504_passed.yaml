@@ -26,11 +26,14 @@ automation:
         2026-07-15T22:17:08.720+09:00: 批准 P1-SPEC-001 四章大纲，按当前 5 in/4 out 范围填充正文。
     - kind: human_result_acceptance
       phase: post_integration
-      status: pending
-      evidence: "The integrated 20-line result summary has not yet been accepted; B2 remains locked."
+      status: satisfied
+      evidence: >-
+        External controller run_state complete@revision16 records human_result_acceptance.status=accepted
+        by human on 2026-07-16; evidence sha256
+        5ea77c4c92c5735a41722a2ea5b0d7e2ec457b697931686268e3e145369d483a.
   auto_next_policy: blocked
   auto_next_result: blocked
-  auto_next_reason: "B2 cannot unlock while spec status is draft and human_result_acceptance is pending."
+  auto_next_reason: "P1-SPEC-001 approval is reconciled by P1-SPEC-001-APPROVE-001; auto-next remains blocked because B2 requires a separate per-task prompt and new lane after the approval task's own result acceptance."
 redline_authorization:
   requested_actions: []
   authorized_actions: []
@@ -81,15 +84,21 @@ task_prompt_patch:
       correct them only within a later already-authorized task that touches tasks/, without a new lane
       and without blocking this candidate.
 summary: >-
-  The approved four-chapter outline was filled into a complete B2-B5 draft result contract. It has
+  The approved four-chapter outline was filled into a complete B2-B5 result contract. It has
   exactly twenty stable-ID subsections, a complete five-deliverable/four-exclusion C.1 mapping, frozen
   Port usage, acceptance-source boundaries, per-batch golden authorization language, and PDR cuts.
   Controlled Exploration and Dynamic Tool Composition use the human-approved corrected blueprint
   anchors without changing the 5 in/4 out semantics or editing the forbidden descriptor. Structural,
-  dependency-policy, architecture, scope, and candidate checks pass. Human result acceptance is a
-  design-delayed post-integration Gate 2 and does not negate this pre-integration deliverable result.
-  The spec remains draft and B2 remains locked until a later authorized task records approval, fixes
-  the descriptor anchors, synchronizes status/Task Record/INDEX, and explicitly unlocks B2.
+  dependency-policy, architecture, scope, and candidate checks pass. The integrated result was
+  accepted by the human at Gate 2 on 2026-07-16. P1-SPEC-001-APPROVE-001 corrects the two descriptor
+  anchors, synchronizes status/Task Record/INDEX, marks the spec approved, and unlocks the B2 product
+  hard gate without generating or starting a B2 task.
+approval_reconciliation:
+  approved_by_task_id: P1-SPEC-001-APPROVE-001
+  spec_status: approved
+  human_result_acceptance: accepted
+  gate2_evidence_sha256: "5ea77c4c92c5735a41722a2ea5b0d7e2ec457b697931686268e3e145369d483a"
+  b2_gate: unlocked
 acceptance_criteria_result:
   - criterion: "AC-1 PHASE1_SPEC is an overall replacement of PLACEHOLDER, not an append"
     result: passed
@@ -107,18 +116,11 @@ acceptance_criteria_result:
     result: passed
     evidence: "Working-tree path reconciliation contains no docs/blueprint/ path."
   - criterion: "AC-6 B2 unlocks only after human approval and consistent spec status, Task Record, and INDEX evidence"
-    result: not_applicable
-    status: pending
-    phase: post_integration
+    result: passed
     evidence: >-
-      The safety invariant currently holds: human_result_acceptance is pending, status remains draft,
-      INDEX keeps Gate 2 pending, and B2 stays locked. Completion is intentionally deferred until after
-      integration and belongs to the later authorized task that also fixes the descriptor anchors.
-    not_applicable_reason: "Design-delayed post-integration Gate 2; the pre-integration deliverable is complete while B2 remains locked."
-    not_applicable_scope: intentionally_deferred
-    blocked_by_task_id: P1-SPEC-001
-    activation_task_id: P1-SPEC-001
-    expiry_condition: "Integrated draft receives human_result_acceptance and the later authorized task synchronizes spec status, Task Record, INDEX, descriptor anchors, and B2 unlock."
+      External controller complete@revision16 records merge 10c5993d, post-merge CI run 29434748864
+      success, and human_result_acceptance accepted. P1-SPEC-001-APPROVE-001 synchronizes status,
+      Task Record, INDEX, descriptor anchors, and B2 product-gate unlock.
   - criterion: "AC-7 instructor is absent or only in forbidden/errata/non-baseline context"
     result: passed
     evidence: "Case-insensitive instructor count is zero."
@@ -185,11 +187,14 @@ candidate_evidence:
   integration_mode: git
   candidate_root: "E:/code/eternalai/.worktrees/P1-SPEC-001"
   reviewed_parent_sha: "90e1878744bc3d68cb5084ff30eba9907e3b8ebe"
-  reviewed_tree_oid: "bound_by_external_candidate_evidence_after_exact_stage"
-  staged_diff_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
-  changed_paths_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
-  changed_blob_oids: []
-  freshness_sha256: "bound_by_external_candidate_evidence_after_exact_stage"
+  reviewed_tree_oid: "e44d36b4ef5eb9c911f99a4d782e8fe6b2a61203"
+  staged_diff_sha256: "e2f210b07f6fe2ab356fc0fbe8f3b8c0ec38473544d86d810b4b987b01de4fe4"
+  changed_paths_sha256: "0fd37fcd7ef4aea71cfef1b7a4073452e2465c10fb16c7490e719cd90b575b50"
+  changed_blob_oids:
+    - "50f5a8ddce373f0732ba3e32565e64cb2e0c2458"
+    - "aea2541e9f89fa1a654e4f8c90ce4372a15cf89e"
+    - "f04c4391baf62097e63689650130e950d6fb1fdf"
+  freshness_sha256: "2facdd46b1515c6fd62162e50bc720b83bfea8002b455d6dad37c353b243c255"
 filesystem_companion_evidence:
   path: ""
   disposition: not_applicable
@@ -233,63 +238,58 @@ weak_test_scan_result:
   result: not_applicable
   evidence: "Documentation-only task; no test file changed."
 ci_evidence:
-  result: not_applicable
-  run_id: ""
-  url_or_log_path: ""
-  not_applicable_reason: "Task/PR and post-merge CI are not triggered before final Review."
-  not_applicable_scope: intentionally_deferred
-  blocked_by_task_id: P1-SPEC-001
-  activation_task_id: P1-SPEC-001
-  expiry_condition: "Bind actual branch/PR/merge-SHA CI evidence after non-force integration."
-  evidence: "Dependency CI is baseline evidence only and is not claimed as this task's CI."
+  result: passed
+  run_id: "29434748864"
+  url_or_log_path: "https://github.com/evarainy/eternalai/actions/runs/29434748864"
+  evidence: "Post-merge CI completed successfully on merge SHA 10c5993d18b3d5d2bd3e5b6eafd846dc04b84941."
 review:
   mode: independent_review
-  reviewed_by: "external candidate-bound Opus final meta; replacement Review pending"
-  reviewed_at: ""
-  notes: "The human overturned the initial BLOCKED as a record-layer lifecycle mischaracterization and authorized one bounded replacement final Review; verified final evidence remains in external controller meta."
+  reviewed_by: "claude_code candidate-bound Opus final Review"
+  reviewed_at: "2026-07-15"
+  notes: "Replacement final Review is bound in the external controller to the integrated candidate tree and returned PASS."
   provider: claude
   requested_model: claude-opus-4-8
-  observed_models: {}
-  model_verified: false
-  verdict: not_applicable
-  packet_sha256: "external_review_meta"
-  prompt_sha256: "external_review_meta"
-  output_sha256: "external_review_meta"
-  meta_sha256: "external_review_meta"
-  validation_evidence_sha256: "external_controller_validation_evidence"
+  observed_models:
+    dominant: claude-opus-4-8
+  model_verified: true
+  verdict: PASS
+  packet_sha256: "e88dde2db59ff81cc624a1cdde9243fccb63e364539a786015d03a174ee5e86a"
+  prompt_sha256: "8be2a5e8d1b33e0e1ed9c5728273a842d7cb95ea3c18647335e417d66e39e102"
+  output_sha256: "a7a897b7553325941b01cc73fd7cf95c1064f03e3711e06317cc3ed36318d73b"
+  meta_sha256: "9f820c0ad79b0e73dad8618d74fb73f80a16e403ad7be6ca15987627818a8f34"
+  validation_evidence_sha256: "e427d9b6865d09b20e2942a7b65823fdd31873d457a34a901c097540826ea18d"
 remote_integration:
-  policy_sha256: "bound_before_integration"
-  task_commit_sha: "recorded_by_git_history_after_final_review"
+  policy_sha256: "bound in external integration evidence"
+  task_commit_sha: "8b0b8e3b23e91f6560440453a057b54fed23aef6"
   task_branch: phase1/P1-SPEC-001
   task_branch_ci:
     status: not_triggered
     run_id: ""
     head_sha: ""
     jobs: []
-    evidence: "Pending reviewed commit and push."
+    evidence: "No separate task-branch check was required before PR merge; post-merge CI is recorded below."
   pull_request:
-    number: ""
-    head_sha: ""
+    number: "14"
+    head_sha: "8b0b8e3b23e91f6560440453a057b54fed23aef6"
     base_ref: phase0/main
-    mergeability: ""
+    mergeability: "merged"
     required_checks: []
   merge:
-    status: not_merged
-    merge_sha: ""
-    method: not_applicable
+    status: merged
+    merge_sha: "10c5993d18b3d5d2bd3e5b6eafd846dc04b84941"
+    method: merge
   post_merge_ci:
-    status: not_triggered
-    run_id: ""
-    head_sha: ""
+    status: passed
+    run_id: "29434748864"
+    head_sha: "10c5993d18b3d5d2bd3e5b6eafd846dc04b84941"
     jobs: []
-    evidence: "Required after merge; not triggered before final Review."
-  integration_freshness_sha256: "bound_before_integration"
+    evidence: "GitHub Actions run 29434748864 completed successfully on the merge SHA."
+  integration_freshness_sha256: "5b57807669be3f18f801029b1166a8efa0618f05913a7220554384ec4099623a"
 remaining_risks:
-  - "B2 remains locked; status is draft and human_result_acceptance is pending."
-  - "The later authorized tasks/ edit must correct the descriptor's two wrong anchors, flip spec status to approved after Gate 2 acceptance, synchronize Task Record/INDEX, and explicitly unlock B2."
-rollback_or_failure_record: "No rollback required. The candidate is documentation-only; retain draft/passed-with-Gate-2-pending status and do not unlock B2."
+  - "B2 per-task prompt has not been generated; B2 must remain unscheduled until P1-SPEC-001-APPROVE-001 is integrated and its own post-integration result acceptance is satisfied."
+rollback_or_failure_record: "No rollback required. P1-SPEC-001 is integrated, reviewed, CI-green, Gate 2 accepted, and approved by P1-SPEC-001-APPROVE-001."
 local_commit_policy: after_review_pass
-git_commit_sha: "recorded_by_git_history_after_final_review"
+git_commit_sha: "8b0b8e3b23e91f6560440453a057b54fed23aef6"
 package_confirmation_status: not_applicable
 package_confirmation: "No distributable package is required for a repository documentation task."
 package_scope: ""
