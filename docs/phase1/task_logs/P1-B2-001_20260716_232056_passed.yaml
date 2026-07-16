@@ -1,0 +1,275 @@
+schema_version: "1.2.0"
+task_id: P1-B2-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: PDR
+  execution_owner: codex
+  review_owner: claude_code
+  review_mode_policy: independent_review
+  model_note: "Registry selection is an R2 Runtime change; Claude Opus is the bounded read-only Plan/final-diff reviewer and Codex owns TDD execution."
+controller_risk:
+  tier: R2
+  classification_reason: "Runtime main-chain selection, Registry filtering, ambiguity handling, and Golden assembly wiring."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: standard
+  required_stops:
+    - kind: human_result_acceptance
+      phase: post_integration
+      status: pending
+      evidence: "Required after ordinary PR merge and merge-SHA CI; the human launch additionally requires a pre-merge candidate-evidence inspection before those actions."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "P1-B2-001 has an explicit human result stop and no authorized auto-next task."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No deletion/history rewrite, secret/env, DB schema/real-data, global/system, publish/deploy, rebase, reset-hard, or force-push action was requested or performed."
+started_at: "2026-07-16T22:33:15+09:00"
+completed_at: "2026-07-16T23:20:56+09:00"
+plan_approved_by: "claude-opus-4-8 independent Plan Review under human-authorized revised scope"
+plan_approved_at: "2026-07-16T23:13:40+09:00"
+plan_approved_via: "codex-claude v4 guarded Plan Review"
+plan_review:
+  required: true
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      input_tokens: 2
+      cache_read_input_tokens: 2665
+      cache_creation_input_tokens: 11812
+      output_tokens: 6677
+    claude-haiku-4-5-20251001:
+      input_tokens: 8127
+      output_tokens: 23
+  model_verified: true
+  verdict: PLAN_READY
+  packet_sha256: "9664acd907e57937da8ea76aba81a523c74c1f80a53e389e524be518539c5b70"
+  prompt_sha256: "bf4b6274ef0099dfd3b5b095d04df7f058c154488f60fc97f40c29abf1d25224"
+  output_sha256: "649d1e924e9c9b23b70e02b829e8e77a1b5f0408f2c4c234a47fe21118f043ad"
+  meta_sha256: "df19e8627f34e97b3be5d88a61e33e88ea69c39617d5362888a871c78528edac"
+  external_packet_audit: not_applicable
+  sanity_sha256: ""
+  gate1_evidence_sha256: "bound_in_controller_revision_3"
+summary: >
+  Runtime now resolves validated structured-output selectors through the frozen
+  CapabilityRegistryPort before Gateway execution. Exact active IDs win; exact inactive
+  IDs fail closed; absent IDs may uniquely match an active intent tag; zero or ambiguous
+  candidates return the existing no_capability_found envelope and never call Gateway.
+  Composition and the Golden evaluator pass the same Registry instance to Runtime and
+  Gateway. Golden fixtures, FROZEN_GT_IDS, dependencies, Ports, contracts, and Trace event
+  vocabulary remain unchanged.
+acceptance_criteria_result:
+  - criterion: "B2-AC-01 Registry-backed active-only selection"
+    result: passed
+    evidence: "Focused Runtime selection tests cover exact active plus draft/disabled/deprecated rejection; Runtime suite is 45 passed."
+  - criterion: "B2-AC-02 zero/ambiguous candidates fail closed before Gateway"
+    result: passed
+    evidence: "Unregistered and two-order ambiguous-tag tests return no_capability_found with zero Gateway calls."
+  - criterion: "B2-AC-03 existing Trace and Task terminal semantics"
+    result: passed
+    evidence: "Selection tests assert existing event sequence and canonical capability_selected ID; existing lifecycle tests remain green."
+  - criterion: "B2-AC-04 deterministic selection"
+    result: passed
+    evidence: "Opposite Registry orders produce the same ambiguity failure and the same exact-ID selection."
+  - criterion: "B2-AC-05 Web/CLI, structured output, filtering, envelope, and boundary coverage"
+    result: passed
+    evidence: "Focused 9-test selection file plus existing Runtime suite covers Web/CLI parity, parse failures, active filtering, unique selection, standard envelope, and downstream short circuit."
+  - criterion: "B2-AC-06 Golden gate and GT-008 non-regression"
+    result: passed
+    evidence: "Golden gate is 11/11 with 7 positive and 4 negative; GT-008 remains no_capability_found with no Adapter call. GT-008 is a parse-path non-regression signal, while focused tests cover the new unregistered-selector branch."
+  - criterion: "B2-AC-07 architecture boundary"
+    result: passed
+    evidence: "Runtime imports only the frozen Registry Port; architecture suite and final dependency checks are bound in external validation evidence."
+  - criterion: "B2-AC-08 zero dependencies"
+    result: passed
+    evidence: "No package imports or manifests changed; baseline pyproject/uv.lock SHA-256 are 473df7a6... and e596f3be..., rechecked on the frozen candidate."
+  - criterion: "B2-AC-09 exact scope, FROZEN IDs, and fixture integrity"
+    result: passed
+    evidence: "No fixture changes; FROZEN_GT_IDS remains 187 bytes with SHA-256 c99d5c3...; evaluator diff is limited to shared-Registry assembly."
+failure_examples_tested:
+  - example: "embedding/vector/new dependency introduced"
+    result: not_triggered
+    evidence: "Implementation uses frozen Port types and built-in exact/tag comparison only."
+    not_applicable_reason: "The forbidden implementation choice was not used."
+    not_applicable_scope: current_phase_only
+    blocked_by_task_id: P1-B2-001
+    activation_task_id: P1-B2-001
+    expiry_condition: "Any later dependency or algorithm expansion reactivates this failure."
+  - example: "inactive Capability selected"
+    result: triggered
+    evidence: "Parameterized draft/disabled/deprecated tests prove exact inactive records fail closed without tag fallback."
+  - example: "ambiguous candidates choose first Adapter"
+    result: triggered
+    evidence: "Two active capabilities sharing a tag fail closed in both Registry orders with zero Gateway calls."
+  - example: "Golden/FROZEN expansion"
+    result: not_triggered
+    evidence: "Fixture delta is none; FROZEN block byte length/hash are unchanged; all 11 existing IDs remain."
+    not_applicable_reason: "No Golden identity, fixture semantics, threshold, or frozen tuple was changed."
+    not_applicable_scope: current_phase_only
+    blocked_by_task_id: P1-B2-001
+    activation_task_id: P1-B2-002
+    expiry_condition: "Any future Golden expansion requires the separately authorized P1-B2-002 lane."
+step_verification_points:
+  - step: baseline
+    result: passed
+    command: "base/worktree/controller/Docker/Runtime/Golden preflight"
+    evidence: "Base/HEAD 9fc6fdf6, isolated phase1/P1-B2-001 worktree, Registry wiring audit, Runtime 36 passed, and Golden 11/11 passed."
+  - step: plan
+    result: passed
+    command: "guarded Opus Plan Review and controller bind"
+    evidence: "Revised packet returned verified PLAN_READY and controller entered working@revision 3 before implementation code edits."
+  - step: red
+    result: passed
+    command: "uv run pytest tests/runtime/test_runtime_capability_selection.py -q -p no:cacheprovider"
+    evidence: "9 expected failures: RuntimeImpl.__init__ lacked capability_registry."
+  - step: green
+    result: passed
+    command: "focused selection, Runtime suite, weak-test checks, and Golden gate"
+    evidence: "Selection 9 passed; Runtime 45 passed; 8 changed test files passed weak checks; Golden 11/11 passed."
+  - step: validation
+    result: passed
+    command: "descriptor hard-gate validation set"
+    evidence: "Exact outputs and candidate identity are stored in the external validation evidence bound by the controller."
+  - step: integration
+    result: not_applicable
+    command: "commit/push/PR/merge/post-merge CI"
+    evidence: "Human launch requires a candidate-evidence stop after final Opus PASS and before commit/push/PR/merge."
+    not_applicable_reason: "Integration is intentionally deferred until the human inspects and releases the reviewed candidate."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B2-001
+    activation_task_id: P1-B2-001
+    expiry_condition: "Human releases the exact staged reviewed candidate for non-force PR integration and post-merge CI."
+changed_files:
+  - app/composition.py
+  - app/runtime/runtime.py
+  - docs/phase1/task_logs/INDEX.md
+  - docs/phase1/task_logs/P1-B2-001_20260716_232056_passed.yaml
+  - docs/phase1/tasks/P1-B2-001.md
+  - scripts/golden_task_evaluator.py
+  - tests/runtime/registry_fakes.py
+  - tests/runtime/test_runtime_capability_selection.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/runtime/test_runtime_gateway_result_mapping.py
+  - tests/runtime/test_runtime_response_content.py
+  - tests/runtime/test_runtime_response_envelope.py
+  - tests/runtime/test_runtime_trace_lifecycle.py
+  - tests/runtime/test_runtime_trace_threading.py
+  - tests/runtime/test_task_creation.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-B2-001"
+  reviewed_parent_sha: "9fc6fdf614aea927323ca3254705da3a6f4815b6"
+  reviewed_tree_oid: "bound_by_controller_after_exact_stage"
+  staged_diff_sha256: "bound_by_controller_after_exact_stage"
+  changed_paths_sha256: "bound_by_controller_after_exact_stage"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_controller_after_exact_stage"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest tests/runtime/test_runtime_capability_selection.py -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "9 passed after the expected 9-test RED."
+  - command: "uv run pytest tests/runtime/ -q -p no:cacheprovider"
+    result: passed
+    output_snippet: "45 passed."
+  - command: "uv run python scripts/check_weak_tests.py <each changed Runtime test file>"
+    result: passed
+    output_snippet: "All 8 changed test files passed individually."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "11/11 passed; 7 positive and 4 negative, including GT-008."
+  - command: "ruff / mypy / dependencies / architecture / full pytest / Golden final hard gate"
+    result: passed
+    output_snippet: "Exact outputs and exit codes are bound in external validation evidence for the frozen candidate."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "Runtime depends on app.ports.capability_registry only; final tests/architecture output is bound externally."
+security_scan_result:
+  result: passed
+  evidence: "Plan packet secret scan reported no hits; candidate/final packet scans are hard pre-dispatch gates with external evidence."
+weak_test_scan_result:
+  result: passed
+  evidence: "All 8 changed Runtime test files passed scripts/check_weak_tests.py."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Task/PR and post-merge CI are not triggered before the human pre-merge inspection stop."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B2-001
+  activation_task_id: P1-B2-001
+  expiry_condition: "Human releases the reviewed candidate for PR integration; then task/PR checks and merge-SHA CI must be bound."
+  evidence: "No remote CI result is claimed at the pre-merge candidate stage."
+review:
+  mode: independent_review
+  reviewed_by: "pending one fresh record-inclusive Claude final-diff Review"
+  reviewed_at: ""
+  notes: "Final Review artifacts are external and bind the exact staged tree; placeholders remain immutable after Review."
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: "bound_after_exact_stage"
+  prompt_sha256: "bound_after_exact_stage"
+  output_sha256: "bound_after_exact_stage"
+  meta_sha256: "bound_after_exact_stage"
+  validation_evidence_sha256: "bound_after_final_validation"
+remote_integration:
+  policy_sha256: "bound_before_integration"
+  task_commit_sha: "recorded_by_git_history_after_final_review_and_human_release"
+  task_branch: phase1/P1-B2-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No reviewed task commit exists before the human pre-merge stop."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: not_evaluated_pre_commit
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind the merge SHA."
+  integration_freshness_sha256: "bound_after_human_release"
+remaining_risks:
+  - "Intent-tag fallback is a Plan-Review-approved mechanism choice for unique convergence, not a general fuzzy router contract; B2-002 and later tasks must not broaden it implicitly."
+  - "Commit, task-branch/PR CI, mergeability, ordinary merge, merge-SHA CI, and post-integration result acceptance remain pending after the explicit human pre-merge inspection stop."
+rollback_or_failure_record: "Stop and preserve candidate/scratch on drift or failure. No deletion, reset, rebase, force push, or automatic post-merge repair; any repair/revert requires a governed lane."
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded_by_git_history_after_final_review_and_human_release"
+package_confirmation_status: not_applicable
+package_confirmation: "No package artifact is produced by this Runtime selection task."
+package_scope: ""
+package_evidence: ""
