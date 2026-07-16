@@ -14,6 +14,7 @@ from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.runtime.models import CapabilityRef
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
 class RecordingTaskStore:
@@ -51,6 +52,9 @@ class RecordingSessionStore:
 
 
 class CompletedGateway:
+    def __init__(self, capability_registry: StaticCapabilityRegistry) -> None:
+        self.capability_registry = capability_registry
+
     async def execute_capability(self, *args: Any, **kwargs: Any) -> ExecutionResult:
         return ExecutionResult(
             status="completed",
@@ -136,10 +140,13 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     task_store = RecordingTaskStore()
     session_store = RecordingSessionStore()
     trace_port = RecordingTracePort()
+    capability_registry = StaticCapabilityRegistry("synthetic.query")
+    gateway = CompletedGateway(capability_registry)
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
-        gateway=CompletedGateway(),
+        capability_registry=capability_registry,
+        gateway=gateway,
         trace_port=trace_port,
         structured_output=DeterministicStructuredOutput(),
     )
@@ -155,6 +162,8 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert envelope["data"] == {"result": "ok"}
     assert task_store.created
     assert session_store.created
+    assert runtime._capability_registry is capability_registry
+    assert gateway.capability_registry is capability_registry
     assert "task_created" in trace_port.event_types
     assert "response_envelope_created" in trace_port.event_types
     assert "task_completed" in trace_port.event_types

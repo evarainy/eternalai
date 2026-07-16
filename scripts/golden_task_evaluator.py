@@ -587,13 +587,15 @@ async def _run_fixture(
     when = cast(dict[str, Any], fixture["when"])
     adapters, adapter_calls, reset_adapters = _build_adapter_spies(given)
     trace_port = SpyTracePort()
+    capability_registry = FakeCapabilityRegistry(
+        cast(Sequence[dict[str, Any]], given["registered_capabilities"])
+    )
     runtime = build_runtime(
         task_store=SpyTaskStore(),
         session_store=ExistingSessionStore(),
+        capability_registry=capability_registry,
         gateway=CapabilityGateway(
-            capability_registry=FakeCapabilityRegistry(
-                cast(Sequence[dict[str, Any]], given["registered_capabilities"])
-            ),
+            capability_registry=capability_registry,
             identity_mapping=FakeIdentityMapping(
                 cast(Sequence[dict[str, Any]], given["identity_mappings"])
             ),

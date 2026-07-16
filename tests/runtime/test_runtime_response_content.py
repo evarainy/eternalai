@@ -14,6 +14,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
 class SpyTaskStore:
@@ -169,6 +170,7 @@ def _run_runtime(
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
+            capability_registry=StaticCapabilityRegistry(capability_id),
             gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
             structured_output=structured_output,

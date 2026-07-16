@@ -17,6 +17,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
 class CapturingLogger:
@@ -119,6 +120,7 @@ def _run_runtime(
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
+        capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
         gateway=gateway,
         trace_port=writer,
         structured_output=_provider(message, malformed=malformed),
@@ -148,6 +150,7 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
+        capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
         gateway=CapabilityGateway(adapter=SuccessfulAdapter(), trace_port=writer),
         trace_port=writer,
         structured_output=_provider(message),

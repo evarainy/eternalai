@@ -14,6 +14,7 @@ from app.ports.capability_gateway import (
     ExecutionStatus,
     RequestOrgContext,
 )
+from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import (
@@ -32,6 +33,7 @@ class RuntimeImpl:
         self,
         task_store: TaskStorePort,
         session_store: SessionStorePort,
+        capability_registry: CapabilityRegistryPort,
         gateway: CapabilityGatewayPort,
         trace_port: TracePort,
         structured_output: StructuredOutputPort,
@@ -39,6 +41,7 @@ class RuntimeImpl:
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
+        self._capability_registry = capability_registry
         self._gateway = gateway
         self._trace_port = trace_port
         self._structured_output = structured_output
@@ -96,43 +99,26 @@ class RuntimeImpl:
         )
 
         if not parse_ok or capability_ref is None:
-            await self._task_store.update_status(task_id, "no_capability_found")
-            await self._trace_port.record_step(
-                trace_id,
-                task_id,
-                session_id,
-                event_type="no_capability_found",
-                status="blocked",
-            )
-            envelope = self._response_builder.build_no_capability_found(
+            return await self._finish_no_capability_found(
                 response_id,
                 task_id,
                 session_id,
-                "暂未接入该能力",
-                "No capability found.",
                 trace_id,
             )
-            await self._trace_port.record_step(
-                trace_id,
+
+        selected_capability = await self._select_capability(
+            capability_ref.capability_id
+        )
+        if selected_capability is None:
+            return await self._finish_no_capability_found(
+                response_id,
                 task_id,
                 session_id,
-                event_type="response_envelope_created",
-                status="ok",
-            )
-            await self._trace_port.record_step(
                 trace_id,
-                task_id,
-                session_id,
-                event_type="task_failed",
-                status="failed",
             )
-            await self._trace_port.finalize_task_trace(
-                trace_id,
-                task_id,
-                session_id,
-                status="blocked",
-            )
-            return envelope
+        capability_ref = capability_ref.model_copy(
+            update={"capability_id": selected_capability.capability_id}
+        )
 
         await self._trace_port.record_step(
             trace_id,
@@ -207,6 +193,73 @@ class RuntimeImpl:
             status=finalize_status,
             capability_id=capability_ref.capability_id,
             error_code=exec_result.error_code,
+        )
+        return envelope
+
+    async def _select_capability(self, selector: str) -> CapabilitySpec | None:
+        exact_match = await self._capability_registry.get(selector)
+        if exact_match is not None:
+            return exact_match if exact_match.status == "active" else None
+
+        normalized_selector = _normalize_intent_tag(selector)
+        if not normalized_selector:
+            return None
+        active_capabilities = await self._capability_registry.list(status="active")
+        matches = [
+            capability
+            for capability in active_capabilities
+            if capability.status == "active"
+            and normalized_selector
+            in {
+                normalized_tag
+                for tag in capability.intent_tags
+                if (normalized_tag := _normalize_intent_tag(tag))
+            }
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    async def _finish_no_capability_found(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        trace_id: str,
+    ) -> ResponseEnvelope:
+        await self._task_store.update_status(task_id, "no_capability_found")
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="no_capability_found",
+            status="blocked",
+        )
+        envelope = self._response_builder.build_no_capability_found(
+            response_id,
+            task_id,
+            session_id,
+            "暂未接入该能力",
+            "No capability found.",
+            trace_id,
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="task_failed",
+            status="failed",
+        )
+        await self._trace_port.finalize_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            status="blocked",
         )
         return envelope
 
@@ -333,6 +386,10 @@ def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _normalize_intent_tag(value: str) -> str:
+    return value.strip().casefold()
 
 
 def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
