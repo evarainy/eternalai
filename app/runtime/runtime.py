@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any, Literal
 from uuid import uuid4
-
-from pydantic import ValidationError
 
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import (
@@ -15,17 +16,26 @@ from app.ports.capability_gateway import (
     RequestOrgContext,
 )
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.llm_provider import LLMProviderPort
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import (
     SessionRecord,
     SessionStorePort,
+    TaskEventRecord,
     TaskRecord,
     TaskStatus,
     TaskStorePort,
 )
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
+from app.runtime.intent_router import IntentRouter
 from app.runtime.models import CapabilityRef
+
+
+@dataclass(frozen=True)
+class _CapabilitySelection:
+    capability: CapabilitySpec
+    rule: Literal["exact_id", "unique_intent_tag"]
 
 
 class RuntimeImpl:
@@ -36,7 +46,9 @@ class RuntimeImpl:
         capability_registry: CapabilityRegistryPort,
         gateway: CapabilityGatewayPort,
         trace_port: TracePort,
+        llm_provider: LLMProviderPort,
         structured_output: StructuredOutputPort,
+        intent_model: str,
         response_builder: ResponseEnvelopeBuilder,
     ) -> None:
         self._task_store = task_store
@@ -44,7 +56,11 @@ class RuntimeImpl:
         self._capability_registry = capability_registry
         self._gateway = gateway
         self._trace_port = trace_port
-        self._structured_output = structured_output
+        self._intent_router = IntentRouter(
+            llm_provider=llm_provider,
+            structured_output=structured_output,
+            model=intent_model,
+        )
         self._response_builder = response_builder
 
     async def handle_user_message(
@@ -81,14 +97,15 @@ class RuntimeImpl:
             status="ok",
         )
 
-        result = await self._structured_output.parse_to_schema(message, CapabilityRef)
-        capability_ref: CapabilityRef | None = None
-        parse_ok = result.error is None and result.parsed is not None
-        if parse_ok:
-            try:
-                capability_ref = CapabilityRef.model_validate(result.parsed)
-            except ValidationError:
-                parse_ok = False
+        capability_ref = await self._intent_router.parse(
+            message,
+            trace_metadata={
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "session_id": session_id,
+            },
+        )
+        parse_ok = capability_ref is not None
 
         await self._trace_port.record_step(
             trace_id,
@@ -96,6 +113,7 @@ class RuntimeImpl:
             session_id,
             event_type="intent_parsed",
             status="ok" if parse_ok else "failed",
+            attributes=_intent_trace_attributes(capability_ref),
         )
 
         if not parse_ok or capability_ref is None:
@@ -104,20 +122,36 @@ class RuntimeImpl:
                 task_id,
                 session_id,
                 trace_id,
+                reason="intent_invalid",
             )
 
-        selected_capability = await self._select_capability(
-            capability_ref.capability_id
-        )
-        if selected_capability is None:
+        intent_selector = capability_ref.capability_id
+        selection = await self._select_capability(capability_ref)
+        if selection is None:
             return await self._finish_no_capability_found(
                 response_id,
                 task_id,
                 session_id,
                 trace_id,
+                reason="no_unique_active_candidate",
             )
+        selected_capability = selection.capability
         capability_ref = capability_ref.model_copy(
             update={"capability_id": selected_capability.capability_id}
+        )
+
+        await self._task_store.append_event(
+            task_id,
+            TaskEventRecord(
+                event_id=str(uuid4()),
+                task_id=task_id,
+                event_type="capability_selected",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "capability_id": selected_capability.capability_id,
+                    "selection_rule": selection.rule,
+                },
+            ),
         )
 
         await self._trace_port.record_step(
@@ -127,6 +161,10 @@ class RuntimeImpl:
             event_type="capability_selected",
             status="ok",
             capability_id=capability_ref.capability_id,
+            attributes={
+                "intent_fingerprint": _intent_fingerprint(intent_selector),
+                "selection_rule": selection.rule,
+            },
         )
         request_context = RequestOrgContext(
             request_id=trace_id,
@@ -196,19 +234,33 @@ class RuntimeImpl:
         )
         return envelope
 
-    async def _select_capability(self, selector: str) -> CapabilitySpec | None:
+    async def _select_capability(
+        self,
+        intent: CapabilityRef,
+    ) -> _CapabilitySelection | None:
+        selector = intent.capability_id
         exact_match = await self._capability_registry.get(selector)
         if exact_match is not None:
-            return exact_match if exact_match.status == "active" else None
+            if exact_match.status == "active" and _matches_intent_constraints(
+                exact_match,
+                intent,
+            ):
+                return _CapabilitySelection(exact_match, "exact_id")
+            return None
 
         normalized_selector = _normalize_intent_tag(selector)
         if not normalized_selector:
             return None
-        active_capabilities = await self._capability_registry.list(status="active")
+        active_capabilities = await self._capability_registry.list(
+            target_system=intent.target_system,
+            type=intent.capability_type,
+            status="active",
+        )
         matches = [
             capability
             for capability in active_capabilities
             if capability.status == "active"
+            and _matches_intent_constraints(capability, intent)
             and normalized_selector
             in {
                 normalized_tag
@@ -216,7 +268,9 @@ class RuntimeImpl:
                 if (normalized_tag := _normalize_intent_tag(tag))
             }
         ]
-        return matches[0] if len(matches) == 1 else None
+        if len(matches) != 1:
+            return None
+        return _CapabilitySelection(matches[0], "unique_intent_tag")
 
     async def _finish_no_capability_found(
         self,
@@ -224,14 +278,21 @@ class RuntimeImpl:
         task_id: str,
         session_id: str,
         trace_id: str,
+        reason: str,
     ) -> ResponseEnvelope:
-        await self._task_store.update_status(task_id, "no_capability_found")
+        await self._task_store.update_status(
+            task_id,
+            "no_capability_found",
+            "capability_not_found",
+        )
         await self._trace_port.record_step(
             trace_id,
             task_id,
             session_id,
             event_type="no_capability_found",
             status="blocked",
+            error_code="capability_not_found",
+            attributes={"reason": reason},
         )
         envelope = self._response_builder.build_no_capability_found(
             response_id,
@@ -254,12 +315,14 @@ class RuntimeImpl:
             session_id,
             event_type="task_failed",
             status="failed",
+            error_code="capability_not_found",
         )
         await self._trace_port.finalize_task_trace(
             trace_id,
             task_id,
             session_id,
             status="blocked",
+            error_code="capability_not_found",
         )
         return envelope
 
@@ -390,6 +453,33 @@ def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
 
 def _normalize_intent_tag(value: str) -> str:
     return value.strip().casefold()
+
+
+def _matches_intent_constraints(
+    capability: CapabilitySpec,
+    intent: CapabilityRef,
+) -> bool:
+    if intent.target_system is not None and capability.target_system != intent.target_system:
+        return False
+    return intent.capability_type is None or capability.type == intent.capability_type
+
+
+def _intent_trace_attributes(intent: CapabilityRef | None) -> dict[str, Any]:
+    if intent is None:
+        return {"result": "invalid"}
+    attributes: dict[str, Any] = {
+        "result": "valid",
+        "intent_fingerprint": _intent_fingerprint(intent.capability_id),
+    }
+    if intent.target_system is not None:
+        attributes["target_system"] = intent.target_system
+    if intent.capability_type is not None:
+        attributes["capability_type"] = intent.capability_type
+    return attributes
+
+
+def _intent_fingerprint(selector: str) -> str:
+    return sha256(selector.encode("utf-8")).hexdigest()
 
 
 def _target_system_for_capability(capability_id: str) -> TargetSystem | None:

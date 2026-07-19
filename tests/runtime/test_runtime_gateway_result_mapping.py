@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -157,7 +158,9 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
             capability_registry=StaticCapabilityRegistry("mapped.cap"),
             gateway=gateway,
             trace_port=SpyTracePort(),
+            llm_provider=MockLLMProvider(),
             structured_output=structured_output,
+            intent_model="test-intent-model",
             response_builder=ResponseEnvelopeBuilder(),
         )
 

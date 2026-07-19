@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -123,7 +124,9 @@ def _run_runtime(
         capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
         gateway=gateway,
         trace_port=writer,
+        llm_provider=MockLLMProvider(),
         structured_output=_provider(message, malformed=malformed),
+        intent_model="test-intent-model",
         response_builder=ResponseEnvelopeBuilder(),
     )
     envelope = asyncio.run(
@@ -153,7 +156,9 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
         capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
         gateway=CapabilityGateway(adapter=SuccessfulAdapter(), trace_port=writer),
         trace_port=writer,
+        llm_provider=MockLLMProvider(),
         structured_output=_provider(message),
+        intent_model="test-intent-model",
         response_builder=ResponseEnvelopeBuilder(),
     )
 

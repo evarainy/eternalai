@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, cast
 
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -264,7 +265,9 @@ def _run_runtime(
             capability_registry=StaticCapabilityRegistry("u8.get_document_status"),
             gateway=gateway,
             trace_port=trace_port,
+            llm_provider=MockLLMProvider(),
             structured_output=structured_output,
+            intent_model="test-intent-model",
             response_builder=ResponseEnvelopeBuilder(),
         )
         envelope = await runtime.handle_user_message(

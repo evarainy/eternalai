@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -178,7 +179,9 @@ def _make_runtime(
         capability_registry=StaticCapabilityRegistry("trace.cap"),
         gateway=gateway,
         trace_port=trace_port,
+        llm_provider=MockLLMProvider(),
         structured_output=structured_output,
+        intent_model="test-intent-model",
         response_builder=ResponseEnvelopeBuilder(),
     )
     return runtime, task_store, trace_port, gateway

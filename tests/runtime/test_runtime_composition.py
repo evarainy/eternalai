@@ -8,6 +8,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient
 
 from app.composition import build_runtime
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.main import create_app
 from app.ports.capability_gateway import ExecutionResult
@@ -142,13 +143,16 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     trace_port = RecordingTracePort()
     capability_registry = StaticCapabilityRegistry("synthetic.query")
     gateway = CompletedGateway(capability_registry)
+    llm_provider = MockLLMProvider()
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
         capability_registry=capability_registry,
         gateway=gateway,
         trace_port=trace_port,
+        llm_provider=llm_provider,
         structured_output=DeterministicStructuredOutput(),
+        intent_model="test-intent-model",
     )
 
     response = TestClient(create_app(runtime)).post(
@@ -164,6 +168,8 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert session_store.created
     assert runtime._capability_registry is capability_registry
     assert gateway.capability_registry is capability_registry
+    assert llm_provider.calls[0]["model"] == "test-intent-model"
+    assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}
     assert "task_created" in trace_port.event_types
     assert "response_envelope_created" in trace_port.event_types
     assert "task_completed" in trace_port.event_types

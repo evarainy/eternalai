@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -200,7 +201,9 @@ def test_handle_user_message_creates_running_task_executes_gateway_and_completes
             capability_registry=StaticCapabilityRegistry("test.cap"),
             gateway=gateway,
             trace_port=trace_port,
+            llm_provider=MockLLMProvider(),
             structured_output=structured_output,
+            intent_model="test-intent-model",
             response_builder=ResponseEnvelopeBuilder(),
         )
 

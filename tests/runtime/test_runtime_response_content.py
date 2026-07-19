@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -173,7 +174,9 @@ def _run_runtime(
             capability_registry=StaticCapabilityRegistry(capability_id),
             gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
+            llm_provider=MockLLMProvider(),
             structured_output=structured_output,
+            intent_model="test-intent-model",
             response_builder=ResponseEnvelopeBuilder(),
         )
         return await runtime.handle_user_message(
