@@ -60,8 +60,12 @@ class IntentRouter:
         if not raw_response:
             return None
 
-        parser_metadata = dict(completion.trace_metadata)
-        parser_metadata.update(trace_metadata or {})
+        caller_metadata = trace_metadata or {}
+        parser_metadata = {
+            key: caller_metadata[key]
+            for key in ("trace_id", "task_id")
+            if key in caller_metadata
+        }
         result = await self._structured_output.parse_to_schema(
             raw_response,
             CapabilityRef,

@@ -62,7 +62,11 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
     result = asyncio.run(
         router.parse(
             "  查 OA\r\n待办  ",
-            trace_metadata={"trace_id": "trace-1"},
+            trace_metadata={
+                "trace_id": "trace-1",
+                "task_id": "task-1",
+                "unapproved_context": "must-not-forward",
+            },
         )
     )
 
@@ -82,8 +86,8 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
             "raw_response": '{"capability_id":"pending-workflows"}',
             "schema_type": CapabilityRef,
             "trace_metadata": {
-                "provider_request_id": "request-1",
                 "trace_id": "trace-1",
+                "task_id": "task-1",
             },
         }
     ]
