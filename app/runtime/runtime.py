@@ -102,7 +102,6 @@ class RuntimeImpl:
             trace_metadata={
                 "trace_id": trace_id,
                 "task_id": task_id,
-                "session_id": session_id,
             },
         )
         parse_ok = capability_ref is not None

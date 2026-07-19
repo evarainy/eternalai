@@ -65,12 +65,16 @@ class CompletedGateway:
 
 
 class DeterministicStructuredOutput:
+    def __init__(self) -> None:
+        self.trace_metadata: list[dict[str, Any]] = []
+
     async def parse_to_schema(
         self,
         raw_response: str,
         schema_type: type[Any],
         trace_metadata: dict[str, Any] | None = None,
     ) -> StructuredOutputResult:
+        self.trace_metadata.append(dict(trace_metadata or {}))
         return StructuredOutputResult(
             parsed=CapabilityRef(capability_id="synthetic.query", arguments={})
         )
@@ -144,6 +148,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     capability_registry = StaticCapabilityRegistry("synthetic.query")
     gateway = CompletedGateway(capability_registry)
     llm_provider = MockLLMProvider()
+    structured_output = DeterministicStructuredOutput()
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
@@ -151,7 +156,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
         gateway=gateway,
         trace_port=trace_port,
         llm_provider=llm_provider,
-        structured_output=DeterministicStructuredOutput(),
+        structured_output=structured_output,
         intent_model="test-intent-model",
     )
 
@@ -170,6 +175,13 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert gateway.capability_registry is capability_registry
     assert llm_provider.calls[0]["model"] == "test-intent-model"
     assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}
+    assert structured_output.trace_metadata == [
+        {
+            "trace_id": task_store.created[0].trace_id,
+            "task_id": task_store.created[0].task_id,
+        }
+    ]
+    assert "session-1" not in repr(structured_output.trace_metadata)
     assert "task_created" in trace_port.event_types
     assert "response_envelope_created" in trace_port.event_types
     assert "task_completed" in trace_port.event_types
