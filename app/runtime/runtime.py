@@ -28,7 +28,7 @@ from app.ports.task_store import (
     TaskStorePort,
 )
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
-from app.runtime.intent_router import IntentRouter
+from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef
 
 
@@ -97,13 +97,14 @@ class RuntimeImpl:
             status="ok",
         )
 
-        capability_ref = await self._intent_router.parse(
+        intent_result = await self._intent_router.parse(
             message,
             trace_metadata={
                 "trace_id": trace_id,
                 "task_id": task_id,
             },
         )
+        capability_ref = intent_result.capability_ref
         parse_ok = capability_ref is not None
 
         await self._trace_port.record_step(
@@ -112,7 +113,10 @@ class RuntimeImpl:
             session_id,
             event_type="intent_parsed",
             status="ok" if parse_ok else "failed",
-            attributes=_intent_trace_attributes(capability_ref),
+            attributes=_intent_trace_attributes(
+                capability_ref,
+                intent_result.failure_reason,
+            ),
         )
 
         if not parse_ok or capability_ref is None:
@@ -121,7 +125,7 @@ class RuntimeImpl:
                 task_id,
                 session_id,
                 trace_id,
-                reason="intent_invalid",
+                reason=intent_result.failure_reason or "schema_invalid",
             )
 
         intent_selector = capability_ref.capability_id
@@ -463,9 +467,15 @@ def _matches_intent_constraints(
     return intent.capability_type is None or capability.type == intent.capability_type
 
 
-def _intent_trace_attributes(intent: CapabilityRef | None) -> dict[str, Any]:
+def _intent_trace_attributes(
+    intent: CapabilityRef | None,
+    failure_reason: IntentFailureReason | None,
+) -> dict[str, Any]:
     if intent is None:
-        return {"result": "invalid"}
+        return {
+            "result": "invalid",
+            "reason": failure_reason or "schema_invalid",
+        }
     attributes: dict[str, Any] = {
         "result": "valid",
         "intent_fingerprint": _intent_fingerprint(intent.capability_id),

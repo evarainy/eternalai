@@ -19,6 +19,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
@@ -205,6 +206,8 @@ def _run_runtime(
     channel: str = "web",
     target_system: CapabilityTargetSystem | None = None,
     capability_type: CapabilityType | None = None,
+    llm_completion: LLMCompletionResponse | None = None,
+    malformed_intent: bool = False,
 ) -> tuple[
     ResponseEnvelope,
     RecordingTaskStore,
@@ -218,23 +221,29 @@ def _run_runtime(
     registry = StaticRegistry(capabilities)
     structured_output = MockStructuredOutputProvider()
     message = f"select {selector}"
-    structured_output.register(
-        message,
-        CapabilityRef,
-        CapabilityRef(
-            capability_id=selector,
-            arguments={"request": "value"},
-            target_system=target_system,
-            capability_type=capability_type,
-        ),
-    )
+    if malformed_intent:
+        structured_output.register_malformed(message, CapabilityRef)
+    else:
+        structured_output.register(
+            message,
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=selector,
+                arguments={"request": "value"},
+                target_system=target_system,
+                capability_type=capability_type,
+            ),
+        )
+    llm_provider = MockLLMProvider()
+    if llm_completion is not None:
+        llm_provider.register(message, llm_completion)
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=registry,
         gateway=gateway,
         trace_port=trace_port,
-        llm_provider=MockLLMProvider(),
+        llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model="test-intent-model",
         response_builder=ResponseEnvelopeBuilder(),
@@ -489,3 +498,43 @@ def test_model_generated_intent_is_fingerprinted_before_trace() -> None:
         selected_event["attributes"]["intent_fingerprint"]
         == intent_event["attributes"]["intent_fingerprint"]
     )
+
+
+def test_provider_failure_and_invalid_intent_have_distinct_safe_trace_reasons() -> None:
+    capability = _capability("oa.safe")
+    cases: list[tuple[LLMCompletionResponse | None, bool, str]] = [
+        (LLMCompletionResponse(error_code="timeout"), False, "provider_error"),
+        (None, True, "structured_output_error"),
+    ]
+    observed_reasons: list[str] = []
+
+    for llm_completion, malformed_intent, expected_reason in cases:
+        envelope, task_store, trace, gateway, registry = _run_runtime(
+            capability.capability_id,
+            [capability],
+            llm_completion=llm_completion,
+            malformed_intent=malformed_intent,
+        )
+
+        assert envelope.status == "no_capability_found"
+        assert task_store.status_updates[-1][1:] == (
+            "no_capability_found",
+            "capability_not_found",
+        )
+        assert registry.get_calls == []
+        assert registry.list_calls == []
+        assert gateway.calls == []
+        intent_event = next(
+            step for step in trace.steps if step["event_type"] == "intent_parsed"
+        )
+        no_capability_event = next(
+            step for step in trace.steps if step["event_type"] == "no_capability_found"
+        )
+        assert intent_event["attributes"] == {
+            "result": "invalid",
+            "reason": expected_reason,
+        }
+        assert no_capability_event["attributes"] == {"reason": expected_reason}
+        observed_reasons.append(expected_reason)
+
+    assert observed_reasons == ["provider_error", "structured_output_error"]

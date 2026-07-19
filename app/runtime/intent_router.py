@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal, TypeAlias
 
 from pydantic import ValidationError
 
@@ -11,12 +12,25 @@ from app.ports.structured_output import StructuredOutputPort
 from app.runtime.models import CapabilityRef
 
 JSON_OBJECT_RESPONSE_FORMAT: dict[str, str] = {"type": "json_object"}
+IntentFailureReason: TypeAlias = Literal[
+    "blank_input",
+    "provider_error",
+    "empty_response",
+    "structured_output_error",
+    "schema_invalid",
+]
 
 _INTENT_SYSTEM_PROMPT = (
     "Normalize the user request into one JSON object with keys capability_id, "
     "arguments, target_system, and capability_type. capability_id must be a stable "
     "intent tag or exact capability id. Use null for unknown optional constraints."
 )
+
+
+@dataclass(frozen=True)
+class IntentParseResult:
+    capability_ref: CapabilityRef | None = None
+    failure_reason: IntentFailureReason | None = None
 
 
 class IntentRouter:
@@ -40,10 +54,10 @@ class IntentRouter:
         message: str,
         *,
         trace_metadata: dict[str, Any] | None = None,
-    ) -> CapabilityRef | None:
+    ) -> IntentParseResult:
         normalized_message = _normalize_user_message(message)
         if not normalized_message:
-            return None
+            return IntentParseResult(failure_reason="blank_input")
 
         completion = await self._llm_provider.complete(
             messages=[
@@ -53,12 +67,14 @@ class IntentRouter:
             model=self._model,
             response_format=dict(JSON_OBJECT_RESPONSE_FORMAT),
         )
-        if completion.error_code is not None or completion.content is None:
-            return None
+        if completion.error_code is not None:
+            return IntentParseResult(failure_reason="provider_error")
+        if completion.content is None:
+            return IntentParseResult(failure_reason="empty_response")
 
         raw_response = completion.content.strip()
         if not raw_response:
-            return None
+            return IntentParseResult(failure_reason="empty_response")
 
         caller_metadata = trace_metadata or {}
         parser_metadata = {
@@ -72,15 +88,21 @@ class IntentRouter:
             trace_metadata=parser_metadata,
         )
         if result.error is not None or result.parsed is None:
-            return None
+            return IntentParseResult(failure_reason="structured_output_error")
         try:
-            return CapabilityRef.model_validate(result.parsed)
+            capability_ref = CapabilityRef.model_validate(result.parsed)
         except ValidationError:
-            return None
+            return IntentParseResult(failure_reason="schema_invalid")
+        return IntentParseResult(capability_ref=capability_ref)
 
 
 def _normalize_user_message(message: str) -> str:
     return message.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
-__all__ = ("IntentRouter", "JSON_OBJECT_RESPONSE_FORMAT")
+__all__ = (
+    "IntentFailureReason",
+    "IntentParseResult",
+    "IntentRouter",
+    "JSON_OBJECT_RESPONSE_FORMAT",
+)

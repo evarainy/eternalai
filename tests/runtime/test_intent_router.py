@@ -70,11 +70,12 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
         )
     )
 
-    assert result == CapabilityRef(
+    assert result.capability_ref == CapabilityRef(
         capability_id="pending-workflows",
         target_system="oa",
         capability_type="query",
     )
+    assert result.failure_reason is None
     llm_call = llm_provider.calls[0]
     assert llm_call["method"] == "complete"
     assert llm_call["model"] == "qwen-test"
@@ -94,15 +95,19 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
 
 
 @pytest.mark.parametrize(
-    "completion",
+    ("completion", "expected_reason"),
     [
-        LLMCompletionResponse(content=None),
-        LLMCompletionResponse(content="   "),
-        LLMCompletionResponse(error_code="provider_error", error_message="failed"),
+        (LLMCompletionResponse(content=None), "empty_response"),
+        (LLMCompletionResponse(content="   "), "empty_response"),
+        (
+            LLMCompletionResponse(error_code="provider_error", error_message="failed"),
+            "provider_error",
+        ),
     ],
 )
 def test_router_fails_closed_before_structured_output_on_llm_failure(
     completion: LLMCompletionResponse,
+    expected_reason: str,
 ) -> None:
     llm_provider = MockLLMProvider()
     llm_provider.register("request", completion)
@@ -113,27 +118,43 @@ def test_router_fails_closed_before_structured_output_on_llm_failure(
 
     result = asyncio.run(router.parse("request"))
 
-    assert result is None
+    assert result.capability_ref is None
+    assert result.failure_reason == expected_reason
     assert len(llm_provider.calls) == 1
     assert structured_output.calls == []
 
 
 @pytest.mark.parametrize(
-    "structured_result",
+    ("structured_result", "expected_reason"),
     [
-        StructuredOutputResult(
-            error=StructuredOutputError(
-                error_code="validation_error",
-                error_message="invalid intent",
-            )
+        (
+            StructuredOutputResult(
+                error=StructuredOutputError(
+                    error_code="validation_error",
+                    error_message="invalid intent",
+                )
+            ),
+            "structured_output_error",
         ),
-        StructuredOutputResult(parsed={"capability_id": "", "arguments": {}}),
-        StructuredOutputResult(parsed={"capability_id": "   ", "arguments": {}}),
-        StructuredOutputResult(parsed={"capability_id": "intent", "target_system": "unknown"}),
+        (
+            StructuredOutputResult(parsed={"capability_id": "", "arguments": {}}),
+            "schema_invalid",
+        ),
+        (
+            StructuredOutputResult(parsed={"capability_id": "   ", "arguments": {}}),
+            "schema_invalid",
+        ),
+        (
+            StructuredOutputResult(
+                parsed={"capability_id": "intent", "target_system": "unknown"}
+            ),
+            "schema_invalid",
+        ),
     ],
 )
 def test_router_rejects_structured_output_errors_and_invalid_pydantic_results(
     structured_result: StructuredOutputResult,
+    expected_reason: str,
 ) -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(structured_result)
@@ -141,7 +162,8 @@ def test_router_rejects_structured_output_errors_and_invalid_pydantic_results(
 
     result = asyncio.run(router.parse("raw-json"))
 
-    assert result is None
+    assert result.capability_ref is None
+    assert result.failure_reason == expected_reason
     assert len(structured_output.calls) == 1
     assert structured_output.calls[0]["schema_type"] is CapabilityRef
 
@@ -155,7 +177,8 @@ def test_router_rejects_blank_input_without_calling_either_boundary() -> None:
 
     result = asyncio.run(router.parse(" \r\n "))
 
-    assert result is None
+    assert result.capability_ref is None
+    assert result.failure_reason == "blank_input"
     assert llm_provider.calls == []
     assert structured_output.calls == []
 
