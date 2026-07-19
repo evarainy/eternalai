@@ -1,10 +1,12 @@
-# TASK_PROMPT_TEMPLATE — Phase 1 v2.1.0
+# TASK_PROMPT_TEMPLATE — Phase 1 V4 legacy v2.1.0 (retired for new V5 Goals)
 
-本文件定义 per-task prompt（`docs/phase1/tasks/<task_id>.md`）的**任务契约**形状。
-执行编排（Plan/Review/gate 的操作步骤、packet 格式、汇报模板）由 `codex-claude` workflow skill 负责，不写在本文件。
-Role / review / risk 政策唯一来源：`docs/phase1/ROLE_POLICY.md`。
+本文件只定义既有 V4 per-task prompt（`docs/phase1/tasks/<task_id>.md`）的历史**任务契约**形状，并用于最后一项迁移任务 `P1-WORKFLOW-V5-001`。历史 descriptor 继续按原义解释，不回填。
 
-## Per-task prompt 必备结构
+新的 V5 Goal 不要求 per-task 长 descriptor，不依赖 V4 `codex-claude` 命令、packet、Gate 编排或重型 Task Record。V5 Goal 最低输入为 Outcome / Constraints / Verification；真正委派时才创建稀疏 Worker Contract，并按 `docs/phase1/ROLE_POLICY.md` 的 Q0-Q3 路由 Review。核心 Bug 仍先取得稳定复现或最强失败证据，能建立回归测试时先建回归测试；但不强制完整教条式 TDD 方法论。
+
+以下内容均为 V4 legacy contract，仅供历史任务和本迁移任务解释。
+
+## V4 legacy per-task prompt 必备结构
 
 ```yaml
 task_id: ""
@@ -53,7 +55,7 @@ references: []                # 只引用不复述；引用 spec 用稳定小节
 - R2 默认 `human_pre_apply`；只有当前机器可读 task contract 明确保留 R2 Review/验证并移除人工停点时才可写 `automation_class: auto`。R3 必须列出具体授权动作，不能用宽泛类别代替。
 - Gate 2 只表示 post-integration result acceptance；不得把它写成 commit/push/merge/CI 授权。普通非强制 Git/CI 是否自动由当前 task contract、repo policy、Review、validation、freshness 和 required checks 共同决定。
 
-## Engineering Method Selection（速查）
+## V4 legacy Engineering Method Selection（速查）
 
 | 任务类型 | 推荐 method | 证据要求 |
 |---|---|---|
@@ -94,7 +96,7 @@ references: []                # 只引用不复述；引用 spec 用稳定小节
 - 正向任务通过率 >= 80%；负向 / 边界 / 安全拒绝路径 100% 通过（含 GT-012 多 active 绑定未指定 scope 场景）。
 - `P1-GATE-001` 之后的 implementation 任务必须运行 `uv run python scripts/run_golden_tasks.py --gate`。
 
-## B2+ per-task prompt 生成规则
+## V4 legacy B2+ per-task prompt 生成规则
 
 1. B2-B5 每个任务启动前必须先生成 `docs/phase1/tasks/<task_id>.md`，结构见上。
 2. 每个 task prompt 必须声明 touched_paths / forbidden_paths、acceptance criteria、evidence requirements、method_profile。

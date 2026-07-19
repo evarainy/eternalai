@@ -1,4 +1,7 @@
-# Unified Task Record schema v1.2.0 (Phase 0 + Phase 1).
+# V4 legacy/retired Unified Task Record schema v1.2.0 (Phase 0 + Phase 1).
+# A new V5 Goal does not generate this heavy record. Existing historical records and the final
+# P1-WORKFLOW-V5-001 migration record retain the exact v1.2.0 meaning below and are never backfilled.
+# This schema remains migration/history evidence only; it is not a V5 runtime dependency.
 # Store task records as: docs/phase<N>/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
 # Record detail is tiered by method_profile.risk_tier (see docs/phase1/ROLE_POLICY.md):
 #   low    -> no YAML record; one line in TASK_INDEX.md + pointer to review verdict

@@ -1,0 +1,260 @@
+schema_version: "1.2.0"
+task_id: "P1-WORKFLOW-V5-001"
+task_type: "documentation"
+result: "passed"
+method_profile:
+  risk_tier: "high"
+  method: "not_applicable"
+controller_risk:
+  tier: "R2"
+  classification_reason: "Documentation-only change to the active workflow control plane; no product/runtime/schema/credential change and no reserved action."
+  prior_tier: "R2"
+  downgrade_attempted: false
+automation:
+  class: "auto"
+  authorization_mode: "bounded_goal_preapproval"
+  required_stops: []
+  auto_next_policy: "blocked"
+  auto_next_result: "blocked"
+  auto_next_reason: "Final candidate-bound Codex and Opus Review, commit, integration, post-merge CI, and cutover remain external and have not occurred."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No deletion, credential/configuration change, database operation, history rewrite, public release, or cutover was requested or performed."
+started_at: "2026-07-19T19:33:00+09:00"
+completed_at: "2026-07-19T21:31:46+09:00"
+plan_approved_by: "user"
+plan_approved_at: "2026-07-19T00:00:00+09:00"
+plan_approved_via: "Codex App written authorization; approval date is authoritative and exact clock time remains in the authorizing task"
+plan_review:
+  required: false
+  provider: "not_applicable"
+  requested_model: "not_applicable: approved design/implementation plan explicitly removed duplicate construction-time plan Review"
+  observed_models: {}
+  model_verified: false
+  verdict: "not_applicable"
+  packet_sha256: "not_applicable"
+  prompt_sha256: "not_applicable"
+  output_sha256: "not_applicable"
+  meta_sha256: "not_applicable"
+  external_packet_audit: "not_applicable"
+  sanity_sha256: "not_applicable"
+  gate1_evidence_sha256: "external_written_authorization_2026-07-19"
+summary: >-
+  Formed the last V4-governed EternalAI governance migration candidate for Codex-Claude V5.
+  The candidate changes only five semantic governance files, one TASK_INDEX row, this descriptor,
+  and this final Task Record. Bootstrap byte/hash validation and the repaired frozen-authority
+  checker pass. One native Review session observed gpt-5.6-sol/xhigh but auto-loaded the prohibited
+  canonical codex-claude Skill, so its verdict is invalid; its seven technical findings were repaired
+  without treating that session as Review PASS. All affected non-database formal checks pass. Full
+  local pytest truthfully remains reused local-only
+  not_applicable because DATABASE_URL is absent and no PostgreSQL service is reachable at the
+  repository-documented 127.0.0.1:55432 endpoint; exactly three DB/Alembic tests fail while 708 pass
+  and 26 skip. No database/configuration action was authorized. Final Review and all integration are external.
+acceptance_criteria_result:
+  - criterion: "V5-B-AC-01"
+    result: "passed"
+    evidence: "Frozen parser 455D3309... direct parse PASS; repaired checker E53F656B... semantic PASS; scratch/repo descriptor SHA-256 058DCB2D...B7E7 and exact INDEX row SHA-256 E73FBAFB...CFE are byte-identical."
+  - criterion: "V5-B-AC-02"
+    result: "passed"
+    evidence: "Exact declared changed_files contains only the five semantic files, TASK_INDEX, descriptor, and this single Task Record. Removing the exact scratch registration row from TASK_INDEX reproduces the HEAD file byte-for-byte after newline normalization; no other TASK_INDEX semantic edit remains."
+  - criterion: "V5-B-AC-03"
+    result: "passed"
+    evidence: "Approved checker semantic functions pass. AGENTS authority order now exactly follows design section 3.1; AGENTS/CLAUDE include redlines, expansion, architecture/framework, public contract/API/protocol/trust-boundary/core-invariant changes, material choice, repository Gate, and batch/milestone acceptance. CLAUDE limits task-prompt patching to historical V4 tasks."
+  - criterion: "V5-B-AC-04"
+    result: "passed"
+    evidence: "ROLE_POLICY.md defines Q0 mechanical/no model Review, Q1 native Codex, Q2 Codex plus Opus 4.8 High, and Q3 Codex plus Opus 4.8 X-High; xhigh is explicitly not max. Ordinary V5 identity is only immutable base+head; exact staged identity is expressly limited to P1-WORKFLOW-V5-001."
+  - criterion: "V5-B-AC-05"
+    result: "passed"
+    evidence: "Template and schema are marked V4 legacy/retired for new V5 Goals; schema v1.2.0 duplicate-key-safe parse passed through the repaired task-specific checker."
+  - criterion: "V5-B-AC-06"
+    result: "passed"
+    evidence: "TASK_INDEX mechanical search found exactly one P1-WORKFLOW-V5-001 row bound to phase1/P1-WORKFLOW-V5-001; after removing that scratch-identical row, all original HEAD content is unchanged. This is the only matching Task Record."
+  - criterion: "V5-B-AC-07"
+    result: "passed"
+    evidence: "After the seven finding repairs, approved semantic checker functions, Ruff, mypy, dependency, architecture, golden gate, diff, content, and secret-like assignment checks were rerun and pass. Full pytest was not rerun because app/tests are unchanged; its prior exact three DATABASE_URL failures remain reused local-only not_applicable and are not reported as PASS."
+  - criterion: "V5-B-AC-08"
+    result: "passed"
+    evidence: "Exact pre-commit staged identity is deliberately bound in external evidence after this record joins the stage; reviewed_parent is fixed here and Review/commit/integration remain deferred."
+failure_examples_tested:
+  - example: "V5-B-FE-01: scratch and landed descriptor or TASK_INDEX bytes/hash differ"
+    result: "not_triggered"
+    evidence: "Both exact-byte checks passed with hashes 058DCB2D...B7E7 and E73FBAFB...CFE."
+  - example: "V5-B-FE-02: changed/staged path outside the eight allowed classes or multiple migration records"
+    result: "not_triggered"
+    evidence: "Semantic scope checker passed seven pre-record paths; this file is the single eighth path class."
+  - example: "V5-B-FE-03: duplicate YAML key, hidden failure, or prefilled Review/integration success"
+    result: "not_triggered"
+    evidence: "Duplicate-key-safe parsing passes; local pytest failure is explicit. Native Review session 019f7a4c-f377-7490-8d46-9c03fe74ae1e is recorded as invalid due to unauthorized Skill autoload, never PASS; remote states remain not_applicable/deferred/not_triggered/not_merged."
+  - example: "V5-B-FE-04: same causal bootstrap/construction failure occurs a second time"
+    result: "triggered"
+    evidence: "B_CHECKER_YAML_MERGE_HANDLING remains count=2. User approved one bounded checker-only repair cycle; checker-focused 6/6 and resumed semantic phase pass. The count was not reset and no further checker repair is authorized."
+step_verification_points:
+  - step: "V5-B-SV-01: freeze and validate scratch bootstrap before semantic edits"
+    result: "passed"
+    command: "frozen goal_contract.py direct parse; validate_candidate_b.py --phase landed"
+    evidence: "Parser/checker PASS; descriptor/index exact bytes; semantic files still matched frozen hashes at bootstrap completion."
+  - step: "V5-B-SV-02: complete only five semantic edits and unique TASK_INDEX row"
+    result: "passed"
+    command: "validate_candidate_b.py --phase semantic; unique TASK_INDEX row search"
+    evidence: "Approved checker semantic functions PASS; seven review findings have deterministic content evidence; unique row count=1 and removing it exactly restores HEAD TASK_INDEX content after newline normalization."
+  - step: "V5-B-SV-03: run formal repository validation and freeze one v1.2.0 record"
+    result: "passed"
+    command: "git diff --check; uv run pytest; ruff; mypy; dependency check; architecture tests; golden gate"
+    evidence: "All affected applicable non-DB checks were rerun and pass; full pytest was not rerun because no app/tests path changed and its prior local-only DATABASE_URL not_applicable remains fully disclosed below."
+  - step: "V5-B-SV-04: stage exact candidate and freeze pre-commit identity"
+    result: "passed"
+    command: "git write-tree; git diff --cached --binary --full-index; validate_candidate_b.py --phase final"
+    evidence: "Bound in repository-external final staged-identity evidence after this immutable record is staged; no repo rewrite follows."
+changed_files:
+  - "AGENTS.md"
+  - "CLAUDE.md"
+  - "docs/dev/task_record_schema.yaml"
+  - "docs/phase1/ROLE_POLICY.md"
+  - "docs/phase1/TASK_INDEX.md"
+  - "docs/phase1/TASK_PROMPT_TEMPLATE.md"
+  - "docs/phase1/task_logs/P1-WORKFLOW-V5-001_20260719_203909_passed.yaml"
+  - "docs/phase1/tasks/P1-WORKFLOW-V5-001.md"
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: "git"
+  candidate_root: "E:/code/eternalai/.worktrees/P1-WORKFLOW-V5-001"
+  reviewed_parent_sha: "f99737cdd3a566be43c6e521cc21f7271c42c6c2"
+  reviewed_tree_oid: "bound_by_external_precommit_staged_identity"
+  staged_diff_sha256: "bound_by_external_precommit_staged_identity"
+  changed_paths_sha256: "bound_by_external_precommit_staged_identity"
+  changed_blob_oids: []
+  freshness_sha256: "bound_by_external_precommit_staged_identity"
+filesystem_companion_evidence:
+  path: "not_applicable"
+  disposition: "not_applicable"
+  git_tracking: "not_applicable"
+  baseline_sha256: "not_applicable"
+  candidate_sha256: "not_applicable"
+  operation_manifest_sha256: "not_applicable"
+  rollback_sha256: "not_applicable"
+  freshness_result: "not_applicable"
+  git_claimed: false
+tests_run:
+  - command: "approved validate_candidate_b.py: validate_bootstrap + validate_common_identity + validate_active_semantics (read-only post-review repair invocation)"
+    result: "passed"
+    output_snippet: "frozen_bundle_hashes, scratch_descriptor_and_index, candidate_common_identity, and v5_active_and_legacy_semantics passed; CLI semantic exact-seven-path wrapper is pre-record-only and was not misused after the final record existed."
+  - command: "git diff --check"
+    result: "passed"
+    output_snippet: "Exit 0; only Git CRLF conversion warnings, no whitespace errors."
+  - command: "uv run pytest"
+    result: "not_applicable"
+    output_snippet: "Not rerun after the seven governance-document findings because app/tests are unchanged. Reused prior exit 1: 708 passed, 26 skipped, 3 failed. Exact failures: tests/db/test_db_health.py::test_session_factory_supports_explicit_url_injection; tests/db/test_db_health.py::test_db_health_helper_returns_true_for_select_one; tests/db/test_migrations.py::test_alembic_upgrade_downgrade_upgrade_cycle. All report missing DATABASE_URL."
+    not_applicable_reason: "This documentation-only candidate does not touch DB code/schema. DATABASE_URL is absent and TCP probes show no service at repository-documented 127.0.0.1:55432; starting/changing a database or configuration was not authorized."
+    not_applicable_scope: "waiting_dependency"
+    blocked_by_task_id: "external_test_environment:DATABASE_URL"
+    activation_task_id: "post_merge_ci"
+    expiry_condition: "A disposable PostgreSQL/pgvector test service and DATABASE_URL are supplied by the authorized test runner."
+    evidence: "Frozen schema v1.2.0 permits explicit not_applicable evidence; Git HEAD phase0 acceptance history records the same exact three local failures, and the prior staged candidate command produced 708 passed/26 skipped/3 DATABASE_URL failures. The finding repair changes only governance documents, so this result is reused rather than rewritten or reported as PASS."
+  - command: "uv run ruff check app/ tests/"
+    result: "passed"
+    output_snippet: "All checks passed!"
+  - command: "uv run mypy app/"
+    result: "passed"
+    output_snippet: "Success: no issues found in 47 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: "passed"
+    output_snippet: "Dependency check passed; 7 manifests, 49 dependencies."
+  - command: "uv run pytest tests/architecture/"
+    result: "passed"
+    output_snippet: "22 passed in 0.34s after the seven finding repairs."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: "passed"
+    output_snippet: "11/11 passed; positive 7/7; negative/boundary 4/4; skipped 0."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: "passed"
+  evidence: "uv run pytest tests/architecture/: 22 passed, including import boundaries and weak-test checker."
+security_scan_result:
+  result: "passed"
+  evidence: "Deterministic scan of added tracked lines found no assigned password/token/secret/API/private-key-like values; no credential/configuration path changed."
+weak_test_scan_result:
+  result: "passed"
+  evidence: "tests/architecture/test_weak_test_checker.py passed as part of 22 architecture tests; this candidate changes no tests."
+ci_evidence:
+  result: "not_applicable"
+  run_id: ""
+  url_or_log_path: "external_after_review_and_integration"
+  not_applicable_reason: "Candidate is intentionally stopped before Review, commit, push, PR, merge, and CI."
+  not_applicable_scope: "intentionally_deferred"
+  blocked_by_task_id: "P1-WORKFLOW-V5-001"
+  activation_task_id: "P1-WORKFLOW-V5-001"
+  expiry_condition: "Required final Review passes, cutover is precisely authorized, and the reviewed candidate is committed/integrated without drift."
+  evidence: "No remote action was performed; task-branch and post-merge status below are not_triggered."
+review:
+  mode: "independent_review"
+  reviewed_by: "none; required candidate-bound Codex and Claude Opus final Review remains pending"
+  reviewed_at: ""
+  notes: "Native Review session 019f7a4c-f377-7490-8d46-9c03fe74ae1e observed gpt-5.6-sol/xhigh but auto-read C:/Users/Administrator/.codex/skills/codex-claude/SKILL.md, violating this Goal's Skill boundary. Its verdict is invalid; only its seven technical findings were used and repaired. A fresh required external final Review has not occurred, and this record is not rewritten after future valid Review."
+  provider: "required codex_native_and_claude_opus; prior native session invalid"
+  requested_model: "fixed Sol Review profile plus Claude Opus 4.8 X-High (xhigh, not max)"
+  observed_models:
+    invalid_native_review:
+      session_id: "019f7a4c-f377-7490-8d46-9c03fe74ae1e"
+      model: "gpt-5.6-sol"
+      effort: "xhigh"
+      boundary_result: "invalid_unauthorized_skill_autoload"
+  model_verified: false
+  verdict: "not_applicable"
+  packet_sha256: "external_final_review_meta"
+  prompt_sha256: "external_final_review_meta"
+  output_sha256: "external_final_review_meta"
+  meta_sha256: "external_final_review_meta"
+  validation_evidence_sha256: "external_precommit_staged_identity"
+remote_integration:
+  policy_sha256: "B383356A0B86D8C9247EBFA34495A40699DBC8941B6EC70E68EEA629DFFBF68A"
+  task_commit_sha: "deferred_after_review_pass"
+  task_branch: "phase1/P1-WORKFLOW-V5-001"
+  task_branch_ci:
+    status: "not_triggered"
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No commit/push/PR occurred before Review."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: "phase0/main"
+    mergeability: "not_evaluated_pre_review"
+    required_checks: []
+  merge:
+    status: "not_merged"
+    merge_sha: ""
+    method: "not_applicable"
+  post_merge_ci:
+    status: "not_triggered"
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Post-merge CI is required by policy but cannot trigger before separately authorized integration."
+  integration_freshness_sha256: "external_after_review_and_cutover_authorization"
+remaining_risks:
+  - "Full local pytest has an explicit DATABASE_URL/disposable-PostgreSQL gap: 708 passed, 26 skipped, and the exact three DB/Alembic tests failed; this is not a PASS claim."
+  - "B_CHECKER_YAML_MERGE_HANDLING failure_count remains 2; the one authorized bounded checker repair passed, and no further checker change is allowed."
+  - "Native Review session 019f7a4c-f377-7490-8d46-9c03fe74ae1e is invalid because it auto-loaded a prohibited Skill; repaired technical findings do not supply Review PASS."
+  - "Final Codex and Opus Q3 Review have not occurred; any candidate change invalidates the future staged identity."
+  - "Commit, push, PR/merge, required checks, and cutover remain unauthorized/not triggered."
+rollback_or_failure_record: >-
+  Initial semantic validation stopped after B_CHECKER_YAML_MERGE_HANDLING reached count=2.
+  User then authorized exactly one checker-only bounded repair cycle; root coordinator changed only the
+  scratch checker, checker-focused validation passed 6/6, and semantic validation resumed successfully.
+  The count remains 2 and recurrence requires immediate BLOCKED with no fourth strategy. A later native
+  Review verdict was discarded because that reviewer auto-loaded a prohibited Skill; its seven technical
+  findings were repaired in-scope without accepting the invalid verdict.
+  The first post-finding final checker run also found the distinct record-contract omission
+  B_RECORD_REVIEW_NOTES_EXTERNAL_MARKER count=1; adding the required external marker resolved it.
+local_commit_policy: "after_review_pass"
+git_commit_sha: "deferred_after_review_pass"
+package_confirmation_status: "not_created"
+package_confirmation: "No package was created; deliverable is an exact staged Git candidate for external pre-commit Review."
+package_scope: "Candidate B eight allowed path classes only"
+package_evidence: "External reviewed_parent/tree/raw-diff/path/freshness evidence binds the staged candidate without adding a repository package."

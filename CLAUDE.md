@@ -1,4 +1,4 @@
-# CLAUDE.md — Phase 1 Compact Claude Code Memory v2.1.0
+# CLAUDE.md — Phase 1 Compact Claude Code Memory v2.2.0
 
 Keep this file compact. Claude Code loads project memory at session start, so detailed rules must be read on demand instead of inlined here. Do not add `@import` links to long specs.
 
@@ -61,24 +61,23 @@ git ls-files --others --exclude-standard
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
 - Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
 - Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. Descriptor presence alone never releases a dependency. `P1-SPEC-001` remains the independent B2 hard prerequisite.
-- Phase 1 role / review / risk policy: `docs/phase1/ROLE_POLICY.md`.
-- Task Record: use the unified YAML format under `docs/phase1/task_logs/` and schema `docs/dev/task_record_schema.yaml`.
-- One session turn = one `task_id`, run through the global `codex-claude` workflow skill (sole process SOP; repo docs are result contracts only).
-- Review/detail tier (`method_profile.risk_tier`), controller risk (`R0`-`R3`), and `automation_class` are separate. Human stops come from the current task's explicit `required_stops`; risk may only stay equal or increase.
-- Every repo-changing task requires `independent_review` (universal review floor, see ROLE_POLICY).
-- There is no separate local-commit Gate. Ordinary non-force push, PR/merge, and CI may proceed only when the current task/repo policy explicitly allows them and validation, required Review, freshness, branch protection, and required checks pass. Gate 2 is post-integration result acceptance, not Git/CI authorization.
-- Delete/history rewrite, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push are R3 and need exact authorization. Never bypass hooks or branch protection.
+- Phase 1 role / Review / risk policy: `docs/phase1/ROLE_POLICY.md`; active V5 work uses Q0-Q3 rather than a universal independent-Review floor.
+- The unified YAML Task Record and per-task prompt are V4 legacy formats. Existing records and the final `P1-WORKFLOW-V5-001` migration evidence keep their original meaning; a new V5 Goal does not generate them.
+- One native Goal may handle multiple task IDs and auto-next. Each write lane remains isolated and owns one explicit Goal and a single Scope; a new scope requires a new lane/Worker Contract.
+- Q0-Q3 controls Review strength. Risk alone does not create a human Gate; required stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
+- There is no separate local-commit Gate. Ordinary non-force push, PR/merge, CI/CD configuration changes, and CI runs may proceed only when the current Goal and target repository policy explicitly allow them and validation, required Review, freshness, branch protection, and required checks pass. Historical Gate 2 remains post-integration result acceptance, not Git/CI authorization.
+- Delete/history rewrite, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push need exact action-specific authorization; a risk label never supplies it. Never bypass hooks or branch protection.
 - Use Explore/Plan/read-only behavior for investigation when possible.
-- If task context is incomplete, stop and ask for a task-prompt patch instead of guessing.
+- For a historical V4 task, incomplete task context requires a task-prompt patch instead of guessing. For V5, first investigate the applicable documents, code, tests, and history; ask only when Outcome / Constraints / Verification remains materially missing, and do not manufacture a per-task descriptor requirement.
 - When executing: apply Execution Guardrails. When reviewing: apply Review Guardrails.
-- Skills/subagents are advisory aids only; they must not override Phase 1 rules or task prompts.
+- Skills/subagents are advisory aids only; they must not override Goal authority, Phase 1 rules, scope, model routing, Review, or Git boundaries. New V5 Goals do not depend on the V4 command surface.
 
 ## Read on demand (not by default)
-- Phase 1 task template: `docs/phase1/TASK_PROMPT_TEMPLATE.md`
+- Phase 1 V4 legacy task template: `docs/phase1/TASK_PROMPT_TEMPLATE.md`
 - Phase 1 task index / dependency DAG: `docs/phase1/TASK_INDEX.md`
 - Phase 1 task prompt: `docs/phase1/tasks/<task_id>.md`
 - Phase 1 task logs: `docs/phase1/task_logs/`
-- Task record schema: `docs/dev/task_record_schema.yaml`
+- V4 legacy task record schema: `docs/dev/task_record_schema.yaml`
 - Cross-stage context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md` (supporting guidance, not Phase 1 task authority)
 - Role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
 - Repository navigation map: `docs/phase0/REPOSITORY_CONTEXT_MAP.md`
@@ -86,6 +85,6 @@ git ls-files --others --exclude-standard
 - Boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md` (cross-stage support every 3 tasks; not Phase 1 task authority)
 
 ## Scratch/temp cleanup
-- Workflow-skill runtime scratch lives outside the repo (`$CLAUDE_CODEX_SCRATCH_ROOT`). Manual / non-skill temp files go in `_scratch/` only. Neither goes in `app/`, `tests/`, `docs/`, or repo root.
+- V5 Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`. Manual temp files go in `_scratch/` only. Neither goes in `app/`, `tests/`, `docs/`, or repo root.
 - Before staging: remove `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`.
 - Do not scan/clean inside `.venv/`.
