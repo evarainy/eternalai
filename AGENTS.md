@@ -1,16 +1,21 @@
-# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.1.0
+# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.2.0
 
 This file is intentionally short. It is the always-loaded compact boot context for Codex and other generic coding agents. Do not expand it into a full spec.
-Process choreography (plan/review/gate mechanics) lives in the `codex-claude` workflow skill; this file is boot context plus fail-closed floor only.
+Process choreography uses the Codex App native Goal, subagents, worktrees, Review, Git, and CI. Repository documents define result and safety contracts; they do not depend on a V4 workflow command or custom lifecycle.
 
 ## Phase
 Phase 1 active. The main branch is still `phase0/main`; Phase 1 task branches use `phase1/<task_id>`.
 
 Phase 1 rule authority, highest first:
-1. Current task prompt: `docs/phase1/tasks/<task_id>.md`
-2. `CLAUDE.md`
-3. `docs/phase1/*`
-4. `docs/dev/task_record_schema.yaml`
+1. The user's latest explicit instruction in the current native Goal
+2. Applicable `AGENTS.md` files and user redlines
+3. Approved product, architecture, interface, batch, and milestone documents
+4. Current Goal Outcome / Constraints / Verification
+5. Repository code, tests, CI, branch protection, required checks, and runtime evidence
+6. Derived plans and Worker Contracts
+7. Skills, history, examples, and agent suggestions
+
+Historical per-task prompts and Task Records keep their original V4 meaning. They do not become authority for a new V5 Goal.
 
 Phase 0 context-loading, style, boundary, and role/method files may be reused only when the Phase 1 prompt or docs say they are cross-stage support. They are not the current Phase 1 task authority.
 
@@ -43,8 +48,8 @@ infra/docker/       Docker Compose templates
 - **Task branch**: `phase1/<task_id>` (e.g. `phase1/P1-SPEC-001`)
 - **Commit message**: `phase1(<task_id>): <short description>`
 - **Merge message**: `merge phase1(<task_id>): <short description>`
-- There is no separate local-commit human Gate. Ordinary non-force push, PR/merge, and CI may proceed only when the current task contract and repo policy allow them, deterministic validation and required independent Review pass, freshness remains bound, and branch protection/required checks are satisfied. Gate 2 is post-integration result acceptance, not Git/CI authorization.
-- Exact authorization is mandatory for every R3 operation — file/directory or history deletion, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push. Never bypass hooks or branch protection.
+- There is no separate local-commit human Gate. Ordinary non-force push, PR/merge, CI/CD configuration changes, and CI runs may proceed only when the current Goal and target repository policy allow them, deterministic validation and required Review pass, freshness remains bound, and branch protection/required checks are satisfied. Historical Gate 2 remains post-integration result acceptance, not Git/CI authorization.
+- Exact action-specific authorization is mandatory for file/directory or history deletion, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push. A risk label never supplies that authorization. Never bypass hooks or branch protection.
 - Check remote GitHub Actions CI after every merge to phase0/main
 
 ## Validation commands
@@ -79,29 +84,29 @@ uv run python scripts/run_golden_tasks.py --gate
 - Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
 
 ## Non-negotiable hard rules
-1. Execute exactly one `task_id` per lane/state. Auto-next may only open a new lane from a user-approved finite queue after dependencies and required result stops are satisfied.
-2. Start with the matching per-task prompt. Do not load or paste the full spec unless resolving a contradiction.
-3. Keep review/detail tier (`method_profile.risk_tier`) separate from controller risk (`R0`-`R3`) and `automation_class`; human stops come from the current task's `required_stops`, not from habit or the low/medium/high label alone.
+1. One native Goal may execute multiple task IDs and auto-next when dependencies, required evidence, Review, and result stops are satisfied. Each write lane still owns one explicit Goal and a single Scope; a new scope opens a new lane/contract.
+2. Start from the current Goal and the minimum relevant authority. Historical V4 work still starts from its matching per-task prompt; new V5 work does not require one.
+3. Risk and Q0-Q3 Review strength do not create a human Gate. Human stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
 4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
 5. `app/ports/` is frozen; do not edit it unless the task explicitly authorizes it and a human approves.
 6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
 7. `P1-GATE-001` has landed. Later implementation tasks must run `scripts/run_golden_tasks.py --gate`.
 8. Do not weaken tests to pass: no `assert True`, empty `pass`, broad skip, or deleted assertions.
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
-10. Work on one task branch: `phase1/<task_id>`.
+10. Every write lane works in one isolated worktree/branch and a single Scope. The current repository branch convention remains `phase1/<task_id>`.
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
 12. Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. A downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` remains the independent B2 hard prerequisite.
 
 ## Scratch/temp and artifact review rules
-- Workflow-skill runtime scratch lives outside the repo (`$CLAUDE_CODEX_SCRATCH_ROOT`); repo-local `_scratch/` is for manual/non-skill temp files only.
+- V5 Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`; repo-local `_scratch/` is for manual temp files only.
 - Verify no temp/cache artifacts (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_scratch/` contents) are staged.
 - Verify untracked files are either intentionally ignored or cleaned before closeout.
 - Verify `git ls-files --others --exclude-standard` is clean, or only shows intentional files that are explicitly explained.
-- Verify Task Record `changed_files` exactly matches `git diff --cached --name-only`.
-- Verify artifact lifecycle and cleanup timing are recorded in the Task Record.
+- For historical V4 tasks and the final `P1-WORKFLOW-V5-001` migration only, verify Task Record `changed_files` exactly matches `git diff --cached --name-only`, and verify artifact lifecycle/cleanup timing is recorded in that Task Record.
+- For V5 tasks, verify Candidate Manifest and Recovery Index pointers bind the exact candidate and evidence; each completed task emits its own Chinese result summary of at most 20 lines.
 - Treat `.venv/` internals as out of scope unless task scope explicitly says otherwise.
 
 ## Completion
-Use the unified Task Record unless the current task explicitly narrows allowed paths and forbids creating one. Package confirmation is not tied to mandatory human diff review. Record `package_confirmation_status`, `package_scope`, and `package_evidence` when applicable.
+The unified Task Record is V4 legacy evidence. Existing records and the final `P1-WORKFLOW-V5-001` migration record keep schema v1.2.0 meaning; each completed task in a new V5 Goal uses native Goal state, external Candidate Manifest/Recovery Index pointers, Review evidence, and its own Chinese result summary of at most 20 lines instead of this heavy record. Package fields remain historical evidence where applicable.
 
 - Golden Task negative/boundary paths must pass 100%, including GT-012 multi-binding scope clarification.
