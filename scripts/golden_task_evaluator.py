@@ -60,6 +60,8 @@ FROZEN_GT_IDS = (
     "GT-009",
     "GT-010",
     "GT-012",
+    "GT-013",
+    "GT-014",
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
@@ -666,12 +668,24 @@ def _structured_output_for_fixture(fixture: dict[str, Any]) -> MockStructuredOut
     if not capabilities:
         provider.register_malformed(message, CapabilityRef)
         return provider
+    selector = cast(
+        dict[str, Any],
+        given.get("capability_selector") or capabilities[0],
+    )
     provider.register(
         message,
         CapabilityRef,
         CapabilityRef(
-            capability_id=str(capabilities[0]["capability_id"]),
+            capability_id=str(selector["capability_id"]),
             arguments=cast(dict[str, Any], when.get("arguments", {})),
+            target_system=cast(
+                CapabilityTargetSystem | None,
+                selector.get("target_system"),
+            ),
+            capability_type=cast(
+                CapabilityType | None,
+                selector.get("capability_type"),
+            ),
         ),
     )
     return provider
@@ -789,7 +803,7 @@ def _build_capability_spec(raw: dict[str, Any]) -> CapabilitySpec:
         capability_id=capability_id,
         name=capability_id,
         type=cast(CapabilityType, raw.get("type", "query")),
-        intent_tags=[],
+        intent_tags=cast(list[str], raw.get("intent_tags", [])),
         input_schema=cast(dict[str, Any], raw.get("input_schema", {})),
         output_schema=cast(dict[str, Any], raw.get("output_schema", {})),
         input_schema_digest=str(
