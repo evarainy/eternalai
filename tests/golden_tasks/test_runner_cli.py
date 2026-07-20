@@ -52,7 +52,7 @@ def test_real_runner_works_from_non_repo_cwd() -> None:
 
     assert completed.returncode == 0, completed.stderr
     summary = json.loads(completed.stdout)
-    assert summary["passed"] == 11
+    assert summary["passed"] == 13
     assert summary["failed"] == 0
 
 
