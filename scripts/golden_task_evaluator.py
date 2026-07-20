@@ -21,6 +21,7 @@ from app.execution_fabric.mock_adapters.hikvision_ivms.mock_hikvision_ivms_adapt
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.execution_fabric.mock_adapters.u8.mock_u8_adapter import MockU8Adapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
@@ -606,7 +607,9 @@ async def _run_fixture(
             adapters=adapters,
         ),
         trace_port=trace_port,
+        llm_provider=MockLLMProvider(),
         structured_output=_structured_output_for_fixture(fixture),
+        intent_model="golden-task-intent-model",
     )
     try:
         envelope = await runtime.handle_user_message(
