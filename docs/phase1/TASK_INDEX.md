@@ -1,8 +1,8 @@
-# TASK_INDEX — Phase 1 Dependency DAG v1.1.0
+# TASK_INDEX — Phase 1 Dependency DAG v1.1.1
 
 本文件是 Phase 1 的任务依赖 DAG。Codex / Claude Code 必须按批次和 `depends_on` 执行，不得跳过前置任务。
 
-**强制单任务执行：每个 lane/state 只能执行一个 `task_id`。下一任务必须同时满足 DAG、当前 task contract 的 `auto_next_policy` 与全部 required stops；R2 的 post-integration result acceptance 未闭合时不得 auto-next。**
+**执行模型：一个 native Goal 可顺序执行多个 `task_id`；每个 write lane 仍对应一份 Scope、独立 worktree 与 branch。auto-next 必须满足依赖、所需证据与 Review。**
 
 ## 0. 批次总览
 
@@ -18,9 +18,9 @@ B4：Workflow 轻量引擎 + 执行
 B5：Session Memory + Evaluator + Admin Lite
 ```
 
-## B2+ per-task prompt gate
+## B2+ contract（legacy prompt 说明）
 
-B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必须生成对应 `docs/phase1/tasks/<task_id>.md`。不得在缺少 per-task prompt 的情况下执行 B2-B5。
+历史 V4 任务继续按原 per-task prompt 执行；新的 native Goal 以当前 Goal 与 `AGENTS.md` 为合同，不强制新增 descriptor。
 
 ## 1. B1 — 启动准备
 
@@ -41,15 +41,15 @@ B1 的 per-task prompt 已内置（`docs/phase1/tasks/`）。B2-B5 启动前必�
 
 ### B1 治理修复控制链
 
-本链只登记 W002 治理修复及其后续任务依赖，不改写已完成的 `P1-WORKFLOW-002` 历史状态，也不表示 03—05 已具备执行条件。
+本链只登记 W002 治理修复及其后续任务依赖，不改写已完成的 `P1-WORKFLOW-002` 历史状态。下列四项已按历史顺序完成 merge，且各自 merge-SHA CI success。
 
 | task_id | title | depends_on | deliverable / start gate |
 |---|---|---|---|
 | P1-WORKFLOW-V5-001 | Codex-Claude V5 治理同步候选 | 已批准设计 `F464E36…` + 修订计划 `118AE10B…` + 2026-07-19 书面建设授权；cutover 未授权 | 分支 `phase1/P1-WORKFLOW-V5-001`：五个 V5 语义治理文件 + 本行 + descriptor + 最后一份 V4 Task Record；最终 Review 前只形成 staged candidate，不 commit/集成 |
-| P1-WORKFLOW-002-REPAIR-001 | W002 完整范围修复与活动控制面收敛 | P1-WORKFLOW-002 completed；P1-WORKFLOW-002-REPAIR-BOOTSTRAP-001 landed | 正式 03—05 task contracts、活动治理规则核对、repo-local phase-task companion 边界证据；完成集成并通过 post-integration Gate 2 后才释放下一项 |
-| P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed + Gate 2 accepted | `docs/phase1/tasks/P1-CI-ALIGN-001.md`；本 lane 对齐 CI 事件矩阵与 frontend test；完成与结果验收后，P1-OBS-001 仅可作为新 lane 调度，不自动启动 |
-| P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | `docs/phase1/tasks/P1-OBS-001.md`；contract 已登记，但依赖满足前不得启动 |
-| P1-RUNTIME-ENTRY-001 | Runtime Composition Root 与 Golden Harness 解耦 | P1-OBS-001 completed | `docs/phase1/tasks/P1-RUNTIME-ENTRY-001.md`；contract 已登记，但依赖满足前不得启动 |
+| P1-WORKFLOW-002-REPAIR-001 | W002 完整范围修复与活动控制面收敛 | P1-WORKFLOW-002 completed；P1-WORKFLOW-002-REPAIR-BOOTSTRAP-001 landed | merged：task `4f7d4f9`，merge `bce81d0`，merge-SHA CI `29205276520` success |
+| P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed | merged：task `3c35505`，merge `cdfd9eb`，merge-SHA CI `29210156919` success |
+| P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | merged：task `a20650a`，merge `d8b729d`，merge-SHA CI `29215852960` success |
+| P1-RUNTIME-ENTRY-001 | Runtime Composition Root 与 Golden Harness 解耦 | P1-OBS-001 completed | merged：task `e853b95`，merge `869647f`，merge-SHA CI `29222619275` success |
 
 ```text
 P1-WORKFLOW-002-REPAIR-001
@@ -58,7 +58,7 @@ P1-WORKFLOW-002-REPAIR-001
 → P1-RUNTIME-ENTRY-001
 ```
 
-**硬门**：`P1-WORKFLOW-002-REPAIR-001` 未完成集成且其 post-integration Gate 2 未通过前，`P1-CI-ALIGN-001`、`P1-OBS-001`、`P1-RUNTIME-ENTRY-001` 均不可启动；每次仍只执行一个 `task_id`。
+**legacy 说明**：历史 Task Record 的 result acceptance 状态（含 `pending`）按原记录保留，本次只同步 merge/CI 事实，不闭合 legacy Gate 2，也不把它作为当前 Git/CI 授权。
 
 正式 descriptor 存在只表示结果契约已登记，不表示 task prompt-ready 等于 dependency-ready。普通 commit/push/PR/merge/CI 是否自动由各 task contract 的 controller risk、automation、Review/validation/freshness 与 repo policy 决定；Gate 2 只验收集成结果。
 
@@ -74,9 +74,12 @@ P1-WORKFLOW-002-REPAIR-001
 
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
-| （B2 任务 TBD，由 P1-SPEC-001 产出后生成 per-task prompt） | Intent → Capability 选择闭环 | P1-GATE-001, P1-SPEC-001 | Intent Router 实现 + Capability Preselector 轻量版 + `no_capability_found` 路径 |
+| P1-B2-001 | Registry 支撑的 Capability 选择段 | P1-RUNTIME-ENTRY-001, P1-GATE-001, P1-SPEC-001, P1-SPEC-001-APPROVE-001 | merged：selection 段；task `53cda6d`，merge `f99737c`，merge-SHA CI `29510375566` success |
+| P1-INTENT-CAP-001 | Intent / structured-output 闭环补齐 | P1-B2-001 integrated + merge-SHA CI passed | merged：复用 P1-B2-001 selection behavior 并完成 B2 Runtime 闭环；task `e881905`，merge `d870ad8`，Task Record merge `046a2fe`，两次 merge-SHA CI success |
+| P1-B2-LEDGER-ALIGN-001 | B2 与前置任务台账事实对齐 | P1-INTENT-CAP-001 Task Record merge `046a2fe` + CI `29710489147` success | native Goal；只修订 `TASK_INDEX.md` 与 human-approved `task_logs/INDEX.md` |
+| P1-B2-002 | B2 frozen Golden 增量（下一项） | P1-B2-LEDGER-ALIGN-001 integrated + merge-SHA CI passed | S-B2.4 限定授权已给出；仅限本任务的 Golden fixtures 与 `FROZEN_GT_IDS`，实施前先提交不超过 12 行的 Golden 决策包 |
 
-> P1-SPEC-001 产品硬门已满足并标记 B2 unlocked；本任务不生成 per-task prompt、不启动 B2。`P1-SPEC-001-APPROVE-001` 集成并通过其自身 post-integration result acceptance 后，才可在新的 task lane 生成 B2 per-task prompt；缺少 prompt 仍不得执行。
+> `P1-B2-001` 与 `P1-INTENT-CAP-001` 均已落地：前者负责 Registry-backed selection 段，后者复用该段并补齐 Intent/structured-output，合起来完成 B2 Runtime 闭环。二者不是覆盖关系。`P1-B2-002` 只负责 S-B2.4 Golden 增量，不得借机重写已落地 Runtime。
 
 ## 3. B3 — Identity / Policy 预检闭环
 
@@ -115,29 +118,15 @@ P1-WORKFLOW-002-REPAIR-001
 P1-SPEC-CONTRACT-ALIGN integrated/result accepted
 → P1-GATE-001 passed + P1-SPEC-001 approved/landed + Gate 2 accepted
 → P1-SPEC-001-APPROVE-001 integrated/result accepted
-→ B2 Intent → Capability 选择闭环
+→ P1-B2-001 Registry-backed selection
+→ P1-INTENT-CAP-001 Intent/structured-output 闭环
+→ P1-B2-LEDGER-ALIGN-001 台账事实对齐
+→ P1-B2-002 Golden 增量
 → B3 Identity / Policy 预检闭环
 → B4 Workflow 轻量引擎 + 执行
 → B5 Session Memory + Evaluator + Admin Lite
 ```
 
-## 7. Unified Task Record 要求
+## 7. Legacy Task Record 说明
 
-每个任务完成、失败或阻塞时，必须生成机器可读 YAML Task Record：
-
-```text
-docs/phase1/task_logs/<task_id>_<YYYYMMDD_HHMMSS>_<passed|failed|blocked>.yaml
-```
-
-统一 schema 见：
-
-```text
-docs/dev/task_record_schema.yaml
-```
-
-关键要求（统一 schema v1.2.0；Phase 0 与既有 Phase 1 记录按其原版本解释）：
-- `not_applicable` 必须包含 reason、scope、blocked_by_task_id、activation_task_id、expiry_condition 和 evidence。
-- `review.mode` 可为 `none | self_review | independent_review | human_review`。
-- 旧 `codex_review`、`self_check`、`human_optional` 只用于历史记录解释，按 `docs/phase1/ROLE_POLICY.md` 的 migration table 处理。
-- `package_confirmation_status` 可为 `created | not_created | not_applicable`。
-- 新 high-tier records 分开记录 controller risk/automation/required stops、Plan/final Review、task-branch/PR checks、merge SHA、post-merge CI、R3 authorization、auto-next 与 filesystem companion（如适用）；未触发检查不得写成 passed。
+历史 Unified Task Record 按原 schema 与语义保留；新的 native Goal 按当前 `AGENTS.md` Completion 要求收口，不新增 Task Record。
