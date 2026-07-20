@@ -1,0 +1,262 @@
+schema_version: "1.2.0"
+task_id: P1-INTENT-CAP-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: TDD
+  execution_owner: codex
+  review_owner: "Codex native review plus Claude Opus canonical review"
+  review_mode_policy: independent_review
+  model_note: "Runtime main-chain intent parsing and Capability selection are R2; the final immutable candidate received native gpt-5.6-sol/xhigh review and verified Claude Opus review."
+controller_risk:
+  tier: R2
+  classification_reason: "Runtime entry normalization, structured-output parsing, Registry filtering, deterministic unique selection, TaskStore persistence, and Trace behavior."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: "The required <=20-line Chinese result summary follows record integration and CI."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "This Goal executes exactly P1-INTENT-CAP-001 and has no authorized auto-next task."
+redline_authorization:
+  requested_actions:
+    - "Remove only ignored, reproducible validation caches inside E:/code/eternalai/.worktrees/P1-INTENT-CAP-001 before staging."
+  authorized_actions:
+    - "Rain delegated all decisions to the supervisor; the supervisor authorized exact __pycache__, *.pyc, .pytest_cache, .mypy_cache, and .ruff_cache removal inside the task worktree while excluding .venv."
+  evidence: "Supervisor thread item 30 and subsequent delegated instructions; final cleanup removed 46 verified ignored cache directories with .venv preserved. No source, test, descriptor, Git object, credential, DB, dependency, history, or remote branch was deleted."
+started_at: "2026-07-20T00:39:50+09:00"
+completed_at: "2026-07-20T10:02:57+09:00"
+plan_approved_by: "P1-INTENT-CAP-001 supervisor under Rain's written delegation"
+plan_approved_at: "2026-07-20T00:59:27+09:00"
+plan_approved_via: "Codex supervisor thread item 13"
+plan_review:
+  required: false
+  provider: not_applicable
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: not_applicable
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Web and CLI input now enters one runtime-local IntentRouter that normalizes text,
+  calls the frozen LLMProviderPort with JSON-object response format, and validates the
+  frozen StructuredOutputPort result through Pydantic v2. Runtime filters Registry
+  candidates by active status and optional target/type constraints, selects only an
+  exact or unique deterministic match, persists the selection, and traces only safe
+  enums and selector fingerprints. Invalid, unavailable, disabled, or ambiguous intent
+  paths preserve the existing no_capability_found ResponseEnvelope and GT-008 short
+  circuit without entering Identity, Policy, Gateway, or an Adapter.
+acceptance_criteria_result:
+  - criterion: "入口归一与既有 LLMProviderPort -> StructuredOutputPort 串联"
+    result: passed
+    evidence: "app/runtime/intent_router.py plus Web/CLI parametrized tests; focused intent/capability suite 25 passed."
+  - criterion: "候选仅从状态可用且符合请求约束的 Registry Capability 中唯一选择"
+    result: passed
+    evidence: "Exact active, inactive, target/type filter, tag ambiguity, and Registry-order tests pass with negative paths asserting zero Gateway calls."
+  - criterion: "no_capability_found、capability_not_found ResponseEnvelope 与 GT-008 短路保持"
+    result: passed
+    evidence: "Golden gate 11/11, including GT-008; negative Runtime tests assert no Identity, Policy, Gateway, or Adapter traversal."
+  - criterion: "intent、选择与无能力终态形成可审计且安全的 Trace/TaskStore 证据"
+    result: passed
+    evidence: "Selection TaskEvent persistence, Trace lifecycle, safe failure enums, metadata whitelist, and raw-selector fingerprint tests pass."
+  - criterion: "冻结边界、依赖与 Golden fixtures 不漂移"
+    result: passed
+    evidence: "No app/ports, ResponseEnvelope, pyproject/uv.lock, Golden fixture, or FROZEN_GT_IDS path appears in candidate.diff; architecture 22 passed and dependency check passed."
+failure_examples_tested:
+  - example: "disabled/draft/deprecated Capability is selected"
+    result: triggered
+    evidence: "Parameterized exact-inactive tests return no_capability_found and assert no tag fallback or Gateway call."
+  - example: "ambiguous candidates select by Registry order"
+    result: triggered
+    evidence: "Opposite Registry orders both fail closed with no Adapter/Gateway call."
+  - example: "provider failure and invalid structured output collapse to indistinguishable or leaking Trace reasons"
+    result: triggered
+    evidence: "Tests distinguish provider_error from schema_invalid while excluding provider text, user input, session identifiers, and arbitrary provider metadata."
+  - example: "frozen Port, ResponseEnvelope, dependency, or Golden fixture change"
+    result: not_triggered
+    evidence: "Candidate path list and canonical review confirm zero such changes."
+step_verification_points:
+  - step: plan_and_scope
+    result: passed
+    command: "Supervisor approval after descriptor/spec/base inspection"
+    evidence: "Supervisor thread item 13 approved the narrowed plan and required reuse of already-landed P1-B2-001 selection behavior."
+  - step: implementation
+    result: passed
+    command: "TDD-focused Runtime/Intent tests plus bounded successor fixes"
+    evidence: "Four ordinary commits culminate in immutable candidate e8819058359163e4f5245cd38a2c6f71dd9dcda2."
+  - step: deterministic_validation
+    result: passed
+    command: "descriptor validation commands, focused tests, and weak-test checker"
+    evidence: "Full pytest 753 passed; architecture 22; focused 25; Ruff, mypy, dependencies, weak tests, and Golden 11/11 passed."
+  - step: native_review
+    result: passed
+    command: "/review"
+    evidence: "Actual model gpt-5.6-sol, reasoning effort xhigh, no actionable findings on e881905."
+  - step: independent_review
+    result: passed
+    command: "canonical safe-mode Claude candidate review"
+    evidence: "Verified claude-opus-4-8 PASS, termination_reason=completed, Findings: none; base/head bound exactly."
+  - step: integration
+    result: passed
+    command: "ordinary push, ready PR #18, required checks, merge commit, post-merge CI"
+    evidence: "PR #18 merged as d870ad85b493a88fb838f2f6ae42ddde03519d0b; task/PR and phase0/main Backend/Frontend jobs all succeeded."
+changed_files:
+  - docs/phase1/task_logs/P1-INTENT-CAP-001_20260720_100257_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-INTENT-CAP-001"
+  reviewed_parent_sha: "76586cec2c8ba6faa599c450b7a79e4efbc141c8"
+  reviewed_tree_oid: "4a05ebcfc43ebbc97afb466ac8d641346a44e59d"
+  staged_diff_sha256: "a3c41e2cda178ec97a24413e6fd5e28e546e004d5f2649c157d71ef9edf301e7"
+  changed_paths_sha256: "4d20337cb89c40c21f571f0704bd2e59ff34d8f64041b5ffef73b88065f56a55"
+  changed_blob_oids:
+    - "app/composition.py:134077e50b5ca85f84433c992aa99ed30419951b"
+    - "app/infra/llm/mock_llm/mock_llm_provider.py:423c3cd3fe1d1d1092228096a8afc496a9527cdc"
+    - "app/runtime/intent_router.py:625200764628752a78882f5e552dd561cc6f09ed"
+    - "app/runtime/models.py:7d26d32f90692ec880aae5499d62b4edd01476ef"
+    - "app/runtime/runtime.py:b685d9a940668261793467ad67da7c2d28c8c9ae"
+    - "docs/phase1/tasks/P1-INTENT-CAP-001.md:0f5bf6e8910a5beb2758a6bc40dd992e271970b8"
+    - "scripts/golden_task_evaluator.py:831acd1fc96e07299f72ab8f6dff80952a21d00b"
+    - "tests/infra/llm/test_mock_llm_provider.py:5b27a3ccff9f6d14250b3dce5aea9dae17c880f1"
+    - "tests/runtime/test_intent_router.py:2626c4bcedb7f3cda3bae18f07caa6af610b2d2f"
+    - "tests/runtime/test_runtime_capability_selection.py:5e238e130c84c61be4245346bcb77e614b94ccba"
+    - "tests/runtime/test_runtime_composition.py:395aa21b6ceed499bf645fe3e1d2cf886153509f"
+    - "tests/runtime/test_runtime_gateway_result_mapping.py:660c99a6ad478d557607906710329e3b672613f1"
+    - "tests/runtime/test_runtime_response_content.py:44e89ad204f63cc662688e3bdf01d27405c1f574"
+    - "tests/runtime/test_runtime_response_envelope.py:de613ee67b05e8b1a7e6b4562396cf7aee268731"
+    - "tests/runtime/test_runtime_trace_lifecycle.py:f100b43ef146b256b6f8abf529837069190af5ee"
+    - "tests/runtime/test_runtime_trace_threading.py:6b291202bee628a3abb84c3608d5d38c6d76df39"
+    - "tests/runtime/test_task_creation.py:75252a71d489d246af38105afe46dbca6546a382"
+  freshness_sha256: "4fa5c062a638f6a666ecaadd82c29b756f2189de2cb8a4789d68dc8fb22f0999"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "753 passed, 6 warnings using the task-local disposable PostgreSQL test service."
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "22 passed."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 49 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; dependency policy passed."
+  - command: "uv run python scripts/check_weak_tests.py tests/runtime/test_intent_router.py and tests/runtime/test_runtime_capability_selection.py"
+    result: passed
+    output_snippet: "Both changed S-B2.3 behavioral test modules passed the weak-test checker."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "11/11 passed, including GT-008."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "uv run pytest tests/architecture/: 22 passed; no frozen Port was modified or added."
+security_scan_result:
+  result: passed
+  evidence: "Canonical candidate preflight passed; metadata is whitelisted to trace_id/task_id and safe enum/fingerprint tests prevent plaintext provider errors, user text, or session identifiers from entering Trace."
+weak_test_scan_result:
+  result: passed
+  evidence: "scripts/check_weak_tests.py passed for tests/runtime/test_intent_router.py and tests/runtime/test_runtime_capability_selection.py."
+ci_evidence:
+  result: passed
+  run_id: "29710189385"
+  url_or_log_path: "https://github.com/evarainy/eternalai/actions/runs/29710189385"
+  evidence: "phase0/main push run is bound to merge SHA d870ad85b493a88fb838f2f6ae42ddde03519d0b; Backend and Frontend jobs both concluded success."
+review:
+  mode: independent_review
+  reviewed_by: "claude-opus-4-8 via canonical bridge; native Codex review gpt-5.6-sol/xhigh"
+  reviewed_at: "2026-07-20T09:51:01+09:00"
+  notes: "Native review reported no actionable findings. The canonical safe-mode review used the verbatim supervisor classification ruling, retained carried-over terminal semantics under Residual risks, and reported Findings: none without suppressing in-scope defects."
+  provider: claude
+  requested_model: opus
+  observed_models:
+    claude-opus-4-8:
+      verified_from: "system/init and assistant events"
+  model_verified: true
+  verdict: PASS
+  packet_sha256: "a3c41e2cda178ec97a24413e6fd5e28e546e004d5f2649c157d71ef9edf301e7"
+  prompt_sha256: "6fb21d0ce2c601a4aa7e1795bc2b2b8895e54eee66c23acaa34cec6e4c36d9b6"
+  output_sha256: "84d21810c003831f3119138baca240c4493c6b99593857f85615ef2052636aee"
+  meta_sha256: "490578eb8f79ebe0c048c74d0b977a22e7cf5e80aa3da0f626b2ffdf110113cc"
+  validation_evidence_sha256: "45b59e189e672610c227c966110162169b62931ca625363bdd89fff62da3b730"
+remote_integration:
+  policy_sha256: "1ba1b3cee651e74f5c4921fe20403db897d5c0d69e7070991482626dc46f9341"
+  task_commit_sha: "e8819058359163e4f5245cd38a2c6f71dd9dcda2"
+  task_branch: phase1/P1-INTENT-CAP-001
+  task_branch_ci:
+    status: passed
+    run_id: "29710138677,29710151714"
+    head_sha: "e8819058359163e4f5245cd38a2c6f71dd9dcda2"
+    jobs:
+      - "Backend (lint, type, test): success in both push and PR runs"
+      - "Frontend (lint, typecheck, test, build): success in both push and PR runs"
+    evidence: "https://github.com/evarainy/eternalai/actions/runs/29710138677 and https://github.com/evarainy/eternalai/actions/runs/29710151714"
+  pull_request:
+    number: "18"
+    head_sha: "e8819058359163e4f5245cd38a2c6f71dd9dcda2"
+    base_ref: phase0/main
+    mergeability: CLEAN
+    required_checks:
+      - "Backend (lint, type, test): success"
+      - "Frontend (lint, typecheck, test, build): success"
+  merge:
+    status: merged
+    merge_sha: "d870ad85b493a88fb838f2f6ae42ddde03519d0b"
+    method: merge
+  post_merge_ci:
+    status: passed
+    run_id: "29710189385"
+    head_sha: "d870ad85b493a88fb838f2f6ae42ddde03519d0b"
+    jobs:
+      - "Backend (lint, type, test): success"
+      - "Frontend (lint, typecheck, test, build): success"
+    evidence: "https://github.com/evarainy/eternalai/actions/runs/29710189385"
+  integration_freshness_sha256: "4fa5c062a638f6a666ecaadd82c29b756f2189de2cb8a4789d68dc8fb22f0999"
+remaining_risks:
+  - "Carried-over Phase 0 semantic: provider/structured-output failure remains no_capability_found; supervisor ruled terminal-state redesign and GT-008 semantic changes out of this task."
+  - "Intent fingerprints are unsalted SHA-256 over capability selectors and should not be treated as protection for arbitrary secrets."
+  - "A real OpenAI/vLLM LLMProviderPort adapter is not part of this task; call-shape conformance is exercised through the existing frozen boundary and MockLLMProvider."
+rollback_or_failure_record: >
+  Implementation merge used an ordinary merge commit with no force operation. Any future
+  rollback requires a separately governed revert; no reset, rebase, branch deletion, or
+  history rewrite was performed. External immutable review artifacts and detached review
+  worktrees are retained outside the repository. Before this record was staged, 46 exact
+  ignored validation cache directories were removed under the task worktree, .venv was
+  preserved, and untracked-standard/staged counts were both zero.
+local_commit_policy: after_review_pass
+git_commit_sha: "recorded by Git history as the commit containing this immutable Task Record"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced by this Runtime task."
+package_scope: ""
+package_evidence: ""
