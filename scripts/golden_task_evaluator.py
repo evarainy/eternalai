@@ -62,6 +62,11 @@ FROZEN_GT_IDS = (
     "GT-012",
     "GT-013",
     "GT-014",
+    "GT-015",
+    "GT-016",
+    "GT-017",
+    "GT-018",
+    "GT-019",
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
@@ -310,30 +315,40 @@ class FakeIdentityMapping:
             mapping
             for mapping in self._mappings
             if mapping.get("target_system") == target_system
+            and mapping.get("execution_identity", "user_delegated") == execution_identity
         ]
+        scope_filters = {
+            "account_set_id": request_context.account_set_id,
+            "device_domain_id": request_context.device_domain_id,
+            "binding_scope": request_context.resource_scope,
+        }
+        if any(value is not None for value in scope_filters.values()):
+            matches = [
+                mapping
+                for mapping in matches
+                if all(
+                    value is None or mapping.get(field) == value
+                    for field, value in scope_filters.items()
+                )
+            ]
+        if not matches:
+            return IdentityCheckResult(
+                bind_status="unbound",
+                target_system=target_system,
+                execution_identity=execution_identity,
+                reason_code="identity_unbound",
+            )
         active_matches = [
             mapping for mapping in matches if mapping.get("status", "unbound") == "active"
         ]
-        if (
-            len(active_matches) > 1
-            and request_context.account_set_id is None
-            and request_context.resource_scope is None
-        ):
+        if len(active_matches) > 1:
             return IdentityCheckResult(
                 bind_status="needs_binding_scope",
                 target_system=target_system,
                 execution_identity=execution_identity,
                 reason_code="needs_binding_scope",
             )
-        if not matches:
-            return IdentityCheckResult(
-                bind_status="unbound",
-                target_system=target_system,
-                execution_identity=execution_identity,
-                reason_code="unbound",
-            )
-
-        mapping = matches[0]
+        mapping = active_matches[0] if active_matches else matches[0]
         return IdentityCheckResult(
             bind_status=cast(
                 IdentityBindStatus,
@@ -396,6 +411,7 @@ class FakeIdentityMapping:
 class FakePolicyGuard:
     def __init__(self, fixture_policy: dict[str, Any] | None) -> None:
         self._fixture_policy = fixture_policy or {"decision": "allow"}
+        self.call_count = 0
 
     async def decide(
         self,
@@ -404,6 +420,7 @@ class FakePolicyGuard:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> PolicyDecision:
+        self.call_count += 1
         decision = cast(
             PolicyDecisionValue,
             self._fixture_policy.get("decision", "allow"),
@@ -423,7 +440,9 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
     injection_status: Literal["passed", "failed"] = "passed"
     clear_injection()
     try:
-        envelope, trace_steps, adapter_calls = asyncio.run(_run_fixture(fixture))
+        envelope, trace_steps, adapter_calls, policy_calls = asyncio.run(
+            _run_fixture(fixture)
+        )
         expected_trace = _expected_trace_for_matrix(fixture)
         judgement = judge_assertions(
             envelope=envelope,
@@ -433,6 +452,11 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
             forbidden_items=fixture["then_forbidden"],
             adapter_assertion=fixture["adapter_assertion"],
             adapter_calls=adapter_calls,
+            policy_assertion=cast(
+                Mapping[str, Any] | None,
+                fixture.get("policy_assertion"),
+            ),
+            policy_calls=policy_calls,
         )
         primary_status = judgement.status
         reasons.extend(judgement.reasons)
@@ -525,7 +549,7 @@ async def _run_injection_companion(fixture: dict[str, Any]) -> RunnerAssertionJu
             duration=_mock_injection_duration(payload.get("duration")),
             error_detail=_serialize_error_detail(payload.get("error_detail")),
         )
-        envelope, trace_steps, adapter_calls = await _run_fixture(fixture)
+        envelope, trace_steps, adapter_calls, _policy_calls = await _run_fixture(fixture)
         return judge_injection_companion_assertions(
             envelope=envelope,
             trace_steps=trace_steps,
@@ -585,13 +609,16 @@ def build_summary(results: Sequence[GoldenTaskResult]) -> dict[str, Any]:
 
 async def _run_fixture(
     fixture: dict[str, Any],
-) -> tuple[ResponseEnvelope, list[dict[str, Any]], dict[str, int]]:
+) -> tuple[ResponseEnvelope, list[dict[str, Any]], dict[str, int], int]:
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
     adapters, adapter_calls, reset_adapters = _build_adapter_spies(given)
     trace_port = SpyTracePort()
     capability_registry = FakeCapabilityRegistry(
         cast(Sequence[dict[str, Any]], given["registered_capabilities"])
+    )
+    policy_guard = FakePolicyGuard(
+        cast(dict[str, Any] | None, given.get("policy_fixture"))
     )
     runtime = build_runtime(
         task_store=SpyTaskStore(),
@@ -602,9 +629,7 @@ async def _run_fixture(
             identity_mapping=FakeIdentityMapping(
                 cast(Sequence[dict[str, Any]], given["identity_mappings"])
             ),
-            policy_guard=FakePolicyGuard(
-                cast(dict[str, Any] | None, given.get("policy_fixture"))
-            ),
+            policy_guard=policy_guard,
             trace_port=trace_port,
             adapters=adapters,
         ),
@@ -621,7 +646,7 @@ async def _run_fixture(
             message=str(when["message"]),
             client_capabilities={},
         )
-        return envelope, trace_port.steps, adapter_calls()
+        return envelope, trace_port.steps, adapter_calls(), policy_guard.call_count
     finally:
         reset_adapters()
         clear_injection()

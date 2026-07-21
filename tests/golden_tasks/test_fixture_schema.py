@@ -24,6 +24,11 @@ GT_IDS = [
     "GT-012",
     "GT-013",
     "GT-014",
+    "GT-015",
+    "GT-016",
+    "GT-017",
+    "GT-018",
+    "GT-019",
 ]
 REQUIRED_TOP_LEVEL = [
     "golden_task_id",
@@ -103,6 +108,82 @@ def test_gt_012_has_fallback_forbidden_items() -> None:
     forbidden = fixture["then_forbidden"]
     assert "fallback_to_first_binding" in forbidden
     assert "fallback_to_system_scope" in forbidden
+
+
+@pytest.mark.parametrize(
+    ("gt_id", "expected_error_code"),
+    (
+        ("GT-015", "identity_expired"),
+        ("GT-016", "identity_revoked"),
+    ),
+)
+def test_b3_inactive_binding_fixtures_require_exact_identity_short_circuit(
+    gt_id: str,
+    expected_error_code: str,
+) -> None:
+    fixture = load_fixture(gt_id)
+    response = fixture["then_response"]
+    events = fixture["then_trace"]["event_sequence"]
+
+    assert response["status"] == "blocked"
+    assert response["envelope"]["ui.action"] == "bind_required"
+    assert response["envelope"]["ui.reason_code"] == expected_error_code
+    assert fixture["then_trace"]["reason"] == expected_error_code
+    assert fixture["mock_failure_injection"]["expected_error_code"] == (expected_error_code)
+    assert events.index("blocked_by_identity") == events.index("identity_check") + 1
+    assert "policy_checked" not in events
+    assert fixture["policy_assertion"] == {
+        "must_be_called": False,
+        "must_not_be_called": True,
+    }
+    assert fixture["adapter_assertion"] == {
+        "must_be_called": False,
+        "must_not_be_called": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("gt_id", "request_field", "mapping_field"),
+    (
+        ("GT-017", "account_set_id", "account_set_id"),
+        ("GT-018", "device_domain_id", "device_domain_id"),
+        ("GT-019", "resource_scope", "binding_scope"),
+    ),
+)
+def test_b3_explicit_scope_ambiguity_fixtures_cannot_degrade_to_gt_012(
+    gt_id: str,
+    request_field: str,
+    mapping_field: str,
+) -> None:
+    fixture = load_fixture(gt_id)
+    requested_scope = fixture["when"]["arguments"][request_field]
+    mappings = fixture["given"]["identity_mappings"]
+    delegated_matches = [
+        mapping
+        for mapping in mappings
+        if mapping.get("status") == "active"
+        and mapping.get("execution_identity") == "user_delegated"
+        and mapping.get(mapping_field) == requested_scope
+    ]
+    system_scope_traps = [
+        mapping
+        for mapping in mappings
+        if mapping.get("status") == "active"
+        and mapping.get("execution_identity") == "system_scope"
+        and mapping.get(mapping_field) == requested_scope
+    ]
+    response = fixture["then_response"]
+
+    assert len(delegated_matches) == 2
+    assert system_scope_traps
+    assert response["status"] == "blocked"
+    assert response["envelope"]["ui.action"] == "clarify_scope"
+    assert response["envelope"]["ui.reason_code"] == "needs_binding_scope"
+    assert fixture["then_trace"]["reason"] == "needs_binding_scope"
+    assert "fallback_to_first_binding" in fixture["then_forbidden"]
+    assert "fallback_to_system_scope" in fixture["then_forbidden"]
+    assert fixture["policy_assertion"]["must_not_be_called"] is True
+    assert fixture["adapter_assertion"]["must_not_be_called"] is True
 
 
 @pytest.mark.parametrize(
