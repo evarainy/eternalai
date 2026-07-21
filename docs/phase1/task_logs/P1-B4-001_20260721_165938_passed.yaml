@@ -1,0 +1,271 @@
+schema_version: "1.2.0"
+task_id: P1-B4-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+  execution_owner: codex
+  review_owner: "Codex focused self-review plus Claude Opus substantive review-of-record"
+  review_mode_policy: independent_review
+  model_note: "Workflow core and version locking used Q2 review strength with claude-opus-4-8/high."
+controller_risk:
+  tier: R2
+  classification_reason: "Runtime main-chain Workflow routing, version locking, Gateway-only step execution, mapping, and Trace behavior."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "The monitor approved the implementation Gap Map before production edits."
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: "Rain authorized ordinary integration; final acceptance follows merge-SHA required checks."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "This closeout is limited to P1-B4-001 and must not enter P1-B4-002."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No deletion, history rewrite, secret/env change, DB change, global change, force push, or production deployment was requested or performed."
+started_at: "2026-07-21T15:05:14+09:00"
+completed_at: "2026-07-21T16:59:38+09:00"
+plan_approved_by: "Rain via monitor delegation"
+plan_approved_at: "2026-07-21T15:05:14+09:00"
+plan_approved_via: "Codex monitor delegation"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: "monitor"
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Added the minimal strictly linear Workflow engine skeleton. Steps execute in order,
+  use simple sequential when conditions, map Workflow and prior-step values, lock one
+  definition version snapshot, and invoke only registered active low-risk capabilities
+  through CapabilityGatewayPort. Runtime routes registered Workflow capabilities to the
+  engine while preserving the ordinary capability path. Safe step state is observable in
+  Trace and TaskStore without arguments, outputs, or sensitive values. Follow-up commit
+  5c8f3d7 closed the two accepted low product findings: invalid non-earlier step_output
+  references now fail before Gateway execution, and a missing Workflow engine now uses the
+  existing internal_error failure envelope and terminal Task/Trace chain.
+acceptance_criteria_result:
+  - criterion: "Linear ordered execution and simple non-DAG conditional branch"
+    result: passed
+    evidence: "Focused Workflow tests cover ordered execution, skip/rejoin behavior, and no graph or queue carrier."
+  - criterion: "Step input/output mapping and version lock"
+    result: passed
+    evidence: "Tests map initial input and prior output and mutate the source definition mid-run while retaining version 1.0.0."
+  - criterion: "Gateway unique entry and registered low-risk capabilities only"
+    result: passed
+    evidence: "Validation rejects missing, inactive, high-risk, and nested Workflow capabilities before Adapter execution."
+  - criterion: "Step Trace order, terminal state, and sensitive-value exclusion"
+    result: passed
+    evidence: "Tests assert capability_selected, Gateway, Adapter, Gateway terminal order and exclude the runtime sensitive sentinel from Trace and TaskStore."
+  - criterion: "Invalid step_output references fail before the first Gateway call"
+    result: passed
+    evidence: "Follow-up tests cover nonexistent, self, and forward references in input_mapping and when; Adapter calls remain zero."
+  - criterion: "Missing Workflow engine uses the standard failed terminal chain"
+    result: passed
+    evidence: "Follow-up test asserts failed envelope, internal_error, update_status(failed), task_failed, finalize_task_trace, and zero Gateway calls."
+failure_examples_tested:
+  - example: "Workflow definition drifts after execution begins"
+    result: triggered
+    evidence: "The source mapping changes to 2.0.0 during the first Adapter call; the run and events remain locked to 1.0.0."
+  - example: "A step bypasses Capability Gateway or calls an unsafe/unregistered capability"
+    result: triggered
+    evidence: "Negative tests fail before Adapter execution; successful steps call CapabilityGatewayPort only."
+  - example: "A step_output reference targets itself, a later step, or a missing step"
+    result: triggered
+    evidence: "Six input_mapping/when cases raise definition errors with zero Adapter calls."
+  - example: "Runtime selects a Workflow while no engine is configured"
+    result: triggered
+    evidence: "Runtime returns a standard failed envelope and completes the failed Task/Trace lifecycle without Gateway calls."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "Monitor review of existing Ports, Gateway, Runtime, TaskStore, and Trace connection points"
+    evidence: "Monitor verdict PASS with the implementation restricted to the approved nine-file surface."
+  - step: implementation
+    result: passed
+    command: "Two ordinary commits"
+    evidence: "6ac91e2d0a92b1ab120d95b00bf10a49e944927d delivered the skeleton; 5c8f3d7c2b9a9842053e8815e4d90b64b47725c3 closed two low product findings."
+  - step: deterministic_validation
+    result: passed
+    command: "Full section 7 validation followed by focused low-finding validation"
+    evidence: "Full suite 833 passed; architecture 23; Golden 18/18; follow-up focused suite 15 passed; all listed lint/type/dependency/weak checks passed."
+  - step: review
+    result: passed
+    command: "Codex self-review and claude-opus-4-8/high candidate review"
+    evidence: "Opus substantive verdict was PASS with low/non-blocking findings; Rain accepted it as review-of-record after the two product findings were fixed and focused self-review passed."
+  - step: integration
+    result: not_applicable
+    command: "ordinary push, PR, required checks, merge, and merge-SHA checks"
+    evidence: "Integration starts only after this Task Record commit."
+    not_applicable_reason: "The record is intentionally committed before remote integration."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B4-001
+    activation_task_id: P1-B4-001
+    expiry_condition: "This record commit is pushed and required branch, PR, and merge-SHA checks complete."
+changed_files:
+  - docs/phase1/task_logs/P1-B4-001_20260721_165938_passed.yaml
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+candidate_evidence:
+  integration_mode: git
+  candidate_root: "E:/code/eternalai/.worktrees/P1-B4-001"
+  reviewed_parent_sha: "d270af5027092ccec22e6d7aedb37e3a84eb093d"
+  reviewed_tree_oid: "754b8e1c48725ee0ddacb26d7922f2feb979457f"
+  staged_diff_sha256: "d3bbbd35bb2145ae788b61dc401dbfa8e8ac8114622e8a8d1e72d65ac21ce33a"
+  changed_paths_sha256: "0cf7c8b9c835e10a5e53990632895276f42d4eb27b779d09c4734f5002fbdd2e"
+  changed_blob_oids:
+    - "app/composition.py:492c86ee086d1669e2eb3515ff83f57d9c6aa21d"
+    - "app/runtime/runtime.py:a037afcd9772ccc6a52f37202b332b0e088ad510"
+    - "app/workflow/__init__.py:628e0279ab6e8082c51de461f6403a66d516967b"
+    - "app/workflow/engine.py:79968064dcf4382f7e23d6c05756d1530e34df42"
+    - "app/workflow/models.py:5ba21805f06512e67ca02539d424e426e1f4d39b"
+    - "docs/phase1/tasks/P1-B4-001.md:c1fa7da39222cc9772cdae9047efd74574129fec"
+    - "tests/architecture/test_import_boundaries.py:807740b8b6019b5b8444b96c0fa30f5dfc75e212"
+    - "tests/runtime/test_runtime_workflow.py:53cf11dce1af266c62abcd6d7a699c71261e7314"
+    - "tests/workflow/test_engine.py:69beac42a82e70c05ca4a2d98fc0c5fe8cb11104"
+  freshness_sha256: "52692522ae6734fb1feb08921eb683abe9e3d5cdee3e8e58c4b8c9c1f94b5e3e"
+filesystem_companion_evidence:
+  path: ""
+  disposition: not_applicable
+  git_tracking: not_applicable
+  baseline_sha256: ""
+  candidate_sha256: ""
+  operation_manifest_sha256: ""
+  rollback_sha256: ""
+  freshness_result: not_applicable
+  git_claimed: false
+tests_run:
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "833 passed, 6 warnings against the disposable local PostgreSQL test service."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 52 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependency checks passed."
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "18/18 passed; positive 7/7 and negative 11/11, including GT-001, GT-005, and GT-007."
+  - command: "uv run python scripts/check_weak_tests.py tests/workflow/test_engine.py and tests/runtime/test_runtime_workflow.py"
+    result: passed
+    output_snippet: "Both changed behavior-test modules passed."
+  - command: "uv run pytest tests/workflow/test_engine.py tests/runtime/test_runtime_workflow.py -q"
+    result: passed
+    output_snippet: "Follow-up low-finding validation: 15 passed."
+  - command: "uv run ruff check <four follow-up files> and uv run mypy <two follow-up implementation files>"
+    result: passed
+    output_snippet: "Focused Ruff and mypy passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "Architecture suite: 23 passed; app.workflow imports frozen Ports, not Adapter implementations or queue state carriers."
+security_scan_result:
+  result: passed
+  evidence: "The authorized redacted candidate scan reported no hits; Trace/TaskStore tests exclude the runtime sensitive sentinel."
+weak_test_scan_result:
+  result: passed
+  evidence: "Both Workflow and Runtime behavior test files passed the repository weak-test checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration had not started when this immutable Task Record was created."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B4-001
+  activation_task_id: P1-B4-001
+  expiry_condition: "Task branch, PR, and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: independent_review
+  reviewed_by: "claude-opus-4-8 via canonical bridge; Codex focused self-review"
+  reviewed_at: "2026-07-21T15:31:22+09:00"
+  notes: >
+    The Opus output gave substantive Verdict: PASS and four low/non-blocking findings.
+    The observed model was claude-opus-4-8 and requested effort was high, but the Bridge
+    correctly preserved an INVALID meta with termination_reason=pass_verdict_has_findings;
+    this record does not claim a valid PASS meta. Rain's latest ruling treats the substantive
+    PASS as review-of-record. Commit 5c8f3d7 minimally fixed the two product findings and a
+    focused Codex self-review passed. The sid aliases and scanner behavior belong to a separate
+    codex-claude tool task. Workflow-level Policy remains P1-B4-002 and is not implemented here.
+  provider: claude
+  requested_model: claude-opus-4-8
+  observed_models:
+    claude-opus-4-8:
+      verified_from: "canonical review meta observed_model"
+      requested_effort: high
+  model_verified: true
+  verdict: PASS
+  packet_sha256: "d3bbbd35bb2145ae788b61dc401dbfa8e8ac8114622e8a8d1e72d65ac21ce33a"
+  prompt_sha256: "b1e3504415060b1f636a9f9fb39640e83a021a36f0a31d4590c7947110092436"
+  output_sha256: "bb42f1592779960ff06680998805ce03e4921d7a03c176529f5dd43b65f2856b"
+  meta_sha256: "6f586d0cfad571e803eb8dd881d9afe529351115428d912d713f69b948985cff"
+  validation_evidence_sha256: "ec60778e2a62de0b2caaafbd3e6080e9c7f0a142573ff2994db41eaa98061f1c"
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: "5c8f3d7c2b9a9842053e8815e4d90b64b47725c3"
+  task_branch: phase1/P1-B4-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No remote branch existed when this record was created."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: "not_evaluated_pre_push"
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: merge
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Required after ordinary merge and must bind the merge SHA."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - "A prior step that is structurally valid but skipped by when has no output; complete runtime failure and subsequent-step zero-call semantics remain P1-B4-004."
+  - "Selected Workflow Capability identity/policy precheck remains P1-B4-002; no production Workflow Capability may be registered before that decision lands."
+  - "The canonical Bridge rejects PASS outputs containing findings; Rain assigned that tool defect to a separate codex-claude repair task."
+rollback_or_failure_record: >
+  The implementation uses two ordinary commits with no amend, reset, rebase, force push,
+  deletion, or history rewrite. Any rollback requires a separately governed revert. The
+  external INVALID review artifacts are retained unchanged as factual evidence.
+local_commit_policy: after_review_pass
+git_commit_sha: "5c8f3d7c2b9a9842053e8815e4d90b64b47725c3 (implementation head); Task Record commit is its containing Git history entry"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced by this Workflow skeleton task."
+package_scope: ""
+package_evidence: ""
