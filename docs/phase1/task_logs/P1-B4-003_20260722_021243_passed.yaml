@@ -1,0 +1,188 @@
+schema_version: "1.2.0"
+task_id: P1-B4-003
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: TDD
+controller_risk:
+  tier: R2
+  classification_reason: "Q3 correctness: same-task recovery, version lock across waiting, and Policy/Gateway interaction."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "External monitor window recorded Gap Map PASS in the execution thread."
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: "Final acceptance follows exact-candidate Opus PASS and merge-SHA CI."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B4-003; P1-B4-004 and P1-B4-005 are not opened."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: "No deletion, secret/env, DB, system, history rewrite, force push, or production action."
+started_at: "2026-07-22T01:52:47+09:00"
+completed_at: "2026-07-22T02:12:43+09:00"
+plan_approved_by: "Rain via external monitor delegation"
+plan_approved_at: "2026-07-22T01:52:47+09:00"
+plan_approved_via: "Codex external monitor window"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Added same-process, same-task human-gate recovery. Waiting writes a dedicated safe
+  checkpoint evidence event, while the locked definition and recovery values remain only
+  in engine memory. Explicit confirmation resumes the original task/trace through an
+  independently registered confirmed capability and continues later steps. Runtime binds
+  pending recovery to session plus user, and terminal recovery clears the checkpoint.
+acceptance_criteria_result:
+  - criterion: "Confirm creates a recoverable waiting checkpoint without workflow_completed"
+    result: passed
+    evidence: "Workflow tests assert the dedicated event, safe metadata-only payload, and waiting-step Adapter zero call."
+  - criterion: "Confirmation uses a distinct confirmed capability through Registry and Gateway"
+    result: passed
+    evidence: "Real MinimalPolicyGuard test observes original _confirm short-circuit and confirmed_mock Adapter execution."
+  - criterion: "Locked Workflow version and definition survive waiting"
+    result: passed
+    evidence: "Definitions mutate to 2.0.0 before resume; result and every Workflow event remain 1.0.0."
+  - criterion: "Runtime resumes only the original session/user task and trace"
+    result: passed
+    evidence: "Cross-user and cross-session confirmation text follows ordinary routing; matching confirmation reuses task_id and trace_id."
+  - criterion: "Sensitive values remain absent from Trace and TaskStore state"
+    result: passed
+    evidence: "Tests inject a sensitive sentinel and assert it is absent from both evidence stores."
+failure_examples_tested:
+  - example: "Resume re-runs the original _confirm capability and loops"
+    result: triggered
+    evidence: "Observed call order proves confirmed_mock is used and the original capability never reaches Adapter."
+  - example: "Confirmed capability becomes inactive while the Workflow waits"
+    result: triggered
+    evidence: "Resume revalidates Registry state before workflow_resumed/Gateway and leaves Adapter calls unchanged."
+  - example: "A different user or session confirms the pending task"
+    result: triggered
+    evidence: "Both requests create ordinary tasks and do not consume the pending Workflow checkpoint."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "External monitor review"
+    evidence: "PASS with scope narrowed to same-process memory recovery plus safe TaskStore evidence."
+  - step: focused_behavior
+    result: passed
+    command: "uv run pytest tests/workflow/test_engine.py tests/runtime/test_runtime_workflow.py -q"
+    evidence: "26 passed after the Registry-drift review fix."
+  - step: deterministic_validation
+    result: passed
+    command: "Ruff, mypy, dependency, architecture, weak-test, non-DB pytest, and Golden gate"
+    evidence: "All task-relevant gates passed; exact results are listed under tests_run."
+  - step: independent_review
+    result: passed
+    command: "Codex high read-only self-review"
+    evidence: "One Registry-drift finding fixed; affected-delta re-review returned PASS / Findings: none."
+changed_files:
+  - app/runtime/runtime.py
+  - app/workflow/engine.py
+  - app/workflow/models.py
+  - docs/phase1/task_logs/P1-B4-003_20260722_021243_passed.yaml
+  - docs/phase1/tasks/P1-B4-003.md
+  - tests/runtime/test_runtime_workflow.py
+  - tests/workflow/test_engine.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest"
+    result: failed
+    output_snippet: "822 passed, 26 skipped, 3 existing DB tests failed because DATABASE_URL is absent."
+  - command: "uv run pytest --ignore=tests/db -q"
+    result: passed
+    output_snippet: "818 passed, 26 skipped."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 52 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "18/18 passed; positive 7/7 and negative 11/11."
+  - command: "uv run python scripts/check_weak_tests.py tests/workflow/test_engine.py and tests/runtime/test_runtime_workflow.py"
+    result: passed
+    output_snippet: "Both changed behavior modules passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "Architecture suite 23 passed; app.workflow has no forbidden imports."
+security_scan_result:
+  result: passed
+  evidence: "Sensitive sentinel exclusion is asserted for Workflow TaskStore and Trace evidence."
+weak_test_scan_result:
+  result: passed
+  evidence: "Both changed behavior-test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this immutable candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B4-003
+  activation_task_id: P1-B4-003
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: independent_review
+  reviewed_by: "Codex high read-only self-review"
+  reviewed_at: "2026-07-22T02:12:43+09:00"
+  notes: >
+    Codex re-review returned PASS / Findings: none after fixing Registry drift across
+    waiting. This record deliberately makes no Opus PASS claim. Merge remains blocked until
+    the exact committed candidate receives bridge exit 0 and verified claude-opus-4-8/xhigh
+    PASS meta at the user-specified external review path.
+  provider: codex
+  requested_model: codex-read-only-high
+  observed_models: {}
+  model_verified: false
+  verdict: PASS
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remaining_risks:
+  - "Local full pytest remains DB-environment-limited; no DATABASE_URL or database state was changed."
+  - "Recovery is intentionally process-local/current-task only and makes no restart or cross-day durability claim."
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, or schema action.
+  Any rollback requires a separately governed revert.
+local_commit_policy: after_review_pass
+git_commit_sha: "containing candidate commit; exact SHA is recorded by Git and external Opus meta"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""

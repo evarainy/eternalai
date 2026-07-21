@@ -9,6 +9,7 @@ from typing import Any, Callable
 import pytest
 
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
@@ -308,13 +309,18 @@ def test_policy_terminal_short_circuits_workflow_before_later_gateway_call(
         workflow_id="workflow.policy-short-circuit",
         version="1.0.0",
         steps=(
-            WorkflowStep(step_id="guarded", capability_id="oa.guarded"),
+            WorkflowStep(
+                step_id="guarded",
+                capability_id="oa.guarded",
+                confirmed_capability_id="oa.guarded.confirmed" if decision == "confirm" else None,
+            ),
             WorkflowStep(step_id="later", capability_id="oa.later"),
         ),
     )
     registry = RecordingRegistry(
         _capability("oa.guarded"),
         _capability("oa.later"),
+        *((_capability("oa.guarded.confirmed"),) if decision == "confirm" else ()),
     )
     policy_guard = RecordingPolicyGuard({"oa.guarded": decision, "oa.later": "allow"})
     adapter = RoutingAdapter(
@@ -341,13 +347,17 @@ def test_policy_terminal_short_circuits_workflow_before_later_gateway_call(
         "policy_checked",
         expected_policy_event,
     ]
+    terminal_event = "workflow_waiting_confirm" if decision == "confirm" else "workflow_completed"
     assert [event.event_type for event in task_store.events] == [
         "workflow_started",
         "workflow_step_finished",
-        "workflow_completed",
+        terminal_event,
     ]
     assert task_store.events[1].payload["step_status"] == expected_workflow_status
-    assert task_store.events[2].payload["workflow_status"] == expected_workflow_status
+    if decision == "deny":
+        assert task_store.events[2].payload["workflow_status"] == expected_workflow_status
+    else:
+        assert task_store.events[2].payload["waiting_step_id"] == "guarded"
     assert "private-marker-123" not in repr(trace.steps)
     assert "private-marker-123" not in repr(task_store.events)
 
@@ -518,9 +528,7 @@ def test_step_output_reference_must_target_an_existing_strictly_earlier_step(
         capability_id="oa.first",
         input_mapping={"value": value_ref} if reference_site == "input_mapping" else {},
         when=(
-            WorkflowCondition(value=value_ref, equals=True)
-            if reference_site == "when"
-            else None
+            WorkflowCondition(value=value_ref, equals=True) if reference_site == "when" else None
         ),
     )
     definition = WorkflowDefinition(
@@ -543,6 +551,249 @@ def test_step_output_reference_must_target_an_existing_strictly_earlier_step(
     )
 
     with pytest.raises(ValueError, match="strictly earlier"):
+        _run_engine(definition, registry, adapter)
+
+    assert adapter.calls == []
+
+
+class RecordingMinimalPolicyGuard(MinimalPolicyGuard):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def decide(
+        self,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> PolicyDecision:
+        self.calls.append(capability_id)
+        return await super().decide(
+            ai_user_id,
+            capability_id,
+            arguments,
+            request_context,
+        )
+
+
+def test_confirm_checkpoint_resumes_with_confirmed_variant_and_locked_definition() -> None:
+    async def exercise() -> tuple[
+        Any,
+        Any,
+        RecordingMinimalPolicyGuard,
+        RoutingAdapter,
+        RecordingTrace,
+        RecordingTaskStore,
+    ]:
+        sensitive_key = "secret_" + "token"
+        sensitive_value = "private-" + "marker-123"
+        definition = WorkflowDefinition(
+            workflow_id="workflow.leave-submit",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(step_id="prepare", capability_id="oa.leave.prepare"),
+                WorkflowStep(
+                    step_id="submit",
+                    capability_id="oa.leave.submit_confirm",
+                    confirmed_capability_id="oa.submit_leave_request.confirmed_mock",
+                    input_mapping={
+                        "request_id": WorkflowInputRef(
+                            source="step_output",
+                            step_id="prepare",
+                            key="request_id",
+                        ),
+                        "requester": WorkflowInputRef(
+                            source="workflow_input",
+                            key="requester",
+                        ),
+                    },
+                ),
+                WorkflowStep(
+                    step_id="audit",
+                    capability_id="oa.leave.audit",
+                    input_mapping={
+                        "workflow_id": WorkflowInputRef(
+                            source="step_output",
+                            step_id="submit",
+                            key="workflow_id",
+                        )
+                    },
+                ),
+            ),
+        )
+        definitions = {definition.workflow_id: definition}
+        registry = RecordingRegistry(
+            _capability("oa.leave.prepare"),
+            _capability("oa.leave.submit_confirm"),
+            _capability("oa.submit_leave_request.confirmed_mock"),
+            _capability("oa.leave.audit"),
+        )
+        adapter = RoutingAdapter(
+            {
+                "oa.leave.prepare": {
+                    "request_id": "REQ-1",
+                    sensitive_key: sensitive_value,
+                },
+                "oa.leave.submit_confirm": {"must_not": "run"},
+                "oa.submit_leave_request.confirmed_mock": {"workflow_id": "WF-1"},
+                "oa.leave.audit": {"status": "recorded"},
+            }
+        )
+        policy_guard = RecordingMinimalPolicyGuard()
+        trace = RecordingTrace()
+        task_store = RecordingTaskStore()
+        gateway = CapabilityGateway(
+            adapters={"oa": adapter},
+            capability_registry=registry,
+            policy_guard=policy_guard,
+            trace_port=trace,
+        )
+        engine = WorkflowEngine(
+            definitions=definitions,
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+
+        waiting = await engine.execute(
+            workflow_id=definition.workflow_id,
+            expected_version=definition.version,
+            task_id="task-confirm",
+            session_id="session-confirm",
+            ai_user_id="user-confirm",
+            initial_input={
+                "requester": "alice",
+                sensitive_key: sensitive_value,
+            },
+            request_context=RequestOrgContext(
+                request_id="trace-confirm",
+                channel="mock",
+            ),
+        )
+
+        registry.items["oa.submit_leave_request.confirmed_mock"] = _capability(
+            "oa.submit_leave_request.confirmed_mock",
+            status="disabled",
+        )
+        with pytest.raises(ValueError, match="confirmed Workflow capability"):
+            await engine.resume(task_id="task-confirm", confirmed=True)
+        assert [call[0] for call in adapter.calls] == ["oa.leave.prepare"]
+        assert "workflow_resumed" not in [event.event_type for event in task_store.events]
+        registry.items["oa.submit_leave_request.confirmed_mock"] = _capability(
+            "oa.submit_leave_request.confirmed_mock"
+        )
+
+        definitions[definition.workflow_id] = replace(
+            definition,
+            version="2.0.0",
+            steps=(WorkflowStep(step_id="drifted", capability_id="oa.leave.audit"),),
+        )
+        resumed = await engine.resume(task_id="task-confirm", confirmed=True)
+        with pytest.raises(ValueError, match="no waiting Workflow checkpoint"):
+            await engine.resume(task_id="task-confirm", confirmed=True)
+        return waiting, resumed, policy_guard, adapter, trace, task_store
+
+    waiting, resumed, policy_guard, adapter, trace, task_store = asyncio.run(exercise())
+
+    assert waiting.status == "waiting_confirm"
+    assert waiting.output == {}
+    assert waiting.step_outputs == {
+        "prepare": {
+            "request_id": "REQ-1",
+            "secret_token": "private-marker-123",
+        }
+    }
+    assert [call[0] for call in adapter.calls[:1]] == ["oa.leave.prepare"]
+    waiting_event = next(
+        event for event in task_store.events if event.event_type == "workflow_waiting_confirm"
+    )
+    assert waiting_event.event_type == "workflow_waiting_confirm"
+    assert waiting_event.payload == {
+        "workflow_id": "workflow.leave-submit",
+        "workflow_version": "1.0.0",
+        "waiting_step_id": "submit",
+        "waiting_step_index": 1,
+        "confirmed_capability_id": "oa.submit_leave_request.confirmed_mock",
+        "completed_step_ids": ["prepare"],
+        "step_output_keys": {"prepare": ["request_id"]},
+        "recovery_input_keys": ["requester"],
+    }
+    assert "workflow_completed" not in [event.event_type for event in task_store.events[:3]]
+
+    assert resumed.status == "completed"
+    assert resumed.workflow_version == "1.0.0"
+    assert resumed.output == {"status": "recorded"}
+    assert [call[0] for call in adapter.calls] == [
+        "oa.leave.prepare",
+        "oa.submit_leave_request.confirmed_mock",
+        "oa.leave.audit",
+    ]
+    assert policy_guard.calls == [
+        "oa.leave.prepare",
+        "oa.leave.submit_confirm",
+        "oa.submit_leave_request.confirmed_mock",
+        "oa.leave.audit",
+    ]
+    assert [event.event_type for event in task_store.events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_step_finished",
+        "workflow_waiting_confirm",
+        "workflow_resumed",
+        "workflow_step_finished",
+        "workflow_step_finished",
+        "workflow_completed",
+    ]
+    assert {event.payload["workflow_version"] for event in task_store.events} == {"1.0.0"}
+    selected_capabilities = [
+        step["capability_id"] for step in trace.steps if step["event_type"] == "capability_selected"
+    ]
+    assert selected_capabilities == [
+        "oa.leave.prepare",
+        "oa.leave.submit_confirm",
+        "oa.submit_leave_request.confirmed_mock",
+        "oa.leave.audit",
+    ]
+    assert "private-marker-123" not in repr(task_store.events)
+    assert "private-marker-123" not in repr(trace.steps)
+
+
+@pytest.mark.parametrize(
+    "confirmed_capability",
+    (
+        None,
+        _capability("oa.confirmed", status="disabled"),
+        _capability("oa.confirmed", risk_level="high"),
+        _capability("oa.confirmed", capability_type="workflow"),
+    ),
+)
+def test_confirmed_variant_requires_registered_active_low_risk_capability(
+    confirmed_capability: CapabilitySpec | None,
+) -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.invalid-confirmed-variant",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(
+                step_id="guarded",
+                capability_id="oa.guarded_confirm",
+                confirmed_capability_id="oa.confirmed",
+            ),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.guarded_confirm"),
+        *(() if confirmed_capability is None else (confirmed_capability,)),
+    )
+    adapter = RoutingAdapter(
+        {
+            "oa.guarded_confirm": {"must_not": "run"},
+            "oa.confirmed": {"must_not": "run"},
+        }
+    )
+
+    with pytest.raises(ValueError, match="confirmed Workflow capability"):
         _run_engine(definition, registry, adapter)
 
     assert adapter.calls == []
