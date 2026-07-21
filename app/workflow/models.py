@@ -26,6 +26,7 @@ class WorkflowCondition:
 class WorkflowStep:
     step_id: str
     capability_id: str
+    confirmed_capability_id: str | None = None
     static_arguments: Mapping[str, Any] = field(default_factory=dict)
     input_mapping: Mapping[str, WorkflowInputRef] = field(default_factory=dict)
     when: WorkflowCondition | None = None

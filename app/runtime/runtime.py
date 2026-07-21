@@ -31,12 +31,21 @@ from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef
 from app.workflow.engine import WorkflowEngine
+from app.workflow.models import WorkflowRunResult
 
 
 @dataclass(frozen=True)
 class _CapabilitySelection:
     capability: CapabilitySpec
     rule: Literal["exact_id", "unique_intent_tag"]
+
+
+@dataclass(frozen=True)
+class _PendingWorkflow:
+    task_id: str
+    trace_id: str
+    response_id: str
+    capability_id: str
 
 
 class RuntimeImpl:
@@ -65,6 +74,7 @@ class RuntimeImpl:
         )
         self._response_builder = response_builder
         self._workflow_engine = workflow_engine
+        self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
 
     async def handle_user_message(
         self,
@@ -74,6 +84,15 @@ class RuntimeImpl:
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
+        pending_key = (session_id, ai_user_id)
+        pending = self._pending_workflows.get(pending_key)
+        if pending is not None and _is_explicit_workflow_confirmation(message, pending):
+            return await self._resume_pending_workflow(
+                pending_key=pending_key,
+                pending=pending,
+                session_id=session_id,
+            )
+
         task_id = str(uuid4())
         trace_id = str(uuid4())
         response_id = str(uuid4())
@@ -206,24 +225,7 @@ class RuntimeImpl:
                     initial_input=capability_ref.arguments,
                     request_context=request_context,
                 )
-                if workflow_result.status == "denied":
-                    exec_result = ExecutionResult(
-                        status="denied",
-                        error_code="policy_denied",
-                        trace_id=workflow_result.trace_id,
-                    )
-                elif workflow_result.status == "waiting_confirm":
-                    exec_result = ExecutionResult(
-                        status="waiting_user",
-                        error_code="confirm_required",
-                        trace_id=workflow_result.trace_id,
-                    )
-                else:
-                    exec_result = ExecutionResult(
-                        status="completed",
-                        data=workflow_result.output,
-                        trace_id=workflow_result.trace_id,
-                    )
+                exec_result = _workflow_execution_result(workflow_result)
         else:
             exec_result = await self._gateway.execute_capability(
                 task_id,
@@ -266,15 +268,98 @@ class RuntimeImpl:
                 error_code=exec_result.error_code,
             )
 
-        finalize_status = _map_task_to_finalize_status(final_task_status)
-        await self._trace_port.finalize_task_trace(
-            trace_id,
-            task_id,
-            session_id,
-            status=finalize_status,
-            capability_id=capability_ref.capability_id,
-            error_code=exec_result.error_code,
+        workflow_waiting = (
+            selected_capability.type == "workflow" and exec_result.status == "waiting_user"
         )
+        if workflow_waiting:
+            self._pending_workflows[pending_key] = _PendingWorkflow(
+                task_id=task_id,
+                trace_id=trace_id,
+                response_id=response_id,
+                capability_id=capability_ref.capability_id,
+            )
+        else:
+            finalize_status = _map_task_to_finalize_status(final_task_status)
+            await self._trace_port.finalize_task_trace(
+                trace_id,
+                task_id,
+                session_id,
+                status=finalize_status,
+                capability_id=capability_ref.capability_id,
+                error_code=exec_result.error_code,
+            )
+        return envelope
+
+    async def _resume_pending_workflow(
+        self,
+        *,
+        pending_key: tuple[str, str],
+        pending: _PendingWorkflow,
+        session_id: str,
+    ) -> ResponseEnvelope:
+        if self._workflow_engine is None:
+            raise RuntimeError("pending Workflow has no configured engine")
+
+        workflow_result = await self._workflow_engine.resume(
+            task_id=pending.task_id,
+            confirmed=True,
+        )
+        exec_result = _workflow_execution_result(workflow_result)
+        response_id = str(uuid4())
+        capability_ref = CapabilityRef(
+            capability_id=pending.capability_id,
+            capability_type="workflow",
+        )
+        envelope = self._build_envelope(
+            response_id,
+            pending.task_id,
+            session_id,
+            exec_result,
+            pending.trace_id,
+            capability_ref,
+        )
+        await self._trace_port.record_step(
+            pending.trace_id,
+            pending.task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        final_task_status = _map_exec_to_task_status(exec_result.status)
+        await self._task_store.update_status(
+            pending.task_id,
+            final_task_status,
+            exec_result.error_code,
+        )
+        terminal_event = _terminal_event_for_exec_status(exec_result.status)
+        if terminal_event is not None:
+            await self._trace_port.record_step(
+                pending.trace_id,
+                pending.task_id,
+                session_id,
+                event_type=terminal_event,
+                status="ok" if terminal_event == "task_completed" else "failed",
+                capability_id=pending.capability_id,
+                error_code=exec_result.error_code,
+            )
+
+        if exec_result.status == "waiting_user":
+            self._pending_workflows[pending_key] = _PendingWorkflow(
+                task_id=pending.task_id,
+                trace_id=pending.trace_id,
+                response_id=response_id,
+                capability_id=pending.capability_id,
+            )
+        else:
+            self._pending_workflows.pop(pending_key, None)
+            await self._trace_port.finalize_task_trace(
+                pending.trace_id,
+                pending.task_id,
+                session_id,
+                status=_map_task_to_finalize_status(final_task_status),
+                capability_id=pending.capability_id,
+                error_code=exec_result.error_code,
+            )
         return envelope
 
     async def _select_capability(
@@ -414,9 +499,7 @@ class RuntimeImpl:
                     trace_id,
                     target_system=target_system,
                 )
-            identity_message, identity_fallback = _identity_block_message(
-                exec_result.error_code
-            )
+            identity_message, identity_fallback = _identity_block_message(exec_result.error_code)
             return self._response_builder.build_operator_handback_bind_required(
                 response_id,
                 task_id,
@@ -455,13 +538,13 @@ class RuntimeImpl:
                 trace_id,
             )
         return self._response_builder.build_confirm_card(
-                response_id,
-                task_id,
-                session_id,
-                "请确认提交操作",
-                "Please confirm.",
-                trace_id,
-                target_system=target_system,
+            response_id,
+            task_id,
+            session_id,
+            "请确认提交操作",
+            "Please confirm.",
+            trace_id,
+            target_system=target_system,
         )
 
 
@@ -473,6 +556,45 @@ def _map_exec_to_task_status(status: ExecutionStatus) -> TaskStatus:
     if status == "waiting_user":
         return "waiting_user"
     return "failed"
+
+
+def _workflow_execution_result(result: WorkflowRunResult) -> ExecutionResult:
+    if result.status == "denied":
+        return ExecutionResult(
+            status="denied",
+            error_code="policy_denied",
+            trace_id=result.trace_id,
+        )
+    if result.status == "waiting_confirm":
+        return ExecutionResult(
+            status="waiting_user",
+            error_code="confirm_required",
+            trace_id=result.trace_id,
+        )
+    return ExecutionResult(
+        status="completed",
+        data=result.output,
+        trace_id=result.trace_id,
+    )
+
+
+def _is_explicit_workflow_confirmation(
+    message: str,
+    pending: _PendingWorkflow,
+) -> bool:
+    normalized = " ".join(message.strip().casefold().split())
+    if normalized in {"确认", "confirm"}:
+        return True
+    identifiers = (pending.task_id.casefold(), pending.response_id.casefold())
+    return any(
+        normalized
+        in {
+            f"确认 {identifier}",
+            f"confirm {identifier}",
+            f"用户确认 {identifier}",
+        }
+        for identifier in identifiers
+    )
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:

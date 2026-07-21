@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -281,6 +282,9 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
     expected_workflow_status: str,
 ) -> None:
     async def exercise() -> tuple[Any, Gateway, TaskStore, Trace]:
+        confirmed_capability_id = (
+            "oa.document.lookup.confirmed" if step_result.status == "waiting_user" else None
+        )
         definition = WorkflowDefinition(
             workflow_id="oa.workflow.policy-terminal",
             version="1.0.0",
@@ -288,6 +292,7 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
                 WorkflowStep(
                     step_id="guarded",
                     capability_id="oa.document.lookup",
+                    confirmed_capability_id=confirmed_capability_id,
                     input_mapping={
                         "document_no": WorkflowInputRef(source="workflow_input", key="document_no")
                     },
@@ -299,6 +304,11 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
             _capability(definition.workflow_id, "workflow"),
             _capability("oa.document.lookup", "query"),
             _capability("oa.document.status", "query"),
+            *(
+                ()
+                if confirmed_capability_id is None
+                else (_capability(confirmed_capability_id, "query"),)
+            ),
         )
         task_store = TaskStore()
         trace = Trace()
@@ -352,13 +362,21 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
     assert envelope.ui.action == expected_action
     assert task_store.status_updates[-1] == expected_task_update
     workflow_events = task_store.events[-3:]
+    terminal_event = (
+        "workflow_waiting_confirm"
+        if expected_workflow_status == "waiting_confirm"
+        else "workflow_completed"
+    )
     assert [event.event_type for event in workflow_events] == [
         "workflow_started",
         "workflow_step_finished",
-        "workflow_completed",
+        terminal_event,
     ]
     assert workflow_events[1].payload["step_status"] == expected_workflow_status
-    assert workflow_events[2].payload["workflow_status"] == expected_workflow_status
+    if expected_workflow_status == "waiting_confirm":
+        assert workflow_events[2].payload["waiting_step_id"] == "guarded"
+    else:
+        assert workflow_events[2].payload["workflow_status"] == expected_workflow_status
     assert "private-marker-123" not in repr(trace.steps)
     assert "private-marker-123" not in repr(task_store.events)
 
@@ -416,3 +434,191 @@ def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> N
         "capability_id": "oa.workflow.unconfigured",
         "error_code": "internal_error",
     }
+
+
+def test_runtime_confirm_message_resumes_only_for_original_session_and_user() -> None:
+    async def exercise() -> tuple[Any, Any, Any, Any, Gateway, TaskStore, Trace]:
+        sensitive_key = "secret_" + "token"
+        sensitive_value = "private-" + "marker-123"
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.leave-submit",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="submit",
+                    capability_id="oa.leave.submit_confirm",
+                    confirmed_capability_id="oa.submit_leave_request.confirmed_mock",
+                    input_mapping={
+                        "requester": WorkflowInputRef(
+                            source="workflow_input",
+                            key="requester",
+                        )
+                    },
+                ),
+                WorkflowStep(
+                    step_id="audit",
+                    capability_id="oa.leave.audit",
+                    input_mapping={
+                        "workflow_id": WorkflowInputRef(
+                            source="step_output",
+                            step_id="submit",
+                            key="workflow_id",
+                        )
+                    },
+                ),
+            ),
+        )
+        definitions = {definition.workflow_id: definition}
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.leave.submit_confirm", "query"),
+            _capability("oa.submit_leave_request.confirmed_mock", "query"),
+            _capability("oa.leave.audit", "query"),
+            _capability("oa.document.lookup", "query"),
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        gateway = Gateway(
+            {
+                "oa.leave.submit_confirm": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="configured-confirm",
+                ),
+                "oa.submit_leave_request.confirmed_mock": ExecutionResult(
+                    status="completed",
+                    data={"workflow_id": "WF-1"},
+                    trace_id="configured-completed",
+                ),
+                "oa.leave.audit": ExecutionResult(
+                    status="completed",
+                    data={"status": "recorded"},
+                    trace_id="configured-audit",
+                ),
+            }
+        )
+        engine = WorkflowEngine(
+            definitions=definitions,
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "submit workflow",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                arguments={
+                    "requester": "alice",
+                    sensitive_key: sensitive_value,
+                },
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+        )
+
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-1",
+            session_id="session-resume",
+            message="submit workflow",
+            client_capabilities={},
+        )
+        assert trace.finalizations == []
+
+        confirm_message = f"确认 {waiting.task_id}"
+        structured_output.register(
+            confirm_message,
+            CapabilityRef,
+            CapabilityRef(
+                capability_id="oa.document.lookup",
+                arguments={"document_no": "DOC-7"},
+                capability_type="query",
+            ),
+        )
+        wrong_user = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-2",
+            session_id="session-resume",
+            message=confirm_message,
+            client_capabilities={},
+        )
+        wrong_session = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-1",
+            session_id="session-other",
+            message=confirm_message,
+            client_capabilities={},
+        )
+
+        definitions[definition.workflow_id] = replace(
+            definition,
+            version="2.0.0",
+            steps=(WorkflowStep(step_id="drifted", capability_id="oa.leave.audit"),),
+        )
+        resumed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-1",
+            session_id="session-resume",
+            message=confirm_message,
+            client_capabilities={},
+        )
+        return waiting, wrong_user, wrong_session, resumed, gateway, task_store, trace
+
+    waiting, wrong_user, wrong_session, resumed, gateway, task_store, trace = asyncio.run(
+        exercise()
+    )
+
+    assert waiting.status == "waiting_user"
+    assert waiting.ui.action == "confirm"
+    assert wrong_user.status == "completed"
+    assert wrong_user.task_id != waiting.task_id
+    assert wrong_session.status == "completed"
+    assert wrong_session.task_id != waiting.task_id
+    assert resumed.status == "completed"
+    assert resumed.task_id == waiting.task_id
+    assert resumed.trace_id == waiting.trace_id
+    assert resumed.data == {"status": "recorded"}
+    assert len(task_store.created) == 3
+    assert task_store.status_updates == [
+        ("waiting_user", "confirm_required"),
+        ("completed", None),
+        ("completed", None),
+        ("completed", None),
+    ]
+    assert [call[0] for call in gateway.calls] == [
+        "oa.leave.submit_confirm",
+        "oa.document.lookup",
+        "oa.document.lookup",
+        "oa.submit_leave_request.confirmed_mock",
+        "oa.leave.audit",
+    ]
+    workflow_events = [
+        event for event in task_store.events if event.event_type.startswith("workflow_")
+    ]
+    assert [event.event_type for event in workflow_events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_waiting_confirm",
+        "workflow_resumed",
+        "workflow_step_finished",
+        "workflow_step_finished",
+        "workflow_completed",
+    ]
+    assert {event.payload["workflow_version"] for event in workflow_events} == {"1.0.0"}
+    assert len(trace.finalizations) == 3
+    assert trace.finalizations[-1]["status"] == "ok"
+    assert "private-marker-123" not in repr(task_store.events)
+    assert "private-marker-123" not in repr(trace.steps)
