@@ -190,22 +190,27 @@ class RuntimeImpl:
         )
         if selected_capability.type == "workflow":
             if self._workflow_engine is None:
-                raise RuntimeError("registered Workflow has no configured engine")
-            sid = session_id
-            workflow_result = await self._workflow_engine.execute(
-                workflow_id=selected_capability.capability_id,
-                expected_version=selected_capability.version,
-                task_id=task_id,
-                session_id=sid,
-                ai_user_id=ai_user_id,
-                initial_input=capability_ref.arguments,
-                request_context=request_context,
-            )
-            exec_result = ExecutionResult(
-                status="completed",
-                data=workflow_result.output,
-                trace_id=workflow_result.trace_id,
-            )
+                exec_result = ExecutionResult(
+                    status="failed",
+                    error_code="internal_error",
+                    trace_id=trace_id,
+                )
+            else:
+                sid = session_id
+                workflow_result = await self._workflow_engine.execute(
+                    workflow_id=selected_capability.capability_id,
+                    expected_version=selected_capability.version,
+                    task_id=task_id,
+                    session_id=sid,
+                    ai_user_id=ai_user_id,
+                    initial_input=capability_ref.arguments,
+                    request_context=request_context,
+                )
+                exec_result = ExecutionResult(
+                    status="completed",
+                    data=workflow_result.output,
+                    trace_id=workflow_result.trace_id,
+                )
         else:
             exec_result = await self._gateway.execute_capability(
                 task_id,

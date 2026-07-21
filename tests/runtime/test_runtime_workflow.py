@@ -57,6 +57,7 @@ class TaskStore:
         self.created: list[TaskRecord] = []
         self.events: list[Any] = []
         self.statuses: list[str] = []
+        self.status_updates: list[tuple[str, str | None]] = []
 
     async def create_task(self, record: TaskRecord) -> TaskRecord:
         self.created.append(record)
@@ -69,6 +70,7 @@ class TaskStore:
         self, task_id: str, status: str, error_code: str | None = None
     ) -> TaskRecord:
         self.statuses.append(status)
+        self.status_updates.append((status, error_code))
         return self.created[0].model_copy(update={"status": status, "error_code": error_code})
 
     async def append_event(self, task_id: str, event: Any) -> None:
@@ -87,6 +89,7 @@ class SessionStore:
 class Trace:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
+        self.finalizations: list[dict[str, Any]] = []
 
     async def start_task_trace(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -102,10 +105,17 @@ class Trace:
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        self.steps.append({"event_type": event_type, "attributes": attributes or {}})
+        self.steps.append(
+            {
+                "event_type": event_type,
+                "status": status,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
 
     async def finalize_task_trace(self, *args: Any, **kwargs: Any) -> None:
-        return None
+        self.finalizations.append(dict(kwargs))
 
 
 class Gateway:
@@ -218,3 +228,58 @@ def test_runtime_executes_registered_workflow_without_calling_workflow_as_adapte
     assert envelope.status == "completed"
     assert envelope.data == {"status": "approved"}
     assert task_store.statuses[-1] == "completed"
+
+
+def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> None:
+    async def exercise() -> tuple[Any, Gateway, TaskStore, Trace]:
+        workflow = _capability("oa.workflow.unconfigured", "workflow")
+        registry = Registry(workflow)
+        task_store = TaskStore()
+        trace = Trace()
+        gateway = Gateway()
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "unconfigured workflow",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=workflow.capability_id,
+                arguments={},
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+        )
+
+        sid = "session-unconfigured"
+        envelope = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-1",
+            session_id=sid,
+            message="unconfigured workflow",
+            client_capabilities={},
+        )
+        return envelope, gateway, task_store, trace
+
+    envelope, gateway, task_store, trace = asyncio.run(exercise())
+
+    assert gateway.calls == []
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1] == ("failed", "internal_error")
+    assert [step["event_type"] for step in trace.steps[-2:]] == [
+        "response_envelope_created",
+        "task_failed",
+    ]
+    assert trace.steps[-1]["error_code"] == "internal_error"
+    assert trace.finalizations[-1] == {
+        "status": "failed",
+        "capability_id": "oa.workflow.unconfigured",
+        "error_code": "internal_error",
+    }

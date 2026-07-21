@@ -146,6 +146,17 @@ class WorkflowEngine:
         for step in definition.steps:
             if not step.step_id or step.step_id in seen_step_ids:
                 raise ValueError("Workflow step ids must be non-empty and unique")
+            references = list(step.input_mapping.values())
+            if step.when is not None:
+                references.append(step.when.value)
+            for value_ref in references:
+                if (
+                    value_ref.source == "step_output"
+                    and value_ref.step_id not in seen_step_ids
+                ):
+                    raise ValueError(
+                        "Workflow step_output references must target a strictly earlier step"
+                    )
             seen_step_ids.add(step.step_id)
             capability = await self._capability_registry.get(step.capability_id)
             if (

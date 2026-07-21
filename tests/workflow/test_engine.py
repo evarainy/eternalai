@@ -392,3 +392,49 @@ def test_every_step_requires_registered_active_low_risk_non_workflow_capability(
         _run_engine(definition, registry, adapter)
 
     assert adapter.calls == []
+
+
+@pytest.mark.parametrize("reference_site", ("input_mapping", "when"))
+@pytest.mark.parametrize("target_step_id", ("first", "second", "missing"))
+def test_step_output_reference_must_target_an_existing_strictly_earlier_step(
+    reference_site: str,
+    target_step_id: str,
+) -> None:
+    value_ref = WorkflowInputRef(
+        source="step_output",
+        step_id=target_step_id,
+        key="value",
+    )
+    first_step = WorkflowStep(
+        step_id="first",
+        capability_id="oa.first",
+        input_mapping={"value": value_ref} if reference_site == "input_mapping" else {},
+        when=(
+            WorkflowCondition(value=value_ref, equals=True)
+            if reference_site == "when"
+            else None
+        ),
+    )
+    definition = WorkflowDefinition(
+        workflow_id="workflow.invalid-reference",
+        version="1.0.0",
+        steps=(
+            first_step,
+            WorkflowStep(step_id="second", capability_id="oa.second"),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.first"),
+        _capability("oa.second"),
+    )
+    adapter = RoutingAdapter(
+        {
+            "oa.first": {"value": 1},
+            "oa.second": {"value": 2},
+        }
+    )
+
+    with pytest.raises(ValueError, match="strictly earlier"):
+        _run_engine(definition, registry, adapter)
+
+    assert adapter.calls == []
