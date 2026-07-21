@@ -10,6 +10,7 @@ from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort
 from app.runtime.runtime import RuntimeImpl
+from app.workflow.engine import WorkflowEngine
 
 
 def build_runtime(
@@ -22,6 +23,7 @@ def build_runtime(
     llm_provider: LLMProviderPort,
     structured_output: StructuredOutputPort,
     intent_model: str,
+    workflow_engine: WorkflowEngine | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     return RuntimeImpl(
@@ -34,6 +36,7 @@ def build_runtime(
         structured_output=structured_output,
         intent_model=intent_model,
         response_builder=ResponseEnvelopeBuilder(),
+        workflow_engine=workflow_engine,
     )
 
 

@@ -30,6 +30,7 @@ from app.ports.task_store import (
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef
+from app.workflow.engine import WorkflowEngine
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class RuntimeImpl:
         structured_output: StructuredOutputPort,
         intent_model: str,
         response_builder: ResponseEnvelopeBuilder,
+        workflow_engine: WorkflowEngine | None = None,
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
@@ -62,6 +64,7 @@ class RuntimeImpl:
             model=intent_model,
         )
         self._response_builder = response_builder
+        self._workflow_engine = workflow_engine
 
     async def handle_user_message(
         self,
@@ -185,14 +188,38 @@ class RuntimeImpl:
                 "device_domain_id",
             ),
         )
-        exec_result = await self._gateway.execute_capability(
-            task_id,
-            session_id,
-            ai_user_id,
-            capability_ref.capability_id,
-            capability_ref.arguments,
-            request_context,
-        )
+        if selected_capability.type == "workflow":
+            if self._workflow_engine is None:
+                exec_result = ExecutionResult(
+                    status="failed",
+                    error_code="internal_error",
+                    trace_id=trace_id,
+                )
+            else:
+                sid = session_id
+                workflow_result = await self._workflow_engine.execute(
+                    workflow_id=selected_capability.capability_id,
+                    expected_version=selected_capability.version,
+                    task_id=task_id,
+                    session_id=sid,
+                    ai_user_id=ai_user_id,
+                    initial_input=capability_ref.arguments,
+                    request_context=request_context,
+                )
+                exec_result = ExecutionResult(
+                    status="completed",
+                    data=workflow_result.output,
+                    trace_id=workflow_result.trace_id,
+                )
+        else:
+            exec_result = await self._gateway.execute_capability(
+                task_id,
+                session_id,
+                ai_user_id,
+                capability_ref.capability_id,
+                capability_ref.arguments,
+                request_context,
+            )
         envelope = self._build_envelope(
             response_id,
             task_id,

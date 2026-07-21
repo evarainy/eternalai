@@ -82,9 +82,16 @@ def _boundary_rules() -> list[BoundaryRule]:
             evidence="app/gateway/ directory absent from repo",
         ),
         BoundaryRule(
-            name="workflow_no_execution_fabric",
+            name="workflow_executes_only_through_gateway_boundary",
             source="app.workflow",
-            forbidden_imports=("app.execution_fabric",),
+            forbidden_imports=(
+                "app.execution_fabric",
+                "app.infra",
+                "app.ports.adapter",
+                "app.ports.job_queue",
+                "app.ports.policy_guard",
+                "app.ports.secret_provider",
+            ),
             not_applicable_reason=(
                 "app/workflow/ does not exist yet; "
                 "workflow not implemented in Phase 0"
@@ -342,6 +349,25 @@ class TestImportBoundaries:
 
         violations = _find_violations(rule)
         assert violations == []
+
+    def test_workflow_models_are_linear_without_graph_or_queue_fields(self) -> None:
+        from app.workflow.models import WorkflowDefinition, WorkflowStep
+
+        forbidden_fields = {
+            "dependencies",
+            "edges",
+            "job_queue",
+            "nodes",
+            "queue",
+        }
+        assert {"workflow_id", "version", "steps"}.issubset(
+            WorkflowDefinition.__dataclass_fields__
+        )
+        assert {"step_id", "capability_id", "when"}.issubset(
+            WorkflowStep.__dataclass_fields__
+        )
+        assert forbidden_fields.isdisjoint(WorkflowDefinition.__dataclass_fields__)
+        assert forbidden_fields.isdisjoint(WorkflowStep.__dataclass_fields__)
 
     def test_from_import_detected_in_temp_fixture(
         self, tmp_path: Path
