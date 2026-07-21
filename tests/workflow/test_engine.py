@@ -1,0 +1,394 @@
+"""Observable behavior tests for the lightweight linear Workflow engine."""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+from typing import Any, Callable
+
+import pytest
+
+from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.ports.adapter import AdapterResult
+from app.ports.capability_gateway import RequestOrgContext
+from app.ports.capability_registry import CapabilitySpec
+from app.workflow.engine import WorkflowEngine
+from app.workflow.models import (
+    WorkflowCondition,
+    WorkflowDefinition,
+    WorkflowInputRef,
+    WorkflowStep,
+)
+
+
+def _capability(
+    capability_id: str,
+    *,
+    status: str = "active",
+    risk_level: str = "low",
+    capability_type: str = "query",
+) -> CapabilitySpec:
+    return CapabilitySpec(
+        capability_id=capability_id,
+        name=capability_id,
+        type=capability_type,
+        input_schema_digest=f"input-{capability_id}",
+        output_schema_digest=f"output-{capability_id}",
+        risk_level=risk_level,
+        owner="workflow-test",
+        version="1.0.0",
+        status=status,
+        short_description=capability_id,
+        target_system="oa",
+        execution_identity="user_delegated",
+        binding_required=False,
+    )
+
+
+class RecordingRegistry:
+    def __init__(self, *capabilities: CapabilitySpec) -> None:
+        self.items = {item.capability_id: item for item in capabilities}
+
+    async def get(self, capability_id: str) -> CapabilitySpec | None:
+        return self.items.get(capability_id)
+
+
+class RecordingTaskStore:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def append_event(self, task_id: str, event: Any) -> None:
+        assert event.task_id == task_id
+        self.events.append(event)
+
+
+class RecordingTrace:
+    def __init__(self) -> None:
+        self.steps: list[dict[str, Any]] = []
+
+    async def record_step(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        event_type: str,
+        status: str,
+        capability_id: str | None = None,
+        error_code: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        sid = session_id
+        self.steps.append(
+            {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "session_id": sid,
+                "event_type": event_type,
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
+
+    async def record_gateway_call(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        status: str,
+        capability_id: str | None = None,
+        error_code: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        await self.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            "gateway_pre_recorded",
+            status,
+            capability_id,
+            error_code,
+            attributes,
+        )
+
+
+class RoutingAdapter:
+    def __init__(
+        self,
+        outputs: dict[str, dict[str, Any]],
+        on_first_call: Callable[[], None] | None = None,
+    ) -> None:
+        self.outputs = outputs
+        self.on_first_call = on_first_call
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        assert execution_context == {}
+        self.calls.append((capability_id, arguments))
+        if len(self.calls) == 1 and self.on_first_call is not None:
+            self.on_first_call()
+        return AdapterResult(
+            status="success",
+            data=self.outputs[capability_id],
+            error_code=None,
+        )
+
+
+def _run_engine(
+    definition: WorkflowDefinition,
+    registry: RecordingRegistry,
+    adapter: RoutingAdapter,
+    definitions: dict[str, WorkflowDefinition] | None = None,
+) -> tuple[Any, RecordingTrace, RecordingTaskStore]:
+    async def exercise() -> tuple[Any, RecordingTrace, RecordingTaskStore]:
+        sensitive_key = "secret_" + "token"
+        sensitive_value = "private-" + "marker-123"
+        trace = RecordingTrace()
+        task_store = RecordingTaskStore()
+        gateway = CapabilityGateway(
+            adapters={"oa": adapter},
+            capability_registry=registry,
+            trace_port=trace,
+        )
+        engine = WorkflowEngine(
+            definitions=definitions or {definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        sid = "session-1"
+        result = await engine.execute(
+            workflow_id=definition.workflow_id,
+            expected_version=definition.version,
+            task_id="task-1",
+            session_id=sid,
+            ai_user_id="user-1",
+            initial_input={
+                "requester": "alice",
+                sensitive_key: sensitive_value,
+            },
+            request_context=RequestOrgContext(request_id="trace-1", channel="mock"),
+        )
+        return result, trace, task_store
+
+    return asyncio.run(exercise())
+
+
+def test_linear_steps_branch_and_io_mapping_run_through_gateway_in_order() -> None:
+    sensitive_key = "secret_" + "token"
+    sensitive_value = "private-" + "marker-123"
+    definition = WorkflowDefinition(
+        workflow_id="workflow.employee-summary",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(
+                step_id="lookup",
+                capability_id="oa.employee.lookup",
+                input_mapping={
+                    "requested_by": WorkflowInputRef(source="workflow_input", key="requester")
+                },
+            ),
+            WorkflowStep(
+                step_id="summary",
+                capability_id="oa.employee.summary",
+                input_mapping={
+                    "employee_id": WorkflowInputRef(
+                        source="step_output", step_id="lookup", key="employee_id"
+                    )
+                },
+                when=WorkflowCondition(
+                    value=WorkflowInputRef(source="step_output", step_id="lookup", key="approved"),
+                    equals=True,
+                ),
+            ),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.employee.lookup"),
+        _capability("oa.employee.summary"),
+    )
+    adapter = RoutingAdapter(
+        {
+            "oa.employee.lookup": {
+                "employee_id": "E-1",
+                "approved": True,
+                sensitive_key: sensitive_value,
+            },
+            "oa.employee.summary": {"summary": "ready"},
+        }
+    )
+
+    result, trace, task_store = _run_engine(definition, registry, adapter)
+
+    assert result.workflow_id == definition.workflow_id
+    assert result.workflow_version == "1.0.0"
+    assert result.step_outputs["summary"] == {"summary": "ready"}
+    assert adapter.calls == [
+        ("oa.employee.lookup", {"requested_by": "alice"}),
+        ("oa.employee.summary", {"employee_id": "E-1"}),
+    ]
+    assert [step["event_type"] for step in trace.steps] == [
+        "capability_selected",
+        "gateway_pre_recorded",
+        "adapter_called",
+        "gateway_post_recorded",
+        "capability_selected",
+        "gateway_pre_recorded",
+        "adapter_called",
+        "gateway_post_recorded",
+    ]
+    workflow_trace = [step for step in trace.steps if "workflow_id" in step["attributes"]]
+    assert [step["attributes"]["step_id"] for step in workflow_trace] == [
+        "lookup",
+        "summary",
+    ]
+    assert [step["attributes"]["step_status"] for step in workflow_trace] == [
+        "running",
+        "running",
+    ]
+    gateway_terminals = [
+        step for step in trace.steps if step["event_type"] == "gateway_post_recorded"
+    ]
+    assert [step["capability_id"] for step in gateway_terminals] == [
+        "oa.employee.lookup",
+        "oa.employee.summary",
+    ]
+    assert [step["status"] for step in gateway_terminals] == ["ok", "ok"]
+    assert [event.event_type for event in task_store.events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_step_finished",
+        "workflow_completed",
+    ]
+    assert sensitive_value not in repr(trace.steps)
+    assert sensitive_value not in repr(task_store.events)
+
+
+def test_false_condition_skips_only_that_step_then_rejoins_linear_sequence() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.branch",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="check", capability_id="oa.check"),
+            WorkflowStep(
+                step_id="conditional",
+                capability_id="oa.conditional",
+                when=WorkflowCondition(
+                    value=WorkflowInputRef(source="step_output", step_id="check", key="approved"),
+                    equals=True,
+                ),
+            ),
+            WorkflowStep(
+                step_id="finish",
+                capability_id="oa.finish",
+                input_mapping={
+                    "check_id": WorkflowInputRef(
+                        source="step_output", step_id="check", key="check_id"
+                    )
+                },
+            ),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.check"),
+        _capability("oa.conditional"),
+        _capability("oa.finish"),
+    )
+    adapter = RoutingAdapter(
+        {
+            "oa.check": {"approved": False, "check_id": "C-1"},
+            "oa.conditional": {"unexpected": True},
+            "oa.finish": {"done": True},
+        }
+    )
+
+    result, trace, task_store = _run_engine(definition, registry, adapter)
+
+    assert [call[0] for call in adapter.calls] == ["oa.check", "oa.finish"]
+    assert adapter.calls[-1][1] == {"check_id": "C-1"}
+    assert "conditional" not in result.step_outputs
+    skipped = [step for step in trace.steps if step["attributes"].get("step_status") == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["event_type"] == "capability_selected"
+    assert skipped[0]["attributes"]["step_id"] == "conditional"
+    assert not [
+        step
+        for step in trace.steps
+        if step["capability_id"] == "oa.conditional"
+        and step["event_type"]
+        in {"gateway_pre_recorded", "adapter_called", "gateway_post_recorded"}
+    ]
+    assert [event.payload["step_status"] for event in task_store.events[1:-1]] == [
+        "completed",
+        "skipped",
+        "completed",
+    ]
+
+
+def test_definition_is_snapshotted_so_version_cannot_drift_mid_run() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.locked",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="one", capability_id="oa.one"),
+            WorkflowStep(step_id="two", capability_id="oa.two"),
+        ),
+    )
+    definitions = {definition.workflow_id: definition}
+    registry = RecordingRegistry(_capability("oa.one"), _capability("oa.two"))
+    adapter = RoutingAdapter(
+        {"oa.one": {"one": 1}, "oa.two": {"two": 2}},
+        on_first_call=lambda: definitions.__setitem__(
+            definition.workflow_id,
+            replace(definition, version="2.0.0"),
+        ),
+    )
+
+    result, trace, task_store = _run_engine(
+        definition,
+        registry,
+        adapter,
+        definitions,
+    )
+
+    assert definitions[definition.workflow_id].version == "2.0.0"
+    assert result.workflow_version == "1.0.0"
+    assert {
+        step["attributes"]["workflow_version"]
+        for step in trace.steps
+        if "workflow_version" in step["attributes"]
+    } == {"1.0.0"}
+    assert {event.payload["workflow_version"] for event in task_store.events} == {"1.0.0"}
+
+
+@pytest.mark.parametrize(
+    "capability",
+    (
+        None,
+        _capability("oa.unsafe", status="disabled"),
+        _capability("oa.unsafe", risk_level="high"),
+        _capability("oa.unsafe", capability_type="workflow"),
+    ),
+)
+def test_every_step_requires_registered_active_low_risk_non_workflow_capability(
+    capability: CapabilitySpec | None,
+) -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.invalid-step",
+        version="1.0.0",
+        steps=(WorkflowStep(step_id="unsafe", capability_id="oa.unsafe"),),
+    )
+    registry = RecordingRegistry(*(() if capability is None else (capability,)))
+    adapter = RoutingAdapter({"oa.unsafe": {"unexpected": True}})
+
+    with pytest.raises(ValueError, match="active low-risk registered capability"):
+        _run_engine(definition, registry, adapter)
+
+    assert adapter.calls == []
