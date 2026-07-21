@@ -142,7 +142,8 @@ class MockIdentityMapping:
     """Deterministic mock implementation of IdentityMappingPort."""
 
     def __init__(self, rows: Iterable[_RowInput] | None = None) -> None:
-        self._rows = tuple(self._coerce_row(row) for row in (rows or _DEFAULT_ROWS))
+        source_rows = _DEFAULT_ROWS if rows is None else rows
+        self._rows = tuple(self._coerce_row(row) for row in source_rows)
 
     async def resolve_execution_identity(
         self,
@@ -196,7 +197,7 @@ class MockIdentityMapping:
             return self._unbound(target_system, execution_identity)
 
         active_matches = [result for result in matches if result.bind_status == "active"]
-        if len(active_matches) > 1 and not has_scope_filter:
+        if len(active_matches) > 1:
             return IdentityCheckResult(
                 bind_status="needs_binding_scope",
                 target_system=target_system,
@@ -223,7 +224,7 @@ class MockIdentityMapping:
             account_set_id=account_set_id,
             device_domain_id=device_domain_id,
         )
-        if not results:
+        if len(results) != 1:
             return None
         return results[0]
 

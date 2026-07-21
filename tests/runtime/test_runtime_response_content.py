@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pytest
+
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -244,6 +246,51 @@ def test_identity_unbound_uses_operator_handback_bind_required_for_target_system
     assert envelope.ui.component_type == "operator_handback_card"
     assert envelope.ui.action == "bind_required"
     assert envelope.ui.target_system == "oa"
+    assert envelope.ui.reason_code == "identity_unbound"
+
+
+@pytest.mark.parametrize(
+    ("error_code", "message_fragment"),
+    (
+        ("identity_expired", "过期"),
+        ("identity_revoked", "撤销"),
+    ),
+)
+def test_inactive_identity_has_stable_explanatory_handback(
+    error_code: str,
+    message_fragment: str,
+) -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="binding_required",
+            error_code=cast(Any, error_code),
+            trace_id=f"tr-{error_code}",
+        ),
+        capability_id="oa.list_pending_workflows",
+    )
+
+    assert envelope.status == "blocked"
+    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.ui.action == "bind_required"
+    assert envelope.ui.reason_code == error_code
+    assert message_fragment in envelope.message
+
+
+def test_needs_binding_scope_has_matching_reason_and_clarify_action() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="binding_required",
+            error_code="needs_binding_scope",
+            trace_id="tr-needs-binding-scope",
+        ),
+        capability_id="u8.get_document_status",
+    )
+
+    assert envelope.status == "blocked"
+    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.ui.action == "clarify_scope"
+    assert envelope.ui.reason_code == "needs_binding_scope"
+    assert envelope.ui.target_system == "u8"
 
 
 def test_confirm_required_card_carries_target_system() -> None:

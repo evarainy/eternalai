@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pytest
+
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
@@ -172,7 +174,9 @@ class FakeRegistry:
 
 
 class FakeIdentityMapping:
-    def __init__(self) -> None:
+    def __init__(self, bind_status: str = "active") -> None:
+        self.bind_status = bind_status
+        self.call_count = 0
         self.last_context: RequestOrgContext | None = None
 
     async def resolve_execution_identity(
@@ -182,16 +186,19 @@ class FakeIdentityMapping:
         execution_identity: str,
         request_context: RequestOrgContext,
     ) -> IdentityCheckResult:
+        self.call_count += 1
         self.last_context = request_context
         return IdentityCheckResult(
-            bind_status="active",
+            bind_status=cast(Any, self.bind_status),
             target_system=cast(Any, target_system),
             execution_identity=cast(Any, execution_identity),
         )
 
 
 class FakePolicyGuard:
-    def __init__(self) -> None:
+    def __init__(self, decision: str = "allow") -> None:
+        self.decision = decision
+        self.call_count = 0
         self.last_context: RequestOrgContext | None = None
 
     async def decide(
@@ -201,17 +208,22 @@ class FakePolicyGuard:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> PolicyDecision:
+        self.call_count += 1
         self.last_context = request_context
-        return PolicyDecision(decision="allow")
+        return PolicyDecision(decision=cast(Any, self.decision))
 
 
 class FakeAdapter:
+    def __init__(self) -> None:
+        self.call_count = 0
+
     async def execute(
         self,
         capability_id: str,
         arguments: dict[str, Any],
         execution_context: dict[str, Any],
     ) -> AdapterResult:
+        self.call_count += 1
         return AdapterResult(
             status="success",
             data={"document_no": "U8-AP-2026-0033", "document_status": "posted"},
@@ -347,6 +359,124 @@ def test_runtime_injects_scope_arguments_into_request_org_context() -> None:
     assert gateway.last_context.account_set_id == "acctset_hunan_01"
     assert gateway.last_context.resource_scope == "acctset_hunan_01"
     assert gateway.last_context.device_domain_id == "prison_area_a"
+
+
+@pytest.mark.parametrize(
+    (
+        "bind_status",
+        "policy_decision",
+        "expected_error_code",
+        "expected_task_status",
+        "expected_ui_action",
+        "expected_events",
+        "expected_policy_calls",
+    ),
+    (
+        (
+            "unbound",
+            "allow",
+            "identity_unbound",
+            "failed",
+            "bind_required",
+            ["identity_check", "blocked_by_identity"],
+            0,
+        ),
+        (
+            "expired",
+            "allow",
+            "identity_expired",
+            "failed",
+            "bind_required",
+            ["identity_check", "blocked_by_identity"],
+            0,
+        ),
+        (
+            "revoked",
+            "allow",
+            "identity_revoked",
+            "failed",
+            "bind_required",
+            ["identity_check", "blocked_by_identity"],
+            0,
+        ),
+        (
+            "needs_binding_scope",
+            "allow",
+            "needs_binding_scope",
+            "failed",
+            "clarify_scope",
+            ["identity_check", "blocked_by_identity"],
+            0,
+        ),
+        (
+            "active",
+            "deny",
+            "policy_denied",
+            "failed",
+            "none",
+            ["identity_check", "policy_checked", "blocked_by_policy"],
+            1,
+        ),
+        (
+            "active",
+            "confirm",
+            "confirm_required",
+            "waiting_user",
+            "confirm",
+            ["identity_check", "policy_checked", "confirm_required"],
+            1,
+        ),
+    ),
+)
+def test_b3_negative_prechecks_close_runtime_task_trace_and_sdui_loop(
+    bind_status: str,
+    policy_decision: str,
+    expected_error_code: str,
+    expected_task_status: str,
+    expected_ui_action: str,
+    expected_events: list[str],
+    expected_policy_calls: int,
+) -> None:
+    trace_port = SpyTracePort()
+    identity_mapping = FakeIdentityMapping(bind_status)
+    policy_guard = FakePolicyGuard(policy_decision)
+    adapter = FakeAdapter()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=FakeRegistry(),
+        identity_mapping=identity_mapping,
+        policy_guard=policy_guard,
+        trace_port=trace_port,
+    )
+
+    envelope, task_store = _run_runtime(
+        gateway=gateway,
+        trace_port=trace_port,
+        structured_output=_structured_output(f"b3 {expected_error_code}"),
+        message=f"b3 {expected_error_code}",
+    )
+
+    common_prefix = ["task_created", "intent_parsed", "capability_selected"]
+    expected_terminal = [] if expected_task_status == "waiting_user" else ["task_failed"]
+    assert _events(trace_port) == [
+        *common_prefix,
+        *expected_events,
+        "response_envelope_created",
+        *expected_terminal,
+    ]
+    assert task_store.status_updates[-1][1:] == (
+        expected_task_status,
+        expected_error_code,
+    )
+    assert envelope.status == (
+        "waiting_user" if expected_task_status == "waiting_user" else "blocked"
+    )
+    assert envelope.ui.action == expected_ui_action
+    assert identity_mapping.call_count == 1
+    assert policy_guard.call_count == expected_policy_calls
+    assert adapter.call_count == 0
+    assert "adapter_called" not in _events(trace_port)
+    assert "task_completed" not in _events(trace_port)
 
 
 def test_runtime_terminal_events_follow_execution_status_not_envelope_status() -> None:

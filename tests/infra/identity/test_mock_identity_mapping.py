@@ -183,6 +183,114 @@ def test_resolve_hikvision_with_explicit_device_domain_id_returns_matching_bindi
     assert result.device_domain_id == "camera-domain-west"
 
 
+@pytest.mark.parametrize(
+    ("scope_field", "scope_value"),
+    (
+        ("resource_scope", "shared-resource"),
+        ("account_set_id", "shared-account"),
+        ("device_domain_id", "shared-device-domain"),
+    ),
+)
+def test_ambiguous_explicit_scope_never_falls_back_to_first_active_binding(
+    scope_field: str,
+    scope_value: str,
+) -> None:
+    rows = [
+        {
+            "ai_user_id": "ai-user-ambiguous",
+            "bind_status": "active",
+            "binding_id": binding_id,
+            "target_system": "u8",
+            "execution_identity": "user_delegated",
+            "binding_scope": "shared-resource",
+            "account_set_id": "shared-account",
+            "device_domain_id": "shared-device-domain",
+            "reason_code": None,
+        }
+        for binding_id in ("binding-first", "binding-second")
+    ]
+
+    result = _run(
+        _mapping(rows).resolve_execution_identity(
+            ai_user_id="ai-user-ambiguous",
+            target_system="u8",
+            execution_identity="user_delegated",
+            request_context=_context(**{scope_field: scope_value}),
+        )
+    )
+
+    assert result.bind_status == "needs_binding_scope"
+    assert result.reason_code == "needs_binding_scope"
+    assert result.binding_id is None
+
+
+def test_get_mapping_fails_closed_when_filters_still_match_multiple_bindings() -> None:
+    rows = [
+        {
+            "ai_user_id": "ai-user-ambiguous",
+            "bind_status": "active",
+            "binding_id": binding_id,
+            "target_system": "oa",
+            "execution_identity": "user_delegated",
+            "binding_scope": "shared-resource",
+            "account_set_id": None,
+            "device_domain_id": None,
+            "reason_code": None,
+        }
+        for binding_id in ("binding-first", "binding-second")
+    ]
+
+    result = _run(
+        _mapping(rows).get_mapping(
+            ai_user_id="ai-user-ambiguous",
+            target_system="oa",
+            binding_scope="shared-resource",
+        )
+    )
+
+    assert result is None
+
+
+def test_scope_miss_never_falls_back_to_system_scope_binding() -> None:
+    rows = [
+        {
+            "ai_user_id": "ai-user-scoped",
+            "bind_status": "active",
+            "binding_id": "delegated-binding",
+            "target_system": "u8",
+            "execution_identity": "user_delegated",
+            "binding_scope": "delegated-resource",
+            "account_set_id": "delegated-account",
+            "device_domain_id": None,
+            "reason_code": None,
+        },
+        {
+            "ai_user_id": "ai-user-scoped",
+            "bind_status": "active",
+            "binding_id": "system-binding",
+            "target_system": "u8",
+            "execution_identity": "system_scope",
+            "binding_scope": "system-resource",
+            "account_set_id": "system-account",
+            "device_domain_id": None,
+            "reason_code": None,
+        },
+    ]
+
+    result = _run(
+        _mapping(rows).resolve_execution_identity(
+            ai_user_id="ai-user-scoped",
+            target_system="u8",
+            execution_identity="user_delegated",
+            request_context=_context(account_set_id="unknown-account"),
+        )
+    )
+
+    assert result.bind_status == "unbound"
+    assert result.execution_identity == "user_delegated"
+    assert result.binding_id is None
+
+
 def test_precheck_returns_false_for_unresolvable_identity() -> None:
     result = _mapping().precheck(
         ai_user_id="unknown-ai-user",
