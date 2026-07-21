@@ -12,11 +12,13 @@ from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import (
     WorkflowCondition,
     WorkflowDefinition,
     WorkflowInputRef,
+    WorkflowRunStatus,
     WorkflowStep,
 )
 
@@ -60,6 +62,22 @@ class RecordingTaskStore:
     async def append_event(self, task_id: str, event: Any) -> None:
         assert event.task_id == task_id
         self.events.append(event)
+
+
+class RecordingPolicyGuard:
+    def __init__(self, decisions: dict[str, PolicyDecisionValue]) -> None:
+        self.decisions = decisions
+        self.calls: list[str] = []
+
+    async def decide(
+        self,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> PolicyDecision:
+        self.calls.append(capability_id)
+        return PolicyDecision(decision=self.decisions[capability_id])
 
 
 class RecordingTrace:
@@ -145,6 +163,7 @@ def _run_engine(
     registry: RecordingRegistry,
     adapter: RoutingAdapter,
     definitions: dict[str, WorkflowDefinition] | None = None,
+    policy_guard: RecordingPolicyGuard | None = None,
 ) -> tuple[Any, RecordingTrace, RecordingTaskStore]:
     async def exercise() -> tuple[Any, RecordingTrace, RecordingTaskStore]:
         sensitive_key = "secret_" + "token"
@@ -154,6 +173,7 @@ def _run_engine(
         gateway = CapabilityGateway(
             adapters={"oa": adapter},
             capability_registry=registry,
+            policy_guard=policy_guard,
             trace_port=trace,
         )
         engine = WorkflowEngine(
@@ -229,6 +249,7 @@ def test_linear_steps_branch_and_io_mapping_run_through_gateway_in_order() -> No
 
     assert result.workflow_id == definition.workflow_id
     assert result.workflow_version == "1.0.0"
+    assert result.status == "completed"
     assert result.step_outputs["summary"] == {"summary": "ready"}
     assert adapter.calls == [
         ("oa.employee.lookup", {"requested_by": "alice"}),
@@ -269,6 +290,93 @@ def test_linear_steps_branch_and_io_mapping_run_through_gateway_in_order() -> No
     ]
     assert sensitive_value not in repr(trace.steps)
     assert sensitive_value not in repr(task_store.events)
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_workflow_status", "expected_policy_event"),
+    (
+        ("deny", "denied", "blocked_by_policy"),
+        ("confirm", "waiting_confirm", "confirm_required"),
+    ),
+)
+def test_policy_terminal_short_circuits_workflow_before_later_gateway_call(
+    decision: PolicyDecisionValue,
+    expected_workflow_status: WorkflowRunStatus,
+    expected_policy_event: str,
+) -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.policy-short-circuit",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="guarded", capability_id="oa.guarded"),
+            WorkflowStep(step_id="later", capability_id="oa.later"),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.guarded"),
+        _capability("oa.later"),
+    )
+    policy_guard = RecordingPolicyGuard({"oa.guarded": decision, "oa.later": "allow"})
+    adapter = RoutingAdapter(
+        {
+            "oa.guarded": {"must_not": "run"},
+            "oa.later": {"must_not": "run"},
+        }
+    )
+
+    result, trace, task_store = _run_engine(
+        definition,
+        registry,
+        adapter,
+        policy_guard=policy_guard,
+    )
+
+    assert result.status == expected_workflow_status
+    assert result.output == {}
+    assert result.step_outputs == {}
+    assert policy_guard.calls == ["oa.guarded"]
+    assert adapter.calls == []
+    assert [step["event_type"] for step in trace.steps] == [
+        "capability_selected",
+        "policy_checked",
+        expected_policy_event,
+    ]
+    assert [event.event_type for event in task_store.events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_completed",
+    ]
+    assert task_store.events[1].payload["step_status"] == expected_workflow_status
+    assert task_store.events[2].payload["workflow_status"] == expected_workflow_status
+    assert "private-marker-123" not in repr(trace.steps)
+    assert "private-marker-123" not in repr(task_store.events)
+
+
+def test_policy_allow_continues_through_all_workflow_steps() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.policy-allow",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="first", capability_id="oa.first"),
+            WorkflowStep(step_id="second", capability_id="oa.second"),
+        ),
+    )
+    registry = RecordingRegistry(_capability("oa.first"), _capability("oa.second"))
+    policy_guard = RecordingPolicyGuard({"oa.first": "allow", "oa.second": "allow"})
+    adapter = RoutingAdapter({"oa.first": {"first": 1}, "oa.second": {"second": 2}})
+
+    result, _, task_store = _run_engine(
+        definition,
+        registry,
+        adapter,
+        policy_guard=policy_guard,
+    )
+
+    assert result.status == "completed"
+    assert result.output == {"second": 2}
+    assert policy_guard.calls == ["oa.first", "oa.second"]
+    assert [call[0] for call in adapter.calls] == ["oa.first", "oa.second"]
+    assert task_store.events[-1].payload["workflow_status"] == "completed"
 
 
 def test_false_condition_skips_only_that_step_then_rejoins_linear_sequence() -> None:

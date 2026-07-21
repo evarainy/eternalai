@@ -15,6 +15,7 @@ from app.workflow.models import (
     WorkflowDefinition,
     WorkflowInputRef,
     WorkflowRunResult,
+    WorkflowRunStatus,
     WorkflowStep,
 )
 
@@ -106,6 +107,28 @@ class WorkflowEngine:
                 arguments,
                 request_context,
             )
+            if execution.status in {"denied", "waiting_user"}:
+                workflow_status: WorkflowRunStatus = (
+                    "denied" if execution.status == "denied" else "waiting_confirm"
+                )
+                await self._append_state(
+                    task_id,
+                    "workflow_step_finished",
+                    _step_state(definition, step, index, workflow_status),
+                )
+                await self._append_state(
+                    task_id,
+                    "workflow_completed",
+                    _workflow_state(definition, workflow_status),
+                )
+                return WorkflowRunResult(
+                    workflow_id=definition.workflow_id,
+                    workflow_version=definition.version,
+                    trace_id=request_context.request_id,
+                    status=workflow_status,
+                    output={},
+                    step_outputs=step_outputs,
+                )
             if execution.status != "completed":
                 raise RuntimeError("non-completed Workflow step handling is reserved for P1-B4-004")
 
@@ -121,12 +144,13 @@ class WorkflowEngine:
         await self._append_state(
             task_id,
             "workflow_completed",
-            _workflow_state(definition),
+            _workflow_state(definition, "completed"),
         )
         return WorkflowRunResult(
             workflow_id=definition.workflow_id,
             workflow_version=definition.version,
             trace_id=request_context.request_id,
+            status="completed",
             output=final_output,
             step_outputs=step_outputs,
         )
@@ -220,11 +244,17 @@ class WorkflowEngine:
         )
 
 
-def _workflow_state(definition: WorkflowDefinition) -> dict[str, Any]:
-    return {
+def _workflow_state(
+    definition: WorkflowDefinition,
+    status: WorkflowRunStatus | None = None,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
         "workflow_id": definition.workflow_id,
         "workflow_version": definition.version,
     }
+    if status is not None:
+        state["workflow_status"] = status
+    return state
 
 
 def _step_state(

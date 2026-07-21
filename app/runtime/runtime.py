@@ -206,11 +206,24 @@ class RuntimeImpl:
                     initial_input=capability_ref.arguments,
                     request_context=request_context,
                 )
-                exec_result = ExecutionResult(
-                    status="completed",
-                    data=workflow_result.output,
-                    trace_id=workflow_result.trace_id,
-                )
+                if workflow_result.status == "denied":
+                    exec_result = ExecutionResult(
+                        status="denied",
+                        error_code="policy_denied",
+                        trace_id=workflow_result.trace_id,
+                    )
+                elif workflow_result.status == "waiting_confirm":
+                    exec_result = ExecutionResult(
+                        status="waiting_user",
+                        error_code="confirm_required",
+                        trace_id=workflow_result.trace_id,
+                    )
+                else:
+                    exec_result = ExecutionResult(
+                        status="completed",
+                        data=workflow_result.output,
+                        trace_id=workflow_result.trace_id,
+                    )
         else:
             exec_result = await self._gateway.execute_capability(
                 task_id,
