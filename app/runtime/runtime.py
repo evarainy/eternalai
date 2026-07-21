@@ -369,19 +369,23 @@ class RuntimeImpl:
                     response_id,
                     task_id,
                     session_id,
-                    "请先选择账套后继续",
+                    "请先选择明确的账套、设备域或资源范围后继续",
                     "Binding scope required.",
                     trace_id,
                     target_system=target_system,
                 )
+            identity_message, identity_fallback = _identity_block_message(
+                exec_result.error_code
+            )
             return self._response_builder.build_operator_handback_bind_required(
                 response_id,
                 task_id,
                 session_id,
-                "需要绑定账号才能继续",
-                "Identity binding required.",
+                identity_message,
+                identity_fallback,
                 trace_id,
                 target_system,
+                reason_code=exec_result.error_code or "identity_unbound",
             )
         if exec_result.status == "timeout":
             return self._response_builder.build_failed(
@@ -429,6 +433,14 @@ def _map_exec_to_task_status(status: ExecutionStatus) -> TaskStatus:
     if status == "waiting_user":
         return "waiting_user"
     return "failed"
+
+
+def _identity_block_message(error_code: str | None) -> tuple[str, str]:
+    if error_code == "identity_expired":
+        return "账号绑定已过期，请重新绑定后继续", "Identity binding expired."
+    if error_code == "identity_revoked":
+        return "账号绑定已撤销，请重新绑定后继续", "Identity binding revoked."
+    return "需要绑定账号才能继续", "Identity binding required."
 
 
 def _terminal_event_for_exec_status(status: ExecutionStatus) -> TraceEventType | None:

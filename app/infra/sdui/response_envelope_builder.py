@@ -142,7 +142,7 @@ class ResponseEnvelopeBuilder:
             {
                 "action": "clarify_scope",
                 "target_system": target_system,
-                "reason_code": "unclear_scope",
+                "reason_code": "needs_binding_scope",
                 "payload": payload or {},
             },
             data,
@@ -203,6 +203,7 @@ class ResponseEnvelopeBuilder:
         data: dict[str, Any] | None = None,
         trace_summary: str | None = None,
         payload: dict[str, Any] | None = None,
+        reason_code: str = "identity_unbound",
     ) -> ResponseEnvelope:
         return self._build_envelope(
             response_id,
@@ -216,7 +217,7 @@ class ResponseEnvelopeBuilder:
             {
                 "action": "bind_required",
                 "target_system": target_system,
-                "reason_code": "identity_unbound",
+                "reason_code": reason_code,
                 "payload": payload or {},
             },
             data,

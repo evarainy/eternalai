@@ -87,7 +87,7 @@ P1-WORKFLOW-002-REPAIR-001
 
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
-| （B3 任务 TBD） | Identity / Policy 预检闭环 | B2 | IdentityMapping Mock 表 + Policy Guard 绑定预检 + 未绑定 `operator_handback_card` + confirm 路径 |
+| P1-B3-001 | Identity / Policy 预检闭环 | P1-B2-002 integrated + merge-SHA CI passed | IdentityMapping scope 无回退 + Binding 状态预检 + Policy allow/deny/confirm + SDUI/Trace/Task 闭环 |
 
 ## 4. B4 — Workflow 轻量引擎 + 执行
 

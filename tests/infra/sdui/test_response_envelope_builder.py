@@ -117,7 +117,7 @@ def test_build_operator_handback_uses_clarify_scope() -> None:
 
     assert envelope.ui.component_type == "operator_handback_card"
     assert envelope.ui.action == "clarify_scope"
-    assert envelope.ui.reason_code == "unclear_scope"
+    assert envelope.ui.reason_code == "needs_binding_scope"
 
 
 def test_build_failed_fallback_text_non_empty() -> None:
