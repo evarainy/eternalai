@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, TypeAlias
 
 WorkflowInputSource = Literal["workflow_input", "step_output"]
+WorkflowRunStatus: TypeAlias = Literal["completed", "denied", "waiting_confirm"]
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class WorkflowRunResult:
     workflow_id: str
     workflow_version: str
     trace_id: str
+    status: WorkflowRunStatus
     output: dict[str, Any]
     step_outputs: dict[str, dict[str, Any]]
 
@@ -51,5 +53,6 @@ __all__ = (
     "WorkflowDefinition",
     "WorkflowInputRef",
     "WorkflowRunResult",
+    "WorkflowRunStatus",
     "WorkflowStep",
 )
