@@ -6,12 +6,15 @@ import importlib
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 if TYPE_CHECKING:
     assert_adapter_calls: Callable[[Mapping[str, Any], Mapping[str, Any]], None]
     assert_forbidden_absent: Callable[
         [Iterable[str], Any, Iterable[Any], Mapping[str, Any]],
         None,
     ]
+    assert_policy_calls: Callable[[Mapping[str, Any], int], None]
     assert_response_matches: Callable[[Any, Mapping[str, Any]], None]
     assert_terminal_state_matrix: Callable[[Iterable[Any], str | None], None]
     assert_trace_sequence_contains: Callable[[Iterable[Any], Iterable[str]], None]
@@ -19,6 +22,7 @@ else:
     from scripts.golden_task_assertions import (
         assert_adapter_calls,
         assert_forbidden_absent,
+        assert_policy_calls,
         assert_response_matches,
         assert_terminal_state_matrix,
         assert_trace_sequence_contains,
@@ -111,6 +115,30 @@ def test_terminal_matrix_accepts_no_capability_found_short_circuit() -> None:
     assert len(actual_trace) == 4
 
 
+@pytest.mark.parametrize(
+    "terminal_state",
+    ("identity_expired", "identity_revoked"),
+)
+def test_inactive_identity_terminal_matrix_requires_exact_error_code(
+    terminal_state: str,
+) -> None:
+    actual_trace = [
+        {"event_type": "task_created"},
+        {"event_type": "intent_parsed"},
+        {"event_type": "capability_selected"},
+        {"event_type": "identity_check", "error_code": terminal_state},
+        {"event_type": "blocked_by_identity", "error_code": terminal_state},
+        {"event_type": "response_envelope_created"},
+        {"event_type": "task_failed", "error_code": terminal_state},
+    ]
+
+    assert_terminal_state_matrix(actual_trace, terminal_state)
+
+    actual_trace[3]["error_code"] = "identity_unbound"
+    with pytest.raises(AssertionError, match="expected error_code"):
+        assert_terminal_state_matrix(actual_trace, terminal_state)
+
+
 def test_forbidden_credentials_ignore_fixture_placeholder_identifiers() -> None:
     envelope: dict[str, Any] = {
         "status": "completed",
@@ -147,3 +175,16 @@ def test_adapter_assertion_accepts_required_call_count() -> None:
     )
 
     assert sum(adapter_calls.values()) == 1
+
+
+def test_policy_assertion_accepts_zero_calls_for_identity_short_circuit() -> None:
+    assert_policy_calls(
+        {"must_be_called": False, "must_not_be_called": True},
+        0,
+    )
+
+    with pytest.raises(AssertionError, match="policy guard must not be called"):
+        assert_policy_calls(
+            {"must_be_called": False, "must_not_be_called": True},
+            1,
+        )

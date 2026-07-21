@@ -1,0 +1,102 @@
+{
+  "golden_task_id": "GT-018",
+  "title": "显式设备域仍匹配多条绑定时要求澄清",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_device_ambiguous_001",
+    "roles": [
+      "security_operator"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "hikvision_ivms",
+        "binding_id": "bind_ivms_system_trap",
+        "status": "active",
+        "execution_identity": "system_scope",
+        "device_domain_id": "device_domain_shared_01",
+        "binding_scope": "system_scope"
+      },
+      {
+        "target_system": "hikvision_ivms",
+        "binding_id": "bind_ivms_delegated_a",
+        "status": "active",
+        "execution_identity": "user_delegated",
+        "device_domain_id": "device_domain_shared_01",
+        "binding_scope": "delegated_scope_a"
+      },
+      {
+        "target_system": "hikvision_ivms",
+        "binding_id": "bind_ivms_delegated_b",
+        "status": "active",
+        "execution_identity": "user_delegated",
+        "device_domain_id": "device_domain_shared_01",
+        "binding_scope": "delegated_scope_b"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "ivms.get_device_online_status",
+        "target_system": "hikvision_ivms",
+        "type": "query",
+        "risk_level": "medium",
+        "execution_identity": "user_delegated",
+        "binding_required": true
+      }
+    ],
+    "mock_ivms_state": "should_not_be_called"
+  },
+  "when": {
+    "channel": "web",
+    "message": "查询共享设备域的摄像头 CAM-SHARED-001",
+    "arguments": {
+      "device_domain_id": "device_domain_shared_01",
+      "device_id": "CAM-SHARED-001"
+    }
+  },
+  "then_response": {
+    "status": "blocked",
+    "envelope": {
+      "message_contains": [
+        "选择",
+        "设备域"
+      ],
+      "ui.component_type": "operator_handback_card",
+      "ui.action": "clarify_scope",
+      "ui.target_system": "hikvision_ivms",
+      "ui.reason_code": "needs_binding_scope",
+      "data": null
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "capability_selected",
+      "identity_check",
+      "blocked_by_identity",
+      "response_envelope_created",
+      "task_failed"
+    ],
+    "reason": "needs_binding_scope"
+  },
+  "then_forbidden": [
+    "mock_ivms_was_called",
+    "fallback_to_first_binding",
+    "fallback_to_system_scope",
+    "response_data_not_null",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "needs_binding_scope"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  },
+  "policy_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}

@@ -88,6 +88,7 @@ P1-WORKFLOW-002-REPAIR-001
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
 | P1-B3-001 | Identity / Policy 预检闭环 | P1-B2-002 integrated + merge-SHA CI passed | IdentityMapping scope 无回退 + Binding 状态预检 + Policy allow/deny/confirm + SDUI/Trace/Task 闭环 |
+| P1-B3-002 | B3 frozen Golden 增量 | P1-B3-001 integrated + merge-SHA CI passed | GT-015..GT-019：expired/revoked 与显式 account-set/device-domain/resource-scope 多绑定边界；B4 step Policy Frozen deferred 到后续已命名 B4 实现任务落地并获批后激活（当前证据：B4 task TBD），本任务不新增 B4 fixture/实现 |
 
 ## 4. B4 — Workflow 轻量引擎 + 执行
 

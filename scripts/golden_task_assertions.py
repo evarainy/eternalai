@@ -62,6 +62,36 @@ _TERMINAL_EVENT_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
             "fallback_to_system_scope",
         ),
     },
+    "identity_expired": {
+        "must_have": (
+            "task_created",
+            "intent_parsed",
+            "capability_selected",
+            "identity_check",
+            "blocked_by_identity",
+            "response_envelope_created",
+        ),
+        "must_not_have": (
+            "policy_checked",
+            "adapter_called",
+            "fallback_to_system_scope",
+        ),
+    },
+    "identity_revoked": {
+        "must_have": (
+            "task_created",
+            "intent_parsed",
+            "capability_selected",
+            "identity_check",
+            "blocked_by_identity",
+            "response_envelope_created",
+        ),
+        "must_not_have": (
+            "policy_checked",
+            "adapter_called",
+            "fallback_to_system_scope",
+        ),
+    },
     "needs_binding_scope": {
         "must_have": (
             "task_created",
@@ -106,6 +136,11 @@ _TERMINAL_EVENT_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         ),
         "must_not_have": ("task_completed",),
     },
+}
+_TERMINAL_ERROR_CODE_EVENTS: dict[str, tuple[str, ...]] = {
+    "identity_expired": ("identity_check", "blocked_by_identity"),
+    "identity_revoked": ("identity_check", "blocked_by_identity"),
+    "needs_binding_scope": ("identity_check", "blocked_by_identity"),
 }
 _TERMINAL_STATE_ALIASES = {
     "unbound": "identity_unbound",
@@ -198,6 +233,17 @@ def assert_terminal_state_matrix(
             raise AssertionError(
                 f"terminal state {terminal_state!r} must not include event {event!r}"
             )
+    for event in _TERMINAL_ERROR_CODE_EVENTS.get(terminal_state, ()):
+        matching_steps = [step for step in trace_steps if _event_type(step) == event]
+        if not matching_steps:
+            continue
+        for step in matching_steps:
+            actual_error_code = _step_error_code(step)
+            if actual_error_code != terminal_state:
+                raise AssertionError(
+                    f"terminal state {terminal_state!r} event {event!r} expected "
+                    f"error_code {terminal_state!r}, got {actual_error_code!r}"
+                )
 
 
 def assert_forbidden_absent(
@@ -268,6 +314,16 @@ def assert_adapter_calls(
         raise AssertionError("adapter must not be called")
 
 
+def assert_policy_calls(
+    policy_assertion: Mapping[str, Any],
+    policy_calls: int,
+) -> None:
+    if policy_assertion.get("must_be_called") is True and policy_calls <= 0:
+        raise AssertionError("policy guard must be called at least once")
+    if policy_assertion.get("must_not_be_called") is True and policy_calls > 0:
+        raise AssertionError("policy guard must not be called")
+
+
 def judge_assertions(
     *,
     envelope: Any,
@@ -277,6 +333,8 @@ def judge_assertions(
     forbidden_items: Iterable[str],
     adapter_assertion: Mapping[str, Any],
     adapter_calls: Mapping[str, Any],
+    policy_assertion: Mapping[str, Any] | None = None,
+    policy_calls: int = 0,
 ) -> AssertionJudgement:
     reasons: list[str] = []
     _capture_failure(reasons, assert_response_matches, envelope, expected_response)
@@ -297,6 +355,13 @@ def judge_assertions(
         adapter_calls,
     )
     _capture_failure(reasons, assert_adapter_calls, adapter_assertion, adapter_calls)
+    if policy_assertion is not None:
+        _capture_failure(
+            reasons,
+            assert_policy_calls,
+            policy_assertion,
+            policy_calls,
+        )
     return AssertionJudgement(
         status="failed" if reasons else "passed",
         reasons=reasons,
@@ -392,6 +457,18 @@ def _event_type(step: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _step_error_code(step: Any) -> str | None:
+    plain_step = _to_plain(step)
+    if not isinstance(plain_step, Mapping):
+        return None
+    value = plain_step.get("error_code")
+    if value is None:
+        attributes = plain_step.get("attributes")
+        if isinstance(attributes, Mapping):
+            value = attributes.get("error_code")
+    return str(value) if value is not None else None
+
+
 def _to_plain(value: Any) -> Any:
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
@@ -474,6 +551,7 @@ __all__ = (
     "AssertionJudgement",
     "assert_adapter_calls",
     "assert_forbidden_absent",
+    "assert_policy_calls",
     "assert_response_matches",
     "assert_terminal_state_matrix",
     "assert_trace_sequence_contains",
