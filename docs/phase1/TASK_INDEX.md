@@ -1,4 +1,4 @@
-# TASK_INDEX — Phase 1 Dependency DAG v1.1.1
+# TASK_INDEX — Phase 1 Dependency DAG v1.1.2
 
 本文件是 Phase 1 的任务依赖 DAG。Codex / Claude Code 必须按批次和 `depends_on` 执行，不得跳过前置任务。
 
@@ -76,8 +76,8 @@ P1-WORKFLOW-002-REPAIR-001
 |---|---|---|---|
 | P1-B2-001 | Registry 支撑的 Capability 选择段 | P1-RUNTIME-ENTRY-001, P1-GATE-001, P1-SPEC-001, P1-SPEC-001-APPROVE-001 | merged：selection 段；task `53cda6d`，merge `f99737c`，merge-SHA CI `29510375566` success |
 | P1-INTENT-CAP-001 | Intent / structured-output 闭环补齐 | P1-B2-001 integrated + merge-SHA CI passed | merged：复用 P1-B2-001 selection behavior 并完成 B2 Runtime 闭环；task `e881905`，merge `d870ad8`，Task Record merge `046a2fe`，两次 merge-SHA CI success |
-| P1-B2-LEDGER-ALIGN-001 | B2 与前置任务台账事实对齐 | P1-INTENT-CAP-001 Task Record merge `046a2fe` + CI `29710489147` success | native Goal；只修订 `TASK_INDEX.md` 与 human-approved `task_logs/INDEX.md` |
-| P1-B2-002 | B2 frozen Golden 增量（下一项） | P1-B2-LEDGER-ALIGN-001 integrated + merge-SHA CI passed | S-B2.4 限定授权已给出；仅限本任务的 Golden fixtures 与 `FROZEN_GT_IDS`，实施前先提交不超过 12 行的 Golden 决策包 |
+| P1-B2-LEDGER-ALIGN-001 | B2 与前置任务台账事实对齐 | P1-INTENT-CAP-001 Task Record merge `046a2fe` + CI `29710489147` success | merged：task `8a2ed5b`，merge `511ba7e`，merge-SHA CI `29715290480` success |
+| P1-B2-002 | B2 frozen Golden 增量 | P1-B2-LEDGER-ALIGN-001 integrated + merge-SHA CI passed | merged：task `8569756`，merge `a5c2424`，merge-SHA CI `29716841081` success；新增 GT-013/GT-014，GT-008 保持 |
 
 > `P1-B2-001` 与 `P1-INTENT-CAP-001` 均已落地：前者负责 Registry-backed selection 段，后者复用该段并补齐 Intent/structured-output，合起来完成 B2 Runtime 闭环。二者不是覆盖关系。`P1-B2-002` 只负责 S-B2.4 Golden 增量，不得借机重写已落地 Runtime。
 
