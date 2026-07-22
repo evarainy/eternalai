@@ -559,23 +559,38 @@ def _map_exec_to_task_status(status: ExecutionStatus) -> TaskStatus:
 
 
 def _workflow_execution_result(result: WorkflowRunResult) -> ExecutionResult:
+    if result.status == "completed":
+        return ExecutionResult(
+            status="completed",
+            data=result.output,
+            error_code=result.error_code,
+            trace_id=result.trace_id,
+        )
     if result.status == "denied":
         return ExecutionResult(
             status="denied",
-            error_code="policy_denied",
+            error_code=result.error_code,
             trace_id=result.trace_id,
         )
     if result.status == "waiting_confirm":
         return ExecutionResult(
             status="waiting_user",
-            error_code="confirm_required",
+            error_code=result.error_code,
             trace_id=result.trace_id,
         )
-    return ExecutionResult(
-        status="completed",
-        data=result.output,
-        trace_id=result.trace_id,
-    )
+    if result.status == "timeout":
+        return ExecutionResult(
+            status="timeout",
+            error_code=result.error_code,
+            trace_id=result.trace_id,
+        )
+    if result.status == "failed":
+        return ExecutionResult(
+            status="failed",
+            error_code=result.error_code,
+            trace_id=result.trace_id,
+        )
+    raise AssertionError("unsupported Workflow terminal status")
 
 
 def _is_explicit_workflow_confirmation(

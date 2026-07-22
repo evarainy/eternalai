@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from typing import Any, Mapping
 from uuid import uuid4
 
-from app.ports.capability_gateway import CapabilityGatewayPort, RequestOrgContext
+from app.ports.capability_gateway import (
+    CapabilityGatewayPort,
+    ErrorCode,
+    RequestOrgContext,
+)
 from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.task_store import TaskEventRecord, TaskStorePort
 from app.ports.trace import TracePort
@@ -19,6 +23,9 @@ from app.workflow.models import (
     WorkflowRunStatus,
     WorkflowStep,
 )
+
+RETRYABLE_ERROR_CODES: frozenset[ErrorCode] = frozenset({"adapter_timeout"})
+MAX_STEP_RETRIES = 1
 
 
 @dataclass(frozen=True)
@@ -174,23 +181,42 @@ class WorkflowEngine:
                     raise ValueError("waiting Workflow step has no confirmed capability")
                 capability_id = step.confirmed_capability_id
 
-            await self._trace_port.record_step(
-                request_context.request_id,
-                task_id,
-                session_id,
-                event_type="capability_selected",
-                status="ok",
-                capability_id=capability_id,
-                attributes=_step_state(definition, step, index, "running"),
-            )
-            execution = await self._gateway.execute_capability(
-                task_id,
-                session_id,
-                ai_user_id,
-                capability_id,
-                arguments,
-                request_context,
-            )
+            attempt = 1
+            max_attempts = MAX_STEP_RETRIES + 1
+            while True:
+                step_status = "running" if attempt == 1 else "retrying"
+                await self._trace_port.record_step(
+                    request_context.request_id,
+                    task_id,
+                    session_id,
+                    event_type="capability_selected",
+                    status="ok",
+                    capability_id=capability_id,
+                    attributes=_step_state(
+                        definition,
+                        step,
+                        index,
+                        step_status,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    ),
+                )
+                execution = await self._gateway.execute_capability(
+                    task_id,
+                    session_id,
+                    ai_user_id,
+                    capability_id,
+                    arguments,
+                    request_context,
+                )
+                retryable_failure = (
+                    execution.status in {"failed", "timeout"}
+                    and execution.error_code in RETRYABLE_ERROR_CODES
+                )
+                if not retryable_failure or attempt > MAX_STEP_RETRIES:
+                    break
+                attempt += 1
+
             if execution.status == "waiting_user":
                 if index == confirmed_step_index:
                     raise RuntimeError("confirmed Workflow capability requested confirmation again")
@@ -199,7 +225,15 @@ class WorkflowEngine:
                 await self._append_state(
                     task_id,
                     "workflow_step_finished",
-                    _step_state(definition, step, index, "waiting_confirm"),
+                    _step_state(
+                        definition,
+                        step,
+                        index,
+                        "waiting_confirm",
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        error_code=execution.error_code,
+                    ),
                 )
                 await self._append_state(
                     task_id,
@@ -229,12 +263,21 @@ class WorkflowEngine:
                     status="waiting_confirm",
                     output={},
                     step_outputs=step_outputs,
+                    error_code=execution.error_code,
                 )
             if execution.status == "denied":
                 await self._append_state(
                     task_id,
                     "workflow_step_finished",
-                    _step_state(definition, step, index, "denied"),
+                    _step_state(
+                        definition,
+                        step,
+                        index,
+                        "denied",
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        error_code=execution.error_code,
+                    ),
                 )
                 await self._append_state(
                     task_id,
@@ -248,13 +291,54 @@ class WorkflowEngine:
                     status="denied",
                     output={},
                     step_outputs=step_outputs,
+                    error_code=execution.error_code,
                 )
             if execution.status != "completed":
-                raise RuntimeError("non-completed Workflow step handling is reserved for P1-B4-004")
+                workflow_status: WorkflowRunStatus = (
+                    "timeout" if execution.status == "timeout" else "failed"
+                )
+                await self._append_state(
+                    task_id,
+                    "workflow_step_finished",
+                    _step_state(
+                        definition,
+                        step,
+                        index,
+                        workflow_status,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                        error_code=execution.error_code,
+                    ),
+                )
+                await self._append_state(
+                    task_id,
+                    "workflow_failed",
+                    _workflow_state(
+                        definition,
+                        workflow_status,
+                        error_code=execution.error_code,
+                    ),
+                )
+                return WorkflowRunResult(
+                    workflow_id=definition.workflow_id,
+                    workflow_version=definition.version,
+                    trace_id=request_context.request_id,
+                    status=workflow_status,
+                    output={},
+                    step_outputs=step_outputs,
+                    error_code=execution.error_code,
+                )
 
             final_output = deepcopy(execution.data or {})
             step_outputs[step.step_id] = final_output
-            terminal_state = _step_state(definition, step, index, "completed")
+            terminal_state = _step_state(
+                definition,
+                step,
+                index,
+                "completed",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
             await self._append_state(
                 task_id,
                 "workflow_step_finished",
@@ -384,6 +468,8 @@ class WorkflowEngine:
 def _workflow_state(
     definition: WorkflowDefinition,
     status: WorkflowRunStatus | None = None,
+    *,
+    error_code: ErrorCode | None = None,
 ) -> dict[str, Any]:
     state: dict[str, Any] = {
         "workflow_id": definition.workflow_id,
@@ -391,6 +477,8 @@ def _workflow_state(
     }
     if status is not None:
         state["workflow_status"] = status
+    if error_code is not None:
+        state["error_code"] = error_code
     return state
 
 
@@ -399,14 +487,26 @@ def _step_state(
     step: WorkflowStep,
     index: int,
     status: str,
+    *,
+    attempt: int | None = None,
+    max_attempts: int | None = None,
+    error_code: ErrorCode | None = None,
 ) -> dict[str, Any]:
-    return {
+    state: dict[str, Any] = {
         "workflow_id": definition.workflow_id,
         "workflow_version": definition.version,
         "step_id": step.step_id,
         "step_index": index,
         "step_status": status,
     }
+    if attempt is not None:
+        state["attempt"] = attempt
+        state["retry_number"] = attempt - 1
+    if max_attempts is not None:
+        state["max_attempts"] = max_attempts
+    if error_code is not None:
+        state["error_code"] = error_code
+    return state
 
 
 def _resume_state(
