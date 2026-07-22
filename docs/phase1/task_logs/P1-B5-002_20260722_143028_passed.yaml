@@ -39,7 +39,7 @@ redline_authorization:
     No deletion, secret or .env change, DB schema/data action, system change,
     history rewrite, force push, release, or Golden change was requested.
 started_at: "2026-07-22T13:42:00+09:00"
-completed_at: "2026-07-22T14:30:28+09:00"
+completed_at: "2026-07-22T14:43:14+09:00"
 plan_approved_by: "Rain via external monitor delegation"
 plan_approved_at: "2026-07-22T14:30:28+09:00"
 plan_approved_via: "Codex external monitor thread"
@@ -73,7 +73,8 @@ acceptance_criteria_result:
     result: passed
     evidence: >
       Runtime reads CapabilityRegistryPort.list per request; A/B snapshot tests prove
-      changed Registry data replaces old descriptions and no capability list is static.
+      changed Registry data replaces old descriptions in consecutive Runtime calls and
+      no capability list is static.
   - criterion: "Intent injection has exact small hard bounds and coexists with Memory"
     result: passed
     evidence: >
@@ -112,6 +113,15 @@ failure_examples_tested:
   - example: "Disabled capability or sensitive Registry text appears in guidance"
     result: triggered
     evidence: "Active-only and sensitive-marker absence assertions pass."
+  - example: "Quoted credentials with spaces leave a suffix after redaction"
+    result: triggered
+    evidence: "Knowledge and final-prompt tests remove the complete quoted value."
+  - example: "The ASCII keyword oa matches inside roadmap"
+    result: triggered
+    evidence: "ASCII keywords require token boundaries; roadmap remains unmatched."
+  - example: "Runtime reuses a cached Registry knowledge snapshot"
+    result: triggered
+    evidence: "Two calls around a Registry mutation inject only their current snapshot."
 step_verification_points:
   - step: gap_map
     result: passed
@@ -134,8 +144,10 @@ step_verification_points:
   - step: independent_review
     result: not_applicable
     command: "Codex high read-only self-review, then Opus 4.8/high"
-    evidence: "Activated after candidate commit; no review PASS is claimed here."
-    not_applicable_reason: "Exact candidate has not been committed yet."
+    evidence: >
+      Initial candidate 2a6a37c received four actionable self-review findings; all were
+      fixed and revalidated. Successor exact-candidate review has not run yet.
+    not_applicable_reason: "The successor exact candidate has not been committed yet."
     not_applicable_scope: intentionally_deferred
     blocked_by_task_id: P1-B5-002
     activation_task_id: P1-B5-002
@@ -160,7 +172,7 @@ forbidden_paths_confirmed: true
 tests_run:
   - command: "uv run pytest"
     result: passed
-    output_snippet: "959 passed, 6 deprecation warnings."
+    output_snippet: "960 passed, 6 deprecation warnings."
   - command: "uv run pytest tests/memory tests/runtime tests/architecture -q"
     result: passed
     output_snippet: "132 passed."

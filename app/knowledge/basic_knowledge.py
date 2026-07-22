@@ -23,7 +23,7 @@ _SENSITIVE_PATTERNS = (
         r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
         r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
         r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key)"
-        r"\s*[:=：]\s*\S+",
+        r"\s*[:=：]\s*(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|\S+)",
         re.IGNORECASE,
     ),
     re.compile(r"(?:https?|ftp)://\S+", re.IGNORECASE),
@@ -111,7 +111,7 @@ class BasicKnowledge:
             sanitize_knowledge_text(item.content)
             for item in _STATIC_ITEMS
             if any(
-                _normalize_for_match(keyword) in normalized_message
+                _keyword_matches(keyword, normalized_message)
                 for keyword in item.keywords
             )
         ]
@@ -185,6 +185,20 @@ def _active_capability_summary(capability: CapabilitySpec) -> str:
 
 def _normalize_for_match(value: str) -> str:
     return " ".join(value.replace("\r", "\n").split()).casefold()
+
+
+def _keyword_matches(keyword: str, normalized_message: str) -> bool:
+    normalized_keyword = _normalize_for_match(keyword)
+    if normalized_keyword.isascii() and any(
+        character.isalnum() for character in normalized_keyword
+    ):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])",
+                normalized_message,
+            )
+        )
+    return normalized_keyword in normalized_message
 
 
 __all__ = (

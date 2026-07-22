@@ -46,6 +46,11 @@ def test_static_content_covers_required_categories_and_keyword_boundaries() -> N
     assert any("制度模板：费用报销" in item for item in matched)
     assert all("设备巡检" not in item for item in matched)
     assert unmatched == ()
+    assert knowledge.context_items("roadmap automation", ()) == ()
+    assert any(
+        "Mock 系统说明" in item
+        for item in knowledge.context_items("查询 OA 待办", ())
+    )
 
 
 def test_capability_descriptions_follow_each_registry_snapshot() -> None:
@@ -71,11 +76,12 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
     private_address = "http://10.20.30.40/internal"
     personal_name = "张三"
     owner_marker = "synthetic-owner-marker"
+    quoted_credential = "synthetic alpha beta marker"
     capability = _capability(
         "oa.safe.query",
         description=(
             f"{credential_key}={credential_value} endpoint={private_address} "
-            f"联系人:{personal_name}"
+            f"联系人:{personal_name} password=\"{quoted_credential}\""
         ),
         owner=owner_marker,
     )
@@ -88,9 +94,10 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
         private_address,
         personal_name,
         owner_marker,
+        quoted_credential,
     ):
         assert sensitive not in serialized
-    assert serialized.count("[REDACTED]") >= 3
+    assert serialized.count("[REDACTED]") >= 4
 
 
 def test_no_capability_guidance_filters_to_active_registry_entries() -> None:

@@ -235,8 +235,8 @@ def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
     knowledge_items = tuple(
-        f"item-{index}:" + (str(index) * (MAX_KNOWLEDGE_ITEM_LENGTH + 20))
-        for index in range(MAX_KNOWLEDGE_ITEMS + 2)
+        f"item-{index}:" + (str(index) * 260)
+        for index in range(10)
     )
 
     result = asyncio.run(
@@ -248,9 +248,12 @@ def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
     assert [message.role for message in messages] == ["system", "system", "user"]
     payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
     injected = payload["semantic_system_knowledge"]
-    assert len(injected) == MAX_KNOWLEDGE_ITEMS
-    assert all(len(item) == MAX_KNOWLEDGE_ITEM_LENGTH for item in injected)
+    assert MAX_KNOWLEDGE_ITEMS == 8
+    assert MAX_KNOWLEDGE_ITEM_LENGTH == 240
+    assert len(injected) == 8
+    assert all(len(item) == 240 for item in injected)
     assert injected[0].startswith("item-0:")
+    assert injected[7].startswith("item-7:")
     assert all("item-8:" not in item and "item-9:" not in item for item in injected)
 
 
@@ -297,12 +300,14 @@ def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
     credential_value = "synthetic-router-credential"
     private_address = "https://192.168.1.8/internal"
+    quoted_credential = "synthetic spaced router credential"
 
     asyncio.run(
         router.parse(
             "request",
             knowledge_items=(
-                f"authorization={credential_value} endpoint={private_address}",
+                f"authorization={credential_value} endpoint={private_address} "
+                f"password=\"{quoted_credential}\"",
             ),
         )
     )
@@ -310,4 +315,5 @@ def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None
     prompt = llm_provider.calls[0]["messages"][1].content
     assert credential_value not in prompt
     assert private_address not in prompt
-    assert prompt.count("[REDACTED]") == 2
+    assert quoted_credential not in prompt
+    assert prompt.count("[REDACTED]") == 3

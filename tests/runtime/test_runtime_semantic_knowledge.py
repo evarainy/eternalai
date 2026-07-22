@@ -212,3 +212,62 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
     assert "[REDACTED]" in serialized
     assert envelope.status == "no_capability_found"
     assert gateway.calls == []
+
+
+def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
+    first_capability = _capability(
+        "oa.first.query",
+        description="first registry description",
+    )
+    second_capability = _capability(
+        "oa.second.query",
+        description="second registry description",
+    )
+    registry = StaticRegistry([first_capability])
+    llm_provider = MockLLMProvider()
+    structured_output = MockStructuredOutputProvider()
+    for message in ("first request", "second request"):
+        structured_output.register(
+            message,
+            CapabilityRef,
+            CapabilityRef(capability_id="oa.missing.query"),
+        )
+    runtime = RuntimeImpl(
+        task_store=RecordingTaskStore(),
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        gateway=RecordingGateway(),
+        trace_port=RecordingTracePort(),
+        llm_provider=llm_provider,
+        structured_output=structured_output,
+        intent_model="test-intent-model",
+        response_builder=ResponseEnvelopeBuilder(),
+    )
+
+    async def exercise() -> None:
+        await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="ai-user-1",
+            session_id="session-1",
+            message="first request",
+            client_capabilities={},
+        )
+        registry.capabilities = [second_capability]
+        await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="ai-user-1",
+            session_id="session-1",
+            message="second request",
+            client_capabilities={},
+        )
+
+    asyncio.run(exercise())
+
+    first_prompt = llm_provider.calls[0]["messages"][1].content
+    second_prompt = llm_provider.calls[1]["messages"][1].content
+    assert "oa.first.query" in first_prompt
+    assert "first registry description" in first_prompt
+    assert "oa.second.query" not in first_prompt
+    assert "oa.second.query" in second_prompt
+    assert "second registry description" in second_prompt
+    assert "oa.first.query" not in second_prompt
