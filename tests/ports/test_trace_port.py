@@ -40,6 +40,7 @@ EXPECTED_TRACE_EVENT_TYPE_VALUES = (
     "task_completed",
     "task_failed",
     "evaluation_recorded",
+    "admin_action",
 )
 
 EXPECTED_TRACE_EVENT_STATUS_VALUES = ("ok", "blocked", "failed", "skipped")

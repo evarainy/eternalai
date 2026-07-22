@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.registry import AdminRegistryService
 from app.evaluator import TerminalEvaluator
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
@@ -14,6 +17,21 @@ from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
+
+
+def build_admin_registry_service(
+    *,
+    capability_registry: CapabilityRegistryPort,
+    trace_port: TracePort,
+) -> AdminRegistryService:
+    """Wire Admin Lite with the closed management-action allowlist."""
+    return AdminRegistryService(
+        capability_registry=capability_registry,
+        policy_guard=MinimalPolicyGuard(
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+        ),
+        trace_port=trace_port,
+    )
 
 
 def build_runtime(
@@ -49,4 +67,4 @@ def build_runtime(
     )
 
 
-__all__ = ("build_runtime",)
+__all__ = ("build_admin_registry_service", "build_runtime")

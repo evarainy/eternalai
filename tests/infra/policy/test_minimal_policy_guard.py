@@ -8,26 +8,47 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.capability_gateway import RequestOrgContext
-from app.ports.policy_guard import PolicyDecision
+from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyDecision
 
 
-def _request_context() -> RequestOrgContext:
-    return RequestOrgContext(request_id="policy-test-request")
+def _request_context(*, roles: list[str] | None = None) -> RequestOrgContext:
+    return RequestOrgContext(
+        request_id="policy-test-request",
+        roles=roles or [],
+    )
 
 
 def _decide(
     *,
     capability_id: str,
     arguments: dict[str, Any] | None = None,
+    roles: list[str] | None = None,
+    management_plane: bool = False,
+    configure_admin_allowlist: bool = True,
 ) -> PolicyDecision:
+    context = (
+        ManagementPlanePolicyContext(
+            request_id="policy-test-request",
+            roles=roles or [],
+        )
+        if management_plane
+        else _request_context(roles=roles)
+    )
     return asyncio.run(
-        MinimalPolicyGuard().decide(
+        MinimalPolicyGuard(
+            admin_capability_ids=(
+                ADMIN_LITE_POLICY_CAPABILITY_IDS
+                if configure_admin_allowlist
+                else ()
+            )
+        ).decide(
             ai_user_id="policy-test-user",
             capability_id=capability_id,
             arguments=arguments,  # type: ignore[arg-type]
-            request_context=_request_context(),
+            request_context=context,
         )
     )
 
@@ -47,6 +68,71 @@ def test_admin_capability_denies_role_not_allowed() -> None:
     assert result == PolicyDecision(
         decision="deny",
         reason_code="role_not_allowed",
+    )
+
+
+@pytest.mark.parametrize(
+    "capability_id",
+    [
+        "admin_registry_list",
+        "admin_registry_get",
+        "admin_registry_create",
+        "admin_registry_enable",
+        "admin_registry_disable",
+    ],
+)
+def test_admin_role_allows_only_admin_lite_registry_actions(
+    capability_id: str,
+) -> None:
+    result = _decide(
+        capability_id=capability_id,
+        arguments={},
+        roles=["admin"],
+        management_plane=True,
+    )
+
+    assert result == PolicyDecision(decision="allow")
+
+
+def test_admin_role_does_not_unlock_other_admin_capabilities() -> None:
+    result = _decide(
+        capability_id="admin_delete_user",
+        arguments={},
+        roles=["admin"],
+        management_plane=True,
+    )
+
+    assert result == PolicyDecision(
+        decision="deny",
+        reason_code="admin_action_not_allowed",
+    )
+
+
+def test_runtime_context_denies_admin_lite_action_even_with_admin_role() -> None:
+    result = _decide(
+        capability_id="admin_registry_create",
+        arguments={},
+        roles=["admin"],
+    )
+
+    assert result == PolicyDecision(
+        decision="deny",
+        reason_code="role_not_allowed",
+    )
+
+
+def test_management_context_fails_closed_without_injected_allowlist() -> None:
+    result = _decide(
+        capability_id="admin_registry_create",
+        arguments={},
+        roles=["admin"],
+        management_plane=True,
+        configure_admin_allowlist=False,
+    )
+
+    assert result == PolicyDecision(
+        decision="deny",
+        reason_code="admin_action_not_allowed",
     )
 
 

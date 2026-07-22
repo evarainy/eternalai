@@ -1,0 +1,336 @@
+schema_version: "1.2.0"
+task_id: P1-B5-004a
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: >
+    Q3 correctness: this task opens a Registry write surface. A role or routing
+    mistake could silently expose protected metadata or reach execution behavior.
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >
+        Rain's delegated external monitor returned PASS on the revised Gap Map.
+        The local read-only gap_map_monitor was supplemental and is not used as
+        external approval or final review evidence.
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: >
+        Exact-candidate Codex high read-only review, verified Claude Opus 4.8/xhigh
+        PASS, merge, and merge-SHA CI remain mandatory.
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B5-004a; P1-B5-004b must wait for this task."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: >
+    No deletion, .env or real credential change, DB schema/real-data action,
+    system change, history rewrite, force push, release, or Golden change occurred.
+started_at: "2026-07-22T21:41:45+09:00"
+completed_at: "2026-07-22T23:12:00+09:00"
+plan_approved_by: "Rain via delegated external monitor"
+plan_approved_at: "2026-07-22T21:57:00+09:00"
+plan_approved_via: "Codex external monitor delegation"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Admin Lite now exposes role-guarded Registry list/get/create/enable/disable APIs.
+  Create always persists draft; enable is separate; deprecated transitions fail.
+  Every success, denial, miss, and invalid transition records an admin_action Trace.
+  Returned views omit schemas and policy content. Management and business Policy
+  contexts are distinct types; Runtime cannot inject roles, and neither the Admin
+  routes nor business admin_* requests can reach Adapter execution.
+acceptance_criteria_result:
+  - criterion: "Registry list and detail return credential-safe metadata"
+    result: passed
+    evidence: >
+      API tests list and view an entry whose hidden schemas contain password/cookie
+      property names, then assert schemas, policy_digest, and those names are absent.
+  - criterion: "Create, enable, and disable are separate controlled actions"
+    result: passed
+    evidence: >
+      Service and API tests prove create returns draft, client-supplied status is 422,
+      enable changes draft to active, and disable changes active to disabled.
+  - criterion: "Status transitions are complete and stable"
+    result: passed
+    evidence: >
+      Tests cover draft/disabled enable, active enable idempotence, draft/active
+      disable, disabled disable idempotence, and both deprecated 409 paths.
+  - criterion: "Role denial protects read and write without existence disclosure"
+    result: passed
+    evidence: >
+      Existing and missing detail URLs both return the exact same 403
+      role_not_allowed body before any Registry call; a separate create denial test
+      proves zero mutation and blocked Trace.
+  - criterion: "Every management action is traceable"
+    result: passed
+    evidence: >
+      admin_action events assert action, decision, safe transition metadata,
+      role_claim_source=request_header, and role_claim_authenticated=false for
+      successful, blocked, not-found, and invalid-transition paths.
+  - criterion: "Management routes cannot execute business capabilities"
+    result: passed
+    evidence: >
+      Success and denial API tests inject a Runtime to Gateway to Adapter sentinel
+      chain and assert all three call counts remain zero. The admin import boundary
+      also rejects execution and Infra dependencies.
+  - criterion: "Management Policy context cannot enter the business chain"
+    result: passed
+    evidence: >
+      PolicyGuardPort distinguishes ManagementPlanePolicyContext from the Gateway's
+      RequestOrgContext. MinimalPolicyGuard defaults to an empty admin allowlist;
+      the management builder alone injects the five exact action IDs.
+  - criterion: "B2-B4 safety order and Golden behavior do not change"
+    result: passed
+    evidence: >
+      Runtime API rejects a roles field, RuntimeImpl constructs roles=[], and an
+      active admin_registry_list request reaches Gateway entry exactly once before
+      Policy denies it; record_gateway_call and Adapter both remain at zero. Policy
+      stays inside the existing Gateway order instead of moving into Runtime. The
+      non-DB suite passed 992 tests and Golden remained 23/23, negative 14/14.
+  - criterion: "Role authentication state is recorded honestly"
+    result: passed
+    evidence: >
+      角色是未经认证的请求声明，真实部署前需前置认证。Golden 的 given.roles
+      仅做 fixture schema 校验，harness 未接通；本任务没有复用现有角色机制。
+failure_examples_tested:
+  - example: "Create payload requests active and bypasses draft"
+    result: triggered
+    evidence: "Extra status field returns 422 with zero Registry and Trace calls."
+  - example: "Missing role reads an existing or missing protected resource"
+    result: triggered
+    evidence: "Both paths return identical 403 bodies with zero Registry calls."
+  - example: "Missing role mutates Registry"
+    result: triggered
+    evidence: "Denied create records blocked Trace and makes zero Registry calls."
+  - example: "Admin role unlocks an unrelated admin_* capability"
+    result: triggered
+    evidence: >
+      The management builder injects only five exact Registry action IDs; a
+      management context with admin role still receives admin_action_not_allowed
+      for admin_delete_user.
+  - example: "Management allowlist leaks into a normal Gateway request"
+    result: triggered
+    evidence: >
+      Even with the five-item allowlist configured, a plain RequestOrgContext is
+      denied. The /runtime/handle regression records Gateway entry=1,
+      record_gateway_call=0, and Adapter=0.
+  - example: "Business API caller injects admin roles"
+    result: triggered
+    evidence: >
+      /api/v1/runtime/handle rejects roles as an extra field with 422 and does not
+      call Runtime; RuntimeImpl separately proves its constructed roles list is empty.
+  - example: "Deprecated capability is re-enabled or disabled"
+    result: triggered
+    evidence: "Both transitions fail without mutation and record failed Trace."
+  - example: "Admin API is accidentally wired to execution"
+    result: triggered
+    evidence: >
+      Runtime/Gateway/Adapter sentinel tests would increment all counters and fail;
+      current success and denial paths keep all counters at zero.
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "Rain delegated external monitor review"
+    evidence: >
+      PASS after exact admin action allowlist, complete state transitions, and
+      explicit execution-surface sentinel tests were added to the plan.
+  - step: focused_behavior
+    result: passed
+    command: >
+      uv run pytest tests/admin/test_registry_service.py
+      tests/api/test_admin_registry.py tests/infra/policy/test_minimal_policy_guard.py
+      tests/ports/test_policy_guard_port.py tests/runtime/test_runtime_api.py
+      tests/runtime/test_runtime_gateway_result_mapping.py
+      tests/runtime/test_runtime_composition.py -q
+    evidence: "72 passed after the context-isolation fix."
+  - step: deterministic_validation
+    result: passed
+    command: "Full non-DB pytest, Ruff, mypy, dependency, architecture, weak-test, Golden"
+    evidence: "All applicable checks passed; exact results are listed in tests_run."
+  - step: independent_review
+    result: not_applicable
+    command: "Codex high read-only self-review, then Opus 4.8/xhigh"
+    evidence: >
+      Initial candidate 6c85d24 received one P1 finding: the shared PolicyGuard
+      could allow exact management IDs under a plain business context carrying an
+      admin role. Rain selected context isolation. The successor uses distinct
+      Policy context types, an injected allowlist, and business-chain regressions;
+      successor review is pending.
+    not_applicable_reason: "The successor exact candidate has not been reviewed yet."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B5-004a
+    activation_task_id: P1-B5-004a
+    expiry_condition: "Candidate commit exists and deterministic validation stays bound."
+changed_files:
+  - app/admin/__init__.py
+  - app/admin/actions.py
+  - app/admin/registry.py
+  - app/api/v1/admin.py
+  - app/composition.py
+  - app/infra/policy/minimal_policy_guard.py
+  - app/main.py
+  - app/ports/capability_gateway.py
+  - app/ports/policy_guard.py
+  - app/ports/request_context.py
+  - app/ports/trace.py
+  - docs/phase1/task_logs/P1-B5-004a_20260722_221435_passed.yaml
+  - docs/phase1/tasks/P1-B5-004a.md
+  - tests/admin/test_registry_service.py
+  - tests/api/test_admin_registry.py
+  - tests/architecture/test_import_boundaries.py
+  - tests/infra/observability/test_noop_trace_writer.py
+  - tests/infra/policy/test_minimal_policy_guard.py
+  - tests/ports/test_policy_guard_port.py
+  - tests/ports/test_trace_port.py
+  - tests/runtime/test_runtime_api.py
+  - tests/runtime/test_runtime_gateway_result_mapping.py
+  - tests/test_health.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest"
+    result: failed
+    output_snippet: >
+      992 passed, 26 skipped, 3 failed. The three failures are the baseline DB tests
+      that require DATABASE_URL; no .env or database configuration was changed.
+  - command: >
+      uv run pytest --deselect tests/db/test_db_health.py::test_session_factory_supports_explicit_url_injection
+      --deselect tests/db/test_db_health.py::test_db_health_helper_returns_true_for_select_one
+      --deselect tests/db/test_migrations.py::test_alembic_upgrade_downgrade_upgrade_cycle
+    result: passed
+    output_snippet: "992 passed, 26 skipped, 3 deselected, 6 warnings."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 63 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/ -q"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23; positive 9/9, negative 14/14."
+  - command: "check_weak_tests.py for all ten changed/new test modules"
+    result: passed
+    output_snippet: "All ten modules passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: >
+    Architecture suite 23/23. app.admin cannot import Infra, Runtime, Workflow,
+    execution fabric, Adapter Port, or CapabilityGatewayPort. PolicyGuardPort accepts
+    distinct business and management context types while Gateway continues to accept
+    only RequestOrgContext.
+security_scan_result:
+  result: passed
+  evidence: >
+    Safe response models omit schemas and policy content; denial precedes Registry;
+    Trace contains no body or role values. Admin routes keep Runtime/Gateway/Adapter
+    sentinels at zero. Business admin_* reaches Gateway entry once for the existing
+    Policy check, then keeps record_gateway_call and Adapter at zero.
+weak_test_scan_result:
+  result: passed
+  evidence: "All ten changed/new test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B5-004a
+  activation_task_id: P1-B5-004a
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: none
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Initial candidate 6c85d24 received one P1 shared-context finding and is not
+    reusable review evidence. Exact successor Codex high self-review and verified
+    Opus 4.8/xhigh PASS remain mandatory. External artifacts, not this pre-review
+    field, authorize merge.
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: phase1/P1-B5-004a
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Task branch is not pushed yet."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No merge has occurred."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - >
+    角色是未经认证的请求声明，真实部署前需前置认证；当前请求头不能证明调用者身份。
+  - >
+    External Trace consumers with exhaustive event enums must accept admin_action
+    before consuming this revision.
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
+  secret, system, or production action. Rollback requires a separately governed revert.
+local_commit_policy: candidate_commit_before_review
+git_commit_sha: "pending exact candidate commit; Git and external review meta bind the SHA"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""
