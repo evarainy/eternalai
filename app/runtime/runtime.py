@@ -71,15 +71,16 @@ class RuntimeImpl:
         self._capability_registry = capability_registry
         self._gateway = gateway
         self._trace_port = trace_port
+        self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
         self._intent_router = IntentRouter(
             llm_provider=llm_provider,
             structured_output=structured_output,
             model=intent_model,
+            semantic_knowledge=self._semantic_knowledge,
         )
         self._response_builder = response_builder
         self._workflow_engine = workflow_engine
         self._session_memory = session_memory or SessionMemory()
-        self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
 
     async def handle_user_message(
@@ -131,17 +132,14 @@ class RuntimeImpl:
             status="ok",
         )
 
-        capability_snapshot = await self._capability_registry.list()
+        capability_snapshot = await self._capability_registry.list(status="active")
         intent_result = await self._intent_router.parse(
             message,
             trace_metadata={
                 "trace_id": trace_id,
                 "task_id": task_id,
             },
-            knowledge_items=self._semantic_knowledge.context_items(
-                message,
-                capability_snapshot,
-            ),
+            capabilities=tuple(capability_snapshot),
             memory_summaries=self._session_memory.recall(memory_key),
         )
         capability_ref = intent_result.capability_ref

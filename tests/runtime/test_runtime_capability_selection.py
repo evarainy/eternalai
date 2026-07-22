@@ -275,7 +275,7 @@ def test_exact_active_capability_is_selected_for_web_and_cli(channel: str) -> No
     assert envelope.status == "completed"
     assert registry.get_calls == [capability.capability_id]
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None}
+        {"target_system": None, "type": None, "status": "active"}
     ]
     assert gateway.calls == [
         {
@@ -302,7 +302,7 @@ def test_unique_intent_tag_fallback_selects_canonical_capability_id() -> None:
     assert envelope.status == "completed"
     assert registry.get_calls == ["pending-workflows"]
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None},
+        {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"}
     ]
     assert gateway.calls[0]["capability_id"] == capability.capability_id
@@ -329,7 +329,7 @@ def test_exact_inactive_capability_fails_closed_without_tag_fallback(
     assert task_store.status_updates[-1][1] == "no_capability_found"
     assert registry.get_calls == [capability.capability_id]
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None},
+        {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"},
     ]
     assert gateway.calls == []
@@ -357,7 +357,7 @@ def test_unregistered_selector_returns_standard_envelope_without_gateway_call() 
     assert task_store.status_updates[-1][1] == "no_capability_found"
     assert registry.get_calls == ["unknown.capability"]
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None},
+        {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"}
     ]
@@ -404,7 +404,7 @@ def test_exact_id_wins_over_other_capability_tag_regardless_of_registry_order() 
         )
         assert envelope.status == "completed"
         assert registry.list_calls == [
-            {"target_system": None, "type": None, "status": None}
+            {"target_system": None, "type": None, "status": "active"}
         ]
         selected_ids.append(gateway.calls[0]["capability_id"])
 
@@ -427,7 +427,7 @@ def test_exact_active_capability_must_match_intent_constraints() -> None:
     )
     assert registry.get_calls == [capability.capability_id]
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None},
+        {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"},
     ]
     assert gateway.calls == []
@@ -456,7 +456,7 @@ def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
 
     assert envelope.status == "completed"
     assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": None},
+        {"target_system": None, "type": None, "status": "active"},
         {"target_system": "oa", "type": "action", "status": "active"}
     ]
     assert gateway.calls[0]["capability_id"] == "oa.action"
@@ -539,7 +539,7 @@ def test_provider_failure_and_invalid_intent_have_distinct_safe_trace_reasons() 
         )
         assert registry.get_calls == []
         assert registry.list_calls == [
-            {"target_system": None, "type": None, "status": None},
+            {"target_system": None, "type": None, "status": "active"},
             {"target_system": None, "type": None, "status": "active"},
         ]
         assert gateway.calls == []

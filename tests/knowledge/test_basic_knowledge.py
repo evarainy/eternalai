@@ -58,10 +58,15 @@ def test_static_content_covers_required_categories_and_keyword_boundaries() -> N
 def test_capability_descriptions_follow_each_registry_snapshot() -> None:
     knowledge = BasicKnowledge()
     first = _capability("oa.expense.first", status="active")
-    second = _capability("oa.expense.second", status="disabled")
+    second = _capability("oa.expense.second", status="active")
+    inactive = tuple(
+        _capability(f"oa.expense.{status}", status=status)
+        for status in ("draft", "disabled", "deprecated")
+    )
 
     first_context = knowledge.context_items("unmatched", (first,))
     second_context = knowledge.context_items("unmatched", (second,))
+    inactive_context = knowledge.context_items("unmatched", inactive)
 
     assert len(first_context) == len(second_context) == 1
     assert "oa.expense.first" in first_context[0]
@@ -70,7 +75,8 @@ def test_capability_descriptions_follow_each_registry_snapshot() -> None:
     assert "status=active" in first_context[0]
     assert "oa.expense.first" not in second_context[0]
     assert "oa.expense.second" in second_context[0]
-    assert "status=disabled" in second_context[0]
+    assert "status=active" in second_context[0]
+    assert inactive_context == ()
 
 
 def test_registry_free_text_is_never_read_into_capability_knowledge() -> None:

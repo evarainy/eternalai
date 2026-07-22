@@ -39,7 +39,7 @@ redline_authorization:
     No deletion, secret or .env change, DB schema/data action, system change,
     history rewrite, force push, release, or Golden change was requested.
 started_at: "2026-07-22T13:42:00+09:00"
-completed_at: "2026-07-22T15:14:33+09:00"
+completed_at: "2026-07-22T16:21:47+09:00"
 plan_approved_by: "Rain via external monitor delegation"
 plan_approved_at: "2026-07-22T14:30:28+09:00"
 plan_approved_via: "Codex external monitor thread"
@@ -60,7 +60,8 @@ plan_review:
 summary: >
   Runtime now injects a small global Semantic/System Knowledge message. Static
   terms, Mock facts, and policy templates are immutable code data; capability
-  descriptions and no-capability guidance are derived from the live Registry.
+  descriptions and no-capability guidance use only active Registry structural fields.
+  IntentRouter has no arbitrary caller-provided knowledge string entry.
   Knowledge is global and deliberately has no tenant, session, or user isolation
   semantics; B5-001 Session Memory remains the independently isolated data plane.
 acceptance_criteria_result:
@@ -74,12 +75,15 @@ acceptance_criteria_result:
     evidence: >
       Runtime reads CapabilityRegistryPort.list per request; A/B snapshot tests prove
       active-to-disabled and replacement snapshots change the structural descriptions
-      in consecutive Runtime calls, and no capability list is static.
+      in consecutive Runtime calls. Inactive capabilities never reach the actual prompt,
+      and no capability list is static.
   - criterion: "Intent injection has exact small hard bounds and coexists with Memory"
     result: passed
     evidence: >
-      MAX_KNOWLEDGE_ITEMS=8 and MAX_KNOWLEDGE_ITEM_LENGTH=240 are asserted against
-      decoded provider messages; knowledge and memory remain independent system messages.
+      The private final-boundary function is asserted at exactly 8 items and 240
+      characters; decoded provider messages prove that only the first eight generated
+      structural descriptions are injected. Knowledge and memory remain independent
+      system messages.
   - criterion: "No-capability guidance preserves the negative terminal"
     result: passed
     evidence: >
@@ -93,8 +97,9 @@ acceptance_criteria_result:
   - criterion: "Sensitive values do not enter knowledge, prompt, Trace, state, or response"
     result: passed
     evidence: >
-      Registry free-text fields are never read; unsafe capability ids and complete
-      sensitive knowledge items fail closed at construction and final prompt injection.
+      The prompt input surface is closed to arbitrary text: Registry free-text fields
+      are never read, and only trusted static constants plus allowlisted structural
+      fields enter. The sanitizer is only a fallback for obvious static-author mistakes.
   - criterion: "Mock LLM evidence is honest"
     result: passed
     evidence: >
@@ -103,7 +108,9 @@ acceptance_criteria_result:
 failure_examples_tested:
   - example: "A ninth or over-240-character knowledge item reaches the provider"
     result: triggered
-    evidence: "Decoded prompt contains exactly eight items of exactly 240 characters."
+    evidence: >
+      The final-boundary pure function returns exactly eight 240-character items;
+      the decoded provider prompt contains only the first eight safe descriptions.
   - example: "Knowledge and Session Memory overwrite or contaminate one another"
     result: triggered
     evidence: "Exact message order and disjoint JSON keys are asserted."
@@ -118,8 +125,8 @@ failure_examples_tested:
   - example: "Quoted credentials with spaces leave a suffix after redaction"
     result: triggered
     evidence: >
-      Free-form Registry fields never enter knowledge, and final injection replaces
-      complete sensitive items rather than parsing or partially preserving their values.
+      Free-form Registry fields and arbitrary caller strings have no prompt entry;
+      obvious sensitive markers in authored static items fail closed as a whole.
   - example: "The ASCII keyword oa matches inside roadmap"
     result: triggered
     evidence: "ASCII keywords require token boundaries; roadmap remains unmatched."
@@ -137,8 +144,9 @@ step_verification_points:
       uv run pytest tests/knowledge/test_basic_knowledge.py
       tests/runtime/test_intent_router.py tests/runtime/test_runtime_semantic_knowledge.py
       tests/runtime/test_runtime_session_memory.py
-      tests/runtime/test_runtime_capability_selection.py -q
-    evidence: "45 passed on the final structural-reduction candidate."
+      tests/runtime/test_runtime_capability_selection.py
+      tests/runtime/test_runtime_composition.py -q
+    evidence: "49 passed on the user-ruling successor candidate."
   - step: deterministic_validation
     result: passed
     command: "Full pytest, Ruff, mypy, dependency, architecture, weak-test, Golden gate"
@@ -153,8 +161,9 @@ step_verification_points:
       person-label and fallback active-only test gaps; both were fixed and revalidated.
       Successor 5db787c then exposed generic free-text marker gaps. Monitor required
       structural reduction: Registry free text was removed from the prompt surface and
-      final knowledge items now fail closed as a whole. Final exact-candidate review has
-      not run yet.
+      final knowledge items now fail closed as a whole. Rain then replaced the detection
+      criterion with a closed structural-input criterion and required active-only prompt
+      snapshots. The final exact-candidate review has not run yet.
     not_applicable_reason: "The final successor exact candidate has not been committed yet."
     not_applicable_scope: intentionally_deferred
     blocked_by_task_id: P1-B5-002
@@ -180,7 +189,7 @@ forbidden_paths_confirmed: true
 tests_run:
   - command: "uv run pytest"
     result: passed
-    output_snippet: "961 passed, 6 deprecation warnings."
+    output_snippet: "963 passed, 6 deprecation warnings."
   - command: "uv run pytest tests/memory tests/runtime tests/architecture -q"
     result: passed
     output_snippet: "132 passed."
@@ -214,9 +223,10 @@ import_boundary_check:
 security_scan_result:
   result: passed
   evidence: >
-    Static facts contain no real identities or addresses; Registry name, owner,
-    short_description, intent_tags, and schemas are never read. Capability ids use a
-    strict safe allowlist, and sensitive final knowledge items fail closed as a whole.
+    Static facts contain no real identities or addresses; knowledge serialization never
+    reads Registry name, owner, short_description, intent_tags, or schemas. Capability
+    ids use a strict safe allowlist. The fallback sanitizer is not represented as an
+    arbitrary secret detector.
 weak_test_scan_result:
   result: passed
   evidence: "All seven changed/new test modules passed the repository checker."
@@ -281,6 +291,10 @@ remaining_risks:
   - >
     Knowledge is intentionally global static reference data with no tenant, session,
     or user isolation semantics. Session Memory remains separately isolated.
+  - >
+    An unmarked random secret inside a source-code static knowledge constant is not a
+    runtime-detection problem. The closed input surface makes this a code-review risk;
+    no claim is made that sanitize_knowledge_text can detect arbitrary secrets.
 rollback_or_failure_record: >
   Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
   secret, system, or production action. Rollback requires a separately governed revert.

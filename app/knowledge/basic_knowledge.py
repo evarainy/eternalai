@@ -116,7 +116,7 @@ class BasicKnowledge:
         capability_context = [
             _capability_description(capability)
             for capability in sorted(
-                capabilities,
+                (item for item in capabilities if item.status == "active"),
                 key=lambda item: _safe_capability_id(item.capability_id),
             )
         ]
@@ -153,7 +153,7 @@ class BasicKnowledge:
 
 
 def sanitize_knowledge_text(value: str) -> str:
-    """Keep a normalized item only when no sensitive marker is present."""
+    """Catch obvious static-knowledge author mistakes, not arbitrary secrets."""
     normalized = " ".join(value.replace("\r", "\n").split())
     if _SENSITIVE_MARKER.search(normalized) or any(
         pattern.search(normalized) for pattern in _SENSITIVE_LOCATION_OR_IDENTITY

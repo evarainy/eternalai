@@ -100,7 +100,7 @@ def _run(
 
 
 @pytest.mark.parametrize(
-    ("selector", "capabilities", "knowledge_contains"),
+    ("selector", "capabilities"),
     [
         (
             "oa.disabled.query",
@@ -108,19 +108,16 @@ def _run(
                 _capability(
                     "oa.disabled.query",
                     status="disabled",
-                    description="visible but disabled",
                 )
             ],
-            "status=disabled",
         ),
-        ("oa.missing.query", [], None),
+        ("oa.missing.query", []),
     ],
     ids=["disabled", "missing"],
 )
 def test_knowledge_never_authorizes_disabled_or_missing_selector(
     selector: str,
     capabilities: list[CapabilitySpec],
-    knowledge_contains: str | None,
 ) -> None:
     envelope, task_store, trace, gateway, _registry, llm_provider = _run(
         selector,
@@ -139,11 +136,42 @@ def test_knowledge_never_authorizes_disabled_or_missing_selector(
     assert no_capability["error_code"] == "capability_not_found"
     assert "Admin Lite > Registry" in envelope.message
     knowledge_prompt = llm_provider.calls[0]["messages"][1].content
-    if knowledge_contains is None:
-        assert selector not in knowledge_prompt
-    else:
-        assert selector in knowledge_prompt
-        assert knowledge_contains in knowledge_prompt
+    assert selector not in knowledge_prompt
+
+
+def test_runtime_injects_only_active_registry_capabilities() -> None:
+    capabilities = [
+        _capability("oa.active.query"),
+        _capability("oa.draft.query", status="draft"),
+        _capability("oa.disabled.query", status="disabled"),
+        _capability("oa.deprecated.query", status="deprecated"),
+    ]
+
+    envelope, task_store, _trace, gateway, registry, llm_provider = _run(
+        "oa.missing.query",
+        capabilities,
+    )
+
+    prompt = llm_provider.calls[0]["messages"][1].content
+    assert "id=oa.active.query" in prompt
+    assert "status=active" in prompt
+    for inactive_id in (
+        "oa.draft.query",
+        "oa.disabled.query",
+        "oa.deprecated.query",
+    ):
+        assert inactive_id not in prompt
+    assert registry.list_calls[0] == {
+        "target_system": None,
+        "type": None,
+        "status": "active",
+    }
+    assert envelope.status == "no_capability_found"
+    assert task_store.status_updates[-1][1:] == (
+        "no_capability_found",
+        "capability_not_found",
+    )
+    assert gateway.calls == []
 
 
 def test_no_capability_guidance_lists_only_active_registry_capabilities() -> None:
@@ -280,14 +308,14 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
     asyncio.run(exercise())
 
     first_prompt = llm_provider.calls[0]["messages"][1].content
-    second_prompt = llm_provider.calls[1]["messages"][1].content
+    second_messages = llm_provider.calls[1]["messages"]
     third_prompt = llm_provider.calls[2]["messages"][1].content
     assert "oa.first.query" in first_prompt
     assert "status=active" in first_prompt
     assert "oa.second.query" not in first_prompt
-    assert "oa.first.query" in second_prompt
-    assert "status=disabled" in second_prompt
-    assert "oa.second.query" not in second_prompt
+    assert [message.role for message in second_messages] == ["system", "user"]
+    assert all("semantic_system_knowledge" not in item.content for item in second_messages)
+    assert all("oa.first.query" not in item.content for item in second_messages)
     assert "oa.second.query" in third_prompt
     assert "status=active" in third_prompt
     assert "oa.first.query" not in third_prompt
