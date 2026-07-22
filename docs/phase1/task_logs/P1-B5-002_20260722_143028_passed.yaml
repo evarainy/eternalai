@@ -39,7 +39,7 @@ redline_authorization:
     No deletion, secret or .env change, DB schema/data action, system change,
     history rewrite, force push, release, or Golden change was requested.
 started_at: "2026-07-22T13:42:00+09:00"
-completed_at: "2026-07-22T15:00:42+09:00"
+completed_at: "2026-07-22T15:14:33+09:00"
 plan_approved_by: "Rain via external monitor delegation"
 plan_approved_at: "2026-07-22T14:30:28+09:00"
 plan_approved_via: "Codex external monitor thread"
@@ -73,8 +73,8 @@ acceptance_criteria_result:
     result: passed
     evidence: >
       Runtime reads CapabilityRegistryPort.list per request; A/B snapshot tests prove
-      changed Registry data replaces old descriptions in consecutive Runtime calls and
-      no capability list is static.
+      active-to-disabled and replacement snapshots change the structural descriptions
+      in consecutive Runtime calls, and no capability list is static.
   - criterion: "Intent injection has exact small hard bounds and coexists with Memory"
     result: passed
     evidence: >
@@ -93,8 +93,8 @@ acceptance_criteria_result:
   - criterion: "Sensitive values do not enter knowledge, prompt, Trace, state, or response"
     result: passed
     evidence: >
-      Synthetic credential, URL/IP, email/person, and owner markers are removed at the
-      knowledge boundary and again at final prompt injection; all observed surfaces pass.
+      Registry free-text fields are never read; unsafe capability ids and complete
+      sensitive knowledge items fail closed at construction and final prompt injection.
   - criterion: "Mock LLM evidence is honest"
     result: passed
     evidence: >
@@ -118,8 +118,8 @@ failure_examples_tested:
   - example: "Quoted credentials with spaces leave a suffix after redaction"
     result: triggered
     evidence: >
-      Knowledge, final-prompt, and Runtime guidance tests remove complete quoted
-      assignment and Bearer values, including their whitespace-separated suffixes.
+      Free-form Registry fields never enter knowledge, and final injection replaces
+      complete sensitive items rather than parsing or partially preserving their values.
   - example: "The ASCII keyword oa matches inside roadmap"
     result: triggered
     evidence: "ASCII keywords require token boundaries; roadmap remains unmatched."
@@ -137,10 +137,8 @@ step_verification_points:
       uv run pytest tests/knowledge/test_basic_knowledge.py
       tests/runtime/test_intent_router.py tests/runtime/test_runtime_semantic_knowledge.py
       tests/runtime/test_runtime_session_memory.py
-      tests/runtime/test_runtime_capability_selection.py
-      tests/runtime/test_runtime_composition.py
-      tests/architecture/test_import_boundaries.py -q
-    evidence: "54 passed."
+      tests/runtime/test_runtime_capability_selection.py -q
+    evidence: "45 passed on the final structural-reduction candidate."
   - step: deterministic_validation
     result: passed
     command: "Full pytest, Ruff, mypy, dependency, architecture, weak-test, Golden gate"
@@ -153,7 +151,10 @@ step_verification_points:
       fixed and revalidated. Successor da423dc then exposed a quoted Bearer suffix;
       that finding was also fixed and revalidated. Successor 14171c5 exposed quoted
       person-label and fallback active-only test gaps; both were fixed and revalidated.
-      Final exact-candidate review has not run yet.
+      Successor 5db787c then exposed generic free-text marker gaps. Monitor required
+      structural reduction: Registry free text was removed from the prompt surface and
+      final knowledge items now fail closed as a whole. Final exact-candidate review has
+      not run yet.
     not_applicable_reason: "The final successor exact candidate has not been committed yet."
     not_applicable_scope: intentionally_deferred
     blocked_by_task_id: P1-B5-002
@@ -179,7 +180,7 @@ forbidden_paths_confirmed: true
 tests_run:
   - command: "uv run pytest"
     result: passed
-    output_snippet: "960 passed, 6 deprecation warnings."
+    output_snippet: "961 passed, 6 deprecation warnings."
   - command: "uv run pytest tests/memory tests/runtime tests/architecture -q"
     result: passed
     output_snippet: "132 passed."
@@ -213,8 +214,9 @@ import_boundary_check:
 security_scan_result:
   result: passed
   evidence: >
-    Static facts contain no real identities or addresses; Registry owner is never read;
-    sensitive free text is sanitized before knowledge construction and prompt injection.
+    Static facts contain no real identities or addresses; Registry name, owner,
+    short_description, intent_tags, and schemas are never read. Capability ids use a
+    strict safe allowlist, and sensitive final knowledge items fail closed as a whole.
 weak_test_scan_result:
   result: passed
   evidence: "All seven changed/new test modules passed the repository checker."

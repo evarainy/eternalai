@@ -16,26 +16,20 @@ KnowledgeCategory: TypeAlias = Literal[
 
 _REDACTED = "[REDACTED]"
 _MAX_GUIDANCE_CAPABILITIES = 5
-_MAX_GUIDANCE_DESCRIPTION_LENGTH = 80
-_SENSITIVE_PATTERNS = (
-    re.compile(
-        r"bearer\s+(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|\S+)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
-        r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
-        r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key)"
-        r"\s*[:=：]\s*(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|\S+)",
-        re.IGNORECASE,
-    ),
+_MAX_CAPABILITY_ID_LENGTH = 96
+_SAFE_CAPABILITY_ID = re.compile(r"[A-Za-z0-9._-]+")
+_SENSITIVE_MARKER = re.compile(
+    r"(?:bearer|token|credential|secret|password|passwd|auth|authorization|"
+    r"cookie|session)",
+    re.IGNORECASE,
+)
+_SENSITIVE_LOCATION_OR_IDENTITY = (
     re.compile(r"(?:https?|ftp)://\S+", re.IGNORECASE),
     re.compile(r"\\\\[^\s\\]+\\\S+"),
     re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
     re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"),
     re.compile(
-        r"(?:负责人|联系人|姓名|owner)\s*[:=：]\s*"
-        r"(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|[^,，;；。\r\n]*)",
+        r"(?:负责人|联系人|姓名|owner)\s*[:=：]",
         re.IGNORECASE,
     ),
 )
@@ -123,7 +117,7 @@ class BasicKnowledge:
             _capability_description(capability)
             for capability in sorted(
                 capabilities,
-                key=lambda item: sanitize_knowledge_text(item.capability_id),
+                key=lambda item: _safe_capability_id(item.capability_id),
             )
         ]
         return tuple(static_context + capability_context)
@@ -135,7 +129,7 @@ class BasicKnowledge:
         """Describe only active capabilities and the Admin Lite configuration path."""
         active = sorted(
             (item for item in capabilities if item.status == "active"),
-            key=lambda item: sanitize_knowledge_text(item.capability_id),
+            key=lambda item: _safe_capability_id(item.capability_id),
         )
         if active:
             summaries = [
@@ -159,32 +153,40 @@ class BasicKnowledge:
 
 
 def sanitize_knowledge_text(value: str) -> str:
-    """Normalize one untrusted knowledge fragment and remove sensitive values."""
+    """Keep a normalized item only when no sensitive marker is present."""
     normalized = " ".join(value.replace("\r", "\n").split())
-    for pattern in _SENSITIVE_PATTERNS:
-        normalized = pattern.sub(_REDACTED, normalized)
+    if _SENSITIVE_MARKER.search(normalized) or any(
+        pattern.search(normalized) for pattern in _SENSITIVE_LOCATION_OR_IDENTITY
+    ):
+        return _REDACTED
     return normalized.strip()
 
 
 def _capability_description(capability: CapabilitySpec) -> str:
-    capability_id = sanitize_knowledge_text(capability.capability_id)
-    description = sanitize_knowledge_text(capability.short_description)
+    capability_id = _safe_capability_id(capability.capability_id)
     target_system = capability.target_system or "none"
     return (
         f"能力说明：id={capability_id}; type={capability.type}; "
-        f"target_system={target_system}; status={capability.status}; "
-        f"description={description}"
+        f"target_system={target_system}; status={capability.status}"
     )
 
 
 def _active_capability_summary(capability: CapabilitySpec) -> str:
-    capability_id = sanitize_knowledge_text(capability.capability_id)
-    description = sanitize_knowledge_text(capability.short_description)[
-        :_MAX_GUIDANCE_DESCRIPTION_LENGTH
-    ]
-    if not description:
-        return capability_id
-    return f"{capability_id}（{description}）"
+    capability_id = _safe_capability_id(capability.capability_id)
+    target_system = capability.target_system or "none"
+    return f"{capability_id}（{capability.type}/{target_system}/{capability.status}）"
+
+
+def _safe_capability_id(value: str) -> str:
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > _MAX_CAPABILITY_ID_LENGTH
+        or _SAFE_CAPABILITY_ID.fullmatch(normalized) is None
+        or _SENSITIVE_MARKER.search(normalized) is not None
+    ):
+        return _REDACTED
+    return normalized
 
 
 def _normalize_for_match(value: str) -> str:

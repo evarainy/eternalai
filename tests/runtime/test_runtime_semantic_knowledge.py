@@ -31,12 +31,14 @@ def _capability(
     status: CapabilityStatus = "active",
     description: str | None = None,
     owner: str = "semantic-knowledge-test",
+    name: str | None = None,
+    intent_tags: list[str] | None = None,
 ) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id=capability_id,
-        name=capability_id,
+        name=name or capability_id,
         type="query",
-        intent_tags=[],
+        intent_tags=intent_tags or [],
         input_schema_digest=f"input-{capability_id}",
         output_schema_digest=f"output-{capability_id}",
         risk_level="low",
@@ -145,11 +147,10 @@ def test_knowledge_never_authorizes_disabled_or_missing_selector(
 
 
 def test_no_capability_guidance_lists_only_active_registry_capabilities() -> None:
-    active = _capability("oa.active.query", description="active overview")
+    active = _capability("oa.active.query")
     disabled = _capability(
         "oa.disabled.query",
         status="disabled",
-        description="disabled overview",
     )
 
     envelope, task_store, _trace, gateway, registry, _llm = _run(
@@ -163,13 +164,11 @@ def test_no_capability_guidance_lists_only_active_registry_capabilities() -> Non
         "capability_not_found",
     )
     assert "oa.active.query" in envelope.message
-    assert "active overview" in envelope.message
+    assert "query/oa/active" in envelope.message
     assert "oa.disabled.query" not in envelope.message
-    assert "disabled overview" not in envelope.message
     assert "oa.active.query" in envelope.fallback_text
-    assert "active overview" in envelope.fallback_text
+    assert "query/oa/active" in envelope.fallback_text
     assert "oa.disabled.query" not in envelope.fallback_text
-    assert "disabled overview" not in envelope.fallback_text
     assert gateway.calls == []
     assert registry.list_calls[-1] == {
         "target_system": None,
@@ -179,24 +178,26 @@ def test_no_capability_guidance_lists_only_active_registry_capabilities() -> Non
 
 
 def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response() -> None:
-    credential_key = "client_" + "secret"
-    credential_value = "synthetic-runtime-credential"
-    private_address = "https://172.16.10.20/internal"
-    personal_name = "李四 王五"
-    owner_marker = "synthetic-real-owner"
-    quoted_bearer = "synthetic runtime bearer value"
-    capability = _capability(
+    unsafe_id_value = "synthetic-runtime-token-value"
+    description_marker = "unique-runtime-description-1b7a"
+    name_marker = "unique-runtime-name-2c8b"
+    owner_marker = "unique-runtime-owner-3d9c"
+    intent_marker = "unique-runtime-intent-4e0d"
+    safe_capability = _capability(
         "oa.safe.query",
-        description=(
-            f"{credential_key}:{credential_value} address={private_address} "
-            f"负责人=\"{personal_name}\"; Bearer \"{quoted_bearer}\""
-        ),
+        description=description_marker,
         owner=owner_marker,
+        name=name_marker,
+        intent_tags=[intent_marker],
+    )
+    unsafe_capability = _capability(
+        f"token={unsafe_id_value}",
+        description="credential=synthetic-free-text",
     )
 
     envelope, task_store, trace, gateway, _registry, llm_provider = _run(
         "oa.missing.query",
-        [capability],
+        [safe_capability, unsafe_capability],
     )
 
     observed: list[Any] = [
@@ -208,11 +209,12 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
     ]
     serialized = repr(observed)
     for sensitive in (
-        credential_value,
-        private_address,
-        personal_name,
+        unsafe_id_value,
+        description_marker,
+        name_marker,
         owner_marker,
-        quoted_bearer,
+        intent_marker,
+        "synthetic-free-text",
     ):
         assert sensitive not in serialized
     assert "[REDACTED]" in serialized
@@ -221,18 +223,18 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
 
 
 def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
-    first_capability = _capability(
+    first_active = _capability(
         "oa.first.query",
-        description="first registry description",
     )
-    second_capability = _capability(
-        "oa.second.query",
-        description="second registry description",
+    first_disabled = _capability(
+        "oa.first.query",
+        status="disabled",
     )
-    registry = StaticRegistry([first_capability])
+    replacement = _capability("oa.second.query")
+    registry = StaticRegistry([first_active])
     llm_provider = MockLLMProvider()
     structured_output = MockStructuredOutputProvider()
-    for message in ("first request", "second request"):
+    for message in ("first request", "second request", "third request"):
         structured_output.register(
             message,
             CapabilityRef,
@@ -258,7 +260,7 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
             message="first request",
             client_capabilities={},
         )
-        registry.capabilities = [second_capability]
+        registry.capabilities = [first_disabled]
         await runtime.handle_user_message(
             channel="mock",
             ai_user_id="ai-user-1",
@@ -266,14 +268,26 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
             message="second request",
             client_capabilities={},
         )
+        registry.capabilities = [replacement]
+        await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="ai-user-1",
+            session_id="session-1",
+            message="third request",
+            client_capabilities={},
+        )
 
     asyncio.run(exercise())
 
     first_prompt = llm_provider.calls[0]["messages"][1].content
     second_prompt = llm_provider.calls[1]["messages"][1].content
+    third_prompt = llm_provider.calls[2]["messages"][1].content
     assert "oa.first.query" in first_prompt
-    assert "first registry description" in first_prompt
+    assert "status=active" in first_prompt
     assert "oa.second.query" not in first_prompt
-    assert "oa.second.query" in second_prompt
-    assert "second registry description" in second_prompt
-    assert "oa.first.query" not in second_prompt
+    assert "oa.first.query" in second_prompt
+    assert "status=disabled" in second_prompt
+    assert "oa.second.query" not in second_prompt
+    assert "oa.second.query" in third_prompt
+    assert "status=active" in third_prompt
+    assert "oa.first.query" not in third_prompt

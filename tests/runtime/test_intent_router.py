@@ -298,25 +298,26 @@ def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None
         StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
-    credential_value = "synthetic-router-credential"
-    private_address = "https://192.168.1.8/internal"
-    quoted_credential = "synthetic spaced router credential"
-    quoted_bearer = "synthetic spaced bearer credential"
+    sensitive_items = (
+        "token=synthetic-router-token",
+        "credential=synthetic-router-credential",
+        '"access_token": "synthetic-router-json"',
+        'Bearer "synthetic spaced bearer credential"',
+        '联系人="张三 李四"',
+        "endpoint=https://192.168.1.8/internal",
+        "mail=person@example.internal",
+        "host=172.16.1.8",
+    )
 
     asyncio.run(
         router.parse(
             "request",
-            knowledge_items=(
-                f"authorization={credential_value} endpoint={private_address} "
-                f"password=\"{quoted_credential}\" "
-                f"Bearer \"{quoted_bearer}\"",
-            ),
+            knowledge_items=sensitive_items,
         )
     )
 
     prompt = llm_provider.calls[0]["messages"][1].content
-    assert credential_value not in prompt
-    assert private_address not in prompt
-    assert quoted_credential not in prompt
-    assert quoted_bearer not in prompt
-    assert prompt.count("[REDACTED]") == 4
+    for sensitive_item in sensitive_items:
+        assert sensitive_item not in prompt
+    payload = json.loads(prompt.split("\n", maxsplit=1)[1])
+    assert payload["semantic_system_knowledge"] == ["[REDACTED]"] * 8

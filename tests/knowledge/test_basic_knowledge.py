@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.knowledge import BasicKnowledge
+from app.knowledge import BasicKnowledge, sanitize_knowledge_text
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 
 
@@ -12,12 +12,14 @@ def _capability(
     status: CapabilityStatus = "active",
     description: str | None = None,
     owner: str = "knowledge-test-owner",
+    name: str | None = None,
+    intent_tags: list[str] | None = None,
 ) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id=capability_id,
-        name=capability_id,
+        name=name or capability_id,
         type="query",
-        intent_tags=[],
+        intent_tags=intent_tags or [],
         input_schema_digest=f"input-{capability_id}",
         output_schema_digest=f"output-{capability_id}",
         risk_level="low",
@@ -55,71 +57,87 @@ def test_static_content_covers_required_categories_and_keyword_boundaries() -> N
 
 def test_capability_descriptions_follow_each_registry_snapshot() -> None:
     knowledge = BasicKnowledge()
-    first = _capability("oa.expense.first", description="first description")
-    second = _capability("oa.expense.second", description="second description")
+    first = _capability("oa.expense.first", status="active")
+    second = _capability("oa.expense.second", status="disabled")
 
     first_context = knowledge.context_items("unmatched", (first,))
     second_context = knowledge.context_items("unmatched", (second,))
 
     assert len(first_context) == len(second_context) == 1
     assert "oa.expense.first" in first_context[0]
-    assert "first description" in first_context[0]
+    assert "type=query" in first_context[0]
+    assert "target_system=oa" in first_context[0]
+    assert "status=active" in first_context[0]
     assert "oa.expense.first" not in second_context[0]
-    assert "first description" not in second_context[0]
     assert "oa.expense.second" in second_context[0]
-    assert "second description" in second_context[0]
+    assert "status=disabled" in second_context[0]
 
 
-def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None:
-    credential_key = "access_" + "token"
-    credential_value = "synthetic-credential-value"
-    private_address = "http://10.20.30.40/internal"
-    personal_name = "张三 李四"
-    owner_marker = "synthetic-owner-marker"
-    quoted_credential = "synthetic alpha beta marker"
-    quoted_bearer = "synthetic bearer alpha beta marker"
+def test_registry_free_text_is_never_read_into_capability_knowledge() -> None:
+    description_marker = "unique-description-marker-7f3a"
+    name_marker = "unique-name-marker-8b4c"
+    owner_marker = "unique-owner-marker-9d5e"
+    intent_marker = "unique-intent-marker-0a6f"
     capability = _capability(
         "oa.safe.query",
-        description=(
-            f"{credential_key}={credential_value} endpoint={private_address} "
-            f"联系人=\"{personal_name}\"; password=\"{quoted_credential}\" "
-            f"Bearer \"{quoted_bearer}\""
-        ),
+        description=description_marker,
         owner=owner_marker,
+        name=name_marker,
+        intent_tags=[intent_marker],
     )
 
     context = BasicKnowledge().context_items("unmatched", (capability,))
     serialized = repr(context)
 
-    for sensitive in (
-        credential_value,
-        private_address,
-        personal_name,
+    for free_text in (
+        description_marker,
+        name_marker,
         owner_marker,
-        quoted_credential,
-        quoted_bearer,
+        intent_marker,
     ):
-        assert sensitive not in serialized
-    assert serialized.count("[REDACTED]") >= 5
+        assert free_text not in serialized
+    assert "oa.safe.query" in serialized
+    assert "type=query" in serialized
+
+
+def test_sensitive_items_and_unsafe_capability_ids_fail_closed_as_whole_values() -> None:
+    sensitive_items = (
+        "token=synthetic-token-value",
+        "credential=synthetic-credential-value",
+        '"access_token": "synthetic-json-value"',
+        'Bearer "synthetic bearer value"',
+        '联系人="张三 李四"',
+        "endpoint=https://10.20.30.40/internal",
+        "mail=person@example.internal",
+        "host=192.168.10.20",
+    )
+
+    assert [sanitize_knowledge_text(item) for item in sensitive_items] == [
+        "[REDACTED]"
+    ] * len(sensitive_items)
+    context = BasicKnowledge().context_items(
+        "unmatched",
+        (_capability("token=synthetic-unsafe-id"),),
+    )
+    assert len(context) == 1
+    assert "id=[REDACTED]" in context[0]
+    assert "synthetic-unsafe-id" not in context[0]
 
 
 def test_no_capability_guidance_filters_to_active_registry_entries() -> None:
-    active = _capability("oa.active.query", description="active description")
+    active = _capability("oa.active.query")
     disabled = _capability(
         "oa.disabled.query",
         status="disabled",
-        description="disabled description",
     )
 
     message, fallback = BasicKnowledge().no_capability_guidance((disabled, active))
 
     assert "oa.active.query" in message
-    assert "active description" in message
+    assert "query/oa/active" in message
     assert "oa.disabled.query" not in message
-    assert "disabled description" not in message
     assert "oa.active.query" in fallback
-    assert "active description" in fallback
+    assert "query/oa/active" in fallback
     assert "oa.disabled.query" not in fallback
-    assert "disabled description" not in fallback
     assert "Admin Lite > Registry" in message
     assert "will not create or execute" in fallback
