@@ -11,7 +11,6 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY_PATH = REPO_ROOT / "docs" / "dev" / "dependency_policy.md"
 ALLOWLIST_HEADING = "## Dependency Allowlist"

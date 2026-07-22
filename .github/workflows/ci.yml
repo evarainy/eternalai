@@ -54,7 +54,7 @@ jobs:
 
       # ── Lint ─────────────────────────────────────────────────
       - name: Ruff check
-        run: uv run ruff check app/ tests/ scripts/check_weak_tests.py
+        run: uv run ruff check .
 
       # ── Type check ───────────────────────────────────────────
       - name: mypy
