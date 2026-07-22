@@ -35,7 +35,7 @@ redline_authorization:
     GT-011 remains absent; existing 18 fixtures, evaluate_gate, R1-R6, app/, Ports,
     secrets, DB, system configuration, Git history, and production actions were not authorized.
 started_at: "2026-07-22T10:43:22+09:00"
-completed_at: "2026-07-22T11:09:58+09:00"
+completed_at: "2026-07-22T11:24:04+09:00"
 plan_approved_by: "Rain via external monitor delegation"
 plan_approved_at: "2026-07-22T10:43:00+09:00"
 plan_approved_via: "Codex external monitor window"
@@ -107,6 +107,16 @@ step_verification_points:
     result: passed
     command: "Codex high read-only self-review"
     evidence: "Initial MEDIUM was fixed; high read-only re-review returned PASS with no findings."
+  - step: opus_review_candidate_3bc4fa3
+    result: failed
+    command: "opus_review.py --effort xhigh"
+    evidence: >
+      Verified claude-opus-4-8 review found the adapter-prefix forbidden fallback unreachable;
+      merge stayed blocked and the successor restores the live assertion with a regression test.
+  - step: independent_review_opus_f1_successor
+    result: passed
+    command: "Fresh Codex high read-only self-review"
+    evidence: "Fresh high reviewer returned PASS with no findings after affected checks."
 changed_files:
   - docs/phase1/task_logs/P1-B4-005_20260722_105909_passed.yaml
   - docs/phase1/tasks/P1-B4-005.md
@@ -131,7 +141,7 @@ tests_run:
     output_snippet: "880 passed, 26 skipped."
   - command: "uv run pytest tests/golden_tasks/ -q"
     result: passed
-    output_snippet: "228 passed."
+    output_snippet: "229 passed after Opus F1 repair."
   - command: "uv run ruff check app/ tests/"
     result: passed
     output_snippet: "All checks passed."
@@ -183,7 +193,8 @@ review:
   notes: >
     Initial review found missing exact binding of GT-021 terminal error_code. The candidate
     added workflow terminal error-code assertion plus a negative meta-test; re-review returned
-    PASS with no findings. Opus remains a merge hard prerequisite.
+    PASS with no findings. After Opus found the adapter-prefix fallback unreachable, a fresh
+    high reviewer verified the successor fix with no findings. Opus remains a merge hard prerequisite.
   provider: codex
   requested_model: codex-read-only-high
   observed_models: {}

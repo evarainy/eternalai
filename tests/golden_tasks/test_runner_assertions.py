@@ -212,6 +212,31 @@ def test_adapter_assertion_requires_exact_per_capability_counts_and_arguments() 
         )
 
 
+def test_forbidden_adapter_assertion_uses_capability_keyed_counts() -> None:
+    with pytest.raises(AssertionError, match="mock OA adapter was called"):
+        assert_forbidden_absent(
+            ["mock_oa_was_called"],
+            {},
+            [],
+            {"oa.b4.policy.denied": 1},
+        )
+
+    assert_forbidden_absent(
+        ["mock_oa_was_called"],
+        {},
+        [],
+        {"u8.b4.document.lookup": 1},
+    )
+
+    with pytest.raises(AssertionError, match="mock U8 adapter was called"):
+        assert_forbidden_absent(
+            ["mock_u8_was_called"],
+            {},
+            [],
+            {"u8.b4.document.lookup": 1},
+        )
+
+
 def test_trace_event_details_require_workflow_step_metadata() -> None:
     trace = [
         {"event_type": "capability_selected", "capability_id": "workflow.b4"},

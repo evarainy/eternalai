@@ -703,12 +703,12 @@ def _contains_tokenish_value(values: Iterable[str], needle: str) -> bool:
 
 
 def _adapter_call_count(adapter_calls: Mapping[str, Any], adapter_name: str) -> int:
-    value = adapter_calls.get(adapter_name)
-    if isinstance(value, int):
-        return value
-    call_count = getattr(value, "call_count", 0)
-    if isinstance(call_count, int):
-        return call_count
+    if adapter_name in adapter_calls:
+        value = adapter_calls[adapter_name]
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        call_count = getattr(value, "call_count", None)
+        return call_count if isinstance(call_count, int) else 0
     prefixes = {
         "oa": ("oa.",),
         "u8": ("u8.",),
