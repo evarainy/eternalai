@@ -15,7 +15,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 )
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.task_store import SessionRecord, TaskRecord
+from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
@@ -78,6 +78,17 @@ class TaskStore:
 
     async def append_event(self, task_id: str, event: Any) -> None:
         self.events.append(event)
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class SessionStore:

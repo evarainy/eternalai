@@ -339,6 +339,174 @@ def test_append_event_raises_task_not_found_error_for_unknown_task_id():
     asyncio.run(_run())
 
 
+def test_list_tasks_supports_session_user_and_intersection_filters():
+    _require_db()
+    from app.ports.task_store import TaskRecord
+
+    session_id = str(uuid.uuid4())
+    other_session_id = str(uuid.uuid4())
+    user_id = f"user-{uuid.uuid4()}"
+    other_user_id = f"user-{uuid.uuid4()}"
+
+    records = [
+        TaskRecord(
+            task_id=str(uuid.uuid4()),
+            session_id=session_id,
+            ai_user_id=user_id,
+            status="completed",
+        ),
+        TaskRecord(
+            task_id=str(uuid.uuid4()),
+            session_id=session_id,
+            ai_user_id=other_user_id,
+            status="failed",
+            error_code="adapter_error",
+        ),
+        TaskRecord(
+            task_id=str(uuid.uuid4()),
+            session_id=other_session_id,
+            ai_user_id=user_id,
+            status="running",
+        ),
+    ]
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            store = _task_store(_make_factory(engine))
+            for record in records:
+                await store.create_task(record)
+
+            by_session = await store.list_tasks(session_id=session_id)
+            by_user = await store.list_tasks(ai_user_id=user_id)
+            intersection = await store.list_tasks(
+                session_id=session_id,
+                ai_user_id=user_id,
+            )
+
+            assert {item.task_id for item in by_session} == {
+                records[0].task_id,
+                records[1].task_id,
+            }
+            assert {item.task_id for item in by_user} == {
+                records[0].task_id,
+                records[2].task_id,
+            }
+            assert intersection == [records[0]]
+            with pytest.raises(ValueError, match="session_id or ai_user_id"):
+                await store.list_tasks()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_list_tasks_enforces_exact_fixed_limit_in_postgresql():
+    _require_db()
+    from sqlalchemy import text
+
+    from app.ports.task_store import TASK_STORE_QUERY_LIMIT
+
+    session_id = str(uuid.uuid4())
+    user_id = f"user-{uuid.uuid4()}"
+    prefix = f"bounded-{uuid.uuid4()}"
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            factory = _make_factory(engine)
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO tasks"
+                        " (task_id, session_id, ai_user_id, status,"
+                        " trace_id, capability_id, error_code)"
+                        " VALUES"
+                        " (:task_id, :session_id, :ai_user_id, 'completed',"
+                        " NULL, 'oa.leave.apply', NULL)"
+                    ),
+                    [
+                        {
+                            "task_id": f"{prefix}-{index:03d}",
+                            "session_id": session_id,
+                            "ai_user_id": user_id,
+                        }
+                        for index in range(TASK_STORE_QUERY_LIMIT + 1)
+                    ],
+                )
+                await session.commit()
+
+            store = _task_store(factory)
+            tasks = await store.list_tasks(
+                session_id=session_id,
+                ai_user_id=user_id,
+            )
+
+            assert len(tasks) == TASK_STORE_QUERY_LIMIT == 100
+            assert [task.task_id for task in tasks] == [
+                f"{prefix}-{index:03d}" for index in range(TASK_STORE_QUERY_LIMIT)
+            ]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_list_events_round_trips_payload_in_order_with_exact_fixed_limit():
+    _require_db()
+    from sqlalchemy import text
+
+    from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskRecord
+
+    task_id = str(uuid.uuid4())
+    start = datetime(2026, 7, 23, tzinfo=timezone.utc)
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            factory = _make_factory(engine)
+            store = _task_store(factory)
+            await store.create_task(
+                TaskRecord(
+                    task_id=task_id,
+                    session_id=str(uuid.uuid4()),
+                    ai_user_id="bounded-event-user",
+                    status="completed",
+                )
+            )
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO task_events"
+                        " (event_id, task_id, event_type, timestamp, payload)"
+                        " VALUES"
+                        " (:event_id, :task_id, 'workflow_step_finished',"
+                        " :timestamp, CAST(:payload AS JSONB))"
+                    ),
+                    [
+                        {
+                            "event_id": f"event-{task_id}-{index:03d}",
+                            "task_id": task_id,
+                            "timestamp": start.replace(microsecond=index),
+                            "payload": json.dumps({"step_index": index}),
+                        }
+                        for index in range(TASK_STORE_QUERY_LIMIT + 1)
+                    ],
+                )
+                await session.commit()
+
+            events = await store.list_events(task_id)
+
+            assert len(events) == TASK_STORE_QUERY_LIMIT == 100
+            assert [event.payload for event in events] == [
+                {"step_index": index} for index in range(TASK_STORE_QUERY_LIMIT)
+            ]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
 # ── SessionStore tests ─────────────────────────────────────────────────────────
 
 def test_create_session_returns_session_record_and_round_trips():

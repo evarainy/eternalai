@@ -11,6 +11,7 @@ from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
@@ -22,11 +23,15 @@ from app.workflow.engine import WorkflowEngine
 def build_admin_registry_service(
     *,
     capability_registry: CapabilityRegistryPort,
+    task_store: TaskStorePort,
+    identity_mapping: IdentityMappingPort,
     trace_port: TracePort,
 ) -> AdminRegistryService:
     """Wire Admin Lite with the closed management-action allowlist."""
     return AdminRegistryService(
         capability_registry=capability_registry,
+        task_store=task_store,
+        identity_mapping=identity_mapping,
         policy_guard=MinimalPolicyGuard(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),

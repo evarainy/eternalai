@@ -14,6 +14,7 @@ from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
+from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.workflow.engine import MAX_STEP_RETRIES, RETRYABLE_ERROR_CODES, WorkflowEngine
 from app.workflow.models import (
     WorkflowCondition,
@@ -63,6 +64,17 @@ class RecordingTaskStore:
     async def append_event(self, task_id: str, event: Any) -> None:
         assert event.task_id == task_id
         self.events.append(event)
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class RecordingPolicyGuard:

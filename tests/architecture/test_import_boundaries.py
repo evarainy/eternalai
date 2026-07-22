@@ -318,6 +318,19 @@ class TestImportBoundaries:
                 )
         assert all_violations == [], "Import boundary violations:\n" + "\n".join(all_violations)
 
+    def test_admin_api_reaches_ports_only_through_admin_service(self) -> None:
+        admin_api = APP_ROOT / "api" / "v1" / "admin.py"
+        imports = _collect_imports(admin_api, APP_ROOT)
+
+        assert not any(
+            module == "app.ports" or module.startswith("app.ports.")
+            for module in imports
+        )
+        assert not any(
+            module == "app.infra" or module.startswith("app.infra.")
+            for module in imports
+        )
+
     def test_not_applicable_rules_return_records(
         self, rules: list[BoundaryRule]
     ) -> None:

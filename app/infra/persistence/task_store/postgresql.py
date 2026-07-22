@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.infra.persistence.task_store.errors import DuplicateTaskError, TaskNotFoundError
 from app.ports.task_store import (
+    TASK_STORE_QUERY_LIMIT,
     SessionRecord,
     SessionStorePort,
     TaskEventRecord,
@@ -76,15 +77,7 @@ class PostgreSQLTaskStore:
             ).fetchone()
         if row is None:
             return None
-        return TaskRecord(
-            task_id=row.task_id,
-            session_id=row.session_id,
-            ai_user_id=row.ai_user_id,
-            status=row.status,
-            trace_id=row.trace_id,
-            capability_id=row.capability_id,
-            error_code=row.error_code,
-        )
+        return _task_record_from_row(row)
 
     async def update_status(
         self,
@@ -110,15 +103,7 @@ class PostgreSQLTaskStore:
             if row is None:
                 raise TaskNotFoundError(f"Task {task_id!r} not found")
             await session.commit()
-        return TaskRecord(
-            task_id=row.task_id,
-            session_id=row.session_id,
-            ai_user_id=row.ai_user_id,
-            status=row.status,
-            trace_id=row.trace_id,
-            capability_id=row.capability_id,
-            error_code=row.error_code,
-        )
+        return _task_record_from_row(row)
 
     async def append_event(self, task_id: str, event: TaskEventRecord) -> None:
         async with self._session_factory() as session:
@@ -146,6 +131,71 @@ class PostgreSQLTaskStore:
                 },
             )
             await session.commit()
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        filters: list[str] = []
+        parameters: dict[str, str | int] = {"limit": TASK_STORE_QUERY_LIMIT}
+        if session_id is not None:
+            filters.append("session_id = :session_id")
+            parameters["session_id"] = session_id
+        if ai_user_id is not None:
+            filters.append("ai_user_id = :ai_user_id")
+            parameters["ai_user_id"] = ai_user_id
+        if not filters:
+            raise ValueError("session_id or ai_user_id is required")
+
+        query = (
+            "SELECT task_id, session_id, ai_user_id, status,"
+            " trace_id, capability_id, error_code"
+            " FROM tasks WHERE "
+            + " AND ".join(filters)
+            + " ORDER BY task_id ASC LIMIT :limit"
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(text(query), parameters)).fetchall()
+        return [_task_record_from_row(row) for row in rows]
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT event_id, task_id, event_type, timestamp, payload"
+                        " FROM task_events WHERE task_id = :task_id"
+                        " ORDER BY timestamp ASC, event_id ASC LIMIT :limit"
+                    ),
+                    {"task_id": task_id, "limit": TASK_STORE_QUERY_LIMIT},
+                )
+            ).fetchall()
+        return [
+            TaskEventRecord(
+                event_id=row.event_id,
+                task_id=row.task_id,
+                event_type=row.event_type,
+                timestamp=row.timestamp,
+                payload=(
+                    row.payload if isinstance(row.payload, dict) else json.loads(row.payload)
+                ),
+            )
+            for row in rows
+        ]
+
+
+def _task_record_from_row(row: Any) -> TaskRecord:
+    return TaskRecord(
+        task_id=row.task_id,
+        session_id=row.session_id,
+        ai_user_id=row.ai_user_id,
+        status=row.status,
+        trace_id=row.trace_id,
+        capability_id=row.capability_id,
+        error_code=row.error_code,
+    )
 
 
 class PostgreSQLSessionStore:

@@ -9,9 +9,11 @@ from fastapi.testclient import TestClient
 
 from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.admin.registry import AdminRegistryService
+from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.main import create_app
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
 
 
@@ -61,6 +63,36 @@ class RecordingTrace:
 
     async def record_event(self, event: TraceEvent) -> None:
         self.events.append(event)
+
+
+class EmptyTaskStore:
+    async def create_task(self, record: TaskRecord) -> TaskRecord:
+        return record
+
+    async def get_task(self, task_id: str) -> TaskRecord | None:
+        return None
+
+    async def update_status(
+        self,
+        task_id: str,
+        status: str,
+        error_code: str | None = None,
+    ) -> TaskRecord:
+        raise AssertionError("Registry routes must not update Tasks")
+
+    async def append_event(self, task_id: str, event: TaskEventRecord) -> None:
+        raise AssertionError("Registry routes must not append Task events")
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class AdapterSentinel:
@@ -132,6 +164,8 @@ def _client(
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=registry,
+        task_store=EmptyTaskStore(),
+        identity_mapping=MockIdentityMapping(rows=[]),
         policy_guard=MinimalPolicyGuard(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),

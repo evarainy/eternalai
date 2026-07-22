@@ -16,6 +16,8 @@ TaskStatus: TypeAlias = Literal[
     "no_capability_found",
 ]
 
+TASK_STORE_QUERY_LIMIT = 100
+
 
 class TaskRecord(BaseModel):
     task_id: str
@@ -52,6 +54,15 @@ class TaskStorePort(Protocol):
     ) -> TaskRecord: ...
 
     async def append_event(self, task_id: str, event: TaskEventRecord) -> None: ...
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]: ...
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]: ...
 
 
 class SessionStorePort(Protocol):
