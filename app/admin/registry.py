@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +12,7 @@ from app.admin.actions import (
     AdminAction,
 )
 from app.admin.evidence import (
+    AdminBindingListResponse,
     AdminBindingView,
     AdminTaskEventView,
     AdminTaskView,
@@ -130,6 +131,10 @@ class AdminTaskFilterRequiredError(RuntimeError):
 
 class AdminTaskNotFoundError(RuntimeError):
     """Raised only after an authorized Task evidence lookup misses."""
+
+
+class AdminBindingQueryInvalidError(RuntimeError):
+    """Raised after authorization when Binding query parameters are invalid."""
 
 
 class AdminRegistryService:
@@ -305,18 +310,24 @@ class AdminRegistryService:
 
     async def list_bindings(
         self,
-        ai_user_id: str,
+        ai_user_id: str | None,
         context: AdminRequestContext,
         *,
-        target_system: TargetSystem | None = None,
+        target_system: str | None = None,
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
-    ) -> list[AdminBindingView]:
+    ) -> AdminBindingListResponse:
         await self._authorize("bindings_list", context)
+        if ai_user_id is None or not ai_user_id.strip():
+            await self._record_invalid_binding_query("ai_user_id_required", context)
+            raise AdminBindingQueryInvalidError("ai_user_id is required")
+        if target_system is not None and target_system not in get_args(TargetSystem):
+            await self._record_invalid_binding_query("target_system_invalid", context)
+            raise AdminBindingQueryInvalidError("target_system is invalid")
         mappings = await self._identity_mapping.list_mappings(
             ai_user_id,
-            target_system=target_system,
+            target_system=cast(TargetSystem | None, target_system),
             binding_scope=binding_scope,
             account_set_id=account_set_id,
             device_domain_id=device_domain_id,
@@ -332,7 +343,20 @@ class AdminRegistryService:
             decision="allow",
             attributes={"result_count": len(views)},
         )
-        return views
+        return AdminBindingListResponse(ai_user_id=ai_user_id, items=views)
+
+    async def _record_invalid_binding_query(
+        self,
+        reason_code: str,
+        context: AdminRequestContext,
+    ) -> None:
+        await self._record(
+            action="bindings_list",
+            context=context,
+            status="failed",
+            decision="allow",
+            attributes={"reason_code": reason_code},
+        )
 
     async def _authorize(
         self,
@@ -459,6 +483,7 @@ class AdminRegistryService:
 
 
 __all__ = (
+    "AdminBindingQueryInvalidError",
     "AdminCapabilityCreate",
     "AdminCapabilityNotFoundError",
     "AdminCapabilityView",

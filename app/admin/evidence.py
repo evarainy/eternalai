@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, TypeAlias
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,8 +14,6 @@ from app.ports.identity_mapping import (
     TargetSystem,
 )
 from app.ports.task_store import TaskEventRecord, TaskRecord, TaskStatus
-
-AdminTargetSystem: TypeAlias = TargetSystem
 
 
 class AdminTaskView(BaseModel):
@@ -151,5 +149,4 @@ __all__ = (
     "AdminTaskEventView",
     "AdminTaskListResponse",
     "AdminTaskView",
-    "AdminTargetSystem",
 )

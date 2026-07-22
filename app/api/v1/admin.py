@@ -10,11 +10,11 @@ from pydantic import BaseModel, ConfigDict
 
 from app.admin.evidence import (
     AdminBindingListResponse,
-    AdminTargetSystem,
     AdminTaskEventListResponse,
     AdminTaskListResponse,
 )
 from app.admin.registry import (
+    AdminBindingQueryInvalidError,
     AdminCapabilityCreate,
     AdminCapabilityNotFoundError,
     AdminCapabilityView,
@@ -103,6 +103,14 @@ def _raise_http(error: RuntimeError) -> NoReturn:
             detail={
                 "code": "task_filter_required",
                 "message": "session_id or ai_user_id is required.",
+            },
+        ) from None
+    if isinstance(error, AdminBindingQueryInvalidError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "binding_query_invalid",
+                "message": "Binding query parameters are invalid.",
             },
         ) from None
     raise error
@@ -218,8 +226,8 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     @router.get("/bindings", response_model=AdminBindingListResponse)
     async def list_bindings(
         context: AdminContext,
-        ai_user_id: Annotated[str, Query(min_length=1)],
-        target_system: Annotated[AdminTargetSystem | None, Query()] = None,
+        ai_user_id: Annotated[str | None, Query()] = None,
+        target_system: Annotated[str | None, Query()] = None,
         binding_scope: Annotated[str | None, Query()] = None,
         account_set_id: Annotated[str | None, Query()] = None,
         device_domain_id: Annotated[str | None, Query()] = None,
@@ -235,6 +243,6 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
             )
         except RuntimeError as error:
             _raise_http(error)
-        return AdminBindingListResponse(ai_user_id=ai_user_id, items=bindings)
+        return bindings
 
     return router

@@ -40,7 +40,7 @@ redline_authorization:
     mutation, IdentityMappingPort expansion, new dependency, system change,
     history rewrite, force push, release, or Golden change occurred.
 started_at: "2026-07-23T02:34:00+09:00"
-completed_at: "2026-07-23T03:00:14+09:00"
+completed_at: "2026-07-23T03:11:00+09:00"
 plan_approved_by: "Rain via delegated external monitor"
 plan_approved_at: "2026-07-23T02:49:00+09:00"
 plan_approved_via: "Codex external monitor delegation"
@@ -110,7 +110,7 @@ acceptance_criteria_result:
   - criterion: "B2-B4 behavior and Frozen Golden remain unchanged"
     result: passed
     evidence: >
-      Full suite passed 1051 tests with 0 skipped and 0 failed. Golden remained
+      Full suite passed 1057 tests with 0 skipped and 0 failed. Golden remained
       23/23 with negative 14/14; no Golden file changed.
   - criterion: "Role authentication state and Trace debt remain honest"
     result: passed
@@ -128,7 +128,15 @@ failure_examples_tested:
     evidence: "limit=-1 and limit=999999999 both return exactly 100 Task items; event and Binding paths also cap at 100."
   - example: "Missing management role probes whether a Task or user exists"
     result: triggered
-    evidence: "Existing and missing cases return identical 403 bodies before any Store or Mapping call."
+    evidence: >
+      Existing, missing, absent/empty ai_user_id, and invalid target_system cases
+      return identical 403 bodies before any Store or Mapping call.
+  - example: "FastAPI validates Binding parameters before the role guard"
+    result: triggered
+    evidence: >
+      Successor tests prove missing/empty ai_user_id and invalid target_system reach
+      the service role guard first. Without a role they return traced 403; with a role
+      they return stable 422 and make zero Mapping calls.
   - example: "Authorized event lookup probes an unknown Task"
     result: triggered
     evidence: "Returns stable 404 task_not_found after authorization and never calls list_events."
@@ -168,8 +176,11 @@ step_verification_points:
   - step: independent_review
     result: not_applicable
     command: "Codex high read-only self-review, then Opus 4.8/xhigh"
-    evidence: "Exact candidate commit and both independent reviews are pending."
-    not_applicable_reason: "The exact candidate has not been committed and reviewed yet."
+    evidence: >
+      Initial candidate c90fb36 received one P1: FastAPI could return Binding 422
+      before the role guard. The successor moves validation behind _authorize and
+      adds denial/authorized-invalid regressions. Successor review is pending.
+    not_applicable_reason: "The successor exact candidate has not been reviewed yet."
     not_applicable_scope: intentionally_deferred
     blocked_by_task_id: P1-B5-004b
     activation_task_id: P1-B5-004b
@@ -211,7 +222,7 @@ tests_run:
     output_snippet: "14 passed against the fixed PostgreSQL test database."
   - command: "uv run pytest -q"
     result: passed
-    output_snippet: "1051 passed, 0 skipped, 0 failed, 6 warnings."
+    output_snippet: "1057 passed, 0 skipped, 0 failed, 6 warnings."
   - command: "uv run ruff check ."
     result: passed
     output_snippet: "All checks passed."

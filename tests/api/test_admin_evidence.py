@@ -373,6 +373,9 @@ def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
         "/api/v1/admin/tasks/missing-task/events",
         "/api/v1/admin/bindings?ai_user_id=user-1",
         "/api/v1/admin/bindings?ai_user_id=missing-user",
+        "/api/v1/admin/bindings",
+        "/api/v1/admin/bindings?ai_user_id=",
+        "/api/v1/admin/bindings?ai_user_id=user-1&target_system=unsupported",
     ],
 )
 def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
@@ -390,6 +393,41 @@ def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
     assert len(trace.events) == 1
     assert trace.events[0].status == "blocked"
     assert trace.events[0].attributes["role_claim_authenticated"] is False
+
+
+@pytest.mark.parametrize(
+    ("query", "reason_code"),
+    [
+        ("", "ai_user_id_required"),
+        ("?ai_user_id=", "ai_user_id_required"),
+        ("?ai_user_id=user-1&target_system=unsupported", "target_system_invalid"),
+    ],
+)
+def test_authorized_invalid_binding_query_is_checked_after_role_guard(
+    query: str,
+    reason_code: str,
+) -> None:
+    identity_mapping = RecordingIdentityMapping([_binding(0)])
+    trace = RecordingTrace()
+    client = _client(RecordingTaskStore(), identity_mapping, trace)
+
+    response = client.get(
+        f"/api/v1/admin/bindings{query}",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "code": "binding_query_invalid",
+            "message": "Binding query parameters are invalid.",
+        }
+    }
+    assert identity_mapping.calls == []
+    assert len(trace.events) == 1
+    assert trace.events[0].status == "failed"
+    assert trace.events[0].attributes["action"] == "bindings_list"
+    assert trace.events[0].attributes["reason_code"] == reason_code
 
 
 def test_authorized_task_events_report_not_found_without_listing_events() -> None:
