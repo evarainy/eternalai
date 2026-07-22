@@ -208,17 +208,19 @@ class RecordingEvaluator(TerminalEvaluator):
 
 
 class WaitingWorkflow:
-    def __init__(self, resume_status: WorkflowRunStatus) -> None:
+    def __init__(
+        self,
+        resume_status: WorkflowRunStatus,
+        resume_error_code: ErrorCode | None = None,
+    ) -> None:
         self.resume_status = resume_status
+        self.resume_error_code = resume_error_code
 
     async def execute(self, **kwargs: Any) -> WorkflowRunResult:
         return _workflow_result("waiting_confirm", "confirm_required")
 
     async def resume(self, *, task_id: str, confirmed: bool) -> WorkflowRunResult:
-        error_code: ErrorCode | None = None
-        if self.resume_status == "waiting_confirm":
-            error_code = "confirm_required"
-        return _workflow_result(self.resume_status, error_code)
+        return _workflow_result(self.resume_status, self.resume_error_code)
 
 
 def _workflow_result(
@@ -422,12 +424,40 @@ def test_no_capability_terminal_path_records_exactly_one_failed_evaluation() -> 
     ]
     assert gateway.calls == 0
     assert len(events) == 1
-    assert events[0]["attributes"]["business_status"] == "no_capability_found"
-    assert events[0]["attributes"]["evaluation_result"] == "failed"
+    assert events[0]["status"] == "failed"
+    assert events[0]["error_code"] == "capability_not_found"
+    assert events[0]["attributes"] == {
+        "rule_id": "terminal_status_v1",
+        "business_status": "no_capability_found",
+        "business_error_code": "capability_not_found",
+        "evaluation_result": "failed",
+        "reason": "business_not_completed",
+    }
 
 
-def test_workflow_waiting_has_no_evaluation_then_resume_records_one() -> None:
-    workflow = WaitingWorkflow("completed")
+@pytest.mark.parametrize(
+    (
+        "resume_status",
+        "error_code",
+        "expected_envelope_status",
+        "expected_task_status",
+        "expected_evaluation_result",
+    ),
+    [
+        ("completed", None, "completed", "completed", "passed"),
+        ("failed", "adapter_error", "failed", "failed", "failed"),
+        ("denied", "policy_denied", "blocked", "failed", "failed"),
+        ("timeout", "adapter_timeout", "failed", "failed", "failed"),
+    ],
+)
+def test_workflow_waiting_has_no_evaluation_then_resume_records_exact_terminal(
+    resume_status: WorkflowRunStatus,
+    error_code: ErrorCode | None,
+    expected_envelope_status: str,
+    expected_task_status: str,
+    expected_evaluation_result: str,
+) -> None:
+    workflow = WaitingWorkflow(resume_status, error_code)
     runtime, task_store, trace, _gateway = _runtime(
         ExecutionResult(status="failed", trace_id="unused"),
         capability_type="workflow",
@@ -440,15 +470,29 @@ def test_workflow_waiting_has_no_evaluation_then_resume_records_one() -> None:
     assert _evaluation_events(trace) == []
     assert trace.finalizations == []
 
-    completed = _handle(runtime, f"确认 {waiting.task_id}")
+    terminal = _handle(runtime, f"确认 {waiting.task_id}")
 
     events = _evaluation_events(trace)
-    assert completed.status == "completed"
-    assert completed.task_id == waiting.task_id
-    assert task_store.status_updates[-1] == ("completed", None)
+    assert terminal.status == expected_envelope_status
+    assert terminal.task_id == waiting.task_id
+    assert task_store.status_updates[-1] == (expected_task_status, error_code)
     assert len(events) == 1
     assert events[0]["task_id"] == waiting.task_id
-    assert events[0]["attributes"]["evaluation_result"] == "passed"
+    assert events[0]["status"] == (
+        "ok" if expected_evaluation_result == "passed" else "failed"
+    )
+    assert events[0]["error_code"] == error_code
+    assert events[0]["attributes"] == {
+        "rule_id": "terminal_status_v1",
+        "business_status": resume_status,
+        "business_error_code": error_code,
+        "evaluation_result": expected_evaluation_result,
+        "reason": (
+            "business_completed"
+            if expected_evaluation_result == "passed"
+            else "business_not_completed"
+        ),
+    }
     assert len(trace.finalizations) == 1
 
 
@@ -456,7 +500,7 @@ def test_workflow_resume_waiting_again_still_has_no_evaluation() -> None:
     runtime, _task_store, trace, _gateway = _runtime(
         ExecutionResult(status="failed", trace_id="unused"),
         capability_type="workflow",
-        workflow=WaitingWorkflow("waiting_confirm"),
+        workflow=WaitingWorkflow("waiting_confirm", "confirm_required"),
     )
 
     first_wait = _handle(runtime)

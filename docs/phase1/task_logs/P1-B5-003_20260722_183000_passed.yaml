@@ -139,8 +139,12 @@ step_verification_points:
   - step: independent_review
     result: not_applicable
     command: "Codex high read-only self-review, then Opus 4.8/xhigh"
-    evidence: "Exact candidate has not been committed or independently reviewed yet."
-    not_applicable_reason: "Review is intentionally deferred until the exact commit exists."
+    evidence: >
+      Initial candidate 6cb2180 received one P2 finding: Workflow resume and
+      no-capability tests did not fully lock the status/error_code passed into Evaluator.
+      Resume was expanded across completed/failed/denied/timeout, and both paths now
+      assert the full top-level and attribute conclusion. Successor review is pending.
+    not_applicable_reason: "The final successor exact candidate has not been reviewed yet."
     not_applicable_scope: intentionally_deferred
     blocked_by_task_id: P1-B5-003
     activation_task_id: P1-B5-003
