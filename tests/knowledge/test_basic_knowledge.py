@@ -74,7 +74,7 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
     credential_key = "access_" + "token"
     credential_value = "synthetic-credential-value"
     private_address = "http://10.20.30.40/internal"
-    personal_name = "张三"
+    personal_name = "张三 李四"
     owner_marker = "synthetic-owner-marker"
     quoted_credential = "synthetic alpha beta marker"
     quoted_bearer = "synthetic bearer alpha beta marker"
@@ -82,7 +82,7 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
         "oa.safe.query",
         description=(
             f"{credential_key}={credential_value} endpoint={private_address} "
-            f"联系人:{personal_name} password=\"{quoted_credential}\" "
+            f"联系人=\"{personal_name}\"; password=\"{quoted_credential}\" "
             f"Bearer \"{quoted_bearer}\""
         ),
         owner=owner_marker,
@@ -117,5 +117,9 @@ def test_no_capability_guidance_filters_to_active_registry_entries() -> None:
     assert "active description" in message
     assert "oa.disabled.query" not in message
     assert "disabled description" not in message
+    assert "oa.active.query" in fallback
+    assert "active description" in fallback
+    assert "oa.disabled.query" not in fallback
+    assert "disabled description" not in fallback
     assert "Admin Lite > Registry" in message
     assert "will not create or execute" in fallback

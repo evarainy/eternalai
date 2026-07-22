@@ -166,6 +166,10 @@ def test_no_capability_guidance_lists_only_active_registry_capabilities() -> Non
     assert "active overview" in envelope.message
     assert "oa.disabled.query" not in envelope.message
     assert "disabled overview" not in envelope.message
+    assert "oa.active.query" in envelope.fallback_text
+    assert "active overview" in envelope.fallback_text
+    assert "oa.disabled.query" not in envelope.fallback_text
+    assert "disabled overview" not in envelope.fallback_text
     assert gateway.calls == []
     assert registry.list_calls[-1] == {
         "target_system": None,
@@ -178,14 +182,14 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
     credential_key = "client_" + "secret"
     credential_value = "synthetic-runtime-credential"
     private_address = "https://172.16.10.20/internal"
-    personal_name = "李四"
+    personal_name = "李四 王五"
     owner_marker = "synthetic-real-owner"
     quoted_bearer = "synthetic runtime bearer value"
     capability = _capability(
         "oa.safe.query",
         description=(
             f"{credential_key}:{credential_value} address={private_address} "
-            f"负责人:{personal_name} Bearer \"{quoted_bearer}\""
+            f"负责人=\"{personal_name}\"; Bearer \"{quoted_bearer}\""
         ),
         owner=owner_marker,
     )

@@ -34,7 +34,8 @@ _SENSITIVE_PATTERNS = (
     re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
     re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"),
     re.compile(
-        r"(?:负责人|联系人|姓名|owner)\s*[:=：]\s*[\w\u4e00-\u9fff·.-]+",
+        r"(?:负责人|联系人|姓名|owner)\s*[:=：]\s*"
+        r"(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|[^,，;；。\r\n]*)",
         re.IGNORECASE,
     ),
 )
