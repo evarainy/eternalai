@@ -5,11 +5,18 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from fastapi.testclient import TestClient
+
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.main import create_app
+from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
@@ -60,6 +67,10 @@ class ExistingSessionStore:
 
 
 class SpyTracePort:
+    def __init__(self) -> None:
+        self.steps: list[dict[str, Any]] = []
+        self.record_gateway_call_count = 0
+
     def set_sanitizer(self, hook: Any) -> None:
         return None
 
@@ -85,7 +96,14 @@ class SpyTracePort:
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        self.steps.append(
+            {
+                "event_type": event_type,
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+            }
+        )
 
     async def record_policy_decision(
         self,
@@ -109,7 +127,7 @@ class SpyTracePort:
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        self.record_gateway_call_count += 1
 
     async def finalize_task_trace(
         self,
@@ -128,6 +146,7 @@ class SpyGateway:
     def __init__(self, result: ExecutionResult) -> None:
         self.result = result
         self.calls: list[str] = []
+        self.request_contexts: list[RequestOrgContext] = []
 
     async def execute_capability(
         self,
@@ -139,7 +158,47 @@ class SpyGateway:
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
         self.calls.append(capability_id)
+        self.request_contexts.append(request_context)
         return self.result
+
+
+class AdapterSentinel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        self.calls += 1
+        return AdapterResult(status="success", data={"unexpected": True})
+
+
+class CountingGateway:
+    def __init__(self, gateway: CapabilityGateway) -> None:
+        self.gateway = gateway
+        self.calls = 0
+
+    async def execute_capability(
+        self,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> ExecutionResult:
+        self.calls += 1
+        return await self.gateway.execute_capability(
+            task_id=task_id,
+            session_id=session_id,
+            ai_user_id=ai_user_id,
+            capability_id=capability_id,
+            arguments=arguments,
+            request_context=request_context,
+        )
 
 
 def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStore, SpyGateway]:
@@ -186,6 +245,76 @@ def test_denied_result_maps_to_failed_task_blocked_envelope_and_single_gateway_c
     assert result.status == "blocked"
     assert result.ui.component_type == "operator_handback_card"
     assert len(gateway.calls) == 1
+
+
+def test_runtime_constructs_business_request_context_with_empty_roles() -> None:
+    _result, _task_store, gateway = _run_mapping(
+        ExecutionResult(status="completed", trace_id="trace-empty-roles")
+    )
+
+    assert len(gateway.request_contexts) == 1
+    assert gateway.request_contexts[0].roles == []
+
+
+def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or_adapter() -> None:
+    message = "list the admin registry"
+    capability_id = "admin_registry_list"
+    task_store = SpyTaskStore()
+    trace_port = SpyTracePort()
+    registry = StaticCapabilityRegistry(capability_id)
+    adapter = AdapterSentinel()
+    policy_guard = MinimalPolicyGuard(
+        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+    )
+    gateway = CountingGateway(
+        CapabilityGateway(
+            adapter=adapter,
+            capability_registry=registry,
+            policy_guard=policy_guard,
+            trace_port=trace_port,
+        )
+    )
+    structured_output = MockStructuredOutputProvider()
+    structured_output.register(
+        message,
+        CapabilityRef,
+        CapabilityRef(capability_id=capability_id, arguments={}),
+    )
+    runtime = RuntimeImpl(
+        task_store=task_store,
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        gateway=gateway,
+        trace_port=trace_port,
+        llm_provider=MockLLMProvider(),
+        structured_output=structured_output,
+        intent_model="test-intent-model",
+        response_builder=ResponseEnvelopeBuilder(),
+    )
+
+    response = TestClient(create_app(runtime=runtime)).post(
+        "/api/v1/runtime/handle",
+        json={
+            "channel": "api",
+            "ai_user_id": "runtime-user",
+            "session_id": "runtime-session",
+            "message": message,
+            "client_capabilities": {},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "blocked"
+    assert task_store.status_updates[-1][2] == "policy_denied"
+    assert gateway.calls == 1
+    assert trace_port.record_gateway_call_count == 0
+    assert adapter.calls == 0
+    assert any(
+        step["event_type"] == "policy_checked"
+        and step["status"] == "blocked"
+        and step["error_code"] == "policy_denied"
+        for step in trace_port.steps
+    )
 
 
 def test_binding_required_result_maps_to_failed_task_blocked_envelope_with_operator_handback(

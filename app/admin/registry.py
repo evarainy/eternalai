@@ -20,8 +20,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
-from app.ports.policy_guard import PolicyGuardPort
-from app.ports.request_context import RequestOrgContext
+from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyGuardPort
 from app.ports.trace import TraceEvent, TraceEventStatus, TracePort
 
 
@@ -233,10 +232,9 @@ class AdminRegistryService:
             ai_user_id=context.ai_user_id,
             capability_id=ADMIN_POLICY_CAPABILITY_BY_ACTION[action],
             arguments={},
-            request_context=RequestOrgContext(
+            request_context=ManagementPlanePolicyContext(
                 request_id=context.trace_id,
                 roles=list(context.roles),
-                channel="api",
             ),
         )
         if decision.decision == "allow":

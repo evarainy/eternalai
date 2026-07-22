@@ -14,6 +14,9 @@ from app.ports.response_envelope import ResponseEnvelope
 
 
 class FakeRuntime:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def handle_user_message(
         self,
         channel: str,
@@ -22,6 +25,7 @@ class FakeRuntime:
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
+        self.calls += 1
         return ResponseEnvelopeBuilder().build_message(
             response_id="response-1",
             task_id="task-1",
@@ -33,9 +37,9 @@ class FakeRuntime:
         )
 
 
-def _client() -> TestClient:
+def _client(runtime: FakeRuntime | None = None) -> TestClient:
     app = FastAPI()
-    app.include_router(make_router(FakeRuntime()), prefix="/api/v1/runtime")
+    app.include_router(make_router(runtime or FakeRuntime()), prefix="/api/v1/runtime")
     return TestClient(app)
 
 
@@ -68,6 +72,17 @@ def test_runtime_handle_endpoint_rejects_extra_fields() -> None:
     response = _client().post("/api/v1/runtime/handle", json=body)
 
     assert response.status_code == 422
+
+
+def test_runtime_handle_endpoint_cannot_inject_roles() -> None:
+    runtime = FakeRuntime()
+    body = _valid_body()
+    body["roles"] = ["admin"]
+
+    response = _client(runtime).post("/api/v1/runtime/handle", json=body)
+
+    assert response.status_code == 422
+    assert runtime.calls == 0
 
 
 def test_formal_app_runtime_route_fails_closed_without_provider() -> None:

@@ -7,12 +7,14 @@ from typing import Any
 
 import pytest
 
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.admin.registry import (
     AdminCapabilityCreate,
     AdminInvalidStatusTransitionError,
     AdminRegistryService,
     AdminRequestContext,
 )
+from app.composition import build_admin_registry_service
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.trace import TraceEvent
@@ -113,9 +115,28 @@ def _service(
 ) -> AdminRegistryService:
     return AdminRegistryService(
         capability_registry=registry,
-        policy_guard=MinimalPolicyGuard(),
+        policy_guard=MinimalPolicyGuard(
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+        ),
         trace_port=trace,
     )
+
+
+def test_management_builder_injects_the_closed_admin_action_allowlist() -> None:
+    registry = RecordingRegistry([_capability()])
+    trace = RecordingTrace()
+    service = build_admin_registry_service(
+        capability_registry=registry,
+        trace_port=trace,
+    )
+
+    capabilities = asyncio.run(service.list_capabilities(_context("admin")))
+
+    assert [capability.capability_id for capability in capabilities] == [
+        "oa.leave.apply"
+    ]
+    assert registry.calls == [("list", None)]
+    assert trace.events[0].attributes["policy_capability_id"] == "admin_registry_list"
 
 
 def test_create_is_draft_and_enable_is_a_separate_action() -> None:

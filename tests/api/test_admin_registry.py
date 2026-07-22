@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.admin.registry import AdminRegistryService
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.main import create_app
@@ -131,7 +132,9 @@ def _client(
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=registry,
-        policy_guard=MinimalPolicyGuard(),
+        policy_guard=MinimalPolicyGuard(
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+        ),
         trace_port=trace,
     )
     return TestClient(

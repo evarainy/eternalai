@@ -8,13 +8,15 @@ from typing import Any, get_args, get_type_hints
 import pytest
 from pydantic import ValidationError
 
-from app.ports.capability_gateway import RequestOrgContext
 from app.ports.policy_guard import (
+    ManagementPlanePolicyContext,
     PolicyDecision,
     PolicyDecisionValue,
     PolicyGuardPort,
+    PolicyRequestContext,
     PolicyRequiredAction,
 )
+from app.ports.request_context import RequestOrgContext
 
 EXPECTED_POLICY_DECISION_FIELDS = {
     "decision",
@@ -122,6 +124,18 @@ class TestPolicyGuardPortProtocol:
         assert hints["ai_user_id"] is str
         assert hints["capability_id"] is str
         assert hints["arguments"] == dict[str, Any]
-        assert hints["request_context"] is RequestOrgContext
+        assert hints["request_context"] == PolicyRequestContext
         assert hints["return"] is PolicyDecision
         assert inspect.iscoroutinefunction(PolicyGuardPort.decide)
+
+
+def test_policy_request_context_keeps_business_and_management_planes_distinct() -> None:
+    business = RequestOrgContext(request_id="runtime-request", roles=["admin"])
+    management = ManagementPlanePolicyContext(
+        request_id="admin-request",
+        roles=["admin"],
+    )
+
+    assert type(business) is RequestOrgContext
+    assert type(management) is ManagementPlanePolicyContext
+    assert not isinstance(management, RequestOrgContext)
