@@ -1,0 +1,121 @@
+schema_version: "1.2.0"
+task_id: P1-DEVENV-001
+task_type: infrastructure
+result: passed
+method_profile:
+  risk_tier: medium
+  method: TDD
+controller_risk:
+  tier: R2
+  classification_reason: "Q2 local test database engineering: destructive schema reset is guarded by an exact local target check."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "Rain supplied the execution window and later corrected the local host port to 15432."
+    - kind: human_pre_action
+      phase: pre_action
+      status: satisfied
+      evidence: "Rain authorized recreation only of the task-created failed test DB container."
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: "Result is available for Rain's asynchronous acceptance after remote CI and PR completion."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-DEVENV-001."
+redline_authorization:
+  requested_actions:
+    - "Recreate task-created eternalai_test_db-postgres-1 after its failed 55432 binding."
+  authorized_actions:
+    - "Recreate only eternalai_test_db-postgres-1 with the corrected 15432 loopback binding."
+  evidence: "No historical container, volume, image, .env, application code, migration, root Compose, or CI configuration was changed."
+started_at: "2026-07-22T10:48:32+09:00"
+completed_at: "2026-07-22T11:23:40+09:00"
+plan_approved_by: "Rain"
+plan_approved_at: "2026-07-22T10:48:32+09:00"
+plan_approved_via: "Codex session"
+summary: >
+  Added a fixed, loopback-only PostgreSQL 18 pgvector test database with a named volume and
+  an idempotent Compose start path. reset_test_db.py rejects every target other than the local
+  eternalai_test database on port 15432 before DDL, recreates public schema, then migrates to head.
+acceptance_criteria_result:
+  - criterion: "Fixed test database matches the CI image, user, public test password, database, and healthcheck."
+    result: passed
+    evidence: "docker compose config and docker compose ps show pgvector/pgvector:0.8.2-pg18, healthy loopback binding 127.0.0.1:15432->5432."
+  - criterion: "Unsafe database URLs are rejected before any DDL or migration call."
+    result: passed
+    evidence: "tests/db/test_reset_test_db.py: 7 passed; each unsafe case asserts zero schema-reset and migration callbacks."
+  - criterion: "Database reset is repeatable and restores the latest schema."
+    result: passed
+    evidence: "Two reset -> alembic head -> tests/db plus tests/infra/persistence runs each passed 47 tests."
+  - criterion: "Full repository verification remains green with the fixed local DATABASE_URL."
+    result: passed
+    evidence: "uv run pytest -q: 872 passed."
+changed_files:
+  - .env.example
+  - docs/phase1/task_logs/P1-DEVENV-001_20260722_112115_passed.yaml
+  - docs/phase1/tasks/P1-DEVENV-001.md
+  - infra/docker/docker-compose.test-db.yml
+  - scripts/reset_test_db.py
+  - tests/db/README.md
+  - tests/db/test_reset_test_db.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/db/ tests/infra/persistence/ -q"
+    result: passed
+    output_snippet: "47 passed in 36.92s after initial reset; 47 passed in 50.73s after a second reset."
+  - command: "uv run pytest tests/db/test_reset_test_db.py -q"
+    result: passed
+    output_snippet: "7 passed; unsafe URL cases invoke neither DDL nor migration callbacks."
+  - command: "uv run pytest -q"
+    result: passed
+    output_snippet: "872 passed in 45.53s with DATABASE_URL set only for the command process."
+  - command: "uv run ruff check app/ tests/ scripts/check_weak_tests.py"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 52 source files."
+  - command: "uv run python scripts/check_dependencies.py; uv run pytest tests/architecture/ -q; uv run python scripts/check_weak_tests.py tests/db/test_reset_test_db.py"
+    result: passed
+    output_snippet: "Dependency check passed; 23 architecture tests passed; weak-test check passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "18/18 passed: positive 7/7 and negative 11/11."
+review:
+  mode: independent_review
+  reviewed_by: "Codex high read-only self-review"
+  reviewed_at: "2026-07-22T11:23:40+09:00"
+  notes: >
+    The first review found that the unqualified host port was LAN-exposed. The mapping was
+    corrected to 127.0.0.1:15432:5432, DB regression reran, and a fresh high-effort reviewer
+    returned PASS with no findings. Opus was intentionally not requested by Rain for this task.
+  provider: codex
+  requested_model: codex-read-only-high
+  observed_models: {}
+  model_verified: false
+  verdict: PASS
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Task branch has not been pushed when this record was written."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-DEVENV-001
+  activation_task_id: P1-DEVENV-001
+  expiry_condition: "Branch push, pull request, and required checks complete."
+  evidence: "No remote CI success is claimed before push."
+remaining_risks:
+  - "The fixed database contains only test data but remains destructive by design; reset_test_db.py retains its non-bypassable local URL guard."
+rollback_or_failure_record: >
+  No deletion of historical Docker assets occurred. Reverting the committed files does not delete the
+  named volume; any later Docker asset removal requires separate authorization.
+local_commit_policy: after_review_pass
+git_commit_sha: "deferred; this Task Record is included in the candidate commit."
