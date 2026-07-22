@@ -13,6 +13,13 @@ _scratch/
 .worktrees/
 
 # ──────────────────────────────────────────────
+# Local environment files (never commit real credentials)
+# ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ──────────────────────────────────────────────
 # Python bytecode and tool caches
 # ──────────────────────────────────────────────
 __pycache__/
