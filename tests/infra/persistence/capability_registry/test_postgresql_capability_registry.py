@@ -23,9 +23,14 @@ if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
 
-def _skip_if_no_db() -> None:
+def _require_db() -> None:
+    """Fail loudly instead of skipping: a silent skip reads as a pass.
+
+    Matches tests/db/. To run without a database, exclude these paths
+    explicitly (`--ignore=...`) so the omission is visible in the command.
+    """
     if not DATABASE_URL:
-        pytest.skip("DATABASE_URL not set")
+        raise AssertionError("DATABASE_URL must be set by the test runner environment")
 
 
 def _repository_module() -> ModuleType:
@@ -98,7 +103,7 @@ def _ids(records: list[Any]) -> set[str]:
 
 
 def test_create_happy_path() -> None:
-    _skip_if_no_db()
+    _require_db()
     from app.ports.capability_registry import CapabilitySpec
 
     capability = _capability()
@@ -117,7 +122,7 @@ def test_create_happy_path() -> None:
 
 
 def test_create_duplicate_rejected() -> None:
-    _skip_if_no_db()
+    _require_db()
     DuplicateCapabilityError = _errors_module().DuplicateCapabilityError
     capability = _capability()
     duplicate = _capability(capability_id=capability.capability_id, capability_type="action")
@@ -138,7 +143,7 @@ def test_create_duplicate_rejected() -> None:
 
 
 def test_get_found() -> None:
-    _skip_if_no_db()
+    _require_db()
     from app.ports.capability_registry import CapabilitySpec
 
     capability = _capability()
@@ -158,7 +163,7 @@ def test_get_found() -> None:
 
 
 def test_get_missing_returns_none() -> None:
-    _skip_if_no_db()
+    _require_db()
 
     async def _run() -> None:
         engine = _make_engine()
@@ -173,7 +178,7 @@ def test_get_missing_returns_none() -> None:
 
 
 def test_list_all() -> None:
-    _skip_if_no_db()
+    _require_db()
     first = _capability()
     second = _capability(capability_type="action", target_system="u8")
 
@@ -192,7 +197,7 @@ def test_list_all() -> None:
 
 
 def test_list_filter_target_system() -> None:
-    _skip_if_no_db()
+    _require_db()
     matching = _capability(target_system="hikvision_ivms")
     non_matching = _capability(target_system="u8")
 
@@ -213,7 +218,7 @@ def test_list_filter_target_system() -> None:
 
 
 def test_list_filter_type() -> None:
-    _skip_if_no_db()
+    _require_db()
     matching = _capability(capability_type="workflow")
     non_matching = _capability(capability_type="mock")
 
@@ -234,7 +239,7 @@ def test_list_filter_type() -> None:
 
 
 def test_list_filter_status() -> None:
-    _skip_if_no_db()
+    _require_db()
     matching = _capability(status="draft")
     non_matching = _capability(status="deprecated")
 
@@ -255,7 +260,7 @@ def test_list_filter_status() -> None:
 
 
 def test_update_valid_patch() -> None:
-    _skip_if_no_db()
+    _require_db()
     capability = _capability(status="draft")
 
     async def _run() -> None:
@@ -277,7 +282,7 @@ def test_update_valid_patch() -> None:
 
 
 def test_update_unknown_field_rejected() -> None:
-    _skip_if_no_db()
+    _require_db()
     capability = _capability()
 
     async def _run() -> None:
@@ -294,7 +299,7 @@ def test_update_unknown_field_rejected() -> None:
 
 
 def test_update_invalid_literal_rejected() -> None:
-    _skip_if_no_db()
+    _require_db()
     capability = _capability()
 
     async def _run() -> None:
@@ -311,7 +316,7 @@ def test_update_invalid_literal_rejected() -> None:
 
 
 def test_update_missing_raises() -> None:
-    _skip_if_no_db()
+    _require_db()
     CapabilityNotFoundError = _errors_module().CapabilityNotFoundError
 
     async def _run() -> None:
@@ -327,7 +332,7 @@ def test_update_missing_raises() -> None:
 
 
 def test_disable_happy_path() -> None:
-    _skip_if_no_db()
+    _require_db()
     capability = _capability(status="active")
 
     async def _run() -> None:
@@ -344,7 +349,7 @@ def test_disable_happy_path() -> None:
 
 
 def test_disable_missing_raises() -> None:
-    _skip_if_no_db()
+    _require_db()
     CapabilityNotFoundError = _errors_module().CapabilityNotFoundError
 
     async def _run() -> None:
@@ -360,7 +365,7 @@ def test_disable_missing_raises() -> None:
 
 
 def test_returns_capability_spec_not_dict() -> None:
-    _skip_if_no_db()
+    _require_db()
     from app.ports.capability_registry import CapabilitySpec
 
     capability = _capability()

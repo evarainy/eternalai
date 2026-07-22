@@ -19,9 +19,14 @@ if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
 
 
-def _skip_if_no_db() -> None:
+def _require_db() -> None:
+    """Fail loudly instead of skipping: a silent skip reads as a pass.
+
+    Matches tests/db/. To run without a database, exclude these paths
+    explicitly (`--ignore=...`) so the omission is visible in the command.
+    """
     if not DATABASE_URL:
-        pytest.skip("DATABASE_URL not set")
+        raise AssertionError("DATABASE_URL must be set by the test runner environment")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -53,7 +58,7 @@ def test_create_task_returns_task_record_and_round_trips_arbitrary_strings():
     Open-str lock: task_id, session_id, ai_user_id, error_code, trace_id, capability_id
     must all accept arbitrary strings and round-trip unchanged.
     """
-    _skip_if_no_db()
+    _require_db()
     from app.ports.task_store import TaskRecord
 
     task_id = str(uuid.uuid4())
@@ -98,7 +103,7 @@ def test_create_task_returns_task_record_and_round_trips_arbitrary_strings():
 
 
 def test_create_task_duplicate_rejection_preserves_original_record():
-    _skip_if_no_db()
+    _require_db()
     from app.infra.persistence.task_store.errors import DuplicateTaskError
     from app.ports.task_store import TaskRecord
 
@@ -134,7 +139,7 @@ def test_create_task_duplicate_rejection_preserves_original_record():
 
 
 def test_get_task_returns_none_for_unknown_task_id():
-    _skip_if_no_db()
+    _require_db()
 
     async def _run() -> None:
         engine = _make_engine()
@@ -153,7 +158,7 @@ def test_update_status_round_trips_all_task_status_values():
     HARD MANDATE (P2-1): Every allowed TaskStatus value must be positively constructed
     and verified to round-trip through update_status and get_task.
     """
-    _skip_if_no_db()
+    _require_db()
     from typing import get_args
 
     from app.ports.task_store import TaskRecord, TaskStatus
@@ -190,7 +195,7 @@ def test_update_status_round_trips_all_task_status_values():
 
 
 def test_update_status_sets_error_code_correctly():
-    _skip_if_no_db()
+    _require_db()
     from app.ports.task_store import TaskRecord
 
     task_id = str(uuid.uuid4())
@@ -218,7 +223,7 @@ def test_update_status_sets_error_code_correctly():
 
 
 def test_update_status_raises_task_not_found_error_for_unknown_task_id():
-    _skip_if_no_db()
+    _require_db()
     from app.infra.persistence.task_store.errors import TaskNotFoundError
 
     async def _run() -> None:
@@ -235,7 +240,7 @@ def test_update_status_raises_task_not_found_error_for_unknown_task_id():
 
 def test_update_status_raises_value_error_for_invalid_status_before_db_write():
     """ValueError must be raised before any DB write — use unknown task_id to prove ordering."""
-    _skip_if_no_db()
+    _require_db()
 
     async def _run() -> None:
         engine = _make_engine()
@@ -254,7 +259,7 @@ def test_append_event_returns_none_and_verifies_event_id_type_payload():
     HARD MANDATE (P3-1): direct SQL verify must assert event_id, event_type, and payload.
     Open-str lock: event_type uses arbitrary value.
     """
-    _skip_if_no_db()
+    _require_db()
     from sqlalchemy import text
 
     from app.ports.task_store import TaskEventRecord, TaskRecord
@@ -311,7 +316,7 @@ def test_append_event_returns_none_and_verifies_event_id_type_payload():
 
 
 def test_append_event_raises_task_not_found_error_for_unknown_task_id():
-    _skip_if_no_db()
+    _require_db()
     from app.infra.persistence.task_store.errors import TaskNotFoundError
     from app.ports.task_store import TaskEventRecord
 
@@ -337,7 +342,7 @@ def test_append_event_raises_task_not_found_error_for_unknown_task_id():
 # ── SessionStore tests ─────────────────────────────────────────────────────────
 
 def test_create_session_returns_session_record_and_round_trips():
-    _skip_if_no_db()
+    _require_db()
     from app.ports.task_store import SessionRecord
 
     session_id = str(uuid.uuid4())
@@ -361,7 +366,7 @@ def test_create_session_returns_session_record_and_round_trips():
 
 
 def test_get_session_returns_none_for_unknown_session_id():
-    _skip_if_no_db()
+    _require_db()
 
     async def _run() -> None:
         engine = _make_engine()

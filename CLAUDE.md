@@ -34,6 +34,11 @@ infra/docker/       Docker Compose 模板
 - 每次 merge 到 phase0/main 后检查 remote GitHub Actions CI
 
 ## Validation commands
+> **全量测试需要固定测试库在跑**：Docker Desktop 启动，测试库 healthy 于 `127.0.0.1:15432`，
+> 且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
+> 缺 `DATABASE_URL` 时 DB 测试**失败而不是跳过**——静默跳过会被读成通过。
+> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1021 passed, 0 skipped, 0 failed**。
+
 ```powershell
 # 单元测试（全量）
 uv run pytest

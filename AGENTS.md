@@ -53,6 +53,13 @@ infra/docker/       Docker Compose templates
 - Check remote GitHub Actions CI after every merge to phase0/main
 
 ## Validation commands
+> **The full suite needs the fixed test database running**: Docker Desktop up, test DB healthy on
+> `127.0.0.1:15432`, and `DATABASE_URL` visible to the current process (user-level env var; a process
+> started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
+> DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
+> database, pass `--ignore=` explicitly so the omission is visible in the command.
+> Baseline: **1021 passed, 0 skipped, 0 failed**.
+
 ```bash
 # Full test suite
 uv run pytest
