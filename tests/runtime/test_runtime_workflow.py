@@ -622,3 +622,233 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
     assert trace.finalizations[-1]["status"] == "ok"
     assert "private-marker-123" not in repr(task_store.events)
     assert "private-marker-123" not in repr(trace.steps)
+
+
+@pytest.mark.parametrize(
+    ("step_result", "expected_gateway_calls"),
+    (
+        (
+            ExecutionResult(
+                status="timeout",
+                error_code="adapter_timeout",
+                trace_id="configured-timeout",
+            ),
+            2,
+        ),
+        (
+            ExecutionResult(
+                status="failed",
+                error_code="adapter_http_500",
+                trace_id="configured-failed",
+            ),
+            1,
+        ),
+    ),
+)
+def test_runtime_preserves_workflow_terminal_error_without_reporting_completed(
+    step_result: ExecutionResult,
+    expected_gateway_calls: int,
+) -> None:
+    async def exercise() -> tuple[Any, Gateway, TaskStore, Trace]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.failure",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(step_id="terminal", capability_id="oa.failure"),
+                WorkflowStep(step_id="later", capability_id="oa.later"),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.failure", "query"),
+            _capability("oa.later", "query"),
+        )
+        gateway = Gateway({"oa.failure": step_result})
+        task_store = TaskStore()
+        trace = Trace()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "run failing workflow",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                arguments={"secret_token": "private-marker-123"},
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+        )
+        envelope = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-failure",
+            session_id="session-failure",
+            message="run failing workflow",
+            client_capabilities={},
+        )
+        return envelope, gateway, task_store, trace
+
+    envelope, gateway, task_store, trace = asyncio.run(exercise())
+
+    assert envelope.status == "failed"
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.failure"
+    ] * expected_gateway_calls
+    assert task_store.status_updates == [("failed", step_result.error_code)]
+    assert "task_completed" not in [step["event_type"] for step in trace.steps]
+    assert trace.steps[-1]["event_type"] == "task_failed"
+    assert trace.steps[-1]["error_code"] == step_result.error_code
+    assert trace.finalizations[-1]["status"] == "failed"
+    assert trace.finalizations[-1]["error_code"] == step_result.error_code
+    workflow_events = [
+        event for event in task_store.events if event.event_type.startswith("workflow_")
+    ]
+    assert [event.event_type for event in workflow_events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_failed",
+    ]
+    assert workflow_events[-1].payload["error_code"] == step_result.error_code
+    assert "private-marker-123" not in repr(trace.steps)
+    assert "private-marker-123" not in repr(task_store.events)
+
+
+def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
+    async def exercise() -> tuple[Any, Any, Any, Gateway, TaskStore, Trace, list[Any]]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.resume-failure",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="submit",
+                    capability_id="oa.submit.confirm",
+                    confirmed_capability_id="oa.submit.confirmed",
+                ),
+                WorkflowStep(step_id="later", capability_id="oa.later"),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.submit.confirm", "query"),
+            _capability("oa.submit.confirmed", "query"),
+            _capability("oa.later", "query"),
+            _capability("oa.document.lookup", "query"),
+        )
+        gateway = Gateway(
+            {
+                "oa.submit.confirm": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="configured-waiting",
+                ),
+                "oa.submit.confirmed": ExecutionResult(
+                    status="failed",
+                    error_code="adapter_http_500",
+                    trace_id="configured-failure",
+                ),
+            }
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "start resumable failure",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                arguments={"secret_token": "private-marker-123"},
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+        )
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-resume-failure",
+            session_id="session-resume-failure",
+            message="start resumable failure",
+            client_capabilities={},
+        )
+        confirm_message = f"确认 {waiting.task_id}"
+        structured_output.register(
+            confirm_message,
+            CapabilityRef,
+            CapabilityRef(
+                capability_id="oa.document.lookup",
+                arguments={"document_no": "DOC-9"},
+                capability_type="query",
+            ),
+        )
+        failed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-resume-failure",
+            session_id="session-resume-failure",
+            message=confirm_message,
+            client_capabilities={},
+        )
+        failed_trace = list(trace.steps)
+        with pytest.raises(ValueError, match="no waiting Workflow checkpoint"):
+            await engine.resume(task_id=waiting.task_id, confirmed=True)
+        repeated = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-resume-failure",
+            session_id="session-resume-failure",
+            message=confirm_message,
+            client_capabilities={},
+        )
+        return waiting, failed, repeated, gateway, task_store, trace, failed_trace
+
+    waiting, failed, repeated, gateway, task_store, trace, failed_trace = asyncio.run(exercise())
+
+    assert waiting.status == "waiting_user"
+    assert failed.status == "failed"
+    assert failed.task_id == waiting.task_id
+    assert failed.trace_id == waiting.trace_id
+    assert repeated.status == "completed"
+    assert repeated.task_id != waiting.task_id
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.submit.confirm",
+        "oa.submit.confirmed",
+        "oa.document.lookup",
+    ]
+    assert task_store.status_updates == [
+        ("waiting_user", "confirm_required"),
+        ("failed", "adapter_http_500"),
+        ("completed", None),
+    ]
+    assert "task_completed" not in [step["event_type"] for step in failed_trace]
+    assert trace.finalizations[0]["status"] == "failed"
+    assert trace.finalizations[0]["error_code"] == "adapter_http_500"
+    assert "private-marker-123" not in repr(trace.steps)
+    assert "private-marker-123" not in repr(task_store.events)

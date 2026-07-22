@@ -11,10 +11,10 @@ import pytest
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.adapter import AdapterResult
-from app.ports.capability_gateway import RequestOrgContext
+from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
-from app.workflow.engine import WorkflowEngine
+from app.workflow.engine import MAX_STEP_RETRIES, RETRYABLE_ERROR_CODES, WorkflowEngine
 from app.workflow.models import (
     WorkflowCondition,
     WorkflowDefinition,
@@ -132,6 +132,28 @@ class RecordingTrace:
         )
 
 
+class SequencedGateway:
+    def __init__(self, results: dict[str, tuple[ExecutionResult, ...]]) -> None:
+        self.results = {capability_id: list(items) for capability_id, items in results.items()}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute_capability(
+        self,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> ExecutionResult:
+        self.calls.append((capability_id, arguments))
+        return (
+            self.results[capability_id]
+            .pop(0)
+            .model_copy(update={"trace_id": request_context.request_id})
+        )
+
+
 class RoutingAdapter:
     def __init__(
         self,
@@ -159,10 +181,26 @@ class RoutingAdapter:
         )
 
 
+class SequencedAdapter:
+    def __init__(self, results: dict[str, tuple[AdapterResult, ...]]) -> None:
+        self.results = {capability_id: list(items) for capability_id, items in results.items()}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        assert execution_context == {}
+        self.calls.append((capability_id, arguments))
+        return self.results[capability_id].pop(0)
+
+
 def _run_engine(
     definition: WorkflowDefinition,
     registry: RecordingRegistry,
-    adapter: RoutingAdapter,
+    adapter: RoutingAdapter | SequencedAdapter,
     definitions: dict[str, WorkflowDefinition] | None = None,
     policy_guard: RecordingPolicyGuard | None = None,
 ) -> tuple[Any, RecordingTrace, RecordingTaskStore]:
@@ -198,6 +236,35 @@ def _run_engine(
             request_context=RequestOrgContext(request_id="trace-1", channel="mock"),
         )
         return result, trace, task_store
+
+    return asyncio.run(exercise())
+
+
+def _run_engine_with_gateway(
+    definition: WorkflowDefinition,
+    registry: RecordingRegistry,
+    gateway: SequencedGateway,
+) -> tuple[Any, RecordingTrace, RecordingTaskStore, WorkflowEngine]:
+    async def exercise() -> tuple[Any, RecordingTrace, RecordingTaskStore, WorkflowEngine]:
+        trace = RecordingTrace()
+        task_store = RecordingTaskStore()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        result = await engine.execute(
+            workflow_id=definition.workflow_id,
+            expected_version=definition.version,
+            task_id="task-retry",
+            session_id="session-retry",
+            ai_user_id="user-retry",
+            initial_input={"secret_token": "private-marker-123"},
+            request_context=RequestOrgContext(request_id="trace-retry", channel="mock"),
+        )
+        return result, trace, task_store, engine
 
     return asyncio.run(exercise())
 
@@ -797,3 +864,173 @@ def test_confirmed_variant_requires_registered_active_low_risk_capability(
         _run_engine(definition, registry, adapter)
 
     assert adapter.calls == []
+
+
+def test_retry_policy_is_fixed_to_one_adapter_timeout_retry() -> None:
+    assert RETRYABLE_ERROR_CODES == frozenset({"adapter_timeout"})
+    assert MAX_STEP_RETRIES == 1
+
+
+def test_retryable_timeout_exhaustion_stops_before_later_gateway_call() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.retry-exhausted",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="unstable", capability_id="oa.unstable"),
+            WorkflowStep(step_id="later", capability_id="oa.later"),
+        ),
+    )
+    registry = RecordingRegistry(_capability("oa.unstable"), _capability("oa.later"))
+    adapter = SequencedAdapter(
+        {
+            "oa.unstable": (
+                AdapterResult(status="timeout", error_code="adapter_timeout"),
+                AdapterResult(status="timeout", error_code="adapter_timeout"),
+            ),
+            "oa.later": (AdapterResult(status="success", data={"late": True}),),
+        }
+    )
+
+    result, trace, task_store = _run_engine(definition, registry, adapter)
+
+    assert result.status == "timeout"
+    assert result.error_code == "adapter_timeout"
+    assert result.output == {}
+    assert result.step_outputs == {}
+    assert [capability_id for capability_id, _ in adapter.calls] == [
+        "oa.unstable",
+        "oa.unstable",
+    ]
+    selected = [step for step in trace.steps if step["event_type"] == "capability_selected"]
+    assert [step["attributes"]["step_status"] for step in selected] == [
+        "running",
+        "retrying",
+    ]
+    assert [step["attributes"]["attempt"] for step in selected] == [1, 2]
+    assert [step["attributes"]["retry_number"] for step in selected] == [0, 1]
+    assert all(step["attributes"]["max_attempts"] == 2 for step in selected)
+    mapped = [step for step in trace.steps if step["event_type"] == "adapter_error_mapped"]
+    assert len(mapped) == 2
+    assert all(step["error_code"] == "adapter_timeout" for step in mapped)
+    assert [event.event_type for event in task_store.events] == [
+        "workflow_started",
+        "workflow_step_finished",
+        "workflow_failed",
+    ]
+    assert task_store.events[1].payload == {
+        "workflow_id": definition.workflow_id,
+        "workflow_version": definition.version,
+        "step_id": "unstable",
+        "step_index": 0,
+        "step_status": "timeout",
+        "attempt": 2,
+        "retry_number": 1,
+        "max_attempts": 2,
+        "error_code": "adapter_timeout",
+    }
+    assert task_store.events[2].payload["workflow_status"] == "timeout"
+    assert task_store.events[2].payload["error_code"] == "adapter_timeout"
+    assert "private-marker-123" not in repr(trace.steps)
+    assert "private-marker-123" not in repr(task_store.events)
+
+
+def test_retryable_timeout_can_succeed_on_the_only_retry() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.retry-success",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(step_id="unstable", capability_id="oa.unstable"),
+            WorkflowStep(step_id="later", capability_id="oa.later"),
+        ),
+    )
+    registry = RecordingRegistry(_capability("oa.unstable"), _capability("oa.later"))
+    gateway = SequencedGateway(
+        {
+            "oa.unstable": (
+                ExecutionResult(
+                    status="timeout",
+                    error_code="adapter_timeout",
+                    trace_id="timeout",
+                ),
+                ExecutionResult(status="completed", data={"ready": True}, trace_id="ready"),
+            ),
+            "oa.later": (
+                ExecutionResult(status="completed", data={"done": True}, trace_id="done"),
+            ),
+        }
+    )
+
+    result, _, task_store, _ = _run_engine_with_gateway(definition, registry, gateway)
+
+    assert result.status == "completed"
+    assert result.output == {"done": True}
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.unstable",
+        "oa.unstable",
+        "oa.later",
+    ]
+    first_step = task_store.events[1]
+    assert first_step.payload["step_status"] == "completed"
+    assert first_step.payload["attempt"] == 2
+    assert first_step.payload["retry_number"] == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "error_code", "expected_status"),
+    (
+        ("denied", "policy_denied", "denied"),
+        ("waiting_user", "confirm_required", "waiting_confirm"),
+        ("no_capability_found", "capability_not_found", "failed"),
+        ("binding_required", "identity_unbound", "failed"),
+        ("binding_required", "identity_expired", "failed"),
+        ("binding_required", "identity_revoked", "failed"),
+        ("failed", "adapter_payload_invalid", "failed"),
+        ("failed", "adapter_missing_required_field", "failed"),
+    ),
+)
+def test_deterministic_step_errors_never_retry_or_call_later_step(
+    status: str,
+    error_code: str,
+    expected_status: WorkflowRunStatus,
+) -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.no-retry",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(
+                step_id="terminal",
+                capability_id="oa.terminal",
+                confirmed_capability_id="oa.terminal.confirmed",
+            ),
+            WorkflowStep(step_id="later", capability_id="oa.later"),
+        ),
+    )
+    registry = RecordingRegistry(
+        _capability("oa.terminal"),
+        _capability("oa.terminal.confirmed"),
+        _capability("oa.later"),
+    )
+    gateway = SequencedGateway(
+        {
+            "oa.terminal": (
+                ExecutionResult(
+                    status=status,
+                    error_code=error_code,
+                    trace_id="terminal",
+                ),
+            ),
+            "oa.later": (
+                ExecutionResult(status="completed", data={"late": True}, trace_id="late"),
+            ),
+        }
+    )
+
+    result, trace, _, _ = _run_engine_with_gateway(definition, registry, gateway)
+
+    assert result.status == expected_status
+    assert result.error_code == error_code
+    assert [capability_id for capability_id, _ in gateway.calls] == ["oa.terminal"]
+    selected = [step for step in trace.steps if step["event_type"] == "capability_selected"]
+    assert len(selected) == 1
+    assert selected[0]["attributes"]["attempt"] == 1
+    assert selected[0]["attributes"]["retry_number"] == 0

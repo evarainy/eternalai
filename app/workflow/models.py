@@ -5,8 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, TypeAlias
 
+from app.ports.capability_gateway import ErrorCode
+
 WorkflowInputSource = Literal["workflow_input", "step_output"]
-WorkflowRunStatus: TypeAlias = Literal["completed", "denied", "waiting_confirm"]
+WorkflowRunStatus: TypeAlias = Literal[
+    "completed",
+    "denied",
+    "waiting_confirm",
+    "failed",
+    "timeout",
+]
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,7 @@ class WorkflowRunResult:
     status: WorkflowRunStatus
     output: dict[str, Any]
     step_outputs: dict[str, dict[str, Any]]
+    error_code: ErrorCode | None = None
 
 
 __all__ = (
