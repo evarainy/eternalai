@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 JudgementStatus = Literal["passed", "failed"]
 
@@ -214,6 +214,24 @@ def assert_trace_sequence_contains(
             )
 
 
+def assert_trace_event_details(
+    trace_steps: Iterable[Any],
+    expected_details: Iterable[Mapping[str, Any]],
+) -> None:
+    actual_steps = [_to_plain(step) for step in trace_steps]
+    search_from = 0
+    for expected in expected_details:
+        for index in range(search_from, len(actual_steps)):
+            if _mapping_contains(actual_steps[index], expected):
+                search_from = index + 1
+                break
+        else:
+            raise AssertionError(
+                f"trace missing expected event details {dict(expected)!r} after index "
+                f"{search_from - 1}"
+            )
+
+
 def assert_terminal_state_matrix(
     trace_steps: Iterable[Any],
     terminal_state: str | None,
@@ -306,12 +324,135 @@ def assert_forbidden_absent(
 def assert_adapter_calls(
     adapter_assertion: Mapping[str, Any],
     adapter_calls: Mapping[str, Any],
+    adapter_arguments: Mapping[str, Any] | None = None,
 ) -> None:
     total_calls = _total_adapter_calls(adapter_calls)
     if adapter_assertion.get("must_be_called") is True and total_calls <= 0:
         raise AssertionError("adapter must be called at least once")
     if adapter_assertion.get("must_not_be_called") is True and total_calls > 0:
         raise AssertionError("adapter must not be called")
+    exact_calls = adapter_assertion.get("exact_calls", {})
+    if not isinstance(exact_calls, Mapping):
+        raise AssertionError("adapter exact_calls must be mapping-like")
+    for capability_id, expected_count in exact_calls.items():
+        if (
+            not isinstance(expected_count, int)
+            or isinstance(expected_count, bool)
+            or expected_count < 0
+        ):
+            raise AssertionError(
+                f"adapter exact call count for {capability_id!r} must be a non-negative int"
+            )
+        actual_count = _adapter_call_count(adapter_calls, str(capability_id))
+        if actual_count != expected_count:
+            raise AssertionError(
+                f"adapter {capability_id!r} expected exactly {expected_count} calls, "
+                f"got {actual_count}"
+            )
+
+    expected_arguments = adapter_assertion.get("exact_arguments", {})
+    if not isinstance(expected_arguments, Mapping):
+        raise AssertionError("adapter exact_arguments must be mapping-like")
+    if expected_arguments and adapter_arguments is None:
+        raise AssertionError("adapter arguments were not captured")
+    for capability_id, expected in expected_arguments.items():
+        actual = (adapter_arguments or {}).get(str(capability_id), [])
+        if actual != expected:
+            raise AssertionError(
+                f"adapter {capability_id!r} arguments expected {expected!r}, got {actual!r}"
+            )
+
+
+def assert_workflow_evidence(
+    workflow_events: Iterable[Any],
+    workflow_assertion: Mapping[str, Any],
+    first_round_envelope: Any = None,
+    first_round_adapter_calls: Mapping[str, Any] | None = None,
+    source_definition_version_after_first: str | None = None,
+) -> None:
+    events = [_to_plain(event) for event in workflow_events]
+    actual_sequence = [_event_type(event) for event in events]
+    expected_sequence = _as_list(workflow_assertion.get("event_sequence"))
+    if actual_sequence != expected_sequence:
+        raise AssertionError(
+            f"workflow event sequence expected {expected_sequence!r}, got {actual_sequence!r}"
+        )
+
+    expected_version = workflow_assertion.get("workflow_version")
+    if expected_version is not None:
+        observed_versions = {
+            event.get("payload", {}).get("workflow_version")
+            for event in events
+            if isinstance(event, Mapping) and isinstance(event.get("payload"), Mapping)
+        }
+        if observed_versions != {expected_version}:
+            raise AssertionError(
+                f"workflow event versions expected only {expected_version!r}, "
+                f"got {observed_versions!r}"
+            )
+
+    expected_step_statuses = workflow_assertion.get("step_statuses")
+    if expected_step_statuses is not None:
+        actual_step_statuses = [
+            event.get("payload", {}).get("step_status")
+            for event in events
+            if _event_type(event) == "workflow_step_finished"
+        ]
+        if actual_step_statuses != expected_step_statuses:
+            raise AssertionError(
+                f"workflow step statuses expected {expected_step_statuses!r}, "
+                f"got {actual_step_statuses!r}"
+            )
+
+    expected_terminal_status = workflow_assertion.get("terminal_status")
+    if expected_terminal_status is not None:
+        terminal_payload = events[-1].get("payload", {}) if events else {}
+        actual_terminal_status = terminal_payload.get("workflow_status")
+        if actual_terminal_status != expected_terminal_status:
+            raise AssertionError(
+                f"workflow terminal status expected {expected_terminal_status!r}, "
+                f"got {actual_terminal_status!r}"
+            )
+
+    expected_terminal_error_code = workflow_assertion.get("terminal_error_code")
+    if expected_terminal_error_code is not None:
+        terminal_payload = events[-1].get("payload", {}) if events else {}
+        actual_terminal_error_code = terminal_payload.get("error_code")
+        if actual_terminal_error_code != expected_terminal_error_code:
+            raise AssertionError(
+                f"workflow terminal error_code expected "
+                f"{expected_terminal_error_code!r}, got {actual_terminal_error_code!r}"
+            )
+
+    first_round = workflow_assertion.get("first_round")
+    if first_round is not None:
+        if not isinstance(first_round, Mapping):
+            raise AssertionError("workflow first_round assertion must be mapping-like")
+        if first_round_envelope is None or first_round_adapter_calls is None:
+            raise AssertionError("workflow first-round evidence was not captured")
+        expected_response = first_round.get("response")
+        if not isinstance(expected_response, Mapping):
+            raise AssertionError("workflow first_round.response must be mapping-like")
+        assert_response_matches(first_round_envelope, expected_response)
+        exact_calls = first_round.get("exact_calls", {})
+        if not isinstance(exact_calls, Mapping):
+            raise AssertionError("workflow first_round.exact_calls must be mapping-like")
+        assert_adapter_calls(
+            {"exact_calls": exact_calls},
+            first_round_adapter_calls,
+        )
+
+    expected_source_version = workflow_assertion.get(
+        "source_definition_version_after_first"
+    )
+    if expected_source_version is not None and (
+        source_definition_version_after_first != expected_source_version
+    ):
+        raise AssertionError(
+            "workflow source definition version after first round expected "
+            f"{expected_source_version!r}, got "
+            f"{source_definition_version_after_first!r}"
+        )
 
 
 def assert_policy_calls(
@@ -333,8 +474,14 @@ def judge_assertions(
     forbidden_items: Iterable[str],
     adapter_assertion: Mapping[str, Any],
     adapter_calls: Mapping[str, Any],
+    adapter_arguments: Mapping[str, Any] | None = None,
     policy_assertion: Mapping[str, Any] | None = None,
     policy_calls: int = 0,
+    workflow_assertion: Mapping[str, Any] | None = None,
+    workflow_events: Iterable[Any] = (),
+    first_round_envelope: Any = None,
+    first_round_adapter_calls: Mapping[str, Any] | None = None,
+    source_definition_version_after_first: str | None = None,
 ) -> AssertionJudgement:
     reasons: list[str] = []
     _capture_failure(reasons, assert_response_matches, envelope, expected_response)
@@ -343,6 +490,12 @@ def judge_assertions(
         assert_trace_sequence_contains,
         trace_steps,
         _as_list(expected_trace.get("event_sequence")),
+    )
+    _capture_failure(
+        reasons,
+        assert_trace_event_details,
+        trace_steps,
+        cast(Iterable[Mapping[str, Any]], _as_list(expected_trace.get("event_details"))),
     )
     terminal_state = _terminal_state(expected_response, expected_trace)
     _capture_failure(reasons, assert_terminal_state_matrix, trace_steps, terminal_state)
@@ -354,13 +507,29 @@ def judge_assertions(
         trace_steps,
         adapter_calls,
     )
-    _capture_failure(reasons, assert_adapter_calls, adapter_assertion, adapter_calls)
+    _capture_failure(
+        reasons,
+        assert_adapter_calls,
+        adapter_assertion,
+        adapter_calls,
+        adapter_arguments,
+    )
     if policy_assertion is not None:
         _capture_failure(
             reasons,
             assert_policy_calls,
             policy_assertion,
             policy_calls,
+        )
+    if workflow_assertion is not None:
+        _capture_failure(
+            reasons,
+            assert_workflow_evidence,
+            workflow_events,
+            workflow_assertion,
+            first_round_envelope,
+            first_round_adapter_calls,
+            source_definition_version_after_first,
         )
     return AssertionJudgement(
         status="failed" if reasons else "passed",
@@ -534,17 +703,46 @@ def _contains_tokenish_value(values: Iterable[str], needle: str) -> bool:
 
 
 def _adapter_call_count(adapter_calls: Mapping[str, Any], adapter_name: str) -> int:
-    value = adapter_calls.get(adapter_name, 0)
-    if isinstance(value, int):
-        return value
-    call_count = getattr(value, "call_count", 0)
-    if isinstance(call_count, int):
-        return call_count
+    if adapter_name in adapter_calls:
+        value = adapter_calls[adapter_name]
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        call_count = getattr(value, "call_count", None)
+        return call_count if isinstance(call_count, int) else 0
+    prefixes = {
+        "oa": ("oa.",),
+        "u8": ("u8.",),
+        "hikvision_ivms": ("ivms.", "hikvision_ivms."),
+    }.get(adapter_name, ())
+    if prefixes:
+        return sum(
+            item
+            for key, item in adapter_calls.items()
+            if isinstance(item, int)
+            and not isinstance(item, bool)
+            and str(key).startswith(prefixes)
+        )
     return 0
 
 
 def _total_adapter_calls(adapter_calls: Mapping[str, Any]) -> int:
     return sum(_adapter_call_count(adapter_calls, key) for key in adapter_calls)
+
+
+def _mapping_contains(actual: Any, expected: Mapping[str, Any]) -> bool:
+    actual = _to_plain(actual)
+    if not isinstance(actual, Mapping):
+        return False
+    for key, expected_value in expected.items():
+        if key not in actual:
+            return False
+        actual_value = actual[key]
+        if isinstance(expected_value, Mapping):
+            if not _mapping_contains(actual_value, expected_value):
+                return False
+        elif actual_value != expected_value:
+            return False
+    return True
 
 
 __all__ = (
@@ -554,6 +752,8 @@ __all__ = (
     "assert_policy_calls",
     "assert_response_matches",
     "assert_terminal_state_matrix",
+    "assert_trace_event_details",
     "assert_trace_sequence_contains",
+    "assert_workflow_evidence",
     "judge_assertions",
 )
