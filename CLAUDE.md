@@ -55,7 +55,8 @@ git ls-files --others --exclude-standard
 ```
 
 ## Phase 1 rules (当前阶段)
-- Phase 1 implementation in progress. Phase 0 interface contracts in `app/ports/` are FROZEN: do not edit without explicit task authorization + human approval.
+- Phase 1 implementation in progress. `app/ports/` contracts are no longer frozen by decree: change one when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits. Never build a workaround for a contract you should have fixed — with a single maintainer a contract change is cheap and immediately visible, so process must not push the design sideways.
+- These stay strict at any scope, because they fail silently: never weaken or delete a test assertion to make code pass (fix the code, or stop and report); never let a failure path report success or lose its error code; never regress session/tenant/user isolation or credential handling. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval — golden is the regression net, and a weakened net is invisible.
 - Hexagonal boundary holds: `app/ports/` must not depend on `app/infra/`.
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
@@ -64,7 +65,7 @@ git ls-files --others --exclude-standard
 - Phase 1 role / Review / risk policy: `docs/phase1/ROLE_POLICY.md`; active V5 work uses Q0-Q3 rather than a universal independent-Review floor.
 - The unified YAML Task Record and per-task prompt are V4 legacy formats. Existing records and the final `P1-WORKFLOW-V5-001` migration evidence keep their original meaning; a new V5 Goal does not generate them.
 - One native Goal may handle multiple task IDs and auto-next. Each write lane remains isolated and owns one explicit Goal and a single Scope; a new scope requires a new lane/Worker Contract.
-- Q0-Q3 controls Review strength. Risk alone does not create a human Gate; required stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
+- Q0-Q3 controls Review strength. Risk alone does not create a human Gate; required stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant (an internal `app/ports/` change that preserves the existing architecture is not by itself a stop); a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
 - There is no separate local-commit Gate. Ordinary non-force push, PR/merge, CI/CD configuration changes, and CI runs may proceed only when the current Goal and target repository policy explicitly allow them and validation, required Review, freshness, branch protection, and required checks pass. Historical Gate 2 remains post-integration result acceptance, not Git/CI authorization.
 - Delete/history rewrite, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push need exact action-specific authorization; a risk label never supplies it. Never bypass hooks or branch protection.
 - Use Explore/Plan/read-only behavior for investigation when possible.

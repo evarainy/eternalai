@@ -86,12 +86,12 @@ uv run python scripts/run_golden_tasks.py --gate
 ## Non-negotiable hard rules
 1. One native Goal may execute multiple task IDs and auto-next when dependencies, required evidence, Review, and result stops are satisfied. Each write lane still owns one explicit Goal and a single Scope; a new scope opens a new lane/contract.
 2. Start from the current Goal and the minimum relevant authority. Historical V4 work still starts from its matching per-task prompt; new V5 work does not require one.
-3. Risk and Q0-Q3 Review strength do not create a human Gate. Human stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
+3. Risk and Q0-Q3 Review strength do not create a human Gate. Human stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant (an internal `app/ports/` change that preserves the existing architecture is not by itself a stop); a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
 4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
-5. `app/ports/` is frozen; do not edit it unless the task explicitly authorizes it and a human approves.
+5. `app/ports/` is not frozen by decree. Change a contract when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits, and never build a workaround for a contract you should have fixed.
 6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
 7. `P1-GATE-001` has landed. Later implementation tasks must run `scripts/run_golden_tasks.py --gate`.
-8. Do not weaken tests to pass: no `assert True`, empty `pass`, broad skip, or deleted assertions.
+8. These stay strict at any scope, because they fail silently: do not weaken tests to pass (no `assert True`, empty `pass`, broad skip, or deleted assertions — fix the code or stop and report); do not let a failure path report success or lose its error code; do not regress session/tenant/user isolation. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval.
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 10. Every write lane works in one isolated worktree/branch and a single Scope. The current repository branch convention remains `phase1/<task_id>`.
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
