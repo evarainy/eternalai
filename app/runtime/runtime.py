@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import (
     CapabilityGatewayPort,
     ExecutionResult,
@@ -61,6 +62,7 @@ class RuntimeImpl:
         intent_model: str,
         response_builder: ResponseEnvelopeBuilder,
         workflow_engine: WorkflowEngine | None = None,
+        session_memory: SessionMemory | None = None,
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
@@ -74,6 +76,7 @@ class RuntimeImpl:
         )
         self._response_builder = response_builder
         self._workflow_engine = workflow_engine
+        self._session_memory = session_memory or SessionMemory()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
 
     async def handle_user_message(
@@ -84,6 +87,11 @@ class RuntimeImpl:
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
+        memory_key = SessionMemoryKey(
+            tenant_id="default",
+            session_id=session_id,
+            ai_user_id=ai_user_id,
+        )
         pending_key = (session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
         if pending is not None and _is_explicit_workflow_confirmation(message, pending):
@@ -91,6 +99,7 @@ class RuntimeImpl:
                 pending_key=pending_key,
                 pending=pending,
                 session_id=session_id,
+                memory_key=memory_key,
             )
 
         task_id = str(uuid4())
@@ -125,6 +134,7 @@ class RuntimeImpl:
                 "trace_id": trace_id,
                 "task_id": task_id,
             },
+            memory_summaries=self._session_memory.recall(memory_key),
         )
         capability_ref = intent_result.capability_ref
         parse_ok = capability_ref is not None
@@ -194,6 +204,7 @@ class RuntimeImpl:
         request_context = RequestOrgContext(
             request_id=trace_id,
             channel=channel,
+            tenant_id=memory_key.tenant_id,
             account_set_id=_optional_str_argument(
                 capability_ref.arguments,
                 "account_set_id",
@@ -288,6 +299,11 @@ class RuntimeImpl:
                 capability_id=capability_ref.capability_id,
                 error_code=exec_result.error_code,
             )
+        if exec_result.status == "completed":
+            self._session_memory.remember_completed(
+                memory_key,
+                capability_id=capability_ref.capability_id,
+            )
         return envelope
 
     async def _resume_pending_workflow(
@@ -296,6 +312,7 @@ class RuntimeImpl:
         pending_key: tuple[str, str],
         pending: _PendingWorkflow,
         session_id: str,
+        memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
         if self._workflow_engine is None:
             raise RuntimeError("pending Workflow has no configured engine")
@@ -359,6 +376,11 @@ class RuntimeImpl:
                 status=_map_task_to_finalize_status(final_task_status),
                 capability_id=pending.capability_id,
                 error_code=exec_result.error_code,
+            )
+        if exec_result.status == "completed":
+            self._session_memory.remember_completed(
+                memory_key,
+                capability_id=pending.capability_id,
             )
         return envelope
 

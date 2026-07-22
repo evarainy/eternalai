@@ -1,0 +1,271 @@
+schema_version: "1.2.0"
+task_id: P1-B5-001
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: >
+    Q3 correctness: Session Memory creates a new data plane where cross-session,
+    cross-user, tenant, and credential leakage must fail closed.
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >
+        External monitor issued PASS after reviewing the corrected Gap Map,
+        exact worktree identity, and provisional diff.
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: >
+        Final acceptance requires exact-candidate Codex self-review, verified
+        Claude Opus 4.8/xhigh PASS, merge, and merge-SHA CI.
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B5-001; B5-002 remains a separate lane task."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: >
+    No file deletion, secret or .env change, DB schema/data action, global/system
+    change, history rewrite, force push, production release, or Golden change requested.
+started_at: "2026-07-22T13:08:16+09:00"
+completed_at: "2026-07-22T13:25:58+09:00"
+plan_approved_by: "Rain via external monitor delegation"
+plan_approved_at: "2026-07-22T13:25:58+09:00"
+plan_approved_via: "Codex external monitor window"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Runtime now receives a bounded process-local SessionMemory. Only completed
+  capability identifiers become structured summaries; exact tenant/session/user
+  keys isolate recall, and hard per-context plus global limits prevent unbounded growth.
+acceptance_criteria_result:
+  - criterion: "Same session and ai_user can use prior successful structured context"
+    result: passed
+    evidence: >
+      tests/runtime/test_runtime_session_memory.py proves the follow-up succeeds only
+      when the prior capability summary is present in the exact-key LLM context.
+  - criterion: "Different session and different ai_user cannot read owner memory"
+    result: passed
+    evidence: >
+      Separate pytest parameter instances assert no memory system message and a
+      no_capability_found outcome for each isolation dimension.
+  - criterion: "Tenant is structurally present and honestly reported"
+    result: passed
+    evidence: >
+      SessionMemoryKey is (tenant_id, session_id, ai_user_id). Runtime currently
+      supplies only default; no end-to-end cross-tenant verification is claimed.
+  - criterion: "Capacity has exact hard limits"
+    result: passed
+    evidence: >
+      MAX_ENTRIES_PER_CONTEXT=5 and MAX_CONTEXTS=32; tests assert the sixth-entry
+      and thirty-third-context eviction results exactly.
+  - criterion: "Sensitive values and full payloads do not enter memory, trace, or context"
+    result: passed
+    evidence: >
+      Runtime passes only capability_id after completed; memory rejects all required
+      credential assignment families; synthetic credential payload tests remain absent
+      from memory state, recorded trace, next LLM context, and ResponseEnvelope.
+  - criterion: "Failures do not leave success-looking memory"
+    result: passed
+    evidence: >
+      denied, failed, waiting_user, and no_capability_found each leave entry_count zero.
+  - criterion: "Ports, dependencies, Golden, and B2-B4 behavior do not regress"
+    result: passed
+    evidence: >
+      No Port/manifest/Golden diff; architecture 23/23 and Golden gate 23/23 passed.
+failure_examples_tested:
+  - example: "A different session receives the prior capability summary"
+    result: triggered
+    evidence: "different-session test sees only base system plus user messages."
+  - example: "A second ai_user in the same session receives owner memory"
+    result: triggered
+    evidence: "different-ai-user test sees only base system plus user messages."
+  - example: "The sixth entry or thirty-third context grows memory without eviction"
+    result: triggered
+    evidence: "Both exact boundary assertions pass with deterministic oldest eviction."
+  - example: "A denied, failed, waiting, or no-capability turn is remembered as completed"
+    result: triggered
+    evidence: "All four statuses retain zero summaries."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "External monitor review after corrected Gap Map packet"
+    evidence: "PASS; route (a), tenant risk, lifecycle, key, limits, and filters accepted."
+  - step: focused_behavior
+    result: passed
+    command: >
+      uv run pytest tests/memory/test_session_memory.py tests/runtime/test_intent_router.py
+      tests/runtime/test_runtime_session_memory.py tests/runtime/test_runtime_composition.py
+      tests/architecture/test_import_boundaries.py -q
+    evidence: "47 passed."
+  - step: deterministic_validation
+    result: passed
+    command: "Ruff, mypy, dependency, architecture, weak-test, non-DB pytest, Golden gate"
+    evidence: "All task-relevant deterministic checks passed; exact results are in tests_run."
+  - step: independent_review
+    result: not_applicable
+    command: "Codex high read-only self-review, then Opus 4.8/xhigh"
+    evidence: "Activated after the candidate commit; no review PASS is claimed in this snapshot."
+    not_applicable_reason: "Review has not run yet because the exact candidate is not committed."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B5-001
+    activation_task_id: P1-B5-001
+    expiry_condition: "Candidate commit exists and deterministic validation remains bound."
+changed_files:
+  - app/composition.py
+  - app/memory/__init__.py
+  - app/memory/session_memory.py
+  - app/runtime/intent_router.py
+  - app/runtime/runtime.py
+  - docs/phase1/task_logs/P1-B5-001_20260722_132558_passed.yaml
+  - docs/phase1/tasks/P1-B5-001.md
+  - tests/architecture/test_import_boundaries.py
+  - tests/memory/test_session_memory.py
+  - tests/runtime/test_intent_router.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/runtime/test_runtime_session_memory.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest"
+    result: failed
+    output_snippet: >
+      919 passed, 26 skipped; three existing DB tests failed because DATABASE_URL
+      is absent. No environment, schema, credential, or data was changed.
+  - command: "uv run pytest --ignore=tests/db -q"
+    result: passed
+    output_snippet: "908 passed, 26 skipped."
+  - command: "Focused Memory/Runtime/architecture pytest"
+    result: passed
+    output_snippet: "47 passed."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 54 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/ -q"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23; positive 9/9, negative 14/14, skipped 0, not_applicable 0."
+  - command: "check_weak_tests.py for all five changed/new test modules"
+    result: passed
+    output_snippet: "All five modules passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: >
+    Architecture suite 23/23; app.memory cannot import app.infra or
+    app.execution_fabric, and no Port changed.
+security_scan_result:
+  result: passed
+  evidence: >
+    Allowlisted completed summaries only; credential assignments are rejected;
+    raw messages, arguments, and Gateway payloads never enter SessionMemory.
+weak_test_scan_result:
+  result: passed
+  evidence: "All five changed/new test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B5-001
+  activation_task_id: P1-B5-001
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: none
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Exact-candidate Codex high self-review and verified Opus 4.8/xhigh PASS remain
+    mandatory. Their external artifacts, not this pre-review field, authorize merge.
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: phase1/P1-B5-001
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Task branch is not pushed yet."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No merge has occurred."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - >
+    tenant_id is currently always default. The key structurally includes tenant,
+    but end-to-end cross-tenant isolation remains unverified until trusted tenant
+    identity is wired into Runtime and tested through the real entry path.
+  - >
+    Memory is intentionally Runtime-instance-local with no TTL or restart durability;
+    cross-process, cross-day, and persistent memory remain out of scope.
+  - >
+    Local full pytest remains DB-environment-limited because DATABASE_URL is absent;
+    no .env, credential, schema, or real data was changed.
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
+  secret, system, or production action. Any rollback requires a separately governed revert.
+local_commit_policy: after_review_pass
+git_commit_sha: "containing candidate commit; exact SHA is recorded by Git and external review meta"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""
