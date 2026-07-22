@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
@@ -26,6 +27,7 @@ def build_runtime(
     intent_model: str,
     workflow_engine: WorkflowEngine | None = None,
     session_memory: SessionMemory | None = None,
+    semantic_knowledge: BasicKnowledge | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     return RuntimeImpl(
@@ -40,6 +42,7 @@ def build_runtime(
         response_builder=ResponseEnvelopeBuilder(),
         workflow_engine=workflow_engine,
         session_memory=session_memory or SessionMemory(),
+        semantic_knowledge=semantic_knowledge or BasicKnowledge(),
     )
 
 

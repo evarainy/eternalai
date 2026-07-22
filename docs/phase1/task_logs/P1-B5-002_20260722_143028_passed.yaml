@@ -1,0 +1,271 @@
+schema_version: "1.2.0"
+task_id: P1-B5-002
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: >
+    Q2 correctness: the change adds bounded system-prompt context and readable
+    content to a Golden-locked no-capability terminal, while knowledge remains
+    static global reference data rather than a tenant/user data plane.
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >
+        External monitor returned PASS on the corrected Gap Map, exact worktree
+        identity, 8x240 boundary, Registry derivation, sanitizer points, and Mock limits.
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: >
+        Final acceptance still requires exact-candidate Codex high read-only review,
+        verified Claude Opus 4.8/high PASS, merge, and merge-SHA CI.
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B5-002; B5-003 remains a separate task."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: >
+    No deletion, secret or .env change, DB schema/data action, system change,
+    history rewrite, force push, release, or Golden change was requested.
+started_at: "2026-07-22T13:42:00+09:00"
+completed_at: "2026-07-22T14:30:28+09:00"
+plan_approved_by: "Rain via external monitor delegation"
+plan_approved_at: "2026-07-22T14:30:28+09:00"
+plan_approved_via: "Codex external monitor thread"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PASS
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Runtime now injects a small global Semantic/System Knowledge message. Static
+  terms, Mock facts, and policy templates are immutable code data; capability
+  descriptions and no-capability guidance are derived from the live Registry.
+  Knowledge is global and deliberately has no tenant, session, or user isolation
+  semantics; B5-001 Session Memory remains the independently isolated data plane.
+acceptance_criteria_result:
+  - criterion: "Required basic knowledge content exists without external loading"
+    result: passed
+    evidence: >
+      Frozen code tuples cover enterprise terms, Mock systems, and policy templates;
+      deterministic keyword hit/miss tests pass without file, DB, or network access.
+  - criterion: "Capability descriptions have one Registry source of truth"
+    result: passed
+    evidence: >
+      Runtime reads CapabilityRegistryPort.list per request; A/B snapshot tests prove
+      changed Registry data replaces old descriptions and no capability list is static.
+  - criterion: "Intent injection has exact small hard bounds and coexists with Memory"
+    result: passed
+    evidence: >
+      MAX_KNOWLEDGE_ITEMS=8 and MAX_KNOWLEDGE_ITEM_LENGTH=240 are asserted against
+      decoded provider messages; knowledge and memory remain independent system messages.
+  - criterion: "No-capability guidance preserves the negative terminal"
+    result: passed
+    evidence: >
+      Runtime tests retain no_capability_found/capability_not_found and blocked Trace,
+      while the envelope lists only active capabilities and Admin Lite > Registry.
+  - criterion: "Knowledge never authorizes disabled or missing capabilities"
+    result: passed
+    evidence: >
+      Selector inputs still traverse the real Registry gate; disabled and missing cases
+      make zero Gateway calls and finish at the unchanged negative terminal.
+  - criterion: "Sensitive values do not enter knowledge, prompt, Trace, state, or response"
+    result: passed
+    evidence: >
+      Synthetic credential, URL/IP, email/person, and owner markers are removed at the
+      knowledge boundary and again at final prompt injection; all observed surfaces pass.
+  - criterion: "Mock LLM evidence is honest"
+    result: passed
+    evidence: >
+      No test attributes a selector to system knowledge. Evidence is limited to pure
+      lookup, actual provider messages, Registry gates, Gateway calls, and terminal state.
+failure_examples_tested:
+  - example: "A ninth or over-240-character knowledge item reaches the provider"
+    result: triggered
+    evidence: "Decoded prompt contains exactly eight items of exactly 240 characters."
+  - example: "Knowledge and Session Memory overwrite or contaminate one another"
+    result: triggered
+    evidence: "Exact message order and disjoint JSON keys are asserted."
+  - example: "A disabled or missing selector bypasses Registry and executes"
+    result: triggered
+    evidence: "Both cases retain Gateway call count zero and capability_not_found."
+  - example: "Disabled capability or sensitive Registry text appears in guidance"
+    result: triggered
+    evidence: "Active-only and sensitive-marker absence assertions pass."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "External monitor review of corrected Gap Map"
+    evidence: "PASS with eight implementation locks; no architecture or redline change."
+  - step: focused_behavior
+    result: passed
+    command: >
+      uv run pytest tests/knowledge/test_basic_knowledge.py
+      tests/runtime/test_intent_router.py tests/runtime/test_runtime_semantic_knowledge.py
+      tests/runtime/test_runtime_session_memory.py
+      tests/runtime/test_runtime_capability_selection.py
+      tests/runtime/test_runtime_composition.py
+      tests/architecture/test_import_boundaries.py -q
+    evidence: "54 passed."
+  - step: deterministic_validation
+    result: passed
+    command: "Full pytest, Ruff, mypy, dependency, architecture, weak-test, Golden gate"
+    evidence: "All checks passed; exact results are listed in tests_run."
+  - step: independent_review
+    result: not_applicable
+    command: "Codex high read-only self-review, then Opus 4.8/high"
+    evidence: "Activated after candidate commit; no review PASS is claimed here."
+    not_applicable_reason: "Exact candidate has not been committed yet."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B5-002
+    activation_task_id: P1-B5-002
+    expiry_condition: "Candidate commit exists and deterministic validation stays bound."
+changed_files:
+  - app/composition.py
+  - app/knowledge/__init__.py
+  - app/knowledge/basic_knowledge.py
+  - app/runtime/intent_router.py
+  - app/runtime/runtime.py
+  - docs/phase1/task_logs/P1-B5-002_20260722_143028_passed.yaml
+  - docs/phase1/tasks/P1-B5-002.md
+  - tests/architecture/test_import_boundaries.py
+  - tests/knowledge/test_basic_knowledge.py
+  - tests/runtime/test_intent_router.py
+  - tests/runtime/test_runtime_capability_selection.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/runtime/test_runtime_semantic_knowledge.py
+  - tests/runtime/test_runtime_session_memory.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest"
+    result: passed
+    output_snippet: "959 passed, 6 deprecation warnings."
+  - command: "uv run pytest tests/memory tests/runtime tests/architecture -q"
+    result: passed
+    output_snippet: "132 passed."
+  - command: "uv run ruff check ."
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 56 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/ -q"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23; positive 9/9, negative 14/14."
+  - command: "check_weak_tests.py for all seven changed/new test modules"
+    result: passed
+    output_snippet: "All seven modules passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: >
+    Architecture suite 23/23; app.knowledge cannot import infra, execution fabric,
+    Runtime, CapabilityGateway, or Trace. No Port changed.
+security_scan_result:
+  result: passed
+  evidence: >
+    Static facts contain no real identities or addresses; Registry owner is never read;
+    sensitive free text is sanitized before knowledge construction and prompt injection.
+weak_test_scan_result:
+  result: passed
+  evidence: "All seven changed/new test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B5-002
+  activation_task_id: P1-B5-002
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: none
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Exact-candidate Codex high self-review and verified Opus 4.8/high PASS remain
+    mandatory. External review artifacts, not this pre-review field, authorize merge.
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: phase1/P1-B5-002
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Task branch is not pushed yet."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No merge has occurred."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - >
+    Mock LLM cannot prove semantic routing quality because it keys only on the final
+    user message. This task claims bounded context and Registry-gate correctness only.
+  - >
+    Knowledge is intentionally global static reference data with no tenant, session,
+    or user isolation semantics. Session Memory remains separately isolated.
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
+  secret, system, or production action. Rollback requires a separately governed revert.
+local_commit_policy: candidate_commit_before_review
+git_commit_sha: "pending exact candidate commit; Git and external review meta bind the SHA"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""

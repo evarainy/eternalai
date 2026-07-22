@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.composition import build_runtime
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
+from app.knowledge import BasicKnowledge
 from app.main import create_app
 from app.memory import SessionMemory
 from app.ports.capability_gateway import ExecutionResult
@@ -151,6 +152,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     llm_provider = MockLLMProvider()
     structured_output = DeterministicStructuredOutput()
     session_memory = SessionMemory()
+    semantic_knowledge = BasicKnowledge()
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
@@ -161,6 +163,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
         structured_output=structured_output,
         intent_model="test-intent-model",
         session_memory=session_memory,
+        semantic_knowledge=semantic_knowledge,
     )
 
     response = TestClient(create_app(runtime)).post(
@@ -176,9 +179,14 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert session_store.created
     assert runtime._capability_registry is capability_registry
     assert runtime._session_memory is session_memory
+    assert runtime._semantic_knowledge is semantic_knowledge
     assert gateway.capability_registry is capability_registry
     assert llm_provider.calls[0]["model"] == "test-intent-model"
     assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}
+    messages = llm_provider.calls[0]["messages"]
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert "semantic_system_knowledge" in messages[1].content
+    assert "synthetic.query" in messages[1].content
     assert structured_output.trace_metadata == [
         {
             "trace_id": task_store.created[0].trace_id,

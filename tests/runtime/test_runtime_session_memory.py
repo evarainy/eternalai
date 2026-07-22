@@ -130,7 +130,8 @@ class MemoryAwareLLMProvider:
             capability_id = "oa.get_workflow_status"
             arguments = self._first_arguments
         elif any(
-            '"capability_id":"oa.get_workflow_status"' in item.content
+            '"session_memory"' in item.content
+            and '"capability_id":"oa.get_workflow_status"' in item.content
             for item in messages
         ):
             capability_id = "oa.get_workflow_status"
@@ -230,9 +231,13 @@ def test_same_session_and_user_followup_can_use_prior_success_summary() -> None:
     assert [message.role for message in followup_messages] == [
         "system",
         "system",
+        "system",
         "user",
     ]
-    memory_prompt = followup_messages[1].content
+    knowledge_prompt = followup_messages[1].content
+    memory_prompt = followup_messages[2].content
+    assert "semantic_system_knowledge" in knowledge_prompt
+    assert "session_memory" not in knowledge_prompt
     assert '"capability_id":"oa.get_workflow_status"' in memory_prompt
     assert '"terminal_status":"completed"' in memory_prompt
     assert "first request" not in memory_prompt
@@ -265,11 +270,13 @@ def test_followup_cannot_read_another_session_or_users_memory(
     followup, followup_messages = asyncio.run(exercise())
 
     assert followup.status == "no_capability_found"
-    assert [message.role for message in followup_messages] == ["system", "user"]
-    assert all(
-        "oa.get_workflow_status" not in message.content
-        for message in followup_messages
-    )
+    assert [message.role for message in followup_messages] == [
+        "system",
+        "system",
+        "user",
+    ]
+    assert "semantic_system_knowledge" in followup_messages[1].content
+    assert "session_memory" not in followup_messages[1].content
 
 
 @pytest.mark.parametrize(

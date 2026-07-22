@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -14,7 +15,11 @@ from app.ports.structured_output import (
     StructuredOutputError,
     StructuredOutputResult,
 )
-from app.runtime.intent_router import IntentRouter
+from app.runtime.intent_router import (
+    MAX_KNOWLEDGE_ITEM_LENGTH,
+    MAX_KNOWLEDGE_ITEMS,
+    IntentRouter,
+)
 from app.runtime.models import CapabilityRef
 
 
@@ -221,3 +226,88 @@ def test_router_adds_only_structured_success_summaries_when_memory_exists() -> N
         '"terminal_status":"completed"}]}'
     )
     assert "repeat" not in messages[1].content
+
+
+def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
+    llm_provider = MockLLMProvider()
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+    )
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+    knowledge_items = tuple(
+        f"item-{index}:" + (str(index) * (MAX_KNOWLEDGE_ITEM_LENGTH + 20))
+        for index in range(MAX_KNOWLEDGE_ITEMS + 2)
+    )
+
+    result = asyncio.run(
+        router.parse("request", knowledge_items=knowledge_items)
+    )
+
+    assert result.capability_ref == CapabilityRef(capability_id="oa.safe.query")
+    messages = llm_provider.calls[0]["messages"]
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
+    injected = payload["semantic_system_knowledge"]
+    assert len(injected) == MAX_KNOWLEDGE_ITEMS
+    assert all(len(item) == MAX_KNOWLEDGE_ITEM_LENGTH for item in injected)
+    assert injected[0].startswith("item-0:")
+    assert all("item-8:" not in item and "item-9:" not in item for item in injected)
+
+
+def test_router_keeps_knowledge_and_memory_in_independent_system_messages() -> None:
+    llm_provider = MockLLMProvider()
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+    )
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+
+    asyncio.run(
+        router.parse(
+            "repeat",
+            knowledge_items=("企业术语：待办是等待处理的流程事项。",),
+            memory_summaries=(
+                SessionMemorySummary(capability_id="oa.previous.query"),
+            ),
+        )
+    )
+
+    messages = llm_provider.calls[0]["messages"]
+    assert [message.role for message in messages] == [
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
+    knowledge_prompt = messages[1].content
+    memory_prompt = messages[2].content
+    assert "semantic_system_knowledge" in knowledge_prompt
+    assert "session_memory" not in knowledge_prompt
+    assert "oa.previous.query" not in knowledge_prompt
+    assert "session_memory" in memory_prompt
+    assert "semantic_system_knowledge" not in memory_prompt
+    assert "企业术语" not in memory_prompt
+    assert messages[-1].content == "repeat"
+
+
+def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None:
+    llm_provider = MockLLMProvider()
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+    )
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+    credential_value = "synthetic-router-credential"
+    private_address = "https://192.168.1.8/internal"
+
+    asyncio.run(
+        router.parse(
+            "request",
+            knowledge_items=(
+                f"authorization={credential_value} endpoint={private_address}",
+            ),
+        )
+    )
+
+    prompt = llm_provider.calls[0]["messages"][1].content
+    assert credential_value not in prompt
+    assert private_address not in prompt
+    assert prompt.count("[REDACTED]") == 2

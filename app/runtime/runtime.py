@@ -9,6 +9,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import (
     CapabilityGatewayPort,
@@ -63,6 +64,7 @@ class RuntimeImpl:
         response_builder: ResponseEnvelopeBuilder,
         workflow_engine: WorkflowEngine | None = None,
         session_memory: SessionMemory | None = None,
+        semantic_knowledge: BasicKnowledge | None = None,
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
@@ -77,6 +79,7 @@ class RuntimeImpl:
         self._response_builder = response_builder
         self._workflow_engine = workflow_engine
         self._session_memory = session_memory or SessionMemory()
+        self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
 
     async def handle_user_message(
@@ -128,12 +131,17 @@ class RuntimeImpl:
             status="ok",
         )
 
+        capability_snapshot = await self._capability_registry.list()
         intent_result = await self._intent_router.parse(
             message,
             trace_metadata={
                 "trace_id": trace_id,
                 "task_id": task_id,
             },
+            knowledge_items=self._semantic_knowledge.context_items(
+                message,
+                capability_snapshot,
+            ),
             memory_summaries=self._session_memory.recall(memory_key),
         )
         capability_ref = intent_result.capability_ref
@@ -430,6 +438,10 @@ class RuntimeImpl:
         trace_id: str,
         reason: str,
     ) -> ResponseEnvelope:
+        active_capabilities = await self._capability_registry.list(status="active")
+        message, fallback_text = self._semantic_knowledge.no_capability_guidance(
+            active_capabilities
+        )
         await self._task_store.update_status(
             task_id,
             "no_capability_found",
@@ -448,8 +460,8 @@ class RuntimeImpl:
             response_id,
             task_id,
             session_id,
-            "暂未接入该能力",
-            "No capability found.",
+            message,
+            fallback_text,
             trace_id,
         )
         await self._trace_port.record_step(
