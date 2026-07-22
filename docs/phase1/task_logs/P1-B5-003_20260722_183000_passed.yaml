@@ -1,0 +1,275 @@
+schema_version: "1.2.0"
+task_id: P1-B5-003
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: >
+    Q3 correctness: Evaluator covers every Runtime terminal path, expands the
+    closed Trace event contract, and must make its own failure visible without
+    changing or misreporting the business terminal result.
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >
+        External monitor returned a supplemental PASS on the seven-part Gap Map.
+        Implementation began before that explicit verdict; the deviation was recorded,
+        no work was rolled back, and scope was not expanded after the ruling.
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: >
+        Exact-candidate Codex high read-only review, verified Claude Opus 4.8/xhigh
+        PASS, merge, and merge-SHA CI remain mandatory.
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B5-003; Lane B and later B5 tasks are separate."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: >
+    No deletion, .env or real credential change, DB schema/real-data action,
+    system change, history rewrite, force push, release, or Golden change occurred.
+started_at: "2026-07-22T17:50:00+09:00"
+completed_at: "2026-07-22T18:30:00+09:00"
+plan_approved_by: "Rain via external monitor delegation"
+plan_approved_at: "2026-07-22T18:30:00+09:00"
+plan_approved_via: "Codex external monitor thread supplemental review"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PASS
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Runtime now emits one distinct evaluation_recorded event for every terminal
+  business result on the direct, Workflow-resume, and no-capability paths. The
+  deterministic Evaluator maps completed to passed and every non-success terminal
+  to failed. Evaluator exceptions become an explicit error conclusion while the
+  ResponseEnvelope, TaskStatus, and business error_code remain unchanged.
+acceptance_criteria_result:
+  - criterion: "All three terminal paths produce exactly one evaluation conclusion"
+    result: passed
+    evidence: >
+      Runtime integration tests cover direct execution, Workflow resume, and
+      _finish_no_capability_found with exact event counts and task identity.
+  - criterion: "Business terminal and Evaluator result are trace-distinguishable"
+    result: passed
+    evidence: >
+      TraceEventType has a dedicated evaluation_recorded value; business terminal
+      events remain unchanged and precede the independent evaluation event.
+  - criterion: "Terminal mapping is complete and deterministic"
+    result: passed
+    evidence: >
+      Parameterized unit and Runtime tests cover completed, failed, denied,
+      binding_required, timeout, and no_capability_found without LLM, time, or random input.
+  - criterion: "Evaluator cannot rewrite business outcome"
+    result: passed
+    evidence: >
+      Baseline-versus-raising-Evaluator comparisons cover all six terminal statuses
+      and assert identical ResponseEnvelope.status, TaskStatus, and error_code.
+  - criterion: "Evaluator failure is visible but does not break the main chain"
+    result: passed
+    evidence: >
+      A raising Evaluator returns the original response and task state plus one failed
+      evaluation_recorded event with evaluation_result=error and reason=evaluator_error.
+  - criterion: "waiting_user never produces an evaluation conclusion"
+    result: passed
+    evidence: >
+      Initial Workflow waiting and a second waiting resume both assert zero evaluation
+      events and zero Trace finalizations.
+  - criterion: "Sensitive business data cannot enter evaluation Trace or state"
+    result: passed
+    evidence: >
+      Evaluator accepts only closed status and ErrorCode values. Credential sentinels in
+      exec_result.data and exception text are absent from evaluation Trace and task state.
+failure_examples_tested:
+  - example: "A business failure is evaluated as passed"
+    result: triggered
+    evidence: "All five non-success terminal classes assert evaluation_result=failed."
+  - example: "Evaluator exception is swallowed as success or breaks the response"
+    result: triggered
+    evidence: >
+      Six terminal comparisons assert evaluation_result=error and unchanged business output.
+  - example: "Workflow waiting or repeated waiting is evaluated twice"
+    result: triggered
+    evidence: "Both waiting checkpoints retain zero evaluation events."
+  - example: "Workflow resume terminal omits its evaluation"
+    result: triggered
+    evidence: "Resume completion records exactly one event on the original task and trace."
+  - example: "exec_result.data or exception secrets enter Trace attributes"
+    result: triggered
+    evidence: "Explicit password, access_token, Bearer, and exception-message sentinels stay absent."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "External monitor supplemental review"
+    evidence: >
+      PASS on Trace design, result shape, mapping, three paths, waiting exclusion,
+      exception handling, and sensitive-value boundary; process-order deviation recorded.
+  - step: focused_behavior
+    result: passed
+    command: >
+      uv run pytest tests/evaluator/test_terminal_evaluator.py
+      tests/runtime/test_runtime_evaluator.py tests/runtime/test_runtime_composition.py
+      tests/ports/test_trace_port.py tests/infra/observability/test_noop_trace_writer.py
+      tests/architecture/test_import_boundaries.py -q
+    evidence: "87 passed before existing Trace-sequence tests were synchronized."
+  - step: deterministic_validation
+    result: passed
+    command: "Full pytest, Ruff, mypy, dependency, architecture, weak-test, Golden gate"
+    evidence: "All checks passed; exact results are listed in tests_run."
+  - step: independent_review
+    result: not_applicable
+    command: "Codex high read-only self-review, then Opus 4.8/xhigh"
+    evidence: "Exact candidate has not been committed or independently reviewed yet."
+    not_applicable_reason: "Review is intentionally deferred until the exact commit exists."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B5-003
+    activation_task_id: P1-B5-003
+    expiry_condition: "Candidate commit exists and deterministic validation stays bound."
+changed_files:
+  - app/composition.py
+  - app/evaluator/__init__.py
+  - app/evaluator/terminal.py
+  - app/ports/trace.py
+  - app/runtime/runtime.py
+  - docs/phase1/task_logs/P1-B5-003_20260722_183000_passed.yaml
+  - docs/phase1/tasks/P1-B5-003.md
+  - tests/architecture/test_import_boundaries.py
+  - tests/evaluator/test_terminal_evaluator.py
+  - tests/infra/observability/test_noop_trace_writer.py
+  - tests/ports/test_trace_port.py
+  - tests/runtime/test_runtime_capability_selection.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/runtime/test_runtime_evaluator.py
+  - tests/runtime/test_runtime_response_envelope.py
+  - tests/runtime/test_runtime_trace_lifecycle.py
+  - tests/runtime/test_runtime_trace_threading.py
+  - tests/runtime/test_runtime_workflow.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: >
+      $env:DATABASE_URL=<repository test DB on 127.0.0.1:15432>; uv run pytest
+    result: passed
+    output_snippet: "987 passed, 6 deprecation warnings. No .env file was modified."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 58 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23; positive 9/9, negative 14/14."
+  - command: "check_weak_tests.py for all eleven changed/new test modules"
+    result: passed
+    output_snippet: "All eleven modules passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: >
+    Architecture suite 23/23; app.evaluator cannot import infra, Runtime, or Trace.
+    The only Port change is the authorized evaluation_recorded event literal.
+security_scan_result:
+  result: passed
+  evidence: >
+    Evaluator has no payload input. Status/error-only tests and exception-message
+    tests prove credential sentinels stay out of evaluation Trace and task state.
+weak_test_scan_result:
+  result: passed
+  evidence: "All eleven changed/new test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B5-003
+  activation_task_id: P1-B5-003
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: none
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Exact-candidate Codex high self-review and verified Opus 4.8/xhigh PASS remain
+    mandatory. External artifacts, not this pre-review field, authorize merge.
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: phase1/P1-B5-003
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Task branch is not pushed yet."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No merge has occurred."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - >
+    Repository Trace consumers are synchronized, but any external consumer with its own
+    exhaustive event enum must accept evaluation_recorded before consuming this revision.
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
+  secret, system, or production action. Rollback requires a separately governed revert.
+local_commit_policy: candidate_commit_before_review
+git_commit_sha: "pending exact candidate commit; Git and external review meta bind the SHA"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""

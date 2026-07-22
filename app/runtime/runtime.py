@@ -8,11 +8,17 @@ from hashlib import sha256
 from typing import Any, Literal
 from uuid import uuid4
 
+from app.evaluator import (
+    EvaluationConclusion,
+    TerminalBusinessStatus,
+    TerminalEvaluator,
+)
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import (
     CapabilityGatewayPort,
+    ErrorCode,
     ExecutionResult,
     ExecutionStatus,
     RequestOrgContext,
@@ -65,6 +71,7 @@ class RuntimeImpl:
         workflow_engine: WorkflowEngine | None = None,
         session_memory: SessionMemory | None = None,
         semantic_knowledge: BasicKnowledge | None = None,
+        evaluator: TerminalEvaluator | None = None,
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
@@ -81,6 +88,7 @@ class RuntimeImpl:
         self._response_builder = response_builder
         self._workflow_engine = workflow_engine
         self._session_memory = session_memory or SessionMemory()
+        self._evaluator = evaluator or TerminalEvaluator()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
 
     async def handle_user_message(
@@ -296,6 +304,15 @@ class RuntimeImpl:
                 capability_id=capability_ref.capability_id,
             )
         else:
+            if exec_result.status != "waiting_user":
+                await self._record_terminal_evaluation(
+                    trace_id=trace_id,
+                    task_id=task_id,
+                    session_id=session_id,
+                    business_status=exec_result.status,
+                    error_code=exec_result.error_code,
+                    capability_id=capability_ref.capability_id,
+                )
             finalize_status = _map_task_to_finalize_status(final_task_status)
             await self._trace_port.finalize_task_trace(
                 trace_id,
@@ -375,6 +392,14 @@ class RuntimeImpl:
             )
         else:
             self._pending_workflows.pop(pending_key, None)
+            await self._record_terminal_evaluation(
+                trace_id=pending.trace_id,
+                task_id=pending.task_id,
+                session_id=session_id,
+                business_status=exec_result.status,
+                error_code=exec_result.error_code,
+                capability_id=pending.capability_id,
+            )
             await self._trace_port.finalize_task_trace(
                 pending.trace_id,
                 pending.task_id,
@@ -477,6 +502,13 @@ class RuntimeImpl:
             status="failed",
             error_code="capability_not_found",
         )
+        await self._record_terminal_evaluation(
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            business_status="no_capability_found",
+            error_code="capability_not_found",
+        )
         await self._trace_port.finalize_task_trace(
             trace_id,
             task_id,
@@ -485,6 +517,36 @@ class RuntimeImpl:
             error_code="capability_not_found",
         )
         return envelope
+
+    async def _record_terminal_evaluation(
+        self,
+        *,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        business_status: TerminalBusinessStatus,
+        error_code: ErrorCode | None,
+        capability_id: str | None = None,
+    ) -> None:
+        try:
+            conclusion = self._evaluator.evaluate(business_status, error_code)
+        except Exception:
+            conclusion = EvaluationConclusion(
+                business_status=business_status,
+                business_error_code=error_code,
+                evaluation_result="error",
+                reason="evaluator_error",
+            )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="evaluation_recorded",
+            status="ok" if conclusion.evaluation_result == "passed" else "failed",
+            capability_id=capability_id,
+            error_code=error_code,
+            attributes=conclusion.trace_attributes(),
+        )
 
     def _build_envelope(
         self,

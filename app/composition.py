@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.evaluator import TerminalEvaluator
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
@@ -28,6 +29,7 @@ def build_runtime(
     workflow_engine: WorkflowEngine | None = None,
     session_memory: SessionMemory | None = None,
     semantic_knowledge: BasicKnowledge | None = None,
+    evaluator: TerminalEvaluator | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     return RuntimeImpl(
@@ -43,6 +45,7 @@ def build_runtime(
         workflow_engine=workflow_engine,
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
+        evaluator=evaluator or TerminalEvaluator(),
     )
 
 

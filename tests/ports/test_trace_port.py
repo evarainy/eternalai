@@ -39,12 +39,13 @@ EXPECTED_TRACE_EVENT_TYPE_VALUES = (
     "response_envelope_created",
     "task_completed",
     "task_failed",
+    "evaluation_recorded",
 )
 
 EXPECTED_TRACE_EVENT_STATUS_VALUES = ("ok", "blocked", "failed", "skipped")
 
 
-def test_trace_event_type_literal_values_match_spec_8_6_7() -> None:
+def test_trace_event_type_literal_values_match_governed_contract() -> None:
     assert get_args(TraceEventType) == EXPECTED_TRACE_EVENT_TYPE_VALUES
 
 

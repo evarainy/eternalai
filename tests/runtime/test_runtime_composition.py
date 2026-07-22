@@ -8,6 +8,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient
 
 from app.composition import build_runtime
+from app.evaluator import TerminalEvaluator
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.knowledge import BasicKnowledge
@@ -153,6 +154,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     structured_output = DeterministicStructuredOutput()
     session_memory = SessionMemory()
     semantic_knowledge = BasicKnowledge()
+    evaluator = TerminalEvaluator()
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
@@ -164,6 +166,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
         intent_model="test-intent-model",
         session_memory=session_memory,
         semantic_knowledge=semantic_knowledge,
+        evaluator=evaluator,
     )
 
     response = TestClient(create_app(runtime)).post(
@@ -180,6 +183,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert runtime._capability_registry is capability_registry
     assert runtime._session_memory is session_memory
     assert runtime._semantic_knowledge is semantic_knowledge
+    assert runtime._evaluator is evaluator
     assert gateway.capability_registry is capability_registry
     assert llm_provider.calls[0]["model"] == "test-intent-model"
     assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}
@@ -197,6 +201,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert "task_created" in trace_port.event_types
     assert "response_envelope_created" in trace_port.event_types
     assert "task_completed" in trace_port.event_types
+    assert "evaluation_recorded" in trace_port.event_types
 
 
 class CapturingTraceLogger:

@@ -216,6 +216,7 @@ def test_happy_path_trace_event_sequence_matches_spec() -> None:
         "capability_selected",
         "response_envelope_created",
         "task_completed",
+        "evaluation_recorded",
     ]
 
 
@@ -231,6 +232,7 @@ def test_parse_error_trace_event_sequence_matches_no_capability_found_spec() -> 
         "no_capability_found",
         "response_envelope_created",
         "task_failed",
+        "evaluation_recorded",
     ]
 
 

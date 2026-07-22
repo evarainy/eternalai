@@ -28,6 +28,7 @@ TraceEventType: TypeAlias = Literal[
     "response_envelope_created",
     "task_completed",
     "task_failed",
+    "evaluation_recorded",
 ]
 
 TraceEventStatus: TypeAlias = Literal["ok", "blocked", "failed", "skipped"]

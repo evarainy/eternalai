@@ -341,6 +341,7 @@ def test_exact_inactive_capability_fails_closed_without_tag_fallback(
         "no_capability_found",
         "response_envelope_created",
         "task_failed",
+        "evaluation_recorded",
     ]
 
 

@@ -328,6 +328,7 @@ def test_runtime_and_gateway_share_trace_id_and_gateway_steps_are_visible() -> N
         "gateway_post_recorded",
         "response_envelope_created",
         "task_completed",
+        "evaluation_recorded",
     ]
     trace_ids = {step["trace_id"] for step in trace_port.steps}
     assert len(trace_ids) == 1
@@ -457,7 +458,11 @@ def test_b3_negative_prechecks_close_runtime_task_trace_and_sdui_loop(
     )
 
     common_prefix = ["task_created", "intent_parsed", "capability_selected"]
-    expected_terminal = [] if expected_task_status == "waiting_user" else ["task_failed"]
+    expected_terminal = (
+        []
+        if expected_task_status == "waiting_user"
+        else ["task_failed", "evaluation_recorded"]
+    )
     assert _events(trace_port) == [
         *common_prefix,
         *expected_events,
@@ -513,3 +518,6 @@ def test_runtime_terminal_events_follow_execution_status_not_envelope_status() -
         if exec_result.status == "waiting_user":
             assert "task_completed" not in events
             assert "task_failed" not in events
+            assert "evaluation_recorded" not in events
+        else:
+            assert "evaluation_recorded" in events
