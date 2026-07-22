@@ -183,11 +183,14 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
         "gateway_post_recorded",
         "response_envelope_created",
         "task_completed",
+        "evaluation_recorded",
     ]
     assert event_types.count("task_created") == 1
     assert event_types.count("gateway_pre_recorded") == 1
     assert event_types.count("task_completed") == 1
     assert event_types.count("task_failed") == 0
+    assert event_types.count("evaluation_recorded") == 1
+    assert logger.events[-1]["attributes"]["evaluation_result"] == "passed"
     assert len({event["trace_id"] for event in logger.events}) == 1
 
 
@@ -203,7 +206,7 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
         ("no_capability_found", "capability_not_found", "task_failed"),
     ),
 )
-def test_real_writer_terminal_matrix_is_exact_and_last(
+def test_real_writer_terminal_matrix_is_followed_by_one_evaluation(
     status: ExecutionStatus,
     error_code: str | None,
     expected_terminal: str | None,
@@ -228,9 +231,15 @@ def test_real_writer_terminal_matrix_is_exact_and_last(
     assert event_types.count("task_completed") == (expected_terminal == "task_completed")
     assert event_types.count("task_failed") == (expected_terminal == "task_failed")
     if expected_terminal is not None:
-        assert event_types[-2:] == ["response_envelope_created", expected_terminal]
+        assert event_types[-3:] == [
+            "response_envelope_created",
+            expected_terminal,
+            "evaluation_recorded",
+        ]
+        assert event_types.count("evaluation_recorded") == 1
     else:
         assert event_types[-1] == "response_envelope_created"
+        assert event_types.count("evaluation_recorded") == 0
 
 
 def test_real_writer_structured_output_parse_failure_has_one_failed_terminal() -> None:
@@ -248,5 +257,7 @@ def test_real_writer_structured_output_parse_failure_has_one_failed_terminal() -
         "no_capability_found",
         "response_envelope_created",
         "task_failed",
+        "evaluation_recorded",
     ]
+    assert events[-1]["attributes"]["evaluation_result"] == "failed"
     assert task_store.status_updates[-1][1] == "no_capability_found"

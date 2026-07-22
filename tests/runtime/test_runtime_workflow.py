@@ -424,11 +424,13 @@ def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> N
     assert gateway.calls == []
     assert envelope.status == "failed"
     assert task_store.status_updates[-1] == ("failed", "internal_error")
-    assert [step["event_type"] for step in trace.steps[-2:]] == [
+    assert [step["event_type"] for step in trace.steps[-3:]] == [
         "response_envelope_created",
         "task_failed",
+        "evaluation_recorded",
     ]
     assert trace.steps[-1]["error_code"] == "internal_error"
+    assert trace.steps[-1]["attributes"]["evaluation_result"] == "failed"
     assert trace.finalizations[-1] == {
         "status": "failed",
         "capability_id": "oa.workflow.unconfigured",
@@ -711,8 +713,12 @@ def test_runtime_preserves_workflow_terminal_error_without_reporting_completed(
     ] * expected_gateway_calls
     assert task_store.status_updates == [("failed", step_result.error_code)]
     assert "task_completed" not in [step["event_type"] for step in trace.steps]
-    assert trace.steps[-1]["event_type"] == "task_failed"
+    assert [step["event_type"] for step in trace.steps[-2:]] == [
+        "task_failed",
+        "evaluation_recorded",
+    ]
     assert trace.steps[-1]["error_code"] == step_result.error_code
+    assert trace.steps[-1]["attributes"]["evaluation_result"] == "failed"
     assert trace.finalizations[-1]["status"] == "failed"
     assert trace.finalizations[-1]["error_code"] == step_result.error_code
     workflow_events = [

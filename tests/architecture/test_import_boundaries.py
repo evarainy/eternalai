@@ -84,6 +84,11 @@ def _boundary_rules() -> list[BoundaryRule]:
             ),
         ),
         BoundaryRule(
+            name="evaluator_no_infra_runtime_or_trace_imports",
+            source="app.evaluator",
+            forbidden_imports=("app.infra", "app.runtime", "app.ports.trace"),
+        ),
+        BoundaryRule(
             name="gateway_no_runtime",
             source="app.gateway",
             forbidden_imports=("app.runtime",),
