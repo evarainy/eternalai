@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.ports.capability_gateway import RequestOrgContext
+from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.ports.policy_guard import PolicyDecision, PolicyGuardPort
+from app.ports.request_context import RequestOrgContext
 
 
 class MinimalPolicyGuard(PolicyGuardPort):
@@ -24,9 +25,16 @@ class MinimalPolicyGuard(PolicyGuardPort):
                 reason_code="policy_denied",
             )
         if capability_id.startswith("admin_"):
+            if "admin" not in request_context.roles:
+                return PolicyDecision(
+                    decision="deny",
+                    reason_code="role_not_allowed",
+                )
+            if capability_id in ADMIN_LITE_POLICY_CAPABILITY_IDS:
+                return PolicyDecision(decision="allow")
             return PolicyDecision(
                 decision="deny",
-                reason_code="role_not_allowed",
+                reason_code="admin_action_not_allowed",
             )
         if capability_id.endswith("_confirm"):
             return PolicyDecision(

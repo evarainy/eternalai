@@ -183,6 +183,31 @@ def test_record_step_supports_distinct_evaluation_event() -> None:
     assert event.attributes == attributes
 
 
+def test_record_step_supports_admin_action_event() -> None:
+    writer = _CapturingTraceWriter()
+
+    asyncio.run(
+        writer.record_step(
+            "trace-admin",
+            "admin-request:trace-admin",
+            "admin-lite",
+            event_type="admin_action",
+            status="blocked",
+            capability_id="oa.leave.apply",
+            attributes={
+                "action": "get",
+                "authorization_decision": "deny",
+                "role_claim_authenticated": False,
+            },
+        )
+    )
+
+    event = writer.events[0]
+    assert event.event_type == "admin_action"
+    assert event.status == "blocked"
+    assert event.attributes["role_claim_authenticated"] is False
+
+
 def test_record_policy_decision_delegates_policy_checked() -> None:
     writer = _CapturingTraceWriter()
 
@@ -258,8 +283,8 @@ def test_trace_event_extra_field_raises_validation_error() -> None:
 
 
 def test_all_trace_event_type_values_construct_valid_events() -> None:
-    # 19 = prior 18-event contract + B5 terminal evaluation_recorded.
-    assert len(get_args(TraceEventType)) == 19
+    # 20 = prior 19-event contract + B5 Admin Lite action trace.
+    assert len(get_args(TraceEventType)) == 20
     for event_type in get_args(TraceEventType):
         event = TraceEvent(
             trace_id="trace-1",

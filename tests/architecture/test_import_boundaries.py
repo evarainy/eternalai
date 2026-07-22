@@ -89,6 +89,18 @@ def _boundary_rules() -> list[BoundaryRule]:
             forbidden_imports=("app.infra", "app.runtime", "app.ports.trace"),
         ),
         BoundaryRule(
+            name="admin_no_execution_or_infra_dependencies",
+            source="app.admin",
+            forbidden_imports=(
+                "app.infra",
+                "app.runtime",
+                "app.workflow",
+                "app.execution_fabric",
+                "app.ports.adapter",
+                "app.ports.capability_gateway",
+            ),
+        ),
+        BoundaryRule(
             name="gateway_no_runtime",
             source="app.gateway",
             forbidden_imports=("app.runtime",),

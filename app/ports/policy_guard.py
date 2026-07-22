@@ -6,7 +6,7 @@ from typing import Any, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
-from app.ports.capability_gateway import RequestOrgContext
+from app.ports.request_context import RequestOrgContext
 
 PolicyDecisionValue: TypeAlias = Literal["allow", "deny", "confirm"]
 

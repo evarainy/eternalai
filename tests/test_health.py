@@ -18,7 +18,14 @@ def test_health_response_shape() -> None:
 
 
 def test_formal_app_and_factory_register_health_and_runtime_routes() -> None:
-    expected_paths = {"/api/v1/health", "/api/v1/runtime/handle"}
+    expected_paths = {
+        "/api/v1/health",
+        "/api/v1/runtime/handle",
+        "/api/v1/admin/registry",
+        "/api/v1/admin/registry/{capability_id}",
+        "/api/v1/admin/registry/{capability_id}/enable",
+        "/api/v1/admin/registry/{capability_id}/disable",
+    }
 
     assert expected_paths <= set(app.openapi()["paths"])
     assert expected_paths <= set(create_app().openapi()["paths"])

@@ -13,21 +13,25 @@ from app.ports.capability_gateway import RequestOrgContext
 from app.ports.policy_guard import PolicyDecision
 
 
-def _request_context() -> RequestOrgContext:
-    return RequestOrgContext(request_id="policy-test-request")
+def _request_context(*, roles: list[str] | None = None) -> RequestOrgContext:
+    return RequestOrgContext(
+        request_id="policy-test-request",
+        roles=roles or [],
+    )
 
 
 def _decide(
     *,
     capability_id: str,
     arguments: dict[str, Any] | None = None,
+    roles: list[str] | None = None,
 ) -> PolicyDecision:
     return asyncio.run(
         MinimalPolicyGuard().decide(
             ai_user_id="policy-test-user",
             capability_id=capability_id,
             arguments=arguments,  # type: ignore[arg-type]
-            request_context=_request_context(),
+            request_context=_request_context(roles=roles),
         )
     )
 
@@ -47,6 +51,41 @@ def test_admin_capability_denies_role_not_allowed() -> None:
     assert result == PolicyDecision(
         decision="deny",
         reason_code="role_not_allowed",
+    )
+
+
+@pytest.mark.parametrize(
+    "capability_id",
+    [
+        "admin_registry_list",
+        "admin_registry_get",
+        "admin_registry_create",
+        "admin_registry_enable",
+        "admin_registry_disable",
+    ],
+)
+def test_admin_role_allows_only_admin_lite_registry_actions(
+    capability_id: str,
+) -> None:
+    result = _decide(
+        capability_id=capability_id,
+        arguments={},
+        roles=["admin"],
+    )
+
+    assert result == PolicyDecision(decision="allow")
+
+
+def test_admin_role_does_not_unlock_other_admin_capabilities() -> None:
+    result = _decide(
+        capability_id="admin_delete_user",
+        arguments={},
+        roles=["admin"],
+    )
+
+    assert result == PolicyDecision(
+        decision="deny",
+        reason_code="admin_action_not_allowed",
     )
 
 
