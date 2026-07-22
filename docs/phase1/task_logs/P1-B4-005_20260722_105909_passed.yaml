@@ -1,0 +1,208 @@
+schema_version: "1.2.0"
+task_id: P1-B4-005
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: "Q3 correctness: Golden release-gate harness, frozen ID list, exact negative-path assertions."
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: "External monitor recorded Gap Map PASS in the execution thread."
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: "Final acceptance follows exact-candidate Opus PASS and merge-SHA CI."
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B4-005."
+redline_authorization:
+  requested_actions:
+    - "Add exactly GT-020 through GT-024 fixtures."
+    - "Extend FROZEN_GT_IDS and fixture-schema GT_IDS with exactly GT-020 through GT-024."
+  authorized_actions:
+    - "Rain explicitly authorized both actions on 2026-07-22 for P1-B4-005 only."
+  evidence: >
+    GT-011 remains absent; existing 18 fixtures, evaluate_gate, R1-R6, app/, Ports,
+    secrets, DB, system configuration, Git history, and production actions were not authorized.
+started_at: "2026-07-22T10:43:22+09:00"
+completed_at: "2026-07-22T11:09:58+09:00"
+plan_approved_by: "Rain via external monitor delegation"
+plan_approved_at: "2026-07-22T10:43:00+09:00"
+plan_approved_via: "Codex external monitor window"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Golden harness now constructs and injects WorkflowEngine from fixture definitions,
+  supports one same-runtime confirmation recovery, and checks exact per-capability calls.
+  GT-020 through GT-024 cover IO mapping and branch skip, retry exhaustion, Policy deny,
+  Policy confirmation, and version-locked human-gate recovery. All 23 Goldens pass.
+acceptance_criteria_result:
+  - criterion: "Harness executes real Workflow definitions through Runtime and Gateway"
+    result: passed
+    evidence: "Each new fixture requires Workflow TaskStore events plus step trace metadata and per-capability calls."
+  - criterion: "Human-gate uses one same-runtime confirmation round"
+    result: passed
+    evidence: "GT-024 captures first waiting response and zero calls, mutates the source definition, then resumes the same task."
+  - criterion: "Exact Adapter counts include required zero-call paths"
+    result: passed
+    evidence: "GT-021 locks 2/0 calls; GT-020, GT-023, and GT-024 lock explicit zero counts."
+  - criterion: "Five new Golden fixtures cover S-B4.4 without exemptions"
+    result: passed
+    evidence: "Gate summary is 23/23, positive 9/9, negative 14/14, skipped 0, not_applicable 0."
+  - criterion: "Frozen lists and schema tests stay synchronized"
+    result: passed
+    evidence: "FROZEN_GT_IDS and test fixture GT_IDS contain GT-020..024 while GT-011 remains absent."
+  - criterion: "Existing 18 fixtures do not regress"
+    result: passed
+    evidence: "Baseline and expanded gate summaries show GT-001..GT-019 all passed."
+failure_examples_tested:
+  - example: "Workflow fixture passes while no engine ran"
+    result: triggered
+    evidence: "Workflow event sequence, step metadata, and exact nonzero step calls are mandatory."
+  - example: "Retry exhaustion is accepted with one or more calls"
+    result: triggered
+    evidence: "Assertion helper rejects any value other than exactly 2 for the unstable capability and exactly 0 for later."
+  - example: "Policy deny or confirm reaches an Adapter"
+    result: triggered
+    evidence: "GT-022 and GT-023 exact zero-call assertions cover blocked and later capabilities."
+  - example: "Resume reads a drifted current definition instead of the checkpoint snapshot"
+    result: triggered
+    evidence: "GT-024 source changes to 2.0.0 while every resumed Workflow event remains 1.0.0."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "External monitor review"
+    evidence: "PASS with GT-021 inner timeout versus outer failed mapping explicitly preserved."
+  - step: focused_behavior
+    result: passed
+    command: "uv run pytest tests/golden_tasks/ -q"
+    evidence: "228 passed after adding the terminal error-code negative meta-test."
+  - step: deterministic_validation
+    result: passed
+    command: "Ruff, mypy, dependency, architecture, weak-test, non-DB pytest, and Golden gate"
+    evidence: "All task-relevant deterministic gates passed; exact results are listed under tests_run."
+  - step: independent_review
+    result: passed
+    command: "Codex high read-only self-review"
+    evidence: "Initial MEDIUM was fixed; high read-only re-review returned PASS with no findings."
+changed_files:
+  - docs/phase1/task_logs/P1-B4-005_20260722_105909_passed.yaml
+  - docs/phase1/tasks/P1-B4-005.md
+  - scripts/golden_task_assertions.py
+  - scripts/golden_task_evaluator.py
+  - tests/golden_tasks/fixtures/GT-020.json
+  - tests/golden_tasks/fixtures/GT-021.json
+  - tests/golden_tasks/fixtures/GT-022.json
+  - tests/golden_tasks/fixtures/GT-023.json
+  - tests/golden_tasks/fixtures/GT-024.json
+  - tests/golden_tasks/test_fixture_schema.py
+  - tests/golden_tasks/test_runner_assertions.py
+  - tests/golden_tasks/test_runner_cli.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest"
+    result: failed
+    output_snippet: "884 passed, 26 skipped; 3 existing DB tests failed because DATABASE_URL is absent."
+  - command: "uv run pytest --ignore=tests/db -q"
+    result: passed
+    output_snippet: "880 passed, 26 skipped."
+  - command: "uv run pytest tests/golden_tasks/ -q"
+    result: passed
+    output_snippet: "228 passed."
+  - command: "uv run ruff check app/ tests/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run ruff check scripts/golden_task_evaluator.py scripts/golden_task_assertions.py scripts/golden_task_fixture_support.py tests/golden_tasks/"
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 52 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/ -q"
+    result: passed
+    output_snippet: "23 passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23 passed; positive 9/9 and negative 14/14; no exemptions."
+  - command: "uv run python scripts/check_weak_tests.py for each changed Golden test module"
+    result: passed
+    output_snippet: "test_fixture_schema.py, test_runner_assertions.py, and test_runner_cli.py passed."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: "Architecture suite 23 passed; no app/ file changed."
+security_scan_result:
+  result: passed
+  evidence: "Fixtures contain identifiers only; credential and internal-URL forbidden assertions remain active."
+weak_test_scan_result:
+  result: passed
+  evidence: "All three changed Golden test modules passed the repository checker."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this immutable candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B4-005
+  activation_task_id: P1-B4-005
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: independent_review
+  reviewed_by: "Codex high read-only self-review"
+  reviewed_at: "2026-07-22T11:09:58+09:00"
+  notes: >
+    Initial review found missing exact binding of GT-021 terminal error_code. The candidate
+    added workflow terminal error-code assertion plus a negative meta-test; re-review returned
+    PASS with no findings. Opus remains a merge hard prerequisite.
+  provider: codex
+  requested_model: codex-read-only-high
+  observed_models: {}
+  model_verified: false
+  verdict: PASS
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remaining_risks:
+  - "Local full pytest remains DB-environment-limited; no DATABASE_URL or database state was changed."
+  - "Recovery remains intentionally same-process/current-task only; checkpoint TTL and restart durability stay out of scope."
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema, secret,
+  system, or production action. Any rollback requires a separately governed revert.
+local_commit_policy: after_review_pass
+git_commit_sha: "containing candidate commit; exact SHA is recorded by Git and external Opus meta"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""

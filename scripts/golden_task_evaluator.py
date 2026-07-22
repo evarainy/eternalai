@@ -45,6 +45,13 @@ from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.runtime.models import CapabilityRef
+from app.workflow.engine import WorkflowEngine
+from app.workflow.models import (
+    WorkflowCondition,
+    WorkflowDefinition,
+    WorkflowInputRef,
+    WorkflowStep,
+)
 from scripts.golden_task_assertions import judge_assertions
 from scripts.golden_task_fixture_support import FIXTURES_DIR, apply_mock_state, load_fixture
 
@@ -67,6 +74,11 @@ FROZEN_GT_IDS = (
     "GT-017",
     "GT-018",
     "GT-019",
+    "GT-020",
+    "GT-021",
+    "GT-022",
+    "GT-023",
+    "GT-024",
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
@@ -94,10 +106,24 @@ class GoldenTaskResult:
         }
 
 
+@dataclass(frozen=True)
+class FixtureObservation:
+    envelope: ResponseEnvelope
+    trace_steps: list[dict[str, Any]]
+    adapter_calls: dict[str, int]
+    adapter_arguments: dict[str, list[dict[str, Any]]]
+    policy_calls: int
+    workflow_events: list[Any]
+    first_round_envelope: ResponseEnvelope | None = None
+    first_round_adapter_calls: dict[str, int] | None = None
+    source_definition_version_after_first: str | None = None
+
+
 class SpyTaskStore:
     def __init__(self) -> None:
         self.created: list[TaskRecord] = []
         self.status_updates: list[tuple[str, str, str | None]] = []
+        self.events: list[Any] = []
 
     async def create_task(self, record: TaskRecord) -> TaskRecord:
         self.created.append(record)
@@ -124,7 +150,7 @@ class SpyTaskStore:
         )
 
     async def append_event(self, task_id: str, event: Any) -> None:
-        return None
+        self.events.append(event)
 
 
 class ExistingSessionStore:
@@ -421,13 +447,21 @@ class FakePolicyGuard:
         request_context: RequestOrgContext,
     ) -> PolicyDecision:
         self.call_count += 1
+        per_capability = self._fixture_policy.get("by_capability", {})
+        capability_policy = (
+            per_capability.get(capability_id, self._fixture_policy)
+            if isinstance(per_capability, Mapping)
+            else self._fixture_policy
+        )
+        if not isinstance(capability_policy, Mapping):
+            capability_policy = self._fixture_policy
         decision = cast(
             PolicyDecisionValue,
-            self._fixture_policy.get("decision", "allow"),
+            capability_policy.get("decision", "allow"),
         )
         return PolicyDecision(
             decision=decision,
-            reason_code=_optional_str(self._fixture_policy.get("reason_code")),
+            reason_code=_optional_str(capability_policy.get("reason_code")),
             required_action="confirm" if decision == "confirm" else None,
         )
 
@@ -440,23 +474,32 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
     injection_status: Literal["passed", "failed"] = "passed"
     clear_injection()
     try:
-        envelope, trace_steps, adapter_calls, policy_calls = asyncio.run(
-            _run_fixture(fixture)
-        )
+        observation = asyncio.run(_run_fixture(fixture))
         expected_trace = _expected_trace_for_matrix(fixture)
         judgement = judge_assertions(
-            envelope=envelope,
+            envelope=observation.envelope,
             expected_response=fixture["then_response"],
-            trace_steps=trace_steps,
+            trace_steps=observation.trace_steps,
             expected_trace=expected_trace,
             forbidden_items=fixture["then_forbidden"],
             adapter_assertion=fixture["adapter_assertion"],
-            adapter_calls=adapter_calls,
+            adapter_calls=observation.adapter_calls,
+            adapter_arguments=observation.adapter_arguments,
             policy_assertion=cast(
                 Mapping[str, Any] | None,
                 fixture.get("policy_assertion"),
             ),
-            policy_calls=policy_calls,
+            policy_calls=observation.policy_calls,
+            workflow_assertion=cast(
+                Mapping[str, Any] | None,
+                fixture.get("then_workflow"),
+            ),
+            workflow_events=observation.workflow_events,
+            first_round_envelope=observation.first_round_envelope,
+            first_round_adapter_calls=observation.first_round_adapter_calls,
+            source_definition_version_after_first=(
+                observation.source_definition_version_after_first
+            ),
         )
         primary_status = judgement.status
         reasons.extend(judgement.reasons)
@@ -549,13 +592,13 @@ async def _run_injection_companion(fixture: dict[str, Any]) -> RunnerAssertionJu
             duration=_mock_injection_duration(payload.get("duration")),
             error_detail=_serialize_error_detail(payload.get("error_detail")),
         )
-        envelope, trace_steps, adapter_calls, _policy_calls = await _run_fixture(fixture)
+        observation = await _run_fixture(fixture)
         return judge_injection_companion_assertions(
-            envelope=envelope,
-            trace_steps=trace_steps,
+            envelope=observation.envelope,
+            trace_steps=observation.trace_steps,
             expected_error_code=str(injection["expected_error_code"]),
             adapter_assertion=cast(Mapping[str, Any], fixture["adapter_assertion"]),
-            adapter_calls=adapter_calls,
+            adapter_calls=observation.adapter_calls,
             forbidden_items=cast(Iterable[str], fixture["then_forbidden"]),
         )
     finally:
@@ -609,44 +652,98 @@ def build_summary(results: Sequence[GoldenTaskResult]) -> dict[str, Any]:
 
 async def _run_fixture(
     fixture: dict[str, Any],
-) -> tuple[ResponseEnvelope, list[dict[str, Any]], dict[str, int], int]:
+) -> FixtureObservation:
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
-    adapters, adapter_calls, reset_adapters = _build_adapter_spies(given)
+    adapters, adapter_calls, adapter_arguments, reset_adapters = _build_adapter_spies(given)
     trace_port = SpyTracePort()
+    task_store = SpyTaskStore()
     capability_registry = FakeCapabilityRegistry(
         cast(Sequence[dict[str, Any]], given["registered_capabilities"])
     )
     policy_guard = FakePolicyGuard(
         cast(dict[str, Any] | None, given.get("policy_fixture"))
     )
+    gateway = CapabilityGateway(
+        capability_registry=capability_registry,
+        identity_mapping=FakeIdentityMapping(
+            cast(Sequence[dict[str, Any]], given["identity_mappings"])
+        ),
+        policy_guard=policy_guard,
+        trace_port=trace_port,
+        adapters=adapters,
+    )
+    definitions = _build_workflow_definitions(given.get("workflow_definitions", ()))
+    workflow_engine = (
+        WorkflowEngine(
+            definitions=definitions,
+            capability_registry=capability_registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace_port,
+        )
+        if definitions
+        else None
+    )
     runtime = build_runtime(
-        task_store=SpyTaskStore(),
+        task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=capability_registry,
-        gateway=CapabilityGateway(
-            capability_registry=capability_registry,
-            identity_mapping=FakeIdentityMapping(
-                cast(Sequence[dict[str, Any]], given["identity_mappings"])
-            ),
-            policy_guard=policy_guard,
-            trace_port=trace_port,
-            adapters=adapters,
-        ),
+        gateway=gateway,
         trace_port=trace_port,
         llm_provider=MockLLMProvider(),
         structured_output=_structured_output_for_fixture(fixture),
         intent_model="golden-task-intent-model",
+        workflow_engine=workflow_engine,
     )
     try:
+        _apply_fixture_adapter_injections(given)
+        session_id = f"session-{fixture['golden_task_id'].lower()}"
         envelope = await runtime.handle_user_message(
             channel=cast(RequestChannel, when.get("channel", "web")),
             ai_user_id=str(given["ai_user_id"]),
-            session_id=f"session-{fixture['golden_task_id'].lower()}",
+            session_id=session_id,
             message=str(when["message"]),
             client_capabilities={},
         )
-        return envelope, trace_port.steps, adapter_calls(), policy_guard.call_count
+        first_round_envelope: ResponseEnvelope | None = None
+        first_round_adapter_calls: dict[str, int] | None = None
+        source_definition_version_after_first: str | None = None
+        confirmation_message = when.get("confirmation_message")
+        if confirmation_message is not None:
+            first_round_envelope = envelope
+            first_round_adapter_calls = adapter_calls()
+            replacement_raw = given.get("workflow_definition_after_wait")
+            if replacement_raw is not None:
+                replacement = _build_workflow_definition(
+                    cast(Mapping[str, Any], replacement_raw)
+                )
+                definitions[replacement.workflow_id] = replacement
+                source_definition_version_after_first = replacement.version
+            envelope = await runtime.handle_user_message(
+                channel=cast(RequestChannel, when.get("channel", "web")),
+                ai_user_id=str(given["ai_user_id"]),
+                session_id=session_id,
+                message=str(confirmation_message),
+                client_capabilities={},
+            )
+        return FixtureObservation(
+            envelope=envelope,
+            trace_steps=trace_port.steps,
+            adapter_calls=adapter_calls(),
+            adapter_arguments=adapter_arguments(),
+            policy_calls=policy_guard.call_count,
+            workflow_events=[
+                event
+                for event in task_store.events
+                if str(getattr(event, "event_type", "")).startswith("workflow_")
+            ],
+            first_round_envelope=first_round_envelope,
+            first_round_adapter_calls=first_round_adapter_calls,
+            source_definition_version_after_first=(
+                source_definition_version_after_first
+            ),
+        )
     finally:
         reset_adapters()
         clear_injection()
@@ -654,7 +751,12 @@ async def _run_fixture(
 
 def _build_adapter_spies(
     given: dict[str, Any],
-) -> tuple[dict[str, AdapterPort], Callable[[], dict[str, int]], Callable[[], None]]:
+) -> tuple[
+    dict[str, AdapterPort],
+    Callable[[], dict[str, int]],
+    Callable[[], dict[str, list[dict[str, Any]]]],
+    Callable[[], None],
+]:
     oa_adapter = MockOAAdapter()
     u8_adapter = MockU8Adapter()
     ivms_adapter = MockHikvisionIVMSAdapter()
@@ -669,19 +771,119 @@ def _build_adapter_spies(
     }
 
     def adapter_calls() -> dict[str, int]:
-        return {name: spy.call_count for name, spy in spies.items()}
+        counts: dict[str, int] = {}
+        for spy in spies.values():
+            for call in spy.calls:
+                capability_id = str(call["capability_id"])
+                counts[capability_id] = counts.get(capability_id, 0) + 1
+        return counts
+
+    def adapter_arguments() -> dict[str, list[dict[str, Any]]]:
+        arguments: dict[str, list[dict[str, Any]]] = {}
+        for spy in spies.values():
+            for call in spy.calls:
+                capability_id = str(call["capability_id"])
+                arguments.setdefault(capability_id, []).append(
+                    cast(dict[str, Any], call["arguments"])
+                )
+        return arguments
 
     def reset_adapters() -> None:
         oa_adapter.reset_state()
         u8_adapter.reset_state()
         ivms_adapter.reset_state()
 
-    return cast(dict[str, AdapterPort], spies), adapter_calls, reset_adapters
+    return (
+        cast(dict[str, AdapterPort], spies),
+        adapter_calls,
+        adapter_arguments,
+        reset_adapters,
+    )
 
 
 def _apply_state_if_present(given: dict[str, Any], key: str, adapter: Any) -> None:
     if key in given:
         apply_mock_state(adapter, given[key])
+
+
+def _apply_fixture_adapter_injections(given: Mapping[str, Any]) -> None:
+    raw_injections = given.get("adapter_injections", ())
+    if not isinstance(raw_injections, Sequence) or isinstance(
+        raw_injections, (str, bytes)
+    ):
+        raise AssertionError("given.adapter_injections must be a list")
+    for raw in raw_injections:
+        if not isinstance(raw, Mapping):
+            raise AssertionError("each adapter injection must be mapping-like")
+        set_injection(
+            str(raw["capability_id"]),
+            error_mode=_mock_error_mode(raw.get("error_mode")),
+            duration=_mock_injection_duration(raw.get("duration")),
+            error_detail=_serialize_error_detail(raw.get("error_detail")),
+        )
+
+
+def _build_workflow_definitions(raw_definitions: Any) -> dict[str, WorkflowDefinition]:
+    if not isinstance(raw_definitions, Sequence) or isinstance(
+        raw_definitions, (str, bytes)
+    ):
+        raise AssertionError("given.workflow_definitions must be a list")
+    definitions = [_build_workflow_definition(raw) for raw in raw_definitions]
+    return {definition.workflow_id: definition for definition in definitions}
+
+
+def _build_workflow_definition(raw: Mapping[str, Any]) -> WorkflowDefinition:
+    raw_steps = raw.get("steps")
+    if not isinstance(raw_steps, Sequence) or isinstance(raw_steps, (str, bytes)):
+        raise AssertionError("workflow definition steps must be a list")
+    return WorkflowDefinition(
+        workflow_id=str(raw["workflow_id"]),
+        version=str(raw["version"]),
+        steps=tuple(_build_workflow_step(step) for step in raw_steps),
+    )
+
+
+def _build_workflow_step(raw: Any) -> WorkflowStep:
+    if not isinstance(raw, Mapping):
+        raise AssertionError("workflow step must be mapping-like")
+    raw_input_mapping = raw.get("input_mapping", {})
+    if not isinstance(raw_input_mapping, Mapping):
+        raise AssertionError("workflow step input_mapping must be mapping-like")
+    raw_when = raw.get("when")
+    when: WorkflowCondition | None = None
+    if raw_when is not None:
+        if not isinstance(raw_when, Mapping) or not isinstance(
+            raw_when.get("value"), Mapping
+        ):
+            raise AssertionError("workflow step when must contain a value reference")
+        when = WorkflowCondition(
+            value=_build_workflow_input_ref(cast(Mapping[str, Any], raw_when["value"])),
+            equals=raw_when.get("equals"),
+        )
+    static_arguments = raw.get("static_arguments", {})
+    if not isinstance(static_arguments, Mapping):
+        raise AssertionError("workflow step static_arguments must be mapping-like")
+    return WorkflowStep(
+        step_id=str(raw["step_id"]),
+        capability_id=str(raw["capability_id"]),
+        confirmed_capability_id=_optional_str(raw.get("confirmed_capability_id")),
+        static_arguments=dict(static_arguments),
+        input_mapping={
+            str(argument_name): _build_workflow_input_ref(value_ref)
+            for argument_name, value_ref in raw_input_mapping.items()
+        },
+        when=when,
+    )
+
+
+def _build_workflow_input_ref(raw: Any) -> WorkflowInputRef:
+    if not isinstance(raw, Mapping):
+        raise AssertionError("workflow input reference must be mapping-like")
+    return WorkflowInputRef(
+        source=cast(Any, raw["source"]),
+        key=str(raw["key"]),
+        step_id=_optional_str(raw.get("step_id")),
+    )
 
 
 def _structured_output_for_fixture(fixture: dict[str, Any]) -> MockStructuredOutputProvider:
@@ -839,7 +1041,7 @@ def _build_capability_spec(raw: dict[str, Any]) -> CapabilitySpec:
         ),
         risk_level=cast(CapabilityRiskLevel, raw.get("risk_level", "low")),
         owner="golden_tasks",
-        version="0.0.0",
+        version=str(raw.get("version", "0.0.0")),
         status=cast(CapabilityStatus, raw.get("status", "active")),
         short_description=str(raw.get("short_description", capability_id)),
         target_system=cast(

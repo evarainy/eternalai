@@ -29,6 +29,11 @@ GT_IDS = [
     "GT-017",
     "GT-018",
     "GT-019",
+    "GT-020",
+    "GT-021",
+    "GT-022",
+    "GT-023",
+    "GT-024",
 ]
 REQUIRED_TOP_LEVEL = [
     "golden_task_id",
@@ -201,3 +206,99 @@ def test_positive_fixtures_with_adapter_calls_have_failure_injection(gt_id: str)
     fixture = load_fixture(gt_id)
     if fixture["adapter_assertion"].get("must_be_called"):
         assert fixture["mock_failure_injection"]["enabled"] is True
+
+
+@pytest.mark.parametrize("gt_id", ["GT-020", "GT-021", "GT-022", "GT-023", "GT-024"])
+def test_b4_workflow_fixtures_bind_definition_trace_and_exact_calls(gt_id: str) -> None:
+    fixture = load_fixture(gt_id)
+    definitions = fixture["given"]["workflow_definitions"]
+    workflow_capabilities = [
+        capability
+        for capability in fixture["given"]["registered_capabilities"]
+        if capability["type"] == "workflow"
+    ]
+
+    assert len(definitions) == 1
+    assert len(workflow_capabilities) == 1
+    assert definitions[0]["workflow_id"] == workflow_capabilities[0]["capability_id"]
+    assert definitions[0]["version"] == workflow_capabilities[0]["version"]
+    assert definitions[0]["steps"]
+    assert fixture["then_trace"]["event_details"]
+    assert fixture["then_workflow"]["event_sequence"][0] == "workflow_started"
+    assert "workflow_step_finished" in fixture["then_workflow"]["event_sequence"]
+    assert fixture["then_workflow"]["workflow_version"] == definitions[0]["version"]
+    assert fixture["adapter_assertion"]["exact_calls"]
+
+
+def test_gt_020_locks_io_mapping_and_unselected_branch_zero_calls() -> None:
+    fixture = load_fixture("GT-020")
+    steps = fixture["given"]["workflow_definitions"][0]["steps"]
+    mapped_step = steps[1]
+    skipped_step = steps[2]
+
+    assert mapped_step["input_mapping"]["account_set_id"] == {
+        "source": "step_output",
+        "step_id": "lookup_document",
+        "key": "account_set_id",
+    }
+    assert skipped_step["when"]["value"]["source"] == "step_output"
+    assert fixture["adapter_assertion"]["exact_calls"] == {
+        "u8.b4.document.lookup": 1,
+        "u8.b4.vendor.balance": 1,
+        "u8.b4.branch.never": 0,
+    }
+
+
+def test_gt_021_locks_retry_exhaustion_without_later_step_or_completion() -> None:
+    fixture = load_fixture("GT-021")
+
+    assert fixture["then_response"]["status"] == "failed"
+    assert fixture["then_trace"]["reason"] == "adapter_timeout"
+    assert "task_completed" not in fixture["then_trace"]["event_sequence"]
+    assert fixture["then_workflow"]["terminal_status"] == "timeout"
+    assert fixture["then_workflow"]["terminal_error_code"] == "adapter_timeout"
+    assert fixture["adapter_assertion"]["exact_calls"] == {
+        "oa.b4.timeout.unstable": 2,
+        "oa.b4.timeout.later": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("gt_id", "zero_capabilities"),
+    (
+        (
+            "GT-023",
+            {
+                "oa.b4.policy.confirm",
+                "oa.b4.policy.confirmed",
+                "oa.b4.policy.confirm_later",
+            },
+        ),
+        ("GT-024", {"oa.b4.human_gate"}),
+    ),
+)
+def test_b4_confirm_fixtures_keep_required_zero_call_assertions(
+    gt_id: str,
+    zero_capabilities: set[str],
+) -> None:
+    exact_calls = load_fixture(gt_id)["adapter_assertion"]["exact_calls"]
+
+    assert {capability_id for capability_id, count in exact_calls.items() if count == 0} >= (
+        zero_capabilities
+    )
+
+
+def test_gt_024_is_one_confirmation_round_with_definition_drift_trap() -> None:
+    fixture = load_fixture("GT-024")
+    original = fixture["given"]["workflow_definitions"][0]
+    replacement = fixture["given"]["workflow_definition_after_wait"]
+    evidence = fixture["then_workflow"]
+
+    assert fixture["when"]["confirmation_message"] == "确认"
+    assert replacement["workflow_id"] == original["workflow_id"]
+    assert replacement["version"] == "2.0.0"
+    assert replacement["version"] != original["version"]
+    assert evidence["workflow_version"] == "1.0.0"
+    assert evidence["source_definition_version_after_first"] == "2.0.0"
+    assert evidence["first_round"]["response"]["status"] == "waiting_user"
+    assert all(count == 0 for count in evidence["first_round"]["exact_calls"].values())

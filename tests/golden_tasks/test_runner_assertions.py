@@ -17,7 +17,11 @@ if TYPE_CHECKING:
     assert_policy_calls: Callable[[Mapping[str, Any], int], None]
     assert_response_matches: Callable[[Any, Mapping[str, Any]], None]
     assert_terminal_state_matrix: Callable[[Iterable[Any], str | None], None]
+    assert_trace_event_details: Callable[
+        [Iterable[Any], Iterable[Mapping[str, Any]]], None
+    ]
     assert_trace_sequence_contains: Callable[[Iterable[Any], Iterable[str]], None]
+    assert_workflow_evidence: Callable[..., None]
 else:
     from scripts.golden_task_assertions import (
         assert_adapter_calls,
@@ -25,7 +29,9 @@ else:
         assert_policy_calls,
         assert_response_matches,
         assert_terminal_state_matrix,
+        assert_trace_event_details,
         assert_trace_sequence_contains,
+        assert_workflow_evidence,
     )
 
 
@@ -175,6 +181,157 @@ def test_adapter_assertion_accepts_required_call_count() -> None:
     )
 
     assert sum(adapter_calls.values()) == 1
+
+
+def test_adapter_assertion_requires_exact_per_capability_counts_and_arguments() -> None:
+    calls = {"oa.unstable": 2, "oa.later": 0}
+    arguments = {"oa.unstable": [{"attempt": 1}, {"attempt": 2}]}
+
+    assert_adapter_calls(
+        {
+            "must_be_called": True,
+            "must_not_be_called": False,
+            "exact_calls": {"oa.unstable": 2, "oa.later": 0},
+            "exact_arguments": {
+                "oa.unstable": [{"attempt": 1}, {"attempt": 2}]
+            },
+        },
+        calls,
+        arguments,
+    )
+
+    with pytest.raises(AssertionError, match="expected exactly 2 calls, got 1"):
+        assert_adapter_calls(
+            {"exact_calls": {"oa.unstable": 2}},
+            {"oa.unstable": 1},
+        )
+    with pytest.raises(AssertionError, match="expected exactly 0 calls, got 1"):
+        assert_adapter_calls(
+            {"exact_calls": {"oa.later": 0}},
+            {"oa.later": 1},
+        )
+
+
+def test_trace_event_details_require_workflow_step_metadata() -> None:
+    trace = [
+        {"event_type": "capability_selected", "capability_id": "workflow.b4"},
+        {
+            "event_type": "capability_selected",
+            "capability_id": "oa.step",
+            "attributes": {
+                "workflow_id": "workflow.b4",
+                "workflow_version": "1.0.0",
+                "step_id": "step-1",
+            },
+        },
+    ]
+    expected = [
+        {
+            "event_type": "capability_selected",
+            "capability_id": "oa.step",
+            "attributes": {
+                "workflow_id": "workflow.b4",
+                "workflow_version": "1.0.0",
+                "step_id": "step-1",
+            },
+        }
+    ]
+
+    assert_trace_event_details(trace, expected)
+
+    expected[0]["attributes"]["workflow_version"] = "2.0.0"
+    with pytest.raises(AssertionError, match="trace missing expected event details"):
+        assert_trace_event_details(trace, expected)
+
+
+def test_workflow_evidence_locks_first_round_and_snapshot_version() -> None:
+    workflow_events = [
+        {
+            "event_type": "workflow_started",
+            "payload": {"workflow_version": "1.0.0"},
+        },
+        {
+            "event_type": "workflow_step_finished",
+            "payload": {
+                "workflow_version": "1.0.0",
+                "step_status": "waiting_confirm",
+            },
+        },
+        {
+            "event_type": "workflow_waiting_confirm",
+            "payload": {"workflow_version": "1.0.0"},
+        },
+    ]
+    expected = {
+        "event_sequence": [
+            "workflow_started",
+            "workflow_step_finished",
+            "workflow_waiting_confirm",
+        ],
+        "workflow_version": "1.0.0",
+        "step_statuses": ["waiting_confirm"],
+        "first_round": {
+            "response": {"status": "waiting_user"},
+            "exact_calls": {"oa.waiting": 0},
+        },
+        "source_definition_version_after_first": "2.0.0",
+    }
+
+    assert_workflow_evidence(
+        workflow_events,
+        expected,
+        {"status": "waiting_user", "ui": {}},
+        {},
+        "2.0.0",
+    )
+
+    with pytest.raises(AssertionError, match="workflow event versions"):
+        assert_workflow_evidence(
+            workflow_events,
+            {**expected, "workflow_version": "2.0.0"},
+            {"status": "waiting_user", "ui": {}},
+            {},
+            "2.0.0",
+        )
+
+
+def test_workflow_evidence_requires_exact_terminal_error_code() -> None:
+    workflow_events = [
+        {
+            "event_type": "workflow_started",
+            "payload": {"workflow_version": "1.0.0"},
+        },
+        {
+            "event_type": "workflow_step_finished",
+            "payload": {
+                "workflow_version": "1.0.0",
+                "step_status": "timeout",
+                "error_code": "adapter_timeout",
+            },
+        },
+        {
+            "event_type": "workflow_failed",
+            "payload": {
+                "workflow_version": "1.0.0",
+                "workflow_status": "timeout",
+                "error_code": "adapter_http_500",
+            },
+        },
+    ]
+    expected = {
+        "event_sequence": [
+            "workflow_started",
+            "workflow_step_finished",
+            "workflow_failed",
+        ],
+        "workflow_version": "1.0.0",
+        "step_statuses": ["timeout"],
+        "terminal_status": "timeout",
+        "terminal_error_code": "adapter_timeout",
+    }
+
+    with pytest.raises(AssertionError, match="terminal error_code expected"):
+        assert_workflow_evidence(workflow_events, expected)
 
 
 def test_policy_assertion_accepts_zero_calls_for_identity_short_circuit() -> None:

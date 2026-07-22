@@ -1,0 +1,233 @@
+{
+  "golden_task_id": "GT-024",
+  "title": "Workflow human_gate 同实例确认恢复并锁定版本",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_employee_024",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "oa",
+        "binding_id": "bind_oa_024",
+        "status": "active",
+        "binding_scope": "default"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.workflow.b4_human_gate",
+        "target_system": "oa",
+        "type": "workflow",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": false,
+        "version": "1.0.0"
+      },
+      {
+        "capability_id": "oa.b4.human_gate",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": false
+      },
+      {
+        "capability_id": "oa.b4.human_gate.confirmed",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": false
+      },
+      {
+        "capability_id": "oa.b4.resume_audit",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": false
+      }
+    ],
+    "workflow_definitions": [
+      {
+        "workflow_id": "oa.workflow.b4_human_gate",
+        "version": "1.0.0",
+        "steps": [
+          {
+            "step_id": "human_gate",
+            "capability_id": "oa.b4.human_gate",
+            "confirmed_capability_id": "oa.b4.human_gate.confirmed",
+            "input_mapping": {
+              "requester": {
+                "source": "workflow_input",
+                "key": "requester"
+              }
+            }
+          },
+          {
+            "step_id": "resume_audit",
+            "capability_id": "oa.b4.resume_audit",
+            "input_mapping": {
+              "workflow_id": {
+                "source": "step_output",
+                "step_id": "human_gate",
+                "key": "workflow_id"
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "workflow_definition_after_wait": {
+      "workflow_id": "oa.workflow.b4_human_gate",
+      "version": "2.0.0",
+      "steps": [
+        {
+          "step_id": "drifted",
+          "capability_id": "oa.b4.resume_audit"
+        }
+      ]
+    },
+    "policy_fixture": {
+      "decision": "allow",
+      "by_capability": {
+        "oa.b4.human_gate": {
+          "decision": "confirm",
+          "reason_code": "approval_required"
+        }
+      }
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "执行 B4 human gate 工作流",
+    "arguments": {
+      "requester": "employee_024"
+    },
+    "confirmation_message": "确认"
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "data.workflow_id": "wf-mock-001",
+      "ui.component_type": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "capability_selected",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "confirm_required",
+      "response_envelope_created",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "adapter_called",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "adapter_called",
+      "response_envelope_created",
+      "task_completed"
+    ],
+    "event_details": [
+      {
+        "event_type": "capability_selected",
+        "capability_id": "oa.b4.human_gate",
+        "attributes": {
+          "workflow_id": "oa.workflow.b4_human_gate",
+          "workflow_version": "1.0.0",
+          "step_id": "human_gate",
+          "step_status": "running"
+        }
+      },
+      {
+        "event_type": "capability_selected",
+        "capability_id": "oa.b4.human_gate.confirmed",
+        "attributes": {
+          "workflow_id": "oa.workflow.b4_human_gate",
+          "workflow_version": "1.0.0",
+          "step_id": "human_gate",
+          "step_status": "running"
+        }
+      },
+      {
+        "event_type": "capability_selected",
+        "capability_id": "oa.b4.resume_audit",
+        "attributes": {
+          "workflow_id": "oa.workflow.b4_human_gate",
+          "workflow_version": "1.0.0",
+          "step_id": "resume_audit",
+          "step_status": "running"
+        }
+      }
+    ]
+  },
+  "then_workflow": {
+    "event_sequence": [
+      "workflow_started",
+      "workflow_step_finished",
+      "workflow_waiting_confirm",
+      "workflow_resumed",
+      "workflow_step_finished",
+      "workflow_step_finished",
+      "workflow_completed"
+    ],
+    "workflow_version": "1.0.0",
+    "step_statuses": [
+      "waiting_confirm",
+      "completed",
+      "completed"
+    ],
+    "terminal_status": "completed",
+    "source_definition_version_after_first": "2.0.0",
+    "first_round": {
+      "response": {
+        "status": "waiting_user",
+        "envelope": {
+          "ui.component_type": "confirm_card",
+          "ui.action": "confirm"
+        }
+      },
+      "exact_calls": {
+        "oa.b4.human_gate": 0,
+        "oa.b4.human_gate.confirmed": 0,
+        "oa.b4.resume_audit": 0
+      }
+    }
+  },
+  "then_forbidden": [
+    "trace_contains_token",
+    "response_contains_internal_url"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false,
+    "exact_calls": {
+      "oa.b4.human_gate": 0,
+      "oa.b4.human_gate.confirmed": 1,
+      "oa.b4.resume_audit": 1
+    },
+    "exact_arguments": {
+      "oa.b4.human_gate.confirmed": [
+        {
+          "requester": "employee_024"
+        }
+      ],
+      "oa.b4.resume_audit": [
+        {
+          "workflow_id": "wf-mock-001"
+        }
+      ]
+    }
+  }
+}
