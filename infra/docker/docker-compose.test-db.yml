@@ -1,0 +1,22 @@
+name: eternalai_test_db
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18
+    environment:
+      POSTGRES_USER: eternalai
+      POSTGRES_PASSWORD: change_me_test
+      POSTGRES_DB: eternalai_test
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - eternalai_test_db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eternalai -d eternalai_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  eternalai_test_db_data:
+    name: eternalai_test_db_data
