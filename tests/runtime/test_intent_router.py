@@ -301,13 +301,15 @@ def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None
     credential_value = "synthetic-router-credential"
     private_address = "https://192.168.1.8/internal"
     quoted_credential = "synthetic spaced router credential"
+    quoted_bearer = "synthetic spaced bearer credential"
 
     asyncio.run(
         router.parse(
             "request",
             knowledge_items=(
                 f"authorization={credential_value} endpoint={private_address} "
-                f"password=\"{quoted_credential}\"",
+                f"password=\"{quoted_credential}\" "
+                f"Bearer \"{quoted_bearer}\"",
             ),
         )
     )
@@ -316,4 +318,5 @@ def test_router_sanitizes_knowledge_again_at_the_final_prompt_boundary() -> None
     assert credential_value not in prompt
     assert private_address not in prompt
     assert quoted_credential not in prompt
-    assert prompt.count("[REDACTED]") == 3
+    assert quoted_bearer not in prompt
+    assert prompt.count("[REDACTED]") == 4

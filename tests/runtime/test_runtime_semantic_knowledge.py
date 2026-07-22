@@ -180,11 +180,12 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
     private_address = "https://172.16.10.20/internal"
     personal_name = "李四"
     owner_marker = "synthetic-real-owner"
+    quoted_bearer = "synthetic runtime bearer value"
     capability = _capability(
         "oa.safe.query",
         description=(
             f"{credential_key}:{credential_value} address={private_address} "
-            f"负责人:{personal_name}"
+            f"负责人:{personal_name} Bearer \"{quoted_bearer}\""
         ),
         owner=owner_marker,
     )
@@ -207,6 +208,7 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
         private_address,
         personal_name,
         owner_marker,
+        quoted_bearer,
     ):
         assert sensitive not in serialized
     assert "[REDACTED]" in serialized

@@ -18,7 +18,10 @@ _REDACTED = "[REDACTED]"
 _MAX_GUIDANCE_CAPABILITIES = 5
 _MAX_GUIDANCE_DESCRIPTION_LENGTH = 80
 _SENSITIVE_PATTERNS = (
-    re.compile(r"bearer\s+\S+", re.IGNORECASE),
+    re.compile(
+        r"bearer\s+(?:\"[^\"\r\n]*(?:\"|$)|'[^'\r\n]*(?:'|$)|\S+)",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
         r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"

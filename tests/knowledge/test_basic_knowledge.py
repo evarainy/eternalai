@@ -77,11 +77,13 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
     personal_name = "张三"
     owner_marker = "synthetic-owner-marker"
     quoted_credential = "synthetic alpha beta marker"
+    quoted_bearer = "synthetic bearer alpha beta marker"
     capability = _capability(
         "oa.safe.query",
         description=(
             f"{credential_key}={credential_value} endpoint={private_address} "
-            f"联系人:{personal_name} password=\"{quoted_credential}\""
+            f"联系人:{personal_name} password=\"{quoted_credential}\" "
+            f"Bearer \"{quoted_bearer}\""
         ),
         owner=owner_marker,
     )
@@ -95,9 +97,10 @@ def test_registry_sensitive_values_are_removed_before_knowledge_exists() -> None
         personal_name,
         owner_marker,
         quoted_credential,
+        quoted_bearer,
     ):
         assert sensitive not in serialized
-    assert serialized.count("[REDACTED]") >= 4
+    assert serialized.count("[REDACTED]") >= 5
 
 
 def test_no_capability_guidance_filters_to_active_registry_entries() -> None:
