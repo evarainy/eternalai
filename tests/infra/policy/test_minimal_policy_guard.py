@@ -79,9 +79,12 @@ def test_admin_capability_denies_role_not_allowed() -> None:
         "admin_registry_create",
         "admin_registry_enable",
         "admin_registry_disable",
+        "admin_tasks_list",
+        "admin_task_events_list",
+        "admin_bindings_list",
     ],
 )
-def test_admin_role_allows_only_admin_lite_registry_actions(
+def test_admin_role_allows_only_closed_admin_lite_actions(
     capability_id: str,
 ) -> None:
     result = _decide(

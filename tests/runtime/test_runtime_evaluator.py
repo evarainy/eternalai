@@ -25,7 +25,7 @@ from app.ports.capability_gateway import (
 )
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ResponseEnvelope
-from app.ports.task_store import SessionRecord, TaskRecord
+from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
@@ -59,6 +59,17 @@ class TaskStore:
 
     async def append_event(self, task_id: str, event: Any) -> None:
         return None
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class SessionStore:

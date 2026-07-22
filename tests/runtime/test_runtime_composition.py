@@ -16,7 +16,7 @@ from app.main import create_app
 from app.memory import SessionMemory
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
-from app.ports.task_store import SessionRecord, TaskRecord
+from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
@@ -41,6 +41,17 @@ class RecordingTaskStore:
 
     async def append_event(self, task_id: str, event: Any) -> None:
         return None
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class RecordingSessionStore:

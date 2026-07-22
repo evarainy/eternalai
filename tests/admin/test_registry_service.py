@@ -15,8 +15,10 @@ from app.admin.registry import (
     AdminRequestContext,
 )
 from app.composition import build_admin_registry_service
+from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
 
 
@@ -68,6 +70,36 @@ class RecordingTrace:
         self.events.append(event)
 
 
+class EmptyTaskStore:
+    async def create_task(self, record: TaskRecord) -> TaskRecord:
+        return record
+
+    async def get_task(self, task_id: str) -> TaskRecord | None:
+        return None
+
+    async def update_status(
+        self,
+        task_id: str,
+        status: str,
+        error_code: str | None = None,
+    ) -> TaskRecord:
+        raise AssertionError("Registry tests must not update Tasks")
+
+    async def append_event(self, task_id: str, event: TaskEventRecord) -> None:
+        raise AssertionError("Registry tests must not append Task events")
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
+
+
 def _capability(
     capability_id: str = "oa.leave.apply",
     *,
@@ -115,6 +147,8 @@ def _service(
 ) -> AdminRegistryService:
     return AdminRegistryService(
         capability_registry=registry,
+        task_store=EmptyTaskStore(),
+        identity_mapping=MockIdentityMapping(rows=[]),
         policy_guard=MinimalPolicyGuard(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),
@@ -127,6 +161,8 @@ def test_management_builder_injects_the_closed_admin_action_allowlist() -> None:
     trace = RecordingTrace()
     service = build_admin_registry_service(
         capability_registry=registry,
+        task_store=EmptyTaskStore(),
+        identity_mapping=MockIdentityMapping(rows=[]),
         trace_port=trace,
     )
 

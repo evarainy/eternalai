@@ -13,7 +13,7 @@ from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.llm_provider import LLMCompletionResponse, LLMMessage
 from app.ports.structured_output import StructuredOutputResult
-from app.ports.task_store import SessionRecord, TaskRecord
+from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
@@ -43,6 +43,17 @@ class RecordingTaskStore:
 
     async def append_event(self, task_id: str, event: Any) -> None:
         return None
+
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
 
 
 class InMemorySessionStore:

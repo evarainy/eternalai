@@ -9,7 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.admin.actions import (
     ADMIN_POLICY_CAPABILITY_BY_ACTION,
-    AdminRegistryAction,
+    AdminAction,
+)
+from app.admin.evidence import (
+    AdminBindingView,
+    AdminTaskEventView,
+    AdminTaskView,
 )
 from app.ports.capability_registry import (
     CapabilityExecutionIdentity,
@@ -20,7 +25,9 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.identity_mapping import IdentityMappingPort, TargetSystem
 from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyGuardPort
+from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskStorePort
 from app.ports.trace import TraceEvent, TraceEventStatus, TracePort
 
 
@@ -117,6 +124,14 @@ class AdminInvalidStatusTransitionError(RuntimeError):
     """Raised when a deprecated capability is asked to re-enter service."""
 
 
+class AdminTaskFilterRequiredError(RuntimeError):
+    """Raised after authorization when no bounded Task filter was supplied."""
+
+
+class AdminTaskNotFoundError(RuntimeError):
+    """Raised only after an authorized Task evidence lookup misses."""
+
+
 class AdminRegistryService:
     """Role-guarded Registry actions with no execution-surface dependency."""
 
@@ -124,10 +139,14 @@ class AdminRegistryService:
         self,
         *,
         capability_registry: CapabilityRegistryPort,
+        task_store: TaskStorePort,
+        identity_mapping: IdentityMappingPort,
         policy_guard: PolicyGuardPort,
         trace_port: TracePort,
     ) -> None:
         self._capability_registry = capability_registry
+        self._task_store = task_store
+        self._identity_mapping = identity_mapping
         self._policy_guard = policy_guard
         self._trace_port = trace_port
 
@@ -221,9 +240,103 @@ class AdminRegistryService:
         await self._record_transition("disable", current, disabled, context)
         return disabled
 
+    async def list_tasks(
+        self,
+        context: AdminRequestContext,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[AdminTaskView]:
+        await self._authorize("tasks_list", context)
+        if session_id is None and ai_user_id is None:
+            await self._record(
+                action="tasks_list",
+                context=context,
+                status="failed",
+                decision="allow",
+                attributes={"reason_code": "task_filter_required"},
+            )
+            raise AdminTaskFilterRequiredError("session_id or ai_user_id is required")
+        tasks = await self._task_store.list_tasks(
+            session_id=session_id,
+            ai_user_id=ai_user_id,
+        )
+        views = [
+            AdminTaskView.from_record(task)
+            for task in tasks[:TASK_STORE_QUERY_LIMIT]
+        ]
+        await self._record(
+            action="tasks_list",
+            context=context,
+            status="ok",
+            decision="allow",
+            attributes={"result_count": len(views)},
+        )
+        return views
+
+    async def list_task_events(
+        self,
+        task_id: str,
+        context: AdminRequestContext,
+    ) -> list[AdminTaskEventView]:
+        await self._authorize("task_events_list", context)
+        if await self._task_store.get_task(task_id) is None:
+            await self._record(
+                action="task_events_list",
+                context=context,
+                status="failed",
+                decision="allow",
+                attributes={"reason_code": "task_not_found"},
+            )
+            raise AdminTaskNotFoundError(task_id)
+        events = await self._task_store.list_events(task_id)
+        views = [
+            AdminTaskEventView.from_record(event)
+            for event in events[:TASK_STORE_QUERY_LIMIT]
+        ]
+        await self._record(
+            action="task_events_list",
+            context=context,
+            status="ok",
+            decision="allow",
+            attributes={"result_count": len(views)},
+        )
+        return views
+
+    async def list_bindings(
+        self,
+        ai_user_id: str,
+        context: AdminRequestContext,
+        *,
+        target_system: TargetSystem | None = None,
+        binding_scope: str | None = None,
+        account_set_id: str | None = None,
+        device_domain_id: str | None = None,
+    ) -> list[AdminBindingView]:
+        await self._authorize("bindings_list", context)
+        mappings = await self._identity_mapping.list_mappings(
+            ai_user_id,
+            target_system=target_system,
+            binding_scope=binding_scope,
+            account_set_id=account_set_id,
+            device_domain_id=device_domain_id,
+        )
+        views = [
+            AdminBindingView.from_result(mapping)
+            for mapping in mappings[:TASK_STORE_QUERY_LIMIT]
+        ]
+        await self._record(
+            action="bindings_list",
+            context=context,
+            status="ok",
+            decision="allow",
+            attributes={"result_count": len(views)},
+        )
+        return views
+
     async def _authorize(
         self,
-        action: AdminRegistryAction,
+        action: AdminAction,
         context: AdminRequestContext,
         *,
         capability_id: str | None = None,
@@ -251,7 +364,7 @@ class AdminRegistryService:
 
     async def _get_for_transition(
         self,
-        action: AdminRegistryAction,
+        action: AdminAction,
         capability_id: str,
         context: AdminRequestContext,
     ) -> CapabilitySpec:
@@ -263,7 +376,7 @@ class AdminRegistryService:
 
     async def _record_not_found(
         self,
-        action: AdminRegistryAction,
+        action: AdminAction,
         capability_id: str,
         context: AdminRequestContext,
     ) -> None:
@@ -278,7 +391,7 @@ class AdminRegistryService:
 
     async def _record_invalid_transition(
         self,
-        action: AdminRegistryAction,
+        action: AdminAction,
         capability: CapabilitySpec,
         context: AdminRequestContext,
     ) -> None:
@@ -297,7 +410,7 @@ class AdminRegistryService:
 
     async def _record_transition(
         self,
-        action: AdminRegistryAction,
+        action: AdminAction,
         before: CapabilitySpec,
         after: CapabilitySpec,
         context: AdminRequestContext,
@@ -317,7 +430,7 @@ class AdminRegistryService:
     async def _record(
         self,
         *,
-        action: AdminRegistryAction,
+        action: AdminAction,
         context: AdminRequestContext,
         status: TraceEventStatus,
         decision: str,
@@ -353,4 +466,6 @@ __all__ = (
     "AdminRegistryService",
     "AdminRequestContext",
     "AdminRoleNotAllowedError",
+    "AdminTaskFilterRequiredError",
+    "AdminTaskNotFoundError",
 )

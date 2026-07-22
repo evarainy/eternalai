@@ -53,6 +53,17 @@ class RecordingTaskStore:
     async def append_event(self, task_id: str, event: TaskEventRecord) -> None:
         self.events.append((task_id, event))
 
+    async def list_tasks(
+        self,
+        *,
+        session_id: str | None = None,
+        ai_user_id: str | None = None,
+    ) -> list[TaskRecord]:
+        return []
+
+    async def list_events(self, task_id: str) -> list[TaskEventRecord]:
+        return []
+
 
 class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:

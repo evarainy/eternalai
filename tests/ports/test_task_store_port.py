@@ -10,6 +10,7 @@ from typing import Any, get_args, get_type_hints
 from pydantic import ValidationError
 
 from app.ports.task_store import (
+    TASK_STORE_QUERY_LIMIT,
     SessionRecord,
     SessionStorePort,
     TaskEventRecord,
@@ -129,6 +130,30 @@ class TestTaskStorePortProtocol:
         assert hints["event"] is TaskEventRecord
         assert hints["return"] is type(None)
         assert inspect.iscoroutinefunction(TaskStorePort.append_event)
+
+    def test_list_tasks_signature_requires_bounded_filters(self) -> None:
+        hints = get_type_hints(TaskStorePort.list_tasks)
+        signature = inspect.signature(TaskStorePort.list_tasks)
+
+        assert list(signature.parameters) == ["self", "session_id", "ai_user_id"]
+        assert signature.parameters["session_id"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert signature.parameters["ai_user_id"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert signature.parameters["session_id"].default is None
+        assert signature.parameters["ai_user_id"].default is None
+        assert hints["session_id"] == str | None
+        assert hints["ai_user_id"] == str | None
+        assert hints["return"] == list[TaskRecord]
+        assert inspect.iscoroutinefunction(TaskStorePort.list_tasks)
+
+    def test_list_events_signature_is_bounded_by_contract_constant(self) -> None:
+        hints = get_type_hints(TaskStorePort.list_events)
+        signature = inspect.signature(TaskStorePort.list_events)
+
+        assert list(signature.parameters) == ["self", "task_id"]
+        assert hints["task_id"] is str
+        assert hints["return"] == list[TaskEventRecord]
+        assert inspect.iscoroutinefunction(TaskStorePort.list_events)
+        assert TASK_STORE_QUERY_LIMIT == 100
 
 
 class TestSessionStorePortProtocol:

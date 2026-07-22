@@ -1,0 +1,323 @@
+schema_version: "1.2.0"
+task_id: P1-B5-004b
+task_type: implementation
+result: passed
+method_profile:
+  risk_tier: high
+  method: mixed
+controller_risk:
+  tier: R2
+  classification_reason: >
+    Q3 correctness: this task opens a role-guarded data surface over arbitrary
+    users' Task and Binding state. An authorization-order, payload-shape, or query
+    bound mistake could silently disclose internal or credential-bearing data.
+  prior_tier: R2
+  downgrade_attempted: false
+automation:
+  class: auto
+  authorization_mode: bounded_goal_preapproval
+  required_stops:
+    - kind: human_pre_apply
+      phase: pre_apply
+      status: satisfied
+      evidence: >
+        Rain's delegated external monitor passed the Gap Map and added four
+        mechanical acceptance checks without expanding scope.
+    - kind: final_result_only
+      phase: final_result_only
+      status: pending
+      evidence: >
+        Exact-candidate Codex high read-only review, verified Claude Opus 4.8/xhigh
+        PASS, merge, and merge-SHA CI remain mandatory.
+  auto_next_policy: blocked
+  auto_next_result: blocked
+  auto_next_reason: "Scope ends at P1-B5-004b; frontend and Golden expansion remain separate tasks."
+redline_authorization:
+  requested_actions: []
+  authorized_actions: []
+  evidence: >
+    No deletion, .env or credential change, DB schema or migration, real-data
+    mutation, IdentityMappingPort expansion, new dependency, system change,
+    history rewrite, force push, release, or Golden change occurred.
+started_at: "2026-07-23T02:34:00+09:00"
+completed_at: "2026-07-23T03:00:14+09:00"
+plan_approved_by: "Rain via delegated external monitor"
+plan_approved_at: "2026-07-23T02:49:00+09:00"
+plan_approved_via: "Codex external monitor delegation"
+plan_review:
+  required: true
+  provider: deterministic_audit
+  requested_model: monitor
+  observed_models: {}
+  model_verified: false
+  verdict: PLAN_READY
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  external_packet_audit: CLEAR
+  sanity_sha256: ""
+  gate1_evidence_sha256: ""
+summary: >
+  Admin Lite now lists Tasks by session or user, reads a Task's event sequence,
+  and lists Binding state for one required ai_user_id. All three actions reuse the
+  existing management Policy and Trace path, return explicit credential-safe views,
+  and are fixed at 100 results with no client-adjustable limit. Unknown Task event
+  payload fields are discarded. Admin routes never call Runtime, Gateway, Adapter,
+  or Workflow. PostgreSQL reads use the existing tables and require no migration.
+acceptance_criteria_result:
+  - criterion: "Binding status is visible only by required ai_user_id with optional existing filters"
+    result: passed
+    evidence: >
+      API tests pass target_system, binding_scope, account_set_id, and
+      device_domain_id to IdentityMappingPort.list_mappings; no global list or
+      IdentityMappingPort change exists. The response contains only eight named fields.
+  - criterion: "Task list exposes status, capability_id, and error_code by session or user"
+    result: passed
+    evidence: >
+      PostgreSQL integration tests cover session-only, user-only, and intersection
+      filters. The API view exposes six fields and excludes trace_id.
+  - criterion: "Task event evidence never exposes raw payload"
+    result: passed
+    evidence: >
+      A real API response is built from an event containing password, access_token,
+      future_payload, and a secret sentinel. Tests assert every unknown field and
+      value is absent while allowlisted capability evidence remains.
+  - criterion: "Every list is hard-bounded at exactly 100"
+    result: passed
+    evidence: >
+      PostgreSQL Task and event queries use fixed LIMIT 100. Admin service also caps
+      all three response types. API requests with limit=-1 and limit=999999999 still
+      return exactly 100; no route declares a limit parameter.
+  - criterion: "Each action denies before resource access without existence disclosure"
+    result: passed
+    evidence: >
+      Task list, Task events, and Binding list each test existing and missing
+      identifiers. All six cases return the identical 403 role_not_allowed body,
+      record blocked Trace, and keep TaskStore and IdentityMapping calls at zero.
+  - criterion: "Every successful and denied action records Trace"
+    result: passed
+    evidence: >
+      Success tests assert tasks_list, task_events_list, and bindings_list actions
+      with result counts. Denial tests assert blocked status and
+      role_claim_authenticated=false. No query payload or role value is recorded.
+  - criterion: "Management data routes cannot reach the execution plane"
+    result: passed
+    evidence: >
+      Each new route injects Runtime, Gateway, Adapter, and Workflow sentinels and
+      asserts all four counters remain zero. Architecture also forbids Admin API
+      direct Port or Infra imports and Admin service execution/Infra imports.
+  - criterion: "B2-B4 behavior and Frozen Golden remain unchanged"
+    result: passed
+    evidence: >
+      Full suite passed 1051 tests with 0 skipped and 0 failed. Golden remained
+      23/23 with negative 14/14; no Golden file changed.
+  - criterion: "Role authentication state and Trace debt remain honest"
+    result: passed
+    evidence: >
+      X-EternalAI-Roles remains an unauthenticated request claim; Phase 1 has not
+      established caller identity. TracePort is called but remains non-persistent
+      under the recorded P2-TRACE-PERSIST-001 debt. Neither limitation is upgraded
+      into a stronger claim or bypassed with a second persistence path.
+failure_examples_tested:
+  - example: "Unknown or credential-like Task event payload fields reach the API"
+    result: triggered
+    evidence: "password, access_token, future_payload, and secret sentinel are absent from the response."
+  - example: "Negative or huge client limit creates an unbounded response"
+    result: triggered
+    evidence: "limit=-1 and limit=999999999 both return exactly 100 Task items; event and Binding paths also cap at 100."
+  - example: "Missing management role probes whether a Task or user exists"
+    result: triggered
+    evidence: "Existing and missing cases return identical 403 bodies before any Store or Mapping call."
+  - example: "Authorized event lookup probes an unknown Task"
+    result: triggered
+    evidence: "Returns stable 404 task_not_found after authorization and never calls list_events."
+  - example: "Task list is requested without a bounding filter"
+    result: triggered
+    evidence: "Returns stable 422 task_filter_required after role guard and makes zero TaskStore calls."
+  - example: "Admin data route reaches business execution"
+    result: triggered
+    evidence: "All three routes keep Runtime, Gateway, Adapter, and Workflow counters at zero."
+  - example: "TaskStore list implementation omits or weakens the fixed bound"
+    result: triggered
+    evidence: "Real PostgreSQL tests insert 101 matching rows/events and assert the deterministic first 100 only."
+step_verification_points:
+  - step: gap_map
+    result: passed
+    command: "Rain delegated external monitor review"
+    evidence: >
+      PASS with explicit payload-leak, hostile limit, three-action denial, four-layer
+      execution-surface, and exact fake synchronization checks.
+  - step: focused_behavior
+    result: passed
+    command: >
+      uv run pytest tests/admin tests/api/test_admin_registry.py
+      tests/api/test_admin_evidence.py tests/ports/test_task_store_port.py
+      tests/infra/policy/test_minimal_policy_guard.py -q
+    evidence: "76 passed."
+  - step: real_postgresql
+    result: passed
+    command: >
+      uv run pytest tests/db
+      tests/infra/persistence/task_store/test_postgresql_task_session_store.py -q
+    evidence: "28 passed against 127.0.0.1:15432."
+  - step: deterministic_validation
+    result: passed
+    command: "Full pytest, Ruff, mypy, dependency, architecture, weak-test, Golden"
+    evidence: "All applicable checks passed; exact results are listed in tests_run."
+  - step: independent_review
+    result: not_applicable
+    command: "Codex high read-only self-review, then Opus 4.8/xhigh"
+    evidence: "Exact candidate commit and both independent reviews are pending."
+    not_applicable_reason: "The exact candidate has not been committed and reviewed yet."
+    not_applicable_scope: intentionally_deferred
+    blocked_by_task_id: P1-B5-004b
+    activation_task_id: P1-B5-004b
+    expiry_condition: "Candidate commit exists and deterministic validation stays bound."
+changed_files:
+  - app/admin/actions.py
+  - app/admin/evidence.py
+  - app/admin/registry.py
+  - app/api/v1/admin.py
+  - app/composition.py
+  - app/infra/persistence/task_store/postgresql.py
+  - app/ports/task_store.py
+  - docs/phase1/task_logs/P1-B5-004b_20260723_030014_passed.yaml
+  - docs/phase1/tasks/P1-B5-004b.md
+  - tests/admin/test_registry_service.py
+  - tests/api/test_admin_evidence.py
+  - tests/api/test_admin_registry.py
+  - tests/architecture/test_import_boundaries.py
+  - tests/infra/persistence/task_store/test_postgresql_task_session_store.py
+  - tests/infra/policy/test_minimal_policy_guard.py
+  - tests/ports/test_task_store_port.py
+  - tests/runtime/test_runtime_capability_selection.py
+  - tests/runtime/test_runtime_composition.py
+  - tests/runtime/test_runtime_evaluator.py
+  - tests/runtime/test_runtime_gateway_result_mapping.py
+  - tests/runtime/test_runtime_response_content.py
+  - tests/runtime/test_runtime_response_envelope.py
+  - tests/runtime/test_runtime_session_memory.py
+  - tests/runtime/test_runtime_trace_lifecycle.py
+  - tests/runtime/test_runtime_trace_threading.py
+  - tests/runtime/test_runtime_workflow.py
+  - tests/runtime/test_task_creation.py
+  - tests/workflow/test_engine.py
+touched_paths_confirmed: true
+forbidden_paths_confirmed: true
+tests_run:
+  - command: "uv run pytest tests/db -q"
+    result: passed
+    output_snippet: "14 passed against the fixed PostgreSQL test database."
+  - command: "uv run pytest -q"
+    result: passed
+    output_snippet: "1051 passed, 0 skipped, 0 failed, 6 warnings."
+  - command: "uv run ruff check ."
+    result: passed
+    output_snippet: "All checks passed."
+  - command: "uv run mypy app/"
+    result: passed
+    output_snippet: "Success: no issues found in 64 source files."
+  - command: "uv run python scripts/check_dependencies.py"
+    result: passed
+    output_snippet: "49 dependencies checked; policy passed."
+  - command: "uv run pytest tests/architecture/ -q"
+    result: passed
+    output_snippet: "24 passed."
+  - command: "uv run python scripts/check_weak_tests.py tests/"
+    result: passed
+    output_snippet: "Weak-test check passed."
+  - command: "uv run python scripts/run_golden_tasks.py --gate"
+    result: passed
+    output_snippet: "23/23; positive 9/9, negative 14/14, 0 skipped."
+dependency_changes:
+  added: []
+  changed: []
+  lockfiles_changed: []
+import_boundary_check:
+  result: passed
+  evidence: >
+    Architecture suite 24/24. app.admin cannot import Infra, Runtime, Workflow,
+    execution fabric, Adapter Port, or CapabilityGatewayPort. Admin API directly
+    imports neither Port nor Infra and reaches data only through AdminRegistryService.
+security_scan_result:
+  result: passed
+  evidence: >
+    Explicit response models drop unknown Task payload fields; role denial precedes
+    resource access; all outputs are fixed at 100; Trace contains no query payload or
+    role values; all three routes keep four execution-surface sentinels at zero.
+weak_test_scan_result:
+  result: passed
+  evidence: "The repository checker passed the complete tests directory."
+ci_evidence:
+  result: not_applicable
+  run_id: ""
+  url_or_log_path: ""
+  not_applicable_reason: "Remote integration has not started for this candidate."
+  not_applicable_scope: intentionally_deferred
+  blocked_by_task_id: P1-B5-004b
+  activation_task_id: P1-B5-004b
+  expiry_condition: "Task branch is pushed and merge-SHA required checks complete."
+  evidence: "No CI success is claimed before push."
+review:
+  mode: none
+  reviewed_by: ""
+  reviewed_at: ""
+  notes: >
+    Exact-candidate Codex high read-only review and verified Opus 4.8/xhigh PASS
+    remain mandatory. External artifacts, not this pre-review field, authorize merge.
+  provider: ""
+  requested_model: ""
+  observed_models: {}
+  model_verified: false
+  verdict: not_applicable
+  packet_sha256: ""
+  prompt_sha256: ""
+  output_sha256: ""
+  meta_sha256: ""
+  validation_evidence_sha256: ""
+remote_integration:
+  policy_sha256: ""
+  task_commit_sha: ""
+  task_branch: phase1/P1-B5-004b
+  task_branch_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "Task branch is not pushed yet."
+  pull_request:
+    number: ""
+    head_sha: ""
+    base_ref: phase0/main
+    mergeability: ""
+    required_checks: []
+  merge:
+    status: not_merged
+    merge_sha: ""
+    method: not_applicable
+  post_merge_ci:
+    status: not_triggered
+    run_id: ""
+    head_sha: ""
+    jobs: []
+    evidence: "No merge has occurred."
+  integration_freshness_sha256: ""
+remaining_risks:
+  - >
+    X-EternalAI-Roles is an unauthenticated request claim; Phase 1 does not prove
+    caller identity. This task increases the data visible to that claim, so real
+    deployment still requires an upstream authentication boundary.
+  - >
+    TracePort is invoked for successful and blocked actions but remains
+    non-persistent under P2-TRACE-PERSIST-001; no durable audit claim is made.
+rollback_or_failure_record: >
+  Ordinary Git history only; no amend, rebase, reset, force push, deletion, schema,
+  secret, system, Golden, or production action. Rollback requires a separately
+  governed revert.
+local_commit_policy: candidate_commit_before_review
+git_commit_sha: "pending exact candidate commit; Git and external review meta bind the SHA"
+package_confirmation_status: not_applicable
+package_confirmation: "No distributable package is produced."
+package_scope: ""
+package_evidence: ""
