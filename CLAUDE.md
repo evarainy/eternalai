@@ -39,8 +39,8 @@ infra/docker/       Docker Compose 模板
 uv run pytest
 # 指定测试
 uv run pytest tests/ports/test_capability_gateway_port.py
-# Lint
-uv run ruff check app/ tests/
+# Lint（范围由 pyproject.toml 的 [tool.ruff] exclude 单一声明）
+uv run ruff check .
 # Type check
 uv run mypy app/
 # 依赖合规

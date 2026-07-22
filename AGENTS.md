@@ -58,8 +58,8 @@ infra/docker/       Docker Compose templates
 uv run pytest
 # Single test file
 uv run pytest tests/ports/test_capability_gateway_port.py
-# Lint
-uv run ruff check app/ tests/
+# Lint (scope declared once in pyproject.toml [tool.ruff] exclude)
+uv run ruff check .
 # Type check
 uv run mypy app/
 # Dependency compliance

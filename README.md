@@ -49,7 +49,7 @@ Run the same checks CI performs, locally.
 
 ```bash
 uv sync
-uv run ruff check app/ tests/ scripts/check_weak_tests.py
+uv run ruff check .
 uv run mypy app
 uv run python scripts/check_dependencies.py
 uv run pytest tests/architecture/test_import_boundaries.py -v
@@ -59,9 +59,11 @@ uv run python scripts/check_weak_tests.py tests
 uv run pytest -v
 ```
 
-The ruff check is scoped to `app/ tests/ scripts/check_weak_tests.py` because
-pre-existing violations in `alembic/` and `experiments/` from prior tasks are
-outside this task's scope.
+The ruff check covers the whole repository. Its scope is declared once, in
+`pyproject.toml` under `[tool.ruff] exclude`, so the command never has to be
+kept in sync by hand. Two directories are excluded: `experiments/`, which is
+spike code that never ships to production, and `alembic/versions/`, which is
+applied migration history rather than live code.
 
 The full pytest requires a running PostgreSQL instance. Start a disposable one:
 

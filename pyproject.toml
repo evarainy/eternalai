@@ -22,6 +22,10 @@ dev = [
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# Single source of truth for lint scope. Callers run `uv run ruff check .`
+# experiments/       spike code that never ships to production (see CLAUDE.md)
+# alembic/versions/  applied migration history, not live code
+exclude = ["experiments", "alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
