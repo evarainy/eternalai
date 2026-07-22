@@ -106,6 +106,14 @@ P1-WORKFLOW-002-REPAIR-001
 |---|---|---|---|
 | （B5 任务 TBD） | Session Memory + Evaluator + Admin Lite | B4 | 最小记忆层 + Evaluator + Registry/Policy/Trace/Binding 管理页 |
 
+## 5.1 Phase 1 明确欠下的任务（不排期，不属于 Phase 1 范围）
+
+以下条目**不是 Phase 1 任务**，不得被当作待办领取。列在这里是因为「裁剪记录」容易被读成「决定不做」，而命名条目会被读成「欠着的」。
+
+| task_id | title | 欠债来源 | 触发条件 |
+|---|---|---|---|
+| `P2-CONFIRM-RESUME-001` | 非 Workflow 能力的 Policy `confirm` 恢复 | `PHASE1_SPEC.md` S-B5.5；spec 第 125 行把 confirm 恢复实现留给下游任务，B3 只做了确认响应、B4-003 只做了 Workflow `human_gate`，`action`/`query` 类型的确认卡目前是死路 | **自触发**：出现任何不经 Workflow 的高风险 `action`/`query` 能力时（例如 iVMS 单步开门禁）。确认前 Adapter 零调用的安全不变量已有常驻测试守卫，所以这是功能缺口而不是安全缺口 |
+
 ## 6. 硬顺序摘要
 
 ```text
