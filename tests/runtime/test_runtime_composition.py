@@ -11,6 +11,7 @@ from app.composition import build_runtime
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.main import create_app
+from app.memory import SessionMemory
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskRecord
@@ -149,6 +150,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     gateway = CompletedGateway(capability_registry)
     llm_provider = MockLLMProvider()
     structured_output = DeterministicStructuredOutput()
+    session_memory = SessionMemory()
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
@@ -158,6 +160,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
         llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model="test-intent-model",
+        session_memory=session_memory,
     )
 
     response = TestClient(create_app(runtime)).post(
@@ -172,6 +175,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert task_store.created
     assert session_store.created
     assert runtime._capability_registry is capability_registry
+    assert runtime._session_memory is session_memory
     assert gateway.capability_registry is capability_registry
     assert llm_provider.calls[0]["model"] == "test-intent-model"
     assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}

@@ -68,6 +68,11 @@ def _boundary_rules() -> list[BoundaryRule]:
             evidence="app/runtime/ directory absent from repo",
         ),
         BoundaryRule(
+            name="memory_no_infra_or_execution_fabric_imports",
+            source="app.memory",
+            forbidden_imports=("app.infra", "app.execution_fabric"),
+        ),
+        BoundaryRule(
             name="gateway_no_runtime",
             source="app.gateway",
             forbidden_imports=("app.runtime",),

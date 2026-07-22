@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
+from app.memory import SessionMemorySummary
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.structured_output import (
     StructuredOutputError,
@@ -190,3 +191,33 @@ def test_router_rejects_empty_model_configuration() -> None:
             RecordingStructuredOutput(StructuredOutputResult()),
             "   ",
         )
+
+
+def test_router_adds_only_structured_success_summaries_when_memory_exists() -> None:
+    llm_provider = MockLLMProvider()
+    llm_provider.register(
+        "repeat",
+        LLMCompletionResponse(content='{"capability_id":"oa.previous.query"}'),
+    )
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.previous.query"))
+    )
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+
+    result = asyncio.run(
+        router.parse(
+            "repeat",
+            memory_summaries=(
+                SessionMemorySummary(capability_id="oa.previous.query"),
+            ),
+        )
+    )
+
+    assert result.capability_ref == CapabilityRef(capability_id="oa.previous.query")
+    messages = llm_provider.calls[0]["messages"]
+    assert [message.role for message in messages] == ["system", "system", "user"]
+    assert messages[1].content.endswith(
+        '{"session_memory":[{"capability_id":"oa.previous.query",'
+        '"terminal_status":"completed"}]}'
+    )
+    assert "repeat" not in messages[1].content
