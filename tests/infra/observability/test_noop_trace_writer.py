@@ -52,6 +52,44 @@ def _logged_trace_event(logger: _FakeLogger) -> dict[str, Any]:
     return logger.calls[-1][1]["extra"]["trace_event"]
 
 
+@pytest.mark.parametrize("environment", [None, "production", "staging", "development"])
+def test_noop_trace_writer_rejects_non_test_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str | None,
+) -> None:
+    if environment is None:
+        monkeypatch.delenv("ENV", raising=False)
+    else:
+        monkeypatch.setenv("ENV", environment)
+    monkeypatch.delenv("PHASE0_MOCK_MODE", raising=False)
+
+    with pytest.raises(RuntimeError, match="persistent TracePort is required"):
+        NoopTraceWriter()
+
+
+@pytest.mark.parametrize(
+    ("environment", "mock_mode"),
+    [("testing", None), (None, "true")],
+)
+def test_noop_trace_writer_allows_explicit_test_or_mock_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str | None,
+    mock_mode: str | None,
+) -> None:
+    if environment is None:
+        monkeypatch.delenv("ENV", raising=False)
+    else:
+        monkeypatch.setenv("ENV", environment)
+    if mock_mode is None:
+        monkeypatch.delenv("PHASE0_MOCK_MODE", raising=False)
+    else:
+        monkeypatch.setenv("PHASE0_MOCK_MODE", mock_mode)
+
+    writer = NoopTraceWriter()
+
+    assert isinstance(writer, NoopTraceWriter)
+
+
 def test_set_sanitizer_and_record_event_calls_it_before_logging() -> None:
     call_order: list[str] = []
     logger = _FakeLogger()

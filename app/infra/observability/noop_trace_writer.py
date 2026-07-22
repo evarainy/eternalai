@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from app.ports.capability_gateway import ErrorCode
@@ -17,6 +18,13 @@ class NoopTraceWriter:
     """TracePort-compatible writer that emits sanitized DEBUG logs only."""
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
+        if not (
+            os.environ.get("ENV", "").lower() == "testing"
+            or os.environ.get("PHASE0_MOCK_MODE", "").lower() == "true"
+        ):
+            raise RuntimeError(
+                "persistent TracePort is required outside testing or mock mode"
+            )
         self._logger = logger or logging.getLogger(__name__)
         self._sanitizer: SanitizerHookFn | None = None
 

@@ -113,6 +113,7 @@ P1-WORKFLOW-002-REPAIR-001
 | task_id | title | 欠债来源 | 触发条件 |
 |---|---|---|---|
 | `P2-CONFIRM-RESUME-001` | 非 Workflow 能力的 Policy `confirm` 恢复 | `PHASE1_SPEC.md` S-B5.5；spec 第 125 行把 confirm 恢复实现留给下游任务，B3 只做了确认响应、B4-003 只做了 Workflow `human_gate`，`action`/`query` 类型的确认卡目前是死路 | **自触发**：出现任何不经 Workflow 的高风险 `action`/`query` 能力时（例如 iVMS 单步开门禁）。确认前 Adapter 零调用的安全不变量已有常驻测试守卫，所以这是功能缺口而不是安全缺口 |
+| `P2-TRACE-PERSIST-001` | 持久化 TracePort 与生产审计可查 | `PHASE1_SPEC.md` S-B5.2 / S-B5.5；Phase 1 只验证正确调用 `TracePort`，当前唯一实现 `NoopTraceWriter` 只写 DEBUG log，Policy、Identity、Gateway/Adapter、终局、Evaluator 与 Admin Lite 管理动作在重启后均不可追溯 | **deployment blocker**：任何生产部署前必须完成持久化实现及完整审计面验证；守卫只允许 `NoopTraceWriter` 在显式 testing/mock 环境构造，不得把守卫当成持久化替代品 |
 
 ## 6. 硬顺序摘要
 
