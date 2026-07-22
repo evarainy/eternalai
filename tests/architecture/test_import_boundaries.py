@@ -73,6 +73,17 @@ def _boundary_rules() -> list[BoundaryRule]:
             forbidden_imports=("app.infra", "app.execution_fabric"),
         ),
         BoundaryRule(
+            name="knowledge_no_infra_runtime_gateway_or_trace_imports",
+            source="app.knowledge",
+            forbidden_imports=(
+                "app.infra",
+                "app.execution_fabric",
+                "app.runtime",
+                "app.ports.capability_gateway",
+                "app.ports.trace",
+            ),
+        ),
+        BoundaryRule(
             name="gateway_no_runtime",
             source="app.gateway",
             forbidden_imports=("app.runtime",),
