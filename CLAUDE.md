@@ -66,7 +66,7 @@ git ls-files --others --exclude-standard
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
 - `P1-GATE-001` landed: implementation `0e9d48e`, merge `7beebbd`; prompt hardening landed at `6c5f85a`. CI success: https://github.com/evarainy/eternalai/actions/runs/28843469212
 - Later implementation tasks must run `uv run python scripts/run_golden_tasks.py --gate`.
-- Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. Descriptor presence alone never releases a dependency. `P1-SPEC-001` remains the independent B2 hard prerequisite.
+- Historical governance-repair sequence completed: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. The general invariant remains: descriptor presence alone never releases a dependency. `P1-SPEC-001` was the independent B2 hard prerequisite and is approved/landed.
 - Phase 1 role / Review / risk policy: `docs/phase1/ROLE_POLICY.md`; active V5 work uses Q0-Q3 rather than a universal independent-Review floor.
 - The unified YAML Task Record and per-task prompt are V4 legacy formats. Existing records and the final `P1-WORKFLOW-V5-001` migration evidence keep their original meaning; a new V5 Goal does not generate them.
 - One native Goal may handle multiple task IDs and auto-next. Each write lane remains isolated and owns one explicit Goal and a single Scope; a new scope requires a new lane/Worker Contract.

@@ -102,7 +102,7 @@ uv run python scripts/run_golden_tasks.py --gate
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
 10. Every write lane works in one isolated worktree/branch and a single Scope. The current repository branch convention remains `phase1/<task_id>`.
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-12. Active governance-repair order: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. A downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` remains the independent B2 hard prerequisite.
+12. Historical governance-repair sequence completed: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. The general invariant remains: a downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` was the independent B2 hard prerequisite and is approved/landed.
 
 ## Scratch/temp and artifact review rules
 - V5 Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`; repo-local `_scratch/` is for manual temp files only.
