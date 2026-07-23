@@ -1,0 +1,507 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "EternalAI Admin Registry API",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/api/v1/admin/registry": {
+      "get": {
+        "operationId": "listRegistry",
+        "summary": "List Registry capabilities",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registry capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilityListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCapability",
+        "summary": "Create a draft Registry capability",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCapabilityCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Draft capability created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilityView"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "422": {
+            "description": "Request body validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FastApiValidationErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/registry/{capability_id}": {
+      "get": {
+        "operationId": "getCapability",
+        "summary": "Get a Registry capability",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilityId"
+          },
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registry capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilityView"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "404": {
+            "$ref": "#/components/responses/CapabilityNotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/registry/{capability_id}/enable": {
+      "post": {
+        "operationId": "enableCapability",
+        "summary": "Enable a Registry capability",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilityId"
+          },
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Enabled Registry capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilityView"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "404": {
+            "$ref": "#/components/responses/CapabilityNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/InvalidStatusTransition"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/registry/{capability_id}/disable": {
+      "post": {
+        "operationId": "disableCapability",
+        "summary": "Disable a Registry capability",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CapabilityId"
+          },
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disabled Registry capability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilityView"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "404": {
+            "$ref": "#/components/responses/CapabilityNotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/InvalidStatusTransition"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "CapabilityId": {
+        "name": "capability_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RoleClaims": {
+        "name": "X-EternalAI-Roles",
+        "in": "header",
+        "required": false,
+        "description": "Unverified comma-separated role claims for Admin Lite.",
+        "schema": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    },
+    "responses": {
+      "RoleNotAllowed": {
+        "description": "The declared roles are insufficient",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
+      "CapabilityNotFound": {
+        "description": "The capability was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
+      "InvalidStatusTransition": {
+        "description": "The requested status transition is invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
+      "RegistryUnavailable": {
+        "description": "The Admin Registry provider is unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CapabilityType": {
+        "type": "string",
+        "enum": ["query", "action", "workflow", "mock"]
+      },
+      "CapabilityRiskLevel": {
+        "type": "string",
+        "enum": ["low", "medium", "high"]
+      },
+      "CapabilityStatus": {
+        "type": "string",
+        "enum": ["draft", "active", "disabled", "deprecated"]
+      },
+      "CapabilityTargetSystem": {
+        "type": "string",
+        "enum": ["oa", "u8", "hikvision_ivms"],
+        "nullable": true
+      },
+      "CapabilityExecutionIdentity": {
+        "type": "string",
+        "enum": ["user_delegated", "system_scope", "admin_approved_proxy"]
+      },
+      "AdminCapabilityCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capability_id",
+          "name",
+          "type",
+          "input_schema_digest",
+          "output_schema_digest",
+          "risk_level",
+          "owner",
+          "version",
+          "short_description",
+          "execution_identity",
+          "binding_required"
+        ],
+        "properties": {
+          "capability_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/CapabilityType"
+          },
+          "intent_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "input_schema": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          },
+          "output_schema": {
+            "type": "object",
+            "additionalProperties": true,
+            "default": {}
+          },
+          "input_schema_digest": {
+            "type": "string"
+          },
+          "output_schema_digest": {
+            "type": "string"
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/CapabilityRiskLevel"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "short_description": {
+            "type": "string"
+          },
+          "target_system": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityTargetSystem"
+              }
+            ],
+            "default": null
+          },
+          "execution_identity": {
+            "$ref": "#/components/schemas/CapabilityExecutionIdentity"
+          },
+          "binding_required": {
+            "type": "boolean"
+          },
+          "policy_digest": {
+            "type": "string",
+            "nullable": true,
+            "default": null
+          }
+        }
+      },
+      "AdminCapabilityView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capability_id",
+          "name",
+          "type",
+          "intent_tags",
+          "input_schema_digest",
+          "output_schema_digest",
+          "risk_level",
+          "owner",
+          "version",
+          "status",
+          "short_description",
+          "target_system",
+          "execution_identity",
+          "binding_required"
+        ],
+        "properties": {
+          "capability_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/CapabilityType"
+          },
+          "intent_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "input_schema_digest": {
+            "type": "string"
+          },
+          "output_schema_digest": {
+            "type": "string"
+          },
+          "risk_level": {
+            "$ref": "#/components/schemas/CapabilityRiskLevel"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          },
+          "short_description": {
+            "type": "string"
+          },
+          "target_system": {
+            "$ref": "#/components/schemas/CapabilityTargetSystem"
+          },
+          "execution_identity": {
+            "$ref": "#/components/schemas/CapabilityExecutionIdentity"
+          },
+          "binding_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AdminCapabilityListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCapabilityView"
+            }
+          }
+        }
+      },
+      "AdminErrorDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "message"],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminErrorResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["detail"],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/AdminErrorDetail"
+          }
+        }
+      },
+      "FastApiValidationError": {
+        "type": "object",
+        "required": ["loc", "msg", "type"],
+        "properties": {
+          "loc": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            }
+          },
+          "msg": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FastApiValidationErrorResponse": {
+        "type": "object",
+        "required": ["detail"],
+        "properties": {
+          "detail": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FastApiValidationError"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
