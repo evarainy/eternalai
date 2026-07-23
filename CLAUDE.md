@@ -28,16 +28,16 @@ infra/docker/       Docker Compose 模板
 
 ## Git workflow
 - **主分支**: `phase0/main` (Phase 1 续用此主干；不是 `main`)
-- **任务分支**: `phase1/<task_id>` (例: `phase1/P1-XXX-001`；旧 `phase0/<task_id>` 仅历史/补丁)
-- **Commit message**: `phase1(<task_id>): <简要描述>`
-- **Merge message**: `merge phase1(<task_id>): <简要描述>`
+- **任务分支**: Phase 2 起用 `phase2/<task_id>`；Phase 1 为 `phase1/<task_id>`（旧 `phase0/<task_id>` 仅历史/补丁）
+- **Commit message**: `phase2(<task_id>): <简要描述>`（Phase 1 为 `phase1(<task_id>): ...`）
+- **Merge message**: `merge phase2(<task_id>): <简要描述>`（Phase 1 为 `merge phase1(<task_id>): ...`）
 - 每次 merge 到 phase0/main 后检查 remote GitHub Actions CI
 
 ## Validation commands
 > **全量测试需要固定测试库在跑**：Docker Desktop 启动，测试库 healthy 于 `127.0.0.1:15432`，
 > 且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
 > 缺 `DATABASE_URL` 时 DB 测试**失败而不是跳过**——静默跳过会被读成通过。
-> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1071 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P1-B5-006 / merge `0cae8fe6`）。
+> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1102 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P2-TRACE-PERSIST-001 / merge `f8eb8533`）。
 
 ```powershell
 # 单元测试（全量）
@@ -60,7 +60,7 @@ git ls-files --others --exclude-standard
 ```
 
 ## Phase 1 rules（开发已收尾；下列规则续用于 P2 与后续维护）
-- Phase 1 development is complete: the B2→B5 product chain and the governance-repair chain have all landed with trunk CI green; two recorded debts carry to P2 (P2-TRACE-PERSIST-001 deployment blocker / P2-CONFIRM-RESUME-001 self-triggered — see `docs/phase1/TASK_INDEX.md` §5.1). The rules below stay in force for P2 and follow-up work. `app/ports/` contracts are no longer frozen by decree: change one when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits. Never build a workaround for a contract you should have fixed — with a single maintainer a contract change is cheap and immediately visible, so process must not push the design sideways.
+- Phase 1 development is complete (B2→B5 product chain + governance-repair chain landed, trunk CI green). Phase 2 has formally opened: `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query) landed at merge `f8eb8533` (CI run 30017941828 success); one recorded debt remains — `P2-CONFIRM-RESUME-001` self-triggered (see `docs/phase1/TASK_INDEX.md` §5.1). The rules below stay in force for P2 and follow-up work. `app/ports/` contracts are no longer frozen by decree: change one when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits. Never build a workaround for a contract you should have fixed — with a single maintainer a contract change is cheap and immediately visible, so process must not push the design sideways.
 - These stay strict at any scope, because they fail silently: never weaken or delete a test assertion to make code pass (fix the code, or stop and report); never let a failure path report success or lose its error code; never regress session/tenant/user isolation or credential handling. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval — golden is the regression net, and a weakened net is invisible.
 - Hexagonal boundary holds: `app/ports/` must not depend on `app/infra/`.
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).
