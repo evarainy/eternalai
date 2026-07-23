@@ -4,7 +4,7 @@ This file is intentionally short. It is the always-loaded compact boot context f
 Process choreography uses the Codex App native Goal, subagents, worktrees, Review, Git, and CI. Repository documents define result and safety contracts; they do not depend on a V4 workflow command or custom lifecycle.
 
 ## Phase
-Phase 1 development is complete: the B2→B5 product chain and governance-repair chain have landed with trunk CI green; two recorded debts carry to P2 (P2-TRACE-PERSIST-001 deployment blocker / P2-CONFIRM-RESUME-001 self-triggered — see `docs/phase1/TASK_INDEX.md` §5.1). The main branch remains `phase0/main`; the `phase1/<task_id>` branch convention stays until Phase 2 formally opens. All rules below remain active.
+Phase 1 development is complete (B2→B5 product chain + governance-repair chain landed, trunk CI green). Phase 2 has formally opened: `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query) landed at merge `f8eb8533` (CI run 30017941828 success); one recorded debt remains — `P2-CONFIRM-RESUME-001` self-triggered (see `docs/phase1/TASK_INDEX.md` §5.1). The main branch remains `phase0/main`; Phase 2 tasks use the `phase2/<task_id>` branch convention. All rules below remain active.
 
 Phase 1 rule authority, highest first:
 1. The user's latest explicit instruction in the current native Goal
@@ -45,9 +45,9 @@ infra/docker/       Docker Compose templates
 
 ## Git workflow
 - **Main branch**: `phase0/main` (not `main`)
-- **Task branch**: `phase1/<task_id>` (e.g. `phase1/P1-SPEC-001`)
-- **Commit message**: `phase1(<task_id>): <short description>`
-- **Merge message**: `merge phase1(<task_id>): <short description>`
+- **Task branch**: Phase 2 uses `phase2/<task_id>`; Phase 1 was `phase1/<task_id>`
+- **Commit message**: `phase2(<task_id>): <short description>` (Phase 1 was `phase1(<task_id>): ...`)
+- **Merge message**: `merge phase2(<task_id>): <short description>` (Phase 1 was `merge phase1(<task_id>): ...`)
 - There is no separate local-commit human Gate. Ordinary non-force push, PR/merge, CI/CD configuration changes, and CI runs may proceed only when the current Goal and target repository policy allow them, deterministic validation and required Review pass, freshness remains bound, and branch protection/required checks are satisfied. Historical Gate 2 remains post-integration result acceptance, not Git/CI authorization.
 - Exact action-specific authorization is mandatory for file/directory or history deletion, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push. A risk label never supplies that authorization. Never bypass hooks or branch protection.
 - Check remote GitHub Actions CI after every merge to phase0/main
@@ -58,7 +58,7 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1071 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P1-B5-006 / merge 0cae8fe6).
+> Baseline: **1102 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-TRACE-PERSIST-001 / merge f8eb8533).
 
 ```bash
 # Full test suite
@@ -100,7 +100,7 @@ uv run python scripts/run_golden_tasks.py --gate
 7. `P1-GATE-001` has landed. Later implementation tasks must run `scripts/run_golden_tasks.py --gate`.
 8. These stay strict at any scope, because they fail silently: do not weaken tests to pass (no `assert True`, empty `pass`, broad skip, or deleted assertions — fix the code or stop and report); do not let a failure path report success or lose its error code; do not regress session/tenant/user isolation. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval.
 9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
-10. Every write lane works in one isolated worktree/branch and a single Scope. The current repository branch convention remains `phase1/<task_id>`.
+10. Every write lane works in one isolated worktree/branch and a single Scope. Phase 2 tasks use the `phase2/<task_id>` branch convention (Phase 1 used `phase1/<task_id>`).
 11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
 12. Historical governance-repair sequence completed: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. The general invariant remains: a downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` was the independent B2 hard prerequisite and is approved/landed.
 
