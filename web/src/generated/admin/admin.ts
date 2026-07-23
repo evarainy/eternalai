@@ -5,9 +5,14 @@
  * OpenAPI spec version: 0.0.0
  */
 import type {
+  AdminBindingListResponse,
   AdminCapabilityCreate,
   AdminCapabilityListResponse,
-  AdminCapabilityView
+  AdminCapabilityView,
+  AdminTaskEventListResponse,
+  AdminTaskListResponse,
+  ListBindingsParams,
+  ListTasksParams
 } from './admin.schemas';
 
 import { customInstance } from '../../api/mutator';
@@ -15,6 +20,44 @@ import { customInstance } from '../../api/mutator';
 
 
   /**
+ * @summary List Tasks by session or AI user
+ */
+export const listTasks = (
+    params?: ListTasksParams,
+ ) => {
+      return customInstance<AdminTaskListResponse>(
+      {url: `/api/v1/admin/tasks`, method: 'GET',
+        params
+    },
+      );
+    }
+
+/**
+ * @summary List safe evidence for a Task
+ */
+export const listTaskEvents = (
+    taskId: string,
+ ) => {
+      return customInstance<AdminTaskEventListResponse>(
+      {url: `/api/v1/admin/tasks/${taskId}/events`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary List identity bindings for an AI user
+ */
+export const listBindings = (
+    params?: ListBindingsParams,
+ ) => {
+      return customInstance<AdminBindingListResponse>(
+      {url: `/api/v1/admin/bindings`, method: 'GET',
+        params
+    },
+      );
+    }
+
+/**
  * @summary List Registry capabilities
  */
 export const listRegistry = (
@@ -76,6 +119,9 @@ export const disableCapability = (
       );
     }
 
+export type ListTasksResult = NonNullable<Awaited<ReturnType<typeof listTasks>>>
+export type ListTaskEventsResult = NonNullable<Awaited<ReturnType<typeof listTaskEvents>>>
+export type ListBindingsResult = NonNullable<Awaited<ReturnType<typeof listBindings>>>
 export type ListRegistryResult = NonNullable<Awaited<ReturnType<typeof listRegistry>>>
 export type CreateCapabilityResult = NonNullable<Awaited<ReturnType<typeof createCapability>>>
 export type GetCapabilityResult = NonNullable<Awaited<ReturnType<typeof getCapability>>>

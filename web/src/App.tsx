@@ -3,7 +3,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import RoleSelector from './components/RoleSelector';
 import HealthPage from './pages/HealthPage';
+import BindingsPage from './pages/admin/BindingsPage';
 import RegistryPage from './pages/admin/RegistryPage';
+import TasksPage from './pages/admin/TasksPage';
 
 const { Header, Content } = Layout;
 const queryClient = new QueryClient();
@@ -24,6 +26,12 @@ export default function App() {
                     <Link to="/admin/registry" style={{ color: '#fff' }}>
                       Registry 管理
                     </Link>
+                    <Link to="/admin/tasks" style={{ color: '#fff' }}>
+                      Task 证据
+                    </Link>
+                    <Link to="/admin/bindings" style={{ color: '#fff' }}>
+                      Binding 查看
+                    </Link>
                   </Space>
                   <RoleSelector />
                 </Flex>
@@ -33,6 +41,8 @@ export default function App() {
                   <Route path="/" element={<HealthPage />} />
                   <Route path="/health" element={<HealthPage />} />
                   <Route path="/admin/registry" element={<RegistryPage />} />
+                  <Route path="/admin/tasks" element={<TasksPage />} />
+                  <Route path="/admin/bindings" element={<BindingsPage />} />
                 </Routes>
               </Content>
             </Layout>
