@@ -45,7 +45,7 @@ B5：Session Memory + Evaluator + Admin Lite
 
 | task_id | title | depends_on | deliverable / start gate |
 |---|---|---|---|
-| P1-WORKFLOW-V5-001 | Codex-Claude V5 治理同步候选 | 已批准设计 `F464E36…` + 修订计划 `118AE10B…` + 2026-07-19 书面建设授权；cutover 未授权 | 分支 `phase1/P1-WORKFLOW-V5-001`：五个 V5 语义治理文件 + 本行 + descriptor + 最后一份 V4 Task Record；最终 Review 前只形成 staged candidate，不 commit/集成 |
+| P1-WORKFLOW-V5-001 | Codex-Claude V5 治理迁移 | 已批准设计 `F464E36…` + 修订计划 `118AE10B…` + 2026-07-19 书面建设授权 | merged：task `8739a99`，merge `76586ce`；五个 V5 语义治理文件 + 本行 + descriptor + 最后一份 V4 Task Record 已落地 |
 | P1-WORKFLOW-002-REPAIR-001 | W002 完整范围修复与活动控制面收敛 | P1-WORKFLOW-002 completed；P1-WORKFLOW-002-REPAIR-BOOTSTRAP-001 landed | merged：task `4f7d4f9`，merge `bce81d0`，merge-SHA CI `29205276520` success |
 | P1-CI-ALIGN-001 | Phase 1 预合并 CI 对齐 | P1-WORKFLOW-002-REPAIR-001 completed | merged：task `3c35505`，merge `cdfd9eb`，merge-SHA CI `29210156919` success |
 | P1-OBS-001 | Trace 生命周期与敏感字段契约修复 | P1-CI-ALIGN-001 completed | merged：task `a20650a`，merge `d8b729d`，merge-SHA CI `29215852960` success |
@@ -88,7 +88,7 @@ P1-WORKFLOW-002-REPAIR-001
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
 | P1-B3-001 | Identity / Policy 预检闭环 | P1-B2-002 integrated + merge-SHA CI passed | IdentityMapping scope 无回退 + Binding 状态预检 + Policy allow/deny/confirm + SDUI/Trace/Task 闭环 |
-| P1-B3-002 | B3 frozen Golden 增量 | P1-B3-001 integrated + merge-SHA CI passed | GT-015..GT-019：expired/revoked 与显式 account-set/device-domain/resource-scope 多绑定边界；B4 step Policy Frozen deferred 到后续已命名 B4 实现任务落地并获批后激活（当前证据：B4 task TBD），本任务不新增 B4 fixture/实现 |
+| P1-B3-002 | B3 frozen Golden 增量 | P1-B3-001 integrated + merge-SHA CI passed | GT-015..GT-019：expired/revoked 与显式 account-set/device-domain/resource-scope 多绑定边界；B4 step Policy Frozen 已由 `P1-B4-002` 落地，B4 Golden 已由 `P1-B4-005` 落地（merge `878a7aa` / `e975858`），本任务不新增 B4 fixture/实现 |
 
 ## 4. B4 — Workflow 轻量引擎 + 执行
 
@@ -96,7 +96,7 @@ P1-WORKFLOW-002-REPAIR-001
 
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
-| （B4 任务 TBD） | Workflow 轻量引擎 + 执行 | B3 | 线性 Workflow + step Policy + 有限重试 + human_gate，经 Gateway 执行 Mock Adapter |
+| `P1-B4-001` / `P1-B4-002` / `P1-B4-003` / `P1-B4-004` / `P1-B4-005` | Workflow 轻量引擎 + 执行 | B3 | 已落地：线性 Workflow + step Policy + 有限重试 + human_gate，经 Gateway 执行 Mock Adapter |
 
 ## 5. B5 — Session Memory + Evaluator + Admin Lite
 
@@ -104,7 +104,7 @@ P1-WORKFLOW-002-REPAIR-001
 
 | task_id | title | depends_on | 纵切内容 |
 |---|---|---|---|
-| （B5 任务 TBD） | Session Memory + Evaluator + Admin Lite | B4 | 最小记忆层 + Evaluator + Registry/Policy/Trace/Binding 管理页 |
+| `P1-B5-001` / `P1-B5-002` / `P1-B5-003` / `P1-B5-004a` / `P1-B5-004b` / `P1-B5-005a` / `P1-B5-005b` / `P1-B5-006` | Session Memory + Evaluator + Admin Lite | B4 | 已落地：Session Memory + Semantic/System Knowledge + Evaluator + Admin Lite Registry/Task/Binding 管理面 + Golden；`P1-B5-005a` / `P1-B5-005b` / `P1-B5-006` 经 V5 Goal 落地，按 §7 无 Task Record |
 
 ## 5.1 Phase 1 明确欠下的任务（不排期，不属于 Phase 1 范围）
 
