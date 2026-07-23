@@ -59,8 +59,8 @@ git diff --cached --name-only && git diff --cached --stat && git diff --cached -
 git ls-files --others --exclude-standard
 ```
 
-## Phase 1 rules (当前阶段)
-- Phase 1 implementation in progress. `app/ports/` contracts are no longer frozen by decree: change one when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits. Never build a workaround for a contract you should have fixed — with a single maintainer a contract change is cheap and immediately visible, so process must not push the design sideways.
+## Phase 1 rules（开发已收尾；下列规则续用于 P2 与后续维护）
+- Phase 1 development is complete: the B2→B5 product chain and the governance-repair chain have all landed with trunk CI green; two recorded debts carry to P2 (P2-TRACE-PERSIST-001 deployment blocker / P2-CONFIRM-RESUME-001 self-triggered — see `docs/phase1/TASK_INDEX.md` §5.1). The rules below stay in force for P2 and follow-up work. `app/ports/` contracts are no longer frozen by decree: change one when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits. Never build a workaround for a contract you should have fixed — with a single maintainer a contract change is cheap and immediately visible, so process must not push the design sideways.
 - These stay strict at any scope, because they fail silently: never weaken or delete a test assertion to make code pass (fix the code, or stop and report); never let a failure path report success or lose its error code; never regress session/tenant/user isolation or credential handling. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval — golden is the regression net, and a weakened net is invisible.
 - Hexagonal boundary holds: `app/ports/` must not depend on `app/infra/`.
 - LLM baseline = Qwen + vLLM raw JSON. Do NOT introduce instructor / PydanticAI (rejected by ADR, internal-validated; see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1).

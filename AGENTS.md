@@ -4,7 +4,7 @@ This file is intentionally short. It is the always-loaded compact boot context f
 Process choreography uses the Codex App native Goal, subagents, worktrees, Review, Git, and CI. Repository documents define result and safety contracts; they do not depend on a V4 workflow command or custom lifecycle.
 
 ## Phase
-Phase 1 active. The main branch is still `phase0/main`; Phase 1 task branches use `phase1/<task_id>`.
+Phase 1 development is complete: the B2→B5 product chain and governance-repair chain have landed with trunk CI green; two recorded debts carry to P2 (P2-TRACE-PERSIST-001 deployment blocker / P2-CONFIRM-RESUME-001 self-triggered — see `docs/phase1/TASK_INDEX.md` §5.1). The main branch remains `phase0/main`; the `phase1/<task_id>` branch convention stays until Phase 2 formally opens. All rules below remain active.
 
 Phase 1 rule authority, highest first:
 1. The user's latest explicit instruction in the current native Goal
@@ -58,7 +58,7 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1021 passed, 0 skipped, 0 failed**.
+> Baseline: **1071 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P1-B5-006 / merge 0cae8fe6).
 
 ```bash
 # Full test suite
