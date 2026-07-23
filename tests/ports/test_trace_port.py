@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, get_args, get_type_hints
 
@@ -13,11 +14,14 @@ from pydantic import ValidationError
 
 from app.ports.capability_gateway import ErrorCode
 from app.ports.trace import (
+    TRACE_QUERY_LIMIT,
     SanitizerHookFn,
     TraceEvent,
     TraceEventStatus,
     TraceEventType,
+    TracePersistedEvent,
     TracePort,
+    TraceQueryPort,
 )
 
 EXPECTED_TRACE_EVENT_TYPE_VALUES = (
@@ -224,6 +228,52 @@ def test_trace_port_protocol_defines_expected_methods() -> None:
         "record_gateway_call",
         "finalize_task_trace",
     }
+
+
+def test_trace_persisted_event_defines_exact_read_fields() -> None:
+    assert set(TracePersistedEvent.model_fields) == {
+        "event_id",
+        "trace_id",
+        "task_id",
+        "session_id",
+        "event_type",
+        "status",
+        "capability_id",
+        "error_code",
+        "attributes",
+        "created_at",
+    }
+    event = TracePersistedEvent(
+        event_id="event-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        event_type="task_created",
+        status="ok",
+        created_at=datetime.now(UTC),
+    )
+
+    assert event.attributes == {}
+    with pytest.raises(ValidationError):
+        TracePersistedEvent(
+            **event.model_dump(),
+            internal_column="must-not-pass",
+        )
+
+
+def test_trace_query_port_defines_only_bounded_read_methods() -> None:
+    assert TRACE_QUERY_LIMIT == 100
+    assert TraceQueryPort.__protocol_attrs__ == {
+        "list_events_by_trace",
+        "list_events_by_task",
+        "list_events_by_session",
+    }
+    for method_name in TraceQueryPort.__protocol_attrs__:
+        method = getattr(TraceQueryPort, method_name)
+        assert inspect.iscoroutinefunction(method)
+        signature = inspect.signature(method)
+        assert signature.parameters["limit"].default == TRACE_QUERY_LIMIT
+        assert get_type_hints(method)["return"] == list[TracePersistedEvent]
 
 
 def test_set_sanitizer_is_sync_not_coroutine() -> None:

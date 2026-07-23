@@ -100,6 +100,17 @@ class EmptyTaskStore:
         return []
 
 
+class EmptyTraceQuery:
+    async def list_events_by_trace(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def list_events_by_task(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def list_events_by_session(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+
 def _capability(
     capability_id: str = "oa.leave.apply",
     *,
@@ -153,6 +164,7 @@ def _service(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),
         trace_port=trace,
+        trace_query=EmptyTraceQuery(),
     )
 
 
@@ -164,6 +176,7 @@ def test_management_builder_injects_the_closed_admin_action_allowlist() -> None:
         task_store=EmptyTaskStore(),
         identity_mapping=MockIdentityMapping(rows=[]),
         trace_port=trace,
+        trace_query=EmptyTraceQuery(),
     )
 
     capabilities = asyncio.run(service.list_capabilities(_context("admin")))

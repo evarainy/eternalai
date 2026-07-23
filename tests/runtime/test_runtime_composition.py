@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.composition import build_runtime
+from app.composition import build_runtime, build_trace_port, build_trace_query
 from app.evaluator import TerminalEvaluator
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
+from app.infra.observability.postgresql_trace import (
+    PostgreSQLTraceReader,
+    PostgreSQLTraceWriter,
+)
 from app.knowledge import BasicKnowledge
 from app.main import create_app
 from app.memory import SessionMemory
@@ -266,3 +271,41 @@ def test_golden_trace_double_matches_real_writer_semantic_sequence() -> None:
         "response_envelope_created",
         "task_completed",
     ]
+
+
+def test_trace_selector_uses_noop_only_for_explicit_testing_or_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    factory = cast(Any, object())
+
+    monkeypatch.setenv("ENV", "testing")
+    monkeypatch.delenv("PHASE0_MOCK_MODE", raising=False)
+    assert isinstance(build_trace_port(session_factory=factory), NoopTraceWriter)
+
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("PHASE0_MOCK_MODE", "true")
+    assert isinstance(build_trace_port(session_factory=factory), NoopTraceWriter)
+
+
+@pytest.mark.parametrize("environment", [None, "production", "staging", "unknown"])
+def test_trace_selector_physically_excludes_noop_outside_test_mock(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: str | None,
+) -> None:
+    factory = cast(Any, object())
+    if environment is None:
+        monkeypatch.delenv("ENV", raising=False)
+    else:
+        monkeypatch.setenv("ENV", environment)
+    monkeypatch.delenv("PHASE0_MOCK_MODE", raising=False)
+
+    writer = build_trace_port(session_factory=factory)
+
+    assert isinstance(writer, PostgreSQLTraceWriter)
+    assert not isinstance(writer, NoopTraceWriter)
+
+
+def test_trace_query_selector_always_builds_postgresql_reader() -> None:
+    reader = build_trace_query(session_factory=cast(Any, object()))
+
+    assert isinstance(reader, PostgreSQLTraceReader)

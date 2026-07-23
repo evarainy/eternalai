@@ -14,6 +14,12 @@ from app.ports.identity_mapping import (
     TargetSystem,
 )
 from app.ports.task_store import TaskEventRecord, TaskRecord, TaskStatus
+from app.ports.trace import (
+    TraceEventStatus,
+    TraceEventType,
+    TracePersistedEvent,
+    redact_trace_attributes,
+)
 
 
 class AdminTaskView(BaseModel):
@@ -122,6 +128,41 @@ class AdminBindingView(BaseModel):
         )
 
 
+class AdminTracePersistedView(BaseModel):
+    """Explicit trace response allowlist with read-side credential defense."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str
+    trace_id: str
+    task_id: str
+    session_id: str
+    event_type: TraceEventType
+    status: TraceEventStatus
+    capability_id: str | None
+    error_code: str | None
+    attributes: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_record(
+        cls,
+        event: TracePersistedEvent,
+    ) -> AdminTracePersistedView:
+        return cls(
+            event_id=event.event_id,
+            trace_id=event.trace_id,
+            task_id=event.task_id,
+            session_id=event.session_id,
+            event_type=event.event_type,
+            status=event.status,
+            capability_id=event.capability_id,
+            error_code=event.error_code,
+            attributes=redact_trace_attributes(event.attributes),
+            created_at=event.created_at,
+        )
+
+
 class AdminTaskListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -141,6 +182,12 @@ class AdminBindingListResponse(BaseModel):
     items: list[AdminBindingView]
 
 
+class AdminTraceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[AdminTracePersistedView]
+
+
 __all__ = (
     "AdminBindingListResponse",
     "AdminBindingView",
@@ -149,4 +196,6 @@ __all__ = (
     "AdminTaskEventView",
     "AdminTaskListResponse",
     "AdminTaskView",
+    "AdminTraceListResponse",
+    "AdminTracePersistedView",
 )

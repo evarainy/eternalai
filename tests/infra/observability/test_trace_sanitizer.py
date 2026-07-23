@@ -5,6 +5,11 @@ from copy import deepcopy
 import pytest
 
 from app.infra.observability.sanitizer import redact_trace_attributes
+from app.ports.trace import redact_trace_attributes as contract_redact_trace_attributes
+
+
+def test_infra_sanitizer_is_the_trace_contract_compatibility_export() -> None:
+    assert redact_trace_attributes is contract_redact_trace_attributes
 
 
 def test_redacts_bearer_token_value() -> None:
@@ -76,6 +81,12 @@ def test_non_str_value_passes_through() -> None:
     "credential_key",
     (
         "Authorization",
+        "Proxy-Authorization",
+        "X-Api-Key",
+        "X-Auth-Token",
+        "X-Access-Token",
+        "X-CSRF-Token",
+        "token",
         "PASSWORD",
         "passwd",
         "Api-Key",
@@ -113,6 +124,19 @@ def test_redacts_credential_assignments_under_safe_key(
     payload = {"message": credential_assignment}
 
     assert redact_trace_attributes(payload) == {"message": "[REDACTED]"}
+
+
+@pytest.mark.parametrize(
+    "credential_uri",
+    (
+        "postgresql+psycopg://alice:hunter2@db/app",
+        "https://service-user:synthetic-password@example.test/resource",
+    ),
+)
+def test_redacts_uri_userinfo_under_safe_key(credential_uri: str) -> None:
+    assert redact_trace_attributes({"dsn": credential_uri}) == {
+        "dsn": "[REDACTED]"
+    }
 
 
 def test_nested_redaction_does_not_mutate_input() -> None:
