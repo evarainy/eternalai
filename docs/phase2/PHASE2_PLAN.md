@@ -1,0 +1,90 @@
+# Phase 2 总目标、范围与任务 DAG（Lean Plan）
+
+> 状态：**草案**。须经 Claude(Opus) 实审与雨爷拍板后才生效；开放问题未决、BLOCKED 外部输入未到时，不据此启动对应任务。
+
+## 1. P2 总目标
+
+P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个真实系统的部门试点纵切：先只读验收，再做 1 个获批的低风险写入**；所有真实调用仍经 Gateway / Policy / Trace / Evaluator，并补齐试点必需的可信入口、账号绑定与凭证、审计与反馈、Golden、User Profile / Semantic Memory 及基础 Skill 候选治理。（`PHASE1_SPEC.md` L13-L25；蓝图 §3.2 L176-L186、§13 L2680-L2717）
+
+- **真实但克制**：首个真实 API Adapter 为必达；第二个仅在首个稳定且雨爷选定后进入。（蓝图 §13 L2701-L2707）
+- **安全可运维**：真实身份/凭证不可再用 Mock，绑定、审计与管理动作形成闭环。（蓝图 §7.4.7 L1671-L1677、§7.5.1 L1685-L1691）
+- **以证据扩展**：更多 Golden、用户反馈统计和审计看板共同约束试点，不以“接口能调通”冒充完成。（蓝图 §7.6 L1752-L1786、§13 L2708-L2714）
+- **进化只到候选**：P2 可有基础 Skill 候选池，但不自动生成、发布或扩大权限。（蓝图 §2.5 L110-L118、§10.3 L2207-L2253、§13 L2710）
+
+## 2. 范围边界
+
+### IN（P2 做）
+
+| 能力/闭环 | 一句话交付与边界 | 来源 |
+|---|---|---|
+| 可运行的试点基线（**假设 A1，待拍板**） | 生产装配入口接入真实 structured-output LLM 与可信试点用户身份，使现有低风险主链可启动、可健康检查、可审计；不选定新框架。当前 `app = create_app()` 未装配 Runtime，Admin 角色仍来自未验证 header。 | `app/main.py` L10-L24；`app/api/v1/admin.py` L38-L51；蓝图 §12.1.3 L2492-L2510、§12.1.5 L2538-L2549、§13 L2701-L2703 |
+| 真实 API Adapter 只读纵切 | 选 1 个真实系统，把一个只读用例从请求、真实身份、Gateway、Adapter、Evaluator、Trace 跑到响应；第二个 Adapter 是可选增量。 | 蓝图 §8.1 L1794-L1808、§13 L2703-L2707、§15 L2870-L2907 |
+| 基础 DB Gateway | 只对业务负责人/DBA 批准的只读视图和注册查询能力开放，参数化、限行、超时、脱敏、审计；无批准用例时保持 BLOCKED。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947、§13 L2707 |
+| 真实绑定与凭证闭环 | 对选定系统落地正式 Secret 管理、真实 bind mode、基础凭证验证，以及管理员查看/筛选/解绑/重置/发送引导；支持 Excel/HR 导入映射，禁止导入密码。 | 蓝图 §7.4.3 L1540-L1549、§7.4.7 L1671-L1677、§7.5.2 L1693-L1717、§13 L2712-L2714 |
+| 试点运营面 | 在已落地持久 Trace/查询之上提供审计看板；接收最小用户反馈并形成基础统计，不自动生成建设 backlog。 | 蓝图 §7.6 L1752-L1786、§9.2 L2064-L2082、§13 L2709-L2711；`TASK_INDEX.md` §5.1 L109-L118 |
+| P2 Memory 增量 | 引入按用户隔离的 User Profile Memory，并增强制度、字段、报表口径和业务术语等 Semantic Memory；不进入 Episodic/Procedural/Knowledge Vault。 | 蓝图 §10.1 L2148-L2186、§10.2 L2188-L2205、§13 L2715 |
+| 基础 Skill 候选池 | 只保存受治理、可审查的候选及来源引用；候选不能自动发布、执行或晋升 scope。候选如何产生留作开放问题。 | 蓝图 §10.3 L2207-L2253、§13 L2710 |
+| P2 Golden 增量 | 为真实 Adapter、真实绑定、DB Gateway、隔离、反馈与审计边界补 Golden；负向/安全拒绝继续 100%，冻结 ID/fixture 仍须显式人批。 | 蓝图 §9.3.2 L2120-L2139、§13 L2708；`PHASE1_SPEC.md` L11、L62-L68 |
+| 低风险写入纵切 | 只读试点通过后，选 1 个获批写操作，具备幂等、预览、确认、补偿声明、Evaluator 与审计；没有安全用例/沙箱则不排期。 | 蓝图 §5.9 L878-L918、§13 L2703 |
+
+### OUT（P2 仍排除）
+
+| 排除项 | 裁剪理由 | 重开条件 | 来源 |
+|---|---|---|---|
+| Controlled Exploration（含 P2 测试只读草案）、Dynamic Tool Composition | 蓝图只“允许”P2 在严格前置下试验草案，不是部门试点必达；当前主线先完成真实纵切，封闭系统也禁止未知路径探索。 | 沙箱、测试用户、只读白名单、Policy、Trace、Governance Evaluation、审批/回滚齐备，另立任务并人批；动态组合仍按 Phase 3+ 评估。 | 蓝图 §2.3 L91-L104、§6.5 L1116-L1139、§6.10 L1268-L1327 |
+| 自动 Capability/Skill 生成、完整 Skill CI/CD、自动发布 | P2 只到基础候选池；完整受控进化属于 Phase 4，候选不得自动上线。 | Phase 4 治理方案、测试/评级/审批/灰度/回滚全部就绪。 | 蓝图 §10.3 L2207-L2253、§13 L2736-L2751 |
+| RPA、Local Worker、IoT/视频控制主链 | 属于 Phase 3 执行织物增强；物理控制风险高。 | Phase 3 独立信任模型、设备/Worker 协议与审批机制获批。 | 蓝图 §8.3-§8.5 L1829-L1900、§13 L2719-L2733 |
+| 企业级 Keycloak / LDAP / SSO 全量接入 | 蓝图排在 Phase 3；P2 只需一个不可自报角色的可信试点入口。 | 雨爷决定把企业 IAM 提前，且完成独立安全/信任边界设计。 | 蓝图 §12.1.5 L2538-L2549、§13 L2728 |
+| OAuth 自动续签、定期健康检查、批量失效通知和完整轮换 | 蓝图明确为 Phase 3；P2 只做基础验证和状态总览。 | Phase 3 凭证生命周期任务。 | 蓝图 §7.4.7 L1671-L1677、§13 L2732 |
+| 复杂并行 DAG、跨天长事务、外部 Workflow 引擎、LLM 改写 Workflow | 真实试点不要求扩大 Workflow 语义，提前做会产生半成品可靠性边界。 | 出现明确长流程/恢复需求，另立架构与可靠性任务。 | 蓝图 §4.3.2 L435-L454、§4.3.3 L457-L468 |
+| PydanticAI / 新编排框架默认引入 | 它不是 P2 目标的必要条件，既有 Spike 结论为 failed with caveat，且仍需内网 vLLM 复验。 | 内网复验通过，且雨爷确认收益大于新增框架面。 | 蓝图 §6.11 L1368-L1374、§13 L2716；`ADR-P0-SPIKE-007-pydanticai-qwen-vllm.md` L91-L103、L194-L202 |
+| `P2-CONFIRM-RESUME-001` 主动实施 | 当前仍是安全不变量受守卫的功能欠债；默认仅在非 Workflow 高风险 `action/query` 出现时自触发。 | 雨爷决定主动做，或选定写用例命中其自触发条件。 | `PHASE1_SPEC.md` S-B5.5 L243；`TASK_INDEX.md` §5.1 L109-L118 |
+| Temporal/Celery/Milvus/OpenSearch/Next.js/原生 App 等平台升级 | P2 没有已证实规模触发条件，升级不会直接闭合部门试点。 | 对应规模、可靠性、门户或移动需求出现并通过 ADR。 | 蓝图 §12.2 L2552-L2603、§12.3 L2604-L2622、§13 L2719-L2767 |
+
+### BLOCKED（依赖外部输入，不排期）
+
+| 阻塞项 | 必需外部输入 | 来源 |
+|---|---|---|
+| 真实 LLM / 生产装配 | 内网 vLLM endpoint，以及 `max_model_len`、量化、timeout、`max_tokens`、`enable_thinking` 的实际值。 | `P1-PARAM-001.md` L3-L7、L24-L59 |
+| 可信试点入口 | 雨爷选择最小试点认证方案，或 infra 提供现有 IAM/SSO 可接入条件；禁止继续把 `X-EternalAI-Roles` 当证明。 | `app/api/v1/admin.py` L38-L51；蓝图 §12.1.5 L2538-L2549 |
+| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | 蓝图 §15 L2870-L2907；`ADR-P0-SPIKE-005a-oa-api-auth.md` L123-L150、`ADR-P0-SPIKE-005b-u8-api-auth.md` L122-L148、`ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md` L124-L152 |
+| 正式 Secret 管理 | 企业允许的 Vault/KMS/OS secret 方案、密钥责任边界与轮换要求；不填具体产品/参数。 | 蓝图 §7.4.3 L1540-L1549、§7.4.6 L1597-L1653、§7.4.7 L1677 |
+| DB Gateway 真实纵切 | 业务负责人/DBA 批准的只读视图、字段/行级范围、测试数据与访问身份。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947 |
+| Memory 与低风险写入验收 | 经批准的知识语料/用户数据边界；以及具体写操作、测试环境、owner、回滚/补偿能力。 | 蓝图 §10.1-§10.2 L2148-L2205、§5.9 L878-L918 |
+
+## 3. 任务 DAG
+
+> Q 档按 `ROLE_POLICY.md` §Q0-Q3 L30-L41；以下 task_id 也是草案，只有本计划获批后才可开 lane。
+
+| task_id | 一句话交付 | depends_on | 风险档 | BLOCKED |
+|---|---|---|---|---|
+| `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | 是：vLLM 参数、认证方案 |
+| `P2-IDENTITY-CREDENTIAL-001` | 选定系统的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：目标系统与 Secret 方案 |
+| `P2-READ-ADAPTER-001` | 首个真实系统只读用例经 Gateway→Adapter→Evaluator→Trace→Response 完整闭环。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：现场接口/凭证/测试环境 |
+| `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
+| `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
+| `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
+| `P2-SKILL-CANDIDATE-001` | 基础 Skill 候选可登记、审查、拒绝，且不能自动发布或执行。 | `P2-PILOT-OPS-001` | Q3 | 是：候选来源语义待拍板 |
+| `P2-GOLDEN-001` | 冻结 P2 新 Golden，覆盖真实只读、绑定、DB、隔离、审计与反馈负向边界。 | `P2-READ-ADAPTER-001`、`P2-DB-GATEWAY-001`、`P2-PILOT-OPS-001`、`P2-MEMORY-001`、`P2-SKILL-CANDIDATE-001` | Q3 | 否（需显式 fixture 人批） |
+| `P2-LOW-RISK-WRITE-001` | 一个获批低风险写操作完成幂等、预览、确认、补偿、评测与审计。 | `P2-GOLDEN-001`；若命中自触发条件再依赖 `P2-CONFIRM-RESUME-001` | Q3 | 是：写用例/沙箱/授权 |
+
+主链：`FOUNDATION → IDENTITY_CREDENTIAL → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
+
+## 4. 开放问题（待雨爷定）
+
+1. **A1 是否成立**：生产 composition、真实 LLM 和最小可信试点入口是否作为 P2 首个硬前置？
+2. **首个系统/用例**：OA、U8、iVMS 谁先做；首个只读用例与第二个 Adapter 的启动条件是什么？
+3. **认证路线**：P2 采用哪种最小可信认证；是否把企业 IAM/SSO 从 Phase 3 提前？
+4. **DB Gateway**：Phase 2 路线图写了基础 DB Gateway，但蓝图又限定“仅无 API/报表需求时”；是否已有获批报表用例？
+5. **Skill 候选池**：只允许管理员/用户手工登记，还是允许脱敏 Trace 产生“候选提议”？后者不得变成自动 Skill 生成。
+6. **框架**：默认继续 raw SDK；是否投入内网 PydanticAI 复验并可能局部引入？
+7. **confirm 欠债**：`P2-CONFIRM-RESUME-001` 保持自触发，还是本阶段主动做？
+8. **低风险写入**：具体选哪个动作、何种确认/审批、是否有沙箱与可验证补偿？
+
+## 5. P2 不做什么
+
+- 不把“能连到接口”当试点完成；缺可信身份、正式凭证、审计、Evaluator 或负向 Golden 时仍是半成品。（蓝图 §3.2 L176-L186、§7.0 L1383-L1404、§13 L2701-L2717）
+- 不让 Runtime、LLM、UI、Workflow 或 Skill 绕过 Capability Gateway；不让 DB Gateway 自由查生产表。（蓝图 §7.3 L1436-L1502、§14.2.1-§14.2.2 L2787-L2806）
+- 不把密码、token、Cookie、session 或敏感原文写入 LLM、Memory、Skill、Trace、日志、fixture 或报告。（蓝图 §7.4.3 L1540-L1549、§14.2.3 L2808-L2817）
+- 不因未绑定/凭证失效自动切换服务账号；不让自报角色获得 Admin 权限。（蓝图 §9.1.1 L2021-L2062）
+- 不在外部输入缺失时编 endpoint、infra 数值、凭证模式或系统能力；BLOCKED 项只解除，不猜测。（`P1-PARAM-001.md` L52-L59、L73-L77；蓝图 §15 L2870-L2907）
