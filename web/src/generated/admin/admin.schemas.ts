@@ -4,6 +4,123 @@
  * EternalAI Admin Registry API
  * OpenAPI spec version: 0.0.0
  */
+export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const TaskStatus = {
+  created: 'created',
+  running: 'running',
+  waiting_user: 'waiting_user',
+  completed: 'completed',
+  failed: 'failed',
+  no_capability_found: 'no_capability_found',
+} as const;
+
+export type TargetSystem = typeof TargetSystem[keyof typeof TargetSystem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const TargetSystem = {
+  oa: 'oa',
+  u8: 'u8',
+  hikvision_ivms: 'hikvision_ivms',
+} as const;
+
+export type ExecutionIdentity = typeof ExecutionIdentity[keyof typeof ExecutionIdentity];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ExecutionIdentity = {
+  user_delegated: 'user_delegated',
+  system_scope: 'system_scope',
+  admin_approved_proxy: 'admin_approved_proxy',
+} as const;
+
+export type IdentityBindStatus = typeof IdentityBindStatus[keyof typeof IdentityBindStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const IdentityBindStatus = {
+  active: 'active',
+  unbound: 'unbound',
+  expired: 'expired',
+  revoked: 'revoked',
+  verification_failed: 'verification_failed',
+  needs_binding_scope: 'needs_binding_scope',
+} as const;
+
+export interface AdminTaskView {
+  task_id: string;
+  session_id: string;
+  ai_user_id: string;
+  status: TaskStatus;
+  /** @nullable */
+  capability_id: string | null;
+  /** @nullable */
+  error_code: string | null;
+}
+
+export type AdminTaskEventEvidenceStepOutputKeys = {[key: string]: string[]};
+
+export interface AdminTaskEventEvidence {
+  capability_id?: string;
+  selection_rule?: string;
+  workflow_id?: string;
+  workflow_version?: string;
+  workflow_status?: string;
+  error_code?: string;
+  step_id?: string;
+  step_index?: number;
+  step_status?: string;
+  attempt?: number;
+  retry_number?: number;
+  max_attempts?: number;
+  waiting_step_id?: string;
+  waiting_step_index?: number;
+  confirmed_capability_id?: string;
+  completed_step_ids?: string[];
+  step_output_keys?: AdminTaskEventEvidenceStepOutputKeys;
+  recovery_input_keys?: string[];
+}
+
+export interface AdminTaskEventView {
+  event_id: string;
+  task_id: string;
+  event_type: string;
+  timestamp: string;
+  evidence: AdminTaskEventEvidence;
+}
+
+export interface AdminBindingView {
+  /** @nullable */
+  binding_id: string | null;
+  target_system: TargetSystem;
+  execution_identity: ExecutionIdentity;
+  bind_status: IdentityBindStatus;
+  /** @nullable */
+  binding_scope: string | null;
+  /** @nullable */
+  account_set_id: string | null;
+  /** @nullable */
+  device_domain_id: string | null;
+  /** @nullable */
+  reason_code: string | null;
+}
+
+export interface AdminTaskListResponse {
+  items: AdminTaskView[];
+}
+
+export interface AdminTaskEventListResponse {
+  items: AdminTaskEventView[];
+}
+
+export interface AdminBindingListResponse {
+  ai_user_id: string;
+  items: AdminBindingView[];
+}
+
 export type CapabilityType = typeof CapabilityType[keyof typeof CapabilityType];
 
 
@@ -127,6 +244,21 @@ export interface FastApiValidationErrorResponse {
 }
 
 /**
+ * A session_id or ai_user_id filter is required
+ */
+export type TaskFilterRequiredResponse = AdminErrorResponse;
+
+/**
+ * The Task was not found
+ */
+export type TaskNotFoundResponse = AdminErrorResponse;
+
+/**
+ * The Binding query parameters are invalid
+ */
+export type BindingQueryInvalidResponse = AdminErrorResponse;
+
+/**
  * The declared roles are insufficient
  */
 export type RoleNotAllowedResponse = AdminErrorResponse;
@@ -150,3 +282,16 @@ export type RegistryUnavailableResponse = AdminErrorResponse;
  * Unverified comma-separated role claims for Admin Lite.
  */
 export type RoleClaimsParameter = string | null;
+
+export type ListTasksParams = {
+session_id?: string;
+ai_user_id?: string;
+};
+
+export type ListBindingsParams = {
+ai_user_id?: string;
+target_system?: TargetSystem;
+binding_scope?: string;
+account_set_id?: string;
+device_domain_id?: string;
+};

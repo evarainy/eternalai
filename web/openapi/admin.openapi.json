@@ -5,6 +5,161 @@
     "version": "0.0.0"
   },
   "paths": {
+    "/api/v1/admin/tasks": {
+      "get": {
+        "operationId": "listTasks",
+        "summary": "List Tasks by session or AI user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ai_user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tasks matching the supplied filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTaskListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "422": {
+            "$ref": "#/components/responses/TaskFilterRequired"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/tasks/{task_id}/events": {
+      "get": {
+        "operationId": "listTaskEvents",
+        "summary": "List safe evidence for a Task",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TaskId"
+          },
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task events with allowlisted evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTaskEventListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "404": {
+            "$ref": "#/components/responses/TaskNotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/bindings": {
+      "get": {
+        "operationId": "listBindings",
+        "summary": "List identity bindings for an AI user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoleClaims"
+          },
+          {
+            "name": "ai_user_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_system",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TargetSystem"
+            }
+          },
+          {
+            "name": "binding_scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_set_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "device_domain_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Identity bindings matching the supplied filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminBindingListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/RoleNotAllowed"
+          },
+          "422": {
+            "$ref": "#/components/responses/BindingQueryInvalid"
+          },
+          "503": {
+            "$ref": "#/components/responses/RegistryUnavailable"
+          }
+        }
+      }
+    },
     "/api/v1/admin/registry": {
       "get": {
         "operationId": "listRegistry",
@@ -195,6 +350,14 @@
   },
   "components": {
     "parameters": {
+      "TaskId": {
+        "name": "task_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "CapabilityId": {
         "name": "capability_id",
         "in": "path",
@@ -215,6 +378,36 @@
       }
     },
     "responses": {
+      "TaskFilterRequired": {
+        "description": "A session_id or ai_user_id filter is required",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
+      "TaskNotFound": {
+        "description": "The Task was not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
+      "BindingQueryInvalid": {
+        "description": "The Binding query parameters are invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AdminErrorResponse"
+            }
+          }
+        }
+      },
       "RoleNotAllowed": {
         "description": "The declared roles are insufficient",
         "content": {
@@ -257,6 +450,252 @@
       }
     },
     "schemas": {
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "created",
+          "running",
+          "waiting_user",
+          "completed",
+          "failed",
+          "no_capability_found"
+        ]
+      },
+      "TargetSystem": {
+        "type": "string",
+        "enum": ["oa", "u8", "hikvision_ivms"]
+      },
+      "ExecutionIdentity": {
+        "type": "string",
+        "enum": ["user_delegated", "system_scope", "admin_approved_proxy"]
+      },
+      "IdentityBindStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "unbound",
+          "expired",
+          "revoked",
+          "verification_failed",
+          "needs_binding_scope"
+        ]
+      },
+      "AdminTaskView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "session_id",
+          "ai_user_id",
+          "status",
+          "capability_id",
+          "error_code"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "ai_user_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "capability_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "error_code": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "AdminTaskEventEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "capability_id": {
+            "type": "string"
+          },
+          "selection_rule": {
+            "type": "string"
+          },
+          "workflow_id": {
+            "type": "string"
+          },
+          "workflow_version": {
+            "type": "string"
+          },
+          "workflow_status": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "step_index": {
+            "type": "integer"
+          },
+          "step_status": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "retry_number": {
+            "type": "integer"
+          },
+          "max_attempts": {
+            "type": "integer"
+          },
+          "waiting_step_id": {
+            "type": "string"
+          },
+          "waiting_step_index": {
+            "type": "integer"
+          },
+          "confirmed_capability_id": {
+            "type": "string"
+          },
+          "completed_step_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "step_output_keys": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "recovery_input_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AdminTaskEventView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "task_id", "event_type", "timestamp", "evidence"],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AdminTaskEventEvidence"
+          }
+        }
+      },
+      "AdminBindingView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "binding_id",
+          "target_system",
+          "execution_identity",
+          "bind_status",
+          "binding_scope",
+          "account_set_id",
+          "device_domain_id",
+          "reason_code"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "target_system": {
+            "$ref": "#/components/schemas/TargetSystem"
+          },
+          "execution_identity": {
+            "$ref": "#/components/schemas/ExecutionIdentity"
+          },
+          "bind_status": {
+            "$ref": "#/components/schemas/IdentityBindStatus"
+          },
+          "binding_scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "account_set_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "device_domain_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "reason_code": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "AdminTaskListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminTaskView"
+            }
+          }
+        }
+      },
+      "AdminTaskEventListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminTaskEventView"
+            }
+          }
+        }
+      },
+      "AdminBindingListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ai_user_id", "items"],
+        "properties": {
+          "ai_user_id": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminBindingView"
+            }
+          }
+        }
+      },
       "CapabilityType": {
         "type": "string",
         "enum": ["query", "action", "workflow", "mock"]
