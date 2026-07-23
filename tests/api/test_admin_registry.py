@@ -95,6 +95,17 @@ class EmptyTaskStore:
         return []
 
 
+class EmptyTraceQuery:
+    async def list_events_by_trace(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def list_events_by_task(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+    async def list_events_by_session(self, *args: Any, **kwargs: Any) -> list[Any]:
+        return []
+
+
 class AdapterSentinel:
     def __init__(self) -> None:
         self.calls = 0
@@ -170,6 +181,7 @@ def _client(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),
         trace_port=trace,
+        trace_query=EmptyTraceQuery(),
     )
     return TestClient(
         create_app(

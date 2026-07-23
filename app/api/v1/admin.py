@@ -12,6 +12,7 @@ from app.admin.evidence import (
     AdminBindingListResponse,
     AdminTaskEventListResponse,
     AdminTaskListResponse,
+    AdminTraceListResponse,
 )
 from app.admin.registry import (
     AdminBindingQueryInvalidError,
@@ -24,6 +25,7 @@ from app.admin.registry import (
     AdminRoleNotAllowedError,
     AdminTaskFilterRequiredError,
     AdminTaskNotFoundError,
+    AdminTraceFilterRequiredError,
 )
 
 
@@ -111,6 +113,14 @@ def _raise_http(error: RuntimeError) -> NoReturn:
             detail={
                 "code": "binding_query_invalid",
                 "message": "Binding query parameters are invalid.",
+            },
+        ) from None
+    if isinstance(error, AdminTraceFilterRequiredError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "trace_filter_required",
+                "message": "trace_id, task_id, or session_id is required.",
             },
         ) from None
     raise error
@@ -244,5 +254,27 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
         except RuntimeError as error:
             _raise_http(error)
         return bindings
+
+    @router.get(
+        "/traces",
+        response_model=AdminTraceListResponse,
+        response_model_exclude_none=True,
+    )
+    async def list_traces(
+        context: AdminContext,
+        trace_id: Annotated[str | None, Query()] = None,
+        task_id: Annotated[str | None, Query()] = None,
+        session_id: Annotated[str | None, Query()] = None,
+    ) -> AdminTraceListResponse:
+        try:
+            traces = await _configured(service).list_traces(
+                context,
+                trace_id=trace_id,
+                task_id=task_id,
+                session_id=session_id,
+            )
+        except RuntimeError as error:
+            _raise_http(error)
+        return AdminTraceListResponse(items=traces)
 
     return router

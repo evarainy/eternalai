@@ -16,6 +16,7 @@ from app.admin.evidence import (
     AdminBindingView,
     AdminTaskEventView,
     AdminTaskView,
+    AdminTracePersistedView,
 )
 from app.ports.capability_registry import (
     CapabilityExecutionIdentity,
@@ -29,7 +30,13 @@ from app.ports.capability_registry import (
 from app.ports.identity_mapping import IdentityMappingPort, TargetSystem
 from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyGuardPort
 from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskStorePort
-from app.ports.trace import TraceEvent, TraceEventStatus, TracePort
+from app.ports.trace import (
+    TRACE_QUERY_LIMIT,
+    TraceEvent,
+    TraceEventStatus,
+    TracePort,
+    TraceQueryPort,
+)
 
 
 class AdminCapabilityCreate(BaseModel):
@@ -137,6 +144,10 @@ class AdminBindingQueryInvalidError(RuntimeError):
     """Raised after authorization when Binding query parameters are invalid."""
 
 
+class AdminTraceFilterRequiredError(RuntimeError):
+    """Raised after authorization when no bounded Trace filter was supplied."""
+
+
 class AdminRegistryService:
     """Role-guarded Registry actions with no execution-surface dependency."""
 
@@ -148,12 +159,14 @@ class AdminRegistryService:
         identity_mapping: IdentityMappingPort,
         policy_guard: PolicyGuardPort,
         trace_port: TracePort,
+        trace_query: TraceQueryPort,
     ) -> None:
         self._capability_registry = capability_registry
         self._task_store = task_store
         self._identity_mapping = identity_mapping
         self._policy_guard = policy_guard
         self._trace_port = trace_port
+        self._trace_query = trace_query
 
     async def list_capabilities(
         self,
@@ -345,6 +358,58 @@ class AdminRegistryService:
         )
         return AdminBindingListResponse(ai_user_id=ai_user_id, items=views)
 
+    async def list_traces(
+        self,
+        context: AdminRequestContext,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        session_id: str | None = None,
+    ) -> list[AdminTracePersistedView]:
+        await self._authorize("traces_list", context)
+        trace_id = _non_blank_filter(trace_id)
+        task_id = _non_blank_filter(task_id)
+        session_id = _non_blank_filter(session_id)
+        if trace_id is None and task_id is None and session_id is None:
+            await self._record(
+                action="traces_list",
+                context=context,
+                status="failed",
+                decision="allow",
+                attributes={"reason_code": "trace_filter_required"},
+            )
+            raise AdminTraceFilterRequiredError(
+                "trace_id, task_id, or session_id is required"
+            )
+
+        if trace_id is not None:
+            events = await self._trace_query.list_events_by_trace(
+                trace_id,
+                task_id=task_id,
+                session_id=session_id,
+            )
+        elif task_id is not None:
+            events = await self._trace_query.list_events_by_task(
+                task_id,
+                session_id=session_id,
+            )
+        else:
+            assert session_id is not None
+            events = await self._trace_query.list_events_by_session(session_id)
+
+        views = [
+            AdminTracePersistedView.from_record(event)
+            for event in events[:TRACE_QUERY_LIMIT]
+        ]
+        await self._record(
+            action="traces_list",
+            context=context,
+            status="ok",
+            decision="allow",
+            attributes={"result_count": len(views)},
+        )
+        return views
+
     async def _record_invalid_binding_query(
         self,
         reason_code: str,
@@ -493,4 +558,11 @@ __all__ = (
     "AdminRoleNotAllowedError",
     "AdminTaskFilterRequiredError",
     "AdminTaskNotFoundError",
+    "AdminTraceFilterRequiredError",
 )
+
+
+def _non_blank_filter(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return value

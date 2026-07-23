@@ -25,7 +25,7 @@ from app.ports.task_store import (
     TaskRecord,
     TaskStatus,
 )
-from app.ports.trace import TraceEvent
+from app.ports.trace import TRACE_QUERY_LIMIT, TraceEvent, TracePersistedEvent
 
 
 class RegistrySentinel:
@@ -153,6 +153,36 @@ class RecordingTrace:
         self.events.append(event)
 
 
+class RecordingTraceQuery:
+    def __init__(self, events: list[TracePersistedEvent] | None = None) -> None:
+        self.events = events or []
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    async def list_events_by_trace(
+        self,
+        trace_id: str,
+        **filters: object,
+    ) -> list[TracePersistedEvent]:
+        self.calls.append(("trace", trace_id, filters))
+        return self.events
+
+    async def list_events_by_task(
+        self,
+        task_id: str,
+        **filters: object,
+    ) -> list[TracePersistedEvent]:
+        self.calls.append(("task", task_id, filters))
+        return self.events
+
+    async def list_events_by_session(
+        self,
+        session_id: str,
+        **filters: object,
+    ) -> list[TracePersistedEvent]:
+        self.calls.append(("session", session_id, filters))
+        return self.events
+
+
 class AdapterSentinel:
     def __init__(self) -> None:
         self.calls = 0
@@ -248,11 +278,38 @@ def _binding(index: int) -> IdentityCheckResult:
     )
 
 
+def _trace_event(index: int) -> TracePersistedEvent:
+    return TracePersistedEvent(
+        event_id=f"trace-event-{index:03d}",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        event_type="adapter_error",
+        status="failed",
+        capability_id="oa.leave.apply",
+        error_code="adapter_timeout",
+        attributes={
+            "safe": "visible",
+            "authorization": "Bearer MUST-NOT-LEAK-ADMIN-TRACE",
+            "token": "MUST-NOT-LEAK-DIRECT-TOKEN",
+            "nested": {"access_token": "MUST-NOT-LEAK-ADMIN-TRACE"},
+            "dsn": "postgresql+psycopg://alice:MUST-NOT-LEAK-URI@db/app",
+            "headers": {
+                "X-Api-Key": "MUST-NOT-LEAK-API-KEY",
+                "X-CSRF-Token": "MUST-NOT-LEAK-CSRF-TOKEN",
+            },
+        },
+        created_at=datetime(2026, 7, 23, tzinfo=timezone.utc)
+        + timedelta(seconds=index),
+    )
+
+
 def _client(
     task_store: RecordingTaskStore,
     identity_mapping: RecordingIdentityMapping,
     trace: RecordingTrace,
     runtime: RuntimeSentinel | None = None,
+    trace_query: RecordingTraceQuery | None = None,
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=RegistrySentinel(),
@@ -262,6 +319,7 @@ def _client(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
         ),
         trace_port=trace,
+        trace_query=trace_query or RecordingTraceQuery(),
     )
     return TestClient(create_app(runtime=runtime, admin_registry_service=service))
 
@@ -466,12 +524,143 @@ def test_authorized_task_list_requires_a_bounded_filter() -> None:
     assert trace.events[-1].status == "failed"
 
 
+def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
+    query = RecordingTraceQuery(
+        [_trace_event(index) for index in range(TRACE_QUERY_LIMIT + 1)]
+    )
+    trace = RecordingTrace()
+    client = _client(
+        RecordingTaskStore(),
+        RecordingIdentityMapping(),
+        trace,
+        trace_query=query,
+    )
+
+    response = client.get(
+        "/api/v1/admin/traces"
+        "?trace_id=trace-1&task_id=task-1&session_id=session-1&limit=999999",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == TRACE_QUERY_LIMIT == 100
+    assert set(items[0]) == {
+        "event_id",
+        "trace_id",
+        "task_id",
+        "session_id",
+        "event_type",
+        "status",
+        "capability_id",
+        "error_code",
+        "attributes",
+        "created_at",
+    }
+    assert items[0]["attributes"] == {
+        "safe": "visible",
+        "authorization": "[REDACTED]",
+        "token": "[REDACTED]",
+        "nested": {"access_token": "[REDACTED]"},
+        "dsn": "[REDACTED]",
+        "headers": {
+            "X-Api-Key": "[REDACTED]",
+            "X-CSRF-Token": "[REDACTED]",
+        },
+    }
+    assert "MUST-NOT-LEAK-ADMIN-TRACE" not in response.text
+    assert "MUST-NOT-LEAK-URI" not in response.text
+    assert "MUST-NOT-LEAK-API-KEY" not in response.text
+    assert "MUST-NOT-LEAK-DIRECT-TOKEN" not in response.text
+    assert "MUST-NOT-LEAK-CSRF-TOKEN" not in response.text
+    assert query.calls == [
+        (
+            "trace",
+            "trace-1",
+            {"task_id": "task-1", "session_id": "session-1"},
+        )
+    ]
+    assert trace.events[-1].attributes["action"] == "traces_list"
+    assert trace.events[-1].attributes["result_count"] == 100
+
+
+def test_trace_list_denies_before_query_and_records_blocked_action() -> None:
+    query = RecordingTraceQuery([_trace_event(0)])
+    trace = RecordingTrace()
+    client = _client(
+        RecordingTaskStore(),
+        RecordingIdentityMapping(),
+        trace,
+        trace_query=query,
+    )
+
+    response = client.get("/api/v1/admin/traces?trace_id=trace-1")
+
+    assert response.status_code == 403
+    assert response.json() == ROLE_DENIED_DETAIL
+    assert query.calls == []
+    assert len(trace.events) == 1
+    assert trace.events[0].status == "blocked"
+    assert trace.events[0].attributes["action"] == "traces_list"
+    assert trace.events[0].attributes["authorization_decision"] == "deny"
+    assert trace.events[0].attributes["role_claim_authenticated"] is False
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    ["", "?trace_id=", "?task_id=%20%20&session_id="],
+)
+def test_authorized_trace_list_requires_a_non_blank_filter(
+    query_string: str,
+) -> None:
+    query = RecordingTraceQuery([_trace_event(0)])
+    trace = RecordingTrace()
+    client = _client(
+        RecordingTaskStore(),
+        RecordingIdentityMapping(),
+        trace,
+        trace_query=query,
+    )
+
+    response = client.get(
+        f"/api/v1/admin/traces{query_string}",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "code": "trace_filter_required",
+            "message": "trace_id, task_id, or session_id is required.",
+        }
+    }
+    assert query.calls == []
+    assert trace.events[-1].status == "failed"
+    assert trace.events[-1].attributes["reason_code"] == "trace_filter_required"
+
+
+def test_trace_list_returns_503_when_admin_service_is_unconfigured() -> None:
+    response = TestClient(create_app()).get(
+        "/api/v1/admin/traces?trace_id=trace-1",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "admin_registry_unavailable",
+            "message": "Admin Registry provider is not configured.",
+        }
+    }
+
+
 @pytest.mark.parametrize(
     "url",
     [
         "/api/v1/admin/tasks?ai_user_id=user-1",
         "/api/v1/admin/tasks/task-000/events",
         "/api/v1/admin/bindings?ai_user_id=user-1",
+        "/api/v1/admin/traces?trace_id=trace-1",
     ],
 )
 def test_new_admin_routes_never_reach_any_execution_surface(url: str) -> None:
