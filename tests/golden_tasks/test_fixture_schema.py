@@ -34,6 +34,8 @@ GT_IDS = [
     "GT-022",
     "GT-023",
     "GT-024",
+    "GT-025",
+    "GT-026",
 ]
 REQUIRED_TOP_LEVEL = [
     "golden_task_id",
