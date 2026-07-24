@@ -108,6 +108,10 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                         "userpassword": oa_password,
                         "oa_cookies": {"loginuuids": oa_cookie},
                         "message": identity_number,
+                        "tuple_nested": (
+                            {"userpassword": oa_password},
+                            {"message": identity_number},
+                        ),
                         "safe": "visible",
                     },
                 )
@@ -131,6 +135,10 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                 "userpassword": "[REDACTED]",
                 "oa_cookies": "[REDACTED]",
                 "message": "[REDACTED]",
+                "tuple_nested": [
+                    {"userpassword": "[REDACTED]"},
+                    {"message": "[REDACTED]"},
+                ],
                 "safe": "visible",
             }
             assert token not in raw_attributes

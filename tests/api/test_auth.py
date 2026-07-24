@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
@@ -133,6 +135,44 @@ def test_login_failure_is_generic_and_sets_no_cookie() -> None:
     }
     assert "set-cookie" not in response.headers
     assert "upstream" not in response.text
+
+
+def test_malformed_login_body_is_generic_401_without_credential_echo(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = TestClient(
+        create_app(
+            authentication=FailedAuthentication(),
+            session_tokens=_token_port(),
+            session_binder=_binder().bind,
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+    loginid_marker = "MARKER-LOGINID-MUST-NOT-ECHO"
+    password_marker = "MARKER-PASSWORD-MUST-NOT-ECHO"
+    caplog.set_level(logging.DEBUG)
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "loginid": {"raw": loginid_marker},
+            "userpassword": {"raw": password_marker},
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "authentication_failed",
+            "message": "Authentication failed.",
+        }
+    }
+    assert loginid_marker not in response.text
+    assert password_marker not in response.text
+    assert loginid_marker not in caplog.text
+    assert password_marker not in caplog.text
+    assert "set-cookie" not in response.headers
 
 
 def test_missing_token_wins_over_invalid_runtime_body_and_role_header() -> None:

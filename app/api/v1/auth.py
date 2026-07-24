@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import NoReturn
 
@@ -18,6 +19,7 @@ from app.ports.auth import (
 
 SESSION_COOKIE_NAME = "eternalai_session"
 PrincipalDependency = Callable[[Request], Awaitable[Principal]]
+_MAX_LOGIN_BODY_BYTES = 16_384
 
 _AUTHENTICATION_REQUIRED_DETAIL = {
     "code": "authentication_required",
@@ -61,7 +63,7 @@ def make_router(
 
     @router.post("/login", response_model=LoginResponse)
     async def login(
-        body: LoginCredential,
+        request: Request,
         response: Response,
     ) -> LoginResponse:
         if (
@@ -72,6 +74,11 @@ def make_router(
         ):
             _raise_authentication_failed()
         try:
+            raw_body = await request.body()
+            if len(raw_body) > _MAX_LOGIN_BODY_BYTES:
+                raise ValueError("login request exceeds the size limit")
+            payload = json.loads(raw_body)
+            body = LoginCredential.model_validate(payload)
             assert authentication is not None
             assert session_tokens is not None
             assert session_cookie_ttl_seconds is not None

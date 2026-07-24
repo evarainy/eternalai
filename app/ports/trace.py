@@ -121,7 +121,7 @@ def redact_trace_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
 def _redact_value(value: Any) -> Any:
     if isinstance(value, dict):
         return redact_trace_attributes(value)
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_redact_value(item) for item in value]
     if isinstance(value, str) and _is_credential_value(value):
         return REDACTED_TRACE_VALUE

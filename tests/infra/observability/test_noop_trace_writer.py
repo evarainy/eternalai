@@ -120,7 +120,7 @@ def test_record_event_logs_sanitized_attributes_only() -> None:
     assert raw_value not in str(logged_event)
 
 
-def test_record_event_no_sanitizer_passes_through_unchanged() -> None:
+def test_record_event_default_sanitizer_preserves_safe_attributes() -> None:
     logger = _FakeLogger()
     writer = NoopTraceWriter(logger=logger)
     attributes = {"capability_id": "oa_leave_apply", "latency_ms": 25}
@@ -129,6 +129,51 @@ def test_record_event_no_sanitizer_passes_through_unchanged() -> None:
 
     logged_event = _logged_trace_event(logger)
     assert logged_event["attributes"] == attributes
+
+
+def test_record_event_default_sanitizer_never_logs_credentials() -> None:
+    logger = _FakeLogger()
+    writer = NoopTraceWriter(logger=logger)
+    password_marker = "synthetic-" + "noop-password"
+    identity_marker = "1" * 17 + "X"
+
+    asyncio.run(
+        writer.record_event(
+            _trace_event(
+                {
+                    "tuple_nested": (
+                        {"userpassword": password_marker},
+                        {"message": identity_marker},
+                    )
+                }
+            )
+        )
+    )
+
+    logged_event = _logged_trace_event(logger)
+    assert logged_event["attributes"] == {
+        "tuple_nested": [
+            {"userpassword": "[REDACTED]"},
+            {"message": "[REDACTED]"},
+        ]
+    }
+    assert password_marker not in str(logged_event)
+    assert identity_marker not in str(logged_event)
+
+
+def test_record_event_reapplies_mandatory_redaction_after_custom_hook() -> None:
+    logger = _FakeLogger()
+    writer = NoopTraceWriter(logger=logger)
+    password_marker = "synthetic-" + "hook-password"
+    writer.set_sanitizer(lambda attributes: attributes)
+
+    asyncio.run(
+        writer.record_event(_trace_event({"userpassword": password_marker}))
+    )
+
+    logged_event = _logged_trace_event(logger)
+    assert logged_event["attributes"] == {"userpassword": "[REDACTED]"}
+    assert password_marker not in str(logged_event)
 
 
 def test_record_event_sanitizer_failure_raises_deterministic_error() -> None:
