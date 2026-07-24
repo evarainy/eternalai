@@ -189,8 +189,9 @@ def test_record_event_sanitizer_failure_raises_deterministic_error() -> None:
         asyncio.run(writer.record_event(_trace_event({"auth_header": sensitive_value})))
 
     assert str(exc_info.value) == "trace attribute sanitization failed"
+    assert exc_info.value.__context__ is None
     assert sensitive_value not in str(exc_info.value)
-    assert sensitive_value not in str(exc_info.value.__cause__)
+    assert exc_info.value.__cause__ is None
 
 
 def test_record_event_soft_fails_when_logger_raises() -> None:

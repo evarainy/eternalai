@@ -38,11 +38,9 @@ class NoopTraceWriter:
         self._sanitizer = hook
 
     async def record_event(self, event: TraceEvent) -> None:
-        try:
-            attributes = self._sanitizer(event.attributes)
-            attributes = redact_trace_attributes(attributes)
-        except Exception:
-            raise TraceSanitizationError("trace attribute sanitization failed") from None
+        attributes = self._sanitize_attributes(event.attributes)
+        if attributes is None:
+            raise TraceSanitizationError("trace attribute sanitization failed")
 
         event_payload = event.model_dump()
         event_payload["attributes"] = attributes
@@ -55,6 +53,16 @@ class NoopTraceWriter:
             )
         except Exception:
             return
+
+    def _sanitize_attributes(
+        self,
+        attributes: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            custom_sanitized = self._sanitizer(attributes)
+            return redact_trace_attributes(custom_sanitized)
+        except Exception:
+            return None
 
     async def start_task_trace(
         self,

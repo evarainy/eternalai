@@ -438,9 +438,10 @@ def test_reader_enforces_exact_limit_for_default_huge_and_negative_values() -> N
 
 def test_writer_fails_closed_when_sanitizer_raises() -> None:
     writer = PostgreSQLTraceWriter(object())  # type: ignore[arg-type]
+    sensitive_value = "synthetic-" + "oa-password"
 
     def fail(_attributes: dict[str, Any]) -> dict[str, Any]:
-        raise ValueError("synthetic sanitizer failure")
+        raise ValueError("synthetic sanitizer failure " + sensitive_value)
 
     writer.set_sanitizer(fail)
     event = TraceEvent(
@@ -449,10 +450,15 @@ def test_writer_fails_closed_when_sanitizer_raises() -> None:
         session_id="session-fail-closed",
         event_type="task_created",
         status="ok",
+        attributes={"userpassword": sensitive_value},
     )
 
     with pytest.raises(
         TraceSanitizationError,
         match="trace attribute sanitization failed",
-    ):
+    ) as exc_info:
         asyncio.run(writer.record_event(event))
+
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert sensitive_value not in str(exc_info.value)
