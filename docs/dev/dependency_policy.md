@@ -104,6 +104,7 @@ explicitly names a future dedicated allowlist file.
 | python | ruff | >=0.8,<1 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend linting / formatting validation) |
 | python | mypy | >=1.13,<2 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend static type checking) |
 | python | httpx | >=0.24.0 | spike; backend-test | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements; P0-INFRA-002 backend skeleton (backend test client / HTTP validation support) |
+| python | cryptography | >=42,<47 | backend-runtime | pending_internal_mirror_confirmation | P2-AUTH-001 approved trusted-entry RSA and encrypted OA credential storage |
 | python | instructor | >=1.0.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-002 spike requirements |
 | python | pydantic-ai | >=1,<2 | spike | pending_internal_mirror_confirmation | P0-SPIKE-007 spike requirements |
 | python | alembic | >=1.13,<2.0 | spike; backend-migration | pending_internal_mirror_confirmation | P0-SPIKE-003 spike requirements; P0-INFRA-002 backend skeleton (Alembic baseline dependency for later migration integration) |

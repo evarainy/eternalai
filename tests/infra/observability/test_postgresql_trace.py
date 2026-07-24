@@ -85,6 +85,9 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
     _require_db()
     trace_id = f"redaction-{uuid4().hex}"
     token = f"SYNTHETIC-BEARER-{uuid4().hex}"
+    oa_password = f"SYNTHETIC-OA-PASSWORD-{uuid4().hex}"
+    oa_cookie = f"SYNTHETIC-OA-COOKIE-{uuid4().hex}"
+    identity_number = "1" * 17 + "X"
 
     async def exercise() -> None:
         engine = _make_engine()
@@ -102,6 +105,9 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                     attributes={
                         "authorization": f"Bearer {token}",
                         "nested": {"access_token": token},
+                        "userpassword": oa_password,
+                        "oa_cookies": {"loginuuids": oa_cookie},
+                        "message": identity_number,
                         "safe": "visible",
                     },
                 )
@@ -122,9 +128,15 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
             assert persisted[0].attributes == {
                 "authorization": "[REDACTED]",
                 "nested": {"access_token": "[REDACTED]"},
+                "userpassword": "[REDACTED]",
+                "oa_cookies": "[REDACTED]",
+                "message": "[REDACTED]",
                 "safe": "visible",
             }
             assert token not in raw_attributes
+            assert oa_password not in raw_attributes
+            assert oa_cookie not in raw_attributes
+            assert identity_number not in raw_attributes
             assert "[REDACTED]" in raw_attributes
         finally:
             await engine.dispose()

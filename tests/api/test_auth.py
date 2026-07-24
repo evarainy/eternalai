@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi.testclient import TestClient
+
+from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
+from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.main import create_app
+from app.ports.auth import (
+    AuthenticationError,
+    LoginCredential,
+    Principal,
+    PrincipalOrgContext,
+)
+from app.ports.response_envelope import ResponseEnvelope
+
+
+class SuccessfulAuthentication:
+    def __init__(self, principal: Principal) -> None:
+        self.principal = principal
+        self.calls = 0
+
+    async def authenticate(self, credential: LoginCredential) -> Principal:
+        self.calls += 1
+        assert credential.loginid.get_secret_value()
+        assert credential.userpassword.get_secret_value()
+        return self.principal
+
+
+class FailedAuthentication:
+    async def authenticate(self, credential: LoginCredential) -> Principal:
+        raise AuthenticationError("synthetic upstream detail")
+
+
+class RecordingRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def handle_user_message(
+        self,
+        channel: str,
+        ai_user_id: str,
+        session_id: str,
+        message: str,
+        client_capabilities: dict[str, Any],
+    ) -> ResponseEnvelope:
+        self.calls.append((ai_user_id, session_id))
+        return ResponseEnvelopeBuilder().build_message(
+            response_id="response-auth",
+            task_id="task-auth",
+            session_id=session_id,
+            message="ok",
+            fallback_text="ok",
+            trace_id="trace-auth",
+            status="completed",
+        )
+
+
+def _principal(label: str, *, roles: tuple[str, ...] = ("admin",)) -> Principal:
+    return Principal(
+        ai_user_id=f"usr_v1_{label}",
+        display_name=f"Synthetic {label}",
+        roles=roles,
+        org_ctx=PrincipalOrgContext(),
+    )
+
+
+def _token_port() -> HMACSessionToken:
+    return HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+
+
+def _binder() -> PrincipalSessionBinder:
+    return PrincipalSessionBinder(binding_key=bytes(reversed(range(32))))
+
+
+def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
+    principal = _principal("login")
+    authentication = SuccessfulAuthentication(principal)
+    tokens = _token_port()
+    client = TestClient(
+        create_app(
+            authentication=authentication,
+            session_tokens=tokens,
+            session_binder=_binder().bind,
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+    synthetic_loginid = "1" * 17 + "X"
+    synthetic_password = "synthetic-" + "password"
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"loginid": synthetic_loginid, "userpassword": synthetic_password},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"authenticated": True}
+    set_cookie = response.headers["set-cookie"]
+    assert "eternalai_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Path=/api/v1" in set_cookie
+    assert synthetic_loginid not in response.text
+    assert synthetic_password not in response.text
+    assert authentication.calls == 1
+
+
+def test_login_failure_is_generic_and_sets_no_cookie() -> None:
+    client = TestClient(
+        create_app(
+            authentication=FailedAuthentication(),
+            session_tokens=_token_port(),
+            session_binder=_binder().bind,
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"loginid": "synthetic-login", "userpassword": "synthetic-secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "authentication_failed",
+            "message": "Authentication failed.",
+        }
+    }
+    assert "set-cookie" not in response.headers
+    assert "upstream" not in response.text
+
+
+def test_missing_token_wins_over_invalid_runtime_body_and_role_header() -> None:
+    response = TestClient(create_app()).post(
+        "/api/v1/runtime/handle",
+        headers={"X-EternalAI-Roles": "admin"},
+        json={"unexpected": "body"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "authentication_required"
+
+
+def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:
+    tokens = _token_port()
+    binder = _binder()
+    runtime = RecordingRuntime()
+    app = create_app(
+        runtime=runtime,
+        session_tokens=tokens,
+        session_binder=binder.bind,
+        session_cookie_ttl_seconds=3600,
+    )
+    client = TestClient(app, base_url="https://testserver")
+    body = {
+        "channel": "web",
+        "session_id": "shared-client-session",
+        "message": "hello",
+        "client_capabilities": {},
+    }
+
+    token_b = tokens.issue(_principal("b"))
+    response_b = client.post(
+        "/api/v1/runtime/handle",
+        cookies={"eternalai_session": token_b},
+        json=body,
+    )
+    bound_b = response_b.json()["session_id"]
+
+    token_a = tokens.issue(_principal("a"))
+    response_a = client.post(
+        "/api/v1/runtime/handle",
+        cookies={"eternalai_session": token_a},
+        json={**body, "session_id": bound_b},
+    )
+
+    assert response_b.status_code == 200
+    assert response_a.status_code == 404
+    assert response_a.json()["detail"]["code"] == "session_not_found"
+    assert runtime.calls == [("usr_v1_b", bound_b)]

@@ -530,8 +530,8 @@ class AdminRegistryService:
             "action": action,
             "policy_capability_id": ADMIN_POLICY_CAPABILITY_BY_ACTION[action],
             "authorization_decision": decision,
-            "role_claim_source": "request_header",
-            "role_claim_authenticated": False,
+            "role_claim_source": "authenticated_principal",
+            "role_claim_authenticated": True,
         }
         event_attributes.update(attributes or {})
         await self._trace_port.record_event(

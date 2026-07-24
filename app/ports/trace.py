@@ -45,6 +45,7 @@ _CREDENTIAL_KEYS = frozenset(
         "authorization",
         "bearer",
         "cookie",
+        "cookies",
         "set_cookie",
         "setcookie",
         "session",
@@ -68,15 +69,40 @@ _CREDENTIAL_KEYS = frozenset(
         "clientsecret",
         "private_key",
         "privatekey",
+        "loginid",
+        "login_id",
+        "userpassword",
+        "user_password",
+        "oa_password",
+        "userid",
+        "user_id",
+        "oa_userid",
+        "oa_user_id",
+        "oa_cookies",
+        "ecology_jsessionid",
+        "loginidweaver",
+        "loginuuids",
+        "_clustersessioncookiename",
+        "_clustersessionidcookiename",
+        "cluster_session_cookie_name",
+        "cluster_session_id_cookie_name",
+        "credential",
+        "credential_blob",
+        "credential_ciphertext",
+        "encrypted_loginid",
+        "encrypted_userpassword",
+        "rsa_code",
     }
 )
 _CREDENTIAL_VALUE_PATTERNS = (
+    re.compile(r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)"),
     re.compile(r"bearer\s+\S+", re.IGNORECASE),
     re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@", re.IGNORECASE),
     re.compile(
         r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
         r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
-        r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key)"
+        r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key|"
+        r"loginid|userpassword|oa[\s_-]?userid|userid)"
         r"\s*[:=]\s*\S+",
         re.IGNORECASE,
     ),

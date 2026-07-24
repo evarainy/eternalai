@@ -22,6 +22,11 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.auth_fakes import (
+    StaticSessionTokens,
+    auth_cookies,
+    make_session_binder,
+)
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -303,11 +308,21 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
         response_builder=ResponseEnvelopeBuilder(),
     )
 
-    response = TestClient(create_app(runtime=runtime)).post(
+    session_tokens = StaticSessionTokens()
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+    response = client.post(
         "/api/v1/runtime/handle",
         json={
             "channel": "api",
-            "ai_user_id": "runtime-user",
             "session_id": "runtime-session",
             "message": message,
             "client_capabilities": {},

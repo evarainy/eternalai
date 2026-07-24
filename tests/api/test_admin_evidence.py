@@ -26,6 +26,11 @@ from app.ports.task_store import (
     TaskStatus,
 )
 from app.ports.trace import TRACE_QUERY_LIMIT, TraceEvent, TracePersistedEvent
+from tests.auth_fakes import (
+    StaticSessionTokens,
+    auth_cookies,
+    make_session_binder,
+)
 
 
 class RegistrySentinel:
@@ -222,7 +227,7 @@ class RuntimeSentinel:
         raise AssertionError("Admin route reached the Runtime execution chain")
 
 
-ADMIN_HEADERS = {"X-EternalAI-Roles": "admin"}
+ADMIN_COOKIES = auth_cookies()
 ROLE_DENIED_DETAIL = {
     "detail": {
         "code": "role_not_allowed",
@@ -310,6 +315,8 @@ def _client(
     trace: RecordingTrace,
     runtime: RuntimeSentinel | None = None,
     trace_query: RecordingTraceQuery | None = None,
+    *,
+    roles: tuple[str, ...] = ("admin",),
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=RegistrySentinel(),
@@ -321,7 +328,17 @@ def _client(
         trace_port=trace,
         trace_query=trace_query or RecordingTraceQuery(),
     )
-    return TestClient(create_app(runtime=runtime, admin_registry_service=service))
+    session_tokens = StaticSessionTokens(roles=roles)
+    return TestClient(
+        create_app(
+            runtime=runtime,
+            admin_registry_service=service,
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
 
 
 @pytest.mark.parametrize("requested_limit", ["-1", "999999999"])
@@ -334,7 +351,7 @@ def test_task_list_is_whitelisted_and_fixed_at_100_regardless_of_limit(
 
     response = client.get(
         f"/api/v1/admin/tasks?ai_user_id=user-1&limit={requested_limit}",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 200
@@ -364,7 +381,7 @@ def test_task_events_drop_unknown_sensitive_payload_and_are_fixed_at_100() -> No
 
     response = client.get(
         "/api/v1/admin/tasks/task-000/events?limit=999999999",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 200
@@ -399,7 +416,7 @@ def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
         "?ai_user_id=user-1&target_system=oa&binding_scope=self"
         "&account_set_id=account-set&device_domain_id=device-domain"
         "&limit=-1",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 200
@@ -440,9 +457,9 @@ def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
     task_store = RecordingTaskStore([_task(0)], [_event(0)])
     identity_mapping = RecordingIdentityMapping([_binding(0)])
     trace = RecordingTrace()
-    client = _client(task_store, identity_mapping, trace)
+    client = _client(task_store, identity_mapping, trace, roles=())
 
-    response = client.get(url)
+    response = client.get(url, cookies=ADMIN_COOKIES)
 
     assert response.status_code == 403
     assert response.json() == ROLE_DENIED_DETAIL
@@ -450,7 +467,7 @@ def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
     assert identity_mapping.calls == []
     assert len(trace.events) == 1
     assert trace.events[0].status == "blocked"
-    assert trace.events[0].attributes["role_claim_authenticated"] is False
+    assert trace.events[0].attributes["role_claim_authenticated"] is True
 
 
 @pytest.mark.parametrize(
@@ -471,7 +488,7 @@ def test_authorized_invalid_binding_query_is_checked_after_role_guard(
 
     response = client.get(
         f"/api/v1/admin/bindings{query}",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 422
@@ -495,7 +512,7 @@ def test_authorized_task_events_report_not_found_without_listing_events() -> Non
 
     response = client.get(
         "/api/v1/admin/tasks/missing-task/events",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 404
@@ -511,7 +528,7 @@ def test_authorized_task_list_requires_a_bounded_filter() -> None:
     trace = RecordingTrace()
     client = _client(task_store, RecordingIdentityMapping(), trace)
 
-    response = client.get("/api/v1/admin/tasks", headers=ADMIN_HEADERS)
+    response = client.get("/api/v1/admin/tasks", cookies=ADMIN_COOKIES)
 
     assert response.status_code == 422
     assert response.json() == {
@@ -539,7 +556,7 @@ def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
     response = client.get(
         "/api/v1/admin/traces"
         "?trace_id=trace-1&task_id=task-1&session_id=session-1&limit=999999",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 200
@@ -592,9 +609,13 @@ def test_trace_list_denies_before_query_and_records_blocked_action() -> None:
         RecordingIdentityMapping(),
         trace,
         trace_query=query,
+        roles=(),
     )
 
-    response = client.get("/api/v1/admin/traces?trace_id=trace-1")
+    response = client.get(
+        "/api/v1/admin/traces?trace_id=trace-1",
+        cookies=ADMIN_COOKIES,
+    )
 
     assert response.status_code == 403
     assert response.json() == ROLE_DENIED_DETAIL
@@ -603,7 +624,7 @@ def test_trace_list_denies_before_query_and_records_blocked_action() -> None:
     assert trace.events[0].status == "blocked"
     assert trace.events[0].attributes["action"] == "traces_list"
     assert trace.events[0].attributes["authorization_decision"] == "deny"
-    assert trace.events[0].attributes["role_claim_authenticated"] is False
+    assert trace.events[0].attributes["role_claim_authenticated"] is True
 
 
 @pytest.mark.parametrize(
@@ -624,7 +645,7 @@ def test_authorized_trace_list_requires_a_non_blank_filter(
 
     response = client.get(
         f"/api/v1/admin/traces{query_string}",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 422
@@ -640,9 +661,18 @@ def test_authorized_trace_list_requires_a_non_blank_filter(
 
 
 def test_trace_list_returns_503_when_admin_service_is_unconfigured() -> None:
-    response = TestClient(create_app()).get(
+    session_tokens = StaticSessionTokens()
+    client = TestClient(
+        create_app(
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+    response = client.get(
         "/api/v1/admin/traces?trace_id=trace-1",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 503
@@ -675,7 +705,7 @@ def test_new_admin_routes_never_reach_any_execution_surface(url: str) -> None:
         runtime,
     )
 
-    response = client.get(url, headers=ADMIN_HEADERS)
+    response = client.get(url, cookies=ADMIN_COOKIES)
 
     assert response.status_code == 200
     assert runtime.calls == 0

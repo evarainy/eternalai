@@ -173,3 +173,41 @@ def test_safe_telemetry_names_are_not_over_redacted() -> None:
     }
 
     assert redact_trace_attributes(payload) == payload
+
+
+@pytest.mark.parametrize(
+    "credential_key",
+    (
+        "loginid",
+        "login_id",
+        "userpassword",
+        "oa_userid",
+        "userid",
+        "ecology_JSessionid",
+        "loginidweaver",
+        "loginuuids",
+        "__clusterSessionCookieName",
+        "__clusterSessionIDCookieName",
+        "oa_cookies",
+        "credential_ciphertext",
+        "encrypted_loginid",
+        "encrypted_userpassword",
+        "rsa_code",
+    ),
+)
+def test_redacts_oa_authentication_credential_keys(credential_key: str) -> None:
+    payload = {credential_key: "synthetic-" + "oa-auth-value"}
+
+    assert redact_trace_attributes(payload) == {credential_key: "[REDACTED]"}
+
+
+@pytest.mark.parametrize("digits", [15, 17])
+def test_redacts_national_identity_number_under_safe_nested_key(digits: int) -> None:
+    suffix = "X" if digits == 17 else ""
+    synthetic_identity_number = "1" * digits + suffix
+    payload = {"safe": [{"message": synthetic_identity_number}]}
+
+    result = redact_trace_attributes(payload)
+
+    assert result == {"safe": [{"message": "[REDACTED]"}]}
+    assert synthetic_identity_number not in str(result)

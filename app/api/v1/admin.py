@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, NoReturn
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
 
 from app.admin.evidence import (
@@ -27,6 +27,7 @@ from app.admin.registry import (
     AdminTaskNotFoundError,
     AdminTraceFilterRequiredError,
 )
+from app.api.v1.auth import Principal, PrincipalDependency
 
 
 class AdminCapabilityListResponse(BaseModel):
@@ -35,23 +36,14 @@ class AdminCapabilityListResponse(BaseModel):
     items: list[AdminCapabilityView]
 
 
-def _request_context(
-    role_claims: Annotated[
-        str | None,
-        Header(alias="X-EternalAI-Roles"),
-    ] = None,
-) -> AdminRequestContext:
-    roles = tuple(role.strip() for role in (role_claims or "").split(",") if role.strip())
+def _request_context(principal: Principal) -> AdminRequestContext:
     trace_id = uuid4().hex
     return AdminRequestContext(
         trace_id=trace_id,
-        session_id="admin-lite",
-        ai_user_id="unverified-admin-request",
-        roles=roles,
+        session_id=f"admin-v1:{principal.ai_user_id}",
+        ai_user_id=principal.ai_user_id,
+        roles=principal.roles,
     )
-
-
-AdminContext = Annotated[AdminRequestContext, Depends(_request_context)]
 
 
 def _configured(service: AdminRegistryService | None) -> AdminRegistryService:
@@ -126,11 +118,21 @@ def _raise_http(error: RuntimeError) -> NoReturn:
     raise error
 
 
-def make_router(service: AdminRegistryService | None) -> APIRouter:
+def make_router(
+    service: AdminRegistryService | None,
+    require_principal: PrincipalDependency,
+) -> APIRouter:
     router = APIRouter()
 
+    async def authenticated_context(
+        principal: Principal = Depends(require_principal),
+    ) -> AdminRequestContext:
+        return _request_context(principal)
+
     @router.get("/registry", response_model=AdminCapabilityListResponse)
-    async def list_capabilities(context: AdminContext) -> AdminCapabilityListResponse:
+    async def list_capabilities(
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> AdminCapabilityListResponse:
         try:
             capabilities = await _configured(service).list_capabilities(context)
         except RuntimeError as error:
@@ -142,7 +144,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     @router.get("/registry/{capability_id}", response_model=AdminCapabilityView)
     async def get_capability(
         capability_id: str,
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
     ) -> AdminCapabilityView:
         try:
             capability = await _configured(service).get_capability(
@@ -160,7 +162,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     )
     async def create_capability(
         body: AdminCapabilityCreate,
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
     ) -> AdminCapabilityView:
         try:
             capability = await _configured(service).create_capability(body, context)
@@ -174,7 +176,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     )
     async def enable_capability(
         capability_id: str,
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
     ) -> AdminCapabilityView:
         try:
             capability = await _configured(service).enable_capability(
@@ -191,7 +193,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     )
     async def disable_capability(
         capability_id: str,
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
     ) -> AdminCapabilityView:
         try:
             capability = await _configured(service).disable_capability(
@@ -204,7 +206,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
 
     @router.get("/tasks", response_model=AdminTaskListResponse)
     async def list_tasks(
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
         session_id: Annotated[str | None, Query()] = None,
         ai_user_id: Annotated[str | None, Query()] = None,
     ) -> AdminTaskListResponse:
@@ -225,7 +227,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
     )
     async def list_task_events(
         task_id: str,
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
     ) -> AdminTaskEventListResponse:
         try:
             events = await _configured(service).list_task_events(task_id, context)
@@ -235,7 +237,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
 
     @router.get("/bindings", response_model=AdminBindingListResponse)
     async def list_bindings(
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
         ai_user_id: Annotated[str | None, Query()] = None,
         target_system: Annotated[str | None, Query()] = None,
         binding_scope: Annotated[str | None, Query()] = None,
@@ -261,7 +263,7 @@ def make_router(service: AdminRegistryService | None) -> APIRouter:
         response_model_exclude_none=True,
     )
     async def list_traces(
-        context: AdminContext,
+        context: AdminRequestContext = Depends(authenticated_context),
         trace_id: Annotated[str | None, Query()] = None,
         task_id: Annotated[str | None, Query()] = None,
         session_id: Annotated[str | None, Query()] = None,
