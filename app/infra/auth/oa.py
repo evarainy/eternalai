@@ -161,6 +161,15 @@ class OACredentialVerifier:
         self._clock = clock
 
     async def authenticate(self, credential: LoginCredential) -> Principal:
+        principal = await self._authenticate_once(credential)
+        if principal is None:
+            raise AuthenticationError("authentication failed")
+        return principal
+
+    async def _authenticate_once(
+        self,
+        credential: LoginCredential,
+    ) -> Principal | None:
         try:
             session = self._session_factory()
             now = self._clock()
@@ -234,10 +243,8 @@ class OACredentialVerifier:
                 roles=roles,
                 org_ctx=PrincipalOrgContext(),
             )
-        except AuthenticationError:
-            raise
         except Exception:
-            raise AuthenticationError("authentication failed") from None
+            return None
 
 
 def make_urllib_session_factory(

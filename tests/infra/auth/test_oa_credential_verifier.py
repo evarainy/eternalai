@@ -241,8 +241,11 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
 def test_oa_rejection_is_generic_fail_closed_and_never_retries() -> None:
     verifier, store, openers, credential = _fixture(login_succeeds=False)
 
-    with pytest.raises(AuthenticationError, match="authentication failed"):
+    with pytest.raises(AuthenticationError, match="authentication failed") as exc_info:
         asyncio.run(verifier.authenticate(credential))
 
+    assert exc_info.value.__context__ is None
+    assert credential.loginid.get_secret_value() not in str(exc_info.value)
+    assert credential.userpassword.get_secret_value() not in str(exc_info.value)
     assert store.records == []
     assert openers[0].check_login_calls == 1
