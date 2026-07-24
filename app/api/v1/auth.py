@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.ports.auth import (
-    AuthenticationError,
     AuthenticationPort,
     LoginCredential,
     Principal,
@@ -28,6 +27,16 @@ _AUTHENTICATION_REQUIRED_DETAIL = {
 _AUTHENTICATION_FAILED_DETAIL = {
     "code": "authentication_failed",
     "message": "Authentication failed.",
+}
+_LOGIN_REQUEST_BODY = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": LoginCredential.model_json_schema(),
+            }
+        },
+    }
 }
 
 
@@ -61,7 +70,11 @@ def make_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/login", response_model=LoginResponse)
+    @router.post(
+        "/login",
+        response_model=LoginResponse,
+        openapi_extra=_LOGIN_REQUEST_BODY,
+    )
     async def login(
         request: Request,
         response: Response,
@@ -73,20 +86,14 @@ def make_router(
             or session_cookie_ttl_seconds <= 0
         ):
             _raise_authentication_failed()
-        try:
-            raw_body = await request.body()
-            if len(raw_body) > _MAX_LOGIN_BODY_BYTES:
-                raise ValueError("login request exceeds the size limit")
-            payload = json.loads(raw_body)
-            body = LoginCredential.model_validate(payload)
-            assert authentication is not None
-            assert session_tokens is not None
-            assert session_cookie_ttl_seconds is not None
-            principal = await authentication.authenticate(body)
-            token = session_tokens.issue(principal)
-        except AuthenticationError:
+        body = await _parse_login_credential(request)
+        if body is None:
             _raise_authentication_failed()
-        except Exception:
+        assert authentication is not None
+        assert session_tokens is not None
+        assert session_cookie_ttl_seconds is not None
+        token = await _authenticate_and_issue(authentication, session_tokens, body)
+        if token is None:
             _raise_authentication_failed()
         response.set_cookie(
             key=SESSION_COOKIE_NAME,
@@ -100,6 +107,32 @@ def make_router(
         return LoginResponse(authenticated=True)
 
     return router
+
+
+async def _parse_login_credential(request: Request) -> LoginCredential | None:
+    try:
+        raw_body = await request.body()
+        if len(raw_body) > _MAX_LOGIN_BODY_BYTES:
+            raise ValueError("login request exceeds the size limit")
+        payload = json.loads(raw_body)
+        return LoginCredential.model_validate(payload)
+    except Exception:
+        return None
+
+
+async def _authenticate_and_issue(
+    authentication: AuthenticationPort,
+    session_tokens: SessionTokenPort,
+    credential: LoginCredential,
+) -> str | None:
+    try:
+        principal = await authentication.authenticate(credential)
+        token = session_tokens.issue(principal)
+        if not isinstance(token, str) or not token:
+            return None
+        return token
+    except Exception:
+        return None
 
 
 def _raise_authentication_required() -> NoReturn:

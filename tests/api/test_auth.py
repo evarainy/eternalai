@@ -4,6 +4,8 @@ import logging
 from typing import Any
 
 import pytest
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
@@ -76,6 +78,24 @@ def _binder() -> PrincipalSessionBinder:
     return PrincipalSessionBinder(binding_key=bytes(reversed(range(32))))
 
 
+def _capture_http_exception_contexts(
+    application: FastAPI,
+) -> list[BaseException | None]:
+    contexts: list[BaseException | None] = []
+
+    async def capture(_request: Request, exc: Exception) -> JSONResponse:
+        assert isinstance(exc, HTTPException)
+        contexts.append(exc.__context__)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
+
+    application.add_exception_handler(HTTPException, capture)
+    return contexts
+
+
 def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
     principal = _principal("login")
     authentication = SuccessfulAuthentication(principal)
@@ -111,13 +131,15 @@ def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
 
 
 def test_login_failure_is_generic_and_sets_no_cookie() -> None:
+    application = create_app(
+        authentication=FailedAuthentication(),
+        session_tokens=_token_port(),
+        session_binder=_binder().bind,
+        session_cookie_ttl_seconds=3600,
+    )
+    contexts = _capture_http_exception_contexts(application)
     client = TestClient(
-        create_app(
-            authentication=FailedAuthentication(),
-            session_tokens=_token_port(),
-            session_binder=_binder().bind,
-            session_cookie_ttl_seconds=3600,
-        ),
+        application,
         base_url="https://testserver",
     )
 
@@ -135,18 +157,21 @@ def test_login_failure_is_generic_and_sets_no_cookie() -> None:
     }
     assert "set-cookie" not in response.headers
     assert "upstream" not in response.text
+    assert contexts == [None]
 
 
 def test_malformed_login_body_is_generic_401_without_credential_echo(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    application = create_app(
+        authentication=FailedAuthentication(),
+        session_tokens=_token_port(),
+        session_binder=_binder().bind,
+        session_cookie_ttl_seconds=3600,
+    )
+    contexts = _capture_http_exception_contexts(application)
     client = TestClient(
-        create_app(
-            authentication=FailedAuthentication(),
-            session_tokens=_token_port(),
-            session_binder=_binder().bind,
-            session_cookie_ttl_seconds=3600,
-        ),
+        application,
         base_url="https://testserver",
     )
     loginid_marker = "MARKER-LOGINID-MUST-NOT-ECHO"
@@ -173,6 +198,23 @@ def test_malformed_login_body_is_generic_401_without_credential_echo(
     assert loginid_marker not in caplog.text
     assert password_marker not in caplog.text
     assert "set-cookie" not in response.headers
+    assert contexts == [None]
+
+
+def test_login_openapi_contract_declares_login_credential_body() -> None:
+    operation = create_app().openapi()["paths"]["/api/v1/auth/login"]["post"]
+
+    request_body = operation["requestBody"]
+    assert request_body["required"] is True
+    schema = request_body["content"]["application/json"]["schema"]
+    assert schema["title"] == "LoginCredential"
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"loginid", "userpassword"}
+    assert schema["properties"]["loginid"]["format"] == "password"
+    assert schema["properties"]["loginid"]["writeOnly"] is True
+    assert schema["properties"]["userpassword"]["format"] == "password"
+    assert schema["properties"]["userpassword"]["writeOnly"] is True
 
 
 def test_missing_token_wins_over_invalid_runtime_body_and_role_header() -> None:
