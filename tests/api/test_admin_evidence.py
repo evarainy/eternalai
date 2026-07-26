@@ -468,6 +468,10 @@ def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
     assert len(trace.events) == 1
     assert trace.events[0].status == "blocked"
     assert trace.events[0].attributes["role_claim_authenticated"] is True
+    assert (
+        trace.events[0].attributes["role_claim_source"]
+        == "authenticated_principal"
+    )
 
 
 @pytest.mark.parametrize(
@@ -625,6 +629,10 @@ def test_trace_list_denies_before_query_and_records_blocked_action() -> None:
     assert trace.events[0].attributes["action"] == "traces_list"
     assert trace.events[0].attributes["authorization_decision"] == "deny"
     assert trace.events[0].attributes["role_claim_authenticated"] is True
+    assert (
+        trace.events[0].attributes["role_claim_source"]
+        == "authenticated_principal"
+    )
 
 
 @pytest.mark.parametrize(

@@ -43,7 +43,7 @@ def test_credential_store_rejects_non_aes256_keys(key: bytes) -> None:
         )
 
 
-def test_oa_credential_is_ciphertext_with_ttl_and_no_identity_binding_write() -> None:
+def test_oa_credential_is_ciphertext_with_ttl() -> None:
     from app.db.session import make_async_engine, make_async_session_factory
 
     database_url = _require_db()
@@ -80,11 +80,6 @@ def test_oa_credential_is_ciphertext_with_ttl_and_no_identity_binding_write() ->
                         {"ai_user_id": ai_user_id},
                     )
                 ).one()
-                identity_table = (
-                    await session.execute(
-                        text("SELECT to_regclass('public.identity_mappings')")
-                    )
-                ).scalar_one_or_none()
                 await session.execute(
                     text(
                         "DELETE FROM oa_session_credentials"
@@ -111,7 +106,6 @@ def test_oa_credential_is_ciphertext_with_ttl_and_no_identity_binding_write() ->
             ).digest() == hashlib.sha256(cookie_value.encode()).digest()
             assert row.cipher_version == "aes256gcm-v1"
             assert row.expires_at == expires_at
-            assert identity_table is None
         finally:
             await engine.dispose()
 

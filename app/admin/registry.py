@@ -118,6 +118,7 @@ class AdminRequestContext:
     session_id: str
     ai_user_id: str
     roles: tuple[str, ...]
+    principal_authenticated: bool = False
 
 
 class AdminRoleNotAllowedError(RuntimeError):
@@ -530,8 +531,12 @@ class AdminRegistryService:
             "action": action,
             "policy_capability_id": ADMIN_POLICY_CAPABILITY_BY_ACTION[action],
             "authorization_decision": decision,
-            "role_claim_source": "authenticated_principal",
-            "role_claim_authenticated": True,
+            "role_claim_source": (
+                "authenticated_principal"
+                if context.principal_authenticated
+                else "unverified_context"
+            ),
+            "role_claim_authenticated": context.principal_authenticated,
         }
         event_attributes.update(attributes or {})
         await self._trace_port.record_event(

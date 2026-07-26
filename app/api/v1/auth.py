@@ -110,6 +110,17 @@ def make_router(
 
 
 async def _parse_login_credential(request: Request) -> LoginCredential | None:
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            if (
+                not declared_length.isascii()
+                or not declared_length.isdigit()
+                or int(declared_length) > _MAX_LOGIN_BODY_BYTES
+            ):
+                return None
+        except (ValueError, OverflowError):
+            return None
     try:
         raw_body = await request.body()
         if len(raw_body) > _MAX_LOGIN_BODY_BYTES:

@@ -70,6 +70,7 @@ class HARFixtureOpener:
         oa_user_id: str,
         cookie_values: dict[str, str],
         login_succeeds: bool,
+        rsa_flag: str | None,
     ) -> None:
         self._cookie_jar = cookie_jar
         self._private_key = private_key
@@ -79,6 +80,7 @@ class HARFixtureOpener:
         self._oa_user_id = oa_user_id
         self._cookie_values = cookie_values
         self._login_succeeds = login_succeeds
+        self._rsa_flag = rsa_flag
         self.check_login_calls = 0
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
@@ -90,13 +92,13 @@ class HARFixtureOpener:
         assert timeout > 0
         path = urlparse(request.full_url).path
         if path == "/rsa/weaver.rsa.GetRsaInfo":
-            return FakeResponse(
-                {
-                    "rsa_pub": self._rsa_pub,
-                    "rsa_code": self._rsa_code,
-                    "rsa_flag": "RSA",
-                }
-            )
+            payload = {
+                "rsa_pub": self._rsa_pub,
+                "rsa_code": self._rsa_code,
+            }
+            if self._rsa_flag is not None:
+                payload["rsa_flag"] = self._rsa_flag
+            return FakeResponse(payload)
         if path == "/api/hrm/login/checkLogin":
             self.check_login_calls += 1
             assert request.data is not None
@@ -159,6 +161,7 @@ def _cookie(name: str, value: str) -> Cookie:
 def _fixture(
     *,
     login_succeeds: bool,
+    rsa_flag: str | None = "RSA",
 ) -> tuple[
     OACredentialVerifier,
     RecordingCredentialStore,
@@ -191,6 +194,7 @@ def _fixture(
             oa_user_id=oa_user_id,
             cookie_values=cookie_values,
             login_succeeds=login_succeeds,
+            rsa_flag=rsa_flag,
         )
         openers.append(opener)
         return cast(OpenerDirector, opener)
@@ -249,3 +253,28 @@ def test_oa_rejection_is_generic_fail_closed_and_never_retries() -> None:
     assert credential.userpassword.get_secret_value() not in str(exc_info.value)
     assert store.records == []
     assert openers[0].check_login_calls == 1
+
+
+def test_oa_rsa_flag_defaults_to_rsa_when_fixture_omits_it() -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        rsa_flag=None,
+    )
+
+    principal = asyncio.run(verifier.authenticate(credential))
+
+    assert store.records[0][0] == principal.ai_user_id
+    assert openers[0].check_login_calls == 1
+
+
+def test_oa_non_rsa_flag_is_generic_fail_closed() -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        rsa_flag="INVALID",
+    )
+
+    with pytest.raises(AuthenticationError, match="authentication failed"):
+        asyncio.run(verifier.authenticate(credential))
+
+    assert store.records == []
+    assert openers[0].check_login_calls == 0

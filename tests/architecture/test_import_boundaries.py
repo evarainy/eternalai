@@ -318,16 +318,41 @@ class TestImportBoundaries:
                 )
         assert all_violations == [], "Import boundary violations:\n" + "\n".join(all_violations)
 
-    def test_admin_api_reaches_ports_only_through_admin_service(self) -> None:
+    def test_admin_api_port_dependency_is_limited_to_auth_contract(self) -> None:
         admin_api = APP_ROOT / "api" / "v1" / "admin.py"
         imports = _collect_imports(admin_api, APP_ROOT)
 
-        assert not any(
-            module == "app.ports" or module.startswith("app.ports.")
+        # Principal is an authenticated boundary value, so the Admin API may
+        # consume that one Port contract directly. Every other Port remains
+        # behind the Admin service, and infra dependencies remain forbidden.
+        port_imports = {
+            module
             for module in imports
-        )
+            if module == "app.ports" or module.startswith("app.ports.")
+        }
+        assert {".".join(module.split(".")[:3]) for module in port_imports} == {
+            "app.ports.auth"
+        }
         assert not any(
             module == "app.infra" or module.startswith("app.infra.")
+            for module in imports
+        )
+
+    def test_auth_slice_does_not_depend_on_identity_mapping(self) -> None:
+        auth_files = [
+            APP_ROOT / "ports" / "auth.py",
+            APP_ROOT / "api" / "v1" / "auth.py",
+            *sorted((APP_ROOT / "infra" / "auth").glob("*.py")),
+        ]
+        imports = {
+            module
+            for auth_file in auth_files
+            for module in _collect_imports(auth_file, APP_ROOT)
+        }
+
+        assert not any(
+            module == "app.ports.identity_mapping"
+            or module.startswith("app.ports.identity_mapping.")
             for module in imports
         )
 

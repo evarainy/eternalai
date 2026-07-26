@@ -27,7 +27,8 @@ from app.admin.registry import (
     AdminTaskNotFoundError,
     AdminTraceFilterRequiredError,
 )
-from app.api.v1.auth import Principal, PrincipalDependency
+from app.api.v1.auth import PrincipalDependency
+from app.ports.auth import Principal
 
 
 class AdminCapabilityListResponse(BaseModel):
@@ -43,6 +44,7 @@ def _request_context(principal: Principal) -> AdminRequestContext:
         session_id=f"admin-v1:{principal.ai_user_id}",
         ai_user_id=principal.ai_user_id,
         roles=principal.roles,
+        principal_authenticated=True,
     )
 
 

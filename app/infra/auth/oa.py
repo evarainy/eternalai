@@ -179,7 +179,7 @@ class OACredentialVerifier:
             )
             rsa_pub = _required_string(rsa_info, "rsa_pub")
             rsa_code = _required_string(rsa_info, "rsa_code")
-            rsa_flag = _required_string(rsa_info, "rsa_flag")
+            rsa_flag = rsa_info.get("rsa_flag", "RSA")
             if rsa_flag != "RSA":
                 raise ValueError("OA RSA flag is invalid")
 

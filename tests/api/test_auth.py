@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -8,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from app.api.v1.auth import _parse_login_credential
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
@@ -199,6 +201,23 @@ def test_malformed_login_body_is_generic_401_without_credential_echo(
     assert password_marker not in caplog.text
     assert "set-cookie" not in response.headers
     assert contexts == [None]
+
+
+def test_declared_oversized_login_body_is_rejected_before_body_read() -> None:
+    async def unread_receive() -> dict[str, Any]:
+        raise AssertionError("request body must not be read")
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/auth/login",
+            "headers": [(b"content-length", b"16385")],
+        },
+        unread_receive,
+    )
+
+    assert asyncio.run(_parse_login_credential(request)) is None
 
 
 def test_login_openapi_contract_declares_login_credential_body() -> None:
