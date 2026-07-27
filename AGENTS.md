@@ -1,30 +1,20 @@
-# AGENTS.md - Phase 1 Compact Agent Boot Rules v1.2.0
+# AGENTS.md - Phase 2 Compact Agent Boot Rules v1.3.0
 
-This file is intentionally short. It is the always-loaded compact boot context for Codex and other generic coding agents. Do not expand it into a full spec.
-Process choreography uses the Codex App native Goal, subagents, worktrees, Review, Git, and CI. Repository documents define result and safety contracts; they do not depend on a V4 workflow command or custom lifecycle.
+This is the always-loaded compact context for coding agents. Keep detail in the linked documents; do not turn this file into a full spec or import long specs.
 
-## Phase
-Phase 1 development is complete (B2→B5 product chain + governance-repair chain landed, trunk CI green). Phase 2 has formally opened: `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query) landed at merge `f8eb8533` (CI run 30017941828 success); one recorded debt remains — `P2-CONFIRM-RESUME-001` self-triggered (see `docs/phase1/TASK_INDEX.md` §5.1). The main branch remains `phase0/main`; Phase 2 tasks use the `phase2/<task_id>` branch convention. All rules below remain active.
+## Authority and current phase
+Authority, highest first: the current Goal (latest instruction plus Outcome/Constraints/Verification) > user redlines and applicable `AGENTS.md` > approved product/architecture/interface/batch/milestone documents > repository code, tests, CI, branch protection, and runtime evidence > derived plans, skills, history, and suggestions.
 
-Phase 1 rule authority, highest first:
-1. The user's latest explicit instruction in the current native Goal
-2. Applicable `AGENTS.md` files and user redlines
-3. Approved product, architecture, interface, batch, and milestone documents
-4. Current Goal Outcome / Constraints / Verification
-5. Repository code, tests, CI, branch protection, required checks, and runtime evidence
-6. Derived plans and Worker Contracts
-7. Skills, history, examples, and agent suggestions
+Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`) and `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`). `P2-CONFIRM-RESUME-001` remains recorded but has not triggered; see `docs/phase1/TASK_INDEX.md` §5.1.
 
-Historical per-task prompts and Task Records keep their original V4 meaning. They do not become authority for a new V5 Goal.
-
-Phase 0 context-loading, style, boundary, and role/method files may be reused only when the Phase 1 prompt or docs say they are cross-stage support. They are not the current Phase 1 task authority.
+Each write lane uses one explicit Goal, one Scope, and one isolated worktree/branch; a new scope opens a new lane. Historical V4 prompts and Task Records keep their original meaning, but new work follows the current Goal and this file.
 
 ## Project at a glance
 - **EternalAI**: Government/enterprise AI Agent runtime — natural language driven, integrates OA, Yonyou U8, Hikvision iVMS
-- **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations
+- **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations; `app/ports/` must never depend on `app/infra/`
 - **Backend**: Python + uv + FastAPI | **Frontend**: React 18 + Vite + Ant Design 5.x
 - **Data**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: Qwen + vLLM raw JSON mode (baseline; instructor/PydanticAI rejected by ADR — do not introduce; see docs/phase0/PHASE1_TECHNICAL_BASELINE.md §3.1)
+- **LLM**: Qwen + vLLM raw JSON mode; do not introduce instructor or PydanticAI (see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1)
 - **Observability**: OpenTelemetry + Langfuse
 - **Full tech stack decisions**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
 
@@ -43,14 +33,15 @@ experiments/        Spike experiment code (never enters production)
 infra/docker/       Docker Compose templates
 ```
 
-## Git workflow
+## Git, Review, and authorization
 - **Main branch**: `phase0/main` (not `main`)
-- **Task branch**: Phase 2 uses `phase2/<task_id>`; Phase 1 was `phase1/<task_id>`
-- **Commit message**: `phase2(<task_id>): <short description>` (Phase 1 was `phase1(<task_id>): ...`)
-- **Merge message**: `merge phase2(<task_id>): <short description>` (Phase 1 was `merge phase1(<task_id>): ...`)
-- There is no separate local-commit human Gate. Ordinary non-force push, PR/merge, CI/CD configuration changes, and CI runs may proceed only when the current Goal and target repository policy allow them, deterministic validation and required Review pass, freshness remains bound, and branch protection/required checks are satisfied. Historical Gate 2 remains post-integration result acceptance, not Git/CI authorization.
-- Exact action-specific authorization is mandatory for file/directory or history deletion, secrets or `.env`, DB schema/real data, global/system changes, public release/production deployment, rebase, reset-hard, and force push. A risk label never supplies that authorization. Never bypass hooks or branch protection.
-- Check remote GitHub Actions CI after every merge to phase0/main
+- **Task branch**: `phase2/<task_id>`
+- **Commit**: `phase2(<task_id>): <short description>`
+- **Merge**: `merge phase2(<task_id>): <short description>`
+- Q0-Q3 controls Review strength, not human stops. Human stops come from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; stricter repository rules; or batch/milestone acceptance. An internal `app/ports/` change that preserves the architecture is not, by itself, a stop.
+- There is no separate local-commit Gate. Ordinary non-force push/PR/merge and CI/CD configuration or runs may proceed only when the Goal and repository policy allow them and deterministic validation, required Review, freshness, branch protection, and required checks pass.
+- Exact action-specific authorization is required for file/directory deletion or history rewrite, secrets or `.env`, DB schema or real data, global/system changes, public release or production deployment, rebase, reset-hard, and force push. A risk label is never authorization. Never bypass hooks or branch protection.
+- After every merge to `phase0/main`, check the corresponding remote GitHub Actions CI result.
 
 ## Validation commands
 > **The full suite needs the fixed test database running**: Docker Desktop up, test DB healthy on
@@ -58,62 +49,39 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1102 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-TRACE-PERSIST-001 / merge f8eb8533).
+> Baseline: **1147 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-AUTH-001 / merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`).
 
 ```bash
-# Full test suite
 uv run pytest
-# Single test file
 uv run pytest tests/ports/test_capability_gateway_port.py
-# Lint (scope declared once in pyproject.toml [tool.ruff] exclude)
 uv run ruff check .
-# Type check
 uv run mypy app/
-# Dependency compliance
 uv run python scripts/check_dependencies.py
-# Import boundary + weak test checker
 uv run pytest tests/architecture/
-# Weak test single file
 uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
-# Golden task gate after P1-GATE-001
-uv run python scripts/run_golden_tasks.py --gate
+uv run python scripts/run_golden_tasks.py --gate  # required for every later implementation task
+git diff --cached --name-only
+git diff --cached --stat
+git diff --cached --check
+git ls-files --others --exclude-standard
 ```
 
-## Source pointers
-- Phase 1 task template: `docs/phase1/TASK_PROMPT_TEMPLATE.md`
-- Phase 1 task DAG: `docs/phase1/TASK_INDEX.md`
-- Phase 1 per-task prompts: `docs/phase1/tasks/<task_id>.md`
-- Phase 1 task logs: `docs/phase1/task_logs/`
-- Task record schema: `docs/dev/task_record_schema.yaml`
-- Cross-stage context loading strategy: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`
-- Cross-stage boundary checklist: `docs/phase0/BOUNDARY_CHECKLIST.md`
-- Cross-stage role and method guardrails: `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`
-- Canonical long spec, consult only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
+## Read on demand / source pointers
+- Phase 1: `docs/phase1/TASK_PROMPT_TEMPLATE.md`, `docs/phase1/TASK_INDEX.md`, `docs/phase1/tasks/<task_id>.md`, `docs/phase1/task_logs/`, `docs/phase1/ROLE_POLICY.md`
+- Legacy record schema: `docs/dev/task_record_schema.yaml`
+- Cross-stage: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`, `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`, `docs/phase0/REPOSITORY_CONTEXT_MAP.md`, `docs/phase0/CODING_STYLE_BASELINE.md`, `docs/phase0/BOUNDARY_CHECKLIST.md`
+- Canonical long spec, only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
 
 ## Non-negotiable hard rules
-1. One native Goal may execute multiple task IDs and auto-next when dependencies, required evidence, Review, and result stops are satisfied. Each write lane still owns one explicit Goal and a single Scope; a new scope opens a new lane/contract.
-2. Start from the current Goal and the minimum relevant authority. Historical V4 work still starts from its matching per-task prompt; new V5 work does not require one.
-3. Risk and Q0-Q3 Review strength do not create a human Gate. Human stops come only from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant (an internal `app/ports/` change that preserves the existing architecture is not by itself a stop); a material unresolved choice; a stricter target repository Gate; or batch/milestone acceptance.
-4. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
-5. `app/ports/` is not frozen by decree. Change a contract when the design genuinely needs it, record why in the Task Record, and update every implementation and test in the same change. Prefer the smallest contract that fits, and never build a workaround for a contract you should have fixed.
-6. Do not introduce instructor or PydanticAI. Baseline remains Qwen + vLLM raw JSON mode.
-7. `P1-GATE-001` has landed. Later implementation tasks must run `scripts/run_golden_tasks.py --gate`.
-8. These stay strict at any scope, because they fail silently: do not weaken tests to pass (no `assert True`, empty `pass`, broad skip, or deleted assertions — fix the code or stop and report); do not let a failure path report success or lose its error code; do not regress session/tenant/user isolation. `FROZEN_GT_IDS` / golden fixtures still need explicit human approval.
-9. Do not store plaintext password/token/cookie/sessionid/access_token/refresh_token values in Trace, ResponseEnvelope, fixtures expected output, logs, task records, or reports.
-10. Every write lane works in one isolated worktree/branch and a single Scope. Phase 2 tasks use the `phase2/<task_id>` branch convention (Phase 1 used `phase1/<task_id>`).
-11. Do not use `not_applicable` to hide a failed check; every `not_applicable` requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-12. Historical governance-repair sequence completed: `P1-WORKFLOW-002-REPAIR-001 -> P1-CI-ALIGN-001 -> P1-OBS-001 -> P1-RUNTIME-ENTRY-001`. The general invariant remains: a downstream descriptor existing does not release its dependency gate. `P1-SPEC-001` was the independent B2 hard prerequisite and is approved/landed.
+1. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
+2. `app/ports/` contracts may change only when the design needs it: use the smallest contract, record the reason, and update every implementation and test in the same change. Never build a workaround for a contract that should be fixed.
+3. Never weaken tests to get green (`assert True`, empty `pass`, broad skip, or deleted assertions); fix the code or stop and report. A failure path must not report success or lose its error code. Never regress session/tenant/user isolation. `FROZEN_GT_IDS` and golden fixtures require explicit human approval.
+4. Never put plaintext password/token/cookie/sessionid/access_token/refresh_token in Trace, ResponseEnvelope, expected fixtures, logs, task records, or reports.
+5. Do not use `not_applicable` to hide a failed check; it requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
+6. A downstream descriptor's existence never releases its dependency gate. Golden negative/boundary paths must pass 100%, including GT-012 multi-binding scope clarification.
 
 ## Scratch/temp and artifact review rules
-- V5 Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`; repo-local `_scratch/` is for manual temp files only.
-- Verify no temp/cache artifacts (`__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `_scratch/` contents) are staged.
-- Verify untracked files are either intentionally ignored or cleaned before closeout.
-- Verify `git ls-files --others --exclude-standard` is clean, or only shows intentional files that are explicitly explained.
-- For historical V4 tasks and the final `P1-WORKFLOW-V5-001` migration only, verify Task Record `changed_files` exactly matches `git diff --cached --name-only`, and verify artifact lifecycle/cleanup timing is recorded in that Task Record.
-- For V5 tasks, verify Candidate Manifest and Recovery Index pointers bind the exact candidate and evidence; each completed task emits its own Chinese result summary of at most 20 lines.
-- Treat `.venv/` internals as out of scope unless task scope explicitly says otherwise.
-
-## Completion
-The unified Task Record is V4 legacy evidence. Existing records and the final `P1-WORKFLOW-V5-001` migration record keep schema v1.2.0 meaning; each completed task in a new V5 Goal uses native Goal state, external Candidate Manifest/Recovery Index pointers, Review evidence, and its own Chinese result summary of at most 20 lines instead of this heavy record. Package fields remain historical evidence where applicable.
-
-- Golden Task negative/boundary paths must pass 100%, including GT-012 multi-binding scope clarification.
+- Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`; repo-local `_scratch/` is only for manual temporary files.
+- Before staging, remove `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, and `.ruff_cache/`; never stage `_scratch/` contents.
+- Before closeout, `git ls-files --others --exclude-standard` must be clean or every intentional file explicitly explained.
+- Do not scan or clean inside `.venv/` unless the Scope explicitly includes it.
