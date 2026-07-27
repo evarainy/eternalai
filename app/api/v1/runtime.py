@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.v1.auth import PrincipalDependency
+from app.ports.auth import Principal, SessionBindingError
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import RuntimePort
 
@@ -15,17 +18,42 @@ class HandleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     channel: Literal["web", "cli", "api", "mock"]
-    ai_user_id: str
     session_id: str
     message: str
     client_capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
-def make_router(runtime: RuntimePort | None) -> APIRouter:
+def make_router(
+    runtime: RuntimePort | None,
+    require_principal: PrincipalDependency,
+    session_binder: Callable[[Principal, str], str] | None,
+) -> APIRouter:
     router = APIRouter()
 
     @router.post("/handle")
-    async def handle(body: HandleRequest) -> dict[str, Any]:
+    async def handle(
+        body: HandleRequest,
+        principal: Principal = Depends(require_principal),
+    ) -> dict[str, Any]:
+        if session_binder is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "authentication_required",
+                    "message": "Valid authentication is required.",
+                },
+                headers={"WWW-Authenticate": "Session"},
+            )
+        try:
+            session_id = session_binder(principal, body.session_id)
+        except SessionBindingError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "session_not_found",
+                    "message": "Session was not found.",
+                },
+            ) from None
         if runtime is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -36,8 +64,8 @@ def make_router(runtime: RuntimePort | None) -> APIRouter:
             )
         envelope: ResponseEnvelope = await runtime.handle_user_message(
             channel=body.channel,
-            ai_user_id=body.ai_user_id,
-            session_id=body.session_id,
+            ai_user_id=principal.ai_user_id,
+            session_id=session_id,
             message=body.message,
             client_capabilities=body.client_capabilities,
         )

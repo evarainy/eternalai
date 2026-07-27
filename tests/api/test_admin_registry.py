@@ -15,6 +15,11 @@ from app.main import create_app
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
+from tests.auth_fakes import (
+    StaticSessionTokens,
+    auth_cookies,
+    make_session_binder,
+)
 
 
 class RecordingRegistry:
@@ -172,6 +177,8 @@ def _client(
     registry: RecordingRegistry,
     trace: RecordingTrace,
     runtime: RuntimeSentinel | None = None,
+    *,
+    roles: tuple[str, ...] = ("admin",),
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=registry,
@@ -183,15 +190,20 @@ def _client(
         trace_port=trace,
         trace_query=EmptyTraceQuery(),
     )
+    session_tokens = StaticSessionTokens(roles=roles)
     return TestClient(
         create_app(
             runtime=runtime,
             admin_registry_service=service,
-        )
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
     )
 
 
-ADMIN_HEADERS = {"X-EternalAI-Roles": "viewer, admin"}
+ADMIN_COOKIES = auth_cookies()
 ROLE_DENIED_DETAIL = {
     "detail": {
         "code": "role_not_allowed",
@@ -205,10 +217,10 @@ def test_registry_list_and_get_return_credential_safe_metadata() -> None:
     trace = RecordingTrace()
     client = _client(registry, trace)
 
-    listed = client.get("/api/v1/admin/registry", headers=ADMIN_HEADERS)
+    listed = client.get("/api/v1/admin/registry", cookies=ADMIN_COOKIES)
     viewed = client.get(
         "/api/v1/admin/registry/oa.leave.apply",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert listed.status_code == 200
@@ -232,15 +244,15 @@ def test_create_is_draft_then_enable_and_disable_are_independent_actions() -> No
     created = client.post(
         "/api/v1/admin/registry",
         json=_create_body(),
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
     enabled = client.post(
         "/api/v1/admin/registry/oa.leave.apply/enable",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
     disabled = client.post(
         "/api/v1/admin/registry/oa.leave.apply/disable",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert created.status_code == 201
@@ -266,7 +278,7 @@ def test_create_rejects_client_supplied_status() -> None:
     response = client.post(
         "/api/v1/admin/registry",
         json=body,
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 422
@@ -283,9 +295,12 @@ def test_read_denial_is_identical_before_registry_access(
 ) -> None:
     registry = RecordingRegistry([_capability()])
     trace = RecordingTrace()
-    client = _client(registry, trace)
+    client = _client(registry, trace, roles=())
 
-    response = client.get(f"/api/v1/admin/registry/{capability_id}")
+    response = client.get(
+        f"/api/v1/admin/registry/{capability_id}",
+        cookies=ADMIN_COOKIES,
+    )
 
     assert response.status_code == 403
     assert response.json() == ROLE_DENIED_DETAIL
@@ -298,12 +313,12 @@ def test_read_denial_is_identical_before_registry_access(
 def test_write_denial_prevents_registry_mutation_and_is_traced() -> None:
     registry = RecordingRegistry()
     trace = RecordingTrace()
-    client = _client(registry, trace)
+    client = _client(registry, trace, roles=("viewer",))
 
     response = client.post(
         "/api/v1/admin/registry",
         json=_create_body(),
-        headers={"X-EternalAI-Roles": "viewer"},
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 403
@@ -321,7 +336,7 @@ def test_deprecated_transition_returns_stable_conflict_shape() -> None:
 
     response = client.post(
         "/api/v1/admin/registry/oa.leave.apply/enable",
-        headers=ADMIN_HEADERS,
+        cookies=ADMIN_COOKIES,
     )
 
     assert response.status_code == 409
@@ -336,11 +351,11 @@ def test_deprecated_transition_returns_stable_conflict_shape() -> None:
 
 
 @pytest.mark.parametrize(
-    ("headers", "expected_status"),
-    [(ADMIN_HEADERS, 200), ({}, 403)],
+    ("cookies", "expected_status"),
+    [(ADMIN_COOKIES, 200), ({}, 401)],
 )
 def test_admin_routes_never_reach_runtime_gateway_or_adapter(
-    headers: dict[str, str],
+    cookies: dict[str, str],
     expected_status: int,
 ) -> None:
     adapter = AdapterSentinel()
@@ -349,7 +364,7 @@ def test_admin_routes_never_reach_runtime_gateway_or_adapter(
     registry = RecordingRegistry([_capability()])
     client = _client(registry, RecordingTrace(), runtime)
 
-    response = client.get("/api/v1/admin/registry", headers=headers)
+    response = client.get("/api/v1/admin/registry", cookies=cookies)
 
     assert response.status_code == expected_status
     assert runtime.calls == 0

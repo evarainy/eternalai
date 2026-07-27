@@ -85,6 +85,9 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
     _require_db()
     trace_id = f"redaction-{uuid4().hex}"
     token = f"SYNTHETIC-BEARER-{uuid4().hex}"
+    oa_password = f"SYNTHETIC-OA-PASSWORD-{uuid4().hex}"
+    oa_cookie = f"SYNTHETIC-OA-COOKIE-{uuid4().hex}"
+    identity_number = "1" * 17 + "X"
 
     async def exercise() -> None:
         engine = _make_engine()
@@ -102,6 +105,13 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                     attributes={
                         "authorization": f"Bearer {token}",
                         "nested": {"access_token": token},
+                        "userpassword": oa_password,
+                        "oa_cookies": {"loginuuids": oa_cookie},
+                        "message": identity_number,
+                        "tuple_nested": (
+                            {"userpassword": oa_password},
+                            {"message": identity_number},
+                        ),
                         "safe": "visible",
                     },
                 )
@@ -122,9 +132,19 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
             assert persisted[0].attributes == {
                 "authorization": "[REDACTED]",
                 "nested": {"access_token": "[REDACTED]"},
+                "userpassword": "[REDACTED]",
+                "oa_cookies": "[REDACTED]",
+                "message": "[REDACTED]",
+                "tuple_nested": [
+                    {"userpassword": "[REDACTED]"},
+                    {"message": "[REDACTED]"},
+                ],
                 "safe": "visible",
             }
             assert token not in raw_attributes
+            assert oa_password not in raw_attributes
+            assert oa_cookie not in raw_attributes
+            assert identity_number not in raw_attributes
             assert "[REDACTED]" in raw_attributes
         finally:
             await engine.dispose()
@@ -418,9 +438,10 @@ def test_reader_enforces_exact_limit_for_default_huge_and_negative_values() -> N
 
 def test_writer_fails_closed_when_sanitizer_raises() -> None:
     writer = PostgreSQLTraceWriter(object())  # type: ignore[arg-type]
+    sensitive_value = "synthetic-" + "oa-password"
 
     def fail(_attributes: dict[str, Any]) -> dict[str, Any]:
-        raise ValueError("synthetic sanitizer failure")
+        raise ValueError("synthetic sanitizer failure " + sensitive_value)
 
     writer.set_sanitizer(fail)
     event = TraceEvent(
@@ -429,10 +450,15 @@ def test_writer_fails_closed_when_sanitizer_raises() -> None:
         session_id="session-fail-closed",
         event_type="task_created",
         status="ok",
+        attributes={"userpassword": sensitive_value},
     )
 
     with pytest.raises(
         TraceSanitizationError,
         match="trace attribute sanitization failed",
-    ):
+    ) as exc_info:
         asyncio.run(writer.record_event(event))
+
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert sensitive_value not in str(exc_info.value)

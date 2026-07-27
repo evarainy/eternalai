@@ -10,6 +10,16 @@ from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.admin.registry import AdminRegistryService
 from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
+from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
+from app.infra.auth.oa import (
+    OACredentialVerifier,
+    PrincipalRoleReader,
+    make_urllib_session_factory,
+)
+from app.infra.auth.postgresql import (
+    PostgreSQLCredentialStore,
+    PostgreSQLPrincipalRoleReader,
+)
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
@@ -19,6 +29,7 @@ from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
+from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.identity_mapping import IdentityMappingPort
@@ -28,6 +39,70 @@ from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
+
+
+def build_credential_store(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    encryption_key: bytes,
+) -> PostgreSQLCredentialStore:
+    """Build encrypted OA credential persistence with an explicit key."""
+
+    return PostgreSQLCredentialStore(
+        session_factory=session_factory,
+        encryption_key=encryption_key,
+    )
+
+
+def build_principal_role_reader(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> PostgreSQLPrincipalRoleReader:
+    """Build the fail-closed local principal-role reader."""
+
+    return PostgreSQLPrincipalRoleReader(session_factory=session_factory)
+
+
+def build_authentication_port(
+    *,
+    oa_base_url: str,
+    oa_timeout_seconds: float,
+    credential_store: CredentialStorePort,
+    role_reader: PrincipalRoleReader,
+    identity_hmac_key: bytes,
+    credential_ttl_seconds: int,
+) -> AuthenticationPort:
+    """Build the OA verifier without introducing a production HTTP dependency."""
+
+    return OACredentialVerifier(
+        session_factory=make_urllib_session_factory(
+            base_url=oa_base_url,
+            timeout_seconds=oa_timeout_seconds,
+        ),
+        credential_store=credential_store,
+        role_reader=role_reader,
+        identity_hmac_key=identity_hmac_key,
+        credential_ttl_seconds=credential_ttl_seconds,
+    )
+
+
+def build_session_token_port(
+    *,
+    signing_key: bytes,
+    ttl_seconds: int,
+) -> SessionTokenPort:
+    """Build the EternalAI session-token signer with an explicit key."""
+
+    return HMACSessionToken(signing_key=signing_key, ttl_seconds=ttl_seconds)
+
+
+def build_session_binder(
+    *,
+    binding_key: bytes,
+) -> PrincipalSessionBinder:
+    """Build the Principal-bound conversation-session binder."""
+
+    return PrincipalSessionBinder(binding_key=binding_key)
 
 
 def build_admin_registry_service(
@@ -106,8 +181,13 @@ def build_runtime(
 
 
 __all__ = (
+    "build_authentication_port",
     "build_admin_registry_service",
+    "build_credential_store",
+    "build_principal_role_reader",
     "build_runtime",
+    "build_session_binder",
+    "build_session_token_port",
     "build_trace_port",
     "build_trace_query",
 )

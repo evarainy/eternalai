@@ -7,7 +7,13 @@ import os
 from typing import Any
 
 from app.ports.capability_gateway import ErrorCode
-from app.ports.trace import SanitizerHookFn, TraceEvent, TraceEventStatus, TraceEventType
+from app.ports.trace import (
+    SanitizerHookFn,
+    TraceEvent,
+    TraceEventStatus,
+    TraceEventType,
+    redact_trace_attributes,
+)
 
 
 class TraceSanitizationError(RuntimeError):
@@ -26,18 +32,15 @@ class NoopTraceWriter:
                 "persistent TracePort is required outside testing or mock mode"
             )
         self._logger = logger or logging.getLogger(__name__)
-        self._sanitizer: SanitizerHookFn | None = None
+        self._sanitizer: SanitizerHookFn = redact_trace_attributes
 
     def set_sanitizer(self, hook: SanitizerHookFn) -> None:
         self._sanitizer = hook
 
     async def record_event(self, event: TraceEvent) -> None:
-        attributes = event.attributes
-        if self._sanitizer is not None:
-            try:
-                attributes = self._sanitizer(event.attributes)
-            except Exception:
-                raise TraceSanitizationError("trace attribute sanitization failed") from None
+        attributes = self._sanitize_attributes(event.attributes)
+        if attributes is None:
+            raise TraceSanitizationError("trace attribute sanitization failed")
 
         event_payload = event.model_dump()
         event_payload["attributes"] = attributes
@@ -50,6 +53,16 @@ class NoopTraceWriter:
             )
         except Exception:
             return
+
+    def _sanitize_attributes(
+        self,
+        attributes: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            custom_sanitized = self._sanitizer(attributes)
+            return redact_trace_attributes(custom_sanitized)
+        except Exception:
+            return None
 
     async def start_task_trace(
         self,

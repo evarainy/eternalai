@@ -23,6 +23,11 @@ from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
+from tests.auth_fakes import (
+    StaticSessionTokens,
+    auth_cookies,
+    make_session_binder,
+)
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -153,7 +158,6 @@ class RecordingTracePort:
 def _valid_body() -> dict[str, Any]:
     return {
         "channel": "web",
-        "ai_user_id": "ai-user-1",
         "session_id": "session-1",
         "message": "hello",
         "client_capabilities": {},
@@ -185,7 +189,18 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
         evaluator=evaluator,
     )
 
-    response = TestClient(create_app(runtime)).post(
+    session_tokens = StaticSessionTokens()
+    client = TestClient(
+        create_app(
+            runtime,
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+    response = client.post(
         "/api/v1/runtime/handle", json=_valid_body()
     )
 
