@@ -110,7 +110,7 @@ P1-WORKFLOW-002-REPAIR-001
 
 以下条目**不是 Phase 1 任务**，不得被当作待办领取。列在这里是因为「裁剪记录」容易被读成「决定不做」，而命名条目会被读成「欠着的」。
 
-> **状态更新（2026-07-24）**：`P2-TRACE-PERSIST-001` 已在 Phase 2 落地（持久化 TracePort + Admin 审计查询端点，merge `f8eb8533`，CI run 30017941828 success），**已不是欠债**；下表仅 `P2-CONFIRM-RESUME-001` 仍在案。
+> **状态更新（2026-07-27）**：Phase 2 已落地 `P2-TRACE-PERSIST-001`（持久化 TracePort + Admin 审计查询，merge `f8eb8533`）和 `P2-AUTH-001`（OA 登录认证 + 认证接缝，替换自报身份，merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）；下表仅 `P2-CONFIRM-RESUME-001` 仍在案且尚未触发。
 
 | task_id | title | 欠债来源 | 触发条件 |
 |---|---|---|---|
