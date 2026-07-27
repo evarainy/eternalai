@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
+from functools import partial
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
 from app.admin.registry import AdminRegistryService
+from app.api.v1.health import HealthCheck
+from app.config import ProductionSettings
+from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
@@ -20,15 +26,28 @@ from app.infra.auth.postgresql import (
     PostgreSQLCredentialStore,
     PostgreSQLPrincipalRoleReader,
 )
+from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.health import RedisHealthCheck
+from app.infra.identity.unconfigured import UnconfiguredIdentityMapping
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
+from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
     PostgreSQLTraceWriter,
 )
+from app.infra.persistence.capability_registry.repository import (
+    PostgreSQLCapabilityRegistry,
+)
+from app.infra.persistence.task_store.postgresql import (
+    PostgreSQLSessionStore,
+    PostgreSQLTaskStore,
+)
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
+from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
@@ -39,6 +58,20 @@ from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionComponents:
+    """Complete dependency set consumed by the FastAPI composition root."""
+
+    runtime: RuntimeImpl
+    admin_registry_service: AdminRegistryService
+    authentication: AuthenticationPort
+    session_tokens: SessionTokenPort
+    session_binder: PrincipalSessionBinder
+    session_cookie_ttl_seconds: int
+    health_timeout_seconds: float
+    health_checks: Mapping[str, HealthCheck]
 
 
 def build_credential_store(
@@ -180,10 +213,132 @@ def build_runtime(
     )
 
 
+def build_production_components(
+    settings: ProductionSettings,
+    *,
+    llm_provider: LLMProviderPort | None = None,
+    structured_output: StructuredOutputPort | None = None,
+    authentication: AuthenticationPort | None = None,
+    identity_mapping: IdentityMappingPort | None = None,
+    adapters: Mapping[str, AdapterPort] | None = None,
+    trace_port: TracePort | None = None,
+    health_checks: Mapping[str, HealthCheck] | None = None,
+) -> ProductionComponents:
+    """Build the real database/auth/runtime composition with explicit test seams."""
+
+    session_factory = make_async_session_factory(database_url=settings.database_url)
+    task_store = PostgreSQLTaskStore(session_factory)
+    session_store = PostgreSQLSessionStore(session_factory)
+    capability_registry = PostgreSQLCapabilityRegistry(session_factory)
+    resolved_trace_port = (
+        PostgreSQLTraceWriter(session_factory)
+        if trace_port is None
+        else trace_port
+    )
+    trace_query = build_trace_query(session_factory=session_factory)
+    resolved_identity_mapping = (
+        UnconfiguredIdentityMapping()
+        if identity_mapping is None
+        else identity_mapping
+    )
+    policy_guard = MinimalPolicyGuard()
+    gateway = CapabilityGateway(
+        capability_registry=capability_registry,
+        identity_mapping=resolved_identity_mapping,
+        policy_guard=policy_guard,
+        trace_port=resolved_trace_port,
+        adapters=dict(adapters or {}),
+    )
+    production_llm = OpenAICompatibleLLMProvider(
+        base_url=settings.llm_base_url,
+        timeout_seconds=settings.llm_timeout_seconds,
+        max_tokens=settings.llm_max_tokens,
+        temperature=settings.llm_temperature,
+        top_p=settings.llm_top_p,
+        top_k=settings.llm_top_k,
+        enable_thinking=settings.llm_enable_thinking,
+    )
+    resolved_llm = production_llm if llm_provider is None else llm_provider
+    runtime = build_runtime(
+        task_store=task_store,
+        session_store=session_store,
+        capability_registry=capability_registry,
+        gateway=gateway,
+        trace_port=resolved_trace_port,
+        llm_provider=resolved_llm,
+        structured_output=(
+            JSONStructuredOutputProvider()
+            if structured_output is None
+            else structured_output
+        ),
+        intent_model=settings.llm_model,
+    )
+    credential_store = build_credential_store(
+        session_factory=session_factory,
+        encryption_key=settings.credential_encryption_key,
+    )
+    resolved_authentication = (
+        build_authentication_port(
+            oa_base_url=settings.oa_base_url,
+            oa_timeout_seconds=settings.oa_timeout_seconds,
+            credential_store=credential_store,
+            role_reader=build_principal_role_reader(session_factory=session_factory),
+            identity_hmac_key=settings.identity_hmac_key,
+            credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        )
+        if authentication is None
+        else authentication
+    )
+    session_tokens = build_session_token_port(
+        signing_key=settings.session_signing_key,
+        ttl_seconds=settings.session_cookie_ttl_seconds,
+    )
+    session_binder = build_session_binder(binding_key=settings.session_binding_key)
+    admin_registry_service = build_admin_registry_service(
+        capability_registry=capability_registry,
+        task_store=task_store,
+        identity_mapping=resolved_identity_mapping,
+        trace_port=resolved_trace_port,
+        trace_query=trace_query,
+    )
+    resolved_health_checks: Mapping[str, HealthCheck]
+    if health_checks is None:
+        resolved_health_checks = {
+            "database": partial(
+                check_database_health,
+                settings.database_url,
+                timeout_seconds=settings.health_timeout_seconds,
+            ),
+            "redis": RedisHealthCheck(
+                redis_url=settings.redis_url,
+                timeout_seconds=settings.health_timeout_seconds,
+            ),
+            "vllm": partial(
+                production_llm.check_health,
+                settings.llm_model,
+                timeout_seconds=settings.health_timeout_seconds,
+            ),
+        }
+    else:
+        resolved_health_checks = dict(health_checks)
+    return ProductionComponents(
+        runtime=runtime,
+        admin_registry_service=admin_registry_service,
+        authentication=resolved_authentication,
+        session_tokens=session_tokens,
+        session_binder=session_binder,
+        session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
+        health_timeout_seconds=settings.health_timeout_seconds,
+        health_checks=resolved_health_checks,
+    )
+
+
 __all__ = (
+    "ProductionComponents",
     "build_authentication_port",
     "build_admin_registry_service",
     "build_credential_store",
+    "build_production_components",
     "build_principal_role_reader",
     "build_runtime",
     "build_session_binder",

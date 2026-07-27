@@ -99,6 +99,7 @@ explicitly names a future dedicated allowlist file.
 |---|---|---|---|---|---|
 | python | openai | >=1.0.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements |
 | python | fastapi | >=0.115,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
+| python | uvicorn | >=0.34,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P2-PILOT-FOUNDATION-001; 雨爷批准 2026-07-27（生产 ASGI 进程入口） |
 | python | pydantic | >=2,<3 | spike; backend-runtime | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements; P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
 | python | pytest | >=8,<9 | backend-test | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend test runner for TDD/validation) |
 | python | ruff | >=0.8,<1 | backend-tooling | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (backend linting / formatting validation) |
