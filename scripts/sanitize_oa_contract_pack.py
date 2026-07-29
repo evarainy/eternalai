@@ -27,7 +27,9 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
 
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _MAX_HAR_BYTES = 32 * 1024 * 1024
+_MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
 _MAX_RECORDS = 10_000
+_MAX_EMBEDDED_JSON_DEPTH = 8
 _SYNTHETIC_TIMESTAMP = "2000-01-01T00:00:00+00:00"
 _ALLOWED_RAW_PENDING_STATUSES = frozenset({"pending"})
 
@@ -306,6 +308,10 @@ def _collect_sensitive_fields(value: Any, output: set[str]) -> None:
     elif isinstance(value, list):
         for item in value:
             _collect_sensitive_fields(item, output)
+    elif isinstance(value, str):
+        decoded = _decode_json_container(value)
+        if decoded is not None:
+            _collect_sensitive_fields(decoded, output)
 
 
 def _assert_response_payload_has_no_forbidden_keys(value: Any) -> None:
@@ -317,6 +323,33 @@ def _assert_response_payload_has_no_forbidden_keys(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _assert_response_payload_has_no_forbidden_keys(item)
+    elif isinstance(value, str):
+        decoded = _decode_json_container(value)
+        if decoded is not None:
+            _assert_response_payload_has_no_forbidden_keys(decoded)
+
+
+def _decode_json_container(value: str) -> Mapping[str, Any] | list[Any] | None:
+    candidate: Any = value
+    for _depth in range(_MAX_EMBEDDED_JSON_DEPTH):
+        if not isinstance(candidate, str):
+            break
+        stripped = candidate.strip()
+        if not stripped or stripped[0] not in {'"', "{", "["}:
+            return None
+        if len(stripped.encode("utf-8")) > _MAX_JSON_CONTAINER_BYTES:
+            raise SanitizationError("json_container_too_large")
+        try:
+            candidate = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(candidate, (Mapping, list)):
+        return candidate
+    if isinstance(candidate, str):
+        stripped = candidate.strip()
+        if stripped and stripped[0] in {'"', "{", "["}:
+            raise SanitizationError("embedded_json_depth_exceeded")
+    return None
 
 
 def _collect_entry_credentials(entry: Any, output: set[str]) -> None:

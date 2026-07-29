@@ -301,6 +301,119 @@ def test_nested_response_token_fails_closed_without_leaking_value(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
+def test_json_encoded_sensitive_key_in_selected_response_fails_closed(
+    tmp_path: Path,
+) -> None:
+    embedded_value = "pending"
+    input_har = tmp_path / "embedded-json.har"
+    input_har.write_text(
+        json.dumps(
+            _har(
+                extra_record_fields={
+                    "metadata": {
+                        "opaque": json.dumps(
+                            json.dumps({"accessToken": embedded_value})
+                        )
+                    }
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "embedded-json-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "forbidden_response_key" in completed.stderr
+    assert embedded_value not in completed.stdout
+    assert embedded_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_sensitive_value_in_other_json_response_cannot_reach_output(
+    tmp_path: Path,
+) -> None:
+    other_response_value = "pending"
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps(
+                        {
+                            "unrelated": {
+                                "accessToken": other_response_value,
+                            }
+                        }
+                    ),
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "other-response.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "other-response-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert other_response_value not in completed.stdout
+    assert other_response_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_overdeep_json_encoded_response_fails_closed_without_leak(
+    tmp_path: Path,
+) -> None:
+    sensitive_value = "pending"
+    encoded: Any = {"accessToken": sensitive_value}
+    for _depth in range(12):
+        encoded = json.dumps(encoded)
+    input_har = tmp_path / "overdeep-json.har"
+    input_har.write_text(
+        json.dumps(
+            _har(
+                extra_record_fields={
+                    "metadata": {"opaque": encoded},
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "overdeep-json-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "embedded_json_depth_exceeded" in completed.stderr
+    assert sensitive_value not in completed.stdout
+    assert sensitive_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_oversized_har_fails_closed_before_parsing(tmp_path: Path) -> None:
+    input_har = tmp_path / "oversized.har"
+    input_har.write_bytes(b" " * (32 * 1024 * 1024 + 1))
+    output_dir = tmp_path / "oversized-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert completed.stderr.strip() == "sanitization failed: input_too_large"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
 def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
     private_status = "private-business-status-927315"
     input_har = tmp_path / "unrecognized-status.har"
