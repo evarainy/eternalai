@@ -246,7 +246,9 @@ sanitizer 增加可重复的显式 `--entry-index`。一个场景可按给定顺
 
 smoke 的 selector 必须按 HAR 请求顺序严格递增；三个成功场景及其全部选中 entry 只接受
 同一 HTTP(S) scheme/host/port/path 的 `GET` 请求，多页还必须逐页锁定
-page/pageSize/cursor 链与明确终止信号，不能把逆序或跨 endpoint entry 拼成分页证据。
+page/pageSize/cursor 链与明确终止信号。请求 query 只允许这些分页键，非末页必须提供
+非空 `nextCursor` 且下一请求逐字携带；不能把逆序、跨 endpoint、额外 query 变化或无
+cursor 的 entry 拼成分页证据。
 
 三层防线保持原强度：
 
