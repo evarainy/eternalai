@@ -34,6 +34,10 @@ class RecordingCredentialStore:
     ) -> None:
         self.records.append((ai_user_id, credential))
 
+    async def load(self, ai_user_id: str) -> OASessionCredential | None:
+        del ai_user_id
+        raise AssertionError("authentication write path must not load credentials")
+
 
 class StaticRoleReader:
     async def list_roles(self, ai_user_id: str) -> tuple[str, ...]:

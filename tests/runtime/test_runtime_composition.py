@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from functools import partial
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.admin.registry import AdminRegistryService
 from app.composition import (
+    build_oa_read_adapter,
     build_production_components,
     build_runtime,
     build_trace_port,
@@ -19,10 +21,17 @@ from app.composition import (
 )
 from app.config import ProductionSettings
 from app.evaluator import TerminalEvaluator
+from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.provider import (
+    LiveOAReadProvider,
+    ReplayOAReadProvider,
+    report_oa_structural_drift,
+)
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.oa import OACredentialVerifier
 from app.infra.health import RedisHealthCheck
-from app.infra.identity.unconfigured import UnconfiguredIdentityMapping
+from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
@@ -362,9 +371,9 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     )
     assert isinstance(
         components.runtime._gateway._identity_mapping,
-        UnconfiguredIdentityMapping,
+        PostgreSQLOAIdentityMapping,
     )
-    assert components.runtime._gateway._adapters == {}
+    assert isinstance(components.runtime._gateway._adapters["oa"], MockOAAdapter)
     assert isinstance(components.runtime._trace_port, PostgreSQLTraceWriter)
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert components.session_cookie_ttl_seconds > 0
@@ -392,3 +401,76 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
     assert components.health_checks["vllm"].keywords == {
         "timeout_seconds": settings.health_timeout_seconds
     }
+
+
+@pytest.mark.parametrize(
+    ("mode", "provider_type"),
+    [
+        ("replay", ReplayOAReadProvider),
+        ("live", LiveOAReadProvider),
+    ],
+)
+def test_oa_read_adapter_mode_builds_configured_provider(
+    mode: str,
+    provider_type: type[ReplayOAReadProvider] | type[LiveOAReadProvider],
+) -> None:
+    contract_pack_dir = (
+        Path(__file__).parents[1]
+        / "contract_packs"
+        / "oa"
+        / "ecology9-pending-workflows-v1"
+    )
+    settings = replace(
+        ProductionSettings.from_environment(),
+        oa_read_adapter_mode=cast(Any, mode),
+        oa_read_contract_pack_dir=contract_pack_dir,
+        oa_pending_workflows_path=(
+            "/api/workflow/pending" if mode == "live" else None
+        ),
+    )
+
+    adapter = build_oa_read_adapter(
+        settings=settings,
+        credential_store=cast(Any, object()),
+    )
+
+    assert isinstance(adapter, OAReadAdapter)
+    assert isinstance(adapter._provider, provider_type)
+    if mode == "live":
+        assert adapter._provider._drift_reporter is report_oa_structural_drift
+
+
+def test_explicit_production_adapters_and_identity_mapping_take_priority() -> None:
+    adapters = {"oa": cast(Any, object())}
+    identity_mapping = cast(Any, object())
+
+    components = build_production_components(
+        ProductionSettings.from_environment(),
+        adapters=adapters,
+        identity_mapping=identity_mapping,
+    )
+
+    assert components.runtime._gateway._adapters == adapters
+    assert components.runtime._gateway._identity_mapping is identity_mapping
+
+
+@pytest.mark.parametrize("override", ["identity_mapping", "adapters"])
+def test_live_production_rejects_static_identity_and_adapter_overrides(
+    override: str,
+) -> None:
+    contract_pack_dir = (
+        Path(__file__).parents[1]
+        / "contract_packs"
+        / "oa"
+        / "ecology9-pending-workflows-v1"
+    )
+    settings = replace(
+        ProductionSettings.from_environment(),
+        oa_read_adapter_mode="live",
+        oa_read_contract_pack_dir=contract_pack_dir,
+        oa_pending_workflows_path="/api/workflow/pending",
+    )
+    overrides = {override: cast(Any, object())}
+
+    with pytest.raises(RuntimeError, match="does not allow"):
+        build_production_components(settings, **overrides)

@@ -1,4 +1,4 @@
-"""Build a credential-free OA Contract Pack from one local HAR capture."""
+"""Build a credential-free OA Contract Pack from selected local HAR responses."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +96,7 @@ def sanitize_har_to_contract_pack(
     input_har: Path,
     output_dir: Path,
     profile_version: str,
+    entry_indices: Sequence[int] | None = None,
 ) -> None:
     """Create a Contract Pack atomically or leave the target absent."""
 
@@ -109,11 +110,15 @@ def sanitize_har_to_contract_pack(
         raise SanitizationError("output_parent_missing")
 
     har = _load_har(input_har)
-    raw_payload = _select_pending_workflow_payload(har)
+    raw_payloads = _select_pending_workflow_payloads(
+        har,
+        entry_indices=entry_indices,
+    )
     sensitive_values = _collect_sensitive_values(har)
-    _collect_sensitive_fields(raw_payload, sensitive_values)
-    _assert_response_payload_has_no_forbidden_keys(raw_payload)
-    sample = _normalize_sample(raw_payload)
+    for raw_payload in raw_payloads:
+        _collect_sensitive_fields(raw_payload, sensitive_values)
+        _assert_response_payload_has_no_forbidden_keys(raw_payload)
+    sample = _normalize_sample(raw_payloads)
     fingerprint = build_structural_fingerprint(sample)
     profile = {
         "profile_version": profile_version,
@@ -128,6 +133,9 @@ def sanitize_har_to_contract_pack(
         "sample.json": sample,
         "fingerprint.json": fingerprint,
     }
+    _assert_sensitive_values_absent(sensitive_values, candidate_payloads)
+    _scan_forbidden_output(candidate_payloads)
+    _validate_candidate_pack(candidate_payloads)
 
     temporary_dir = Path(
         tempfile.mkdtemp(
@@ -147,16 +155,28 @@ def sanitize_har_to_contract_pack(
         _validate_candidate_pack(reparsed)
         os.replace(temporary_dir, output_dir)
     except Exception:
-        shutil.rmtree(temporary_dir, ignore_errors=True)
-        raise
+        cleanup_failed = False
+        try:
+            shutil.rmtree(temporary_dir)
+        except OSError:
+            cleanup_failed = True
+    else:
+        return
+
+    if cleanup_failed:
+        raise SanitizationError("temporary_cleanup_failed")
+    raise SanitizationError("contract_pack_publish_failed")
 
 
 def _load_har(path: Path) -> dict[str, Any]:
+    stat_failed = False
     try:
         if path.stat().st_size > _MAX_HAR_BYTES:
             raise SanitizationError("input_too_large")
-    except OSError as exc:
-        raise SanitizationError("input_unreadable") from exc
+    except OSError:
+        stat_failed = True
+    if stat_failed:
+        raise SanitizationError("input_unreadable")
     payload = _load_json_file(path)
     if not isinstance(payload, dict):
         raise SanitizationError("har_root_invalid")
@@ -164,13 +184,22 @@ def _load_har(path: Path) -> dict[str, Any]:
 
 
 def _load_json_file(path: Path) -> Any:
+    payload: Any = None
+    load_failed = False
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise SanitizationError("json_unreadable") from exc
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        load_failed = True
+    if load_failed:
+        raise SanitizationError("json_unreadable")
+    return payload
 
 
-def _select_pending_workflow_payload(har: Mapping[str, Any]) -> dict[str, Any]:
+def _select_pending_workflow_payloads(
+    har: Mapping[str, Any],
+    *,
+    entry_indices: Sequence[int] | None,
+) -> list[Mapping[str, Any]]:
     log = har.get("log")
     if not isinstance(log, Mapping):
         raise SanitizationError("har_log_missing")
@@ -178,35 +207,77 @@ def _select_pending_workflow_payload(har: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(entries, list):
         raise SanitizationError("har_entries_missing")
 
-    candidates: list[dict[str, Any]] = []
-    for entry in entries:
-        payload = _response_json(entry)
-        if payload is not None and _is_pending_workflow_payload(payload):
-            candidates.append(payload)
-    if len(candidates) != 1:
-        raise SanitizationError("pending_workflow_response_not_unique")
-    return candidates[0]
+    if entry_indices is None:
+        candidates: list[Mapping[str, Any]] = []
+        for entry in entries:
+            payload = _response_json(entry)
+            if payload is not None and _is_pending_workflow_payload(payload):
+                candidates.append(payload)
+        if len(candidates) != 1:
+            raise SanitizationError("pending_workflow_response_not_unique")
+        return candidates
+
+    if not entry_indices:
+        raise SanitizationError("entry_index_missing")
+    selected_payloads: list[Mapping[str, Any]] = []
+    seen_indices: set[int] = set()
+    for entry_index in entry_indices:
+        if not isinstance(entry_index, int) or isinstance(entry_index, bool):
+            raise SanitizationError("entry_index_invalid")
+        if entry_index < 0 or entry_index >= len(entries):
+            raise SanitizationError("entry_index_out_of_range")
+        if entry_index in seen_indices:
+            raise SanitizationError("entry_index_duplicate")
+        seen_indices.add(entry_index)
+        payload = _response_json(entries[entry_index], selected=True)
+        if payload is None or not _is_pending_workflow_payload(payload):
+            raise SanitizationError("selected_entry_not_pending_workflow_response")
+        selected_payloads.append(payload)
+    return selected_payloads
 
 
-def _response_json(entry: Any) -> dict[str, Any] | None:
+def _response_json(
+    entry: Any,
+    *,
+    selected: bool = False,
+) -> Mapping[str, Any] | None:
     if not isinstance(entry, Mapping):
+        if selected:
+            raise SanitizationError("selected_entry_invalid")
         return None
     response = entry.get("response")
     if not isinstance(response, Mapping):
+        if selected:
+            raise SanitizationError("selected_entry_invalid")
         return None
     content = response.get("content")
     if not isinstance(content, Mapping):
+        if selected:
+            raise SanitizationError("selected_entry_invalid")
         return None
     if content.get("encoding") not in (None, ""):
         raise SanitizationError("encoded_response_not_supported")
     text = content.get("text")
     if not isinstance(text, str):
+        if selected:
+            raise SanitizationError("selected_entry_invalid")
         return None
     try:
         payload = _bounded_json_loads(text)
     except json.JSONDecodeError:
+        payload = None
+        response_not_json = True
+    else:
+        response_not_json = False
+    if response_not_json:
+        if selected:
+            raise SanitizationError("selected_entry_response_not_json")
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, Mapping):
+        if selected:
+            raise SanitizationError("selected_entry_not_pending_workflow_response")
+        return None
+    return payload
 
 
 def _is_pending_workflow_payload(payload: Mapping[str, Any]) -> bool:
@@ -214,56 +285,62 @@ def _is_pending_workflow_payload(payload: Mapping[str, Any]) -> bool:
     return isinstance(data, Mapping) and isinstance(data.get("records"), list)
 
 
-def _normalize_sample(raw_payload: Mapping[str, Any]) -> dict[str, Any]:
-    data = raw_payload.get("data")
-    if not isinstance(data, Mapping):
-        raise SanitizationError("response_data_invalid")
-    records = data.get("records")
-    if (
-        not isinstance(records, list)
-        or len(records) > _MAX_RECORDS
-    ):
-        raise SanitizationError("response_records_invalid")
-
+def _normalize_sample(
+    raw_payloads: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
     workflows: list[dict[str, Any]] = []
-    for index, record in enumerate(records, start=1):
-        if not isinstance(record, Mapping):
-            raise SanitizationError("response_record_invalid")
-        _require_string(record, "workflowId")
-        _require_string(record, "title")
-        raw_status = _require_string(record, "status")
-        if raw_status not in _ALLOWED_RAW_PENDING_STATUSES:
-            raise SanitizationError("response_status_invalid")
-        _require_string(record, "applicant")
-        _require_string(record, "currentStep")
-        approver = _optional_string(record, "approver")
-        created_at = _optional_string(record, "createdAt")
-        expired = record.get("expired")
-        if not isinstance(expired, bool):
-            raise SanitizationError("response_expired_invalid")
-        workflows.append(
-            {
-                "workflow_id": f"workflow-synthetic-{index:03d}",
-                "title": f"workflow-title-synthetic-{index:03d}",
-                "status": "pending",
-                "applicant": f"applicant-synthetic-{index:03d}",
-                "current_step": f"step-synthetic-{index:03d}",
-                "approver": (
-                    f"approver-synthetic-{index:03d}"
-                    if approver is not None
-                    else None
-                ),
-                "created_at": (
-                    _SYNTHETIC_TIMESTAMP if created_at is not None else None
-                ),
-                "expired": expired,
-            }
-        )
+    for raw_payload in raw_payloads:
+        data = raw_payload.get("data")
+        if not isinstance(data, Mapping):
+            raise SanitizationError("response_data_invalid")
+        records = data.get("records")
+        if not isinstance(records, list):
+            raise SanitizationError("response_records_invalid")
+        if len(workflows) + len(records) > _MAX_RECORDS:
+            raise SanitizationError("response_records_invalid")
+
+        for record in records:
+            if not isinstance(record, Mapping):
+                raise SanitizationError("response_record_invalid")
+            _require_string(record, "workflowId")
+            _require_string(record, "title")
+            raw_status = _require_string(record, "status")
+            if raw_status not in _ALLOWED_RAW_PENDING_STATUSES:
+                raise SanitizationError("response_status_invalid")
+            _require_string(record, "applicant")
+            _require_string(record, "currentStep")
+            approver = _optional_string(record, "approver")
+            created_at = _optional_string(record, "createdAt")
+            expired = record.get("expired")
+            if not isinstance(expired, bool):
+                raise SanitizationError("response_expired_invalid")
+            index = len(workflows) + 1
+            workflows.append(
+                {
+                    "workflow_id": f"workflow-synthetic-{index:03d}",
+                    "title": f"workflow-title-synthetic-{index:03d}",
+                    "status": "pending",
+                    "applicant": f"applicant-synthetic-{index:03d}",
+                    "current_step": f"step-synthetic-{index:03d}",
+                    "approver": (
+                        f"approver-synthetic-{index:03d}"
+                        if approver is not None
+                        else None
+                    ),
+                    "created_at": (
+                        _SYNTHETIC_TIMESTAMP if created_at is not None else None
+                    ),
+                    "expired": expired,
+                }
+            )
     sample = {"workflows": workflows}
+    sample_invalid = False
     try:
         OAPendingWorkflowCollection.model_validate(sample, strict=True)
-    except ValidationError as exc:
-        raise SanitizationError("normalized_sample_invalid") from exc
+    except ValidationError:
+        sample_invalid = True
+    if sample_invalid:
+        raise SanitizationError("normalized_sample_invalid")
     return sample
 
 
@@ -291,6 +368,7 @@ def _collect_sensitive_values(har: Mapping[str, Any]) -> set[str]:
         entries = log.get("entries")
         if isinstance(entries, list):
             for entry in entries:
+                _assert_entry_response_encoding_supported(entry)
                 _collect_entry_credentials(entry, values)
     return {value for value in values if value}
 
@@ -365,6 +443,20 @@ def _collect_entry_credentials(entry: Any, output: set[str]) -> None:
             continue
         _collect_header_values(side.get("headers"), output)
         _collect_cookie_values(side.get("cookies"), output)
+
+
+def _assert_entry_response_encoding_supported(entry: Any) -> None:
+    if not isinstance(entry, Mapping):
+        return
+    response = entry.get("response")
+    if not isinstance(response, Mapping):
+        return
+    content = response.get("content")
+    if (
+        isinstance(content, Mapping)
+        and content.get("encoding") not in (None, "")
+    ):
+        raise SanitizationError("encoded_response_not_supported")
 
 
 def _collect_header_values(headers: Any, output: set[str]) -> None:
@@ -464,6 +556,7 @@ def _scan_payload(value: Any) -> None:
 
 
 def _validate_candidate_pack(candidate_payloads: Mapping[str, Any]) -> None:
+    candidate_invalid = False
     try:
         OAContractPackProfile.model_validate(
             candidate_payloads["profile.json"],
@@ -473,8 +566,10 @@ def _validate_candidate_pack(candidate_payloads: Mapping[str, Any]) -> None:
             candidate_payloads["sample.json"],
             strict=True,
         )
-    except (KeyError, ValidationError) as exc:
-        raise SanitizationError("candidate_contract_invalid") from exc
+    except (KeyError, ValidationError):
+        candidate_invalid = True
+    if candidate_invalid:
+        raise SanitizationError("candidate_contract_invalid")
     if candidate_payloads["fingerprint.json"] != build_structural_fingerprint(
         candidate_payloads["sample.json"]
     ):
@@ -499,6 +594,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-har", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--profile-version", required=True)
+    parser.add_argument(
+        "--entry-index",
+        action="append",
+        dest="entry_indices",
+        type=int,
+        help=(
+            "Zero-based HAR entry index. Repeat to aggregate selected "
+            "pending-workflow pages in the supplied order."
+        ),
+    )
     return parser
 
 
@@ -509,6 +614,7 @@ def main(argv: list[str] | None = None) -> int:
             input_har=args.input_har,
             output_dir=args.output_dir,
             profile_version=args.profile_version,
+            entry_indices=args.entry_indices,
         )
     except SanitizationError as exc:
         print(f"sanitization failed: {exc}", file=sys.stderr)

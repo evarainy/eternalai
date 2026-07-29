@@ -708,7 +708,10 @@ def _is_explicit_workflow_confirmation(
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:
     if error_code == "identity_expired":
-        return "账号绑定已过期，请重新绑定后继续", "Identity binding expired."
+        return (
+            "账号绑定或上游会话已过期，请重新认证或重新绑定后继续",
+            "Identity binding or upstream session expired; reauthentication required.",
+        )
     if error_code == "identity_revoked":
         return "账号绑定已撤销，请重新绑定后继续", "Identity binding revoked."
     return "需要绑定账号才能继续", "Identity binding required."

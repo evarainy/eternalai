@@ -20,7 +20,7 @@ from app.infra.auth.postgresql import (
     PostgreSQLPrincipalRoleReader,
     credential_associated_data,
 )
-from app.ports.auth import OASessionCredential
+from app.ports.auth import CredentialStoreError, OASessionCredential
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -141,6 +141,211 @@ def test_principal_roles_are_local_sorted_and_absent_is_empty() -> None:
                 )
                 await session.commit()
         finally:
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_oa_credential_round_trips_through_authenticated_load() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+    oa_user_id = f"synthetic-{uuid4().hex}"
+    cookie_value = f"synthetic-{uuid4().hex}"
+    key = bytes(range(32))
+    expires_at = datetime.now(UTC) + timedelta(hours=2)
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            store = PostgreSQLCredentialStore(
+                session_factory=factory,
+                encryption_key=key,
+            )
+            await store.store(
+                ai_user_id,
+                OASessionCredential(
+                    oa_user_id=SecretStr(oa_user_id),
+                    cookies={"synthetic_name": SecretStr(cookie_value)},
+                    expires_at=expires_at,
+                ),
+            )
+
+            loaded = await store.load(ai_user_id)
+
+            assert loaded is not None
+            assert hashlib.sha256(
+                loaded.oa_user_id.get_secret_value().encode()
+            ).digest() == hashlib.sha256(oa_user_id.encode()).digest()
+            assert hashlib.sha256(
+                loaded.cookies["synthetic_name"].get_secret_value().encode()
+            ).digest() == hashlib.sha256(cookie_value.encode()).digest()
+            assert loaded.expires_at == expires_at
+            rendered = repr(loaded) + loaded.model_dump_json()
+            assert oa_user_id not in rendered
+            assert cookie_value not in rendered
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_oa_credential_load_returns_none_for_missing_row() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            store = PostgreSQLCredentialStore(
+                session_factory=factory,
+                encryption_key=bytes(range(32)),
+            )
+            assert await store.load(ai_user_id) is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "cipher_version",
+        "nonce",
+        "aad",
+        "authentication_tag",
+        "json_extra_field",
+        "json_wrong_type",
+        "json_duplicate_key",
+    ),
+)
+def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
+    corruption: str,
+) -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+    oa_user_id = f"synthetic-{uuid4().hex}"
+    cookie_value = f"synthetic-{uuid4().hex}"
+    key = bytes(range(32))
+    nonce = os.urandom(12)
+    expires_at = datetime.now(UTC) + timedelta(hours=2)
+    payload: bytes
+    if corruption == "json_extra_field":
+        payload = json.dumps(
+            {
+                "oa_user_id": oa_user_id,
+                "cookies": {"synthetic_name": cookie_value},
+                "unexpected": "value",
+            },
+            separators=(",", ":"),
+        ).encode()
+    elif corruption == "json_wrong_type":
+        payload = json.dumps(
+            {
+                "oa_user_id": oa_user_id,
+                "cookies": ["not", "an", "object"],
+            },
+            separators=(",", ":"),
+        ).encode()
+    elif corruption == "json_duplicate_key":
+        payload = (
+            "{"
+            f'"oa_user_id":{json.dumps(oa_user_id)},'
+            f'"oa_user_id":{json.dumps(oa_user_id)},'
+            f'"cookies":{{"synthetic_name":{json.dumps(cookie_value)}}}'
+            "}"
+        ).encode()
+    else:
+        payload = json.dumps(
+            {
+                "oa_user_id": oa_user_id,
+                "cookies": {"synthetic_name": cookie_value},
+            },
+            separators=(",", ":"),
+        ).encode()
+
+    aad_ai_user_id = (
+        f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+        if corruption == "aad"
+        else ai_user_id
+    )
+    encrypted_payload = AESGCM(key).encrypt(
+        nonce,
+        payload,
+        credential_associated_data(aad_ai_user_id),
+    )
+    stored_nonce = b"short" if corruption == "nonce" else nonce
+    stored_cipher_version = (
+        "unsupported-v2" if corruption == "cipher_version" else "aes256gcm-v1"
+    )
+    if corruption == "authentication_tag":
+        encrypted_payload = encrypted_payload[:-1] + bytes([encrypted_payload[-1] ^ 1])
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials"
+                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " expires_at, updated_at)"
+                        " VALUES"
+                        " (:ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
+                        " :expires_at, :updated_at)"
+                    ),
+                    {
+                        "ai_user_id": ai_user_id,
+                        "cipher_version": stored_cipher_version,
+                        "nonce": stored_nonce,
+                        "encrypted_payload": encrypted_payload,
+                        "expires_at": expires_at,
+                        "updated_at": datetime.now(UTC),
+                    },
+                )
+                await session.commit()
+
+            store = PostgreSQLCredentialStore(
+                session_factory=factory,
+                encryption_key=key,
+            )
+            with pytest.raises(CredentialStoreError) as exc_info:
+                await store.load(ai_user_id)
+
+            rendered = repr(exc_info.value) + str(exc_info.value)
+            assert oa_user_id not in rendered
+            assert cookie_value not in rendered
+            assert ai_user_id not in rendered
+            assert exc_info.value.__context__ is None
+            assert exc_info.value.__cause__ is None
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
             await engine.dispose()
 
     asyncio.run(exercise())

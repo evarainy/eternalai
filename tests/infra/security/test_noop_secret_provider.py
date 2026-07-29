@@ -3,11 +3,16 @@ from __future__ import annotations
 import inspect
 import json
 import pathlib
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from app.ports.secret_provider import SecretInjectionResult, SecretResolutionResult
+from app.ports.secret_provider import (
+    CredentialNotFoundError,
+    SecretInjectionResult,
+    SecretResolutionResult,
+)
 
 # =====================================================================
 # Test group 1: Protocol duck-type
@@ -22,8 +27,10 @@ def test_noop_secret_provider_satisfies_secret_provider_port() -> None:
     provider = NoopSecretProvider()
     assert hasattr(provider, "resolve_secret_ref")
     assert hasattr(provider, "inject_execution_secret")
+    assert hasattr(provider, "resolve_oa_session")
     assert inspect.iscoroutinefunction(provider.resolve_secret_ref)
     assert inspect.iscoroutinefunction(provider.inject_execution_secret)
+    assert inspect.iscoroutinefunction(provider.resolve_oa_session)
     # signature check resolve_secret_ref
     sig_r = inspect.signature(provider.resolve_secret_ref)
     assert "credential_ref" in sig_r.parameters
@@ -33,6 +40,24 @@ def test_noop_secret_provider_satisfies_secret_provider_port() -> None:
     sig_i = inspect.signature(provider.inject_execution_secret)
     assert "execution_context" in sig_i.parameters
     assert "credential_ref" in sig_i.parameters
+
+
+@pytest.mark.anyio
+async def test_noop_secret_provider_always_rejects_oa_session_resolution() -> None:
+    from app.infra.security.noop_secret_provider.noop_secret_provider import (
+        NoopSecretProvider,
+    )
+
+    provider = NoopSecretProvider()
+    sensitive_marker = "synthetic-" + uuid4().hex
+
+    with pytest.raises(CredentialNotFoundError) as exc_info:
+        await provider.resolve_oa_session(
+            f"oa-session-v1:usr_v1_{sensitive_marker}",
+        )
+
+    assert sensitive_marker not in str(exc_info.value)
+    assert exc_info.value.__context__ is None
 
 
 # =====================================================================

@@ -7,12 +7,22 @@ import json
 import re
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-STRUCTURAL_FINGERPRINT_ALGORITHM = "eternalai-structural-v1"
+STRUCTURAL_FINGERPRINT_ALGORITHM: Final[
+    Literal["eternalai-structural-v1"]
+] = "eternalai-structural-v1"
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_STRUCTURAL_PATH_PATTERN = re.compile(
+    r"^\$(?:(?:\.[A-Za-z_][A-Za-z0-9_]*)|\[\])*$"
+)
+_STRUCTURAL_JSON_TYPES = frozenset(
+    {"array", "boolean", "integer", "null", "number", "object", "string"}
+)
+_STRUCTURAL_ARRAY_SHAPE_PATTERN = re.compile(r"^[a-z:<>|]+$")
+_STRUCTURAL_SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 _STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
@@ -111,6 +121,95 @@ class OAContractPackProfile(BaseModel):
         return value
 
 
+class OAStructuralNode(BaseModel):
+    """One value-free node in an OA normalized structural fingerprint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    path: str
+    json_type: str
+    nullable: bool
+    array_shape: str | None
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, value: str) -> str:
+        if _STRUCTURAL_PATH_PATTERN.fullmatch(value) is None:
+            raise ValueError("structural path is invalid")
+        return value
+
+    @field_validator("json_type")
+    @classmethod
+    def _validate_json_type(cls, value: str) -> str:
+        members = value.split("|")
+        if (
+            not members
+            or members != sorted(set(members))
+            or any(member not in _STRUCTURAL_JSON_TYPES for member in members)
+        ):
+            raise ValueError("structural JSON type is invalid")
+        return value
+
+    @field_validator("array_shape")
+    @classmethod
+    def _validate_array_shape(cls, value: str | None) -> str | None:
+        if (
+            value is not None
+            and _STRUCTURAL_ARRAY_SHAPE_PATTERN.fullmatch(value) is None
+        ):
+            raise ValueError("structural array shape is invalid")
+        return value
+
+
+class OAStructuralFingerprint(BaseModel):
+    """Validated ``eternalai-structural-v1`` fingerprint payload."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    algorithm: Literal["eternalai-structural-v1"]
+    nodes: list[OAStructuralNode]
+    sha256: str
+
+    @field_validator("sha256")
+    @classmethod
+    def _validate_sha256(cls, value: str) -> str:
+        if _STRUCTURAL_SHA256_PATTERN.fullmatch(value) is None:
+            raise ValueError("structural SHA-256 is invalid")
+        return value
+
+    @field_validator("nodes")
+    @classmethod
+    def _validate_unique_sorted_paths(
+        cls,
+        value: list[OAStructuralNode],
+    ) -> list[OAStructuralNode]:
+        paths = [node.path for node in value]
+        if paths != sorted(set(paths)):
+            raise ValueError("structural nodes must have unique sorted paths")
+        return value
+
+
+class OAStructuralDriftReport(BaseModel):
+    """Safe Live drift result containing structural metadata only."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    matches: bool
+    algorithm: Literal["eternalai-structural-v1"]
+    expected_sha256: str
+    actual_sha256: str
+    added: tuple[OAStructuralNode, ...]
+    removed: tuple[OAStructuralNode, ...]
+    changed: tuple[OAStructuralNode, ...]
+
+    @field_validator("expected_sha256", "actual_sha256")
+    @classmethod
+    def _validate_report_sha256(cls, value: str) -> str:
+        if _STRUCTURAL_SHA256_PATTERN.fullmatch(value) is None:
+            raise ValueError("drift report SHA-256 is invalid")
+        return value
+
+
 def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
     """Fingerprint JSON structure without including values or array lengths."""
 
@@ -141,6 +240,123 @@ def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
         "nodes": nodes,
         "sha256": hashlib.sha256(canonical).hexdigest(),
     }
+
+
+def compare_structural_fingerprints(
+    expected: Any,
+    actual: Any,
+) -> OAStructuralDriftReport:
+    """Compare normalized fingerprints without exposing values or array lengths."""
+
+    try:
+        expected_fingerprint = OAStructuralFingerprint.model_validate(
+            expected,
+            strict=True,
+        )
+        actual_fingerprint = OAStructuralFingerprint.model_validate(
+            actual,
+            strict=True,
+        )
+    except ValidationError:
+        raise ValueError("OA structural fingerprint is invalid") from None
+
+    expected_nodes = {
+        node.path: node for node in expected_fingerprint.nodes
+    }
+    actual_nodes = {
+        node.path: node for node in actual_fingerprint.nodes
+    }
+    added = tuple(
+        actual_nodes[path]
+        for path in sorted(actual_nodes.keys() - expected_nodes.keys())
+    )
+    removed = tuple(
+        expected_nodes[path]
+        for path in sorted(expected_nodes.keys() - actual_nodes.keys())
+    )
+    changed = tuple(
+        actual_nodes[path]
+        for path in sorted(expected_nodes.keys() & actual_nodes.keys())
+        if actual_nodes[path] != expected_nodes[path]
+    )
+    matches = (
+        expected_fingerprint.algorithm == actual_fingerprint.algorithm
+        and expected_fingerprint.sha256 == actual_fingerprint.sha256
+        and not added
+        and not removed
+        and not changed
+    )
+    return OAStructuralDriftReport(
+        matches=matches,
+        algorithm=STRUCTURAL_FINGERPRINT_ALGORITHM,
+        expected_sha256=expected_fingerprint.sha256,
+        actual_sha256=actual_fingerprint.sha256,
+        added=added,
+        removed=removed,
+        changed=changed,
+    )
+
+
+def normalize_pending_workflow_records(
+    records: list[Any],
+) -> OAPendingWorkflowCollection:
+    """Whitelist and normalize one or more Live OA workflow record pages."""
+
+    normalized: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("OA workflow record must be an object")
+        normalized.append(
+            {
+                "workflow_id": _required_live_string(record, "workflowId"),
+                "title": _required_live_string(record, "title"),
+                "status": _required_live_pending_status(record),
+                "applicant": _required_live_string(record, "applicant"),
+                "current_step": _required_live_string(record, "currentStep"),
+                "approver": _optional_live_string(record, "approver"),
+                "created_at": _optional_live_string(record, "createdAt"),
+                "expired": _required_live_boolean(record, "expired"),
+            }
+        )
+    try:
+        return OAPendingWorkflowCollection.model_validate(
+            {"workflows": normalized},
+            strict=True,
+        )
+    except ValidationError:
+        raise ValueError("normalized OA workflow collection is invalid") from None
+
+
+def _required_live_string(record: Mapping[str, Any], key: str) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("OA workflow required string is invalid")
+    return value.strip()
+
+
+def _optional_live_string(
+    record: Mapping[str, Any],
+    key: str,
+) -> str | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("OA workflow optional string is invalid")
+    return value.strip()
+
+
+def _required_live_pending_status(record: Mapping[str, Any]) -> Literal["pending"]:
+    if record.get("status") != "pending":
+        raise ValueError("OA workflow status is invalid")
+    return "pending"
+
+
+def _required_live_boolean(record: Mapping[str, Any], key: str) -> bool:
+    value = record.get(key)
+    if not isinstance(value, bool):
+        raise ValueError("OA workflow boolean is invalid")
+    return value
 
 
 class _StructuralObservation:
@@ -207,6 +423,11 @@ __all__ = (
     "OAContractPackProfile",
     "OAPendingWorkflow",
     "OAPendingWorkflowCollection",
+    "OAStructuralDriftReport",
+    "OAStructuralFingerprint",
+    "OAStructuralNode",
     "STRUCTURAL_FINGERPRINT_ALGORITHM",
     "build_structural_fingerprint",
+    "compare_structural_fingerprints",
+    "normalize_pending_workflow_records",
 )

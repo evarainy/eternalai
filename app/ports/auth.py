@@ -60,6 +60,10 @@ class SessionBindingError(RuntimeError):
     """Raised when a conversation session is not bound to the Principal."""
 
 
+class CredentialStoreError(RuntimeError):
+    """Uniform fail-closed error for unreadable encrypted credential storage."""
+
+
 class AuthenticationPort(Protocol):
     async def authenticate(self, credential: LoginCredential) -> Principal: ...
 
@@ -77,10 +81,13 @@ class CredentialStorePort(Protocol):
         credential: OASessionCredential,
     ) -> None: ...
 
+    async def load(self, ai_user_id: str) -> OASessionCredential | None: ...
+
 
 __all__ = (
     "AuthenticationError",
     "AuthenticationPort",
+    "CredentialStoreError",
     "CredentialStorePort",
     "LoginCredential",
     "OASessionCredential",

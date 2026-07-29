@@ -16,6 +16,13 @@ from app.config import ProductionSettings
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
+from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
+from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.provider import (
+    LiveOAReadProvider,
+    ReplayOAReadProvider,
+    report_oa_structural_drift,
+)
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.oa import (
     OACredentialVerifier,
@@ -26,9 +33,10 @@ from app.infra.auth.postgresql import (
     PostgreSQLCredentialStore,
     PostgreSQLPrincipalRoleReader,
 )
+from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
-from app.infra.identity.unconfigured import UnconfiguredIdentityMapping
+from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
@@ -138,6 +146,44 @@ def build_session_binder(
     return PrincipalSessionBinder(binding_key=binding_key)
 
 
+def build_oa_read_adapter(
+    *,
+    settings: ProductionSettings,
+    credential_store: CredentialStorePort,
+) -> AdapterPort:
+    """Build the configured OA read adapter without runtime fallback."""
+
+    if settings.oa_read_adapter_mode == "mock":
+        return MockOAAdapter()
+
+    contract_pack_dir = settings.oa_read_contract_pack_dir
+    if contract_pack_dir is None or not contract_pack_dir.is_dir():
+        raise RuntimeError(
+            "OA_READ_CONTRACT_PACK_DIR must be an existing directory"
+        )
+    if settings.oa_read_adapter_mode == "replay":
+        return OAReadAdapter(ReplayOAReadProvider(contract_pack_dir))
+    if settings.oa_read_adapter_mode == "live":
+        endpoint_path = settings.oa_pending_workflows_path
+        if endpoint_path is None:
+            raise RuntimeError(
+                "OA_PENDING_WORKFLOWS_PATH is required for live mode"
+            )
+        return OAReadAdapter(
+            LiveOAReadProvider(
+                base_url=settings.oa_base_url,
+                endpoint_path=endpoint_path,
+                timeout_seconds=settings.oa_timeout_seconds,
+                contract_pack_dir=contract_pack_dir,
+                drift_reporter=report_oa_structural_drift,
+            ),
+            secret_provider=CredentialStoreSecretProvider(
+                credential_store=credential_store
+            ),
+        )
+    raise RuntimeError("OA_READ_ADAPTER_MODE is invalid")
+
+
 def build_admin_registry_service(
     *,
     capability_registry: CapabilityRegistryPort,
@@ -226,10 +272,21 @@ def build_production_components(
 ) -> ProductionComponents:
     """Build the real database/auth/runtime composition with explicit test seams."""
 
+    if settings.oa_read_adapter_mode == "live" and (
+        identity_mapping is not None or adapters is not None
+    ):
+        raise RuntimeError(
+            "Live OA composition does not allow identity mapping or adapter overrides"
+        )
+
     session_factory = make_async_session_factory(database_url=settings.database_url)
     task_store = PostgreSQLTaskStore(session_factory)
     session_store = PostgreSQLSessionStore(session_factory)
     capability_registry = PostgreSQLCapabilityRegistry(session_factory)
+    credential_store = build_credential_store(
+        session_factory=session_factory,
+        encryption_key=settings.credential_encryption_key,
+    )
     resolved_trace_port = (
         PostgreSQLTraceWriter(session_factory)
         if trace_port is None
@@ -237,9 +294,14 @@ def build_production_components(
     )
     trace_query = build_trace_query(session_factory=session_factory)
     resolved_identity_mapping = (
-        UnconfiguredIdentityMapping()
+        PostgreSQLOAIdentityMapping(session_factory=session_factory)
         if identity_mapping is None
         else identity_mapping
+    )
+    resolved_adapters = (
+        {"oa": build_oa_read_adapter(settings=settings, credential_store=credential_store)}
+        if adapters is None
+        else dict(adapters)
     )
     policy_guard = MinimalPolicyGuard()
     gateway = CapabilityGateway(
@@ -247,7 +309,7 @@ def build_production_components(
         identity_mapping=resolved_identity_mapping,
         policy_guard=policy_guard,
         trace_port=resolved_trace_port,
-        adapters=dict(adapters or {}),
+        adapters=resolved_adapters,
     )
     production_llm = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,
@@ -272,10 +334,6 @@ def build_production_components(
             else structured_output
         ),
         intent_model=settings.llm_model,
-    )
-    credential_store = build_credential_store(
-        session_factory=session_factory,
-        encryption_key=settings.credential_encryption_key,
     )
     resolved_authentication = (
         build_authentication_port(
@@ -338,6 +396,7 @@ __all__ = (
     "build_authentication_port",
     "build_admin_registry_service",
     "build_credential_store",
+    "build_oa_read_adapter",
     "build_production_components",
     "build_principal_role_reader",
     "build_runtime",

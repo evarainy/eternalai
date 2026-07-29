@@ -6,7 +6,12 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from app.ports.secret_provider import SecretInjectionResult, SecretResolutionResult
+from app.ports.auth import OASessionCredential
+from app.ports.secret_provider import (
+    CredentialNotFoundError,
+    SecretInjectionResult,
+    SecretResolutionResult,
+)
 
 
 class NoopSecretProvider:
@@ -31,6 +36,14 @@ class NoopSecretProvider:
     ) -> dict[str, Any]:
         # execution_context is intentionally ignored -- never copied into output.
         return SecretInjectionResult(credential_ref=credential_ref).model_dump()
+
+    async def resolve_oa_session(
+        self,
+        credential_ref: str,
+    ) -> OASessionCredential:
+        """Reject every plaintext OA Session request in the noop implementation."""
+
+        raise CredentialNotFoundError
 
 
 _SENSITIVE_PATTERN = re.compile(

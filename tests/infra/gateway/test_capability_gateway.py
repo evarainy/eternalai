@@ -124,9 +124,14 @@ def _capability_spec_for_system(target_system: str) -> CapabilitySpec:
     )
 
 
-def _identity_result(bind_status: str) -> IdentityCheckResult:
+def _identity_result(
+    bind_status: str,
+    *,
+    binding_id: str | None = None,
+) -> IdentityCheckResult:
     return IdentityCheckResult(
         bind_status=bind_status,
+        binding_id=binding_id,
         target_system="oa",
         execution_identity="user_delegated",
     )
@@ -309,6 +314,7 @@ class FakeAdapter:
         )
         self._call_log = call_log
         self.call_count = 0
+        self.last_execution_context: dict[str, Any] | None = None
 
     async def execute(
         self,
@@ -317,6 +323,7 @@ class FakeAdapter:
         execution_context: dict[str, Any],
     ) -> AdapterResult:
         self.call_count += 1
+        self.last_execution_context = dict(execution_context)
         if self._call_log is not None:
             self._call_log.append("adapter")
         return self._result
@@ -602,6 +609,63 @@ def test_happy_path_runs_prechecks_and_records_trace_without_task_finalize() -> 
     record_attributes = trace.record_gateway_call_kwargs.get("attributes") or {}
     assert "arguments" not in record_attributes
     _assert_trace_not_finalized(trace)
+
+
+def test_active_user_delegated_oa_binding_injects_only_server_mapping_ref() -> None:
+    credential_ref = "oa-session-v1:usr_v1_safe-surrogate"
+    registry = FakeRegistry(_capability_spec())
+    identity_mapping = FakeIdentityMapping(
+        _identity_result("active", binding_id=credential_ref)
+    )
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    trace = FakeTrace()
+    adapter = FakeAdapter()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        policy_guard,
+        trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "completed"
+    assert adapter.last_execution_context == {"credential_ref": credential_ref}
+    assert credential_ref not in repr(trace.steps)
+
+
+def test_client_credential_ref_argument_is_never_copied_to_execution_context() -> None:
+    registry = FakeRegistry(_capability_spec())
+    identity_mapping = FakeIdentityMapping(_identity_result("active"))
+    adapter = FakeAdapter()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        FakePolicyGuard(PolicyDecision(decision="allow")),
+        FakeTrace(),
+    )
+
+    result = _execute_gateway_with_ports(
+        gateway,
+        {"credential_ref": "client-supplied-must-be-ignored"},
+    )
+
+    assert result.status == "completed"
+    assert adapter.last_execution_context == {}
+
+
+def test_adapter_session_expiry_maps_to_binding_required_reauthentication_path() -> None:
+    adapter = FakeAdapter(
+        AdapterResult(status="error", data=None, error_code="identity_expired")
+    )
+    gateway = CapabilityGateway(adapter)
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "binding_required"
+    assert result.error_code == "identity_expired"
 
 
 def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_adapter() -> None:

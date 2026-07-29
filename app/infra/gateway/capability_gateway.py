@@ -20,6 +20,13 @@ from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 def _map_adapter_status(adapter_result: AdapterResult) -> ExecutionStatus:
     if adapter_result.status == "success":
         return "completed"
+    if adapter_result.error_code in {
+        "identity_unbound",
+        "identity_expired",
+        "identity_revoked",
+        "needs_binding_scope",
+    }:
+        return "binding_required"
     if adapter_result.error_code == "adapter_timeout":
         return "timeout"
     if adapter_result.error_code == "upstream_permission_denied":
@@ -77,6 +84,7 @@ class CapabilityGateway:
         trace_id = request_context.request_id
 
         capability_spec = None
+        credential_ref: str | None = None
         if self._capability_registry is not None:
             capability_spec = await self._capability_registry.get(capability_id)
             if capability_spec is None:
@@ -143,6 +151,12 @@ class CapabilityGateway:
                 "ok",
                 capability_id=capability_id,
             )
+            if (
+                capability_spec.target_system == "oa"
+                and capability_spec.execution_identity == "user_delegated"
+                and identity_result.binding_id is not None
+            ):
+                credential_ref = identity_result.binding_id
 
         if self._policy_guard is not None:
             policy_decision = await self._policy_guard.decide(
@@ -255,6 +269,8 @@ class CapabilityGateway:
             )
 
         execution_context: dict[str, Any] = {}
+        if credential_ref is not None:
+            execution_context["credential_ref"] = credential_ref
         if "mock_error_mode" in arguments:
             execution_context["mock_error_mode"] = arguments["mock_error_mode"]
 

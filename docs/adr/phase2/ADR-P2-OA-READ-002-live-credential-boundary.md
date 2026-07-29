@@ -91,7 +91,7 @@ execution_identity = "user_delegated"
 | 数据状态 | `bind_status` | `reason_code` | `binding_id` |
 |---|---|---|---|
 | 无凭证行 | `unbound` | `identity_unbound` | null |
-| 本地 TTL 已过期 | `expired` | `identity_expired` | 安全引用 |
+| 本地 TTL 已过期 | `expired` | `identity_expired` | null |
 | 有效 | `active` | null | 安全引用 |
 | 非 OA、非 user-delegated 或请求了本映射不支持的 account/device scope | fail-closed | 不回落其他身份 | null |
 
@@ -197,9 +197,11 @@ OA_READ_ADAPTER_MODE = mock | replay | live
 - `live`：要求同一 Contract Pack 目录和显式、相对 OA host 的
   `OA_PENDING_WORKFLOWS_PATH`，构造真实 SecretProvider 与 Live provider。
 - 非法 mode、缺失 Live/Replay 必需配置或不安全 path 均在 composition 时 fail-fast。
-- `build_production_components(..., adapters=...)` 和 `identity_mapping=...` 的显式测试
-  seam 优先于默认构造，保证 `test_pilot_foundation_e2e.py` 继续使用其显式 Mock；
-  Golden runner 继续直接构造 Mock。
+- `mock` / `replay` 下，`build_production_components(..., adapters=...)` 和
+  `identity_mapping=...` 的显式测试 seam 优先于默认构造，保证
+  `test_pilot_foundation_e2e.py` 继续使用其显式 Mock；Golden runner 继续直接构造 Mock。
+- `live` 下拒绝上述两个 override，强制使用 PostgreSQL OA IdentityMapping、真实
+  SecretProvider 与 Live adapter，静态测试 mapping/adapter 不得成为真实凭证来源。
 - CredentialStore 在 composition 中只构造一次，同时供认证写入、IdentityMapping
   metadata 查询所依赖的 session factory，以及 SecretProvider 读取使用。
 
@@ -218,8 +220,10 @@ OA_READ_ADAPTER_MODE = mock | replay | live
   `array_shape`。
 
 报告不得包含原始响应、业务值、数组长度、Cookie/OA userid，也不得 hash 原始响应。
-Live 可通过注入的安全 reporter 记录报告；不得把报告混入成功业务数据。归一化模型本身
-不成立时直接 `adapter_payload_invalid`。
+生产 composition 必须注入安全 reporter：匹配时保持安静，漂移时只记录 algorithm、
+expected/actual structural SHA 与 added/removed/changed 节点路径；不得把报告混入成功
+业务数据。测试可注入内存 reporter。归一化模型本身不成立时直接
+`adapter_payload_invalid`。
 
 ### 2.8 一次性内网采集与脱敏
 
