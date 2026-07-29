@@ -247,6 +247,8 @@ def test_live_default_opener_ignores_all_environment_proxies(
             "data": {
                 "records": [_raw_workflow(1)],
                 "hasMore": False,
+                "total": 1,
+                "nextCursor": None,
             }
         }
     )
@@ -255,6 +257,8 @@ def test_live_default_opener_ignores_all_environment_proxies(
             "data": {
                 "records": [_raw_workflow(99)],
                 "hasMore": False,
+                "total": 1,
+                "nextCursor": None,
             }
         }
     )
@@ -403,7 +407,16 @@ def test_extra_capability_arguments_fail_closed_without_provider_call() -> None:
 
 def test_live_adapter_requires_server_issued_credential_reference() -> None:
     opener = SequencedOpener(
-        FakeHTTPResponse({"data": {"records": [], "hasMore": False}})
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [],
+                    "hasMore": False,
+                    "total": 0,
+                    "nextCursor": None,
+                }
+            }
+        )
     )
     secret_provider = StaticSecretProvider(_credential())
     adapter = OAReadAdapter(
@@ -662,6 +675,7 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
                     "records": [_raw_workflow(1)],
                     "hasMore": False,
                     "total": 1,
+                    "nextCursor": None,
                 }
             }
         )
@@ -807,6 +821,8 @@ def test_live_business_session_expiry_requires_reauthentication() -> None:
                             }
                         ],
                         "hasMore": False,
+                        "total": 1,
+                        "nextCursor": None,
                     }
                 }
             ),
@@ -932,11 +948,123 @@ def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
             "data": {
                 "records": [_raw_workflow(1)],
                 "hasMore": True,
+                "total": 3,
                 "nextCursor": "same-cursor",
             }
         }
     )
     opener = SequencedOpener(page, page)
+    adapter = OAReadAdapter(
+        _live_provider(opener),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_queries) == 2
+
+
+def test_live_pagination_fails_closed_when_signal_shape_differs_from_profile() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [_raw_workflow(1)],
+                    "hasMore": False,
+                }
+            }
+        )
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_queries) == 1
+
+
+def test_live_pagination_fails_closed_when_cursor_is_not_verbatim_safe() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [_raw_workflow(1)],
+                    "hasMore": True,
+                    "total": 2,
+                    "nextCursor": "  cursor-2  ",
+                }
+            }
+        )
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_queries) == 1
+
+
+def test_live_pagination_fails_closed_when_total_changes_between_pages() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [_raw_workflow(1)],
+                    "hasMore": True,
+                    "total": 2,
+                    "nextCursor": "cursor-2",
+                }
+            }
+        ),
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [_raw_workflow(2)],
+                    "hasMore": True,
+                    "total": 3,
+                    "nextCursor": "cursor-3",
+                }
+            }
+        ),
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [_raw_workflow(3)],
+                    "hasMore": False,
+                    "total": 3,
+                    "nextCursor": None,
+                }
+            }
+        ),
+    )
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential()),
@@ -969,7 +1097,16 @@ def test_secret_resolution_errors_are_safely_mapped(
     expected_error_code: str,
 ) -> None:
     opener = SequencedOpener(
-        FakeHTTPResponse({"data": {"records": [], "hasMore": False}})
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": [],
+                    "hasMore": False,
+                    "total": 0,
+                    "nextCursor": None,
+                }
+            }
+        )
     )
     adapter = OAReadAdapter(
         _live_provider(opener),
@@ -998,6 +1135,7 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
                     "records": [_raw_workflow(1)],
                     "hasMore": False,
                     "total": 1,
+                    "nextCursor": None,
                 }
             }
         )

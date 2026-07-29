@@ -114,10 +114,23 @@ class CapabilityGateway:
                 execution_identity=capability_spec.execution_identity,
                 request_context=request_context,
             )
-            if identity_result.bind_status != "active":
+            identity_result_matches_request = (
+                identity_result.target_system == capability_spec.target_system
+                and identity_result.execution_identity
+                == capability_spec.execution_identity
+            )
+            if (
+                identity_result.bind_status != "active"
+                or not identity_result_matches_request
+            ):
+                bind_status = (
+                    identity_result.bind_status
+                    if identity_result.bind_status != "active"
+                    else "verification_failed"
+                )
                 error_code = cast(
                     ErrorCode,
-                    _map_identity_error(identity_result.bind_status),
+                    _map_identity_error(bind_status),
                 )
                 await self._record_step(
                     trace_id,

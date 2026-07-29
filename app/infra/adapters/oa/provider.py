@@ -37,6 +37,12 @@ from app.ports.auth import OASessionCredential
 _DEFAULT_PAGE_SIZE = 100
 _DEFAULT_MAX_PAGES = 50
 _DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_DEFAULT_PAGINATION_SIGNAL_KEYS = frozenset(
+    {"hasMore", "total", "nextCursor"}
+)
+_KNOWN_PAGINATION_SIGNAL_KEYS = frozenset(
+    {"hasMore", "has_more", "total", "nextCursor", "next_cursor"}
+)
 _MAX_CONFIGURED_PAGES = 1_000
 _MAX_CONFIGURED_RESPONSE_BYTES = 32 * 1024 * 1024
 _COOKIE_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -155,6 +161,7 @@ class LiveOAReadProvider:
         drift_reporter: OAStructuralDriftReporter | None = None,
         max_pages: int = _DEFAULT_MAX_PAGES,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
+        pagination_signal_keys: frozenset[str] = _DEFAULT_PAGINATION_SIGNAL_KEYS,
         opener_factory: Callable[[], OpenerDirector] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
@@ -171,6 +178,9 @@ class LiveOAReadProvider:
         self._timeout_seconds = timeout_seconds
         self._max_pages = max_pages
         self._max_response_bytes = max_response_bytes
+        self._pagination_signal_keys = _validate_pagination_signal_keys(
+            pagination_signal_keys
+        )
         self._expected_fingerprint = expected_fingerprint
         self._drift_reporter = drift_reporter
         self._opener_factory = opener_factory or self._build_isolated_opener
@@ -191,6 +201,7 @@ class LiveOAReadProvider:
         page_records: list[Any] = []
         pagination: Mapping[str, Any] = {}
         next_cursor: str | None = None
+        expected_total: int | None = None
         collection: OAPendingWorkflowCollection | None = None
 
         try:
@@ -229,11 +240,19 @@ class LiveOAReadProvider:
                         raise OALivePayloadInvalid(
                             "OA aggregate exceeds the record limit"
                         )
-                    is_complete, next_cursor = _resolve_pagination(
+                    is_complete, next_cursor, page_total = _resolve_pagination(
                         pagination,
+                        expected_signal_keys=self._pagination_signal_keys,
                         page_record_count=len(page_records),
                         aggregate_record_count=aggregate_record_count,
                     )
+                    if page_total is not None:
+                        if expected_total is None:
+                            expected_total = page_total
+                        elif page_total != expected_total:
+                            raise OALivePayloadInvalid(
+                                "OA total signal changed between pages"
+                            )
                 except OALiveIdentityExpired:
                     page_error_kind = "identity_expired"
                 except OALivePermissionDenied:
@@ -316,6 +335,7 @@ class LiveOAReadProvider:
             seen_cursors.clear()
             cursor = None
             next_cursor = None
+            expected_total = None
             collection = None
 
     def _build_isolated_opener(self) -> OpenerDirector:
@@ -658,9 +678,15 @@ def _read_page(
 def _resolve_pagination(
     pagination: Mapping[str, Any],
     *,
+    expected_signal_keys: frozenset[str],
     page_record_count: int,
     aggregate_record_count: int,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, int | None]:
+    observed_signal_keys = frozenset(
+        key for key in _KNOWN_PAGINATION_SIGNAL_KEYS if key in pagination
+    )
+    if observed_signal_keys != expected_signal_keys:
+        raise OALivePayloadInvalid("OA pagination signal shape changed")
     completion_signals: list[bool] = []
 
     has_more = _read_alias(pagination, "hasMore", "has_more")
@@ -670,11 +696,13 @@ def _resolve_pagination(
         completion_signals.append(not has_more)
 
     total = pagination.get("total", _MISSING)
+    validated_total: int | None = None
     if total is not _MISSING:
         if not isinstance(total, int) or isinstance(total, bool) or total < 0:
             raise OALivePayloadInvalid("OA total signal is invalid")
         if aggregate_record_count > total:
             raise OALivePayloadInvalid("OA total signal contradicts the records")
+        validated_total = total
         completion_signals.append(aggregate_record_count == total)
 
     next_cursor_raw = _read_alias(pagination, "nextCursor", "next_cursor")
@@ -682,8 +710,12 @@ def _resolve_pagination(
     if next_cursor_raw is not _MISSING:
         if next_cursor_raw is None or next_cursor_raw == "":
             completion_signals.append(True)
-        elif isinstance(next_cursor_raw, str) and next_cursor_raw.strip():
-            next_cursor = next_cursor_raw.strip()
+        elif (
+            isinstance(next_cursor_raw, str)
+            and next_cursor_raw
+            and next_cursor_raw == next_cursor_raw.strip()
+        ):
+            next_cursor = next_cursor_raw
             completion_signals.append(False)
         else:
             raise OALivePayloadInvalid("OA next-cursor signal is invalid")
@@ -694,7 +726,21 @@ def _resolve_pagination(
         raise OALivePayloadInvalid("OA pagination signals contradict each other")
     if not completion_signals[0] and page_record_count == 0:
         raise OALivePayloadInvalid("OA pagination cannot continue after an empty page")
-    return completion_signals[0], next_cursor
+    return completion_signals[0], next_cursor, validated_total
+
+
+def _validate_pagination_signal_keys(
+    value: frozenset[str],
+) -> frozenset[str]:
+    if (
+        not isinstance(value, frozenset)
+        or not value
+        or not value.issubset(_KNOWN_PAGINATION_SIGNAL_KEYS)
+        or {"hasMore", "has_more"}.issubset(value)
+        or {"nextCursor", "next_cursor"}.issubset(value)
+    ):
+        raise ValueError("OA pagination signal profile is invalid")
+    return value
 
 
 def _read_alias(

@@ -118,10 +118,12 @@ PostgreSQL mapping。
 ```
 
 Gateway 保持 `Registry → Identity → Policy → adapter selection` 的安全顺序。只有
-`active + user_delegated + target_system="oa"` Identity 与 allow Policy 均通过后，才把
-`identity_result.binding_id` 复制为 `credential_ref`。它不得从 `arguments`、请求体、
-header、客户端 `execution_context`、客户端 session id 或客户端自报 Principal 读取。
-Gateway 不读取、不解密、不缓存 Secret，也不把 context 交给 Trace。
+`active + user_delegated + target_system="oa"` Identity 与 allow Policy 均通过，且
+`IdentityCheckResult.target_system/execution_identity` 逐字匹配本次 capability 请求后，才把
+`identity_result.binding_id` 复制为 `credential_ref`；不匹配视为 `verification_failed` 并
+fail-closed。引用不得从 `arguments`、请求体、header、客户端 `execution_context`、客户端
+session id 或客户端自报 Principal 读取。Gateway 不读取、不解密、不缓存 Secret，也不把
+context 交给 Trace。
 
 Mock 与 Replay 允许 context 无 `credential_ref`；Live 强制要求有效引用。新增键是向后
 兼容的稀疏扩展，因此禁改的 `MockOAAdapter`、Golden fixtures/evaluator 和 pilot e2e
@@ -158,9 +160,12 @@ method 和分页 wire contract 属于进程配置/Provider constructor，不是 
 Live 在 provider 内循环请求并聚合页面；页号/页大小/cursor 永不上浮到 Gateway 或
 Capability。
 
-Live 分页必须优先使用已配置的明确终止信号（`has_more`、`total`、`next_cursor` 中本
-profile 声明的形状），并同时具备最大页数与重复 cursor 防护。缺少可判定终止条件、越界、
-矛盾页信息或超过边界均失败，不把部分结果报告为成功。
+Live 的 Provider constructor 固定该 OA wire profile 的精确分页信号键形状；本棒默认
+Ecology9 形状为 `hasMore + total + nextCursor`，每页观察到的分页信号键必须与配置逐字
+一致。同一次调用首页 `total` 冻结后不得跨页变化，非空 `nextCursor` 不做 trim，下一请求
+逐字携带。分页同时具备最大页数与重复 cursor 防护；缺少可判定终止条件、信号形状变化、
+越界、矛盾页信息或超过边界均失败，不把部分结果报告为成功。该 constructor 配置不改写
+既有不可变 Contract Pack profile。
 
 ### 2.5 Session 失效与错误语义
 
@@ -247,8 +252,9 @@ sanitizer 增加可重复的显式 `--entry-index`。一个场景可按给定顺
 smoke 的 selector 必须按 HAR 请求顺序严格递增；三个成功场景及其全部选中 entry 只接受
 同一 HTTP(S) scheme/host/port/path 的 `GET` 请求，多页还必须逐页锁定
 page/pageSize/cursor 链与明确终止信号。请求 query 只允许这些分页键，非末页必须提供
-非空 `nextCursor` 且下一请求逐字携带；不能把逆序、跨 endpoint、额外 query 变化或无
-cursor 的 entry 拼成分页证据。
+非空、无首尾空白的 `nextCursor`，不做 trim 且下一请求逐字携带；不能把逆序、跨
+endpoint、额外 query 变化、修剪 cursor 或无 cursor 的 entry 拼成分页证据。多页首次
+观察到的分页信号键形状和 `total` 还必须在后续页保持不变。
 
 三层防线保持原强度：
 

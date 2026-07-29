@@ -128,12 +128,14 @@ def _identity_result(
     bind_status: str,
     *,
     binding_id: str | None = None,
+    target_system: str = "oa",
+    execution_identity: str = "user_delegated",
 ) -> IdentityCheckResult:
     return IdentityCheckResult(
         bind_status=bind_status,
         binding_id=binding_id,
-        target_system="oa",
-        execution_identity="user_delegated",
+        target_system=target_system,
+        execution_identity=execution_identity,
     )
 
 
@@ -633,6 +635,48 @@ def test_active_user_delegated_oa_binding_injects_only_server_mapping_ref() -> N
     assert result.status == "completed"
     assert adapter.last_execution_context == {"credential_ref": credential_ref}
     assert credential_ref not in repr(trace.steps)
+
+
+@pytest.mark.parametrize(
+    ("target_system", "execution_identity"),
+    (
+        ("u8", "user_delegated"),
+        ("oa", "system_scope"),
+    ),
+)
+def test_active_identity_result_with_mismatched_domain_fails_before_policy_or_adapter(
+    target_system: str,
+    execution_identity: str,
+) -> None:
+    registry = FakeRegistry(_capability_spec())
+    identity_mapping = FakeIdentityMapping(
+        _identity_result(
+            "active",
+            binding_id="oa-session-v1:wrong-domain",
+            target_system=target_system,
+            execution_identity=execution_identity,
+        )
+    )
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    trace = FakeTrace()
+    adapter = SentinelAdapter()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        policy_guard,
+        trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "binding_required"
+    assert result.error_code == "identity_unbound"
+    assert policy_guard.call_count == 0
+    assert adapter.call_count == 0
+    assert trace.record_gateway_call_count == 0
+    _assert_step_events(trace, ["identity_check", "blocked_by_identity"])
+    assert "wrong-domain" not in repr(trace.steps)
 
 
 def test_client_credential_ref_argument_is_never_copied_to_execution_context() -> None:
