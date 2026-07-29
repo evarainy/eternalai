@@ -29,6 +29,7 @@ _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_RECORDS = 10_000
 _SYNTHETIC_TIMESTAMP = "2000-01-01T00:00:00+00:00"
+_ALLOWED_RAW_PENDING_STATUSES = frozenset({"pending"})
 
 _FORBIDDEN_KEYS = frozenset(
     {
@@ -108,6 +109,8 @@ def sanitize_har_to_contract_pack(
     har = _load_har(input_har)
     raw_payload = _select_pending_workflow_payload(har)
     sensitive_values = _collect_sensitive_values(har)
+    _collect_sensitive_fields(raw_payload, sensitive_values)
+    _assert_response_payload_has_no_forbidden_keys(raw_payload)
     sample = _normalize_sample(raw_payload)
     fingerprint = build_structural_fingerprint(sample)
     profile = {
@@ -216,7 +219,6 @@ def _normalize_sample(raw_payload: Mapping[str, Any]) -> dict[str, Any]:
     records = data.get("records")
     if (
         not isinstance(records, list)
-        or not records
         or len(records) > _MAX_RECORDS
     ):
         raise SanitizationError("response_records_invalid")
@@ -227,7 +229,9 @@ def _normalize_sample(raw_payload: Mapping[str, Any]) -> dict[str, Any]:
             raise SanitizationError("response_record_invalid")
         _require_string(record, "workflowId")
         _require_string(record, "title")
-        status = _require_string(record, "status")
+        raw_status = _require_string(record, "status")
+        if raw_status not in _ALLOWED_RAW_PENDING_STATUSES:
+            raise SanitizationError("response_status_invalid")
         _require_string(record, "applicant")
         _require_string(record, "currentStep")
         approver = _optional_string(record, "approver")
@@ -239,7 +243,7 @@ def _normalize_sample(raw_payload: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "workflow_id": f"workflow-synthetic-{index:03d}",
                 "title": f"workflow-title-synthetic-{index:03d}",
-                "status": status,
+                "status": "pending",
                 "applicant": f"applicant-synthetic-{index:03d}",
                 "current_step": f"step-synthetic-{index:03d}",
                 "approver": (
@@ -302,6 +306,17 @@ def _collect_sensitive_fields(value: Any, output: set[str]) -> None:
     elif isinstance(value, list):
         for item in value:
             _collect_sensitive_fields(item, output)
+
+
+def _assert_response_payload_has_no_forbidden_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if _normalize_key(str(key)) in _FORBIDDEN_KEYS:
+                raise SanitizationError("forbidden_response_key")
+            _assert_response_payload_has_no_forbidden_keys(child)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_response_payload_has_no_forbidden_keys(item)
 
 
 def _collect_entry_credentials(entry: Any, output: set[str]) -> None:

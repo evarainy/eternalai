@@ -13,6 +13,30 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 STRUCTURAL_FINGERPRINT_ALGORITHM = "eternalai-structural-v1"
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_STRUCTURAL_SCHEMA_EXEMPLAR = {
+    "workflows": [
+        {
+            "workflow_id": "",
+            "title": "",
+            "status": "pending",
+            "applicant": "",
+            "current_step": "",
+            "approver": "",
+            "created_at": "2000-01-01T00:00:00+00:00",
+            "expired": False,
+        },
+        {
+            "workflow_id": "",
+            "title": "",
+            "status": "pending",
+            "applicant": "",
+            "current_step": "",
+            "approver": None,
+            "created_at": None,
+            "expired": False,
+        },
+    ]
+}
 
 
 class OAPendingWorkflow(BaseModel):
@@ -22,7 +46,7 @@ class OAPendingWorkflow(BaseModel):
 
     workflow_id: str
     title: str
-    status: str
+    status: Literal["pending"]
     applicant: str
     current_step: str
     approver: str | None
@@ -91,6 +115,7 @@ def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
     """Fingerprint JSON structure without including values or array lengths."""
 
     observations: dict[str, _StructuralObservation] = {}
+    _observe_structure(_STRUCTURAL_SCHEMA_EXEMPLAR, "$", observations)
     _observe_structure(payload, "$", observations)
     nodes = [
         {
@@ -142,14 +167,13 @@ def _observe_structure(
             _observe_structure(value[key], f"{path}.{key}", observations)
         return
     if isinstance(value, list):
-        observation.array_shapes.add(_array_shape(value))
+        if value:
+            observation.array_shapes.add(_array_shape(value))
         for item in value:
             _observe_structure(item, f"{path}[]", observations)
 
 
 def _array_shape(values: list[Any]) -> str:
-    if not values:
-        return "items:empty"
     return "items:" + "|".join(sorted({_value_shape(value) for value in values}))
 
 
@@ -157,7 +181,7 @@ def _value_shape(value: Any) -> str:
     if isinstance(value, Mapping):
         return "object"
     if isinstance(value, list):
-        return f"array<{_array_shape(value)}>"
+        return f"array<{_array_shape(value)}>" if value else "array<items:unknown>"
     return _json_type(value)
 
 

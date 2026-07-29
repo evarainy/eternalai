@@ -200,11 +200,35 @@ def test_structural_fingerprint_excludes_values_and_array_length() -> None:
         }
     )
     second = {"workflows": [second_item, copy.deepcopy(second_item)]}
+    empty = {"workflows": []}
 
     first_fingerprint = build_structural_fingerprint(first)
     second_fingerprint = build_structural_fingerprint(second)
+    empty_fingerprint = build_structural_fingerprint(empty)
 
     assert first_fingerprint == second_fingerprint
+    assert first_fingerprint == empty_fingerprint
     rendered = json.dumps(first_fingerprint)
     for business_value in first["workflows"][0].values():
         assert str(business_value) not in rendered
+
+
+def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
+    pack = tmp_path / CONTRACT_PACK.name
+    shutil.copytree(CONTRACT_PACK, pack)
+    empty_sample = {"workflows": []}
+    (pack / "sample.json").write_text(
+        json.dumps(empty_sample),
+        encoding="utf-8",
+    )
+    (pack / "fingerprint.json").write_text(
+        json.dumps(build_structural_fingerprint(empty_sample)),
+        encoding="utf-8",
+    )
+    adapter = OAReadAdapter(ReplayOAReadProvider(pack))
+
+    result = asyncio.run(adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "success"
+    assert result.error_code is None
+    assert result.data == {"workflows": []}

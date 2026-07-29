@@ -47,7 +47,7 @@ smoke 和 Live 指纹漂移比较留给 `P2-READ-ADAPTER-001`。
 |---|---|---:|---|
 | `workflow_id` | string | 否 | 脱敏后的流程标识 |
 | `title` | string | 否 | 脱敏后的标题 |
-| `status` | string | 否 | 上游状态的归一化值 |
+| `status` | string literal `pending` | 否 | 待办能力的封闭归一化值 |
 | `applicant` | string | 否 | 脱敏后的申请人标签 |
 | `current_step` | string | 否 | 当前节点的归一化标签 |
 | `approver` | string | 是 | 脱敏后的审批人标签 |
@@ -75,11 +75,14 @@ tests/contract_packs/oa/<profile_version>/
   `synthetic`）、sanitizer 版本及三个文件的关联，不记录 URL、用户名、Cookie 或原始
   HAR 路径。
 - `sample.json` 只保存上述归一化模型的脱敏值。Replay 逐字段读取并验证，不接受未知键。
-- `fingerprint.json` 使用 `eternalai-structural-v1`。算法深度遍历 `sample.json`，
-  将每个节点归一化为按路径排序的
+- `fingerprint.json` 使用 `eternalai-structural-v1`。算法先用上述领域模型的结构
+  exemplar 预置字段、类型和可空性，再深度遍历 `sample.json` 补充实际异常结构，将每个
+  节点归一化为按路径排序的
   `{path, json_type, nullable, array_shape}`；数组元素路径统一写成 `[]`，
   `array_shape` 只描述元素类型/对象/嵌套数组结构，不记录长度或值。最后只对这组结构
   节点的 canonical JSON（UTF-8、键排序、紧凑分隔符）计算 SHA-256。
+- 空列表和任意长度的同构非空列表必须得到相同指纹；合法空待办仍可生成 Contract Pack
+  并 Replay success。
 - 指纹不得直接或间接 hash 原始响应、HAR、业务值或样本长度。
 
 ### 2.4 离线脱敏
@@ -90,7 +93,8 @@ tests/contract_packs/oa/<profile_version>/
 转换按以下三层 fail-closed：
 
 1. **正向白名单提取**：只从已选响应体读取领域模型所需字段；标识、标题、姓名/工号类
-   值替换为确定性的合成标签，未知字段不复制。
+   值替换为确定性的合成标签，`status` 只接受并输出封闭的 `pending`，未知字段不复制。
+   已选响应体的解析后 JSON 还须递归拒绝任一禁止键，不能只扫描 HAR 外层。
 2. **原始敏感值不出现断言**：从 HAR headers/cookies 及敏感字段收集非空原值，逐个
    断言其字符串不出现在全部候选输出中。敏感原值若也出现在一个看似允许的字段中，仍
    必须失败。

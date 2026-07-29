@@ -14,22 +14,28 @@ COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
 
 
-def _har(*, status: str = "pending") -> dict[str, Any]:
+def _har(
+    *,
+    status: str = "pending",
+    cookie_value: str = COOKIE_VALUE,
+    extra_record_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    record = {
+        "workflowId": "raw-workflow-employee-001",
+        "title": "Raw confidential workflow title",
+        "status": status,
+        "applicant": "Synthetic Raw Person",
+        "currentStep": "Raw manager review",
+        "approver": "Synthetic Raw Approver",
+        "createdAt": "2026-07-29T09:30:00+09:00",
+        "expired": False,
+        "ignoredField": "must-not-be-copied",
+    }
+    if extra_record_fields is not None:
+        record.update(extra_record_fields)
     response_body = {
         "data": {
-            "records": [
-                {
-                    "workflowId": "raw-workflow-employee-001",
-                    "title": "Raw confidential workflow title",
-                    "status": status,
-                    "applicant": "Synthetic Raw Person",
-                    "currentStep": "Raw manager review",
-                    "approver": "Synthetic Raw Approver",
-                    "createdAt": "2026-07-29T09:30:00+09:00",
-                    "expired": False,
-                    "ignoredField": "must-not-be-copied",
-                }
-            ],
+            "records": [record],
             "ignoredPageValue": "must-not-be-copied",
         }
     }
@@ -43,7 +49,7 @@ def _har(*, status: str = "pending") -> dict[str, Any]:
                         "headers": [
                             {
                                 "name": "Cookie",
-                                "value": f"ecology_JSessionid={COOKIE_VALUE}",
+                                "value": f"ecology_JSessionid={cookie_value}",
                             },
                             {
                                 "name": "Authorization",
@@ -53,7 +59,7 @@ def _har(*, status: str = "pending") -> dict[str, Any]:
                         "cookies": [
                             {
                                 "name": "loginidweaver",
-                                "value": COOKIE_VALUE,
+                                "value": cookie_value,
                             }
                         ],
                     },
@@ -154,12 +160,49 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         assert forbidden not in all_output
 
 
+def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
+    har = _har()
+    entry = har["log"]["entries"][0]
+    response_body = json.loads(entry["response"]["content"]["text"])
+    response_body["data"]["records"] = []
+    entry["response"]["content"]["text"] = json.dumps(response_body)
+    input_har = tmp_path / "empty.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "empty-profile-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 0
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    fingerprint = json.loads(
+        (output_dir / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    assert sample == {"workflows": []}
+    assert fingerprint == build_structural_fingerprint(sample)
+    assert fingerprint == build_structural_fingerprint(
+        {
+            "workflows": [
+                {
+                    "workflow_id": "different",
+                    "title": "different",
+                    "status": "pending",
+                    "applicant": "different",
+                    "current_step": "different",
+                    "approver": None,
+                    "created_at": None,
+                    "expired": False,
+                }
+            ]
+        }
+    )
+
+
 def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
     tmp_path: Path,
 ) -> None:
     input_har = tmp_path / "cookie-leak.har"
     input_har.write_text(
-        json.dumps(_har(status=COOKIE_VALUE)),
+        json.dumps(_har(cookie_value="pending")),
         encoding="utf-8",
     )
     output_dir = tmp_path / "cookie-negative-v1"
@@ -168,28 +211,111 @@ def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
 
     assert completed.returncode != 0
     assert "raw_sensitive_value_survived" in completed.stderr
-    assert COOKIE_VALUE not in completed.stdout
-    assert COOKIE_VALUE not in completed.stderr
+    assert "pending" not in completed.stdout
+    assert "pending" not in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_token_pattern_reaching_whitelisted_field_fails_with_zero_output(
+def test_nested_response_cookie_fails_closed_without_leaking_value(
     tmp_path: Path,
 ) -> None:
-    input_har = tmp_path / "token-pattern.har"
+    nested_cookie_value = "nested-response-cookie-927315"
+    input_har = tmp_path / "nested-cookie.har"
     input_har.write_text(
-        json.dumps(_har(status="Bearer standalone-token-value")),
+        json.dumps(
+            _har(
+                status=nested_cookie_value,
+                extra_record_fields={
+                    "metadata": {"cookie": nested_cookie_value},
+                },
+            )
+        ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "token-negative-v1"
+    output_dir = tmp_path / "nested-cookie-negative-v1"
 
     completed = _run_script(input_har, output_dir)
 
     assert completed.returncode != 0
-    assert "forbidden_output_value" in completed.stderr
-    assert "standalone-token-value" not in completed.stdout
-    assert "standalone-token-value" not in completed.stderr
+    assert "forbidden_response_key" in completed.stderr
+    assert nested_cookie_value not in completed.stdout
+    assert nested_cookie_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_nested_response_workcode_fails_closed_without_leaking_value(
+    tmp_path: Path,
+) -> None:
+    workcode_value = "GOV-EMP-927315"
+    input_har = tmp_path / "nested-workcode.har"
+    input_har.write_text(
+        json.dumps(
+            _har(
+                status=workcode_value,
+                extra_record_fields={
+                    "identity": {"workCode": workcode_value},
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "nested-workcode-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "forbidden_response_key" in completed.stderr
+    assert workcode_value not in completed.stdout
+    assert workcode_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_nested_response_token_fails_closed_without_leaking_value(
+    tmp_path: Path,
+) -> None:
+    nested_token_value = "nested-response-token-927315"
+    input_har = tmp_path / "nested-token.har"
+    input_har.write_text(
+        json.dumps(
+            _har(
+                status=nested_token_value,
+                extra_record_fields={
+                    "authentication": {"accessToken": nested_token_value},
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "nested-token-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "forbidden_response_key" in completed.stderr
+    assert nested_token_value not in completed.stdout
+    assert nested_token_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
+    private_status = "private-business-status-927315"
+    input_har = tmp_path / "unrecognized-status.har"
+    input_har.write_text(
+        json.dumps(_har(status=private_status)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "status-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "response_status_invalid" in completed.stderr
+    assert private_status not in completed.stdout
+    assert private_status not in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
