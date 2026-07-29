@@ -5,16 +5,16 @@ This is the always-loaded compact context for coding agents. Keep detail in the 
 ## Authority and current phase
 Authority, highest first: the current Goal (latest instruction plus Outcome/Constraints/Verification) > user redlines and applicable `AGENTS.md` > approved product/architecture/interface/batch/milestone documents > repository code, tests, CI, branch protection, and runtime evidence > derived plans, skills, history, and suggestions.
 
-Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`) and `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`). `P2-CONFIRM-RESUME-001` remains recorded but has not triggered; see `docs/phase1/TASK_INDEX.md` §5.1.
+Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), and `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success). The only remaining debt is `P2-CONFIRM-RESUME-001` (not triggered); see `docs/phase1/TASK_INDEX.md` §5.1; next task = `P2-READ-ADAPTER-001` (OA read-only vertical slice).
 
 Each write lane uses one explicit Goal, one Scope, and one isolated worktree/branch; a new scope opens a new lane. Historical V4 prompts and Task Records keep their original meaning, but new work follows the current Goal and this file.
 
 ## Project at a glance
 - **EternalAI**: Government/enterprise AI Agent runtime — natural language driven, integrates OA, Yonyou U8, Hikvision iVMS
 - **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations; `app/ports/` must never depend on `app/infra/`
-- **Backend**: Python + uv + FastAPI | **Frontend**: React 18 + Vite + Ant Design 5.x
+- **Backend**: Python + uv + FastAPI + uvicorn 0.51.0 (real process entry point: `python -m app.server`) | **Frontend**: React 18 + Vite + Ant Design 5.x
 - **Data**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: Qwen + vLLM raw JSON mode; do not introduce instructor or PydanticAI (see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1)
+- **LLM**: vLLM raw JSON mode; default `http://34.74.11.38:8011/v1` + `glm-4.7`, with URL / model / sampling parameters overridable by env; do not introduce instructor or PydanticAI (see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1)
 - **Observability**: OpenTelemetry + Langfuse
 - **Full tech stack decisions**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
 
@@ -49,7 +49,7 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1147 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-AUTH-001 / merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`).
+> Baseline: **1182 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-PILOT-FOUNDATION-001 / merge `51af461e561d814deef5f813245520a3dae73871`).
 
 ```bash
 uv run pytest

@@ -5,16 +5,16 @@ Keep this file compact. Claude Code loads project memory at session start, so de
 ## 权威与当前阶段
 权威顺序：当前 Goal（最新指令及 Outcome/Constraints/Verification）> 用户红线和适用的 `AGENTS.md` > 已批准的产品/架构/接口/批次/里程碑文档 > 仓库代码、测试、CI、分支保护和运行证据 > 派生计划、skills、历史与建议。
 
-Phase 1 已完成。Phase 2 已落地 `P2-TRACE-PERSIST-001`（持久化 TracePort + Admin 审计查询，merge `f8eb8533`）和 `P2-AUTH-001`（OA 登录认证 + 认证接缝，替换自报身份，merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）。`P2-CONFIRM-RESUME-001` 仍登记在案但尚未触发，见 `docs/phase1/TASK_INDEX.md` §5.1。
+Phase 1 已完成。Phase 2 已落地 `P2-TRACE-PERSIST-001`（持久化 TracePort + Admin 审计查询，merge `f8eb8533`）、`P2-AUTH-001`（OA 登录认证 + 认证接缝，替换自报身份，merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）和 `P2-PILOT-FOUNDATION-001`（真实生产 composition 与收尾加固，merge `51af461e561d814deef5f813245520a3dae73871`，PR #46，CI run 30422795582 success）。欠债仍仅 `P2-CONFIRM-RESUME-001`（尚未触发），见 `docs/phase1/TASK_INDEX.md` §5.1；下一棒 = `P2-READ-ADAPTER-001`（OA 只读纵切）。
 
 每个 write lane 只承载一个明确 Goal、一个 Scope 和一个隔离 worktree/branch；新 scope 开新 lane。历史 V4 prompt/Task Record 保持原意，新工作以当前 Goal 和本文件为准。
 
 ## Project at a glance
 - **EternalAI**: 政府/企业 AI Agent 运行时平台，自然语言驱动对接 OA、用友 U8、海康 iVMS
 - **架构**: 六边形 (Ports/Adapters)，`app/ports/` = Protocol 接口，`app/infra/` = 实现；`app/ports/` 不得依赖 `app/infra/`
-- **后端**: Python + uv + FastAPI | **前端**: React 18 + Vite + Ant Design 5.x
+- **后端**: Python + uv + FastAPI + uvicorn 0.51.0（真实进程入口 `python -m app.server`）| **前端**: React 18 + Vite + Ant Design 5.x
 - **数据层**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: Qwen + vLLM raw JSON mode；禁止引入 instructor / PydanticAI（见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1）
+- **LLM**: vLLM raw JSON mode；默认 `http://34.74.11.38:8011/v1` + `glm-4.7`，URL / model / 采样参数均可由 env 覆盖；禁止引入 instructor / PydanticAI（见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1）
 - **可观测**: OpenTelemetry + Langfuse
 - **详细技术栈决策**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
 
@@ -47,7 +47,7 @@ infra/docker/       Docker Compose 模板
 > **全量测试需要固定测试库在跑**：Docker Desktop 启动，测试库 healthy 于 `127.0.0.1:15432`，
 > 且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
 > 缺 `DATABASE_URL` 时 DB 测试**失败而不是跳过**——静默跳过会被读成通过。
-> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1147 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P2-AUTH-001 / merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）。
+> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1182 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P2-PILOT-FOUNDATION-001 / merge `51af461e561d814deef5f813245520a3dae73871`）。
 
 ```powershell
 uv run pytest
