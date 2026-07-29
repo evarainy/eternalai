@@ -3,14 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from functools import partial
 from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.composition import build_runtime, build_trace_port, build_trace_query
+from app.admin.registry import AdminRegistryService
+from app.composition import (
+    build_production_components,
+    build_runtime,
+    build_trace_port,
+    build_trace_query,
+)
+from app.config import ProductionSettings
 from app.evaluator import TerminalEvaluator
+from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
+from app.infra.auth.oa import OACredentialVerifier
+from app.infra.health import RedisHealthCheck
+from app.infra.identity.unconfigured import UnconfiguredIdentityMapping
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
+from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
@@ -23,6 +38,7 @@ from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
+from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     StaticSessionTokens,
     auth_cookies,
@@ -324,3 +340,55 @@ def test_trace_query_selector_always_builds_postgresql_reader() -> None:
     reader = build_trace_query(session_factory=cast(Any, object()))
 
     assert isinstance(reader, PostgreSQLTraceReader)
+
+
+def test_production_components_have_no_optional_dependency_gaps() -> None:
+    settings = ProductionSettings.from_environment()
+
+    components = build_production_components(settings)
+
+    assert isinstance(components.runtime, RuntimeImpl)
+    assert isinstance(components.admin_registry_service, AdminRegistryService)
+    assert isinstance(components.authentication, OACredentialVerifier)
+    assert isinstance(components.session_tokens, HMACSessionToken)
+    assert isinstance(components.session_binder, PrincipalSessionBinder)
+    assert isinstance(
+        components.runtime._intent_router._llm_provider,
+        OpenAICompatibleLLMProvider,
+    )
+    assert isinstance(
+        components.runtime._intent_router._structured_output,
+        JSONStructuredOutputProvider,
+    )
+    assert isinstance(
+        components.runtime._gateway._identity_mapping,
+        UnconfiguredIdentityMapping,
+    )
+    assert components.runtime._gateway._adapters == {}
+    assert isinstance(components.runtime._trace_port, PostgreSQLTraceWriter)
+    assert set(components.health_checks) == {"database", "redis", "vllm"}
+    assert components.session_cookie_ttl_seconds > 0
+    assert components.health_timeout_seconds == settings.health_timeout_seconds
+
+
+def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
+    settings = replace(
+        ProductionSettings.from_environment(),
+        environment_name="production",
+    )
+
+    components = build_production_components(
+        settings,
+        trace_port=NoopTraceWriter(),
+    )
+
+    assert set(components.health_checks) == {"database", "redis", "vllm"}
+    assert isinstance(components.health_checks["database"], partial)
+    assert isinstance(components.health_checks["redis"], RedisHealthCheck)
+    assert isinstance(components.health_checks["vllm"], partial)
+    assert components.health_checks["database"].keywords == {
+        "timeout_seconds": settings.health_timeout_seconds
+    }
+    assert components.health_checks["vllm"].keywords == {
+        "timeout_seconds": settings.health_timeout_seconds
+    }

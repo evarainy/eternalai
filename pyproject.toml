@@ -5,6 +5,7 @@ description = "EternalAI Phase 0 backend skeleton"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1.0",
+    "uvicorn>=0.34,<1.0",
     "pydantic>=2,<3",
     "sqlalchemy>=2.0,<3.0",
     "alembic>=1.13,<2.0",
