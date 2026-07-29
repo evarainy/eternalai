@@ -340,6 +340,73 @@ def test_cookie_from_unselected_entry_is_scanned_across_whole_har(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {
+            "url": "https://synthetic.invalid/other?access_token=pending",
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "queryString": [{"name": "access_token", "value": "pending"}],
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "postData": {
+                "mimeType": "application/x-www-form-urlencoded",
+                "params": [{"name": "password", "value": "pending"}],
+            },
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "postData": {
+                "mimeType": "application/x-www-form-urlencoded; charset=utf-8",
+                "text": "password=pending",
+            },
+        },
+    ],
+    ids=("url-query", "har-query", "har-form-params", "form-encoded-body"),
+)
+def test_unselected_query_and_form_credentials_fail_with_zero_output(
+    tmp_path: Path,
+    request_fields: dict[str, Any],
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {
+                "headers": [],
+                "cookies": [],
+                **request_fields,
+            },
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"message": "not selected"}),
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-parameter.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multi-entry-parameter-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0],
+    )
+
+    assert completed.returncode == 2
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert "pending" not in completed.stdout
+    assert "pending" not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
 def test_encoded_unselected_response_remains_fail_closed_with_selector(
     tmp_path: Path,
 ) -> None:

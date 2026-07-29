@@ -146,8 +146,10 @@ async def list_pending_workflows(
   CookieJar 或请求。
 - Live 收到 `None`、无效引用或失效凭证必须 fail-closed；不得回落 Replay、Mock、
   service account、匿名或管理员身份。
-- 每次调用使用隔离的 HTTP session。Cookie 只发送到经配置验证的 OA base host；不跟随
-  跨 host redirect。URL、Request、headers、CookieJar、响应体和异常对象均不得记录。
+- 每次调用使用隔离的 HTTP session，并显式禁用 `HTTP_PROXY`、`HTTPS_PROXY`、
+  `ALL_PROXY` 等环境代理。Cookie 只发送到经配置验证的 OA base host；不跟随跨 host
+  redirect，也不得把部署侧 unset proxy 当成安全前提。URL、Request、headers、
+  CookieJar、响应体和异常对象均不得记录。
 - 沿用标准库 HTTP 能力，不新增依赖；timeout、单响应大小和最大页数均有界，不自动重登，
   不在本棒增加 retry 基建。
 
@@ -242,11 +244,17 @@ sanitizer 增加可重复的显式 `--entry-index`。一个场景可按给定顺
 多页 records 聚合后再归一化；未指定 selector 时保留“必须唯一候选”的旧行为。越界、
 重复、非目标或非法 entry 均非零失败。
 
+smoke 的 selector 必须按 HAR 请求顺序严格递增；三个成功场景及其全部选中 entry 只接受
+同一 HTTP(S) scheme/host/port/path 的 `GET` 请求，多页还必须逐页锁定
+page/pageSize/cursor 链与明确终止信号，不能把逆序或跨 endpoint entry 拼成分页证据。
+
 三层防线保持原强度：
 
 1. 每个被选响应逐一执行禁止键递归检查和正向白名单提取；
-2. 敏感值继续扫描整个 HAR 的全部 entry，而非只扫描 selector，并断言不出现在全部候选
-   输出；
+2. 敏感值继续扫描整个 HAR 的全部 entry，而非只扫描 selector；除 header/cookie 和递归
+   敏感键外，还覆盖 request URL/queryString、`postData.params` 与
+   `application/x-www-form-urlencoded` 正文中的敏感参数，并断言这些原始值不出现在全部
+   候选输出；
 3. 全部候选输出继续做禁止键和值模式扫描。
 
 仍在同级临时目录生成、全部检查通过后原子发布；任一失败时目标目录不存在、非零退出，

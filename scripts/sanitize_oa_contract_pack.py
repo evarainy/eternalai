@@ -12,6 +12,7 @@ import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -443,6 +444,87 @@ def _collect_entry_credentials(entry: Any, output: set[str]) -> None:
             continue
         _collect_header_values(side.get("headers"), output)
         _collect_cookie_values(side.get("cookies"), output)
+        if side_name == "request":
+            _collect_request_parameter_values(side, output)
+
+
+def _collect_request_parameter_values(
+    request: Mapping[str, Any],
+    output: set[str],
+) -> None:
+    url = request.get("url")
+    if isinstance(url, str):
+        try:
+            parsed = urlsplit(url)
+            url_parameters = parse_qsl(
+                parsed.query,
+                keep_blank_values=True,
+                max_num_fields=_MAX_RECORDS,
+            )
+        except ValueError:
+            raise SanitizationError("request_parameters_invalid") from None
+        _collect_named_parameter_values(url_parameters, output)
+        if parsed.username:
+            output.add(parsed.username)
+        if parsed.password:
+            output.add(parsed.password)
+
+    _collect_har_parameter_values(request.get("queryString"), output)
+    post_data = request.get("postData")
+    if not isinstance(post_data, Mapping):
+        return
+    _collect_har_parameter_values(post_data.get("params"), output)
+    mime_type = post_data.get("mimeType")
+    text = post_data.get("text")
+    if (
+        isinstance(mime_type, str)
+        and mime_type.partition(";")[0].strip().casefold()
+        == "application/x-www-form-urlencoded"
+    ):
+        if text is None:
+            return
+        if not isinstance(text, str):
+            raise SanitizationError("request_parameters_invalid")
+        try:
+            form_parameters = parse_qsl(
+                text,
+                keep_blank_values=True,
+                max_num_fields=_MAX_RECORDS,
+            )
+        except ValueError:
+            raise SanitizationError("request_parameters_invalid") from None
+        _collect_named_parameter_values(form_parameters, output)
+
+
+def _collect_har_parameter_values(parameters: Any, output: set[str]) -> None:
+    if parameters is None:
+        return
+    if not isinstance(parameters, list):
+        raise SanitizationError("request_parameters_invalid")
+    named_values: list[tuple[str, str]] = []
+    for parameter in parameters:
+        if not isinstance(parameter, Mapping):
+            raise SanitizationError("request_parameters_invalid")
+        name = parameter.get("name")
+        value = parameter.get("value")
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise SanitizationError("request_parameters_invalid")
+        named_values.append((name, value))
+    _collect_named_parameter_values(named_values, output)
+
+
+def _collect_named_parameter_values(
+    parameters: Iterable[tuple[str, str]],
+    output: set[str],
+) -> None:
+    for name, value in parameters:
+        normalized_name = _normalize_key(name)
+        if (
+            normalized_name in _FORBIDDEN_KEYS
+            or normalized_name in _SENSITIVE_HEADER_KEYS
+        ):
+            output.add(value)
+            output.update(_credential_components(value))
 
 
 def _assert_entry_response_encoding_supported(entry: Any) -> None:

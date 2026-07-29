@@ -6,7 +6,9 @@ import json
 import logging
 import secrets
 import shutil
+import threading
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError
@@ -158,6 +160,43 @@ class SequencedOpener:
         return response
 
 
+class RecordingHTTPServer(ThreadingHTTPServer):
+    def __init__(self, response_payload: dict[str, Any]) -> None:
+        super().__init__(("127.0.0.1", 0), RecordingHTTPRequestHandler)
+        self.response_payload = response_payload
+        self.requests: list[tuple[str, str | None, bool]] = []
+
+
+class RecordingHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        server = cast(RecordingHTTPServer, self.server)
+        server.requests.append(
+            (
+                self.path,
+                self.headers.get("Host"),
+                self.headers.get("Cookie") is not None,
+            )
+        )
+        payload = json.dumps(server.response_payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+def _start_recording_server(
+    response_payload: dict[str, Any],
+) -> tuple[RecordingHTTPServer, threading.Thread]:
+    server = RecordingHTTPServer(response_payload)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
 def _credential(*, cookie_value: str | None = None) -> OASessionCredential:
     return OASessionCredential(
         oa_user_id=SecretStr(secrets.token_hex(16)),
@@ -198,6 +237,70 @@ def _raw_workflow(index: int) -> dict[str, Any]:
         "createdAt": "2026-07-30T00:00:00+00:00",
         "expired": False,
     }
+
+
+def test_live_default_opener_ignores_all_environment_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oa_server, oa_thread = _start_recording_server(
+        {
+            "data": {
+                "records": [_raw_workflow(1)],
+                "hasMore": False,
+            }
+        }
+    )
+    proxy_server, proxy_thread = _start_recording_server(
+        {
+            "data": {
+                "records": [_raw_workflow(99)],
+                "hasMore": False,
+            }
+        }
+    )
+    oa_host = f"127.0.0.1:{oa_server.server_address[1]}"
+    proxy_url = f"http://127.0.0.1:{proxy_server.server_address[1]}"
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.setenv(name, proxy_url)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "proxy-bypass.synthetic.invalid")
+    provider = LiveOAReadProvider(
+        base_url=f"http://{oa_host}",
+        endpoint_path="/api/pending",
+        timeout_seconds=2.0,
+        contract_pack_dir=CONTRACT_PACK,
+    )
+
+    try:
+        collection = asyncio.run(
+            provider.list_pending_workflows(
+                _credential(cookie_value=secrets.token_hex(32))
+            )
+        )
+    finally:
+        oa_server.shutdown()
+        proxy_server.shutdown()
+        oa_server.server_close()
+        proxy_server.server_close()
+        oa_thread.join(timeout=2)
+        proxy_thread.join(timeout=2)
+
+    assert [workflow.workflow_id for workflow in collection.workflows] == [
+        "live-workflow-1"
+    ]
+    assert proxy_server.requests == []
+    assert len(oa_server.requests) == 1
+    request_path, request_host, cookie_present = oa_server.requests[0]
+    assert request_host == oa_host
+    assert request_path.startswith("/api/pending?")
+    assert cookie_present is True
 
 
 def _assert_provider_traceback_is_redacted(

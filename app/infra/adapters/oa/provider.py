@@ -17,6 +17,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import (
     HTTPRedirectHandler,
     OpenerDirector,
+    ProxyHandler,
     Request,
     build_opener,
 )
@@ -318,7 +319,10 @@ class LiveOAReadProvider:
             collection = None
 
     def _build_isolated_opener(self) -> OpenerDirector:
-        return build_opener(_SameOriginRedirectHandler(self._allowed_origin))
+        return build_opener(
+            ProxyHandler({}),
+            _SameOriginRedirectHandler(self._allowed_origin),
+        )
 
     async def _request_page(
         self,
