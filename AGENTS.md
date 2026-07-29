@@ -5,7 +5,7 @@ This is the always-loaded compact context for coding agents. Keep detail in the 
 ## Authority and current phase
 Authority, highest first: the current Goal (latest instruction plus Outcome/Constraints/Verification) > user redlines and applicable `AGENTS.md` > approved product/architecture/interface/batch/milestone documents > repository code, tests, CI, branch protection, and runtime evidence > derived plans, skills, history, and suggestions.
 
-Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), and `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success). The only remaining debt is `P2-CONFIRM-RESUME-001` (not triggered); see `docs/phase1/TASK_INDEX.md` §5.1; next task = `P2-READ-ADAPTER-001` (OA read-only vertical slice).
+Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success), and `P2-DEVENV-PREFLIGHT-001` (`scripts/check_dev_environment.py`: diagnostic tool, not a gate; not wired into conftest, CI, or existing commands; merge `39c437a56bf3da27da457fb585c72fa375872c6d`, PR #48, CI run 30429764545 success). The only remaining debt is `P2-CONFIRM-RESUME-001` (not triggered); see `docs/phase1/TASK_INDEX.md` §5.1; next task = `P2-READ-ADAPTER-001` (OA read-only vertical slice).
 
 Each write lane uses one explicit Goal, one Scope, and one isolated worktree/branch; a new scope opens a new lane. Historical V4 prompts and Task Records keep their original meaning, but new work follows the current Goal and this file.
 
@@ -49,7 +49,7 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1182 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-PILOT-FOUNDATION-001 / merge `51af461e561d814deef5f813245520a3dae73871`).
+> Baseline: **1197 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-DEVENV-PREFLIGHT-001 / merge `39c437a56bf3da27da457fb585c72fa375872c6d`).
 
 ```bash
 uv run pytest
