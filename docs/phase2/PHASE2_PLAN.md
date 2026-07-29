@@ -1,6 +1,8 @@
 # Phase 2 总目标、范围与任务 DAG（Lean Plan）
 
-> 状态：**草案**。须经 Claude(Opus) 实审与雨爷拍板后才生效；开放问题未决、BLOCKED 外部输入未到时，不据此启动对应任务。
+> 状态：**生效（轻量地图）**。单人开发 + 强模型（Opus 5 / GPT-5.6）下不再走「总体计划 → 每任务 task_id 提示词 → 每任务 SPEC」那套 ceremony：本文件是范围边界 + DAG + BLOCKED 护栏的**地图**，不是逐任务合同；task_id 是路标而非正式 lane 依据，无需「Opus 实审 + 拍板生效」门即可据此开 lane。
+>
+> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 1147）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
 
 ## 1. P2 总目标
 
@@ -43,24 +45,26 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ### BLOCKED（依赖外部输入，不排期）
 
-| 阻塞项 | 必需外部输入 | 来源 |
-|---|---|---|
-| 真实 LLM / 生产装配 | 内网 vLLM endpoint，以及 `max_model_len`、量化、timeout、`max_tokens`、`enable_thinking` 的实际值。 | `P1-PARAM-001.md` L3-L7、L24-L59 |
-| 可信试点入口 | 雨爷选择最小试点认证方案，或 infra 提供现有 IAM/SSO 可接入条件；禁止继续把 `X-EternalAI-Roles` 当证明。 | `app/api/v1/admin.py` L38-L51；蓝图 §12.1.5 L2538-L2549 |
-| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | 蓝图 §15 L2870-L2907；`ADR-P0-SPIKE-005a-oa-api-auth.md` L123-L150、`ADR-P0-SPIKE-005b-u8-api-auth.md` L122-L148、`ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md` L124-L152 |
-| 正式 Secret 管理 | 企业允许的 Vault/KMS/OS secret 方案、密钥责任边界与轮换要求；不填具体产品/参数。 | 蓝图 §7.4.3 L1540-L1549、§7.4.6 L1597-L1653、§7.4.7 L1677 |
+> **到位登记（2026-07-27）**：内网 vLLM **URL 直连、无密钥**（P0 已测）；OA 登录已跑通（HAR 分析 → 真实登录 + 取信息，雨爷已验证，流程信息获取接近完成）。下表 ✅ 为已解除，剩余项仍按「只解除不猜测」执行。因此原「必须先有正式 Secret 管理才能调 OA」不成立：只读纵切不等 Secret 方案，`P2-READ-ADAPTER-001` 可紧跟 FOUNDATION（见 §3 主链注）。正式 Secret 管理是否需要，取决于凭证模型（每用户复用自身 OA 会话 vs 共享服务账号）——到 IDENTITY-CREDENTIAL 时由 Codex 查现有 auth 代码后确认。
+
+| 阻塞项 | 必需外部输入 | 状态 | 来源 |
+|---|---|---|---|
+| 真实 LLM / 生产装配 | 内网 vLLM endpoint，以及 `max_model_len`、量化、timeout、`max_tokens`、`enable_thinking` 的实际值。 | ✅ 已到位 | `P1-PARAM-001.md` L3-L7、L24-L59 |
+| 可信试点入口 | 雨爷选择最小试点认证方案，或 infra 提供现有 IAM/SSO 可接入条件；禁止继续把 `X-EternalAI-Roles` 当证明。 | ◐ 认证接缝已由 `P2-AUTH-001` 落地 | `app/api/v1/admin.py` L38-L51；蓝图 §12.1.5 L2538-L2549 |
+| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | ✅ OA 已到位（第二个仍待选） | 蓝图 §15 L2870-L2907；`ADR-P0-SPIKE-005a-oa-api-auth.md` L123-L150、`ADR-P0-SPIKE-005b-u8-api-auth.md` L122-L148、`ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md` L124-L152 |
+| 正式 Secret 管理 | 企业允许的 Vault/KMS/OS secret 方案、密钥责任边界与轮换要求；不填具体产品/参数。 | ✗ **仍缺**（阻塞 IDENTITY-CREDENTIAL 的 Secret 存储子块） | 蓝图 §7.4.3 L1540-L1549、§7.4.6 L1597-L1653、§7.4.7 L1677 |
 | DB Gateway 真实纵切 | 业务负责人/DBA 批准的只读视图、字段/行级范围、测试数据与访问身份。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947 |
 | Memory 与低风险写入验收 | 经批准的知识语料/用户数据边界；以及具体写操作、测试环境、owner、回滚/补偿能力。 | 蓝图 §10.1-§10.2 L2148-L2205、§5.9 L878-L918 |
 
 ## 3. 任务 DAG
 
-> Q 档按 `ROLE_POLICY.md` §Q0-Q3 L30-L41；以下 task_id 也是草案，只有本计划获批后才可开 lane。
+> Q 档按 `ROLE_POLICY.md` §Q0-Q3 L30-L41。task_id 是执行路标：BLOCKED 解除且上游 `depends_on` 满足即可开 lane，无需单独审批本计划。
 
 | task_id | 一句话交付 | depends_on | 风险档 | BLOCKED |
 |---|---|---|---|---|
-| `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | 是：vLLM 参数、认证方案 |
-| `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：OA 现场接口/凭证与 Secret 方案 |
-| `P2-READ-ADAPTER-001` | 首个真实系统 OA 的只读用例经 Gateway→Adapter→Evaluator→Trace→Response 完整闭环。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：OA 现场接口/凭证/测试环境 |
+| `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | 否（2026-07-27：vLLM 参数已到位；认证方案由 `P2-AUTH-001` 接缝推进） |
+| `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 部分：OA 现场接口/凭证已到位；**仍缺正式 Secret 方案**（可先做绑定/凭证验证/注入，Secret 存储子块等方案定后落地） |
+| `P2-READ-ADAPTER-001` | 首个真实系统 OA 的只读用例经 Gateway→Adapter→Evaluator→Trace→Response 完整闭环。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 否（2026-07-27：OA 现场接口/凭证/测试环境已到位） |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
 | `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
 | `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
@@ -69,6 +73,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-LOW-RISK-WRITE-001` | 一个获批低风险写操作完成幂等、预览、确认、补偿、评测与审计。 | `P2-GOLDEN-001`；若命中自触发条件再依赖 `P2-CONFIRM-RESUME-001` | Q3 | 是：写用例/沙箱/授权 |
 
 主链：`FOUNDATION → IDENTITY_CREDENTIAL → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
+
+> **顺序调整（2026-07-27）**：OA 只读已跑通，`READ_ADAPTER` 不再必须等 `IDENTITY_CREDENTIAL` 的正式 Secret 子块——只读纵切可紧跟 `FOUNDATION`。实际近似顺序：`FOUNDATION → READ_ADAPTER（把已验证的 OA 读接入 Gateway→Adapter→Evaluator→Trace→Response 真实框架）`，`IDENTITY_CREDENTIAL` 的绑定/凭证验证/注入与之并行推进，其「正式 Secret 存储」子块按凭证模型确认后再定是否需要。
 
 ## 4. 决策与开放问题
 
