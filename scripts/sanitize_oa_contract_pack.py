@@ -203,7 +203,7 @@ def _response_json(entry: Any) -> dict[str, Any] | None:
     if not isinstance(text, str):
         return None
     try:
-        payload = json.loads(text)
+        payload = _bounded_json_loads(text)
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
@@ -337,10 +337,8 @@ def _decode_json_container(value: str) -> Mapping[str, Any] | list[Any] | None:
         stripped = candidate.strip()
         if not stripped or stripped[0] not in {'"', "{", "["}:
             return None
-        if len(stripped.encode("utf-8")) > _MAX_JSON_CONTAINER_BYTES:
-            raise SanitizationError("json_container_too_large")
         try:
-            candidate = json.loads(stripped)
+            candidate = _bounded_json_loads(stripped)
         except json.JSONDecodeError:
             return None
     if isinstance(candidate, (Mapping, list)):
@@ -350,6 +348,12 @@ def _decode_json_container(value: str) -> Mapping[str, Any] | list[Any] | None:
         if stripped and stripped[0] in {'"', "{", "["}:
             raise SanitizationError("embedded_json_depth_exceeded")
     return None
+
+
+def _bounded_json_loads(value: str) -> Any:
+    if len(value.encode("utf-8")) > _MAX_JSON_CONTAINER_BYTES:
+        raise SanitizationError("json_container_too_large")
+    return json.loads(value)
 
 
 def _collect_entry_credentials(entry: Any, output: set[str]) -> None:

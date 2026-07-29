@@ -414,6 +414,44 @@ def test_oversized_har_fails_closed_before_parsing(tmp_path: Path) -> None:
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
+def test_oversized_non_candidate_response_is_rejected_before_candidate(
+    tmp_path: Path,
+) -> None:
+    sensitive_marker = "oversized-container-sensitive-marker"
+    har = _har()
+    har["log"]["entries"].insert(
+        0,
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps(
+                        {
+                            "accessToken": sensitive_marker,
+                            "padding": "x" * (1 * 1024 * 1024),
+                        }
+                    ),
+                },
+            },
+        },
+    )
+    input_har = tmp_path / "oversized-container.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "oversized-container-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "json_container_too_large" in completed.stderr
+    assert sensitive_marker not in completed.stdout
+    assert sensitive_marker not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
 def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
     private_status = "private-business-status-927315"
     input_har = tmp_path / "unrecognized-status.har"
