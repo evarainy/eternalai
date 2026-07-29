@@ -2,7 +2,7 @@
 
 > 状态：**生效（轻量地图）**。单人开发 + 强模型（Opus 5 / GPT-5.6）下不再走「总体计划 → 每任务 task_id 提示词 → 每任务 SPEC」那套 ceremony：本文件是范围边界 + DAG + BLOCKED 护栏的**地图**，不是逐任务合同；task_id 是路标而非正式 lane 依据，无需「Opus 实审 + 拍板生效」门即可据此开 lane。
 >
-> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 1147）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
+> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 1182）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
 
 ## 1. P2 总目标
 
@@ -62,7 +62,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | task_id | 一句话交付 | depends_on | 风险档 | BLOCKED |
 |---|---|---|---|---|
-| `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | 否（2026-07-27：vLLM 参数已到位；认证方案由 `P2-AUTH-001` 接缝推进） |
+| `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | ✅ 已落地（merge `51af461e`） |
 | `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 部分：OA 现场接口/凭证已到位；**仍缺正式 Secret 方案**（可先做绑定/凭证验证/注入，Secret 存储子块等方案定后落地） |
 | `P2-READ-ADAPTER-001` | 首个真实系统 OA 的只读用例经 Gateway→Adapter→Evaluator→Trace→Response 完整闭环。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 否（2026-07-27：OA 现场接口/凭证/测试环境已到位） |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
