@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from urllib.parse import unquote, urlsplit
+
+from app.config import RedisConnectionURL
 
 _MAX_REDIS_RESPONSE_BYTES = 512
 
@@ -12,30 +13,30 @@ _MAX_REDIS_RESPONSE_BYTES = 512
 class RedisHealthCheck:
     """Authenticate/select when configured, then require an exact PONG."""
 
-    def __init__(self, *, redis_url: str, timeout_seconds: float) -> None:
-        parsed = urlsplit(redis_url)
-        if (
-            parsed.scheme not in {"redis", "rediss"}
-            or not parsed.hostname
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("REDIS_URL must be a redis:// or rediss:// URL")
+    def __init__(
+        self,
+        *,
+        redis_url: RedisConnectionURL | str,
+        timeout_seconds: float,
+    ) -> None:
+        parsed = (
+            RedisConnectionURL.parse(redis_url)
+            if isinstance(redis_url, str)
+            else redis_url
+        )
         if timeout_seconds <= 0:
             raise ValueError("Redis health timeout must be positive")
-        path = parsed.path.lstrip("/")
-        if path and (not path.isascii() or not path.isdigit()):
-            raise ValueError("REDIS_URL database must be a non-negative integer")
-        self._host = parsed.hostname
-        self._port = parsed.port or 6379
-        self._username = unquote(parsed.username) if parsed.username is not None else None
-        self._password = unquote(parsed.password) if parsed.password is not None else None
-        if self._username is not None and self._password is None:
-            raise ValueError("REDIS_URL username requires a password")
-        self._database = int(path) if path else 0
+        self._redis_url = parsed
         self._timeout_seconds = timeout_seconds
         self._ssl: ssl.SSLContext | None = (
             ssl.create_default_context() if parsed.scheme == "rediss" else None
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}("
+            f"redis_url={self._redis_url!r}, "
+            f"timeout_seconds={self._timeout_seconds!r})"
         )
 
     async def __call__(self) -> bool:
@@ -43,23 +44,24 @@ class RedisHealthCheck:
         try:
             async with asyncio.timeout(self._timeout_seconds):
                 reader, writer = await asyncio.open_connection(
-                    self._host,
-                    self._port,
+                    self._redis_url.host,
+                    self._redis_url.port,
                     ssl=self._ssl,
                 )
-                if self._password is not None:
+                password = self._redis_url.password_for_connection()
+                if password is not None:
                     auth_arguments = (
-                        ("AUTH", self._password)
-                        if self._username is None
-                        else ("AUTH", self._username, self._password)
+                        ("AUTH", password)
+                        if self._redis_url.username is None
+                        else ("AUTH", self._redis_url.username, password)
                     )
                     if await _execute(reader, writer, auth_arguments) != "OK":
                         return False
-                if self._database:
+                if self._redis_url.database:
                     if await _execute(
                         reader,
                         writer,
-                        ("SELECT", str(self._database)),
+                        ("SELECT", str(self._redis_url.database)),
                     ) != "OK":
                         return False
                 return await _execute(reader, writer, ("PING",)) == "PONG"

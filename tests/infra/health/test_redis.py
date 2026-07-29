@@ -60,6 +60,8 @@ def test_redis_health_authenticates_selects_and_pings_without_logging_secret(
     ]
     assert writer.closed is True
     assert "redis-test-secret" not in repr(check)
+    assert "redis.invalid" in repr(check)
+    assert "***" in repr(check)
 
 
 def test_redis_health_returns_false_on_error_response(
@@ -85,3 +87,27 @@ def test_redis_health_returns_false_on_error_response(
         )
         is False
     )
+
+
+def test_redis_health_connection_failure_does_not_expose_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    password_marker = "connection-password-marker"
+
+    async def failed_open_connection(
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> tuple[Any, Any]:
+        raise OSError(f"connection failed with {password_marker}")
+
+    monkeypatch.setattr(asyncio, "open_connection", failed_open_connection)
+    check = RedisHealthCheck(
+        redis_url=(
+            f"redis://pilot:{password_marker}@redis.invalid:6379/0"
+        ),
+        timeout_seconds=1,
+    )
+
+    assert asyncio.run(check()) is False
+    assert password_marker not in repr(check)
+    assert "redis.invalid" in repr(check)
