@@ -64,7 +64,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|---|
 | `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | ✅ 已落地（merge `51af461e`） |
 | `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 部分：OA 现场接口/凭证已到位；**仍缺正式 Secret 方案**（可先做绑定/凭证验证/注入，Secret 存储子块等方案定后落地） |
-| `P2-READ-ADAPTER-001` | 首个真实系统 OA 的只读用例经 Gateway→Adapter→Evaluator→Trace→Response 完整闭环。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 否（2026-07-27：OA 现场接口/凭证/测试环境已到位） |
+| `P2-OA-READ-CONTRACT-001` | `oa.list_pending_workflows` 的 Replay Provider 接缝、固定能力白名单、版本化 Contract Pack 与离线脱敏工具。 | `P2-PILOT-FOUNDATION-001` | Q3 | 否（Replay/Contract 棒，不连内网、不读凭证） |
+| `P2-READ-ADAPTER-001` | 在已冻结的 OA Replay/Contract 接缝上补 Live HTTP、凭证读取、最小 IdentityMapping、Live 指纹漂移比较与内网 smoke，并闭合 Gateway→Adapter→Evaluator→Trace→Response。 | `P2-OA-READ-CONTRACT-001` | Q3 | 否（2026-07-27：OA 现场接口/凭证/测试环境已到位） |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
 | `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
 | `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
@@ -72,14 +73,14 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-GOLDEN-001` | 冻结 P2 新 Golden，覆盖真实只读、绑定、DB、隔离、审计与反馈负向边界。 | `P2-READ-ADAPTER-001`、`P2-DB-GATEWAY-001`、`P2-PILOT-OPS-001`、`P2-MEMORY-001`、`P2-SKILL-CANDIDATE-001` | Q3 | 否（需显式 fixture 人批） |
 | `P2-LOW-RISK-WRITE-001` | 一个获批低风险写操作完成幂等、预览、确认、补偿、评测与审计。 | `P2-GOLDEN-001`；若命中自触发条件再依赖 `P2-CONFIRM-RESUME-001` | Q3 | 是：写用例/沙箱/授权 |
 
-主链：`FOUNDATION → IDENTITY_CREDENTIAL → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
+主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；`IDENTITY_CREDENTIAL` 的其余绑定/凭证治理与只读两棒并行推进，`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
 
-> **顺序调整（2026-07-27）**：OA 只读已跑通，`READ_ADAPTER` 不再必须等 `IDENTITY_CREDENTIAL` 的正式 Secret 子块——只读纵切可紧跟 `FOUNDATION`。实际近似顺序：`FOUNDATION → READ_ADAPTER（把已验证的 OA 读接入 Gateway→Adapter→Evaluator→Trace→Response 真实框架）`，`IDENTITY_CREDENTIAL` 的绑定/凭证验证/注入与之并行推进，其「正式 Secret 存储」子块按凭证模型确认后再定是否需要。
+> **顺序调整（2026-07-29）**：OA 只读拆成两棒。`OA_READ_CONTRACT` 先在气隙环境冻结 Replay/Live 接缝、白名单、Contract Pack 与脱敏工具；`READ_ADAPTER` 再补 Live HTTP、凭证读取、最小 IdentityMapping、内网 smoke 和完整运行时闭环。两棒均不等待共享 Secret 方案：已决凭证模型是每用户复用自身 OA Session，不用共享服务账号、不存密码、不静默重登。`IDENTITY_CREDENTIAL` 的其余治理与之并行。
 
 ## 4. 决策与开放问题
 
 1. **已决（2026-07-24 雨爷拍板）— A1：是。** 生产 composition、真实 LLM 和最小可信试点入口作为 P2 首个硬前置（`P2-PILOT-FOUNDATION-001`）。
-2. **已决（2026-07-24 雨爷拍板）— 首个真实系统：OA。** 已有 `ADR-P0-SPIKE-005a-oa-api-auth.md` Phase 0 调研；**仍开放**具体首个 OA 只读用例、第二个 Adapter 的启动条件。
+2. **已决（2026-07-29 雨爷拍板）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** `P2-OA-READ-CONTRACT-001` 先交付 Replay/Contract，`P2-READ-ADAPTER-001` 保留 Live/凭证/IdentityMapping/内网 smoke；第二个 Adapter 的启动条件仍开放。
 3. **认证路线**：P2 采用哪种最小可信认证；是否把企业 IAM/SSO 从 Phase 3 提前？
 4. **DB Gateway**：Phase 2 路线图写了基础 DB Gateway，但蓝图又限定“仅无 API/报表需求时”；是否已有获批报表用例？
 5. **Skill 候选池**：只允许管理员/用户手工登记，还是允许脱敏 Trace 产生“候选提议”？后者不得变成自动 Skill 生成。
