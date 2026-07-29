@@ -51,6 +51,7 @@ infra/docker/       Docker Compose 模板
 
 ```powershell
 uv run pytest
+uv run python scripts/check_dev_environment.py --start-full-tests  # 后台全量测试；日志/状态写入 _scratch/
 uv run pytest tests/ports/test_capability_gateway_port.py
 uv run ruff check .
 uv run mypy app/
