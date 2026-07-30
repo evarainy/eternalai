@@ -1,11 +1,11 @@
-# AGENTS.md - Phase 2 Compact Agent Boot Rules v1.3.2
+# AGENTS.md - Phase 2 Compact Agent Boot Rules v1.3.3
 
 This is the always-loaded compact context for coding agents. Keep detail in the linked documents; do not turn this file into a full spec or import long specs.
 
 ## Authority and current phase
 Authority, highest first: the current Goal (latest instruction plus Outcome/Constraints/Verification) > user redlines and applicable `AGENTS.md` > approved product/architecture/interface/batch/milestone documents > repository code, tests, CI, branch protection, and runtime evidence > derived plans, skills, history, and suggestions.
 
-Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success), `P2-DEVENV-PREFLIGHT-001` (`scripts/check_dev_environment.py`: diagnostic tool, not a gate; not wired into conftest, CI, or existing commands; merge `39c437a56bf3da27da457fb585c72fa375872c6d`, PR #48, CI run 30429764545 success), `P2-OA-READ-CONTRACT-001` (OA Replay adapter + versioned Contract Pack + offline sanitizer, merge `89cd16e33020806c8a7a28170f93689963de5235`), and `P2-READ-ADAPTER-001` (OA Live HTTP, per-user session credential reads, IdentityMapping, Live fingerprint drift comparison, and runtime closure, merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`). Current `phase0/main` baseline = `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`; the only remaining debt is `P2-CONFIRM-RESUME-001` (not triggered), see `docs/phase1/TASK_INDEX.md` §5.1; next task = `P2-FE-API-CLIENTS-001` (freeze Auth / Runtime / Admin-Trace OpenAPI and Orval clients).
+Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success), `P2-DEVENV-PREFLIGHT-001` (`scripts/check_dev_environment.py`: diagnostic tool, not a gate; not wired into conftest, CI, or existing commands; merge `39c437a56bf3da27da457fb585c72fa375872c6d`, PR #48, CI run 30429764545 success), `P2-OA-READ-CONTRACT-001` (OA Replay adapter + versioned Contract Pack + offline sanitizer, merge `89cd16e33020806c8a7a28170f93689963de5235`), `P2-READ-ADAPTER-001` (OA Live HTTP, per-user session credential reads, IdentityMapping, Live fingerprint drift comparison, and runtime closure, merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`), and `P2-FE-API-CLIENTS-001` (frozen Auth / Runtime / Admin-Trace OpenAPI and Orval clients with deterministic drift verification, merge `e60b388edb478f66f70d36e9853f90b43fca7686`). Current `phase0/main` baseline = `e60b388edb478f66f70d36e9853f90b43fca7686`; the only remaining debt is `P2-CONFIRM-RESUME-001` (not triggered), see `docs/phase1/TASK_INDEX.md` §5.1. Current lane `P2-PILOT-ENTRY-FE-001` is in progress (connect the login page, EternalAI Session Cookie, centralized fail-closed 401 reauthentication and protected routes, and stop sending `X-EternalAI-Roles`); its merge SHA will be recorded by the next lane after merge.
 
 Each write lane uses one explicit Goal, one Scope, and one isolated worktree/branch; a new scope opens a new lane. Historical V4 prompts and Task Records keep their original meaning, but new work follows the current Goal and this file.
 
@@ -49,7 +49,7 @@ infra/docker/       Docker Compose templates
 > started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
 > DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
 > database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **1344 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-READ-ADAPTER-001 / merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`).
+> Baseline: **1344 passed, 0 skipped, 0 failed** (25 Golden parametrized cases; as of P2-FE-API-CLIENTS-001 / merge `e60b388edb478f66f70d36e9853f90b43fca7686`).
 
 ```bash
 uv run pytest
