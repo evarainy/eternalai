@@ -1,0 +1,76 @@
+{
+  "components": {
+    "schemas": {
+      "LoginResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authenticated"
+        ],
+        "title": "LoginResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "One-shot OA login credential accepted only by the authentication adapter.",
+                "properties": {
+                  "loginid": {
+                    "format": "password",
+                    "title": "Loginid",
+                    "type": "string",
+                    "writeOnly": true
+                  },
+                  "userpassword": {
+                    "format": "password",
+                    "title": "Userpassword",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "loginid",
+                  "userpassword"
+                ],
+                "title": "LoginCredential",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Login"
+      }
+    }
+  }
+}
