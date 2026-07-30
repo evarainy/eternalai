@@ -23,6 +23,16 @@ _STRUCTURAL_JSON_TYPES = frozenset(
 )
 _STRUCTURAL_ARRAY_SHAPE_PATTERN = re.compile(r"^[a-z:<>|]+$")
 _STRUCTURAL_SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
+    "workflowId": "workflow_id",
+    "title": "title",
+    "status": "status",
+    "applicant": "applicant",
+    "currentStep": "current_step",
+    "approver": "approver",
+    "createdAt": "created_at",
+    "expired": "expired",
+}
 _STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
@@ -213,13 +223,55 @@ class OAStructuralDriftReport(BaseModel):
 def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
     """Fingerprint JSON structure without including values or array lengths."""
 
+    return _build_structural_fingerprint(
+        payload,
+        include_contract_exemplar=True,
+    )
+
+
+def build_live_pending_workflows_fingerprint(
+    records: list[Any],
+) -> dict[str, Any]:
+    """Fingerprint one Live aggregate from value-free normalized wire structure."""
+
+    common_wire_fields = set(_LIVE_PENDING_WORKFLOW_FIELD_NAMES)
+    for record in records:
+        if not isinstance(record, Mapping):
+            common_wire_fields.clear()
+            break
+        common_wire_fields.intersection_update(
+            key for key in record if isinstance(key, str)
+        )
+    projected_records = [
+        _project_live_workflow_record(
+            record,
+            common_wire_fields=common_wire_fields,
+        )
+        for record in records
+    ]
+    return _build_structural_fingerprint(
+        {"workflows": projected_records},
+        include_contract_exemplar=False,
+    )
+
+
+def _build_structural_fingerprint(
+    payload: Any,
+    *,
+    include_contract_exemplar: bool,
+) -> dict[str, Any]:
     observations: dict[str, _StructuralObservation] = {}
-    _observe_structure(_STRUCTURAL_SCHEMA_EXEMPLAR, "$", observations)
+    if include_contract_exemplar:
+        _observe_structure(_STRUCTURAL_SCHEMA_EXEMPLAR, "$", observations)
     _observe_structure(payload, "$", observations)
     nodes = [
         {
             "path": path,
-            "json_type": "|".join(sorted(observation.json_types)),
+            "json_type": (
+                "|".join(sorted(observation.json_types))
+                if observation.json_types
+                else "null"
+            ),
             "nullable": observation.nullable,
             "array_shape": (
                 "|".join(sorted(observation.array_shapes))
@@ -240,6 +292,82 @@ def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
         "nodes": nodes,
         "sha256": hashlib.sha256(canonical).hexdigest(),
     }
+
+
+def _project_live_workflow_record(
+    record: Any,
+    *,
+    common_wire_fields: set[str],
+) -> Any:
+    if not isinstance(record, Mapping):
+        return _project_json_structure(record)
+    common_field_names = {
+        key: normalized_name
+        for key, normalized_name in _LIVE_PENDING_WORKFLOW_FIELD_NAMES.items()
+        if key in common_wire_fields
+    }
+    return _project_json_mapping(
+        record,
+        field_names=common_field_names,
+        ignored_fields=(
+            frozenset(_LIVE_PENDING_WORKFLOW_FIELD_NAMES)
+            - common_wire_fields
+        ),
+    )
+
+
+def _project_json_structure(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        return ""
+    if isinstance(value, int):
+        return 0
+    if isinstance(value, float):
+        return 0.0
+    if isinstance(value, Mapping):
+        return _project_json_mapping(
+            value,
+            field_names={},
+            ignored_fields=frozenset(),
+        )
+    if isinstance(value, list):
+        return [_project_json_structure(item) for item in value]
+    raise TypeError("Live OA payload must contain JSON-compatible values")
+
+
+def _project_json_mapping(
+    value: Mapping[Any, Any],
+    *,
+    field_names: Mapping[str, str],
+    ignored_fields: frozenset[str] | set[str],
+) -> dict[str, Any]:
+    keys = list(value)
+    if any(not isinstance(key, str) for key in keys):
+        raise TypeError("Live OA payload object keys must be strings")
+    string_keys = [
+        key
+        for key in keys
+        if isinstance(key, str) and key not in ignored_fields
+    ]
+    unknown_keys = sorted(
+        key for key in string_keys if key not in field_names
+    )
+    safe_unknown_names = {
+        key: f"unknown_field_{index:03d}"
+        for index, key in enumerate(unknown_keys, start=1)
+    }
+    projected: dict[str, Any] = {}
+    for key in string_keys:
+        safe_key = (
+            field_names[key]
+            if key in field_names
+            else safe_unknown_names[key]
+        )
+        projected[safe_key] = _project_json_structure(value[key])
+    return projected
 
 
 def compare_structural_fingerprints(
@@ -427,6 +555,7 @@ __all__ = (
     "OAStructuralFingerprint",
     "OAStructuralNode",
     "STRUCTURAL_FINGERPRINT_ALGORITHM",
+    "build_live_pending_workflows_fingerprint",
     "build_structural_fingerprint",
     "compare_structural_fingerprints",
     "normalize_pending_workflow_records",

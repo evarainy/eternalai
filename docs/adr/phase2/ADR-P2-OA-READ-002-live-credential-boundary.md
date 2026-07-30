@@ -196,17 +196,21 @@ exception message、traceback locals、context、请求或响应。
 OA_READ_ADAPTER_MODE = mock | replay | live
 ```
 
-默认必须是 `mock`。
+配置解析仍将缺失 mode 归一为 `mock`，但这只为默认测试接线保留：
 
-- `mock`：注册既有 `MockOAAdapter`。
+- `mock`：仅 `ENV=testing`、显式 `PHASE0_MOCK_MODE=true`，或
+  `build_production_components(..., adapters=...)` 的显式测试 seam 可以使用既有
+  `MockOAAdapter`。其他环境缺失 mode 或显式 `mode=mock` 均在配置/装配期 fail-fast，
+  不能让真实已认证用户得到合成 `completed`。
 - `replay`：要求显式、存在的 `OA_READ_CONTRACT_PACK_DIR`，注册
   `OAReadAdapter(ReplayOAReadProvider(...))`。
 - `live`：要求同一 Contract Pack 目录和显式、相对 OA host 的
   `OA_PENDING_WORKFLOWS_PATH`，构造真实 SecretProvider 与 Live provider。
 - 非法 mode、缺失 Live/Replay 必需配置或不安全 path 均在 composition 时 fail-fast。
 - `mock` / `replay` 下，`build_production_components(..., adapters=...)` 和
-  `identity_mapping=...` 的显式测试 seam 优先于默认构造，保证
-  `test_pilot_foundation_e2e.py` 继续使用其显式 Mock；Golden runner 继续直接构造 Mock。
+  `identity_mapping=...` 的显式测试 seam 优先于默认构造；pytest 的 `ENV=testing`
+  保留默认 Mock，`test_pilot_foundation_e2e.py` 继续使用其显式 Mock，Golden runner
+  继续直接构造 Mock。
 - `live` 下拒绝上述两个 override，强制使用 PostgreSQL OA IdentityMapping、真实
   SecretProvider 与 Live adapter，静态测试 mapping/adapter 不得成为真实凭证来源。
 - CredentialStore 在 composition 中只构造一次，同时供认证写入、IdentityMapping
@@ -216,9 +220,23 @@ OA_READ_ADAPTER_MODE = mock | replay | live
 
 ### 2.7 Live 指纹漂移
 
-保留 Replay 对完整 `fingerprint.json` 的精确相等。Live 只将聚合并归一化后的
-`{"workflows": ...}` 与选定 Contract Pack 的 `eternalai-structural-v1` 指纹比较，不
-比较业务值或列表长度。
+保留 Replay 对完整 `fingerprint.json` 的精确相等。Live 的 expected fingerprint 只能
+来自所选不可变 Contract Pack 中已经对 `sample.json` 校验通过的
+`fingerprint.json`；不得从本次 Live actual 重建 expected。
+
+Live actual fingerprint 独立来自本次聚合记录的结构归一化结果：八个已知 wire 字段先
+映射为领域字段名，未知 record 字段只映射为不暴露原字段名的
+`unknown_field_NNN`，所有标量值在观察结构前替换为同类型哨兵；嵌套未知字段也只保留
+安全序号路径。已知字段只有在聚合内每条 record 都存在时才进入 actual 节点，任一
+record 缺失即产生 removed drift；任一 record 的未知新增字段则进入安全的 added
+节点。actual 构建不得注入领域 exemplar、expected 节点或 expected SHA，也不比较或
+hash 业务值、原始响应、凭证和列表长度。
+
+结构比较发生在严格领域归一化之前，因此字段新增、删除、类型、nullable 或
+array_shape 变化都先产生安全 drift report；随后非法业务数据仍
+fail-closed 为 `adapter_payload_invalid`，drift 不能把失败改成成功。合法空列表缺少
+item 结构证据时，actual 如实反映空数组结构；drift 只报告观察差异，不改变空列表的
+成功语义。
 
 新增纯比较器返回安全 drift report：
 
@@ -281,8 +299,8 @@ endpoint、额外 query 变化、修剪 cursor 或无 cursor 的 entry 拼成分
 ## 4. Consequences
 
 - 不增加数据库 migration 或依赖；复用已落地 AES-256-GCM 行与标准库 HTTP。
-- 生产模式可安全地在 Mock、显式 Replay 和显式 Live 之间切换，默认 Mock 不破坏
-  Golden/pilot。
+- 默认测试接线继续走 Mock；非 testing 环境只有显式 mock 旗标/测试 seam 或显式
+  Replay/Live，真实 production 不会因缺失配置静默注册 Mock。
 - `binding_id` 在本最小 OA mapping 中承担不透明 credential ref；正式多绑定、解绑管理、
   Vault/KMS、轮换和批量失效通知仍归后续 Secret/运营任务。
 - Live 只闭合一个只读 capability；不产生写能力、通用 schema 校验或通用 Connector。
@@ -314,7 +332,7 @@ endpoint、额外 query 变化、修剪 cursor 或无 cursor 的 entry 拼成分
 
 - 内网现场可能在本地 TTL 前撤销 Session；Live 必须以已确认的 HTTP/业务信号识别并返回
   `identity_expired`，不能把未知登录页当成功 JSON。
-- Contract Pack 指纹是归一化结构，不覆盖 vendor envelope 的未知新增字段；原始 envelope
-  指纹若未来确有需要，必须另立不含业务值的契约任务，不能偷换现有算法。
+- Live actual 覆盖聚合 record 的未知新增字段；分页 envelope 的信号键形状由 Provider
+  精确校验并 fail-closed，不把原始 envelope 或业务值写入 drift report。
 - Vault/KMS、key rotation、多账号 binding、正式解绑/重置、Session 主动健康检查和写能力
   均明确 deferred；本棒无其他未决设计选择。

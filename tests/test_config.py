@@ -20,6 +20,7 @@ def _environment() -> dict[str, str]:
         "OA_BASE_URL": "https://oa.invalid",
         "OA_CREDENTIAL_TTL_S": "3600",
         "SESSION_COOKIE_TTL_S": "1800",
+        "PHASE0_MOCK_MODE": "true",
         "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": _TEST_KEY_B64,
         "ETERNALAI_IDENTITY_HMAC_KEY_B64": _TEST_KEY_B64,
         "ETERNALAI_SESSION_SIGNING_KEY_B64": _TEST_KEY_B64,
@@ -44,6 +45,37 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.oa_read_adapter_mode == "mock"
     assert settings.oa_read_contract_pack_dir is None
     assert settings.oa_pending_workflows_path is None
+    assert settings.phase0_mock_mode is True
+
+
+@pytest.mark.parametrize("configured_mode", [None, "mock"])
+def test_non_testing_mock_mode_requires_explicit_mock_flag(
+    configured_mode: str | None,
+) -> None:
+    environment = _environment()
+    environment.pop("PHASE0_MOCK_MODE")
+    if configured_mode is None:
+        environment.pop("OA_READ_ADAPTER_MODE", None)
+    else:
+        environment["OA_READ_ADAPTER_MODE"] = configured_mode
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires ENV=testing or PHASE0_MOCK_MODE=true",
+    ):
+        ProductionSettings.from_environment(environment)
+
+
+def test_testing_environment_keeps_default_mock_without_phase_flag() -> None:
+    environment = _environment()
+    environment["ENV"] = "testing"
+    environment.pop("PHASE0_MOCK_MODE")
+    environment.pop("OA_READ_ADAPTER_MODE", None)
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.oa_read_adapter_mode == "mock"
+    assert settings.phase0_mock_mode is False
 
 
 def test_production_settings_repr_excludes_urls_and_key_material() -> None:
@@ -96,6 +128,7 @@ def test_production_settings_allow_all_vllm_endpoint_overrides() -> None:
         ("HEALTH_TIMEOUT_S", "nan"),
         ("HEALTH_TIMEOUT_S", "61"),
         ("OA_READ_ADAPTER_MODE", "automatic"),
+        ("PHASE0_MOCK_MODE", "sometimes"),
     ],
 )
 def test_production_settings_fail_closed_on_invalid_values(

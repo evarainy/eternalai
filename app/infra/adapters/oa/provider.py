@@ -28,6 +28,7 @@ from app.infra.adapters.oa.contracts import (
     OAContractPackProfile,
     OAPendingWorkflowCollection,
     OAStructuralDriftReport,
+    build_live_pending_workflows_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
     normalize_pending_workflow_records,
@@ -296,33 +297,40 @@ class LiveOAReadProvider:
             else:  # pragma: no cover - defensive; the loop always breaks or raises
                 raise OALivePayloadInvalid("OA pagination did not terminate")
 
-            normalization_failed = False
-            normalization_unexpected = False
             try:
-                collection = normalize_pending_workflow_records(raw_records)
-                actual_fingerprint = build_structural_fingerprint(
-                    collection.model_dump(mode="json")
+                actual_fingerprint = (
+                    build_live_pending_workflows_fingerprint(raw_records)
                 )
                 drift_report = compare_structural_fingerprints(
                     self._expected_fingerprint,
                     actual_fingerprint,
                 )
             except (TypeError, ValueError):
-                normalization_failed = True
+                raise OALivePayloadInvalid(
+                    "OA payload structure cannot be fingerprinted"
+                ) from None
             except Exception:
-                _log_provider_failure("normalization")
-                normalization_unexpected = True
-            if normalization_unexpected:
-                raise OALiveRequestError("OA response processing failed")
-            if normalization_failed:
+                _log_provider_failure("structural_fingerprint")
+                raise OALiveRequestError(
+                    "OA response processing failed"
+                ) from None
+            if self._drift_reporter is not None:
+                self._drift_reporter(drift_report)
+
+            try:
+                collection = normalize_pending_workflow_records(raw_records)
+            except (TypeError, ValueError):
                 raise OALivePayloadInvalid(
                     "OA payload violates the normalized contract"
-                )
+                ) from None
+            except Exception:
+                _log_provider_failure("normalization")
+                raise OALiveRequestError(
+                    "OA response processing failed"
+                ) from None
             if collection is None:
                 _log_provider_failure("normalization")
                 raise OALiveRequestError("OA response processing failed")
-            if self._drift_reporter is not None:
-                self._drift_reporter(drift_report)
             return collection
         finally:
             cookie_header = ""

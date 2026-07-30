@@ -22,6 +22,7 @@ from app.infra.adapters.oa import provider as oa_provider
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
+    build_live_pending_workflows_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
 )
@@ -237,6 +238,14 @@ def _raw_workflow(index: int) -> dict[str, Any]:
         "createdAt": "2026-07-30T00:00:00+00:00",
         "expired": False,
     }
+
+
+def _matching_live_workflows() -> list[dict[str, Any]]:
+    first = _raw_workflow(1)
+    first["approver"] = "live-approver-1"
+    second = _raw_workflow(2)
+    second["createdAt"] = None
+    return [first, second]
 
 
 def test_live_default_opener_ignores_all_environment_proxies(
@@ -1128,13 +1137,14 @@ def test_secret_resolution_errors_are_safely_mapped(
 
 def test_live_reports_matching_normalized_contract_structure() -> None:
     reports: list[Any] = []
+    records = _matching_live_workflows()
     opener = SequencedOpener(
         FakeHTTPResponse(
             {
                 "data": {
-                    "records": [_raw_workflow(1)],
+                    "records": records,
                     "hasMore": False,
-                    "total": 1,
+                    "total": len(records),
                     "nextCursor": None,
                 }
             }
@@ -1148,13 +1158,122 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         ).list_pending_workflows(_credential())
     )
 
-    assert len(collection.workflows) == 1
+    expected_fingerprint = json.loads(
+        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    assert len(collection.workflows) == len(records)
     assert len(reports) == 1
     report = reports[0]
     assert report.matches is True
+    assert report.expected_sha256 == expected_fingerprint["sha256"]
+    assert report.actual_sha256 == expected_fingerprint["sha256"]
     assert report.added == ()
     assert report.removed == ()
     assert report.changed == ()
+
+
+@pytest.mark.parametrize(
+    ("change_kind", "expected_bucket", "expected_path", "expected_status"),
+    [
+        (
+            "added",
+            "added",
+            "$.workflows[].unknown_field_001",
+            "success",
+        ),
+        ("removed", "removed", "$.workflows[].title", "error"),
+        ("type", "changed", "$.workflows[].title", "error"),
+        ("nullable", "changed", "$.workflows[].approver", "success"),
+        ("array_shape", "changed", "$.workflows[].title", "error"),
+    ],
+)
+def test_live_reports_reachable_structural_drift_without_values(
+    change_kind: str,
+    expected_bucket: str,
+    expected_path: str,
+    expected_status: str,
+) -> None:
+    reports: list[Any] = []
+    records = _matching_live_workflows()
+    runtime_business_value = f"business-{secrets.token_hex(24)}"
+    runtime_field_name = f"vendorField{secrets.token_hex(8)}"
+    if change_kind == "added":
+        records[0][runtime_field_name] = runtime_business_value
+    elif change_kind == "removed":
+        records[0].pop("title")
+    elif change_kind == "type":
+        for record in records:
+            record["title"] = 7
+    elif change_kind == "nullable":
+        for record in records:
+            record["approver"] = runtime_business_value
+    elif change_kind == "array_shape":
+        for record in records:
+            record["title"] = [runtime_business_value]
+    else:  # pragma: no cover - parameter table is closed above
+        raise AssertionError("unknown structural change kind")
+
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            {
+                "data": {
+                    "records": records,
+                    "hasMore": False,
+                    "total": len(records),
+                    "nextCursor": None,
+                }
+            }
+        )
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, drift_reporter=reports.append),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == expected_status
+    if expected_status == "error":
+        assert result.error_code == "adapter_payload_invalid"
+    assert len(reports) == 1
+    report = reports[0]
+    rendered = report.model_dump_json()
+    assert report.matches is False
+    assert [
+        node.path for node in getattr(report, expected_bucket)
+    ] == [expected_path]
+    if change_kind == "array_shape":
+        assert report.changed[0].array_shape == "items:string"
+    assert runtime_business_value not in rendered
+    assert runtime_field_name not in rendered
+    if change_kind == "added":
+        assert runtime_business_value not in repr(result)
+        assert runtime_field_name not in repr(result)
+
+
+def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
+    records = _matching_live_workflows()
+    expected_fingerprint = json.loads(
+        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    records[0]["title"] = None
+
+    report = compare_structural_fingerprints(
+        expected_fingerprint,
+        build_live_pending_workflows_fingerprint(records),
+    )
+
+    assert report.matches is False
+    assert [node.path for node in report.changed] == [
+        "$.workflows[].title"
+    ]
+    assert report.changed[0].nullable is True
 
 
 def test_structural_drift_report_contains_no_business_values_or_lengths() -> None:

@@ -381,9 +381,17 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
 
 
 def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
+    contract_pack_dir = (
+        Path(__file__).parents[1]
+        / "contract_packs"
+        / "oa"
+        / "ecology9-pending-workflows-v1"
+    )
     settings = replace(
         ProductionSettings.from_environment(),
         environment_name="production",
+        oa_read_adapter_mode="replay",
+        oa_read_contract_pack_dir=contract_pack_dir,
     )
 
     components = build_production_components(
@@ -401,6 +409,37 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
     assert components.health_checks["vllm"].keywords == {
         "timeout_seconds": settings.health_timeout_seconds
     }
+
+
+def test_default_production_assembly_rejects_implicit_mock_mode() -> None:
+    settings = replace(
+        ProductionSettings.from_environment(),
+        environment_name="production",
+        oa_read_adapter_mode="mock",
+        phase0_mock_mode=False,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires ENV=testing or PHASE0_MOCK_MODE=true",
+    ):
+        build_production_components(settings)
+
+
+def test_explicit_phase0_flag_allows_production_mock_adapter() -> None:
+    settings = replace(
+        ProductionSettings.from_environment(),
+        environment_name="production",
+        oa_read_adapter_mode="mock",
+        phase0_mock_mode=True,
+    )
+
+    adapter = build_oa_read_adapter(
+        settings=settings,
+        credential_store=cast(Any, object()),
+    )
+
+    assert isinstance(adapter, MockOAAdapter)
 
 
 @pytest.mark.parametrize(
@@ -443,9 +482,15 @@ def test_oa_read_adapter_mode_builds_configured_provider(
 def test_explicit_production_adapters_and_identity_mapping_take_priority() -> None:
     adapters = {"oa": cast(Any, object())}
     identity_mapping = cast(Any, object())
+    settings = replace(
+        ProductionSettings.from_environment(),
+        environment_name="production",
+        oa_read_adapter_mode="mock",
+        phase0_mock_mode=False,
+    )
 
     components = build_production_components(
-        ProductionSettings.from_environment(),
+        settings,
         adapters=adapters,
         identity_mapping=identity_mapping,
     )

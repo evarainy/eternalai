@@ -153,6 +153,7 @@ def build_oa_read_adapter(
 ) -> AdapterPort:
     """Build the configured OA read adapter without runtime fallback."""
 
+    _require_safe_mock_oa_configuration(settings)
     if settings.oa_read_adapter_mode == "mock":
         return MockOAAdapter()
 
@@ -182,6 +183,23 @@ def build_oa_read_adapter(
             ),
         )
     raise RuntimeError("OA_READ_ADAPTER_MODE is invalid")
+
+
+def _require_safe_mock_oa_configuration(
+    settings: ProductionSettings,
+) -> None:
+    environment_name = (
+        settings.environment_name.strip().casefold() or "production"
+    )
+    if (
+        settings.oa_read_adapter_mode == "mock"
+        and environment_name != "testing"
+        and not settings.phase0_mock_mode
+    ):
+        raise RuntimeError(
+            "OA_READ_ADAPTER_MODE=mock requires ENV=testing "
+            "or PHASE0_MOCK_MODE=true"
+        )
 
 
 def build_admin_registry_service(
@@ -272,6 +290,8 @@ def build_production_components(
 ) -> ProductionComponents:
     """Build the real database/auth/runtime composition with explicit test seams."""
 
+    if adapters is None:
+        _require_safe_mock_oa_configuration(settings)
     if settings.oa_read_adapter_mode == "live" and (
         identity_mapping is not None or adapters is not None
     ):

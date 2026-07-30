@@ -147,6 +147,7 @@ class ProductionSettings:
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_path: str | None = None
+    phase0_mock_mode: bool = False
 
     @classmethod
     def from_environment(
@@ -154,10 +155,27 @@ class ProductionSettings:
         environment: Mapping[str, str] | None = None,
     ) -> ProductionSettings:
         source = os.environ if environment is None else environment
+        environment_name = (
+            source.get("ENV", "production").strip().casefold()
+            or "production"
+        )
         oa_read_adapter_mode = _oa_read_adapter_mode(source)
+        phase0_mock_mode = _boolean(
+            source,
+            "PHASE0_MOCK_MODE",
+            default=False,
+        )
+        if (
+            oa_read_adapter_mode == "mock"
+            and environment_name != "testing"
+            and not phase0_mock_mode
+        ):
+            raise RuntimeError(
+                "OA_READ_ADAPTER_MODE=mock requires ENV=testing "
+                "or PHASE0_MOCK_MODE=true"
+            )
         return cls(
-            environment_name=source.get("ENV", "production").strip().casefold()
-            or "production",
+            environment_name=environment_name,
             database_url=get_database_url(source),
             redis_url=_redis_url(source),
             oa_base_url=_http_base_url(source, "OA_BASE_URL"),
@@ -252,6 +270,7 @@ class ProductionSettings:
                 source,
                 oa_read_adapter_mode,
             ),
+            phase0_mock_mode=phase0_mock_mode,
         )
 
 
