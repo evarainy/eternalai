@@ -9,10 +9,16 @@ from typing import Any, get_args, get_type_hints
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from app.ports.auth import OASessionCredential
 from app.ports.secret_provider import (
+    CredentialExpiredError,
+    CredentialNotFoundError,
+    CredentialStorageError,
+    InvalidCredentialReferenceError,
     MockSecretInjected,
     RedactedSecretPlaceholder,
     SecretInjectionResult,
+    SecretProviderError,
     SecretProviderPort,
     SecretResolutionResult,
 )
@@ -48,6 +54,7 @@ def test_secret_provider_port_is_protocol_only() -> None:
     assert set(SecretProviderPort.__protocol_attrs__) == {
         "resolve_secret_ref",
         "inject_execution_secret",
+        "resolve_oa_session",
     }
     assert not getattr(SecretProviderPort, "_is_runtime_protocol", False)
 
@@ -84,6 +91,35 @@ def test_inject_execution_secret_signature_matches_spec_8_6_8() -> None:
     assert hints["credential_ref"] is str
     assert hints["return"] == dict[str, Any]
     assert inspect.iscoroutinefunction(SecretProviderPort.inject_execution_secret)
+
+
+def test_resolve_oa_session_is_narrow_typed_async_contract() -> None:
+    hints = get_type_hints(SecretProviderPort.resolve_oa_session)
+    signature = inspect.signature(SecretProviderPort.resolve_oa_session)
+
+    assert list(signature.parameters) == ["self", "credential_ref"]
+    assert hints["credential_ref"] is str
+    assert hints["return"] is OASessionCredential
+    assert inspect.iscoroutinefunction(SecretProviderPort.resolve_oa_session)
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    (
+        InvalidCredentialReferenceError,
+        CredentialNotFoundError,
+        CredentialExpiredError,
+        CredentialStorageError,
+    ),
+)
+def test_oa_session_resolution_errors_are_typed_and_context_free(
+    error_type: type[SecretProviderError],
+) -> None:
+    error = error_type()
+
+    assert isinstance(error, SecretProviderError)
+    assert error.__context__ is None
+    assert error.__cause__ is None
 
 
 def test_protocol_methods_return_dict_str_any_not_helper_models() -> None:

@@ -285,6 +285,8 @@ def test_inactive_identity_has_stable_explanatory_handback(
     assert envelope.ui.action == "bind_required"
     assert envelope.ui.reason_code == error_code
     assert message_fragment in envelope.message
+    if error_code == "identity_expired":
+        assert "重新认证" in envelope.message
 
 
 def test_needs_binding_scope_has_matching_reason_and_clarify_action() -> None:

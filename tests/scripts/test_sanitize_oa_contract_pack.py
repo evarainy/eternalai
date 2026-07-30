@@ -6,7 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.infra.adapters.oa.contracts import build_structural_fingerprint
+from scripts import sanitize_oa_contract_pack as sanitizer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "sanitize_oa_contract_pack.py"
@@ -79,18 +82,26 @@ def _har(
     }
 
 
-def _run_script(input_har: Path, output_dir: Path) -> subprocess.CompletedProcess[str]:
+def _run_script(
+    input_har: Path,
+    output_dir: Path,
+    *,
+    entry_indices: list[int | str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "--input-har",
+        str(input_har),
+        "--output-dir",
+        str(output_dir),
+        "--profile-version",
+        output_dir.name,
+    ]
+    for entry_index in entry_indices or []:
+        command.extend(["--entry-index", str(entry_index)])
     return subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--input-har",
-            str(input_har),
-            "--output-dir",
-            str(output_dir),
-            "--profile-version",
-            output_dir.name,
-        ],
+        command,
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -160,6 +171,100 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         assert forbidden not in all_output
 
 
+def test_repeated_entry_indices_aggregate_pages_in_selector_order(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    first_page = har["log"]["entries"][0]
+    unrelated_entry = {
+        "request": {"headers": [], "cookies": []},
+        "response": {
+            "headers": [],
+            "cookies": [],
+            "content": {
+                "mimeType": "application/json",
+                "text": json.dumps({"message": "not a workflow response"}),
+            },
+        },
+    }
+    second_page = _har(
+        extra_record_fields={
+            "expired": True,
+            "approver": None,
+            "createdAt": None,
+        }
+    )["log"]["entries"][0]
+    har["log"]["entries"] = [first_page, unrelated_entry, second_page]
+    input_har = tmp_path / "multi-page.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multi-page-profile-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[2, 0],
+    )
+
+    assert completed.returncode == 0
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert [workflow["workflow_id"] for workflow in sample["workflows"]] == [
+        "workflow-synthetic-001",
+        "workflow-synthetic-002",
+    ]
+    assert [workflow["expired"] for workflow in sample["workflows"]] == [True, False]
+    assert sample["workflows"][0]["approver"] is None
+    assert sample["workflows"][0]["created_at"] is None
+    assert sample["workflows"][1]["approver"] == "approver-synthetic-002"
+    assert sample["workflows"][1]["created_at"] == "2000-01-01T00:00:00+00:00"
+
+
+def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    selected_page = _har(
+        extra_record_fields={
+            "expired": True,
+            "approver": None,
+            "createdAt": None,
+        }
+    )["log"]["entries"][0]
+    har["log"]["entries"].append(selected_page)
+    input_har = tmp_path / "single-selected-page.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "single-selected-profile-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+    )
+
+    assert completed.returncode == 0
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert len(sample["workflows"]) == 1
+    assert sample["workflows"][0]["expired"] is True
+    assert sample["workflows"][0]["approver"] is None
+    assert sample["workflows"][0]["created_at"] is None
+
+
+def test_multiple_candidates_without_selector_fail_with_zero_output(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(_har()["log"]["entries"][0])
+    input_har = tmp_path / "multiple-candidates.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multiple-candidates-negative-v1"
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode != 0
+    assert "pending_workflow_response_not_unique" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
 def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     har = _har()
     entry = har["log"]["entries"][0]
@@ -195,6 +300,304 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
             ]
         }
     )
+
+
+def test_cookie_from_unselected_entry_is_scanned_across_whole_har(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {
+                "headers": [{"name": "Cookie", "value": "pending"}],
+                "cookies": [],
+            },
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"message": "not selected"}),
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-cookie.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multi-entry-cookie-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0],
+    )
+
+    assert completed.returncode == 2
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert "pending" not in completed.stdout
+    assert "pending" not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {
+            "url": "https://synthetic.invalid/other?access_token=pending",
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "queryString": [{"name": "access_token", "value": "pending"}],
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "postData": {
+                "mimeType": "application/x-www-form-urlencoded",
+                "params": [{"name": "password", "value": "pending"}],
+            },
+        },
+        {
+            "url": "https://synthetic.invalid/other",
+            "postData": {
+                "mimeType": "application/x-www-form-urlencoded; charset=utf-8",
+                "text": "password=pending",
+            },
+        },
+    ],
+    ids=("url-query", "har-query", "har-form-params", "form-encoded-body"),
+)
+def test_unselected_query_and_form_credentials_fail_with_zero_output(
+    tmp_path: Path,
+    request_fields: dict[str, Any],
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {
+                "headers": [],
+                "cookies": [],
+                **request_fields,
+            },
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"message": "not selected"}),
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-parameter.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multi-entry-parameter-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0],
+    )
+
+    assert completed.returncode == 2
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert "pending" not in completed.stdout
+    assert "pending" not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_encoded_unselected_response_remains_fail_closed_with_selector(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "encoding": "base64",
+                    "text": "opaque-encoded-response",
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-encoded.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "multi-entry-encoded-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0],
+    )
+
+    assert completed.returncode != 0
+    assert "encoded_response_not_supported" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_every_selected_response_is_checked_for_forbidden_keys(
+    tmp_path: Path,
+) -> None:
+    selected_cookie_value = "selected-page-cookie-927315"
+    har = _har()
+    har["log"]["entries"].append(
+        _har(
+            extra_record_fields={
+                "metadata": {"cookie": selected_cookie_value},
+            }
+        )["log"]["entries"][0]
+    )
+    input_har = tmp_path / "selected-page-cookie.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "selected-page-cookie-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0, 1],
+    )
+
+    assert completed.returncode != 0
+    assert "forbidden_response_key" in completed.stderr
+    assert selected_cookie_value not in completed.stdout
+    assert selected_cookie_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize(
+    ("entry_indices", "expected_error"),
+    [
+        ([-1], "entry_index_out_of_range"),
+        ([1], "entry_index_out_of_range"),
+        ([0, 0], "entry_index_duplicate"),
+    ],
+)
+def test_invalid_entry_indices_fail_with_zero_output(
+    tmp_path: Path,
+    entry_indices: list[int],
+    expected_error: str,
+) -> None:
+    input_har = tmp_path / "selector-invalid.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / f"{expected_error}-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=entry_indices,
+    )
+
+    assert completed.returncode != 0
+    assert expected_error in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_non_integer_entry_index_fails_with_zero_output(tmp_path: Path) -> None:
+    input_har = tmp_path / "selector-not-integer.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / "selector-not-integer-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=["not-an-index"],
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_selected_non_json_response_fails_with_zero_output(tmp_path: Path) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": "not-json",
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "selected-non-json.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "selected-non-json-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+    )
+
+    assert completed.returncode != 0
+    assert "selected_entry_response_not_json" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_selected_non_target_response_fails_with_zero_output(tmp_path: Path) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"message": "not a workflow response"}),
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "selected-non-target.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "selected-non-target-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+    )
+
+    assert completed.returncode != 0
+    assert "selected_entry_not_pending_workflow_response" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_selected_structurally_invalid_entry_fails_with_zero_output(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append({"request": {}})
+    input_har = tmp_path / "selected-invalid-entry.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / "selected-invalid-entry-negative-v1"
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+    )
+
+    assert completed.returncode != 0
+    assert "selected_entry_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
 def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
@@ -485,3 +888,63 @@ def test_existing_output_is_rejected_without_overwrite_or_delete(tmp_path: Path)
     assert "output_already_exists" in completed.stderr
     assert sentinel.read_text(encoding="utf-8") == "preserve-existing-output"
     assert [path.name for path in output_dir.iterdir()] == ["preserve.txt"]
+
+
+def test_third_layer_pattern_scan_runs_before_any_candidate_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_har = tmp_path / "synthetic.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / "aaaaaaaa.bbbbbbbb.cccccccc"
+    write_calls = 0
+
+    def record_write(_path: Path, _payload: Any) -> None:
+        nonlocal write_calls
+        write_calls += 1
+
+    monkeypatch.setattr(sanitizer, "_write_json", record_write)
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="forbidden_output_value",
+    ) as exc_info:
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=output_dir.name,
+        )
+
+    assert write_calls == 0
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_malformed_har_exception_chain_never_retains_raw_input(
+    tmp_path: Path,
+) -> None:
+    sensitive_marker = "malformed-har-sensitive-" + TOKEN_VALUE
+    input_har = tmp_path / "malformed.har"
+    input_har.write_text(
+        '{"log":{"entries":"' + sensitive_marker,
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "malformed-negative-v1"
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="json_unreadable",
+    ) as exc_info:
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=output_dir.name,
+        )
+
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert sensitive_marker not in (repr(exc_info.value) + str(exc_info.value))
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))

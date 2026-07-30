@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import asdict
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,7 @@ def _environment() -> dict[str, str]:
         "OA_BASE_URL": "https://oa.invalid",
         "OA_CREDENTIAL_TTL_S": "3600",
         "SESSION_COOKIE_TTL_S": "1800",
+        "PHASE0_MOCK_MODE": "true",
         "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": _TEST_KEY_B64,
         "ETERNALAI_IDENTITY_HMAC_KEY_B64": _TEST_KEY_B64,
         "ETERNALAI_SESSION_SIGNING_KEY_B64": _TEST_KEY_B64,
@@ -40,6 +42,40 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.llm_enable_thinking is False
     assert settings.health_timeout_seconds == 5
     assert settings.credential_encryption_key == _TEST_KEY
+    assert settings.oa_read_adapter_mode == "mock"
+    assert settings.oa_read_contract_pack_dir is None
+    assert settings.oa_pending_workflows_path is None
+    assert settings.phase0_mock_mode is True
+
+
+@pytest.mark.parametrize("configured_mode", [None, "mock"])
+def test_non_testing_mock_mode_requires_explicit_mock_flag(
+    configured_mode: str | None,
+) -> None:
+    environment = _environment()
+    environment.pop("PHASE0_MOCK_MODE")
+    if configured_mode is None:
+        environment.pop("OA_READ_ADAPTER_MODE", None)
+    else:
+        environment["OA_READ_ADAPTER_MODE"] = configured_mode
+
+    with pytest.raises(
+        RuntimeError,
+        match="requires ENV=testing or PHASE0_MOCK_MODE=true",
+    ):
+        ProductionSettings.from_environment(environment)
+
+
+def test_testing_environment_keeps_default_mock_without_phase_flag() -> None:
+    environment = _environment()
+    environment["ENV"] = "testing"
+    environment.pop("PHASE0_MOCK_MODE")
+    environment.pop("OA_READ_ADAPTER_MODE", None)
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.oa_read_adapter_mode == "mock"
+    assert settings.phase0_mock_mode is False
 
 
 def test_production_settings_repr_excludes_urls_and_key_material() -> None:
@@ -91,6 +127,8 @@ def test_production_settings_allow_all_vllm_endpoint_overrides() -> None:
         ("HEALTH_TIMEOUT_S", "inf"),
         ("HEALTH_TIMEOUT_S", "nan"),
         ("HEALTH_TIMEOUT_S", "61"),
+        ("OA_READ_ADAPTER_MODE", "automatic"),
+        ("PHASE0_MOCK_MODE", "sometimes"),
     ],
 )
 def test_production_settings_fail_closed_on_invalid_values(
@@ -127,3 +165,62 @@ def test_invalid_redis_url_error_masks_password_and_keeps_host() -> None:
 
     assert password_marker not in str(captured.value)
     assert "redis.invalid" in str(captured.value)
+
+
+@pytest.mark.parametrize("mode", ["replay", "live"])
+def test_oa_read_non_mock_modes_require_explicit_contract_pack(mode: str) -> None:
+    environment = _environment()
+    environment["OA_READ_ADAPTER_MODE"] = mode
+    if mode == "live":
+        environment["OA_PENDING_WORKFLOWS_PATH"] = "/api/workflow/pending"
+
+    with pytest.raises(RuntimeError, match="OA_READ_CONTRACT_PACK_DIR"):
+        ProductionSettings.from_environment(environment)
+
+
+def test_oa_read_live_mode_requires_safe_host_relative_path(tmp_path: Path) -> None:
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": "live",
+            "OA_READ_CONTRACT_PACK_DIR": str(tmp_path),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="OA_PENDING_WORKFLOWS_PATH"):
+        ProductionSettings.from_environment(environment)
+
+    for unsafe_path in (
+        "https://other.invalid/pending",
+        "//other.invalid/pending",
+        "/api/../admin",
+        "/api/pending?cookie=unsafe",
+    ):
+        environment["OA_PENDING_WORKFLOWS_PATH"] = unsafe_path
+        with pytest.raises(RuntimeError, match="relative path"):
+            ProductionSettings.from_environment(environment)
+
+
+@pytest.mark.parametrize("mode", ["replay", "live"])
+def test_oa_read_modes_preserve_explicit_safe_configuration(
+    mode: str,
+    tmp_path: Path,
+) -> None:
+    contract_pack = tmp_path / "ecology9-safe-profile"
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": mode,
+            "OA_READ_CONTRACT_PACK_DIR": str(contract_pack),
+        }
+    )
+    if mode == "live":
+        environment["OA_PENDING_WORKFLOWS_PATH"] = "/api/workflow/pending"
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.oa_read_adapter_mode == mode
+    assert settings.oa_read_contract_pack_dir == contract_pack
+    assert settings.oa_pending_workflows_path == (
+        "/api/workflow/pending" if mode == "live" else None
+    )

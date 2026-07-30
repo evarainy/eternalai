@@ -8,6 +8,8 @@ import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
 
 from app.db.config import get_database_url
@@ -22,6 +24,7 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
+OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
 
 
 class _SecretValue:
@@ -141,6 +144,10 @@ class ProductionSettings:
     llm_top_k: int
     llm_enable_thinking: bool
     health_timeout_seconds: float
+    oa_read_adapter_mode: OAReadAdapterMode = "mock"
+    oa_read_contract_pack_dir: Path | None = None
+    oa_pending_workflows_path: str | None = None
+    phase0_mock_mode: bool = False
 
     @classmethod
     def from_environment(
@@ -148,9 +155,27 @@ class ProductionSettings:
         environment: Mapping[str, str] | None = None,
     ) -> ProductionSettings:
         source = os.environ if environment is None else environment
+        environment_name = (
+            source.get("ENV", "production").strip().casefold()
+            or "production"
+        )
+        oa_read_adapter_mode = _oa_read_adapter_mode(source)
+        phase0_mock_mode = _boolean(
+            source,
+            "PHASE0_MOCK_MODE",
+            default=False,
+        )
+        if (
+            oa_read_adapter_mode == "mock"
+            and environment_name != "testing"
+            and not phase0_mock_mode
+        ):
+            raise RuntimeError(
+                "OA_READ_ADAPTER_MODE=mock requires ENV=testing "
+                "or PHASE0_MOCK_MODE=true"
+            )
         return cls(
-            environment_name=source.get("ENV", "production").strip().casefold()
-            or "production",
+            environment_name=environment_name,
             database_url=get_database_url(source),
             redis_url=_redis_url(source),
             oa_base_url=_http_base_url(source, "OA_BASE_URL"),
@@ -236,6 +261,16 @@ class ProductionSettings:
                 maximum=_MAX_HEALTH_TIMEOUT_SECONDS,
                 minimum_inclusive=False,
             ),
+            oa_read_adapter_mode=oa_read_adapter_mode,
+            oa_read_contract_pack_dir=_oa_read_contract_pack_dir(
+                source,
+                oa_read_adapter_mode,
+            ),
+            oa_pending_workflows_path=_oa_pending_workflows_path(
+                source,
+                oa_read_adapter_mode,
+            ),
+            phase0_mock_mode=phase0_mock_mode,
         )
 
 
@@ -283,6 +318,53 @@ def _http_base_url(
         or parsed.fragment
     ):
         raise RuntimeError(f"{name} must be an HTTP(S) base URL without credentials")
+    return value
+
+
+def _oa_read_adapter_mode(source: Mapping[str, str]) -> OAReadAdapterMode:
+    value = source.get("OA_READ_ADAPTER_MODE", "mock").strip().casefold()
+    if value not in {"mock", "replay", "live"}:
+        raise RuntimeError("OA_READ_ADAPTER_MODE must be mock, replay, or live")
+    return cast(OAReadAdapterMode, value)
+
+
+def _oa_read_contract_pack_dir(
+    source: Mapping[str, str],
+    mode: OAReadAdapterMode,
+) -> Path | None:
+    raw = source.get("OA_READ_CONTRACT_PACK_DIR")
+    if raw is None or not raw.strip():
+        if mode in {"replay", "live"}:
+            raise RuntimeError(
+                "OA_READ_CONTRACT_PACK_DIR is required for replay or live mode"
+            )
+        return None
+    return Path(raw.strip())
+
+
+def _oa_pending_workflows_path(
+    source: Mapping[str, str],
+    mode: OAReadAdapterMode,
+) -> str | None:
+    raw = source.get("OA_PENDING_WORKFLOWS_PATH")
+    if raw is None or not raw.strip():
+        if mode == "live":
+            raise RuntimeError("OA_PENDING_WORKFLOWS_PATH is required for live mode")
+        return None
+    value = raw.strip()
+    parsed = urlsplit(value)
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or any(part == ".." for part in parsed.path.split("/"))
+    ):
+        raise RuntimeError(
+            "OA_PENDING_WORKFLOWS_PATH must be a relative path on the OA host"
+        )
     return value
 
 
@@ -385,4 +467,4 @@ def _base64_key(
     return decoded
 
 
-__all__ = ("ProductionSettings", "RedisConnectionURL")
+__all__ = ("OAReadAdapterMode", "ProductionSettings", "RedisConnectionURL")
