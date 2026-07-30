@@ -95,6 +95,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install uv for OpenAPI drift test
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python for OpenAPI drift test
+        run: uv python install 3.12
+
+      - name: Install backend dependencies for OpenAPI drift test
+        run: uv sync --frozen
+
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:

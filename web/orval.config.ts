@@ -29,4 +29,46 @@ export default defineConfig({
       },
     },
   },
+  auth: {
+    input: './openapi/auth.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/auth/auth.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
+  runtime: {
+    input: './openapi/runtime.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/runtime/runtime.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
+  adminTrace: {
+    input: './openapi/admin-trace.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/admin-trace/admin-trace.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
 });
