@@ -58,9 +58,11 @@
 同一时刻 `expires_at == now()` 必须判定为 expired。撤销只设置 `revoked_at`，绝不把
 `expires_at` 改到过去；因此管理员主动撤销与自然过期在状态及审计中始终可区分。
 
-只要 credential row 存在，active、expired、revoked 三种投影均保留安全的
-`binding_id`。Gateway 仍只在 `bind_status == "active"` 时注入 `credential_ref`，所以
-保留引用不会释放执行权限，却允许管理员定位已过期或已撤销的 binding 并进行幂等操作。
+既有投影行为保持不变：active 继续携带安全 `binding_id`，自然过期的 expired 投影继续
+保持 `binding_id=None`，两者其余字段也逐字段不变。只有本任务新增的 revoked 状态和
+revoke/reset mutation 结果携带安全 `binding_id`；Gateway 仍只在
+`bind_status == "active"` 时注入 `credential_ref`。不得为了让管理员从 expired 列表重新
+定位 binding 而改变既有 `bindings_list` 响应契约。
 
 ### 3.2 Minimal `IdentityMappingPort` write contract
 
@@ -233,6 +235,8 @@ downgrade 只允许删除本迁移自己新增的 `revoked_at`，不得删除任
 
 1. active、`expires_at == now()`、自然过期、主动撤销及“已过期后再撤销”按既定优先级
    区分，且撤销不改 `expires_at`。
+   既有 `bindings_list` 的 active/expired 响应必须逐字段回归：active 仍携带原安全引用，
+   expired 仍为 `binding_id=None`；只有新增 revoked/mutation 响应携带撤销引用。
 2. revoke/reset 首次写入与重复调用均符合结果契约；不存在 binding 明确 404。
 3. 非 admin 跨用户操作 403 且 Port 零调用；admin 跨用户操作只因既有角色权限而允许。
 4. 撤销提交后，以同一 Gateway、adapter、SecretProvider 和连接池实例再次执行
