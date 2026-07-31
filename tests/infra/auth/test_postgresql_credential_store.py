@@ -353,6 +353,71 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
     asyncio.run(exercise())
 
 
+def test_revocation_check_precedes_decryption_without_a_session_exit_gap() -> None:
+    ai_user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+    oa_user_id = f"synthetic-{uuid4().hex}"
+    cookie_value = f"synthetic-{uuid4().hex}"
+    events: list[str] = []
+    revocation_committed = False
+
+    class RowResult:
+        def mappings(self) -> RowResult:
+            return self
+
+        def one_or_none(self) -> dict[str, object]:
+            return {
+                "cipher_version": "aes256gcm-v1",
+                "nonce": bytes(range(12)),
+                "encrypted_payload": bytes(range(32)),
+                "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                "revoked_at": None,
+            }
+
+    class Session:
+        async def __aenter__(self) -> Session:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            nonlocal revocation_committed
+            await asyncio.sleep(0)
+            revocation_committed = True
+            events.append("revoke_commit")
+
+        async def execute(self, *_args: object, **_kwargs: object) -> RowResult:
+            events.append("revocation_check")
+            return RowResult()
+
+    class SessionFactory:
+        def __call__(self) -> Session:
+            return Session()
+
+    class OrderingCipher:
+        def decrypt(self, *_args: object, **_kwargs: object) -> bytes:
+            assert revocation_committed is False
+            events.append("decrypt")
+            return json.dumps(
+                {
+                    "oa_user_id": oa_user_id,
+                    "cookies": {"synthetic_name": cookie_value},
+                }
+            ).encode("utf-8")
+
+    async def exercise() -> None:
+        store = PostgreSQLCredentialStore(
+            session_factory=cast(Any, SessionFactory()),
+            encryption_key=bytes(range(32)),
+        )
+        setattr(store, "_cipher", OrderingCipher())
+
+        loaded = await store.load(ai_user_id)
+
+        assert loaded is not None
+        assert loaded.oa_user_id.get_secret_value() == oa_user_id
+        assert events == ["revocation_check", "decrypt", "revoke_commit"]
+
+    asyncio.run(exercise())
+
+
 def test_oa_credential_load_returns_none_for_missing_row() -> None:
     from app.db.session import make_async_engine, make_async_session_factory
 

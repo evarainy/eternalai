@@ -90,11 +90,11 @@ class PostgreSQLCredentialStore:
         if not ai_user_id:
             raise CredentialStoreError("OA session credential cannot be loaded")
 
-        row: RowMapping | None = None
-        query_failed = False
+        credential: OASessionCredential | None = None
+        load_failed = False
         try:
             async with self._session_factory() as session:
-                row = (
+                row: RowMapping | None = (
                     await session.execute(
                         text(
                             "SELECT cipher_version, nonce, encrypted_payload, expires_at,"
@@ -105,28 +105,20 @@ class PostgreSQLCredentialStore:
                         {"ai_user_id": ai_user_id},
                     )
                 ).mappings().one_or_none()
+                if row is None:
+                    return None
+                if row.get("revoked_at") is not None:
+                    load_failed = True
+                else:
+                    credential = _decode_credential_row(
+                        cipher=self._cipher,
+                        ai_user_id=ai_user_id,
+                        row=row,
+                    )
         except Exception:
-            query_failed = True
+            load_failed = True
 
-        if query_failed:
-            raise CredentialStoreError("OA session credential cannot be loaded")
-        if row is None:
-            return None
-        if row.get("revoked_at") is not None:
-            raise CredentialStoreError("OA session credential cannot be loaded")
-
-        credential: OASessionCredential | None = None
-        decode_failed = False
-        try:
-            credential = _decode_credential_row(
-                cipher=self._cipher,
-                ai_user_id=ai_user_id,
-                row=row,
-            )
-        except Exception:
-            decode_failed = True
-
-        if decode_failed or credential is None:
+        if load_failed or credential is None:
             raise CredentialStoreError("OA session credential cannot be loaded")
         return credential
 

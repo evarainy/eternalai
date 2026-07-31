@@ -258,3 +258,20 @@ async def test_idempotent_revoke_preserves_revoked_state_and_reports_unchanged()
     assert result.binding.bind_status == "revoked"
     assert trace.events[0].attributes["previous_bind_status"] == "revoked"
     assert trace.events[0].attributes["changed"] is False
+
+
+@pytest.mark.anyio
+async def test_revoke_expired_binding_audits_expired_to_revoked_transition() -> None:
+    port = RecordingMutationPort(
+        _mutation_result(previous_bind_status="expired", changed=True)
+    )
+    trace = RecordingTrace()
+
+    result = await _service(port, trace).revoke_binding(BINDING_ID, _context("admin"))
+
+    assert result.binding.bind_status == "revoked"
+    assert result.changed is True
+    assert port.calls == [("revoke", BINDING_ID)]
+    assert trace.events[0].attributes["previous_bind_status"] == "expired"
+    assert trace.events[0].attributes["after_bind_status"] == "revoked"
+    assert trace.events[0].attributes["changed"] is True

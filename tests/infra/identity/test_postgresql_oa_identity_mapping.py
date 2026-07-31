@@ -99,9 +99,16 @@ def test_active_projection_uses_only_metadata_and_returns_namespaced_reference()
             fetched = await mapping.get_mapping(ai_user_id, "oa")
             listed = await mapping.list_mappings(ai_user_id)
 
-            assert resolved.bind_status == "active"
-            assert resolved.binding_id == f"oa-session-v1:{ai_user_id}"
-            assert resolved.reason_code is None
+            assert resolved.model_dump() == {
+                "bind_status": "active",
+                "binding_id": f"oa-session-v1:{ai_user_id}",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "binding_scope": None,
+                "account_set_id": None,
+                "device_domain_id": None,
+                "reason_code": None,
+            }
             assert fetched == resolved
             assert listed == [resolved]
             rendered = repr(mapping) + repr(resolved) + resolved.model_dump_json()
@@ -203,9 +210,16 @@ def test_expired_projection_never_emits_a_binding_reference(
                 request_context=_request_context(),
             )
 
-            assert resolved.bind_status == "expired"
-            assert resolved.binding_id is None
-            assert resolved.reason_code == "identity_expired"
+            assert resolved.model_dump() == {
+                "bind_status": "expired",
+                "binding_id": None,
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "binding_scope": None,
+                "account_set_id": None,
+                "device_domain_id": None,
+                "reason_code": "identity_expired",
+            }
         finally:
             async with factory() as session:
                 await session.execute(
@@ -298,7 +312,7 @@ def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() ->
     ai_user_id = _ai_user_id()
     binding_id = f"oa-session-v1:{ai_user_id}"
     expires_at = NOW + timedelta(minutes=5)
-    clock_values = iter((NOW, NOW + timedelta(minutes=1)))
+    clock_values = iter((NOW,))
 
     async def exercise() -> None:
         engine = make_async_engine(database_url)
@@ -329,17 +343,22 @@ def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() ->
                 now=lambda: next(clock_values),
             )
             first = await mapping.revoke_mapping(binding_id)
-            repeated = await mapping.reset_mapping(binding_id)
+            repeated_revoke = await mapping.revoke_mapping(binding_id)
+            reset = await mapping.reset_mapping(binding_id)
 
             assert first is not None
             assert first.previous_bind_status == "active"
             assert first.changed is True
             assert first.mapping.bind_status == "revoked"
             assert first.mapping.binding_id == binding_id
-            assert repeated is not None
-            assert repeated.previous_bind_status == "revoked"
-            assert repeated.changed is False
-            assert repeated.mapping == first.mapping
+            assert repeated_revoke is not None
+            assert repeated_revoke.previous_bind_status == "revoked"
+            assert repeated_revoke.changed is False
+            assert repeated_revoke.mapping == first.mapping
+            assert reset is not None
+            assert reset.previous_bind_status == "revoked"
+            assert reset.changed is False
+            assert reset.mapping == first.mapping
 
             async with factory() as session:
                 query_result = await session.execute(
