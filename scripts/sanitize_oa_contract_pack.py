@@ -11,7 +11,7 @@ import sys
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import parse_qsl, urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +27,7 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
 )
 
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_ALLOWED_CAPTURE_PROFILE_VERSIONS = frozenset({"ecology9-pending-workflows-v1"})
 _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
 _MAX_RECORDS = 10_000
@@ -92,6 +93,21 @@ class SanitizationError(RuntimeError):
     """A fail-closed sanitization condition with a non-sensitive message."""
 
 
+class _NoEchoArgumentParser(argparse.ArgumentParser):
+    """Reject invalid CLI input without rendering its raw value."""
+
+    def error(self, _message: str) -> NoReturn:
+        raise SanitizationError("invalid_arguments")
+
+
+def _validate_capture_profile_version(profile_version: str) -> None:
+    if (
+        _PROFILE_VERSION_PATTERN.fullmatch(profile_version) is None
+        or profile_version not in _ALLOWED_CAPTURE_PROFILE_VERSIONS
+    ):
+        raise SanitizationError("invalid_profile_version")
+
+
 def sanitize_har_to_contract_pack(
     *,
     input_har: Path,
@@ -101,8 +117,7 @@ def sanitize_har_to_contract_pack(
 ) -> None:
     """Create a Contract Pack atomically or leave the target absent."""
 
-    if not _PROFILE_VERSION_PATTERN.fullmatch(profile_version):
-        raise SanitizationError("invalid_profile_version")
+    _validate_capture_profile_version(profile_version)
     if output_dir.name != profile_version:
         raise SanitizationError("profile_output_name_mismatch")
     if output_dir.exists():
@@ -670,7 +685,7 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _NoEchoArgumentParser(
         description="Offline OA HAR to sanitized Contract Pack converter.",
     )
     parser.add_argument("--input-har", required=True, type=Path)
@@ -680,7 +695,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--entry-index",
         action="append",
         dest="entry_indices",
-        type=int,
         help=(
             "Zero-based HAR entry index. Repeat to aggregate selected "
             "pending-workflow pages in the supplied order."
@@ -689,14 +703,43 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def _parse_cli_args(argv: list[str] | None) -> argparse.Namespace:
+    args: argparse.Namespace | None = None
+    parse_failed = False
     try:
+        args = _build_parser().parse_args(argv)
+    except SanitizationError:
+        parse_failed = True
+    if parse_failed or args is None:
+        raise SanitizationError("invalid_arguments")
+    return args
+
+
+def _parse_entry_indices(raw_values: Sequence[str] | None) -> list[int] | None:
+    if raw_values is None:
+        return None
+    entry_indices: list[int] = []
+    for raw_value in raw_values:
+        entry_index = 0
+        conversion_failed = False
+        try:
+            entry_index = int(raw_value, 10)
+        except (TypeError, ValueError):
+            conversion_failed = True
+        if conversion_failed:
+            raise SanitizationError("entry_index_invalid")
+        entry_indices.append(entry_index)
+    return entry_indices
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = _parse_cli_args(argv)
         sanitize_har_to_contract_pack(
             input_har=args.input_har,
             output_dir=args.output_dir,
             profile_version=args.profile_version,
-            entry_indices=args.entry_indices,
+            entry_indices=_parse_entry_indices(args.entry_indices),
         )
     except SanitizationError as exc:
         print(f"sanitization failed: {exc}", file=sys.stderr)
