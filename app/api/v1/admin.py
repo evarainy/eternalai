@@ -15,12 +15,16 @@ from app.admin.evidence import (
     AdminTraceListResponse,
 )
 from app.admin.registry import (
+    AdminBindingMutationResponse,
+    AdminBindingMutationUnavailableError,
+    AdminBindingNotFoundError,
     AdminBindingQueryInvalidError,
     AdminCapabilityCreate,
     AdminCapabilityNotFoundError,
     AdminCapabilityView,
     AdminInvalidStatusTransitionError,
     AdminRegistryService,
+    AdminRegistryServiceWithBindingMutations,
     AdminRequestContext,
     AdminRoleNotAllowedError,
     AdminTaskFilterRequiredError,
@@ -55,6 +59,20 @@ def _configured(service: AdminRegistryService | None) -> AdminRegistryService:
             detail={
                 "code": "admin_registry_unavailable",
                 "message": "Admin Registry provider is not configured.",
+            },
+        )
+    return service
+
+
+def _configured_binding_mutations(
+    service: AdminRegistryService | None,
+) -> AdminRegistryServiceWithBindingMutations:
+    if not isinstance(service, AdminRegistryServiceWithBindingMutations):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "admin_binding_mutation_unavailable",
+                "message": "Admin binding mutation provider is not configured.",
             },
         )
     return service
@@ -107,6 +125,22 @@ def _raise_http(error: RuntimeError) -> NoReturn:
             detail={
                 "code": "binding_query_invalid",
                 "message": "Binding query parameters are invalid.",
+            },
+        ) from None
+    if isinstance(error, AdminBindingNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "binding_not_found",
+                "message": "Binding was not found.",
+            },
+        ) from None
+    if isinstance(error, AdminBindingMutationUnavailableError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "binding_mutation_unavailable",
+                "message": "Binding mutation provider is unavailable.",
             },
         ) from None
     if isinstance(error, AdminTraceFilterRequiredError):
@@ -258,6 +292,40 @@ def make_router(
         except RuntimeError as error:
             _raise_http(error)
         return bindings
+
+    @router.post(
+        "/bindings/{binding_id}/revoke",
+        response_model=AdminBindingMutationResponse,
+    )
+    async def revoke_binding(
+        binding_id: str,
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> AdminBindingMutationResponse:
+        try:
+            result = await _configured_binding_mutations(service).revoke_binding(
+                binding_id,
+                context,
+            )
+        except RuntimeError as error:
+            _raise_http(error)
+        return result
+
+    @router.post(
+        "/bindings/{binding_id}/reset",
+        response_model=AdminBindingMutationResponse,
+    )
+    async def reset_binding(
+        binding_id: str,
+        context: AdminRequestContext = Depends(authenticated_context),
+    ) -> AdminBindingMutationResponse:
+        try:
+            result = await _configured_binding_mutations(service).reset_binding(
+                binding_id,
+                context,
+            )
+        except RuntimeError as error:
+            _raise_http(error)
+        return result
 
     @router.get(
         "/traces",

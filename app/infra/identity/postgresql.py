@@ -1,4 +1,4 @@
-"""Read-only PostgreSQL OA identity projection over encrypted credential metadata."""
+"""PostgreSQL OA identity projection over encrypted credential metadata."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.identity_mapping import (
     ExecutionIdentity,
+    IdentityBindStatus,
     IdentityCheckResult,
+    IdentityMappingMutationError,
+    IdentityMappingMutationResult,
     TargetSystem,
 )
 
@@ -26,6 +29,7 @@ _CREDENTIAL_REF_PREFIX = "oa-session-v1:"
 class _CredentialProjection:
     ai_user_id: str
     expires_at: datetime
+    revoked_at: datetime | None
 
 
 class PostgreSQLOAIdentityMapping:
@@ -125,6 +129,82 @@ class PostgreSQLOAIdentityMapping:
             return []
         return [self._project_status(projection)]
 
+    async def revoke_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return await self._mutate_mapping(binding_id)
+
+    async def reset_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return await self._mutate_mapping(binding_id)
+
+    async def _mutate_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        ai_user_id = _parse_binding_id(binding_id)
+        if ai_user_id is None:
+            return None
+
+        result: IdentityMappingMutationResult | None = None
+        mutation_failed = False
+        try:
+            async with self._session_factory() as session:
+                query_result = await session.execute(
+                    text(
+                        "SELECT ai_user_id, expires_at, revoked_at"
+                        " FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                        " FOR UPDATE"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                row = query_result.mappings().one_or_none()
+                if row is None:
+                    return None
+
+                projection = _coerce_projection(row, ai_user_id)
+                if projection.revoked_at is None:
+                    now = self._validated_now()
+                    previous_bind_status = _status_at(projection, now)
+                    updated_ai_user_id = (
+                        await session.execute(
+                            text(
+                                "UPDATE oa_session_credentials"
+                                " SET revoked_at = :revoked_at"
+                                " WHERE ai_user_id = :ai_user_id"
+                                " AND revoked_at IS NULL"
+                                " RETURNING ai_user_id"
+                            ),
+                            {
+                                "ai_user_id": ai_user_id,
+                                "revoked_at": now,
+                            },
+                        )
+                    ).scalar_one()
+                    if updated_ai_user_id != ai_user_id:
+                        raise RuntimeError
+                    changed = True
+                else:
+                    previous_bind_status = "revoked"
+                    changed = False
+
+                await session.commit()
+                result = IdentityMappingMutationResult(
+                    mapping=_revoked_result(ai_user_id),
+                    previous_bind_status=previous_bind_status,
+                    changed=changed,
+                )
+        except Exception:
+            mutation_failed = True
+
+        if mutation_failed:
+            raise IdentityMappingMutationError("identity mapping mutation failed")
+        return result
+
     async def _load_projection(
         self,
         ai_user_id: str,
@@ -133,16 +213,15 @@ class PostgreSQLOAIdentityMapping:
         query_failed = False
         try:
             async with self._session_factory() as session:
-                row = (
-                    await session.execute(
-                        text(
-                            "SELECT ai_user_id, expires_at"
-                            " FROM oa_session_credentials"
-                            " WHERE ai_user_id = :ai_user_id"
-                        ),
-                        {"ai_user_id": ai_user_id},
-                    )
-                ).mappings().one_or_none()
+                query_result = await session.execute(
+                    text(
+                        "SELECT ai_user_id, expires_at, revoked_at"
+                        " FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                row = query_result.mappings().one_or_none()
         except Exception:
             query_failed = True
 
@@ -152,26 +231,12 @@ class PostgreSQLOAIdentityMapping:
             return False, None
 
         projection: _CredentialProjection | None = None
-        projection_failed = False
         try:
-            row_ai_user_id = row.get("ai_user_id")
-            expires_at = row.get("expires_at")
-            if row_ai_user_id != ai_user_id:
-                raise ValueError
-            if (
-                not isinstance(expires_at, datetime)
-                or expires_at.tzinfo is None
-                or expires_at.utcoffset() is None
-            ):
-                raise TypeError
-            projection = _CredentialProjection(
-                ai_user_id=ai_user_id,
-                expires_at=expires_at,
-            )
+            projection = _coerce_projection(row, ai_user_id)
         except Exception:
-            projection_failed = True
+            pass
 
-        if projection_failed or projection is None:
+        if projection is None:
             return True, None
         return False, projection
 
@@ -179,12 +244,13 @@ class PostgreSQLOAIdentityMapping:
         self,
         projection: _CredentialProjection,
     ) -> IdentityCheckResult:
+        if projection.revoked_at is not None:
+            return _revoked_result(projection.ai_user_id)
+
         now: datetime | None = None
         clock_failed = False
         try:
-            now = self._now()
-            if now.tzinfo is None or now.utcoffset() is None:
-                raise TypeError
+            now = self._validated_now()
         except Exception:
             clock_failed = True
 
@@ -205,6 +271,70 @@ class PostgreSQLOAIdentityMapping:
             target_system="oa",
             execution_identity="user_delegated",
         )
+
+    def _validated_now(self) -> datetime:
+        now = self._now()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise TypeError
+        return now
+
+
+def _coerce_projection(
+    row: RowMapping,
+    ai_user_id: str,
+) -> _CredentialProjection:
+    row_ai_user_id = row.get("ai_user_id")
+    expires_at = row.get("expires_at")
+    revoked_at = row.get("revoked_at")
+    if row_ai_user_id != ai_user_id:
+        raise ValueError
+    if (
+        not isinstance(expires_at, datetime)
+        or expires_at.tzinfo is None
+        or expires_at.utcoffset() is None
+    ):
+        raise TypeError
+    if revoked_at is not None and (
+        not isinstance(revoked_at, datetime)
+        or revoked_at.tzinfo is None
+        or revoked_at.utcoffset() is None
+    ):
+        raise TypeError
+    return _CredentialProjection(
+        ai_user_id=ai_user_id,
+        expires_at=expires_at,
+        revoked_at=revoked_at,
+    )
+
+
+def _status_at(
+    projection: _CredentialProjection,
+    now: datetime,
+) -> IdentityBindStatus:
+    if projection.revoked_at is not None:
+        return "revoked"
+    if projection.expires_at <= now:
+        return "expired"
+    return "active"
+
+
+def _revoked_result(ai_user_id: str) -> IdentityCheckResult:
+    return IdentityCheckResult(
+        bind_status="revoked",
+        binding_id=f"{_CREDENTIAL_REF_PREFIX}{ai_user_id}",
+        target_system="oa",
+        execution_identity="user_delegated",
+        reason_code="identity_revoked",
+    )
+
+
+def _parse_binding_id(binding_id: str) -> str | None:
+    if not isinstance(binding_id, str) or not binding_id.startswith(_CREDENTIAL_REF_PREFIX):
+        return None
+    ai_user_id = binding_id[len(_CREDENTIAL_REF_PREFIX) :]
+    if _AI_USER_ID_RE.fullmatch(ai_user_id) is None:
+        return None
+    return ai_user_id
 
 
 def _unbound_result(

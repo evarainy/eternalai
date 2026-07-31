@@ -439,6 +439,57 @@ def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
     assert trace.events[-1].attributes["action"] == "bindings_list"
 
 
+def test_bindings_list_preserves_existing_active_and_expired_projection_fields() -> None:
+    active = _binding(0)
+    expired = IdentityCheckResult(
+        binding_id=None,
+        target_system="oa",
+        execution_identity="user_delegated",
+        bind_status="expired",
+        binding_scope=None,
+        account_set_id=None,
+        device_domain_id=None,
+        reason_code="identity_expired",
+    )
+    identity_mapping = RecordingIdentityMapping([active, expired])
+    trace = RecordingTrace()
+    client = _client(RecordingTaskStore(), identity_mapping, trace)
+
+    response = client.get(
+        "/api/v1/admin/bindings?ai_user_id=user-1&target_system=oa",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ai_user_id": "user-1",
+        "items": [
+            {
+                "binding_id": "binding-000",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "active",
+                "binding_scope": "self",
+                "account_set_id": "account-000",
+                "device_domain_id": None,
+                "reason_code": None,
+            },
+            {
+                "binding_id": None,
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "expired",
+                "binding_scope": None,
+                "account_set_id": None,
+                "device_domain_id": None,
+                "reason_code": "identity_expired",
+            },
+        ],
+    }
+    assert identity_mapping.calls == [("user-1", "oa", None, None, None)]
+    assert trace.events[-1].attributes["action"] == "bindings_list"
+
+
 @pytest.mark.parametrize(
     "url",
     [

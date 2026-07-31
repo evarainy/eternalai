@@ -14,12 +14,18 @@ import pytest
 from pydantic import ValidationError
 
 from app.ports.capability_gateway import RequestOrgContext
-from app.ports.identity_mapping import IdentityCheckResult, IdentityMappingPort
+from app.ports.identity_mapping import (
+    IdentityCheckResult,
+    IdentityMappingMutationResult,
+    IdentityMappingPort,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 IMPLEMENTATION_SOURCE = REPO_ROOT / "app" / "infra" / "identity" / "mock_identity_mapping.py"
 
 T = TypeVar("T")
+AI_USER_ID = "usr_v1_" + "a" * 43
+BINDING_ID = f"oa-session-v1:{AI_USER_ID}"
 
 
 def _run(awaitable: Awaitable[T]) -> T:
@@ -43,6 +49,20 @@ def _mapping(rows: list[dict[str, str | None]] | None = None) -> Any:
 
 def _context(**overrides: str) -> RequestOrgContext:
     return RequestOrgContext(request_id="identity-test-request", **overrides)
+
+
+def _oa_mutation_row(*, bind_status: str = "active") -> dict[str, str | None]:
+    return {
+        "ai_user_id": AI_USER_ID,
+        "bind_status": bind_status,
+        "binding_id": None if bind_status == "expired" else BINDING_ID,
+        "target_system": "oa",
+        "execution_identity": "user_delegated",
+        "binding_scope": None,
+        "account_set_id": None,
+        "device_domain_id": None,
+        "reason_code": None,
+    }
 
 
 def test_resolve_execution_identity_returns_active_for_known_identity() -> None:
@@ -425,7 +445,9 @@ def test_identity_check_result_extra_field_raises_validation_error() -> None:
 
 
 def test_protocol_methods_return_identity_check_result_instances() -> None:
-    async def exercise(port: IdentityMappingPort) -> tuple[
+    async def exercise(
+        port: IdentityMappingPort,
+    ) -> tuple[
         IdentityCheckResult,
         IdentityCheckResult | None,
         list[IdentityCheckResult],
@@ -450,6 +472,80 @@ def test_protocol_methods_return_identity_check_result_instances() -> None:
     assert isinstance(mapping_result, IdentityCheckResult)
     assert mapping_results
     assert all(isinstance(result, IdentityCheckResult) for result in mapping_results)
+
+
+@pytest.mark.parametrize("method_name", ("revoke_mapping", "reset_mapping"))
+def test_mutation_changes_active_mapping_to_revoked(method_name: str) -> None:
+    mapping = _mapping([_oa_mutation_row()])
+
+    result = _run(getattr(mapping, method_name)(BINDING_ID))
+
+    assert isinstance(result, IdentityMappingMutationResult)
+    assert result.previous_bind_status == "active"
+    assert result.changed is True
+    assert result.mapping.bind_status == "revoked"
+    assert result.mapping.binding_id == BINDING_ID
+    assert result.mapping.reason_code == "identity_revoked"
+    assert _run(mapping.get_mapping(AI_USER_ID, "oa")) == result.mapping
+
+
+def test_mutation_preserves_expired_previous_status_and_binding_reference() -> None:
+    mapping = _mapping([_oa_mutation_row(bind_status="expired")])
+
+    before = _run(mapping.get_mapping(AI_USER_ID, "oa"))
+    assert before is not None
+    assert before.bind_status == "expired"
+    assert before.binding_id is None
+
+    result = _run(mapping.reset_mapping(BINDING_ID))
+
+    assert isinstance(result, IdentityMappingMutationResult)
+    assert result.previous_bind_status == "expired"
+    assert result.changed is True
+    assert result.mapping.bind_status == "revoked"
+    assert result.mapping.binding_id == BINDING_ID
+
+
+def test_repeated_named_mutations_are_idempotent() -> None:
+    mapping = _mapping([_oa_mutation_row()])
+
+    first = _run(mapping.revoke_mapping(BINDING_ID))
+    repeated = _run(mapping.reset_mapping(BINDING_ID))
+
+    assert isinstance(first, IdentityMappingMutationResult)
+    assert isinstance(repeated, IdentityMappingMutationResult)
+    assert first.changed is True
+    assert first.previous_bind_status == "active"
+    assert repeated.changed is False
+    assert repeated.previous_bind_status == "revoked"
+    assert repeated.mapping == first.mapping
+
+
+@pytest.mark.parametrize(
+    "binding_id",
+    (
+        AI_USER_ID,
+        f"binding:{AI_USER_ID}",
+        "oa-session-v1:usr_v1_too-short",
+        f"{BINDING_ID}:suffix",
+        "oa-session-v1:",
+    ),
+)
+def test_mutation_rejects_noncanonical_binding_references(binding_id: str) -> None:
+    mapping = _mapping([_oa_mutation_row()])
+
+    assert _run(mapping.revoke_mapping(binding_id)) is None
+    current = _run(mapping.get_mapping(AI_USER_ID, "oa"))
+    assert current is not None
+    assert current.bind_status == "active"
+
+
+def test_mutation_returns_none_for_canonical_but_missing_binding() -> None:
+    missing_ai_user_id = "usr_v1_" + "b" * 43
+    missing_binding_id = f"oa-session-v1:{missing_ai_user_id}"
+    mapping = _mapping([_oa_mutation_row()])
+
+    assert _run(mapping.reset_mapping(missing_binding_id)) is None
 
 
 def test_concrete_precheck_is_not_added_to_identity_mapping_port_protocol() -> None:

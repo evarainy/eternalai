@@ -70,6 +70,7 @@ class PostgreSQLCredentialStore:
                     " nonce = EXCLUDED.nonce,"
                     " encrypted_payload = EXCLUDED.encrypted_payload,"
                     " expires_at = EXCLUDED.expires_at,"
+                    " revoked_at = NULL,"
                     " updated_at = EXCLUDED.updated_at"
                 ),
                 {
@@ -96,7 +97,8 @@ class PostgreSQLCredentialStore:
                 row = (
                     await session.execute(
                         text(
-                            "SELECT cipher_version, nonce, encrypted_payload, expires_at"
+                            "SELECT cipher_version, nonce, encrypted_payload, expires_at,"
+                            " revoked_at"
                             " FROM oa_session_credentials"
                             " WHERE ai_user_id = :ai_user_id"
                         ),
@@ -110,6 +112,8 @@ class PostgreSQLCredentialStore:
             raise CredentialStoreError("OA session credential cannot be loaded")
         if row is None:
             return None
+        if row.get("revoked_at") is not None:
+            raise CredentialStoreError("OA session credential cannot be loaded")
 
         credential: OASessionCredential | None = None
         decode_failed = False

@@ -221,6 +221,393 @@ def test_expired_projection_never_emits_a_binding_reference(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize(
+    "expires_at",
+    (
+        NOW + timedelta(minutes=5),
+        NOW,
+        NOW - timedelta(microseconds=1),
+    ),
+)
+def test_revoked_projection_precedes_expiry_and_preserves_binding_reference(
+    expires_at: datetime,
+) -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = _ai_user_id()
+    binding_id = f"oa-session-v1:{ai_user_id}"
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials"
+                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " expires_at, revoked_at, updated_at)"
+                        " VALUES"
+                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " :expires_at, :revoked_at, :updated_at)"
+                    ),
+                    {
+                        "ai_user_id": ai_user_id,
+                        "nonce": b"unused",
+                        "encrypted_payload": b"unused",
+                        "expires_at": expires_at,
+                        "revoked_at": NOW - timedelta(seconds=1),
+                        "updated_at": NOW,
+                    },
+                )
+                await session.commit()
+
+            mapping = PostgreSQLOAIdentityMapping(
+                session_factory=factory,
+                now=lambda: NOW,
+            )
+            resolved = await mapping.resolve_execution_identity(
+                ai_user_id=ai_user_id,
+                target_system="oa",
+                execution_identity="user_delegated",
+                request_context=_request_context(),
+            )
+
+            assert resolved.bind_status == "revoked"
+            assert resolved.binding_id == binding_id
+            assert resolved.reason_code == "identity_revoked"
+            assert await mapping.get_mapping(ai_user_id, "oa") == resolved
+            assert await mapping.list_mappings(ai_user_id, "oa") == [resolved]
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = _ai_user_id()
+    binding_id = f"oa-session-v1:{ai_user_id}"
+    expires_at = NOW + timedelta(minutes=5)
+    clock_values = iter((NOW, NOW + timedelta(minutes=1)))
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials"
+                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " expires_at, revoked_at, updated_at)"
+                        " VALUES"
+                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " :expires_at, NULL, :updated_at)"
+                    ),
+                    {
+                        "ai_user_id": ai_user_id,
+                        "nonce": b"unused",
+                        "encrypted_payload": b"unused",
+                        "expires_at": expires_at,
+                        "updated_at": NOW,
+                    },
+                )
+                await session.commit()
+
+            mapping = PostgreSQLOAIdentityMapping(
+                session_factory=factory,
+                now=lambda: next(clock_values),
+            )
+            first = await mapping.revoke_mapping(binding_id)
+            repeated = await mapping.reset_mapping(binding_id)
+
+            assert first is not None
+            assert first.previous_bind_status == "active"
+            assert first.changed is True
+            assert first.mapping.bind_status == "revoked"
+            assert first.mapping.binding_id == binding_id
+            assert repeated is not None
+            assert repeated.previous_bind_status == "revoked"
+            assert repeated.changed is False
+            assert repeated.mapping == first.mapping
+
+            async with factory() as session:
+                query_result = await session.execute(
+                    text(
+                        "SELECT expires_at, revoked_at"
+                        " FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                row = query_result.mappings().one()
+            assert row["expires_at"] == expires_at
+            assert row["revoked_at"] == NOW
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_revoke_reports_expired_previous_status_without_changing_expires_at() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = _ai_user_id()
+    binding_id = f"oa-session-v1:{ai_user_id}"
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials"
+                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " expires_at, revoked_at, updated_at)"
+                        " VALUES"
+                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " :expires_at, NULL, :updated_at)"
+                    ),
+                    {
+                        "ai_user_id": ai_user_id,
+                        "nonce": b"unused",
+                        "encrypted_payload": b"unused",
+                        "expires_at": NOW,
+                        "updated_at": NOW,
+                    },
+                )
+                await session.commit()
+
+            mapping = PostgreSQLOAIdentityMapping(
+                session_factory=factory,
+                now=lambda: NOW,
+            )
+            result = await mapping.revoke_mapping(binding_id)
+
+            assert result is not None
+            assert result.previous_bind_status == "expired"
+            assert result.changed is True
+            assert result.mapping.bind_status == "revoked"
+            assert result.mapping.binding_id == binding_id
+            async with factory() as session:
+                stored_expires_at = await session.scalar(
+                    text(
+                        "SELECT expires_at FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+            assert stored_expires_at == NOW
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    database_url = _require_db()
+    ai_user_id = _ai_user_id()
+    binding_id = f"oa-session-v1:{ai_user_id}"
+    capability = CapabilitySpec(
+        capability_id="oa.list_pending_workflows",
+        name="OA pending workflows",
+        type="query",
+        input_schema_digest="input-digest",
+        output_schema_digest="output-digest",
+        risk_level="low",
+        owner="phase2",
+        version="1.0.0",
+        status="active",
+        short_description="OA pending workflows",
+        target_system="oa",
+        execution_identity="user_delegated",
+        binding_required=True,
+    )
+
+    class Registry:
+        async def get(self, capability_id: str) -> CapabilitySpec | None:
+            assert capability_id == capability.capability_id
+            return capability
+
+    class CountingCredentialStore(PostgreSQLCredentialStore):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.load_calls = 0
+
+        async def load(self, stored_ai_user_id: str) -> OASessionCredential | None:
+            self.load_calls += 1
+            return await super().load(stored_ai_user_id)
+
+    class CountingSecretProvider(CredentialStoreSecretProvider):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.resolve_calls = 0
+
+        async def resolve_oa_session(
+            self,
+            credential_ref: str,
+        ) -> OASessionCredential:
+            self.resolve_calls += 1
+            return await super().resolve_oa_session(credential_ref)
+
+    class CountingAdapter(OAReadAdapter):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.execute_calls = 0
+
+        async def execute(
+            self,
+            capability_id: str,
+            arguments: dict[str, Any],
+            execution_context: dict[str, Any],
+        ) -> Any:
+            self.execute_calls += 1
+            return await super().execute(
+                capability_id,
+                arguments,
+                execution_context,
+            )
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        http_open_calls = 0
+
+        def forbidden_opener_factory() -> Any:
+            nonlocal http_open_calls
+            http_open_calls += 1
+            raise AssertionError("revoked request must not reach Live HTTP")
+
+        try:
+            credential_store = CountingCredentialStore(
+                session_factory=factory,
+                encryption_key=bytes(range(32)),
+            )
+            await credential_store.store(
+                ai_user_id,
+                OASessionCredential(
+                    oa_user_id=SecretStr("synthetic-" + uuid4().hex),
+                    cookies={
+                        "synthetic_name": SecretStr(
+                            "synthetic-" + uuid4().hex
+                        )
+                    },
+                    expires_at=NOW + timedelta(minutes=5),
+                ),
+            )
+            secret_provider = CountingSecretProvider(
+                credential_store=credential_store,
+                now=lambda: NOW,
+            )
+            live_provider = LiveOAReadProvider(
+                base_url="https://oa.synthetic.invalid",
+                endpoint_path="/api/pending",
+                timeout_seconds=2.0,
+                contract_pack_dir=CONTRACT_PACK,
+                opener_factory=forbidden_opener_factory,
+                clock=lambda: NOW,
+            )
+            adapter = CountingAdapter(
+                live_provider,
+                secret_provider=secret_provider,
+            )
+            identity_mapping = PostgreSQLOAIdentityMapping(
+                session_factory=factory,
+                now=lambda: NOW,
+            )
+            active = await identity_mapping.resolve_execution_identity(
+                ai_user_id,
+                "oa",
+                "user_delegated",
+                _request_context(),
+            )
+            assert active.bind_status == "active"
+            assert active.binding_id == binding_id
+
+            revoked = await identity_mapping.revoke_mapping(binding_id)
+            assert revoked is not None
+            assert revoked.previous_bind_status == "active"
+            assert revoked.changed is True
+            assert revoked.mapping.bind_status == "revoked"
+            assert revoked.mapping.binding_id == binding_id
+
+            gateway = CapabilityGateway(
+                capability_registry=cast(Any, Registry()),
+                identity_mapping=identity_mapping,
+                policy_guard=MinimalPolicyGuard(),
+                adapters={"oa": adapter},
+            )
+            result = await gateway.execute_capability(
+                "task-revoked-001",
+                "session-revoked-001",
+                ai_user_id,
+                capability.capability_id,
+                {},
+                RequestOrgContext(request_id="trace-revoked-001"),
+            )
+
+            assert result.status == "binding_required"
+            assert result.error_code == "identity_revoked"
+            assert result.data is None
+            assert adapter.execute_calls == 0
+            assert secret_provider.resolve_calls == 0
+            assert credential_store.load_calls == 0
+            assert http_open_calls == 0
+
+            stale_precheck_result = await adapter.execute(
+                capability.capability_id,
+                {},
+                {"credential_ref": binding_id},
+            )
+
+            assert stale_precheck_result.status == "error"
+            assert stale_precheck_result.error_code == "adapter_error"
+            assert stale_precheck_result.data is None
+            assert adapter.execute_calls == 1
+            assert secret_provider.resolve_calls == 1
+            assert credential_store.load_calls == 1
+            assert http_open_calls == 0
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("target_system", "execution_identity", "context"),

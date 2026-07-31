@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TypeAlias, cast
@@ -11,11 +12,14 @@ from app.ports.identity_mapping import (
     ExecutionIdentity,
     IdentityBindStatus,
     IdentityCheckResult,
+    IdentityMappingMutationResult,
     TargetSystem,
 )
 
 _RowValue: TypeAlias = str | None
 _RowInput: TypeAlias = Mapping[str, _RowValue]
+_AI_USER_ID_RE = re.compile(r"^usr_v1_[A-Za-z0-9_-]{43}$")
+_CREDENTIAL_REF_PREFIX = "oa-session-v1:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +253,62 @@ class MockIdentityMapping:
             )
         ]
 
+    async def revoke_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return self._mutate_mapping(binding_id)
+
+    async def reset_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return self._mutate_mapping(binding_id)
+
+    def _mutate_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        ai_user_id = _parse_binding_id(binding_id)
+        if ai_user_id is None:
+            return None
+
+        matching_indexes = [
+            index
+            for index, row in enumerate(self._rows)
+            if row.ai_user_id == ai_user_id
+            and f"{_CREDENTIAL_REF_PREFIX}{row.ai_user_id}" == binding_id
+            and row.result.target_system == "oa"
+            and row.result.execution_identity == "user_delegated"
+        ]
+        if len(matching_indexes) != 1:
+            return None
+
+        row_index = matching_indexes[0]
+        row = self._rows[row_index]
+        previous_bind_status = row.result.bind_status
+        changed = previous_bind_status != "revoked"
+        revoked_mapping = row.result.model_copy(
+            update={
+                "bind_status": "revoked",
+                "binding_id": binding_id,
+                "reason_code": "identity_revoked",
+            }
+        )
+        if changed:
+            rows = list(self._rows)
+            rows[row_index] = _IdentityMappingRow(
+                ai_user_id=row.ai_user_id,
+                result=revoked_mapping,
+            )
+            self._rows = tuple(rows)
+
+        return IdentityMappingMutationResult(
+            mapping=revoked_mapping,
+            previous_bind_status=previous_bind_status,
+            changed=changed,
+        )
+
     def precheck(
         self,
         ai_user_id: str,
@@ -315,3 +375,12 @@ class MockIdentityMapping:
             execution_identity=execution_identity,
             reason_code="identity_unbound",
         )
+
+
+def _parse_binding_id(binding_id: str) -> str | None:
+    if not isinstance(binding_id, str) or not binding_id.startswith(_CREDENTIAL_REF_PREFIX):
+        return None
+    ai_user_id = binding_id[len(_CREDENTIAL_REF_PREFIX) :]
+    if _AI_USER_ID_RE.fullmatch(ai_user_id) is None:
+        return None
+    return ai_user_id
