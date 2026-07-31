@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "sanitize_oa_contract_pack.py"
 COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
+PROFILE_VERSION = "ecology9-pending-workflows-v1"
 
 
 def _har(
@@ -87,6 +88,7 @@ def _run_script(
     output_dir: Path,
     *,
     entry_indices: list[int | str] | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -100,6 +102,7 @@ def _run_script(
     ]
     for entry_index in entry_indices or []:
         command.extend(["--entry-index", str(entry_index)])
+    command.extend(extra_args or [])
     return subprocess.run(
         command,
         cwd=REPO_ROOT,
@@ -114,7 +117,7 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
 ) -> None:
     input_har = tmp_path / "synthetic.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / "synthetic-profile-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -132,7 +135,7 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         (output_dir / "fingerprint.json").read_text(encoding="utf-8")
     )
     assert profile == {
-        "profile_version": "synthetic-profile-v1",
+        "profile_version": PROFILE_VERSION,
         "capability_id": "oa.list_pending_workflows",
         "source_kind": "sanitized_capture",
         "sanitizer_version": "1",
@@ -171,6 +174,159 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         assert forbidden not in all_output
 
 
+def test_sensitive_profile_version_is_rejected_without_output(
+    tmp_path: Path,
+) -> None:
+    sensitive_profile = "fake-workcode-927315"
+    input_har = tmp_path / "synthetic.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / sensitive_profile
+
+    completed = _run_script(input_har, output_dir)
+
+    rendered_output = (
+        "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in output_dir.iterdir()
+            if path.is_file()
+        )
+        if output_dir.exists()
+        else ""
+    )
+    assert sensitive_profile not in rendered_output
+    assert sensitive_profile not in completed.stdout
+    assert sensitive_profile not in completed.stderr
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: invalid_profile_version\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_unapproved_capture_revision_is_rejected_without_output(
+    tmp_path: Path,
+) -> None:
+    unapproved_profile = "ecology9-pending-workflows-v927"
+    input_har = tmp_path / "synthetic.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / unapproved_profile
+
+    completed = _run_script(input_har, output_dir)
+
+    rendered_output = (
+        "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in output_dir.iterdir()
+            if path.is_file()
+        )
+        if output_dir.exists()
+        else ""
+    )
+    assert unapproved_profile not in rendered_output
+    assert unapproved_profile not in completed.stdout
+    assert unapproved_profile not in completed.stderr
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: invalid_profile_version\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize(
+    "sensitive_cli_value",
+    [
+        "FAKE_SESSIONID_ARGPARSE_927315",
+        "FAKE%5FSESSIONID%5FARGPARSE%5F927315",
+        "RkFLRV9TRVNTSU9OSURfQVJHUEFSU0VfOTI3MzE1",
+    ],
+    ids=["plain", "url-encoded", "base64"],
+)
+def test_invalid_cli_value_is_rejected_without_echo_or_output(
+    tmp_path: Path,
+    sensitive_cli_value: str,
+) -> None:
+    input_har = tmp_path / "synthetic.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[sensitive_cli_value],
+    )
+
+    assert sensitive_cli_value not in completed.stdout
+    assert sensitive_cli_value not in completed.stderr
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: entry_index_invalid\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="entry_index_invalid",
+    ) as exc_info:
+        sanitizer._parse_entry_indices([sensitive_cli_value])
+
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert sensitive_cli_value not in (repr(exc_info.value) + str(exc_info.value))
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "sensitive_cli_value"),
+    [
+        (
+            ["--unknown-option", "FAKE_UNKNOWN_ARG_927315"],
+            "FAKE_UNKNOWN_ARG_927315",
+        ),
+        (["--entry-index"], "FAKE_MISSING_VALUE_CONTEXT_927315"),
+    ],
+    ids=["unknown-option", "missing-option-value"],
+)
+def test_cli_syntax_errors_do_not_echo_known_values_or_retain_exception_context(
+    tmp_path: Path,
+    extra_args: list[str],
+    sensitive_cli_value: str,
+) -> None:
+    input_har = tmp_path / f"{sensitive_cli_value}.har"
+    input_har.write_text(json.dumps(_har()), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        extra_args=extra_args,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: invalid_arguments\n"
+    assert sensitive_cli_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+    cli_args = [
+        "--input-har",
+        str(input_har),
+        "--output-dir",
+        str(output_dir),
+        "--profile-version",
+        PROFILE_VERSION,
+        *extra_args,
+    ]
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="invalid_arguments",
+    ) as exc_info:
+        sanitizer._parse_cli_args(cli_args)
+
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert sensitive_cli_value not in (repr(exc_info.value) + str(exc_info.value))
+
+
 def test_repeated_entry_indices_aggregate_pages_in_selector_order(
     tmp_path: Path,
 ) -> None:
@@ -197,7 +353,7 @@ def test_repeated_entry_indices_aggregate_pages_in_selector_order(
     har["log"]["entries"] = [first_page, unrelated_entry, second_page]
     input_har = tmp_path / "multi-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "multi-page-profile-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -232,7 +388,7 @@ def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
     har["log"]["entries"].append(selected_page)
     input_har = tmp_path / "single-selected-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "single-selected-profile-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -255,7 +411,7 @@ def test_multiple_candidates_without_selector_fail_with_zero_output(
     har["log"]["entries"].append(_har()["log"]["entries"][0])
     input_har = tmp_path / "multiple-candidates.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "multiple-candidates-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -273,7 +429,7 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     entry["response"]["content"]["text"] = json.dumps(response_body)
     input_har = tmp_path / "empty.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "empty-profile-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -324,7 +480,7 @@ def test_cookie_from_unselected_entry_is_scanned_across_whole_har(
     )
     input_har = tmp_path / "multi-entry-cookie.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "multi-entry-cookie-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -391,7 +547,7 @@ def test_unselected_query_and_form_credentials_fail_with_zero_output(
     )
     input_har = tmp_path / "multi-entry-parameter.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "multi-entry-parameter-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -427,7 +583,7 @@ def test_encoded_unselected_response_remains_fail_closed_with_selector(
     )
     input_har = tmp_path / "multi-entry-encoded.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "multi-entry-encoded-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -455,7 +611,7 @@ def test_every_selected_response_is_checked_for_forbidden_keys(
     )
     input_har = tmp_path / "selected-page-cookie.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "selected-page-cookie-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -486,7 +642,7 @@ def test_invalid_entry_indices_fail_with_zero_output(
 ) -> None:
     input_har = tmp_path / "selector-invalid.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / f"{expected_error}-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -503,7 +659,7 @@ def test_invalid_entry_indices_fail_with_zero_output(
 def test_non_integer_entry_index_fails_with_zero_output(tmp_path: Path) -> None:
     input_har = tmp_path / "selector-not-integer.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / "selector-not-integer-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -534,7 +690,7 @@ def test_selected_non_json_response_fails_with_zero_output(tmp_path: Path) -> No
     )
     input_har = tmp_path / "selected-non-json.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "selected-non-json-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -565,7 +721,7 @@ def test_selected_non_target_response_fails_with_zero_output(tmp_path: Path) -> 
     )
     input_har = tmp_path / "selected-non-target.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "selected-non-target-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -586,7 +742,7 @@ def test_selected_structurally_invalid_entry_fails_with_zero_output(
     har["log"]["entries"].append({"request": {}})
     input_har = tmp_path / "selected-invalid-entry.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "selected-invalid-entry-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(
         input_har,
@@ -608,7 +764,7 @@ def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
         json.dumps(_har(cookie_value="pending")),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "cookie-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -636,7 +792,7 @@ def test_nested_response_cookie_fails_closed_without_leaking_value(
         ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "nested-cookie-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -664,7 +820,7 @@ def test_nested_response_workcode_fails_closed_without_leaking_value(
         ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "nested-workcode-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -692,7 +848,7 @@ def test_nested_response_token_fails_closed_without_leaking_value(
         ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "nested-token-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -723,7 +879,7 @@ def test_json_encoded_sensitive_key_in_selected_response_fails_closed(
         ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "embedded-json-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -761,7 +917,7 @@ def test_sensitive_value_in_other_json_response_cannot_reach_output(
     )
     input_har = tmp_path / "other-response.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "other-response-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -791,7 +947,7 @@ def test_overdeep_json_encoded_response_fails_closed_without_leak(
         ),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "overdeep-json-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -806,7 +962,7 @@ def test_overdeep_json_encoded_response_fails_closed_without_leak(
 def test_oversized_har_fails_closed_before_parsing(tmp_path: Path) -> None:
     input_har = tmp_path / "oversized.har"
     input_har.write_bytes(b" " * (32 * 1024 * 1024 + 1))
-    output_dir = tmp_path / "oversized-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -843,7 +999,7 @@ def test_oversized_non_candidate_response_is_rejected_before_candidate(
     )
     input_har = tmp_path / "oversized-container.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
-    output_dir = tmp_path / "oversized-container-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -862,7 +1018,7 @@ def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
         json.dumps(_har(status=private_status)),
         encoding="utf-8",
     )
-    output_dir = tmp_path / "status-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     completed = _run_script(input_har, output_dir)
 
@@ -877,7 +1033,7 @@ def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
 def test_existing_output_is_rejected_without_overwrite_or_delete(tmp_path: Path) -> None:
     input_har = tmp_path / "synthetic.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / "existing-output-v1"
+    output_dir = tmp_path / PROFILE_VERSION
     output_dir.mkdir()
     sentinel = output_dir / "preserve.txt"
     sentinel.write_text("preserve-existing-output", encoding="utf-8")
@@ -896,7 +1052,8 @@ def test_third_layer_pattern_scan_runs_before_any_candidate_write(
 ) -> None:
     input_har = tmp_path / "synthetic.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / "aaaaaaaa.bbbbbbbb.cccccccc"
+    output_dir = tmp_path / PROFILE_VERSION
+    forbidden_marker = "aaaaaaaa.bbbbbbbb.cccccccc"
     write_calls = 0
 
     def record_write(_path: Path, _payload: Any) -> None:
@@ -904,6 +1061,11 @@ def test_third_layer_pattern_scan_runs_before_any_candidate_write(
         write_calls += 1
 
     monkeypatch.setattr(sanitizer, "_write_json", record_write)
+    monkeypatch.setattr(
+        sanitizer,
+        "build_structural_fingerprint",
+        lambda _sample: {"algorithm": forbidden_marker},
+    )
 
     with pytest.raises(
         sanitizer.SanitizationError,
@@ -931,7 +1093,7 @@ def test_malformed_har_exception_chain_never_retains_raw_input(
         '{"log":{"entries":"' + sensitive_marker,
         encoding="utf-8",
     )
-    output_dir = tmp_path / "malformed-negative-v1"
+    output_dir = tmp_path / PROFILE_VERSION
 
     with pytest.raises(
         sanitizer.SanitizationError,
