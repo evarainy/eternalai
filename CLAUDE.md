@@ -5,7 +5,7 @@ Keep this file compact. Claude Code loads project memory at session start, so de
 ## 权威与当前阶段
 权威顺序：当前 Goal（最新指令及 Outcome/Constraints/Verification）> 用户红线和适用的 `AGENTS.md` > 已批准的产品/架构/接口/批次/里程碑文档 > 仓库代码、测试、CI、分支保护和运行证据 > 派生计划、skills、历史与建议。
 
-Phase 1 已完成。Phase 2 已落地 `P2-TRACE-PERSIST-001`（持久化 TracePort + Admin 审计查询，merge `f8eb8533`）、`P2-AUTH-001`（OA 登录认证 + 认证接缝，替换自报身份，merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）、`P2-PILOT-FOUNDATION-001`（真实生产 composition 与收尾加固，merge `51af461e561d814deef5f813245520a3dae73871`，PR #46，CI run 30422795582 success）、`P2-DEVENV-PREFLIGHT-001`（`scripts/check_dev_environment.py`：diagnostic tool，not a gate；未接入 conftest、CI 或既有命令；merge `39c437a56bf3da27da457fb585c72fa375872c6d`，PR #48，CI run 30429764545 success）、`P2-OA-READ-CONTRACT-001`（OA Replay adapter + 版本化 Contract Pack + 离线脱敏器，merge `89cd16e33020806c8a7a28170f93689963de5235`）和 `P2-READ-ADAPTER-001`（OA Live HTTP、每用户 Session 凭证读取、IdentityMapping、Live 指纹漂移比较与运行时闭环，merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`）。当前 `phase0/main` 基线 = `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`；欠债仍仅 `P2-CONFIRM-RESUME-001`（尚未触发），见 `docs/phase1/TASK_INDEX.md` §5.1；下一棒 = `P2-FE-API-CLIENTS-001`（Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端固化）。
+Phase 1 已完成。Phase 2 已落地 `P2-TRACE-PERSIST-001`（持久化 TracePort + Admin 审计查询，merge `f8eb8533`）、`P2-AUTH-001`（OA 登录认证 + 认证接缝，替换自报身份，merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`）、`P2-PILOT-FOUNDATION-001`（真实生产 composition 与收尾加固，merge `51af461e561d814deef5f813245520a3dae73871`，PR #46，CI run 30422795582 success）、`P2-DEVENV-PREFLIGHT-001`（`scripts/check_dev_environment.py`：diagnostic tool，not a gate；未接入 conftest、CI 或既有命令；merge `39c437a56bf3da27da457fb585c72fa375872c6d`，PR #48，CI run 30429764545 success）、`P2-OA-READ-CONTRACT-001`（OA Replay adapter + 版本化 Contract Pack + 离线脱敏器，merge `89cd16e33020806c8a7a28170f93689963de5235`）、`P2-READ-ADAPTER-001`（OA Live HTTP、每用户 Session 凭证读取、IdentityMapping、Live 指纹漂移比较与运行时闭环，merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`）、`P2-FE-API-CLIENTS-001`（Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端固化，merge `e60b388edb478f66f70d36e9853f90b43fca7686`）、`P2-EOL-FREEZE-001`（`web/.gitattributes` 将冻结产物行尾钉死 LF，修掉 Windows 检出导致的无漂移测试假红，merge `362710de8a1e397aba68d4a3aad7aff4b8739e20`）和 `P2-SANITIZE-LEAK-FIX-001`（脱敏器不再把敏感值写入产物或错误回显；检测规则集未削减，merge `01fc6c459e7a8df4ec410ab0273f1fa08e3cd057`）。当前 `phase0/main` 基线 = `01fc6c459e7a8df4ec410ab0273f1fa08e3cd057`；欠债仍仅 `P2-CONFIRM-RESUME-001`（尚未触发），见 `docs/phase1/TASK_INDEX.md` §5.1；下一棒 = `P2-RUNTIME-RESPONSE-CONTRACT-001`（把既有 `ResponseEnvelope` 声明进 Runtime OpenAPI，供生成客户端使用）。
 
 每个 write lane 只承载一个明确 Goal、一个 Scope 和一个隔离 worktree/branch；新 scope 开新 lane。历史 V4 prompt/Task Record 保持原意，新工作以当前 Goal 和本文件为准。
 
@@ -47,7 +47,7 @@ infra/docker/       Docker Compose 模板
 > **全量测试需要固定测试库在跑**：Docker Desktop 启动，测试库 healthy 于 `127.0.0.1:15432`，
 > 且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
 > 缺 `DATABASE_URL` 时 DB 测试**失败而不是跳过**——静默跳过会被读成通过。
-> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1344 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P2-READ-ADAPTER-001 / merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`）。
+> 确实要跳过就显式 `--ignore=`，让省略在命令里看得见。基线：**1351 passed, 0 skipped, 0 failed**（含 25 个 Golden 参数化用例，截至 P2-SANITIZE-LEAK-FIX-001 / merge `01fc6c459e7a8df4ec410ab0273f1fa08e3cd057`）。
 
 ```powershell
 uv run pytest
