@@ -20,6 +20,7 @@ from app.ports.auth import (
     PrincipalOrgContext,
 )
 from app.ports.response_envelope import ResponseEnvelope
+from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
 
 
 class SuccessfulAuthentication:
@@ -108,6 +109,7 @@ def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
             session_tokens=tokens,
             session_binder=_binder().bind,
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
@@ -116,6 +118,7 @@ def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
 
     response = client.post(
         "/api/v1/auth/login",
+        headers=TEST_CSRF_HEADERS,
         json={"loginid": synthetic_loginid, "userpassword": synthetic_password},
     )
 
@@ -138,6 +141,7 @@ def test_login_failure_is_generic_and_sets_no_cookie() -> None:
         session_tokens=_token_port(),
         session_binder=_binder().bind,
         session_cookie_ttl_seconds=3600,
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
     )
     contexts = _capture_http_exception_contexts(application)
     client = TestClient(
@@ -147,6 +151,7 @@ def test_login_failure_is_generic_and_sets_no_cookie() -> None:
 
     response = client.post(
         "/api/v1/auth/login",
+        headers=TEST_CSRF_HEADERS,
         json={"loginid": "synthetic-login", "userpassword": "synthetic-secret"},
     )
 
@@ -170,6 +175,7 @@ def test_malformed_login_body_is_generic_401_without_credential_echo(
         session_tokens=_token_port(),
         session_binder=_binder().bind,
         session_cookie_ttl_seconds=3600,
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
     )
     contexts = _capture_http_exception_contexts(application)
     client = TestClient(
@@ -182,6 +188,7 @@ def test_malformed_login_body_is_generic_401_without_credential_echo(
 
     response = client.post(
         "/api/v1/auth/login",
+        headers=TEST_CSRF_HEADERS,
         json={
             "loginid": {"raw": loginid_marker},
             "userpassword": {"raw": password_marker},
@@ -237,7 +244,9 @@ def test_login_openapi_contract_declares_login_credential_body() -> None:
 
 
 def test_missing_token_wins_over_invalid_runtime_body_and_role_header() -> None:
-    response = TestClient(create_app()).post(
+    response = TestClient(
+        create_app(csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS)
+    ).post(
         "/api/v1/runtime/handle",
         headers={"X-EternalAI-Roles": "admin"},
         json={"unexpected": "body"},
@@ -256,6 +265,7 @@ def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:
         session_tokens=tokens,
         session_binder=binder.bind,
         session_cookie_ttl_seconds=3600,
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
     )
     client = TestClient(app, base_url="https://testserver")
     body = {
@@ -268,6 +278,7 @@ def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:
     token_b = tokens.issue(_principal("b"))
     response_b = client.post(
         "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
         cookies={"eternalai_session": token_b},
         json=body,
     )
@@ -276,6 +287,7 @@ def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:
     token_a = tokens.issue(_principal("a"))
     response_a = client.post(
         "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
         cookies={"eternalai_session": token_a},
         json={**body, "session_id": bound_b},
     )

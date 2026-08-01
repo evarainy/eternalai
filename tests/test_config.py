@@ -20,6 +20,9 @@ def _environment() -> dict[str, str]:
         "OA_BASE_URL": "https://oa.invalid",
         "OA_CREDENTIAL_TTL_S": "3600",
         "SESSION_COOKIE_TTL_S": "1800",
+        "CSRF_ALLOWED_ORIGINS": (
+            "https://app.example.gov.cn,http://127.0.0.1:5173"
+        ),
         "PHASE0_MOCK_MODE": "true",
         "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": _TEST_KEY_B64,
         "ETERNALAI_IDENTITY_HMAC_KEY_B64": _TEST_KEY_B64,
@@ -41,6 +44,9 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.llm_top_k == 20
     assert settings.llm_enable_thinking is False
     assert settings.health_timeout_seconds == 5
+    assert settings.csrf_allowed_origins == frozenset(
+        {"https://app.example.gov.cn", "http://127.0.0.1:5173"}
+    )
     assert settings.credential_encryption_key == _TEST_KEY
     assert settings.oa_read_adapter_mode == "mock"
     assert settings.oa_read_contract_pack_dir is None
@@ -150,6 +156,42 @@ def test_production_settings_require_every_secret_without_echoing_values() -> No
         RuntimeError,
         match="ETERNALAI_SESSION_SIGNING_KEY_B64 is required",
     ):
+        ProductionSettings.from_environment(environment)
+
+
+def test_production_settings_require_csrf_allowed_origins() -> None:
+    environment = _environment()
+    environment.pop("CSRF_ALLOWED_ORIGINS")
+
+    with pytest.raises(RuntimeError, match="CSRF_ALLOWED_ORIGINS is required"):
+        ProductionSettings.from_environment(environment)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "   ",
+        "https://app.example.gov.cn,",
+        "https://app.example.gov.cn, https://admin.example.gov.cn",
+        "https://app.example.gov.cn,https://app.example.gov.cn",
+        "https://*.example.gov.cn",
+        "ftp://app.example.gov.cn",
+        "https://user:password@app.example.gov.cn",
+        "https://app.example.gov.cn/admin",
+        "https://app.example.gov.cn?mode=admin",
+        "https://app.example.gov.cn#admin",
+        "https://app.example.gov.cn/",
+        "HTTPS://app.example.gov.cn",
+        "https://app.example.gov.cn:443",
+        "https://999.999.999.999",
+    ],
+)
+def test_production_settings_reject_noncanonical_csrf_origins(value: str) -> None:
+    environment = _environment()
+    environment["CSRF_ALLOWED_ORIGINS"] = value
+
+    with pytest.raises(RuntimeError, match="CSRF_ALLOWED_ORIGINS"):
         ProductionSettings.from_environment(environment)
 
 

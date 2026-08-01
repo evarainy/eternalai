@@ -13,6 +13,8 @@ from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
 from app.ports.response_envelope import ResponseEnvelope
 from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -114,12 +116,14 @@ def test_formal_app_runtime_route_fails_closed_without_provider() -> None:
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
     client.cookies.update(auth_cookies())
     response = client.post(
         "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
         json=_valid_body(),
     )
 
@@ -142,12 +146,14 @@ def test_formal_app_runtime_route_validates_before_unavailable() -> None:
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
     client.cookies.update(auth_cookies())
     response = client.post(
         "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
         json=body,
     )
 
@@ -158,7 +164,9 @@ def test_missing_principal_precedes_body_validation() -> None:
     body = _valid_body()
     body["extra_field"] = "not allowed"
 
-    response = TestClient(create_app()).post(
+    response = TestClient(
+        create_app(csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS)
+    ).post(
         "/api/v1/runtime/handle",
         json=body,
     )

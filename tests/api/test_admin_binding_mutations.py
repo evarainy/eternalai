@@ -21,7 +21,13 @@ from app.ports.identity_mapping import (
 )
 from app.ports.task_store import TaskStorePort
 from app.ports.trace import TraceEvent, TracePort, TraceQueryPort
-from tests.auth_fakes import StaticSessionTokens, auth_cookies, make_session_binder
+from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
+    StaticSessionTokens,
+    auth_cookies,
+    make_session_binder,
+)
 
 TARGET_AI_USER_ID = "usr_v1_" + ("c" * 43)
 BINDING_ID = f"oa-session-v1:{TARGET_AI_USER_ID}"
@@ -100,6 +106,7 @@ def _client(
             session_tokens=StaticSessionTokens(roles=roles),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
@@ -119,6 +126,7 @@ def test_mutation_endpoints_return_the_fixed_response_contract(
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/{operation}",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -150,6 +158,7 @@ def test_non_admin_cross_user_mutation_is_403_and_never_calls_the_port(
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/{operation}",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -169,6 +178,7 @@ def test_missing_binding_returns_404_without_a_success_body() -> None:
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/revoke",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -188,6 +198,7 @@ def test_storage_failure_returns_safe_503() -> None:
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/reset",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -209,12 +220,14 @@ def test_missing_mutation_composition_returns_distinct_503() -> None:
             session_tokens=StaticSessionTokens(),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/revoke",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -246,12 +259,14 @@ def test_plain_registry_service_type_mismatch_returns_distinct_503() -> None:
             session_tokens=StaticSessionTokens(),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/reset",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -282,6 +297,7 @@ def test_mutation_routes_do_not_accept_a_client_supplied_actor_payload() -> None
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/revoke",
+        headers=TEST_CSRF_HEADERS,
         json=untrusted_payload,
         cookies=ADMIN_COOKIES,
     )
