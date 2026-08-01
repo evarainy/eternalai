@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.convertors import (
+    FloatConvertor,
+    IntegerConvertor,
+    PathConvertor,
+    StringConvertor,
+    UUIDConvertor,
+)
 
 from app.admin.registry import (
     AdminBindingMutationResponse,
@@ -36,6 +45,9 @@ _CSRF_REJECTION = {
 _SAME_SITE_DIFFERENT_ORIGIN = "https://evil.example.gov.cn"
 _CROSS_SITE_ORIGIN = "https://attacker.invalid"
 _BINDING_ID = "synthetic-binding"
+_UNSAFE_METHODS = frozenset({"DELETE", "PATCH", "POST", "PUT"})
+_INTENTIONAL_CSRF_EXEMPT_ROUTES: frozenset[tuple[str, str]] = frozenset()
+_ROUTE_PARAMETER = re.compile(r"\{(?P<name>[^}:]+)(?::[^}]+)?\}")
 
 
 class RecordingRuntime:
@@ -178,6 +190,80 @@ def _registry_body() -> dict[str, Any]:
     }
 
 
+def _route_parameter_sample(convertor: Any) -> str:
+    if isinstance(convertor, (StringConvertor, PathConvertor)):
+        value: Any = "csrf-probe"
+    elif isinstance(convertor, IntegerConvertor):
+        value = 1
+    elif isinstance(convertor, FloatConvertor):
+        value = 1.0
+    elif isinstance(convertor, UUIDConvertor):
+        value = UUID(int=1)
+    else:
+        raise AssertionError(
+            f"Unsupported route convertor in CSRF guard: {type(convertor).__name__}"
+        )
+    return convertor.to_string(value)
+
+
+def _concrete_route_path(path: str, convertors: dict[str, Any]) -> str:
+    def replace_parameter(match: re.Match[str]) -> str:
+        name = match.group("name")
+        convertor = convertors.get(name)
+        if convertor is None:
+            raise AssertionError(f"Missing route convertor for CSRF guard parameter: {name}")
+        return _route_parameter_sample(convertor)
+
+    return _ROUTE_PARAMETER.sub(replace_parameter, path)
+
+
+def _join_route_paths(prefix: str, path: str) -> str:
+    if not prefix:
+        return path
+    if not path:
+        return prefix
+    return f"{prefix.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _unsafe_application_routes(
+    routes: list[Any],
+    *,
+    template_prefix: str = "",
+    concrete_prefix: str = "",
+) -> list[tuple[str, str, str]]:
+    unsafe_routes: list[tuple[str, str, str]] = []
+    for route in routes:
+        path = getattr(route, "path", "")
+        if not isinstance(path, str):
+            raise AssertionError("Application route has a non-string path")
+        convertors = getattr(route, "param_convertors", {})
+        if not isinstance(convertors, dict):
+            raise AssertionError(f"Application route has invalid convertors: {path}")
+        template_path = _join_route_paths(template_prefix, path)
+        concrete_path = _join_route_paths(
+            concrete_prefix,
+            _concrete_route_path(path, convertors),
+        )
+
+        nested_routes = getattr(route, "routes", None)
+        if nested_routes is not None:
+            unsafe_routes.extend(
+                _unsafe_application_routes(
+                    list(nested_routes),
+                    template_prefix=template_path,
+                    concrete_prefix=concrete_path,
+                )
+            )
+
+        methods = getattr(route, "methods", None)
+        if methods is None:
+            continue
+        for method in methods:
+            if method in _UNSAFE_METHODS:
+                unsafe_routes.append((method, template_path, concrete_path))
+    return sorted(unsafe_routes)
+
+
 def test_same_origin_custom_header_allows_cookie_authenticated_runtime() -> None:
     runtime = RecordingRuntime()
 
@@ -300,6 +386,24 @@ def test_admin_get_without_csrf_headers_keeps_read_behavior() -> None:
     assert response.status_code == 200
     assert response.json() == {"items": []}
     assert admin_service.calls == ["list"]
+
+
+def test_every_unsafe_application_route_enforces_csrf() -> None:
+    client = _client()
+    unsafe_routes = _unsafe_application_routes(list(client.app.routes))
+    discovered_routes = {(method, path) for method, path, _ in unsafe_routes}
+
+    assert unsafe_routes
+    assert not (_INTENTIONAL_CSRF_EXEMPT_ROUTES - discovered_routes)
+    for method, path, concrete_path in unsafe_routes:
+        if (method, path) in _INTENTIONAL_CSRF_EXEMPT_ROUTES:
+            continue
+        response = client.request(method, concrete_path, follow_redirects=False)
+        assert response.status_code == 403, (
+            f"{method} {path} did not reject missing CSRF validation: "
+            f"HTTP {response.status_code}"
+        )
+        assert response.json() == _CSRF_REJECTION
 
 
 def test_login_without_csrf_headers_is_rejected_before_authentication() -> None:
