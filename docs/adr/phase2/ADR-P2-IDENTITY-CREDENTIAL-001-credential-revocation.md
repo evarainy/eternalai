@@ -211,6 +211,7 @@ advisory lock、DB lease 或请求注册表。守卫测试只锁定撤销提交�
 
 撤销绑定不等于让用户从 OA 登出；OA 侧断会话属于 OA 管理员动作，不在本系统范围。
 用户在 OA 浏览器中的 Session 是否仍可用，不属于 EternalAI binding 撤销的保证。
+本棒的撤销语义是"不能再发起新调用 + 已存凭证不能再用"，不包含账号封禁；永久封禁属于 OA 侧或独立 deny-list，不应压进 revoked_at 这一列。
 
 ### 3.7 Migration and downgrade
 
