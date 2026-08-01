@@ -13,6 +13,8 @@ AdminAction: TypeAlias = Literal[
     "tasks_list",
     "task_events_list",
     "bindings_list",
+    "bindings_revoke",
+    "bindings_reset",
     "traces_list",
 ]
 
@@ -25,6 +27,8 @@ ADMIN_POLICY_CAPABILITY_BY_ACTION: dict[AdminAction, str] = {
     "tasks_list": "admin_tasks_list",
     "task_events_list": "admin_task_events_list",
     "bindings_list": "admin_bindings_list",
+    "bindings_revoke": "admin_bindings_revoke",
+    "bindings_reset": "admin_bindings_reset",
     "traces_list": "admin_traces_list",
 }
 

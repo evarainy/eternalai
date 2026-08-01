@@ -6,6 +6,7 @@ from app.ports.capability_gateway import RequestOrgContext
 from app.ports.identity_mapping import (
     ExecutionIdentity,
     IdentityCheckResult,
+    IdentityMappingMutationResult,
     TargetSystem,
 )
 
@@ -46,6 +47,18 @@ class UnconfiguredIdentityMapping:
         device_domain_id: str | None = None,
     ) -> list[IdentityCheckResult]:
         return []
+
+    async def revoke_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return None
+
+    async def reset_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None:
+        return None
 
 
 __all__ = ("UnconfiguredIdentityMapping",)
