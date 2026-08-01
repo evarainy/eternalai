@@ -10,7 +10,11 @@ from functools import partial
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
-from app.admin.registry import AdminRegistryService
+from app.admin.registry import (
+    AdminBindingMutationService,
+    AdminRegistryService,
+    AdminRegistryServiceWithBindingMutations,
+)
 from app.api.v1.health import HealthCheck
 from app.config import ProductionSettings
 from app.db.health import check_database_health
@@ -211,15 +215,22 @@ def build_admin_registry_service(
     trace_query: TraceQueryPort,
 ) -> AdminRegistryService:
     """Wire Admin Lite with the closed management-action allowlist."""
-    return AdminRegistryService(
+    policy_guard = MinimalPolicyGuard(
+        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+    )
+    binding_mutations = AdminBindingMutationService(
+        identity_mapping=identity_mapping,
+        policy_guard=policy_guard,
+        trace_port=trace_port,
+    )
+    return AdminRegistryServiceWithBindingMutations(
         capability_registry=capability_registry,
         task_store=task_store,
         identity_mapping=identity_mapping,
-        policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
-        ),
+        policy_guard=policy_guard,
         trace_port=trace_port,
         trace_query=trace_query,
+        binding_mutations=binding_mutations,
     )
 
 

@@ -15,6 +15,8 @@ from app.ports.identity_mapping import (
     ExecutionIdentity,
     IdentityBindStatus,
     IdentityCheckResult,
+    IdentityMappingMutationError,
+    IdentityMappingMutationResult,
     IdentityMappingPort,
     TargetSystem,
 )
@@ -31,6 +33,12 @@ EXPECTED_IDENTITY_CHECK_RESULT_FIELDS = {
     "account_set_id",
     "device_domain_id",
     "reason_code",
+}
+
+EXPECTED_IDENTITY_MAPPING_MUTATION_RESULT_FIELDS = {
+    "mapping",
+    "previous_bind_status",
+    "changed",
 }
 
 EXPECTED_IDENTITY_BIND_STATUS_VALUES = (
@@ -171,6 +179,57 @@ def test_identity_check_result_rejects_extra_fields() -> None:
     assert "Extra inputs are not permitted" in str(exc_info.value)
 
 
+def test_identity_mapping_mutation_result_matches_approved_contract() -> None:
+    mapping = IdentityCheckResult(
+        bind_status="revoked",
+        binding_id="oa-session-v1:usr_v1_" + "a" * 43,
+        target_system="oa",
+        execution_identity="user_delegated",
+        reason_code="identity_revoked",
+    )
+
+    result = IdentityMappingMutationResult(
+        mapping=mapping,
+        previous_bind_status="active",
+        changed=True,
+    )
+
+    assert (
+        set(IdentityMappingMutationResult.model_fields)
+        == EXPECTED_IDENTITY_MAPPING_MUTATION_RESULT_FIELDS
+    )
+    assert result.mapping == mapping
+    assert result.previous_bind_status == "active"
+    assert result.changed is True
+
+
+def test_identity_mapping_mutation_result_rejects_invalid_or_extra_fields() -> None:
+    mapping = make_identity_check_result(bind_status="revoked")
+
+    with pytest.raises(ValidationError):
+        IdentityMappingMutationResult(
+            mapping=mapping,
+            previous_bind_status="pending_review",
+            changed=True,
+        )
+    with pytest.raises(ValidationError):
+        IdentityMappingMutationResult(
+            mapping=mapping,
+            previous_bind_status="active",
+            changed=True,
+            credential="forbidden",
+        )
+
+
+def test_identity_mapping_mutation_error_is_a_safe_runtime_error_type() -> None:
+    error = IdentityMappingMutationError("identity mapping mutation failed")
+
+    assert isinstance(error, RuntimeError)
+    assert str(error) == "identity mapping mutation failed"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
 def test_identity_check_result_requires_core_fields() -> None:
     with pytest.raises(ValidationError) as exc_info:
         IdentityCheckResult()
@@ -202,6 +261,8 @@ def test_identity_mapping_port_protocol_defines_expected_methods() -> None:
         "resolve_execution_identity",
         "get_mapping",
         "list_mappings",
+        "revoke_mapping",
+        "reset_mapping",
     }
 
 
@@ -264,6 +325,18 @@ def test_list_mappings_signature_supports_scope_filters() -> None:
     assert hints["return"] == list[IdentityCheckResult]
 
 
+@pytest.mark.parametrize("method_name", ("revoke_mapping", "reset_mapping"))
+def test_identity_mapping_mutation_signature_is_minimal(method_name: str) -> None:
+    method = getattr(IdentityMappingPort, method_name)
+    hints = get_type_hints(method)
+    signature = inspect.signature(method)
+
+    assert list(signature.parameters) == ["self", "binding_id"]
+    assert hints["binding_id"] is str
+    assert hints["return"] == IdentityMappingMutationResult | None
+    assert inspect.iscoroutinefunction(method)
+
+
 def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() -> None:
     expected = IdentityCheckResult(
         bind_status="active",
@@ -315,10 +388,36 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
             assert device_domain_id is None
             return [expected]
 
-    async def exercise_port(port: IdentityMappingPort) -> tuple[
+        async def revoke_mapping(
+            self,
+            binding_id: str,
+        ) -> IdentityMappingMutationResult | None:
+            assert binding_id == "oa-session-v1:usr_v1_" + "a" * 43
+            return IdentityMappingMutationResult(
+                mapping=expected.model_copy(update={"bind_status": "revoked"}),
+                previous_bind_status="active",
+                changed=True,
+            )
+
+        async def reset_mapping(
+            self,
+            binding_id: str,
+        ) -> IdentityMappingMutationResult | None:
+            assert binding_id == "oa-session-v1:usr_v1_" + "a" * 43
+            return IdentityMappingMutationResult(
+                mapping=expected.model_copy(update={"bind_status": "revoked"}),
+                previous_bind_status="revoked",
+                changed=False,
+            )
+
+    async def exercise_port(
+        port: IdentityMappingPort,
+    ) -> tuple[
         IdentityCheckResult,
         IdentityCheckResult | None,
         list[IdentityCheckResult],
+        IdentityMappingMutationResult | None,
+        IdentityMappingMutationResult | None,
     ]:
         request_context = RequestOrgContext(request_id="test-req-1")
         resolved = await port.resolve_execution_identity(
@@ -329,9 +428,12 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
         )
         mapping = await port.get_mapping(ai_user_id="ai-user-1", target_system="oa")
         mappings = await port.list_mappings(ai_user_id="ai-user-1", target_system="oa")
-        return resolved, mapping, mappings
+        binding_id = "oa-session-v1:usr_v1_" + "a" * 43
+        revoked = await port.revoke_mapping(binding_id)
+        reset = await port.reset_mapping(binding_id)
+        return resolved, mapping, mappings, revoked, reset
 
-    resolved_result, mapping_result, mapping_results = asyncio.run(
+    resolved_result, mapping_result, mapping_results, revoked, reset = asyncio.run(
         exercise_port(MockIdentityMappingPort())
     )
 
@@ -339,6 +441,8 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
     assert resolved_result == expected
     assert mapping_result == expected
     assert mapping_results == [expected]
+    assert revoked is not None and revoked.changed is True
+    assert reset is not None and reset.changed is False
 
 
 def test_identity_mapping_source_imports_no_storage_or_provider_dependencies() -> None:

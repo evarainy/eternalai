@@ -37,6 +37,18 @@ class IdentityCheckResult(BaseModel):
     reason_code: str | None = None
 
 
+class IdentityMappingMutationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mapping: IdentityCheckResult
+    previous_bind_status: IdentityBindStatus
+    changed: bool
+
+
+class IdentityMappingMutationError(RuntimeError):
+    """Report a safe identity-mapping mutation failure."""
+
+
 class IdentityMappingPort(Protocol):
     async def resolve_execution_identity(
         self,
@@ -63,3 +75,13 @@ class IdentityMappingPort(Protocol):
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
     ) -> list[IdentityCheckResult]: ...
+
+    async def revoke_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None: ...
+
+    async def reset_mapping(
+        self,
+        binding_id: str,
+    ) -> IdentityMappingMutationResult | None: ...

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, cast, get_args
+from typing import Any, Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +28,14 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
-from app.ports.identity_mapping import IdentityMappingPort, TargetSystem
+from app.ports.identity_mapping import (
+    IdentityBindStatus,
+    IdentityCheckResult,
+    IdentityMappingMutationError,
+    IdentityMappingMutationResult,
+    IdentityMappingPort,
+    TargetSystem,
+)
 from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyGuardPort
 from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskStorePort
 from app.ports.trace import (
@@ -552,19 +560,349 @@ class AdminRegistryService:
         )
 
 
+class AdminBindingNotFoundError(RuntimeError):
+    """Raised after an authorized binding mutation cannot resolve its target."""
+
+
+class AdminBindingMutationUnavailableError(RuntimeError):
+    """Raised without a storage exception chain when binding mutation fails."""
+
+
+class AdminBindingMutationView(BaseModel):
+    """Credential-safe binding projection returned by mutation endpoints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    binding_id: str
+    target_system: Literal["oa"]
+    execution_identity: Literal["user_delegated"]
+    bind_status: Literal["revoked"]
+    binding_scope: None
+    account_set_id: None
+    device_domain_id: None
+    reason_code: Literal["identity_revoked"]
+
+    @classmethod
+    def from_result(cls, result: IdentityCheckResult) -> AdminBindingMutationView:
+        if result.binding_id is None:
+            raise ValueError("Binding mutation result is missing its safe reference.")
+        return cls.model_validate(
+            result.model_dump(
+                include={
+                    "binding_id",
+                    "target_system",
+                    "execution_identity",
+                    "bind_status",
+                    "binding_scope",
+                    "account_set_id",
+                    "device_domain_id",
+                    "reason_code",
+                }
+            )
+        )
+
+
+class AdminBindingMutationResponse(BaseModel):
+    """Fixed response contract for revoke and reset operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["revoke", "reset"]
+    binding: AdminBindingMutationView
+    changed: bool
+    next_action: Literal["none", "reauthenticate"]
+
+
+class AdminBindingMutationService:
+    """Role-guarded binding mutations isolated from existing Registry behavior."""
+
+    def __init__(
+        self,
+        *,
+        identity_mapping: IdentityMappingPort,
+        policy_guard: PolicyGuardPort,
+        trace_port: TracePort,
+    ) -> None:
+        self._identity_mapping = identity_mapping
+        self._policy_guard = policy_guard
+        self._trace_port = trace_port
+
+    async def revoke_binding(
+        self,
+        binding_id: str,
+        context: AdminRequestContext,
+    ) -> AdminBindingMutationResponse:
+        return await self._mutate("revoke", binding_id, context)
+
+    async def reset_binding(
+        self,
+        binding_id: str,
+        context: AdminRequestContext,
+    ) -> AdminBindingMutationResponse:
+        return await self._mutate("reset", binding_id, context)
+
+    async def _mutate(
+        self,
+        operation: Literal["revoke", "reset"],
+        binding_id: str,
+        context: AdminRequestContext,
+    ) -> AdminBindingMutationResponse:
+        action = _binding_admin_action(operation)
+        next_action = _binding_next_action(operation)
+        await self._authorize(
+            action,
+            binding_id=binding_id,
+            next_action=next_action,
+            context=context,
+        )
+
+        mutation_result: IdentityMappingMutationResult | None = None
+        mutation_failed = False
+        try:
+            if operation == "revoke":
+                mutation_result = await self._identity_mapping.revoke_mapping(binding_id)
+            else:
+                mutation_result = await self._identity_mapping.reset_mapping(binding_id)
+        except IdentityMappingMutationError:
+            mutation_failed = True
+
+        if mutation_failed:
+            await self._record(
+                action=action,
+                context=context,
+                status="failed",
+                decision="allow",
+                binding_id=binding_id,
+                next_action=next_action,
+                reason_code="binding_mutation_unavailable",
+            )
+            raise AdminBindingMutationUnavailableError(
+                "Binding mutation provider is unavailable."
+            ) from None
+
+        if mutation_result is None:
+            await self._record(
+                action=action,
+                context=context,
+                status="failed",
+                decision="allow",
+                binding_id=binding_id,
+                next_action=next_action,
+                reason_code="binding_not_found",
+            )
+            raise AdminBindingNotFoundError("Binding was not found.") from None
+
+        if not _valid_revoked_mapping(mutation_result.mapping):
+            await self._record(
+                action=action,
+                context=context,
+                status="failed",
+                decision="allow",
+                binding_id=binding_id,
+                next_action=next_action,
+                reason_code="binding_mutation_unavailable",
+            )
+            raise AdminBindingMutationUnavailableError(
+                "Binding mutation provider returned an invalid result."
+            ) from None
+
+        response = AdminBindingMutationResponse(
+            action=operation,
+            binding=AdminBindingMutationView.from_result(mutation_result.mapping),
+            changed=mutation_result.changed,
+            next_action=next_action,
+        )
+        await self._record(
+            action=action,
+            context=context,
+            status="ok",
+            decision="allow",
+            binding_id=response.binding.binding_id,
+            previous_bind_status=mutation_result.previous_bind_status,
+            after_bind_status=response.binding.bind_status,
+            changed=response.changed,
+            next_action=response.next_action,
+        )
+        return response
+
+    async def _authorize(
+        self,
+        action: AdminAction,
+        *,
+        binding_id: str,
+        next_action: Literal["none", "reauthenticate"],
+        context: AdminRequestContext,
+    ) -> None:
+        decision = await self._policy_guard.decide(
+            ai_user_id=context.ai_user_id,
+            capability_id=ADMIN_POLICY_CAPABILITY_BY_ACTION[action],
+            arguments={},
+            request_context=ManagementPlanePolicyContext(
+                request_id=context.trace_id,
+                roles=list(context.roles),
+            ),
+        )
+        if decision.decision == "allow":
+            return
+        await self._record(
+            action=action,
+            context=context,
+            status="blocked",
+            decision=decision.decision,
+            binding_id=binding_id,
+            next_action=next_action,
+            reason_code=decision.reason_code or "policy_denied",
+        )
+        raise AdminRoleNotAllowedError(decision.reason_code or "policy_denied")
+
+    async def _record(
+        self,
+        *,
+        action: AdminAction,
+        context: AdminRequestContext,
+        status: TraceEventStatus,
+        decision: str,
+        binding_id: str | None = None,
+        previous_bind_status: IdentityBindStatus | None = None,
+        after_bind_status: IdentityBindStatus | None = None,
+        changed: bool | None = None,
+        next_action: Literal["none", "reauthenticate"] | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        attributes: dict[str, Any] = {
+            "action": action,
+            "policy_capability_id": ADMIN_POLICY_CAPABILITY_BY_ACTION[action],
+            "authorization_decision": decision,
+            "role_claim_source": (
+                "authenticated_principal"
+                if context.principal_authenticated
+                else "unverified_context"
+            ),
+            "role_claim_authenticated": context.principal_authenticated,
+        }
+        safe_binding_id = _safe_binding_reference(binding_id)
+        if safe_binding_id is not None:
+            attributes["binding_id"] = safe_binding_id
+        if previous_bind_status is not None:
+            attributes["previous_bind_status"] = previous_bind_status
+        if after_bind_status is not None:
+            attributes["after_bind_status"] = after_bind_status
+        if changed is not None:
+            attributes["changed"] = changed
+        if next_action is not None:
+            attributes["next_action"] = next_action
+        if reason_code is not None:
+            attributes["reason_code"] = reason_code
+        await self._trace_port.record_event(
+            TraceEvent(
+                trace_id=context.trace_id,
+                task_id=f"admin-request:{context.trace_id}",
+                session_id=context.session_id,
+                event_type="admin_action",
+                status=status,
+                attributes=attributes,
+            )
+        )
+
+
+class AdminRegistryServiceWithBindingMutations(AdminRegistryService):
+    """Admin Registry composition that adds only the approved binding mutations."""
+
+    def __init__(
+        self,
+        *,
+        capability_registry: CapabilityRegistryPort,
+        task_store: TaskStorePort,
+        identity_mapping: IdentityMappingPort,
+        policy_guard: PolicyGuardPort,
+        trace_port: TracePort,
+        trace_query: TraceQueryPort,
+        binding_mutations: AdminBindingMutationService,
+    ) -> None:
+        super().__init__(
+            capability_registry=capability_registry,
+            task_store=task_store,
+            identity_mapping=identity_mapping,
+            policy_guard=policy_guard,
+            trace_port=trace_port,
+            trace_query=trace_query,
+        )
+        self._binding_mutations = binding_mutations
+
+    async def revoke_binding(
+        self,
+        binding_id: str,
+        context: AdminRequestContext,
+    ) -> AdminBindingMutationResponse:
+        return await self._binding_mutations.revoke_binding(binding_id, context)
+
+    async def reset_binding(
+        self,
+        binding_id: str,
+        context: AdminRequestContext,
+    ) -> AdminBindingMutationResponse:
+        return await self._binding_mutations.reset_binding(binding_id, context)
+
+
 __all__ = (
+    "AdminBindingMutationResponse",
+    "AdminBindingMutationService",
+    "AdminBindingMutationUnavailableError",
+    "AdminBindingMutationView",
+    "AdminBindingNotFoundError",
     "AdminBindingQueryInvalidError",
     "AdminCapabilityCreate",
     "AdminCapabilityNotFoundError",
     "AdminCapabilityView",
     "AdminInvalidStatusTransitionError",
     "AdminRegistryService",
+    "AdminRegistryServiceWithBindingMutations",
     "AdminRequestContext",
     "AdminRoleNotAllowedError",
     "AdminTaskFilterRequiredError",
     "AdminTaskNotFoundError",
     "AdminTraceFilterRequiredError",
 )
+
+
+_OA_BINDING_ID_PATTERN = re.compile(
+    r"^oa-session-v1:usr_v1_[A-Za-z0-9_-]{43}$"
+)
+
+
+def _binding_admin_action(
+    operation: Literal["revoke", "reset"],
+) -> AdminAction:
+    if operation == "revoke":
+        return "bindings_revoke"
+    return "bindings_reset"
+
+
+def _binding_next_action(
+    operation: Literal["revoke", "reset"],
+) -> Literal["none", "reauthenticate"]:
+    if operation == "revoke":
+        return "none"
+    return "reauthenticate"
+
+
+def _safe_binding_reference(binding_id: str | None) -> str | None:
+    if binding_id is None or _OA_BINDING_ID_PATTERN.fullmatch(binding_id) is None:
+        return None
+    return binding_id
+
+
+def _valid_revoked_mapping(mapping: IdentityCheckResult) -> bool:
+    return (
+        _safe_binding_reference(mapping.binding_id) is not None
+        and mapping.target_system == "oa"
+        and mapping.execution_identity == "user_delegated"
+        and mapping.bind_status == "revoked"
+        and mapping.binding_scope is None
+        and mapping.account_set_id is None
+        and mapping.device_domain_id is None
+        and mapping.reason_code == "identity_revoked"
+    )
 
 
 def _non_blank_filter(value: str | None) -> str | None:
