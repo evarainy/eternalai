@@ -49,6 +49,158 @@
         "title": "HandleRequest",
         "type": "object"
       },
+      "ResponseEnvelope": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "fallback_text": {
+            "title": "Fallback Text",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "response_id": {
+            "title": "Response Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "phase0.sdui.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "blocked",
+              "waiting_user",
+              "failed",
+              "no_capability_found"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "trace_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Summary"
+          },
+          "ui": {
+            "$ref": "#/components/schemas/UIComponent"
+          }
+        },
+        "required": [
+          "response_id",
+          "task_id",
+          "session_id",
+          "status",
+          "message",
+          "fallback_text",
+          "ui",
+          "trace_id"
+        ],
+        "title": "ResponseEnvelope",
+        "type": "object"
+      },
+      "UIComponent": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "confirm",
+                  "bind_required",
+                  "clarify_scope",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "component_type": {
+            "enum": [
+              "none",
+              "confirm_card",
+              "operator_handback_card",
+              "binding_required_card"
+            ],
+            "title": "Component Type",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "target_system": {
+            "anyOf": [
+              {
+                "enum": [
+                  "oa",
+                  "u8",
+                  "hikvision_ivms"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target System"
+          }
+        },
+        "required": [
+          "component_type"
+        ],
+        "title": "UIComponent",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -115,9 +267,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Handle Api V1 Runtime Handle Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/ResponseEnvelope"
                 }
               }
             },

@@ -30,11 +30,11 @@ def make_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    @router.post("/handle")
+    @router.post("/handle", response_model=ResponseEnvelope)
     async def handle(
         body: HandleRequest,
         principal: Principal = Depends(require_principal),
-    ) -> dict[str, Any]:
+    ) -> ResponseEnvelope:
         if session_binder is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -69,6 +69,6 @@ def make_router(
             message=body.message,
             client_capabilities=body.client_capabilities,
         )
-        return envelope.model_dump()
+        return envelope
 
     return router
