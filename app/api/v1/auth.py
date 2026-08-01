@@ -6,9 +6,10 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import NoReturn
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
+from app.api.v1.csrf import CSRFDependency
 from app.ports.auth import (
     AuthenticationPort,
     LoginCredential,
@@ -66,6 +67,7 @@ def make_router(
     authentication: AuthenticationPort | None,
     session_tokens: SessionTokenPort | None,
     *,
+    require_csrf: CSRFDependency,
     session_cookie_ttl_seconds: int | None,
 ) -> APIRouter:
     router = APIRouter()
@@ -74,6 +76,7 @@ def make_router(
         "/login",
         response_model=LoginResponse,
         openapi_extra=_LOGIN_REQUEST_BODY,
+        dependencies=[Depends(require_csrf)],
     )
     async def login(
         request: Request,

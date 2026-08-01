@@ -49,6 +49,8 @@ from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -221,12 +223,15 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
     client.cookies.update(auth_cookies())
     response = client.post(
-        "/api/v1/runtime/handle", json=_valid_body()
+        "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
+        json=_valid_body(),
     )
 
     assert response.status_code == 200

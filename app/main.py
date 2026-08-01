@@ -10,6 +10,10 @@ from app.api.v1.auth import (
 from app.api.v1.auth import (
     make_router as make_auth_router,
 )
+from app.api.v1.csrf import (
+    make_csrf_protected_principal,
+    make_require_csrf,
+)
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.runtime import make_router as make_runtime_router
@@ -22,6 +26,8 @@ from app.ports.auth import (
 )
 from app.ports.runtime import RuntimePort
 
+_EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
+
 
 def create_app(
     runtime: RuntimePort | None = None,
@@ -31,11 +37,17 @@ def create_app(
     session_tokens: SessionTokenPort | None = None,
     session_binder: Callable[[Principal, str], str] | None = None,
     session_cookie_ttl_seconds: int | None = None,
+    csrf_allowed_origins: frozenset[str] = _EMPTY_CSRF_ALLOWED_ORIGINS,
     health_checks: dict[str, HealthCheck] | None = None,
     health_timeout_seconds: float = 5.0,
 ) -> FastAPI:
     application = FastAPI(title="EternalAI", version="0.1.0")
     require_principal = make_require_principal(session_tokens)
+    require_csrf = make_require_csrf(csrf_allowed_origins)
+    csrf_protected_principal = make_csrf_protected_principal(
+        require_principal,
+        require_csrf,
+    )
     application.include_router(
         make_health_router(
             health_checks,
@@ -47,16 +59,17 @@ def create_app(
         make_auth_router(
             authentication,
             session_tokens,
+            require_csrf=require_csrf,
             session_cookie_ttl_seconds=session_cookie_ttl_seconds,
         ),
         prefix="/api/v1/auth",
     )
     application.include_router(
-        make_runtime_router(runtime, require_principal, session_binder),
+        make_runtime_router(runtime, csrf_protected_principal, session_binder),
         prefix="/api/v1/runtime",
     )
     application.include_router(
-        make_admin_router(admin_registry_service, require_principal),
+        make_admin_router(admin_registry_service, csrf_protected_principal),
         prefix="/api/v1/admin",
     )
     return application
@@ -78,6 +91,7 @@ def create_production_app(
         session_tokens=components.session_tokens,
         session_binder=components.session_binder.bind,
         session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
+        csrf_allowed_origins=resolved_settings.csrf_allowed_origins,
         health_checks=dict(components.health_checks),
         health_timeout_seconds=components.health_timeout_seconds,
     )

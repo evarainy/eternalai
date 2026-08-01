@@ -13,6 +13,12 @@ from app.ports.auth import (
 
 AUTH_COOKIE_NAME = "eternalai_session"
 AUTH_TOKEN = "synthetic-auth-token"
+TEST_ORIGIN = "https://app.example.gov.cn"
+TEST_CSRF_ALLOWED_ORIGINS = frozenset({TEST_ORIGIN})
+TEST_CSRF_HEADERS = {
+    "Origin": TEST_ORIGIN,
+    "X-EternalAI-CSRF": "1",
+}
 
 
 class StaticSessionTokens:
@@ -46,6 +52,9 @@ def auth_cookies() -> dict[str, str]:
 __all__ = (
     "AUTH_TOKEN",
     "StaticSessionTokens",
+    "TEST_CSRF_ALLOWED_ORIGINS",
+    "TEST_CSRF_HEADERS",
+    "TEST_ORIGIN",
     "auth_cookies",
     "make_session_binder",
 )

@@ -20,6 +20,7 @@ os.environ["REDIS_URL"] = "redis://redis.invalid:6379/0"
 os.environ["OA_BASE_URL"] = "https://oa.invalid"
 os.environ["OA_CREDENTIAL_TTL_S"] = "3600"
 os.environ["SESSION_COOKIE_TTL_S"] = "3600"
+os.environ["CSRF_ALLOWED_ORIGINS"] = "https://testserver"
 os.environ["LLM_BASE_URL"] = "https://vllm.invalid/v1"
 os.environ["LLM_MODEL"] = "qwen3.5-27b"
 os.environ["ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64"] = _TEST_KEY_B64

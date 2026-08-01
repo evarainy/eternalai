@@ -36,6 +36,7 @@ from app.infra.persistence.capability_registry.repository import (
 from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
 from app.main import create_app
 from app.ports.capability_registry import CapabilitySpec
+from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -245,6 +246,7 @@ async def _run_pilot_request() -> PilotObservation:
         session_binder=components.session_binder.bind,
         session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
         health_checks=dict(components.health_checks),
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
     )
     registry = PostgreSQLCapabilityRegistry(session_factory)
     await _cleanup(session_factory, ai_user_id)
@@ -276,6 +278,7 @@ async def _run_pilot_request() -> PilotObservation:
         ) as client:
             login_response = await client.post(
                 "/api/v1/auth/login",
+                headers=TEST_CSRF_HEADERS,
                 json={
                     "loginid": _LOGIN_ID,
                     "userpassword": _PASSWORD,
@@ -285,6 +288,7 @@ async def _run_pilot_request() -> PilotObservation:
             response = await client.post(
                 "/api/v1/runtime/handle",
                 headers={
+                    **TEST_CSRF_HEADERS,
                     "X-EternalAI-Roles": "admin",
                     "X-EternalAI-AI-User-ID": "self-reported-attacker",
                     "X-EternalAI-Session-ID": "self-reported-session",
