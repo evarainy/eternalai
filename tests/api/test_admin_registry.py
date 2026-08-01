@@ -16,6 +16,8 @@ from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
 from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -198,6 +200,7 @@ def _client(
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
     )
@@ -243,15 +246,18 @@ def test_create_is_draft_then_enable_and_disable_are_independent_actions() -> No
 
     created = client.post(
         "/api/v1/admin/registry",
+        headers=TEST_CSRF_HEADERS,
         json=_create_body(),
         cookies=ADMIN_COOKIES,
     )
     enabled = client.post(
         "/api/v1/admin/registry/oa.leave.apply/enable",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
     disabled = client.post(
         "/api/v1/admin/registry/oa.leave.apply/disable",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 
@@ -277,6 +283,7 @@ def test_create_rejects_client_supplied_status() -> None:
 
     response = client.post(
         "/api/v1/admin/registry",
+        headers=TEST_CSRF_HEADERS,
         json=body,
         cookies=ADMIN_COOKIES,
     )
@@ -317,6 +324,7 @@ def test_write_denial_prevents_registry_mutation_and_is_traced() -> None:
 
     response = client.post(
         "/api/v1/admin/registry",
+        headers=TEST_CSRF_HEADERS,
         json=_create_body(),
         cookies=ADMIN_COOKIES,
     )
@@ -336,6 +344,7 @@ def test_deprecated_transition_returns_stable_conflict_shape() -> None:
 
     response = client.post(
         "/api/v1/admin/registry/oa.leave.apply/enable",
+        headers=TEST_CSRF_HEADERS,
         cookies=ADMIN_COOKIES,
     )
 

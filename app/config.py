@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import math
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +26,7 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
+_HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
 
 
@@ -144,6 +147,7 @@ class ProductionSettings:
     llm_top_k: int
     llm_enable_thinking: bool
     health_timeout_seconds: float
+    csrf_allowed_origins: frozenset[str] = field(default_factory=frozenset)
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_path: str | None = None
@@ -261,6 +265,7 @@ class ProductionSettings:
                 maximum=_MAX_HEALTH_TIMEOUT_SECONDS,
                 minimum_inclusive=False,
             ),
+            csrf_allowed_origins=_csrf_allowed_origins(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=_oa_read_contract_pack_dir(
                 source,
@@ -319,6 +324,76 @@ def _http_base_url(
     ):
         raise RuntimeError(f"{name} must be an HTTP(S) base URL without credentials")
     return value
+
+
+def _csrf_allowed_origins(source: Mapping[str, str]) -> frozenset[str]:
+    name = "CSRF_ALLOWED_ORIGINS"
+    raw = source.get(name)
+    if raw is None or not raw.strip():
+        raise RuntimeError(f"{name} is required")
+    if raw != raw.strip():
+        raise RuntimeError(f"{name} must contain canonical HTTP(S) origins")
+
+    origins = raw.split(",")
+    if any(not origin or origin != origin.strip() for origin in origins):
+        raise RuntimeError(f"{name} must not contain empty or padded entries")
+
+    canonical_origins = [_canonical_http_origin(origin, name) for origin in origins]
+    if len(canonical_origins) != len(set(canonical_origins)):
+        raise RuntimeError(f"{name} must not contain duplicate origins")
+    return frozenset(canonical_origins)
+
+
+def _canonical_http_origin(value: str, name: str) -> str:
+    if "*" in value:
+        raise RuntimeError(f"{name} does not allow wildcard origins")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError(f"{name} must contain canonical HTTP(S) origins") from None
+    hostname = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(f"{name} must contain origin-only HTTP(S) URLs")
+
+    canonical_host = _canonical_origin_host(hostname, name)
+    default_port = 80 if parsed.scheme == "http" else 443
+    port_suffix = "" if port is None or port == default_port else f":{port}"
+    host_for_url = (
+        f"[{canonical_host}]" if ":" in canonical_host else canonical_host
+    )
+    canonical = f"{parsed.scheme}://{host_for_url}{port_suffix}"
+    if value != canonical:
+        raise RuntimeError(f"{name} must contain canonical HTTP(S) origins")
+    return canonical
+
+
+def _canonical_origin_host(hostname: str, name: str) -> str:
+    if not hostname.isascii() or "%" in hostname:
+        raise RuntimeError(f"{name} must contain canonical ASCII hostnames")
+    if ":" in hostname:
+        try:
+            return ipaddress.IPv6Address(hostname).compressed
+        except ipaddress.AddressValueError:
+            raise RuntimeError(f"{name} contains an invalid hostname") from None
+    if hostname.replace(".", "").isdigit():
+        try:
+            return str(ipaddress.IPv4Address(hostname))
+        except ipaddress.AddressValueError:
+            raise RuntimeError(f"{name} contains an invalid hostname") from None
+    if len(hostname) > 253 or any(
+        _HOST_LABEL.fullmatch(label) is None for label in hostname.split(".")
+    ):
+        raise RuntimeError(f"{name} contains an invalid hostname")
+    return hostname
 
 
 def _oa_read_adapter_mode(source: Mapping[str, str]) -> OAReadAdapterMode:

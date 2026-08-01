@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, customInstance } from '../mutator';
 import { useAuthStore } from '../../stores/authStore';
+import { useRoleStore } from '../../stores/roleStore';
 
 function response(body: unknown, init?: { ok?: boolean; status?: number; statusText?: string }) {
   return {
@@ -124,5 +125,68 @@ describe('customInstance authentication boundary', () => {
         message: 'Management role is required.',
       }),
     );
+  });
+});
+
+describe('customInstance CSRF header', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useRoleStore.setState({ roles: [] });
+    vi.restoreAllMocks();
+  });
+
+  it('injects the fixed header for POST while preserving other headers', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await customInstance({
+      url: '/api/v1/admin/registry',
+      method: 'POST',
+      headers: { Accept: 'application/json', 'X-Request-ID': 'request-1' },
+      data: { name: 'example' },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/admin/registry',
+      expect.objectContaining({
+        headers: {
+          Accept: 'application/json',
+          'X-Request-ID': 'request-1',
+          'X-EternalAI-CSRF': '1',
+          'Content-Type': 'application/json',
+        },
+      }),
+    );
+  });
+
+  it.each(['GET', 'HEAD', 'OPTIONS'])('does not send the header for %s', async (method) => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ items: [] }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await customInstance({ url: '/api/v1/admin/registry', method });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.headers).not.toHaveProperty('X-EternalAI-CSRF');
+  });
+
+  it('removes caller-supplied casing variants before setting the fixed value', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await customInstance({
+      url: '/api/v1/runtime/handle',
+      method: 'post',
+      headers: {
+        'x-eternalai-csrf': 'caller-value',
+        'X-ETERNALAI-CsRf': 'second-caller-value',
+      },
+      data: {},
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const csrfHeaders = Object.entries(request.headers as Record<string, string>).filter(
+      ([name]) => name.toLowerCase() === 'x-eternalai-csrf',
+    );
+    expect(csrfHeaders).toEqual([['X-EternalAI-CSRF', '1']]);
   });
 });

@@ -34,16 +34,30 @@ function isAdminErrorEnvelope(value: unknown): value is AdminErrorEnvelope {
   );
 }
 
+const CSRF_HEADER_NAME = 'X-EternalAI-CSRF';
+const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function removeHeaderCaseInsensitive(headers: Record<string, string>, name: string): void {
+  const normalizedName = name.toLowerCase();
+  for (const headerName of Object.keys(headers)) {
+    if (headerName.toLowerCase() === normalizedName) {
+      delete headers[headerName];
+    }
+  }
+}
+
 export const customInstance = async <T>(
   config: { url: string; method: string; headers?: Record<string, string>; params?: Record<string, unknown>; data?: unknown; signal?: AbortSignal },
 ): Promise<T> => {
   const { url, method, headers, params, data, signal } = config;
   const authGeneration = useAuthStore.getState().generation;
-  const requestHeaders = Object.fromEntries(
-    Object.entries(headers ?? {}).filter(
-      ([name]) => name.toLowerCase() !== 'x-eternalai-roles',
-    ),
-  );
+  const requestHeaders = { ...headers };
+  removeHeaderCaseInsensitive(requestHeaders, 'X-EternalAI-Roles');
+  removeHeaderCaseInsensitive(requestHeaders, CSRF_HEADER_NAME);
+
+  if (!SAFE_HTTP_METHODS.has(method.toUpperCase())) {
+    requestHeaders[CSRF_HEADER_NAME] = '1';
+  }
   if (data !== undefined && requestHeaders['Content-Type'] === undefined) {
     requestHeaders['Content-Type'] = 'application/json';
   }

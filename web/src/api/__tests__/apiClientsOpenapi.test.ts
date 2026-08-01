@@ -79,6 +79,7 @@ os.environ.update({
     "OA_BASE_URL": "https://oa.invalid",
     "OA_CREDENTIAL_TTL_S": "3600",
     "SESSION_COOKIE_TTL_S": "3600",
+    "CSRF_ALLOWED_ORIGINS": "https://testserver",
     "LLM_BASE_URL": "https://vllm.invalid/v1",
     "LLM_MODEL": "openapi-export",
     "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": key,
