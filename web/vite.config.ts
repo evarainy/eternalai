@@ -17,6 +17,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
+      // 4 核环境下文件级并发与 OpenAPI 生成子进程争抢调度，导致 Ant 组件测试 5s 超时；实测失败率 35% → 0%。
+      fileParallelism: false,
       globals: true,
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',

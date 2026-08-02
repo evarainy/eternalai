@@ -24,7 +24,7 @@ describe('application authentication boundary', () => {
       expect(
         await screen.findByRole('heading', { name: '登录 EternalAI' }),
       ).toBeInTheDocument();
-      expect(screen.queryByText('Capability Registry')).not.toBeInTheDocument();
+      expect(screen.queryByText('Registry 管理')).not.toBeInTheDocument();
     },
     30_000,
   );
