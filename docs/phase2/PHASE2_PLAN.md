@@ -66,6 +66,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 部分：OA 现场接口/凭证已到位；**仍缺正式 Secret 方案**（可先做绑定/凭证验证/注入，Secret 存储子块等方案定后落地） |
 | `P2-OA-READ-CONTRACT-001` | `oa.list_pending_workflows` 的 Replay Provider 接缝、固定能力白名单、版本化 Contract Pack 与离线脱敏工具。 | `P2-PILOT-FOUNDATION-001` | Q3 | ✅ 已落地（merge `89cd16e3`；Replay/Contract 棒未连内网、未读凭证） |
 | `P2-READ-ADAPTER-001` | 在已冻结的 OA Replay/Contract 接缝上补 Live HTTP、凭证读取、最小 IdentityMapping、Live 指纹漂移比较与内网 smoke，并闭合 Gateway→Adapter→Evaluator→Trace→Response。 | `P2-OA-READ-CONTRACT-001` | Q3 | ✅ 已落地（merge `f9526a4`） |
+| `P2-FE-API-CLIENTS-001` | 固化 Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端，并以真实重导出、再生成验证无漂移；不改页面、mutator 或后端行为。 | `P2-READ-ADAPTER-001` | Q2 | ✅ 已落地（merge `e60b388`） |
+| `P2-PILOT-ENTRY-FE-001` | 接通登录页、EternalAI Session Cookie、统一 fail-closed 401 重认证与受保护路由，并停发 `X-EternalAI-Roles`；后端零改。 | `P2-FE-API-CLIENTS-001`、`P2-AUTH-001` | Q3 | ◐ 本棒进行中（base `e60b388`；merge SHA 待下一棒补录） |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
 | `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
 | `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
@@ -80,7 +82,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 ## 4. 决策与开放问题
 
 1. **已决（2026-07-24 雨爷拍板）— A1：是。** 生产 composition、真实 LLM 和最小可信试点入口作为 P2 首个硬前置（`P2-PILOT-FOUNDATION-001`）。
-2. **已决（2026-07-29 雨爷拍板）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** `P2-OA-READ-CONTRACT-001` 已交付 Replay/Contract（merge `89cd16e3`），`P2-READ-ADAPTER-001` 已交付 Live/凭证/IdentityMapping/内网 smoke（merge `f9526a4`）；当前下一棒 `P2-FE-API-CLIENTS-001` 固化 Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端，第二个 Adapter 的启动条件仍开放。
+2. **已决（2026-07-29 雨爷拍板）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** `P2-OA-READ-CONTRACT-001` 已交付 Replay/Contract（merge `89cd16e3`），`P2-READ-ADAPTER-001` 已交付 Live/凭证/IdentityMapping/内网 smoke（merge `f9526a4`），`P2-FE-API-CLIENTS-001` 已交付 Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端固化及无漂移验证（merge `e60b388`）；`P2-PILOT-ENTRY-FE-001` 本棒进行中，接通登录、EternalAI Session Cookie、401 重认证与可信角色消费，本棒 merge SHA 待下一棒补录；第二个 Adapter 的启动条件仍开放。
 3. **认证路线**：P2 采用哪种最小可信认证；是否把企业 IAM/SSO 从 Phase 3 提前？
 4. **DB Gateway**：Phase 2 路线图写了基础 DB Gateway，但蓝图又限定“仅无 API/报表需求时”；是否已有获批报表用例？
 5. **Skill 候选池**：只允许管理员/用户手工登记，还是允许脱敏 Trace 产生“候选提议”？后者不得变成自动 Skill 生成。

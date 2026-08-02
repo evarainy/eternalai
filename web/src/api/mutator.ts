@@ -1,4 +1,4 @@
-import { useRoleStore } from '../stores/roleStore';
+import { useAuthStore } from '../stores/authStore';
 
 interface AdminErrorEnvelope {
   detail: {
@@ -50,21 +50,13 @@ export const customInstance = async <T>(
   config: { url: string; method: string; headers?: Record<string, string>; params?: Record<string, unknown>; data?: unknown; signal?: AbortSignal },
 ): Promise<T> => {
   const { url, method, headers, params, data, signal } = config;
+  const authGeneration = useAuthStore.getState().generation;
   const requestHeaders = { ...headers };
-  delete requestHeaders['X-EternalAI-Roles'];
-  delete requestHeaders['x-eternalai-roles'];
+  removeHeaderCaseInsensitive(requestHeaders, 'X-EternalAI-Roles');
   removeHeaderCaseInsensitive(requestHeaders, CSRF_HEADER_NAME);
 
   if (!SAFE_HTTP_METHODS.has(method.toUpperCase())) {
     requestHeaders[CSRF_HEADER_NAME] = '1';
-  }
-
-  const roles = useRoleStore
-    .getState()
-    .roles.map((role) => role.trim())
-    .filter(Boolean);
-  if (roles.length > 0) {
-    requestHeaders['X-EternalAI-Roles'] = roles.join(',');
   }
   if (data !== undefined && requestHeaders['Content-Type'] === undefined) {
     requestHeaders['Content-Type'] = 'application/json';
@@ -77,6 +69,14 @@ export const customInstance = async <T>(
     body: data !== undefined ? JSON.stringify(data) : undefined,
     signal,
   });
+  if (response.status === 401) {
+    useAuthStore.getState().markUnauthenticated(authGeneration);
+    throw new ApiError(
+      response.status,
+      'authentication_required',
+      'Authentication is required.',
+    );
+  }
   const payload: unknown = await response.json();
   if (!response.ok) {
     if (isAdminErrorEnvelope(payload)) {
