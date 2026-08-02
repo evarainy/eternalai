@@ -1328,10 +1328,21 @@ class ExplodingCredentialProvider:
         raise RuntimeError(secret)
 
 
+class ExplodingProvider:
+    requires_credential = False
+
+    async def list_pending_workflows(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OAPendingWorkflowCollection:
+        del credential
+        raise RuntimeError("SECRET-CANARY-12345")
+
+
 def test_unexpected_failure_log_result_and_repr_do_not_leak_credential(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    runtime_secret = secrets.token_hex(32)
+    runtime_secret = "SECRET-CANARY-12345"
     credential = _credential(cookie_value=runtime_secret)
     secret_provider = StaticSecretProvider(credential)
     provider = ExplodingCredentialProvider()
@@ -1351,6 +1362,7 @@ def test_unexpected_failure_log_result_and_repr_do_not_leak_credential(
     rendered = "\n".join(
         (
             caplog.text,
+            repr([record.__dict__ for record in caplog.records]),
             repr(result),
             repr(adapter),
             repr(provider),
@@ -1359,7 +1371,59 @@ def test_unexpected_failure_log_result_and_repr_do_not_leak_credential(
         )
     )
 
-    assert result.status == "error"
-    assert result.error_code == "adapter_error"
+    assert result.model_dump(mode="json") == {
+        "status": "error",
+        "data": None,
+        "error_code": "adapter_error",
+        "raw_payload_ref": None,
+    }
+    assert "capability_id=oa.list_pending_workflows" in caplog.text
+    assert "stage=provider_call" in caplog.text
+    assert "exception_type=RuntimeError" in caplog.text
     assert "classification=adapter_error" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
     assert runtime_secret not in rendered
+
+
+def test_unexpected_failure_preserves_gateway_response_and_trace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trace_logger = logging.getLogger("tests.oa.adapter_error_trace")
+    caplog.set_level(logging.DEBUG, logger=trace_logger.name)
+    gateway = CapabilityGateway(
+        adapter=OAReadAdapter(ExplodingProvider()),
+        trace_port=NoopTraceWriter(logger=trace_logger),
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-adapter-error-001",
+            "session-adapter-error-001",
+            "ai-user-adapter-error-001",
+            "oa.list_pending_workflows",
+            {},
+            RequestOrgContext(request_id="trace-adapter-error-001"),
+        )
+    )
+    trace_events = [
+        record.trace_event
+        for record in caplog.records
+        if record.name == trace_logger.name
+    ]
+
+    assert result.model_dump(mode="json") == {
+        "status": "failed",
+        "data": None,
+        "error_code": "adapter_error",
+        "trace_id": "trace-adapter-error-001",
+    }
+    assert [
+        (event["event_type"], event["status"], event["error_code"])
+        for event in trace_events
+    ] == [
+        ("gateway_pre_recorded", "ok", None),
+        ("adapter_called", "ok", "adapter_error"),
+        ("gateway_post_recorded", "failed", "adapter_error"),
+        ("adapter_error_mapped", "failed", "adapter_error"),
+    ]
+    assert "SECRET-CANARY-12345" not in repr(trace_events)
