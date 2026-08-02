@@ -28,6 +28,65 @@ export interface HandleRequest {
   session_id: string;
 }
 
+export type ResponseEnvelopeDataAnyOf = { [key: string]: unknown };
+
+export type ResponseEnvelopeData = ResponseEnvelopeDataAnyOf | null;
+
+export type ResponseEnvelopeStatus = typeof ResponseEnvelopeStatus[keyof typeof ResponseEnvelopeStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ResponseEnvelopeStatus = {
+  completed: 'completed',
+  blocked: 'blocked',
+  waiting_user: 'waiting_user',
+  failed: 'failed',
+  no_capability_found: 'no_capability_found',
+} as const;
+
+export type ResponseEnvelopeTraceSummary = string | null;
+
+export interface ResponseEnvelope {
+  data?: ResponseEnvelopeData;
+  fallback_text: string;
+  message: string;
+  response_id: string;
+  schema_version?: string;
+  session_id: string;
+  status: ResponseEnvelopeStatus;
+  task_id: string;
+  trace_id: string;
+  trace_summary?: ResponseEnvelopeTraceSummary;
+  ui: UIComponent;
+}
+
+export type UIComponentAction = 'confirm' | 'bind_required' | 'clarify_scope' | 'none' | null;
+
+export type UIComponentComponentType = typeof UIComponentComponentType[keyof typeof UIComponentComponentType];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const UIComponentComponentType = {
+  none: 'none',
+  confirm_card: 'confirm_card',
+  operator_handback_card: 'operator_handback_card',
+  binding_required_card: 'binding_required_card',
+} as const;
+
+export type UIComponentPayload = { [key: string]: unknown };
+
+export type UIComponentReasonCode = string | null;
+
+export type UIComponentTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+
+export interface UIComponent {
+  action?: UIComponentAction;
+  component_type: UIComponentComponentType;
+  payload?: UIComponentPayload;
+  reason_code?: UIComponentReasonCode;
+  target_system?: UIComponentTargetSystem;
+}
+
 export type ValidationErrorCtx = { [key: string]: unknown };
 
 export type ValidationErrorLocItem = string | number;
@@ -39,5 +98,3 @@ export interface ValidationError {
   msg: string;
   type: string;
 }
-
-export type HandleApiV1RuntimeHandlePost200 = { [key: string]: unknown };

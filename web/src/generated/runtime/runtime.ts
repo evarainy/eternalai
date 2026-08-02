@@ -5,8 +5,8 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
-  HandleApiV1RuntimeHandlePost200,
-  HandleRequest
+  HandleRequest,
+  ResponseEnvelope
 } from './runtime.schemas';
 
 import { customInstance } from '../../api/mutator';
@@ -19,7 +19,7 @@ import { customInstance } from '../../api/mutator';
 export const handleApiV1RuntimeHandlePost = (
     handleRequest: HandleRequest,
  ) => {
-      return customInstance<HandleApiV1RuntimeHandlePost200>(
+      return customInstance<ResponseEnvelope>(
       {url: `/api/v1/runtime/handle`, method: 'POST',
       headers: {'Content-Type': 'application/json', },
       data: handleRequest
