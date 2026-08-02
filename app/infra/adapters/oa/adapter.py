@@ -88,8 +88,10 @@ class OAReadAdapter:
         execution_context: dict[str, Any],
     ) -> AdapterResult:
         credential: OASessionCredential | None = None
+        stage = "provider_configuration"
         try:
             if self._provider.requires_credential:
+                stage = "credential_resolution"
                 credential_ref = execution_context.get("credential_ref")
                 if not isinstance(credential_ref, str) or not credential_ref.strip():
                     return _classified_error("identity_unbound")
@@ -98,7 +100,9 @@ class OAReadAdapter:
                 credential = await self._secret_provider.resolve_oa_session(
                     credential_ref
                 )
+            stage = "provider_call"
             collection = await self._provider.list_pending_workflows(credential)
+            stage = "response_serialization"
             return AdapterResult(
                 status="success",
                 data=collection.model_dump(mode="json"),
@@ -140,10 +144,13 @@ class OAReadAdapter:
             return _classified_error("adapter_payload_invalid")
         except OALiveProviderError:
             return _adapter_error()
-        except Exception:
+        except Exception as exc:
             logging.getLogger(__name__).error(
-                "oa_read_adapter_failure capability_id=%s classification=%s",
+                "oa_read_adapter_failure capability_id=%s stage=%s "
+                "exception_type=%s classification=%s",
                 OA_LIST_PENDING_WORKFLOWS,
+                stage,
+                type(exc).__name__,
                 "adapter_error",
             )
             return _adapter_error()
