@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
+      fileParallelism: false,
       globals: true,
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',
