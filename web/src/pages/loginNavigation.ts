@@ -6,7 +6,7 @@ export function getReturnPath(state: unknown): string {
     state !== null &&
     'from' in state &&
     typeof state.from === 'string' &&
-    state.from.startsWith('/admin/')
+    (state.from === '/chat' || state.from.startsWith('/admin/'))
   ) {
     return state.from;
   }

@@ -1,0 +1,594 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ConfigProvider } from 'antd';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { AuthenticationEffects, ProtectedRoute } from '../../App';
+import { useAuthStore } from '../../stores/authStore';
+import ChatPage from '../ChatPage';
+
+const runtimeMock = vi.hoisted(() => ({
+  handle: vi.fn(),
+}));
+
+vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../generated/runtime/runtime')>();
+  return {
+    ...actual,
+    handleApiV1RuntimeHandlePost: (
+      ...args: Parameters<typeof actual.handleApiV1RuntimeHandlePost>
+    ) => {
+      runtimeMock.handle(...args);
+      return actual.handleApiV1RuntimeHandlePost(...args);
+    },
+  };
+});
+
+const SESSION_A = '11111111-1111-4111-8111-111111111111';
+const SESSION_B = '22222222-2222-4222-8222-222222222222';
+
+function response(
+  body: unknown,
+  init: { ok?: boolean; status?: number; statusText?: string } = {},
+): Response {
+  const status = init.status ?? (init.ok === false ? 500 : 200);
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText: init.statusText ?? 'OK',
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function envelope(overrides: Record<string, unknown> = {}) {
+  const base = {
+    schema_version: 'phase0.sdui.v1',
+    response_id: 'response-internal',
+    task_id: 'task-internal',
+    session_id: 'session-server-internal',
+    status: 'completed',
+    message: '业务请求已完成',
+    fallback_text: 'Operation completed.',
+    ui: {
+      component_type: 'none',
+      action: 'none',
+      target_system: null,
+      reason_code: null,
+      payload: {},
+    },
+    data: null,
+    trace_id: 'trace-internal',
+    trace_summary: null,
+  };
+  return { ...base, ...overrides };
+}
+
+function makeClient() {
+  return new QueryClient({
+    defaultOptions: {
+      mutations: { retry: false },
+      queries: { retry: false },
+    },
+  });
+}
+
+function renderChat(client = makeClient()) {
+  const rendered = render(
+    <ConfigProvider>
+      <QueryClientProvider client={client}>
+        <ChatPage />
+      </QueryClientProvider>
+    </ConfigProvider>,
+  );
+  return { client, ...rendered };
+}
+
+function sendMessage(message: string) {
+  fireEvent.change(screen.getByLabelText('办理请求'), {
+    target: { value: message },
+  });
+  fireEvent.click(screen.getByRole('button', { name: '发送办理请求' }));
+}
+
+function storageText(storage: Storage): string {
+  const values: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (key !== null) {
+      values.push(`${key}:${storage.getItem(key) ?? ''}`);
+    }
+  }
+  return values.join('|');
+}
+
+describe('ChatPage request boundary', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    runtimeMock.handle.mockClear();
+    localStorage.clear();
+    sessionStorage.clear();
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+  });
+
+  it('uses the generated client with the fixed web request and one shared CSRF header', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('  查询我的 OA 待办  ');
+
+    await screen.findByText('办理完成');
+    expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+    expect(runtimeMock.handle).toHaveBeenCalledWith({
+      channel: 'web',
+      client_capabilities: {},
+      message: '查询我的 OA 待办',
+      session_id: SESSION_A,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/runtime/handle',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = Object.entries(request.headers as Record<string, string>);
+    expect(
+      headers.filter(([name]) => name.toLowerCase() === 'x-eternalai-csrf'),
+    ).toEqual([['X-EternalAI-CSRF', '1']]);
+    expect(
+      headers.some(([name]) => name.toLowerCase() === 'x-eternalai-roles'),
+    ).toBe(false);
+  });
+
+  it('reuses one client session within a mount and creates a new one after remount', async () => {
+    vi.mocked(globalThis.crypto.randomUUID)
+      .mockReturnValueOnce(SESSION_A)
+      .mockReturnValueOnce(SESSION_B);
+    const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
+    vi.stubGlobal('fetch', fetchMock);
+    const firstMount = renderChat();
+
+    sendMessage('第一条请求');
+    await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(1));
+    await screen.findByText('办理完成');
+    sendMessage('第二条请求');
+    await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(2));
+    firstMount.unmount();
+
+    renderChat();
+    sendMessage('新页面请求');
+    await waitFor(() => expect(runtimeMock.handle).toHaveBeenCalledTimes(3));
+
+    expect(runtimeMock.handle.mock.calls.map(([request]) => request.session_id)).toEqual([
+      SESSION_A,
+      SESSION_A,
+      SESSION_B,
+    ]);
+  });
+
+  it('blocks duplicate submission while the POST is pending', async () => {
+    let resolveRequest!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveRequest = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('只发送一次');
+    expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
+    expect(screen.getByLabelText('办理请求')).toBeDisabled();
+    const pendingButton = screen.getByText('发送办理请求').closest('button');
+    expect(pendingButton).not.toBeNull();
+    fireEvent.click(pendingButton as HTMLButtonElement);
+    const form = screen.getByLabelText('办理请求').closest('form');
+    expect(form).not.toBeNull();
+    fireEvent.submit(form as HTMLFormElement);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    act(() => resolveRequest(response(envelope())));
+    await screen.findByText('办理完成');
+    await waitFor(() => expect(screen.getByLabelText('办理请求')).toBeEnabled());
+  });
+});
+
+describe('ChatPage response projection', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    runtimeMock.handle.mockClear();
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+  });
+
+  it.each([
+    ['completed', 'none', '业务已完成', '办理完成'],
+    ['blocked', 'none', '无权限，操作被拒绝', '请求被拒绝'],
+    ['waiting_user', 'confirm', '请确认提交操作', '需要确认'],
+    ['failed', 'none', '操作超时，请重试', '办理失败'],
+    ['no_capability_found', 'none', '暂未接入该能力', '暂不可办理'],
+  ])('renders %s with a distinct textual status', async (status, action, message, label) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            status,
+            message,
+            ui: {
+              component_type: action === 'confirm' ? 'confirm_card' : 'none',
+              action,
+              target_system: action === 'confirm' ? 'oa' : null,
+              payload: {},
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('状态测试');
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('uses fallback text only when the safe message is empty', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(envelope({ message: '   ', fallback_text: '安全降级文本' })),
+      ),
+    );
+    renderChat();
+
+    sendMessage('需要降级文本');
+
+    expect(await screen.findByText('安全降级文本')).toBeInTheDocument();
+  });
+
+  it('treats clarification as a new explicit request without inventing options', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(
+          envelope({
+            status: 'blocked',
+            message: '请先选择明确的账套后继续',
+            ui: {
+              component_type: 'operator_handback_card',
+              action: 'clarify_scope',
+              target_system: 'u8',
+              payload: { options: ['RAW_OPTION_A', 'RAW_OPTION_B'] },
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(response(envelope({ message: '已查询指定账套' })));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('查询单据状态');
+    expect(await screen.findByText('请先选择明确的账套后继续')).toBeInTheDocument();
+    expect(screen.getByText(/完整重述为一条新请求/)).toBeInTheDocument();
+    expect(screen.queryByText(/RAW_OPTION/)).not.toBeInTheDocument();
+
+    sendMessage('查询湖南账套的 U8-AP-0033 单据状态');
+    expect(await screen.findByText('已查询指定账套')).toBeInTheDocument();
+    expect(runtimeMock.handle).toHaveBeenCalledTimes(2);
+    expect(runtimeMock.handle.mock.calls[1]?.[0]).toEqual({
+      channel: 'web',
+      client_capabilities: {},
+      message: '查询湖南账套的 U8-AP-0033 单据状态',
+      session_id: SESSION_A,
+    });
+  });
+
+  it('shows confirmation as non-interactive and never auto-sends', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            status: 'waiting_user',
+            response_id: 'RAW_RESPONSE_ID',
+            message: '请确认提交操作',
+            ui: {
+              component_type: 'confirm_card',
+              action: 'confirm',
+              target_system: 'oa',
+              payload: { preview: 'RAW_PREVIEW' },
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('提交请假流程');
+
+    expect(await screen.findByText('当前入口暂不能继续确认。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /确认|继续执行/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/RAW_RESPONSE_ID|RAW_PREVIEW/)).not.toBeInTheDocument();
+    expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps policy denial distinct from failure, missing capability, and binding', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            status: 'blocked',
+            message: '无权限，操作被拒绝',
+            ui: {
+              component_type: 'operator_handback_card',
+              action: 'none',
+              reason_code: 'RAW_POLICY_REASON',
+              payload: {},
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询敏感汇总');
+
+    expect(await screen.findByText('无权限，操作被拒绝')).toBeInTheDocument();
+    expect(screen.getByText('请求被拒绝')).toBeInTheDocument();
+    expect(screen.queryByText(/办理失败|暂不可办理|需要账号绑定/)).not.toBeInTheDocument();
+    expect(screen.queryByText('RAW_POLICY_REASON')).not.toBeInTheDocument();
+  });
+
+  it('shows only an allowlisted target-system label for binding', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            status: 'blocked',
+            message: '需要绑定账号才能继续',
+            ui: {
+              component_type: 'operator_handback_card',
+              action: 'bind_required',
+              target_system: 'oa',
+              reason_code: 'RAW_BIND_REASON',
+              payload: {},
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询 OA 待办');
+
+    expect(await screen.findByText('目标系统：OA')).toBeInTheDocument();
+    expect(screen.queryByText('RAW_BIND_REASON')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /绑定|解绑/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['unknown schema', { schema_version: 'future.v9', message: 'RAW_SCHEMA' }],
+    ['missing schema', { schema_version: undefined, message: 'RAW_MISSING_SCHEMA' }],
+    ['unknown status', { status: 'queued', message: 'RAW_STATUS' }],
+    ['non-string message', { message: { raw: 'RAW_MESSAGE' } }],
+    ['missing UI', { ui: null, message: 'RAW_UI' }],
+    [
+      'unknown action',
+      {
+        message: 'RAW_ACTION',
+        ui: { component_type: 'none', action: 'execute_now', target_system: null },
+      },
+    ],
+    [
+      'unknown target',
+      {
+        status: 'blocked',
+        message: 'RAW_TARGET',
+        ui: { component_type: 'none', action: 'bind_required', target_system: 'evil' },
+      },
+    ],
+  ])('fails closed for %s', async (_label, overrides) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(response(envelope(overrides))),
+    );
+    renderChat();
+
+    sendMessage('不兼容响应测试');
+
+    expect(
+      await screen.findByText('当前响应无法安全显示，请稍后重试。'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_/);
+  });
+
+  it('fails closed for a non-JSON success response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('RAW_NON_JSON_RESPONSE', {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        }),
+      ),
+    );
+    renderChat();
+
+    sendMessage('非 JSON 响应测试');
+
+    expect(
+      await screen.findByText('当前响应无法安全显示，请稍后重试。'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('RAW_NON_JSON_RESPONSE');
+  });
+
+  it('does not retain or expose raw envelope fields and sensitive markers', async () => {
+    const sensitiveMarkers = [
+      'RAW_DATA_SECRET',
+      'RAW_PAYLOAD_SECRET',
+      'RAW_TRACE_SUMMARY',
+      'RAW_REASON_CODE',
+      'RAW_RESPONSE_ID',
+      'RAW_TASK_ID',
+      'RAW_SERVER_SESSION',
+      'RAW_TRACE_ID',
+    ];
+    const consoleSpies = [
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'info').mockImplementation(() => undefined),
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            response_id: 'RAW_RESPONSE_ID',
+            task_id: 'RAW_TASK_ID',
+            session_id: 'RAW_SERVER_SESSION',
+            trace_id: 'RAW_TRACE_ID',
+            trace_summary: 'RAW_TRACE_SUMMARY',
+            data: { password: 'RAW_DATA_SECRET' },
+            ui: {
+              component_type: 'none',
+              action: 'none',
+              reason_code: 'RAW_REASON_CODE',
+              payload: { access_token: 'RAW_PAYLOAD_SECRET' },
+            },
+          }),
+        ),
+      ),
+    );
+    const { client } = renderChat();
+
+    sendMessage('安全投影测试');
+    await screen.findByText('办理完成');
+
+    const observableState = [
+      document.body.innerHTML,
+      storageText(localStorage),
+      storageText(sessionStorage),
+      window.location.href,
+      JSON.stringify(useAuthStore.getState()),
+      JSON.stringify(
+        client.getMutationCache().getAll().map((mutation) => ({
+          data: mutation.state.data,
+          variables: mutation.state.variables,
+        })),
+      ),
+      ...consoleSpies.flatMap((spy) => spy.mock.calls.flat().map(String)),
+    ].join('|');
+    sensitiveMarkers.forEach((marker) => expect(observableState).not.toContain(marker));
+    expect(observableState).not.toContain(SESSION_A);
+  });
+});
+
+describe('ChatPage HTTP failures', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    runtimeMock.handle.mockClear();
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+  });
+
+  it('uses the unified 401 reauthentication chain without a chat error bubble', async () => {
+    const client = makeClient();
+    client.setQueryData(['private'], { value: 'cached response' });
+    const failedResponse = response(
+      { detail: 'RAW_401_BODY' },
+      { ok: false, status: 401, statusText: 'Unauthorized' },
+    );
+    const jsonSpy = vi.spyOn(failedResponse, 'json');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(failedResponse));
+    render(
+      <ConfigProvider>
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/chat']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<div>重新认证</div>} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/chat" element={<ChatPage />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </ConfigProvider>,
+    );
+
+    sendMessage('触发重新认证');
+
+    expect(await screen.findByText('重新认证')).toBeInTheDocument();
+    expect(useAuthStore.getState().status).toBe('unauthenticated');
+    await waitFor(() => expect(client.getQueryCache().getAll()).toHaveLength(0));
+    expect(jsonSpy).not.toHaveBeenCalled();
+    expect(screen.queryByText(/请求失败|网络异常|RAW_401_BODY/)).not.toBeInTheDocument();
+  });
+
+  it('maps CSRF 403 safely without reauthentication or retry', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response(
+        {
+          detail: {
+            code: 'csrf_validation_failed',
+            message: 'RAW_CSRF_BACKEND_DETAIL',
+          },
+        },
+        { ok: false, status: 403, statusText: 'Forbidden' },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('CSRF 测试');
+
+    expect(
+      await screen.findByText('当前请求来源未通过安全校验，请联系管理员检查部署配置。'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_CSRF|csrf_validation_failed/);
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [404, 'Not Found', '当前会话不可用，请刷新页面后重试。'],
+    [422, 'Unprocessable Entity', '请求格式未通过校验，请重新输入后再试。'],
+    [503, 'Service Unavailable', '办理服务暂时不可用，请稍后再试。'],
+  ])('maps HTTP %s to fixed safe text', async (status, statusText, expected) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response(
+        { detail: { code: `RAW_HTTP_${status}`, message: 'RAW_BACKEND_BODY' } },
+        { ok: false, status, statusText },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage(`HTTP ${status}`);
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a network rejection to fixed safe text without exposing the error', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('RAW_NETWORK_DETAIL'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('网络失败测试');
+
+    expect(await screen.findByText('网络连接异常，请稍后再试。')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('RAW_NETWORK_DETAIL');
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

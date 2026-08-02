@@ -29,6 +29,25 @@ describe('application authentication boundary', () => {
     30_000,
   );
 
+  it('keeps chat protected and returns there after authentication', async () => {
+    window.history.pushState({}, '', '/chat');
+    render(<App />);
+
+    expect(
+      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: '自然语言办理入口' }),
+    ).not.toBeInTheDocument();
+
+    act(() => useAuthStore.getState().markAuthenticated());
+
+    expect(
+      await screen.findByRole('heading', { name: '自然语言办理入口' }),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/chat');
+  });
+
   it('allows a protected route only while the in-memory session is authenticated', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     render(
@@ -88,5 +107,31 @@ describe('application authentication boundary', () => {
     fireEvent.click(screen.getByRole('button', { name: '退出登录（本地）' }));
 
     expect(useAuthStore.getState().status).toBe('unauthenticated');
+  });
+
+  it('adds chat navigation without removing existing authenticated routes', () => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    render(<App />);
+
+    expect(screen.getByRole('link', { name: 'EternalAI' })).toHaveAttribute(
+      'href',
+      '/health',
+    );
+    expect(screen.getByRole('link', { name: '自然语言办理' })).toHaveAttribute(
+      'href',
+      '/chat',
+    );
+    expect(screen.getByRole('link', { name: 'Registry 管理' })).toHaveAttribute(
+      'href',
+      '/admin/registry',
+    );
+    expect(screen.getByRole('link', { name: 'Task 证据' })).toHaveAttribute(
+      'href',
+      '/admin/tasks',
+    );
+    expect(screen.getByRole('link', { name: 'Binding 查看' })).toHaveAttribute(
+      'href',
+      '/admin/bindings',
+    );
   });
 });

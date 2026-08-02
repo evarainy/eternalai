@@ -15,6 +15,7 @@ import {
   useLocation,
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
+import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
 import { getReturnPath } from './pages/loginNavigation';
@@ -84,22 +85,25 @@ function AppShell() {
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Header style={{ height: 'auto', paddingBlock: 12 }}>
-        <Flex align="center" justify="space-between" gap={24} wrap>
-          <Space size="large">
+        <Flex align="center" justify="space-between" gap={12} wrap>
+          <Space size={[24, 8]} wrap>
             <Link to="/health" style={{ color: '#fff' }}>
               EternalAI
             </Link>
             {status === 'authenticated' ? (
               <>
-                    <Link to="/admin/registry" style={{ color: '#fff' }}>
-                      Registry 管理
-                    </Link>
-                    <Link to="/admin/tasks" style={{ color: '#fff' }}>
-                      Task 证据
-                    </Link>
-                    <Link to="/admin/bindings" style={{ color: '#fff' }}>
-                      Binding 查看
-                    </Link>
+                <Link to="/chat" style={{ color: '#fff' }}>
+                  自然语言办理
+                </Link>
+                <Link to="/admin/registry" style={{ color: '#fff' }}>
+                  Registry 管理
+                </Link>
+                <Link to="/admin/tasks" style={{ color: '#fff' }}>
+                  Task 证据
+                </Link>
+                <Link to="/admin/bindings" style={{ color: '#fff' }}>
+                  Binding 查看
+                </Link>
               </>
             ) : null}
           </Space>
@@ -120,6 +124,7 @@ function AppShell() {
           <Route path="/health" element={<HealthPage />} />
           <Route path="/login" element={<LoginRoute />} />
           <Route element={<ProtectedRoute />}>
+            <Route path="/chat" element={<ChatPage />} />
             <Route path="/admin/registry" element={<RegistryPage />} />
             <Route path="/admin/tasks" element={<TasksPage />} />
             <Route path="/admin/bindings" element={<BindingsPage />} />
