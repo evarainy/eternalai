@@ -33,8 +33,8 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _PENDING_WORKFLOW_PROFILE_VERSION = "ecology9-pending-workflows-v1"
 _SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
-_ALLOWED_CAPTURE_PROFILE_VERSIONS = frozenset(
-    {_PENDING_WORKFLOW_PROFILE_VERSION, _SYSTEM_MESSAGE_PROFILE_VERSION}
+_PENDING_WORKFLOW_PROFILE_VERSION_PATTERN = re.compile(
+    r"^ecology9-pending-workflows-v[1-9][0-9]*$"
 )
 _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
@@ -111,12 +111,14 @@ class _NoEchoArgumentParser(argparse.ArgumentParser):
         raise SanitizationError("invalid_arguments")
 
 
-def _validate_capture_profile_version(profile_version: str) -> None:
-    if (
-        _PROFILE_VERSION_PATTERN.fullmatch(profile_version) is None
-        or profile_version not in _ALLOWED_CAPTURE_PROFILE_VERSIONS
-    ):
+def _capture_profile_kind(profile_version: str) -> str:
+    if _PROFILE_VERSION_PATTERN.fullmatch(profile_version) is None:
         raise SanitizationError("invalid_profile_version")
+    if _PENDING_WORKFLOW_PROFILE_VERSION_PATTERN.fullmatch(profile_version):
+        return "pending_workflows"
+    if profile_version == _SYSTEM_MESSAGE_PROFILE_VERSION:
+        return "system_messages"
+    raise SanitizationError("invalid_profile_version")
 
 
 def sanitize_har_to_contract_pack(
@@ -128,7 +130,7 @@ def sanitize_har_to_contract_pack(
 ) -> None:
     """Create a Contract Pack atomically or leave the target absent."""
 
-    _validate_capture_profile_version(profile_version)
+    profile_kind = _capture_profile_kind(profile_version)
     if output_dir.name != profile_version:
         raise SanitizationError("profile_output_name_mismatch")
     if output_dir.exists():
@@ -137,7 +139,7 @@ def sanitize_har_to_contract_pack(
         raise SanitizationError("output_parent_missing")
 
     har = _load_har(input_har)
-    if profile_version == _PENDING_WORKFLOW_PROFILE_VERSION:
+    if profile_kind == "pending_workflows":
         raw_payloads = _select_pending_workflow_payloads(
             har,
             entry_indices=entry_indices,
@@ -166,7 +168,7 @@ def sanitize_har_to_contract_pack(
     for raw_payload in raw_payloads:
         _collect_sensitive_fields(raw_payload, sensitive_values)
         _assert_response_payload_has_no_forbidden_keys(raw_payload)
-    if profile_version == _SYSTEM_MESSAGE_PROFILE_VERSION:
+    if profile_kind == "system_messages":
         sensitive_values.update(_system_message_source_values(raw_payloads[0]))
         assert system_message_page_size is not None
         sample = _normalize_system_message_sample(

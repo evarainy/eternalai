@@ -20,6 +20,7 @@ SCRIPT = REPO_ROOT / "scripts" / "sanitize_oa_contract_pack.py"
 COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
+PROFILE_VERSION_V2 = "ecology9-pending-workflows-v2"
 SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
 
 
@@ -669,31 +670,62 @@ def test_sensitive_profile_version_is_rejected_without_output(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_unapproved_capture_revision_is_rejected_without_output(
+@pytest.mark.parametrize(
+    "profile_version",
+    [PROFILE_VERSION_V2, "ecology9-pending-workflows-v3", "ecology9-pending-workflows-v927"],
+)
+def test_versioned_pending_capture_revision_is_accepted(
     tmp_path: Path,
+    profile_version: str,
 ) -> None:
-    unapproved_profile = "ecology9-pending-workflows-v927"
     input_har = tmp_path / "synthetic.har"
     input_har.write_text(json.dumps(_har()), encoding="utf-8")
-    output_dir = tmp_path / unapproved_profile
+    output_dir = tmp_path / profile_version
 
     completed = _run_script(input_har, output_dir)
 
-    rendered_output = (
-        "\n".join(
-            path.read_text(encoding="utf-8")
-            for path in output_dir.iterdir()
-            if path.is_file()
-        )
-        if output_dir.exists()
-        else ""
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    assert profile["profile_version"] == profile_version
+    assert profile["capability_id"] == "oa.list_pending_workflows"
+
+
+def test_v2_sensitive_value_still_exits_two_without_output(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {
+                "headers": [{"name": "Cookie", "value": "pending"}],
+                "cookies": [],
+            },
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps({"message": "not selected"}),
+                },
+            },
+        }
     )
-    assert unapproved_profile not in rendered_output
-    assert unapproved_profile not in completed.stdout
-    assert unapproved_profile not in completed.stderr
+    input_har = tmp_path / "v2-sensitive.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[0],
+    )
+
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert completed.stderr == "sanitization failed: invalid_profile_version\n"
+    assert completed.stderr == "sanitization failed: raw_sensitive_value_survived\n"
+    assert "pending" not in completed.stdout
+    assert "pending" not in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
