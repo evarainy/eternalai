@@ -28,6 +28,7 @@ from app.infra.adapters.oa.contracts import (
     OAContractPackProfile,
     OAPendingWorkflowCollection,
     OAStructuralDriftReport,
+    OASystemMessageCollection,
     build_live_pending_workflows_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
@@ -78,6 +79,11 @@ class OAReadProvider(Protocol):
         self,
         credential: OASessionCredential | None = None,
     ) -> OAPendingWorkflowCollection: ...
+
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OASystemMessageCollection: ...
 
 
 class OAStructuralDriftReporter(Protocol):
@@ -144,6 +150,22 @@ class ReplayOAReadProvider:
     ) -> OAPendingWorkflowCollection:
         del credential
         collection, _fingerprint = _load_contract_pack(self._contract_pack_dir)
+        if not isinstance(collection, OAPendingWorkflowCollection):
+            raise OAContractPackPayloadInvalid(
+                "Contract Pack does not provide pending workflows"
+            )
+        return collection
+
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OASystemMessageCollection:
+        del credential
+        collection, _fingerprint = _load_contract_pack(self._contract_pack_dir)
+        if not isinstance(collection, OASystemMessageCollection):
+            raise OAContractPackPayloadInvalid(
+                "Contract Pack does not provide system messages"
+            )
         return collection
 
 
@@ -174,7 +196,11 @@ class LiveOAReadProvider:
             raise ValueError("OA maximum page count is outside the allowed range")
         if not 1 <= max_response_bytes <= _MAX_CONFIGURED_RESPONSE_BYTES:
             raise ValueError("OA response size limit is outside the allowed range")
-        _collection, expected_fingerprint = _load_contract_pack(contract_pack_dir)
+        collection, expected_fingerprint = _load_contract_pack(contract_pack_dir)
+        if not isinstance(collection, OAPendingWorkflowCollection):
+            raise OAContractPackPayloadInvalid(
+                "Live pending-workflow provider requires its matching Contract Pack"
+            )
 
         self._timeout_seconds = timeout_seconds
         self._max_pages = max_pages
@@ -346,6 +372,15 @@ class LiveOAReadProvider:
             expected_total = None
             collection = None
 
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OASystemMessageCollection:
+        del credential
+        raise OALiveRequestError(
+            "Live system-message reads are not configured in this lane"
+        )
+
     def _build_isolated_opener(self) -> OpenerDirector:
         return build_opener(
             ProxyHandler({}),
@@ -475,7 +510,10 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
 
 def _load_contract_pack(
     contract_pack_dir: Path,
-) -> tuple[OAPendingWorkflowCollection, dict[str, Any]]:
+) -> tuple[
+    OAPendingWorkflowCollection | OASystemMessageCollection,
+    dict[str, Any],
+]:
     profile_payload = _load_json(contract_pack_dir / "profile.json")
     try:
         profile = OAContractPackProfile.model_validate(
@@ -494,11 +532,13 @@ def _load_contract_pack(
     if fingerprint_payload != built_fingerprint:
         raise OAContractPackError("Contract Pack structural fingerprint mismatch")
 
+    collection_model = (
+        OAPendingWorkflowCollection
+        if profile.capability_id == "oa.list_pending_workflows"
+        else OASystemMessageCollection
+    )
     try:
-        collection = OAPendingWorkflowCollection.model_validate(
-            sample_payload,
-            strict=True,
-        )
+        collection = collection_model.model_validate(sample_payload, strict=True)
     except ValidationError:
         raise OAContractPackPayloadInvalid(
             "Contract Pack sample violates the normalized OA model"

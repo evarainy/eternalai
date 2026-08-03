@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.provider import ReplayOAReadProvider
+from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -18,6 +22,15 @@ from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SYSTEM_MESSAGE_CONTRACT_PACK = (
+    REPO_ROOT
+    / "tests"
+    / "contract_packs"
+    / "oa"
+    / "ecology9-system-messages-v1"
+)
 
 
 class SpyTaskStore:
@@ -215,6 +228,89 @@ def test_completed_response_message_is_sourced_from_adapter_data() -> None:
     assert envelope.status == "completed"
     assert "OA-WF-2026-0001" in envelope.message
     assert "approved" in envelope.message
+
+
+def test_system_message_response_discloses_incomplete_result_scope() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="completed",
+            data={
+                "messages": [
+                    {"message_id": "90000001", "title": "合成系统消息标题"}
+                ],
+                "returned_count": 1,
+                "is_complete": False,
+            },
+            trace_id="tr-system-messages-partial",
+        ),
+        capability_id="oa.list_system_messages",
+    )
+
+    assert envelope.status == "completed"
+    assert "OA系统消息返回1条" in envelope.message
+    assert "结果不完整，可能还有更多消息" in envelope.message
+    assert "合成系统消息标题" in envelope.message
+
+
+def test_system_message_response_can_report_complete_result_scope() -> None:
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="completed",
+            data={
+                "messages": [],
+                "returned_count": 0,
+                "is_complete": True,
+            },
+            trace_id="tr-system-messages-complete",
+        ),
+        capability_id="oa.list_system_messages",
+    )
+
+    assert envelope.status == "completed"
+    assert envelope.message == "OA系统消息返回0条（结果完整）"
+
+
+def test_system_message_replay_runs_from_natural_language_through_real_gateway() -> None:
+    async def exercise_runtime() -> ResponseEnvelope:
+        capability_id = "oa.list_system_messages"
+        message = "我有什么系统消息"
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            message,
+            CapabilityRef,
+            CapabilityRef(capability_id=capability_id),
+        )
+        registry = StaticCapabilityRegistry(capability_id)
+        gateway = CapabilityGateway(
+            adapter=OAReadAdapter(
+                ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)
+            ),
+            capability_registry=registry,
+        )
+        runtime = RuntimeImpl(
+            task_store=SpyTaskStore(),
+            session_store=ExistingSessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=SpyTracePort(),
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            response_builder=ResponseEnvelopeBuilder(),
+        )
+        return await runtime.handle_user_message(
+            channel="web",
+            ai_user_id="ai-user-system-message",
+            session_id="session-system-message",
+            message=message,
+            client_capabilities={},
+        )
+
+    envelope = asyncio.run(exercise_runtime())
+
+    assert envelope.status == "completed"
+    assert "OA系统消息返回20条" in envelope.message
+    assert "结果不完整，可能还有更多消息" in envelope.message
 
 
 def test_no_capability_found_uses_operator_handback_none_without_degrading() -> None:

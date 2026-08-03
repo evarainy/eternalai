@@ -800,6 +800,18 @@ def _format_capability_response(
         identifiers = _joined_scalar_values(workflows, ("workflow_id", "title"))
         return f"OA待办共{count}条: {identifiers}" if identifiers else f"OA待办共{count}条"
 
+    if capability_id == "oa.list_system_messages":
+        messages = data.get("messages")
+        count = len(messages) if isinstance(messages, list) else 0
+        titles = _joined_scalar_values(messages, ("title",))
+        scope = (
+            "结果完整"
+            if data.get("is_complete") is True
+            else "结果不完整，可能还有更多消息"
+        )
+        prefix = f"OA系统消息返回{count}条（{scope}）"
+        return f"{prefix}: {titles}" if titles else prefix
+
     if capability_id == "oa.get_workflow_status":
         return _join_message_parts(
             "OA流程状态",

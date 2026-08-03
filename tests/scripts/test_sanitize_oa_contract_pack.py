@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -8,7 +9,10 @@ from typing import Any
 
 import pytest
 
-from app.infra.adapters.oa.contracts import build_structural_fingerprint
+from app.infra.adapters.oa.contracts import (
+    EXTERNAL_SANITIZATION_WARNING,
+    build_structural_fingerprint,
+)
 from scripts import sanitize_oa_contract_pack as sanitizer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +20,7 @@ SCRIPT = REPO_ROOT / "scripts" / "sanitize_oa_contract_pack.py"
 COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
+SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
 
 
 def _har(
@@ -81,6 +86,92 @@ def _har(
             ],
         }
     }
+
+
+def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw_records = [
+        {
+            "messageid": "83000001",
+            "title": "真实系统消息标题甲乙丙丁戊己庚辛",
+            "context": "真实系统消息正文甲乙丙丁戊己庚辛壬癸子丑寅卯",
+            "name": "真实消息来源甲",
+            "time": "2026-08-03 10:00:00",
+            "bizstate": "0",
+            "link": "https://internal.example.invalid/message/83000001/detail",
+            "linkmobileurl": "https://internal.example.invalid/mobile/83000001/detail",
+        },
+        {
+            "messageid": "83000002",
+            "title": "真实系统消息标题第二条甲乙丙丁戊己庚辛壬癸",
+            "context": "真实系统消息正文第二条甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳",
+            "name": "真实消息来源乙",
+            "time": "2026-08-03 09:00:00",
+            "bizstate": "1",
+            "link": "",
+            "linkmobileurl": "",
+        },
+    ]
+    image_bytes = b"\x89PNG\r\n\x1a\nsynthetic-image"
+    return (
+        {
+            "log": {
+                "version": "1.2",
+                "entries": [
+                    {
+                        "request": {"headers": [], "cookies": []},
+                        "response": {
+                            "headers": [],
+                            "cookies": [],
+                            "content": {
+                                "mimeType": "image/png",
+                                "encoding": "base64",
+                                "text": base64.b64encode(image_bytes).decode("ascii"),
+                            },
+                        },
+                    },
+                    {
+                        "request": {
+                            "headers": [
+                                {
+                                    "name": "Cookie",
+                                    "value": "ecology_JSessionid=1",
+                                }
+                            ],
+                            "cookies": [
+                                {"name": "ecology_JSessionid", "value": "1"}
+                            ],
+                            "postData": {
+                                "mimeType": "application/x-www-form-urlencoded",
+                                "params": [
+                                    {"name": "pagesize", "value": "2"},
+                                    {"name": "selectState", "value": "0"},
+                                ],
+                                "text": "pagesize=2&selectState=0",
+                            },
+                        },
+                        "response": {
+                            "headers": [],
+                            "cookies": [],
+                            "content": {
+                                "mimeType": "application/json",
+                                "text": json.dumps(
+                                    {
+                                        "data": raw_records,
+                                        "mintime": "2026-08-03 09:00:00",
+                                        "msgid": "cursor-raw-001",
+                                        "maxtime": "2026-08-03 10:00:00",
+                                        "status": "1",
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        raw_records,
+    )
 
 
 def _run_script(
@@ -172,6 +263,381 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         "must-not-be-copied",
     ):
         assert forbidden not in all_output
+
+
+def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert profile == {
+        "profile_version": SYSTEM_MESSAGE_PROFILE_VERSION,
+        "capability_id": "oa.list_system_messages",
+        "source_kind": "externally_sanitized_capture",
+        "sanitizer_version": "2",
+        "sample_file": "sample.json",
+        "fingerprint_file": "fingerprint.json",
+        "source_warning": EXTERNAL_SANITIZATION_WARNING,
+    }
+    assert sample["returned_count"] == 2
+    assert sample["is_complete"] is False
+    assert len(sample["messages"]) == len(raw_records)
+    for raw_record, synthetic_record in zip(raw_records, sample["messages"], strict=True):
+        for raw_key, synthetic_key in (
+            ("messageid", "message_id"),
+            ("title", "title"),
+            ("context", "content"),
+            ("name", "source_name"),
+            ("time", "occurred_at"),
+            ("bizstate", "business_state"),
+        ):
+            assert len(synthetic_record[synthetic_key]) == len(raw_record[raw_key])
+        assert all("\u4e00" <= character <= "\u9fff" for character in synthetic_record["title"])
+        assert all("\u4e00" <= character <= "\u9fff" for character in synthetic_record["content"])
+    assert sample["messages"][0]["link"].startswith("/")
+    assert len(sample["messages"][0]["link"]) == len(raw_records[0]["link"])
+    assert sample["messages"][1]["link"] is None
+    assert sample["messages"][1]["mobile_link"] is None
+    assert json.loads(
+        (output_dir / "fingerprint.json").read_text(encoding="utf-8")
+    ) == build_structural_fingerprint(sample)
+    all_output = "\n".join(
+        path.read_text(encoding="utf-8") for path in output_dir.iterdir()
+    )
+    for raw_record in raw_records:
+        for key in (
+            "messageid",
+            "title",
+            "context",
+            "name",
+            "time",
+            "link",
+            "linkmobileurl",
+        ):
+            raw_value = raw_record[key]
+            if raw_value:
+                assert raw_value not in all_output
+
+
+def test_selected_textual_base64_matches_plaintext_pack(tmp_path: Path) -> None:
+    plain_har, _raw_records = _system_message_har()
+    encoded_har = json.loads(json.dumps(plain_har))
+    encoded_content = encoded_har["log"]["entries"][1]["response"]["content"]
+    plaintext = encoded_content["text"].encode("utf-8")
+    encoded_content["encoding"] = "base64"
+    encoded_content["text"] = base64.b64encode(plaintext).decode("ascii")
+    plain_input = tmp_path / "plain-system-message.har"
+    encoded_input = tmp_path / "base64-system-message.har"
+    plain_input.write_text(json.dumps(plain_har, ensure_ascii=False), encoding="utf-8")
+    encoded_input.write_text(
+        json.dumps(encoded_har, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    plain_parent = tmp_path / "plain"
+    encoded_parent = tmp_path / "encoded"
+    plain_parent.mkdir()
+    encoded_parent.mkdir()
+    plain_output = plain_parent / SYSTEM_MESSAGE_PROFILE_VERSION
+    encoded_output = encoded_parent / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    plain_completed = _run_script(plain_input, plain_output, entry_indices=[1])
+    encoded_completed = _run_script(encoded_input, encoded_output, entry_indices=[1])
+
+    assert plain_completed.returncode == 0
+    assert encoded_completed.returncode == 0
+    for file_name in ("profile.json", "sample.json", "fingerprint.json"):
+        assert (encoded_output / file_name).read_bytes() == (
+            plain_output / file_name
+        ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "page_size_case",
+    ("missing", "non_numeric", "zero", "too_large", "disagrees"),
+)
+def test_system_message_page_size_failures_leave_zero_output(
+    tmp_path: Path,
+    page_size_case: str,
+) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    if page_size_case == "missing":
+        post_data["params"] = [{"name": "selectState", "value": "0"}]
+        post_data["text"] = "selectState=0"
+    elif page_size_case == "disagrees":
+        post_data["text"] = "pagesize=5&selectState=0"
+    else:
+        invalid_value = {
+            "non_numeric": "abc",
+            "zero": "0",
+            "too_large": "10001",
+        }[page_size_case]
+        post_data["params"][0]["value"] = invalid_value
+        post_data["text"] = f"pagesize={invalid_value}&selectState=0"
+    input_har = tmp_path / f"system-message-page-size-{page_size_case}.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "system_message_page_size_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_system_message_short_page_is_explicitly_complete(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    post_data["params"][0]["value"] = "3"
+    post_data["text"] = "pagesize=3&selectState=0"
+    input_har = tmp_path / "system-message-short-page.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 0
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert sample["returned_count"] == 2
+    assert sample["is_complete"] is True
+
+
+def test_system_message_records_cannot_exceed_page_size(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    post_data["params"][0]["value"] = "1"
+    post_data["text"] = "pagesize=1&selectState=0"
+    input_har = tmp_path / "system-message-overfull-page.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "system_message_page_size_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_selected_entry_must_have_system_message_shape(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    content = har["log"]["entries"][1]["response"]["content"]
+    content["text"] = json.dumps({"data": {"records": []}})
+    input_har = tmp_path / "wrong-system-message-shape.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "selected_entry_not_system_message_response" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_selected_system_message_response_requires_text(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    har["log"]["entries"][1]["response"]["content"].pop("text")
+    input_har = tmp_path / "missing-system-message-text.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "selected_entry_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_auto_selection_requires_one_candidate(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    duplicate = json.loads(json.dumps(har["log"]["entries"][1]))
+    har["log"]["entries"].append(duplicate)
+    input_har = tmp_path / "ambiguous-system-message.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
+    assert "system_message_response_not_unique" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_profile_accepts_only_one_entry_index(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    input_har = tmp_path / "multiple-system-message-indices.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1, 1])
+
+    assert completed.returncode == 2
+    assert "system_message_entry_index_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_optional_fields_reject_invalid_types(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    content = har["log"]["entries"][1]["response"]["content"]
+    payload = json.loads(content["text"])
+    payload["data"][0]["link"] = 42
+    content["text"] = json.dumps(payload, ensure_ascii=False)
+    input_har = tmp_path / "invalid-system-message-link.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "response_optional_string_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_non_external_source_keeps_short_transport_values_strict() -> None:
+    har, _raw_records = _system_message_har()
+    request = har["log"]["entries"][1]["request"]
+    header_value = "external-session-header-value"
+    parameter_value = "external-account-password-value"
+    request["headers"] = [{"name": "Cookie", "value": header_value}]
+    request["cookies"] = [{"name": "r", "value": "7"}]
+    request["url"] = f"https://synthetic.invalid/messages?password={parameter_value}"
+
+    sensitive_values = sanitizer._collect_sensitive_values(har)
+
+    assert header_value in sensitive_values
+    assert "7" in sensitive_values
+    assert parameter_value in sensitive_values
+
+
+def test_external_source_long_session_cookie_cannot_survive_in_output() -> None:
+    har, _raw_records = _system_message_har()
+    synthetic_session_cookie = (
+        "Q7mV2pN9xK4rT8wY1cD6fH3jL5sA0bE2uG7zC9qM4nR8tP1vX6kF3dJ5"
+    )
+    request = har["log"]["entries"][1]["request"]
+    request["headers"] = [
+        {
+            "name": "Cookie",
+            "value": f"ecology_JSessionid={synthetic_session_cookie}",
+        }
+    ]
+    request["cookies"] = [
+        {"name": "ecology_JSessionid", "value": synthetic_session_cookie}
+    ]
+    sensitive_values = sanitizer._collect_sensitive_values(
+        har,
+        short_transport_as_full_token=True,
+    )
+    candidate_payloads = {
+        "sample.json": {"leaked_value": synthetic_session_cookie}
+    }
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            candidate_payloads,
+        )
+
+
+def test_external_short_cookie_is_checked_as_full_transport_token() -> None:
+    har, _raw_records = _system_message_har()
+    request = har["log"]["entries"][1]["request"]
+    request["headers"] = [{"name": "Token", "value": "7"}]
+    request["cookies"] = [{"name": "r", "value": "7"}]
+    sensitive_values = sanitizer._collect_sensitive_values(
+        har,
+        short_transport_as_full_token=True,
+    )
+
+    assert "7" not in sensitive_values
+    assert "r" not in sensitive_values
+    assert "Token: 7" in sensitive_values
+    assert "r=7" in sensitive_values
+    sanitizer._assert_sensitive_values_absent(
+        sensitive_values,
+        {"sample.json": {"business_state": "7"}},
+    )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            {"sample.json": {"transport": "r=7"}},
+        )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            {"sample.json": {"transport": "Token: 7"}},
+        )
+
+
+def test_short_sensitive_value_requires_complete_token_match() -> None:
+    short_value = "Q7mV2"
+
+    sanitizer._assert_sensitive_values_absent(
+        {short_value},
+        {"sample.json": {"synthetic": f"prefix{short_value}suffix"}},
+    )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            {short_value},
+            {"sample.json": {"synthetic": f"prefix-{short_value}-suffix"}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("length", "substring_must_match"),
+    [
+        (sanitizer._MIN_SENSITIVE_SUBSTRING_LENGTH - 1, False),
+        (sanitizer._MIN_SENSITIVE_SUBSTRING_LENGTH, True),
+    ],
+)
+def test_sensitive_substring_matching_starts_at_threshold(
+    length: int,
+    substring_must_match: bool,
+) -> None:
+    sensitive_value = ("Q7mV2pN9xK4rT8wY" * 2)[:length]
+    candidate_payloads = {
+        "sample.json": {"synthetic": f"prefix{sensitive_value}suffix"}
+    }
+
+    if substring_must_match:
+        with pytest.raises(
+            sanitizer.SanitizationError,
+            match="raw_sensitive_value_survived",
+        ):
+            sanitizer._assert_sensitive_values_absent(
+                {sensitive_value},
+                candidate_payloads,
+            )
+    else:
+        sanitizer._assert_sensitive_values_absent(
+            {sensitive_value},
+            candidate_payloads,
+        )
 
 
 def test_sensitive_profile_version_is_rejected_without_output(
@@ -563,7 +1029,7 @@ def test_unselected_query_and_form_credentials_fail_with_zero_output(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_encoded_unselected_response_remains_fail_closed_with_selector(
+def test_invalid_base64_unselected_response_remains_fail_closed_with_selector(
     tmp_path: Path,
 ) -> None:
     har = _har()
@@ -592,6 +1058,36 @@ def test_encoded_unselected_response_remains_fail_closed_with_selector(
     )
 
     assert completed.returncode != 0
+    assert "encoded_response_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_unsupported_unselected_response_encoding_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "encoding": "gzip",
+                    "text": "opaque-encoded-response",
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-unsupported-encoding.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[0])
+
+    assert completed.returncode == 2
     assert "encoded_response_not_supported" in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
@@ -922,6 +1418,44 @@ def test_sensitive_value_in_other_json_response_cannot_reach_output(
     completed = _run_script(input_har, output_dir)
 
     assert completed.returncode != 0
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert other_response_value not in completed.stdout
+    assert other_response_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_sensitive_value_in_base64_json_response_cannot_reach_output(
+    tmp_path: Path,
+) -> None:
+    other_response_value = "pending"
+    encoded_payload = base64.b64encode(
+        json.dumps(
+            {"unrelated": {"accessToken": other_response_value}}
+        ).encode("utf-8")
+    ).decode("ascii")
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "encoding": "base64",
+                    "text": encoded_payload,
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "base64-other-response.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
     assert "raw_sensitive_value_survived" in completed.stderr
     assert other_response_value not in completed.stdout
     assert other_response_value not in completed.stderr

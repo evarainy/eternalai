@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import re
@@ -21,17 +23,26 @@ if str(REPO_ROOT) not in sys.path:
 from pydantic import ValidationError  # noqa: E402
 
 from app.infra.adapters.oa.contracts import (  # noqa: E402
+    EXTERNAL_SANITIZATION_WARNING,
     OAContractPackProfile,
     OAPendingWorkflowCollection,
+    OASystemMessageCollection,
     build_structural_fingerprint,
 )
 
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_ALLOWED_CAPTURE_PROFILE_VERSIONS = frozenset({"ecology9-pending-workflows-v1"})
+_PENDING_WORKFLOW_PROFILE_VERSION = "ecology9-pending-workflows-v1"
+_SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
+_ALLOWED_CAPTURE_PROFILE_VERSIONS = frozenset(
+    {_PENDING_WORKFLOW_PROFILE_VERSION, _SYSTEM_MESSAGE_PROFILE_VERSION}
+)
 _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
 _MAX_RECORDS = 10_000
 _MAX_EMBEDDED_JSON_DEPTH = 8
+# At the 32 MiB scan bound, random hex collisions fall from 0.78% at 8
+# characters to 0.049% at 9 characters.
+_MIN_SENSITIVE_SUBSTRING_LENGTH = 9
 _SYNTHETIC_TIMESTAMP = "2000-01-01T00:00:00+00:00"
 _ALLOWED_RAW_PENDING_STATUSES = frozenset({"pending"})
 
@@ -126,24 +137,55 @@ def sanitize_har_to_contract_pack(
         raise SanitizationError("output_parent_missing")
 
     har = _load_har(input_har)
-    raw_payloads = _select_pending_workflow_payloads(
+    if profile_version == _PENDING_WORKFLOW_PROFILE_VERSION:
+        raw_payloads = _select_pending_workflow_payloads(
+            har,
+            entry_indices=entry_indices,
+        )
+        system_message_page_size = None
+        capability_id = "oa.list_pending_workflows"
+        source_kind = "sanitized_capture"
+        sanitizer_version = "1"
+        source_warning = None
+    else:
+        raw_payload, system_message_page_size = _select_system_message_payload(
+            har,
+            entry_indices=entry_indices,
+        )
+        raw_payloads = [raw_payload]
+        capability_id = "oa.list_system_messages"
+        source_kind = "externally_sanitized_capture"
+        sanitizer_version = "2"
+        source_warning = EXTERNAL_SANITIZATION_WARNING
+    sensitive_values = _collect_sensitive_values(
         har,
-        entry_indices=entry_indices,
+        short_transport_as_full_token=(
+            source_kind == "externally_sanitized_capture"
+        ),
     )
-    sensitive_values = _collect_sensitive_values(har)
     for raw_payload in raw_payloads:
         _collect_sensitive_fields(raw_payload, sensitive_values)
         _assert_response_payload_has_no_forbidden_keys(raw_payload)
-    sample = _normalize_sample(raw_payloads)
+    if profile_version == _SYSTEM_MESSAGE_PROFILE_VERSION:
+        sensitive_values.update(_system_message_source_values(raw_payloads[0]))
+        assert system_message_page_size is not None
+        sample = _normalize_system_message_sample(
+            raw_payloads[0],
+            page_size=system_message_page_size,
+        )
+    else:
+        sample = _normalize_pending_workflow_sample(raw_payloads)
     fingerprint = build_structural_fingerprint(sample)
     profile = {
         "profile_version": profile_version,
-        "capability_id": "oa.list_pending_workflows",
-        "source_kind": "sanitized_capture",
-        "sanitizer_version": "1",
+        "capability_id": capability_id,
+        "source_kind": source_kind,
+        "sanitizer_version": sanitizer_version,
         "sample_file": "sample.json",
         "fingerprint_file": "fingerprint.json",
     }
+    if source_warning is not None:
+        profile["source_warning"] = source_warning
     candidate_payloads = {
         "profile.json": profile,
         "sample.json": sample,
@@ -252,6 +294,44 @@ def _select_pending_workflow_payloads(
     return selected_payloads
 
 
+def _select_system_message_payload(
+    har: Mapping[str, Any],
+    *,
+    entry_indices: Sequence[int] | None,
+) -> tuple[Mapping[str, Any], int]:
+    log = har.get("log")
+    if not isinstance(log, Mapping):
+        raise SanitizationError("har_log_missing")
+    entries = log.get("entries")
+    if not isinstance(entries, list):
+        raise SanitizationError("har_entries_missing")
+
+    if entry_indices is None:
+        candidates = [
+            entry
+            for entry in entries
+            if (payload := _response_json(entry)) is not None
+            and _is_system_message_payload(payload)
+        ]
+        if len(candidates) != 1:
+            raise SanitizationError("system_message_response_not_unique")
+        selected_entry = candidates[0]
+    else:
+        if len(entry_indices) != 1:
+            raise SanitizationError("system_message_entry_index_invalid")
+        entry_index = entry_indices[0]
+        if not isinstance(entry_index, int) or isinstance(entry_index, bool):
+            raise SanitizationError("entry_index_invalid")
+        if entry_index < 0 or entry_index >= len(entries):
+            raise SanitizationError("entry_index_out_of_range")
+        selected_entry = entries[entry_index]
+
+    payload = _response_json(selected_entry, selected=True)
+    if payload is None or not _is_system_message_payload(payload):
+        raise SanitizationError("selected_entry_not_system_message_response")
+    return payload, _system_message_page_size(selected_entry)
+
+
 def _response_json(
     entry: Any,
     *,
@@ -271,9 +351,7 @@ def _response_json(
         if selected:
             raise SanitizationError("selected_entry_invalid")
         return None
-    if content.get("encoding") not in (None, ""):
-        raise SanitizationError("encoded_response_not_supported")
-    text = content.get("text")
+    text = _decoded_response_text(content, selected=selected)
     if not isinstance(text, str):
         if selected:
             raise SanitizationError("selected_entry_invalid")
@@ -301,7 +379,19 @@ def _is_pending_workflow_payload(payload: Mapping[str, Any]) -> bool:
     return isinstance(data, Mapping) and isinstance(data.get("records"), list)
 
 
-def _normalize_sample(
+def _is_system_message_payload(payload: Mapping[str, Any]) -> bool:
+    records = payload.get("data")
+    return (
+        isinstance(records, list)
+        and all(
+            isinstance(record, Mapping)
+            and {"messageid", "title", "context", "name", "time"}.issubset(record)
+            for record in records
+        )
+    )
+
+
+def _normalize_pending_workflow_sample(
     raw_payloads: Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
     workflows: list[dict[str, Any]] = []
@@ -360,6 +450,91 @@ def _normalize_sample(
     return sample
 
 
+def _normalize_system_message_sample(
+    raw_payload: Mapping[str, Any],
+    *,
+    page_size: int,
+) -> dict[str, Any]:
+    records = raw_payload.get("data")
+    if not isinstance(records, list) or len(records) > _MAX_RECORDS:
+        raise SanitizationError("response_records_invalid")
+    if len(records) > page_size:
+        raise SanitizationError("system_message_page_size_invalid")
+
+    messages: list[dict[str, Any]] = []
+    for index, record in enumerate(records, start=1):
+        if not isinstance(record, Mapping):
+            raise SanitizationError("response_record_invalid")
+        raw_message_id = _require_string(record, "messageid")
+        raw_title = _require_string(record, "title")
+        raw_content = _require_string(record, "context")
+        raw_source_name = _require_string(record, "name")
+        raw_occurred_at = _require_string(record, "time")
+        raw_business_state = _require_string(record, "bizstate")
+        raw_link = _optional_blankable_string(record, "link")
+        raw_mobile_link = _optional_blankable_string(record, "linkmobileurl")
+        messages.append(
+            {
+                "message_id": _synthetic_identifier(len(raw_message_id), index),
+                "title": _synthetic_chinese_text(len(raw_title), index),
+                "content": _synthetic_chinese_text(len(raw_content), index + 100),
+                "source_name": _synthetic_chinese_text(
+                    len(raw_source_name), index + 200
+                ),
+                "occurred_at": _synthetic_timestamp(len(raw_occurred_at)),
+                "business_state": _synthetic_machine_text(
+                    len(raw_business_state), index
+                ),
+                "link": (
+                    _synthetic_relative_path(len(raw_link), index, "desktop")
+                    if raw_link
+                    else None
+                ),
+                "mobile_link": (
+                    _synthetic_relative_path(len(raw_mobile_link), index, "mobile")
+                    if raw_mobile_link
+                    else None
+                ),
+            }
+        )
+    sample = {
+        "messages": messages,
+        "returned_count": len(messages),
+        "is_complete": len(messages) < page_size,
+    }
+    try:
+        OASystemMessageCollection.model_validate(sample, strict=True)
+    except ValidationError:
+        raise SanitizationError("normalized_sample_invalid") from None
+    return sample
+
+
+def _system_message_source_values(raw_payload: Mapping[str, Any]) -> set[str]:
+    values: set[str] = set()
+    records = raw_payload.get("data")
+    if isinstance(records, list):
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            for key in (
+                "messageid",
+                "title",
+                "context",
+                "name",
+                "time",
+                "link",
+                "linkmobileurl",
+            ):
+                value = record.get(key)
+                if isinstance(value, str) and value:
+                    values.add(value)
+    for key in ("mintime", "msgid", "maxtime"):
+        value = raw_payload.get(key)
+        if isinstance(value, str) and value:
+            values.add(value)
+    return values
+
+
 def _require_string(record: Mapping[str, Any], key: str) -> str:
     value = record.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -376,7 +551,64 @@ def _optional_string(record: Mapping[str, Any], key: str) -> str | None:
     return value
 
 
-def _collect_sensitive_values(har: Mapping[str, Any]) -> set[str]:
+def _optional_blankable_string(
+    record: Mapping[str, Any],
+    key: str,
+) -> str | None:
+    value = record.get(key)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise SanitizationError("response_optional_string_invalid")
+    return value
+
+
+def _synthetic_identifier(length: int, index: int) -> str:
+    if length <= 0:
+        raise SanitizationError("response_required_string_invalid")
+    seed = f"900{index:05d}"
+    return (seed * ((length // len(seed)) + 1))[:length]
+
+
+def _synthetic_chinese_text(length: int, index: int) -> str:
+    if length <= 0:
+        raise SanitizationError("response_required_string_invalid")
+    alphabet = "系统消息合成样本文本内容通知提醒待办查阅"
+    offset = index % len(alphabet)
+    rotated = alphabet[offset:] + alphabet[:offset]
+    return (rotated * ((length // len(rotated)) + 1))[:length]
+
+
+def _synthetic_timestamp(length: int) -> str:
+    seed = "2000-01-01 00:00:00"
+    if length <= 0:
+        raise SanitizationError("response_required_string_invalid")
+    return (seed * ((length // len(seed)) + 1))[:length]
+
+
+def _synthetic_machine_text(length: int, index: int) -> str:
+    if length <= 0:
+        raise SanitizationError("response_required_string_invalid")
+    seed = str((index % 8) + 1)
+    return seed * length
+
+
+def _synthetic_relative_path(
+    length: int,
+    index: int,
+    channel: str,
+) -> str:
+    prefix = f"/oa/system-messages/{channel}/{index:03d}"
+    if length < len(prefix):
+        return "/" + ("m" * (length - 1))
+    return prefix + ("x" * (length - len(prefix)))
+
+
+def _collect_sensitive_values(
+    har: Mapping[str, Any],
+    *,
+    short_transport_as_full_token: bool = False,
+) -> set[str]:
     values: set[str] = set()
     _collect_sensitive_fields(har, values)
     log = har.get("log")
@@ -384,8 +616,14 @@ def _collect_sensitive_values(har: Mapping[str, Any]) -> set[str]:
         entries = log.get("entries")
         if isinstance(entries, list):
             for entry in entries:
-                _assert_entry_response_encoding_supported(entry)
-                _collect_entry_credentials(entry, values)
+                decoded_payload = _decoded_entry_response_json(entry)
+                if decoded_payload is not None:
+                    _collect_sensitive_fields(decoded_payload, values)
+                _collect_entry_credentials(
+                    entry,
+                    values,
+                    short_transport_as_full_token=short_transport_as_full_token,
+                )
     return {value for value in values if value}
 
 
@@ -450,15 +688,28 @@ def _bounded_json_loads(value: str) -> Any:
     return json.loads(value)
 
 
-def _collect_entry_credentials(entry: Any, output: set[str]) -> None:
+def _collect_entry_credentials(
+    entry: Any,
+    output: set[str],
+    *,
+    short_transport_as_full_token: bool,
+) -> None:
     if not isinstance(entry, Mapping):
         return
     for side_name in ("request", "response"):
         side = entry.get(side_name)
         if not isinstance(side, Mapping):
             continue
-        _collect_header_values(side.get("headers"), output)
-        _collect_cookie_values(side.get("cookies"), output)
+        _collect_header_values(
+            side.get("headers"),
+            output,
+            short_transport_as_full_token=short_transport_as_full_token,
+        )
+        _collect_cookie_values(
+            side.get("cookies"),
+            output,
+            short_transport_as_full_token=short_transport_as_full_token,
+        )
         if side_name == "request":
             _collect_request_parameter_values(side, output)
 
@@ -542,21 +793,115 @@ def _collect_named_parameter_values(
             output.update(_credential_components(value))
 
 
-def _assert_entry_response_encoding_supported(entry: Any) -> None:
+def _system_message_page_size(entry: Any) -> int:
     if not isinstance(entry, Mapping):
-        return
+        raise SanitizationError("selected_entry_invalid")
+    request = entry.get("request")
+    if not isinstance(request, Mapping):
+        raise SanitizationError("selected_entry_invalid")
+    observed: list[str] = []
+    post_data = request.get("postData")
+    if isinstance(post_data, Mapping):
+        parameters = post_data.get("params")
+        if isinstance(parameters, list):
+            for parameter in parameters:
+                if (
+                    isinstance(parameter, Mapping)
+                    and _normalize_key(str(parameter.get("name", "")))
+                    == "pagesize"
+                    and isinstance(parameter.get("value"), str)
+                ):
+                    observed.append(parameter["value"])
+        text = post_data.get("text")
+        if isinstance(text, str):
+            try:
+                form_parameters = parse_qsl(
+                    text,
+                    keep_blank_values=True,
+                    max_num_fields=_MAX_RECORDS,
+                )
+            except ValueError:
+                raise SanitizationError("request_parameters_invalid") from None
+            observed.extend(
+                value
+                for name, value in form_parameters
+                if _normalize_key(name) == "pagesize"
+            )
+    if not observed or any(value != observed[0] for value in observed[1:]):
+        raise SanitizationError("system_message_page_size_invalid")
+    try:
+        page_size = int(observed[0], 10)
+    except ValueError:
+        raise SanitizationError("system_message_page_size_invalid") from None
+    if not 1 <= page_size <= _MAX_RECORDS:
+        raise SanitizationError("system_message_page_size_invalid")
+    return page_size
+
+
+def _decoded_entry_response_json(entry: Any) -> Mapping[str, Any] | list[Any] | None:
+    if not isinstance(entry, Mapping):
+        return None
     response = entry.get("response")
     if not isinstance(response, Mapping):
-        return
+        return None
     content = response.get("content")
-    if (
-        isinstance(content, Mapping)
-        and content.get("encoding") not in (None, "")
-    ):
+    if not isinstance(content, Mapping):
+        return None
+    text = _decoded_response_text(content, selected=False)
+    if text is None:
+        return None
+    try:
+        payload = _bounded_json_loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, (Mapping, list)) else None
+
+
+def _decoded_response_text(
+    content: Mapping[str, Any],
+    *,
+    selected: bool,
+) -> str | None:
+    text = content.get("text")
+    if not isinstance(text, str):
+        if selected:
+            raise SanitizationError("selected_entry_invalid")
+        return None
+    encoding = content.get("encoding")
+    if encoding in (None, ""):
+        return text
+    if not isinstance(encoding, str) or encoding.casefold() != "base64":
         raise SanitizationError("encoded_response_not_supported")
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        raise SanitizationError("encoded_response_invalid") from None
+    mime_type = content.get("mimeType")
+    normalized_mime = (
+        mime_type.partition(";")[0].strip().casefold()
+        if isinstance(mime_type, str)
+        else ""
+    )
+    is_textual = normalized_mime.startswith("text/") or normalized_mime in {
+        "application/json",
+        "application/problem+json",
+    }
+    if not is_textual:
+        if selected:
+            raise SanitizationError("selected_entry_response_not_json")
+        return None
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SanitizationError("encoded_response_invalid") from None
 
 
-def _collect_header_values(headers: Any, output: set[str]) -> None:
+def _collect_header_values(
+    headers: Any,
+    output: set[str],
+    *,
+    short_transport_as_full_token: bool = False,
+) -> None:
     if not isinstance(headers, list):
         return
     for header in headers:
@@ -571,11 +916,28 @@ def _collect_header_values(headers: Any, output: set[str]) -> None:
             normalized_name in _SENSITIVE_HEADER_KEYS
             or normalized_name in _FORBIDDEN_KEYS
         ):
-            output.add(value)
-            output.update(_credential_components(value))
+            components = _credential_components(value)
+            if (
+                not short_transport_as_full_token
+                or len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            ):
+                output.add(value)
+            else:
+                output.add(f"{name}: {value}")
+            output.update(
+                component
+                for component in components
+                if not short_transport_as_full_token
+                or len(component) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
 
 
-def _collect_cookie_values(cookies: Any, output: set[str]) -> None:
+def _collect_cookie_values(
+    cookies: Any,
+    output: set[str],
+    *,
+    short_transport_as_full_token: bool = False,
+) -> None:
     if not isinstance(cookies, list):
         return
     for cookie in cookies:
@@ -583,10 +945,24 @@ def _collect_cookie_values(cookies: Any, output: set[str]) -> None:
             continue
         name = cookie.get("name")
         value = cookie.get("value")
-        if isinstance(name, str):
+        if (
+            isinstance(name, str)
+            and (
+                not short_transport_as_full_token
+                or len(name) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
+        ):
             output.add(name)
-        if isinstance(value, str):
+        if (
+            isinstance(value, str)
+            and (
+                not short_transport_as_full_token
+                or len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
+        ):
             output.add(value)
+        if isinstance(name, str) and isinstance(value, str):
+            output.add(f"{name}={value}")
 
 
 def _credential_components(value: str) -> set[str]:
@@ -626,8 +1002,19 @@ def _assert_sensitive_values_absent(
         json.dumps(payload, ensure_ascii=False, sort_keys=True)
         for payload in candidate_payloads.values()
     )
-    if any(value in rendered for value in sensitive_values):
-        raise SanitizationError("raw_sensitive_value_survived")
+    for value in sensitive_values:
+        if len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH:
+            survived = value in rendered
+        else:
+            survived = (
+                re.search(
+                    rf"(?<!\w){re.escape(value)}(?!\w)",
+                    rendered,
+                )
+                is not None
+            )
+        if survived:
+            raise SanitizationError("raw_sensitive_value_survived")
 
 
 def _scan_forbidden_output(candidate_payloads: Mapping[str, Any]) -> None:
@@ -655,14 +1042,16 @@ def _scan_payload(value: Any) -> None:
 def _validate_candidate_pack(candidate_payloads: Mapping[str, Any]) -> None:
     candidate_invalid = False
     try:
-        OAContractPackProfile.model_validate(
+        profile = OAContractPackProfile.model_validate(
             candidate_payloads["profile.json"],
             strict=True,
         )
-        OAPendingWorkflowCollection.model_validate(
-            candidate_payloads["sample.json"],
-            strict=True,
+        collection_model = (
+            OAPendingWorkflowCollection
+            if profile.capability_id == "oa.list_pending_workflows"
+            else OASystemMessageCollection
         )
+        collection_model.model_validate(candidate_payloads["sample.json"], strict=True)
     except (KeyError, ValidationError):
         candidate_invalid = True
     if candidate_invalid:
@@ -696,8 +1085,8 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="entry_indices",
         help=(
-            "Zero-based HAR entry index. Repeat to aggregate selected "
-            "pending-workflow pages in the supplied order."
+            "Zero-based HAR entry index. Repeat only for a multi-page "
+            "pending-workflow capture."
         ),
     )
     return parser

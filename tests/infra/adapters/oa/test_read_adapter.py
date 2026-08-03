@@ -22,6 +22,7 @@ from app.infra.adapters.oa import provider as oa_provider
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
+    OASystemMessageCollection,
     build_live_pending_workflows_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
@@ -58,6 +59,13 @@ CONTRACT_PACK = (
     / "oa"
     / "ecology9-pending-workflows-v1"
 )
+SYSTEM_MESSAGE_CONTRACT_PACK = (
+    REPO_ROOT
+    / "tests"
+    / "contract_packs"
+    / "oa"
+    / "ecology9-system-messages-v1"
+)
 EXPECTED_REPLAY_DATA: dict[str, Any] = {
     "workflows": [
         {
@@ -82,8 +90,6 @@ EXPECTED_REPLAY_DATA: dict[str, Any] = {
         },
     ]
 }
-
-
 class CountingReplayProvider(ReplayOAReadProvider):
     def __init__(self, contract_pack_dir: Path) -> None:
         super().__init__(contract_pack_dir)
@@ -95,6 +101,19 @@ class CountingReplayProvider(ReplayOAReadProvider):
     ) -> OAPendingWorkflowCollection:
         self.calls += 1
         return await super().list_pending_workflows(credential)
+
+
+class CountingSystemMessageReplayProvider(ReplayOAReadProvider):
+    def __init__(self, contract_pack_dir: Path) -> None:
+        super().__init__(contract_pack_dir)
+        self.calls = 0
+
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OASystemMessageCollection:
+        self.calls += 1
+        return await super().list_system_messages(credential)
 
 
 class StaticSecretProvider:
@@ -368,6 +387,95 @@ def test_replay_adapter_runs_through_gateway_with_completed_status() -> None:
     assert result.status == "completed"
     assert result.error_code is None
     assert result.data == EXPECTED_REPLAY_DATA
+
+
+def test_system_message_replay_runs_through_gateway_without_silent_truncation() -> None:
+    gateway = CapabilityGateway(
+        OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK))
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-system-message-001",
+            "session-system-message-001",
+            "ai-user-system-message-001",
+            "oa.list_system_messages",
+            {},
+            RequestOrgContext(request_id="trace-system-message-001"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert result.data is not None
+    assert set(result.data) == {"messages", "returned_count", "is_complete"}
+    messages = result.data["messages"]
+    assert isinstance(messages, list)
+    assert result.data["returned_count"] == 20
+    assert result.data["returned_count"] == len(messages)
+    assert result.data["is_complete"] is False
+    assert messages[0]["message_id"] == "90000001"
+    assert messages[-1]["message_id"] == "90000020"
+    assert all(
+        set(message)
+        == {
+            "message_id",
+            "title",
+            "content",
+            "source_name",
+            "occurred_at",
+            "business_state",
+            "link",
+            "mobile_link",
+        }
+        for message in messages
+    )
+
+
+def test_system_message_capability_is_zero_argument() -> None:
+    provider = CountingSystemMessageReplayProvider(SYSTEM_MESSAGE_CONTRACT_PACK)
+    adapter = OAReadAdapter(provider)
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_system_messages",
+            {"page_size": 20},
+            {},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_error"
+    assert result.data is None
+    assert provider.calls == 0
+
+
+def test_system_message_pack_requires_external_source_warning(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / SYSTEM_MESSAGE_CONTRACT_PACK.name
+    shutil.copytree(SYSTEM_MESSAGE_CONTRACT_PACK, pack)
+    profile_path = pack / "profile.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile.pop("source_warning")
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    adapter = OAReadAdapter(ReplayOAReadProvider(pack))
+
+    result = asyncio.run(adapter.execute("oa.list_system_messages", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_error"
+    assert result.data is None
+
+
+def test_system_message_call_rejects_pending_workflow_pack() -> None:
+    adapter = OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK))
+
+    result = asyncio.run(adapter.execute("oa.list_system_messages", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
 
 
 def test_unknown_capability_returns_adapter_error_and_gateway_failed() -> None:
