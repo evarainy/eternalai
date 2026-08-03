@@ -2,7 +2,7 @@
 
 > 状态：**生效（轻量地图）**。单人开发 + 强模型（Opus 5 / GPT-5.6）下不再走「总体计划 → 每任务 task_id 提示词 → 每任务 SPEC」那套 ceremony：本文件是范围边界 + DAG + BLOCKED 护栏的**地图**，不是逐任务合同；task_id 是路标而非正式 lane 依据，无需「Opus 实审 + 拍板生效」门即可据此开 lane。
 >
-> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 1458 passed / 0 skipped / 0 failed，截至 `P2-FE-TEST-FLAKE-001` / merge `6c47f06f3cae5af43efdbeb79a0d2bfe68f5517b`）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
+> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 1497 passed / 0 skipped / 0 failed，取自 `P2-AUTH-USERID-TYPE-001` / merge `a9bf8b8fc3fbf48448ca511768fe7271d8b8a221` 的 CI run 30797244405 实测日志）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
 
 ## 1. P2 总目标
 
@@ -60,11 +60,15 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | item | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| 登录 → `/chat` → 真实 OA 只读查询的浏览器 smoke | 缺真实 OA 环境、只读 capability、身份绑定与运行配置 | 外部输入（雨爷内网采集） | `P2-OA-INTRANET-SMOKE-001` | 内网采集完成且 Live adapter 接通后立即执行 | 已完成真实浏览器传输链验证（`Secure; HttpOnly; SameSite=Lax; Path=/api/v1` 在 `http://localhost` 实际被 Chromium 接收；Vite 代理未做路径重写；CSRF 头恰好一次；Runtime POST 200）+ focused 45/45 + 前端全量 81/81；真实 HAR（登录成功 / 登录失败 / 系统消息）已由雨爷从内网导出并脱敏，采集步骤已完成；剩余必须在内网做的只有 Live 指纹漂移比对与真实 `/chat` 端到端 |
+| LOGIN-PARITY 两项证据缺口与真实 OA 浏览器 smoke | 生产请求缺少浏览器与成功脚本携带的部分请求头，其必需性未知；真实 HAR 从已有 Cookie 状态开始，不能证明冷启动路径；Live 指纹漂移比对与真实 `/chat` 端到端尚未执行 | `P2-OA-INTRANET-SMOKE-001` | `P2-OA-INTRANET-SMOKE-001` | 真实 smoke 分别判定最小必需请求头、以全新 Cookie 状态证明冷启动链路，并完成 Live 指纹漂移比对与真实 `/chat` 端到端 | `_scratch/P2-OA-LOGIN-PARITY-001_报告.md` 证明代码同时检查 `msgcode` 与 `loginstatus`，未发现认证绕过，但请求头因果性与 Cookie 冷启动仍证据不足；整数 `userid` 缺陷已由 merge `a9bf8b8f` 修复。真实浏览器传输链、CSRF/Runtime POST 与 HAR 采集已完成，不能替代剩余内网 smoke |
+| `phase0/main` 直推可隐式绕过 required checks | `P2-AUTH-USERID-TYPE-001` 本地合并后普通直推主分支时，两个 required checks 尚未完成，GitHub 回显 `Bypassed rule violations`；执行者未传 bypass 参数，账号权限仍允许绕过 | 外部操作：雨爷修改 GitHub 分支保护（无 task_id） | 每次集成均由 boot rules 强制走 PR | `phase0/main` 打开 **Do not allow bypassing the above settings**，且后续集成均在 required checks 最终全绿后通过 PR 合并 | 违规推送的事后 CI run `30797244405` 最终成功，但事后变绿不追溯消除违规；PR #65 在两个 required checks 成功后合并，是正确样板 |
+| 仓库卫生清理 | 历史 worktree、分支与 scratch 噪声仍占空间，部分 worktree 保有独有文件、未暂存修改或未合入 commit；删除均属红线 | 雨爷按绝对路径逐项授权 | `P2-WORKTREE-AUDIT-001` 只读清单及后续逐项复核 | 每个候选目标均经逐项批准并处置，且 B 类独有内容先获明确裁决 | 2026-08-03 对原清单 66 个 worktree 只读复核：A 61 / B 4 / C 1；藏活为 1 个未跟踪文件、3 个未暂存修改、2 个未合入 commit 计数，暂存 0。早前报告所称 `P1-GOV-SYNC-001` 有 18 个已暂存文件经复核已不成立，当前为 0；不追查去向。原报告另列 72 个本地分支和 88 个 Phase 1 scratch 候选；未获逐项授权前均不删除。两笔后续实现任务各新增 1 个 worktree |
+| 四个架构决定未拍板 | 所有写操作纵切仍缺四项边界决定：写操作何时进入及归谁、DB 是否算目标系统、企业 Secret 治理归属、Golden 冻结策略 | 雨爷架构裁决（无 task_id） | 任何写操作纵切启动前 | 四项决定全部在正式治理文档中获得明确结论 | `PHASE2_PLAN.md` 的 DB Gateway、正式 Secret、P2 Golden、低风险写入与开放问题仍保留未决状态；本项只登记，不给倾向性结论 |
+| `P2-CONFIRM-RESUME-001` 维持自触发 | 当前没有证据表明需要主动实现 confirm/resume；提前做会扩张未触发范围 | `P2-LOW-RISK-WRITE-001` 的实际用例与确认语义 | `P2-CONFIRM-RESUME-001`（仅命中自触发条件时） | 真实低风险写入用例触发该能力，或阶段决策明确其不再需要 | 2026-07-24 已决：本阶段不主动做；`P2-LOW-RISK-WRITE-001` 仅在命中自触发条件时依赖它 |
 
 当前 `tests/contract_packs/oa/ecology9-pending-workflows-v1/profile.json` 的 `source_kind` 为 `"synthetic"`；因此 Replay/Contract 与代码纵切不能替代真实 OA 现场验收，OA 只读纵切尚不能据此宣告完成。
 
-- **仓库卫生清理待办**：`P2-WORKTREE-AUDIT-001` 在 `_scratch/P2-WORKTREE-AUDIT-001_清单.md` 记录了 66 个 worktree、72 个本地分支和 88 个 Phase 1 遗留 scratch 文件；其中 B 类 5 个 worktree 有未提交改动或未合入提交，包含 `P1-GOV-SYNC-001` 的 18 个已暂存文件。删除属于红线，本项待雨爷看过清单并逐项批准后激活；本棒不做任何清理。
+- **仓库卫生清理待办**：当前复核结果、历史证据纠偏、激活条件与逐项授权边界见上表“仓库卫生清理”；本棒未执行任何清理。
 
 ## 3. 任务 DAG
 
@@ -83,6 +87,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-CHAT-ENTRY-FE-001` | 受保护 `/chat` 普通文本对话入口，消费 Runtime Orval client 与既有认证会话；`loginNavigation` 白名单新增 `/chat` 精确匹配；不实现 SDUI 渲染器或结构化 Action。 | `P2-PILOT-ENTRY-FE-001`、`P2-RUNTIME-RESPONSE-CONTRACT-001` | Q2 | ✅ 已落地（merge `092a9095cbe4b572a8987707d2ab098887bcd123`） |
 | `P2-BE-SMALL-DEBT-001` | OA adapter 兜底异常补可观测日志，只记异常类型名、`capability_id`、内部阶段与固定分类，`exc_info=None`；对外 `adapter_error` 行为和 Trace 序列逐项不变，含敏感值 canary 测试；`.env.example` 补 OA 读适配三项占位配置，既有 `CSRF_ALLOWED_ORIGINS` 不重复添加。 | `P2-READ-ADAPTER-001` | Q1 | ✅ 已落地（merge `3a901c5bcde8b9b704d70d889c3f6fc165edaa6d`） |
 | `P2-FE-TEST-FLAKE-001` | 关闭 Vitest 文件级并发，消除 4 核环境下 Ant 组件测试与 OpenAPI 生成子进程争抢调度造成的 5s 超时 flake（实测失败率 35% → 0%），保持 81 个测试，并把 `App.test.tsx` 负向文案收窄为精确标题断言；无生产代码改动。 | `P2-CHAT-ENTRY-FE-001` | Q1 | ✅ 已落地（merge `6c47f06f3cae5af43efdbeb79a0d2bfe68f5517b`） |
+| `P2-OA-SYSMSG-PACK-001` | 新增 `oa.list_system_messages` 与并列 `ecology9-system-messages-v1` pack；脱敏器以 9 字符子串阈值和短值完整 token 匹配取代 transport-header 豁免。 | `P2-OA-READ-CONTRACT-001` | Q3 | ✅ 已落地（merge `b55104d193862a78b7529e657ceea4639ed6e152`，PR #65） |
+| `P2-AUTH-USERID-TYPE-001` | 在 `_required_oa_user_id` 单点归一 OA 整数/字符串 `userid`，守卫同一 principal 且凭证行、IdentityMapping 各恰好 1 条。 | `P2-AUTH-001` | Q2 | ✅ 已落地（merge `a9bf8b8fc3fbf48448ca511768fe7271d8b8a221`，CI run 30797244405） |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
 | `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
 | `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
@@ -92,14 +98,14 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；`IDENTITY_CREDENTIAL` 的其余绑定/凭证治理与只读两棒并行推进，`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
 
-当前已落地链推进至 `CHAT_ENTRY_FE`；下一棒为 `P2-OA-SYSMSG-PACK-001` 与 `P2-OA-LOGIN-PARITY-001`（可并行），之后才是 `P2-OA-INTRANET-SMOKE-001`。原主链中 `IDENTITY_CREDENTIAL`、`DB_GATEWAY`、`PILOT_OPS` 与 `GOLDEN` 的范围/依赖偏差属于待裁决项，本次未改原规划。
+当前已落地链推进至 `P2-OA-SYSMSG-PACK-001` 与 `P2-AUTH-USERID-TYPE-001`；`P2-OA-LOGIN-PARITY-001` 已完成纯只读诊断，无分支无 commit。下一棒为 `P2-OA-INTRANET-SMOKE-001`。原主链中 `IDENTITY_CREDENTIAL`、`DB_GATEWAY`、`PILOT_OPS` 与 `GOLDEN` 的范围/依赖偏差仍属待裁决项，本次不替雨爷决定。
 
 > **顺序调整（2026-07-29）**：OA 只读拆成两棒。`OA_READ_CONTRACT` 先在气隙环境冻结 Replay/Live 接缝、白名单、Contract Pack 与脱敏工具；`READ_ADAPTER` 再补 Live HTTP、凭证读取、最小 IdentityMapping、现场 smoke 接线和完整运行时闭环。两棒均不等待共享 Secret 方案：已决凭证模型是每用户复用自身 OA Session，不用共享服务账号、不存密码、不静默重登。`IDENTITY_CREDENTIAL` 的其余治理与之并行。真实 OA 现场浏览器 smoke 仍由 `P2-OA-INTRANET-SMOKE-001` 单独激活，不能由 synthetic Contract Pack 或传输链 smoke 代替。
 
 ## 4. 决策与开放问题
 
 1. **已决（2026-07-24 雨爷拍板）— A1：是。** 生产 composition、真实 LLM 和最小可信试点入口作为 P2 首个硬前置（`P2-PILOT-FOUNDATION-001`）。
-2. **已决（2026-07-29 雨爷拍板）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** Replay/Contract、Live/凭证/IdentityMapping 代码纵切、OpenAPI/Orval、CSRF、Runtime 响应契约、可信登录入口与 `/chat` 普通文本入口均已落地；`P2-CHAT-ENTRY-FE-001` merge = `092a9095cbe4b572a8987707d2ab098887bcd123`。当前 Contract Pack 的 `source_kind` 为 `"synthetic"`，真实 OA 现场浏览器 smoke 仍是欠债；下一棒 = `P2-OA-SYSMSG-PACK-001` 与 `P2-OA-LOGIN-PARITY-001`（可并行），之后才是 `P2-OA-INTRANET-SMOKE-001`；第二个 Adapter 的启动条件仍开放。
+2. **已决（2026-07-29 雨爷拍板）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** Replay/Contract、Live/凭证/IdentityMapping 代码纵切、OpenAPI/Orval、CSRF、Runtime 响应契约、可信登录入口、`/chat` 普通文本入口与 `oa.list_system_messages` 并列 pack 均已落地；整数 `userid` 兼容缺陷也已修复。真实 OA 现场浏览器 smoke 仍是欠债；下一棒 = `P2-OA-INTRANET-SMOKE-001`；第二个 Adapter 的启动条件仍开放。
 3. **认证路线**：OA 登录、EternalAI Session Cookie 与认证 Principal 已落地；仅“是否把企业 IAM/SSO 从 Phase 3 提前”仍开放。
 4. **DB Gateway**：Phase 2 路线图写了基础 DB Gateway，但蓝图又限定“仅无 API/报表需求时”；是否已有获批报表用例？
 5. **Skill 候选池**：只允许管理员/用户手工登记，还是允许脱敏 Trace 产生“候选提议”？后者不得变成自动 Skill 生成。
