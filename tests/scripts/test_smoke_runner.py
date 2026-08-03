@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -12,6 +14,7 @@ from app.infra.adapters.oa.contracts import (
     build_structural_fingerprint,
     compare_structural_fingerprints,
 )
+from app.ports.auth import AuthenticationError
 from scripts.smoke import environment as smoke_environment
 from scripts.smoke import runner as smoke_runner
 from scripts.smoke.environment import parse_env_file, prepare_environment
@@ -579,7 +582,13 @@ def test_each_start_failure_path_runs_retry_cleanup(
     frontend = _FakeProcess(42002)
     cleanups: list[tuple[object | None, object | None]] = []
     monkeypatch.setattr(smoke_runner, "load_runtime_environment", lambda **_kwargs: {})
-    monkeypatch.setattr(smoke_runner, "_validate_settings", lambda _environment: object())
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(
+            oa_base_url="https://synthetic.invalid"
+        ),
+    )
     monkeypatch.setattr(smoke_runner, "_start_backend", lambda *_args: backend)
     monkeypatch.setattr(
         smoke_runner,
@@ -600,7 +609,7 @@ def test_each_start_failure_path_runs_retry_cleanup(
     monkeypatch.setattr(
         smoke_runner,
         "_cold_login_preflight",
-        lambda: failed_stage != "login",
+        lambda _oa_base_url: failed_stage != "login",
     )
     monkeypatch.setattr(
         smoke_runner,
@@ -640,7 +649,13 @@ def test_successful_start_prints_plain_next_step(
     backend = _FakeProcess(43001)
     frontend = _FakeProcess(43002)
     monkeypatch.setattr(smoke_runner, "load_runtime_environment", lambda **_kwargs: {})
-    monkeypatch.setattr(smoke_runner, "_validate_settings", lambda _environment: object())
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(
+            oa_base_url="https://synthetic.invalid"
+        ),
+    )
     monkeypatch.setattr(smoke_runner, "_start_backend", lambda *_args: backend)
     monkeypatch.setattr(
         smoke_runner,
@@ -650,7 +665,11 @@ def test_successful_start_prints_plain_next_step(
     monkeypatch.setattr(smoke_runner, "_write_process_state", lambda *_args: None)
     monkeypatch.setattr(smoke_runner, "_start_frontend", lambda *_args: frontend)
     monkeypatch.setattr(smoke_runner, "_wait_for_frontend", lambda _process: True)
-    monkeypatch.setattr(smoke_runner, "_cold_login_preflight", lambda: True)
+    monkeypatch.setattr(
+        smoke_runner,
+        "_cold_login_preflight",
+        lambda _oa_base_url: True,
+    )
     monkeypatch.setattr(
         smoke_runner,
         "_cleanup_failed_start",
@@ -700,3 +719,138 @@ def test_backend_failure_classification_is_value_free(
     assert classification == expected
     if log_text:
         assert log_text not in classification
+
+
+def test_spawn_service_discards_old_configuration_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_path = tmp_path / "smoke_backend.log"
+    log_path.write_text("RuntimeError: OA_BASE_URL is required", encoding="utf-8")
+    process = _FakeProcess(44001)
+    monkeypatch.setattr(
+        smoke_runner.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: process,
+    )
+
+    spawned = smoke_runner._spawn_service(
+        ["synthetic-service"],
+        cwd=tmp_path,
+        environment={},
+        log_path=log_path,
+    )
+    classification = _classify_backend_failure(
+        failed_checks=(),
+        process_exited=True,
+        log_path=log_path,
+    )
+
+    assert spawned is process
+    assert log_path.read_bytes() == b""
+    assert classification == "process_exited"
+
+
+def test_cold_login_unreachable_stops_before_credential_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: False,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: pytest.fail("unreachable OA must not prompt for credentials"),
+    )
+
+    result = smoke_runner._cold_login_preflight("https://synthetic.invalid")
+
+    assert result is False
+    assert capsys.readouterr().out.splitlines() == [
+        "oa_reachability=false",
+        "cold_login_preflight=connection_failed",
+    ]
+
+
+def test_verify_unreachable_stops_before_credential_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: False,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: pytest.fail("unreachable OA must not prompt for credentials"),
+    )
+
+    with pytest.raises(SmokeError, match="oa_unreachable"):
+        asyncio.run(
+            smoke_runner._run_live_checks(
+                SimpleNamespace(oa_base_url="https://synthetic.invalid")
+            )
+        )
+
+    assert capsys.readouterr().out.splitlines() == ["oa_reachability=false"]
+
+
+def test_verify_reachable_authentication_error_is_classified_without_details(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _FakeEngine:
+        async def dispose(self) -> None:
+            return None
+
+    class _FakeAuthentication:
+        async def authenticate(self, _credential: object) -> object:
+            raise AuthenticationError("synthetic-sensitive-detail")
+
+    settings = SimpleNamespace(
+        oa_base_url="https://synthetic.invalid",
+        database_url="postgresql://synthetic.invalid/db",
+        credential_encryption_key="synthetic-encryption-key",
+        oa_timeout_seconds=5,
+        identity_hmac_key="synthetic-hmac-key",
+        oa_credential_ttl_seconds=60,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+    monkeypatch.setattr(smoke_runner, "make_async_engine", lambda _url: _FakeEngine())
+    monkeypatch.setattr(
+        smoke_runner,
+        "make_async_session_factory",
+        lambda _engine: object(),
+    )
+    monkeypatch.setattr(smoke_runner, "build_credential_store", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        smoke_runner,
+        "build_principal_role_reader",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "build_authentication_port",
+        lambda **_kwargs: _FakeAuthentication(),
+    )
+
+    with pytest.raises(SmokeError, match="authentication_failed") as exc_info:
+        asyncio.run(smoke_runner._run_live_checks(settings))
+
+    output = capsys.readouterr().out
+    assert output.splitlines() == ["oa_reachability=true"]
+    assert "synthetic-sensitive-detail" not in str(exc_info.value)

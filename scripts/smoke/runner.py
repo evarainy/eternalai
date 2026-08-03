@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from pydantic import SecretStr
@@ -341,7 +343,7 @@ def _command_start(layout: Layout) -> int:
         base_env_path=layout.base_env,
         smoke_env_path=layout.smoke_env,
     )
-    _validate_settings(environment)
+    settings = _validate_settings(environment)
     backend: subprocess.Popen[bytes] | None = None
     frontend: subprocess.Popen[bytes] | None = None
     completed = False
@@ -365,7 +367,7 @@ def _command_start(layout: Layout) -> int:
         print(f"backend_url={_BACKEND_URL}")
         print(f"frontend_url={_FRONTEND_URL}")
         print(f"chat_url={_FRONTEND_URL}/chat")
-        if not _cold_login_preflight():
+        if not _cold_login_preflight(settings.oa_base_url):
             _print_stop_instruction()
             return 1
         print("cold_login_preflight=passed")
@@ -425,7 +427,7 @@ def _spawn_service(
     log_path.parent.mkdir(parents=True, exist_ok=True)
     creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     try:
-        with log_path.open("ab") as log:
+        with log_path.open("wb") as log:
             return subprocess.Popen(
                 command,
                 cwd=cwd,
@@ -512,7 +514,12 @@ def _frontend_ready() -> bool:
         return False
 
 
-def _cold_login_preflight() -> bool:
+def _cold_login_preflight(oa_base_url: str) -> bool:
+    reachable = _oa_endpoint_reachable(oa_base_url)
+    print(f"oa_reachability={_bool(reachable)}")
+    if not reachable:
+        print("cold_login_preflight=connection_failed")
+        return False
     account, password = _prompt_credentials()
     raw_body = b""
     try:
@@ -797,6 +804,10 @@ def _command_verify(
 async def _run_live_checks(
     settings: ProductionSettings,
 ) -> tuple[LiveOutcome, LiveOutcome]:
+    reachable = _oa_endpoint_reachable(settings.oa_base_url)
+    print(f"oa_reachability={_bool(reachable)}")
+    if not reachable:
+        raise SmokeError("oa_unreachable")
     account, password = _prompt_credentials()
     engine = make_async_engine(settings.database_url)
     session_factory = make_async_session_factory(engine)
@@ -824,7 +835,7 @@ async def _run_live_checks(
                 )
             )
         except AuthenticationError:
-            raise SmokeError("oa_authentication_failed") from None
+            raise SmokeError("authentication_failed") from None
         credential = await store.load(principal.ai_user_id)
         if credential is None:
             raise SmokeError("oa_credential_not_persisted")
@@ -946,6 +957,20 @@ def _prompt_credentials() -> tuple[str, str]:
         password = ""
         raise SmokeError("credential_input_empty")
     return account, password
+
+
+def _oa_endpoint_reachable(base_url: str) -> bool:
+    """Check only OA host/port reachability without sending credentials or HTTP."""
+
+    try:
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.create_connection((parsed.hostname, port), timeout=5):
+            return True
+    except (OSError, ValueError):
+        return False
 
 
 def _build_optional_pending_v2(
