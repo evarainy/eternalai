@@ -152,8 +152,14 @@ class ProductionSettings:
     oa_read_contract_pack_dir: Path | None = None
     oa_pending_workflows_contract_pack_dir: Path | None = None
     oa_system_messages_contract_pack_dir: Path | None = None
-    oa_pending_workflows_path: str | None = None
-    oa_system_messages_path: str | None = None
+    oa_message_center_path: str | None = None
+    oa_pending_workflows_category_id: str | None = None
+    oa_pending_workflows_bizstate: str | None = None
+    oa_pending_workflows_select_state: str | None = None
+    oa_system_messages_category_id: str | None = None
+    oa_system_messages_bizstate: str | None = None
+    oa_system_messages_select_state: str | None = None
+    oa_message_center_page_size: int = 20
     phase0_mock_mode: bool = False
 
     @classmethod
@@ -286,15 +292,52 @@ class ProductionSettings:
                 oa_read_adapter_mode,
                 "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
             ),
-            oa_pending_workflows_path=_oa_capability_path(
+            oa_message_center_path=_oa_capability_path(
                 source,
                 oa_read_adapter_mode,
-                "OA_PENDING_WORKFLOWS_PATH",
+                "OA_MESSAGE_CENTER_PATH",
             ),
-            oa_system_messages_path=_oa_capability_path(
+            oa_pending_workflows_category_id=_oa_live_form_parameter(
                 source,
                 oa_read_adapter_mode,
-                "OA_SYSTEM_MESSAGES_PATH",
+                "OA_PENDING_WORKFLOWS_CATEGORY_ID",
+                allow_empty=False,
+            ),
+            oa_pending_workflows_bizstate=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_BIZSTATE",
+                allow_empty=True,
+            ),
+            oa_pending_workflows_select_state=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_SELECT_STATE",
+                allow_empty=True,
+            ),
+            oa_system_messages_category_id=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_SYSTEM_MESSAGES_CATEGORY_ID",
+                allow_empty=True,
+            ),
+            oa_system_messages_bizstate=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_SYSTEM_MESSAGES_BIZSTATE",
+                allow_empty=True,
+            ),
+            oa_system_messages_select_state=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_SYSTEM_MESSAGES_SELECT_STATE",
+                allow_empty=True,
+            ),
+            oa_message_center_page_size=_bounded_positive_int(
+                source,
+                "OA_MESSAGE_CENTER_PAGE_SIZE",
+                20,
+                maximum=1_000,
             ),
             phase0_mock_mode=phase0_mock_mode,
         )
@@ -478,6 +521,25 @@ def _oa_capability_path(
     return value
 
 
+def _oa_live_form_parameter(
+    source: Mapping[str, str],
+    mode: OAReadAdapterMode,
+    name: str,
+    *,
+    allow_empty: bool,
+) -> str | None:
+    if name not in source:
+        if mode == "live":
+            raise RuntimeError(f"{name} is required for live mode")
+        return None
+    value = source[name].strip()
+    if not value and not allow_empty:
+        if mode == "live":
+            raise RuntimeError(f"{name} is required for live mode")
+        return None
+    return value
+
+
 def _required_positive_int(source: Mapping[str, str], name: str) -> int:
     raw = _required(source, name)
     return _parse_positive_int(raw, name)
@@ -492,6 +554,19 @@ def _positive_int(
     if raw is None:
         return default
     return _parse_positive_int(raw, name)
+
+
+def _bounded_positive_int(
+    source: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    maximum: int,
+) -> int:
+    value = _positive_int(source, name, default)
+    if value > maximum:
+        raise RuntimeError(f"{name} must be at most {maximum}")
+    return value
 
 
 def _parse_positive_int(raw: str, name: str) -> int:

@@ -199,14 +199,22 @@ class SequencedOpener:
 
 
 class RecordingHTTPServer(ThreadingHTTPServer):
-    def __init__(self, response_payload: dict[str, Any]) -> None:
+    def __init__(self, *response_payloads: dict[str, Any]) -> None:
         super().__init__(("127.0.0.1", 0), RecordingHTTPRequestHandler)
-        self.response_payload = response_payload
+        self.response_payloads = list(response_payloads)
         self.requests: list[tuple[str, str | None, bool]] = []
 
 
 class RecordingHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
+        self._record_and_respond()
+
+    def do_POST(self) -> None:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(content_length)
+        self._record_and_respond()
+
+    def _record_and_respond(self) -> None:
         server = cast(RecordingHTTPServer, self.server)
         server.requests.append(
             (
@@ -215,7 +223,7 @@ class RecordingHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.headers.get("Cookie") is not None,
             )
         )
-        payload = json.dumps(server.response_payload).encode("utf-8")
+        payload = json.dumps(server.response_payloads.pop(0)).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -227,9 +235,9 @@ class RecordingHTTPRequestHandler(BaseHTTPRequestHandler):
 
 
 def _start_recording_server(
-    response_payload: dict[str, Any],
+    *response_payloads: dict[str, Any],
 ) -> tuple[RecordingHTTPServer, threading.Thread]:
-    server = RecordingHTTPServer(response_payload)
+    server = RecordingHTTPServer(*response_payloads)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
@@ -251,17 +259,28 @@ def _live_provider(
     opener: SequencedOpener,
     *,
     drift_reporter: Any = None,
+    page_size: int = 20,
     max_pages: int = 50,
+    max_records: int = 5_000,
+    pending_category_id: str = "101",
+    system_category_id: str = "202",
 ) -> LiveOAReadProvider:
     return LiveOAReadProvider(
         base_url="https://oa.synthetic.invalid",
-        pending_workflows_endpoint_path="/api/pending",
-        system_messages_endpoint_path="/api/messages",
+        message_center_endpoint_path="/api/messages",
+        pending_workflows_category_id=pending_category_id,
+        pending_workflows_bizstate="pending-business-state",
+        pending_workflows_select_state="pending-selection-state",
+        system_messages_category_id=system_category_id,
+        system_messages_bizstate="system-business-state",
+        system_messages_select_state="system-selection-state",
         timeout_seconds=2.0,
         pending_workflows_contract_pack_dir=CONTRACT_PACK,
         system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
         drift_reporter=drift_reporter,
+        page_size=page_size,
         max_pages=max_pages,
+        max_records=max_records,
         opener_factory=lambda: cast(OpenerDirector, opener),
     )
 
@@ -315,12 +334,32 @@ def _matching_live_system_messages() -> list[dict[str, Any]]:
     return [first, second]
 
 
+def _message_center_page(
+    records: list[dict[str, Any]],
+    *,
+    cursor_index: int = 1,
+    status: str = "1",
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "data": records,
+        "maxtime": f"synthetic-upper-{cursor_index}",
+        "mintime": f"synthetic-lower-{cursor_index}",
+        "msgid": f"synthetic-cursor-{cursor_index}",
+    }
+
+
 def test_live_pending_provider_keeps_rejecting_backslash_endpoint_path() -> None:
     with pytest.raises(ValueError, match="endpoint path"):
         LiveOAReadProvider(
             base_url="https://oa.synthetic.invalid",
-            pending_workflows_endpoint_path=r"/api\pending",
-            system_messages_endpoint_path="/api/messages",
+            message_center_endpoint_path=r"/api\messages",
+            pending_workflows_category_id="101",
+            pending_workflows_bizstate="pending-business-state",
+            pending_workflows_select_state="pending-selection-state",
+            system_messages_category_id="202",
+            system_messages_bizstate="system-business-state",
+            system_messages_select_state="system-selection-state",
             timeout_seconds=2.0,
             pending_workflows_contract_pack_dir=CONTRACT_PACK,
             system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
@@ -334,8 +373,13 @@ def test_live_system_message_provider_rejects_pending_pack() -> None:
     ):
         LiveOAReadProvider(
             base_url="https://oa.synthetic.invalid",
-            pending_workflows_endpoint_path="/api/pending",
-            system_messages_endpoint_path="/api/messages",
+            message_center_endpoint_path="/api/messages",
+            pending_workflows_category_id="101",
+            pending_workflows_bizstate="pending-business-state",
+            pending_workflows_select_state="pending-selection-state",
+            system_messages_category_id="202",
+            system_messages_bizstate="system-business-state",
+            system_messages_select_state="system-selection-state",
             timeout_seconds=2.0,
             pending_workflows_contract_pack_dir=CONTRACT_PACK,
             system_messages_contract_pack_dir=CONTRACT_PACK,
@@ -354,7 +398,8 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
                 "mintime": "synthetic-lower-bound",
                 "msgid": "synthetic-message-cursor",
             }
-        )
+        ),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
     )
     adapter = OAReadAdapter(
         _live_provider(opener, drift_reporter=reports.append),
@@ -397,19 +442,27 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
         "returned_count": 2,
         "is_complete": True,
     }
-    assert opener.request_methods == ["POST"]
-    assert opener.request_queries == [{}]
+    assert opener.request_methods == ["POST", "POST"]
+    assert opener.request_queries == [{}, {}]
     assert opener.request_forms == [
         {
             "pagesize": ["20"],
-            "selectState": ["0"],
+            "selectState": ["system-selection-state"],
             "msgid": [""],
-            "bizstate": [""],
+            "bizstate": ["system-business-state"],
             "mintime": [""],
-            "id": [""],
-        }
+            "id": ["202"],
+        },
+        {
+            "pagesize": ["20"],
+            "selectState": ["system-selection-state"],
+            "msgid": ["synthetic-message-cursor"],
+            "bizstate": ["system-business-state"],
+            "mintime": ["synthetic-lower-bound"],
+            "id": ["202"],
+        },
     ]
-    assert opener.cookie_header_present == [True]
+    assert opener.cookie_header_present == [True, True]
     assert {
         "accept",
         "content-type",
@@ -430,44 +483,93 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
     assert report.actual_sha256 == expected_fingerprint["sha256"]
 
 
-def test_live_system_message_full_page_is_explicitly_incomplete() -> None:
+def test_live_system_message_full_page_at_page_limit_fails_closed() -> None:
     records = [_raw_system_message(index) for index in range(1, 21)]
     opener = SequencedOpener(
-        FakeHTTPResponse({"status": "1", "data": records})
+        FakeHTTPResponse(_message_center_page(records))
+    )
+
+    with pytest.raises(OALivePayloadInvalid, match="may be truncated"):
+        asyncio.run(
+            _live_provider(opener, max_pages=1).list_system_messages(_credential())
+        )
+
+    assert len(opener.request_forms) == 1
+
+
+def test_live_system_messages_fetches_all_three_cursor_pages() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            _message_center_page(
+                [_raw_system_message(index) for index in range(1, 21)]
+            )
+        ),
+        FakeHTTPResponse(
+            _message_center_page(
+                [_raw_system_message(index) for index in range(21, 41)],
+                cursor_index=2,
+            )
+        ),
+        FakeHTTPResponse(
+            _message_center_page([_raw_system_message(41)], cursor_index=3)
+        ),
+        FakeHTTPResponse(_message_center_page([], cursor_index=4)),
     )
 
     collection = asyncio.run(
         _live_provider(opener).list_system_messages(_credential())
     )
 
-    assert collection.returned_count == 20
-    assert collection.is_complete is False
-    assert len(collection.messages) == 20
+    assert collection.returned_count == 41
+    assert collection.is_complete is True
+    assert [message.message_id for message in collection.messages] == [
+        f"live-message-{index}" for index in range(1, 42)
+    ]
+    assert [form["id"] for form in opener.request_forms] == [
+        ["202"],
+        ["202"],
+        ["202"],
+        ["202"],
+    ]
+    assert [form["msgid"] for form in opener.request_forms] == [
+        [""],
+        ["synthetic-cursor-1"],
+        ["synthetic-cursor-2"],
+        ["synthetic-cursor-3"],
+    ]
+    assert [form["mintime"] for form in opener.request_forms] == [
+        [""],
+        ["synthetic-lower-1"],
+        ["synthetic-lower-2"],
+        ["synthetic-lower-3"],
+    ]
+    assert len(opener.request_forms) == 4
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"status": "0", "data": []},
-        {
-            "status": "1",
-            "data": [_raw_system_message(index) for index in range(1, 22)],
-        },
-        {
-            "status": "1",
-            "data": [
+        _message_center_page([], status="0"),
+        _message_center_page(
+            [_raw_system_message(index) for index in range(1, 22)]
+        ),
+        _message_center_page(
+            [
                 {
                     **_raw_system_message(1),
                     "link": "https://other.synthetic.invalid/messages/1",
                 }
-            ],
-        },
+            ]
+        ),
     ],
 )
 def test_live_system_message_invalid_status_bounds_and_links_fail_closed(
     payload: dict[str, Any],
 ) -> None:
-    opener = SequencedOpener(FakeHTTPResponse(payload))
+    opener = SequencedOpener(
+        FakeHTTPResponse(payload),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
+    )
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential()),
@@ -493,7 +595,8 @@ def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
     runtime_business_value = f"business-{secrets.token_hex(24)}"
     records[0][runtime_field_name] = runtime_business_value
     opener = SequencedOpener(
-        FakeHTTPResponse({"status": "1", "data": records})
+        FakeHTTPResponse(_message_center_page(records)),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
     )
 
     collection = asyncio.run(
@@ -569,24 +672,11 @@ def test_live_default_opener_ignores_all_environment_proxies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     oa_server, oa_thread = _start_recording_server(
-        {
-            "data": {
-                "records": [_raw_workflow(1)],
-                "hasMore": False,
-                "total": 1,
-                "nextCursor": None,
-            }
-        }
+        _message_center_page([_raw_workflow(1)]),
+        _message_center_page([], cursor_index=2),
     )
     proxy_server, proxy_thread = _start_recording_server(
-        {
-            "data": {
-                "records": [_raw_workflow(99)],
-                "hasMore": False,
-                "total": 1,
-                "nextCursor": None,
-            }
-        }
+        _message_center_page([_raw_workflow(99)])
     )
     oa_host = f"127.0.0.1:{oa_server.server_address[1]}"
     proxy_url = f"http://127.0.0.1:{proxy_server.server_address[1]}"
@@ -603,8 +693,13 @@ def test_live_default_opener_ignores_all_environment_proxies(
         monkeypatch.setenv(name, "proxy-bypass.synthetic.invalid")
     provider = LiveOAReadProvider(
         base_url=f"http://{oa_host}",
-        pending_workflows_endpoint_path="/api/pending",
-        system_messages_endpoint_path="/api/messages",
+        message_center_endpoint_path="/api/messages",
+        pending_workflows_category_id="101",
+        pending_workflows_bizstate="pending-business-state",
+        pending_workflows_select_state="pending-selection-state",
+        system_messages_category_id="202",
+        system_messages_bizstate="system-business-state",
+        system_messages_select_state="system-selection-state",
         timeout_seconds=2.0,
         pending_workflows_contract_pack_dir=CONTRACT_PACK,
         system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
@@ -628,10 +723,10 @@ def test_live_default_opener_ignores_all_environment_proxies(
         "live-workflow-1"
     ]
     assert proxy_server.requests == []
-    assert len(oa_server.requests) == 1
+    assert len(oa_server.requests) == 2
     request_path, request_host, cookie_present = oa_server.requests[0]
     assert request_host == oa_host
-    assert request_path.startswith("/api/pending?")
+    assert request_path == "/api/messages"
     assert cookie_present is True
 
 
@@ -966,30 +1061,15 @@ def test_replay_never_resolves_or_uses_a_credential() -> None:
 
 def test_live_provider_paginates_internally_and_normalizes_records() -> None:
     opener = SequencedOpener(
+        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
         FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(1)],
-                    "hasMore": True,
-                    "total": 2,
-                    "nextCursor": "cursor-2",
-                }
-            }
+            _message_center_page([_raw_workflow(2)], cursor_index=2)
         ),
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(2)],
-                    "hasMore": False,
-                    "total": 2,
-                    "nextCursor": None,
-                }
-            }
-        ),
+        FakeHTTPResponse(_message_center_page([], cursor_index=3)),
     )
     secret_provider = StaticSecretProvider(_credential())
     adapter = OAReadAdapter(
-        _live_provider(opener),
+        _live_provider(opener, page_size=1),
         secret_provider=secret_provider,
     )
 
@@ -1027,11 +1107,33 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
             },
         ]
     }
-    assert opener.request_queries == [
-        {"page": ["1"], "pageSize": ["100"]},
-        {"page": ["2"], "pageSize": ["100"], "cursor": ["cursor-2"]},
+    assert opener.request_forms == [
+        {
+            "id": ["101"],
+            "pagesize": ["1"],
+            "msgid": [""],
+            "mintime": [""],
+            "bizstate": ["pending-business-state"],
+            "selectState": ["pending-selection-state"],
+        },
+        {
+            "id": ["101"],
+            "pagesize": ["1"],
+            "msgid": ["synthetic-cursor-1"],
+            "mintime": ["synthetic-lower-1"],
+            "bizstate": ["pending-business-state"],
+            "selectState": ["pending-selection-state"],
+        },
+        {
+            "id": ["101"],
+            "pagesize": ["1"],
+            "msgid": ["synthetic-cursor-2"],
+            "mintime": ["synthetic-lower-2"],
+            "bizstate": ["pending-business-state"],
+            "selectState": ["pending-selection-state"],
+        },
     ]
-    assert opener.cookie_header_present == [True, True]
+    assert opener.cookie_header_present == [True, True, True]
     assert secret_provider.calls == ["oa-session-v1:server-surrogate"]
 
 
@@ -1092,16 +1194,8 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
             return credential
 
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(1)],
-                    "hasMore": False,
-                    "total": 1,
-                    "nextCursor": None,
-                }
-            }
-        )
+        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
     )
     secret_provider = CredentialStoreSecretProvider(
         credential_store=cast(Any, CredentialStore()),
@@ -1143,24 +1237,16 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
 
 
 def test_live_provider_accepts_a_legal_empty_collection() -> None:
-    opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [],
-                    "hasMore": False,
-                    "total": 0,
-                    "nextCursor": None,
-                }
-            }
-        )
-    )
+    payload = _message_center_page([])
+    payload["mintime"] = ""
+    payload["msgid"] = ""
+    opener = SequencedOpener(FakeHTTPResponse(payload))
     collection = asyncio.run(
         _live_provider(opener).list_pending_workflows(_credential())
     )
 
     assert collection.model_dump(mode="json") == {"workflows": []}
-    assert len(opener.request_queries) == 1
+    assert len(opener.request_forms) == 1
 
 
 @pytest.mark.parametrize(
@@ -1235,19 +1321,14 @@ def test_live_business_session_expiry_requires_reauthentication() -> None:
         ),
         (
             FakeHTTPResponse(
-                {
-                    "data": {
-                        "records": [
-                            {
-                                **_raw_workflow(1),
-                                "status": "not-pending",
-                            }
-                        ],
-                        "hasMore": False,
-                        "total": 1,
-                        "nextCursor": None,
-                    }
-                }
+                _message_center_page(
+                    [
+                        {
+                            **_raw_workflow(1),
+                            "status": "not-pending",
+                        }
+                    ]
+                )
             ),
             "adapter_payload_invalid",
         ),
@@ -1257,7 +1338,10 @@ def test_live_timeout_and_payload_failures_are_classified(
     response: FakeHTTPResponse | Exception,
     expected_error_code: str,
 ) -> None:
-    opener = SequencedOpener(response)
+    opener = SequencedOpener(
+        response,
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
+    )
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential()),
@@ -1331,20 +1415,17 @@ def test_provider_programming_errors_log_only_safe_classification(
         opener = SequencedOpener(RuntimeError(marker))
     else:
         opener = SequencedOpener(
-            FakeHTTPResponse(
-                {
-                    "data": {
-                        "records": [_raw_workflow(1)],
-                        "hasMore": False,
-                    }
-                }
-            )
+            FakeHTTPResponse(_message_center_page([_raw_workflow(1)]))
         )
 
         def explode_payload(_payload: Any) -> Any:
             raise RuntimeError(marker)
 
-        monkeypatch.setattr(oa_provider, "_read_page", explode_payload)
+        monkeypatch.setattr(
+            oa_provider,
+            "_read_message_center_page",
+            explode_payload,
+        )
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential(cookie_value=marker)),
@@ -1366,45 +1447,59 @@ def test_provider_programming_errors_log_only_safe_classification(
 
 
 def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
-    page = FakeHTTPResponse(
-        {
-            "data": {
-                "records": [_raw_workflow(1)],
-                "hasMore": True,
-                "total": 3,
-                "nextCursor": "same-cursor",
-            }
-        }
-    )
-    opener = SequencedOpener(page, page)
-    adapter = OAReadAdapter(
-        _live_provider(opener),
-        secret_provider=StaticSecretProvider(_credential()),
-    )
-
-    result = asyncio.run(
-        adapter.execute(
-            "oa.list_pending_workflows",
-            {},
-            {"credential_ref": "oa-session-v1:server-surrogate"},
-        )
-    )
-
-    assert result.status == "error"
-    assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_queries) == 2
-
-
-def test_live_pagination_fails_closed_when_signal_shape_differs_from_profile() -> None:
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(1)],
-                    "hasMore": False,
-                }
-            }
+        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
+        FakeHTTPResponse(_message_center_page([_raw_workflow(2)])),
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, page_size=1),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
         )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_forms) == 2
+
+
+def test_live_pagination_fails_closed_on_empty_page_with_repeated_cursor() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
+        FakeHTTPResponse(_message_center_page([], cursor_index=1)),
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, page_size=1),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_forms) == 2
+
+
+@pytest.mark.parametrize("cursor_key", ["maxtime", "mintime", "msgid"])
+def test_live_pagination_fails_closed_when_cursor_field_is_missing(
+    cursor_key: str,
+) -> None:
+    payload = _message_center_page([_raw_workflow(1)])
+    payload.pop(cursor_key)
+    opener = SequencedOpener(
+        FakeHTTPResponse(payload)
     )
     adapter = OAReadAdapter(
         _live_provider(opener),
@@ -1421,21 +1516,45 @@ def test_live_pagination_fails_closed_when_signal_shape_differs_from_profile() -
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_queries) == 1
+    assert len(opener.request_forms) == 1
+
+
+def test_live_payload_rejection_logs_only_safe_structure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = secrets.token_hex(32)
+    payload = _message_center_page([_raw_workflow(1)])
+    payload["data"][0]["title"] = marker
+    payload.pop("msgid")
+    adapter = OAReadAdapter(
+        _live_provider(SequencedOpener(FakeHTTPResponse(payload))),
+        secret_provider=StaticSecretProvider(_credential(cookie_value=marker)),
+    )
+    caplog.set_level(logging.WARNING, logger=oa_provider.__name__)
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert "reason=response_shape" in caplog.text
+    assert "page=1" in caplog.text
+    assert "page_records=1" in caplog.text
+    assert "cursor_fields=110" in caplog.text
+    assert "cursor_advanced=False" in caplog.text
+    assert marker not in (caplog.text + repr(result))
 
 
 def test_live_pagination_fails_closed_when_cursor_is_not_verbatim_safe() -> None:
+    payload = _message_center_page([_raw_workflow(1)])
+    payload["msgid"] = "  synthetic-cursor  "
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(1)],
-                    "hasMore": True,
-                    "total": 2,
-                    "nextCursor": "  cursor-2  ",
-                }
-            }
-        )
+        FakeHTTPResponse(payload)
     )
     adapter = OAReadAdapter(
         _live_provider(opener),
@@ -1452,44 +1571,17 @@ def test_live_pagination_fails_closed_when_cursor_is_not_verbatim_safe() -> None
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_queries) == 1
+    assert len(opener.request_forms) == 1
 
 
-def test_live_pagination_fails_closed_when_total_changes_between_pages() -> None:
+def test_live_pagination_fails_closed_when_aggregate_exceeds_limit() -> None:
     opener = SequencedOpener(
         FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(1)],
-                    "hasMore": True,
-                    "total": 2,
-                    "nextCursor": "cursor-2",
-                }
-            }
-        ),
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(2)],
-                    "hasMore": True,
-                    "total": 3,
-                    "nextCursor": "cursor-3",
-                }
-            }
-        ),
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": [_raw_workflow(3)],
-                    "hasMore": False,
-                    "total": 3,
-                    "nextCursor": None,
-                }
-            }
-        ),
+            _message_center_page([_raw_workflow(1), _raw_workflow(2)])
+        )
     )
     adapter = OAReadAdapter(
-        _live_provider(opener),
+        _live_provider(opener, max_records=1),
         secret_provider=StaticSecretProvider(_credential()),
     )
 
@@ -1503,7 +1595,32 @@ def test_live_pagination_fails_closed_when_total_changes_between_pages() -> None
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_queries) == 2
+    assert len(opener.request_forms) == 1
+
+
+def test_live_pagination_fails_closed_on_cross_page_duplicate() -> None:
+    opener = SequencedOpener(
+        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
+        FakeHTTPResponse(
+            _message_center_page([_raw_workflow(1)], cursor_index=2)
+        ),
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, page_size=1),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_forms) == 2
 
 
 @pytest.mark.parametrize(
@@ -1558,16 +1675,8 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
     reports: list[Any] = []
     records = _matching_live_workflows()
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": records,
-                    "hasMore": False,
-                    "total": len(records),
-                    "nextCursor": None,
-                }
-            }
-        )
+        FakeHTTPResponse(_message_center_page(records)),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
     )
 
     collection = asyncio.run(
@@ -1633,16 +1742,8 @@ def test_live_reports_reachable_structural_drift_without_values(
         raise AssertionError("unknown structural change kind")
 
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            {
-                "data": {
-                    "records": records,
-                    "hasMore": False,
-                    "total": len(records),
-                    "nextCursor": None,
-                }
-            }
-        )
+        FakeHTTPResponse(_message_center_page(records)),
+        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
     )
     adapter = OAReadAdapter(
         _live_provider(opener, drift_reporter=reports.append),

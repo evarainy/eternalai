@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -38,18 +39,24 @@ from app.infra.adapters.oa.contracts import (
 )
 from app.ports.auth import OASessionCredential
 
-_DEFAULT_PAGE_SIZE = 100
-_SYSTEM_MESSAGE_PAGE_SIZE = 20
+_DEFAULT_MESSAGE_CENTER_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
+_DEFAULT_MAX_RECORDS = 5_000
 _DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-_DEFAULT_PAGINATION_SIGNAL_KEYS = frozenset(
-    {"hasMore", "total", "nextCursor"}
-)
-_KNOWN_PAGINATION_SIGNAL_KEYS = frozenset(
-    {"hasMore", "has_more", "total", "nextCursor", "next_cursor"}
-)
 _MAX_CONFIGURED_PAGES = 1_000
+_MAX_CONFIGURED_PAGE_SIZE = 1_000
+_MAX_CONFIGURED_RECORDS = 1_000_000
 _MAX_CONFIGURED_RESPONSE_BYTES = 32 * 1024 * 1024
+_MESSAGE_CENTER_PAYLOAD_REASON_CODES = {
+    "OA message-center page exceeds the record limit": "page_limit",
+    "OA message-center aggregate exceeds the record limit": "aggregate_limit",
+    "OA message-center pagination cursor did not advance": "cursor_not_advanced",
+    "OA message-center record repeated across pages": "record_repeated",
+    "OA message-center response shape changed": "response_shape",
+    "OA message-center response status is invalid": "response_status",
+    "OA message-center response data is invalid": "response_data",
+    "OA message-center response cursor is invalid": "response_cursor",
+}
 _COOKIE_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _SESSION_EXPIRED_CODES = frozenset(
     {
@@ -70,7 +77,6 @@ _PERMISSION_DENIED_CODES = frozenset(
         "permission_denied",
     }
 )
-_MISSING = object()
 
 
 class OAReadProvider(Protocol):
@@ -181,29 +187,48 @@ class LiveOAReadProvider:
         self,
         *,
         base_url: str,
-        pending_workflows_endpoint_path: str,
-        system_messages_endpoint_path: str,
+        message_center_endpoint_path: str,
+        pending_workflows_category_id: str,
+        pending_workflows_bizstate: str,
+        pending_workflows_select_state: str,
+        system_messages_category_id: str,
+        system_messages_bizstate: str,
+        system_messages_select_state: str,
         timeout_seconds: float,
         pending_workflows_contract_pack_dir: Path,
         system_messages_contract_pack_dir: Path,
         drift_reporter: OAStructuralDriftReporter | None = None,
+        page_size: int = _DEFAULT_MESSAGE_CENTER_PAGE_SIZE,
         max_pages: int = _DEFAULT_MAX_PAGES,
+        max_records: int = _DEFAULT_MAX_RECORDS,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
-        pagination_signal_keys: frozenset[str] = _DEFAULT_PAGINATION_SIGNAL_KEYS,
         opener_factory: Callable[[], OpenerDirector] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._base_url, self._allowed_origin = _validate_base_url(base_url)
-        self._pending_workflows_endpoint_path = _validate_endpoint_path(
-            pending_workflows_endpoint_path
+        self._message_center_endpoint_path = _validate_endpoint_path(
+            message_center_endpoint_path
         )
-        self._system_messages_endpoint_path = _validate_endpoint_path(
-            system_messages_endpoint_path
+        self._pending_workflows_form = _validate_message_center_form(
+            category_id=pending_workflows_category_id,
+            bizstate=pending_workflows_bizstate,
+            select_state=pending_workflows_select_state,
+            allow_empty_category=False,
+        )
+        self._system_messages_form = _validate_message_center_form(
+            category_id=system_messages_category_id,
+            bizstate=system_messages_bizstate,
+            select_state=system_messages_select_state,
+            allow_empty_category=True,
         )
         if timeout_seconds <= 0:
             raise ValueError("OA HTTP timeout must be positive")
+        if not 1 <= page_size <= _MAX_CONFIGURED_PAGE_SIZE:
+            raise ValueError("OA message-center page size is outside the allowed range")
         if not 1 <= max_pages <= _MAX_CONFIGURED_PAGES:
             raise ValueError("OA maximum page count is outside the allowed range")
+        if not 1 <= max_records <= _MAX_CONFIGURED_RECORDS:
+            raise ValueError("OA aggregate record limit is outside the allowed range")
         if not 1 <= max_response_bytes <= _MAX_CONFIGURED_RESPONSE_BYTES:
             raise ValueError("OA response size limit is outside the allowed range")
         pending_collection, pending_expected_fingerprint = _load_contract_pack(
@@ -222,11 +247,10 @@ class LiveOAReadProvider:
             )
 
         self._timeout_seconds = timeout_seconds
+        self._page_size = page_size
         self._max_pages = max_pages
+        self._max_records = max_records
         self._max_response_bytes = max_response_bytes
-        self._pagination_signal_keys = _validate_pagination_signal_keys(
-            pagination_signal_keys
-        )
         self._pending_expected_fingerprint = pending_expected_fingerprint
         self._system_message_expected_fingerprint = (
             system_message_expected_fingerprint
@@ -239,112 +263,14 @@ class LiveOAReadProvider:
         self,
         credential: OASessionCredential | None = None,
     ) -> OAPendingWorkflowCollection:
-        if credential is None:
-            raise OALiveIdentityUnbound("OA credential is required")
-        cookie_header = ""
-        opener: OpenerDirector | None = None
         raw_records: list[Any] = []
-        seen_cursors: set[str] = set()
-        cursor: str | None = None
-        payload: dict[str, Any] | None = None
-        page_records: list[Any] = []
-        pagination: Mapping[str, Any] = {}
-        next_cursor: str | None = None
-        expected_total: int | None = None
         collection: OAPendingWorkflowCollection | None = None
 
         try:
-            ttl_status = _credential_ttl_status(
-                credential.expires_at,
-                self._clock(),
+            raw_records = await self._list_message_center_records(
+                credential,
+                self._pending_workflows_form,
             )
-            if ttl_status == "invalid":
-                raise OALiveRequestError("OA credential expiry is invalid")
-            if ttl_status == "expired":
-                raise OALiveIdentityExpired("OA Session has expired")
-            cookie_header = _build_cookie_header(credential.cookies)
-            opener = self._opener_factory()
-            for page_number in range(1, self._max_pages + 1):
-                assert opener is not None
-                payload = await self._request_page(
-                    opener=opener,
-                    cookie_header=cookie_header,
-                    page_number=page_number,
-                    cursor=cursor,
-                )
-                page_error_kind: str | None = None
-                is_complete = False
-                try:
-                    _raise_for_business_error(payload)
-                    page_records, pagination = _read_page(payload)
-                    if len(page_records) > _DEFAULT_PAGE_SIZE:
-                        raise OALivePayloadInvalid(
-                            "OA page exceeds the record limit"
-                        )
-                    aggregate_record_count = len(raw_records) + len(page_records)
-                    if (
-                        aggregate_record_count
-                        > self._max_pages * _DEFAULT_PAGE_SIZE
-                    ):
-                        raise OALivePayloadInvalid(
-                            "OA aggregate exceeds the record limit"
-                        )
-                    is_complete, next_cursor, page_total = _resolve_pagination(
-                        pagination,
-                        expected_signal_keys=self._pagination_signal_keys,
-                        page_record_count=len(page_records),
-                        aggregate_record_count=aggregate_record_count,
-                    )
-                    if page_total is not None:
-                        if expected_total is None:
-                            expected_total = page_total
-                        elif page_total != expected_total:
-                            raise OALivePayloadInvalid(
-                                "OA total signal changed between pages"
-                            )
-                except OALiveIdentityExpired:
-                    page_error_kind = "identity_expired"
-                except OALivePermissionDenied:
-                    page_error_kind = "permission_denied"
-                except OALiveProviderError:
-                    page_error_kind = "payload_invalid"
-                except Exception:
-                    _log_provider_failure("payload_processing")
-                    page_error_kind = "request_error"
-                if page_error_kind is not None:
-                    payload = None
-                    page_records.clear()
-                    pagination = {}
-                    if page_error_kind == "identity_expired":
-                        raise OALiveIdentityExpired(
-                            "OA Session is no longer valid"
-                        )
-                    if page_error_kind == "permission_denied":
-                        raise OALivePermissionDenied(
-                            "OA permission was denied"
-                        )
-                    if page_error_kind == "request_error":
-                        raise OALiveRequestError(
-                            "OA response processing failed"
-                        )
-                    raise OALivePayloadInvalid("OA response payload is invalid")
-                raw_records.extend(page_records)
-                if is_complete:
-                    break
-                if page_number == self._max_pages:
-                    raise OALivePayloadInvalid("OA pagination exceeds the page limit")
-                if not page_records:
-                    raise OALivePayloadInvalid(
-                        "OA pagination cannot continue after an empty page"
-                    )
-                if next_cursor is not None:
-                    if next_cursor in seen_cursors:
-                        raise OALivePayloadInvalid("OA pagination cursor repeated")
-                    seen_cursors.add(next_cursor)
-                cursor = next_cursor
-            else:  # pragma: no cover - defensive; the loop always breaks or raises
-                raise OALivePayloadInvalid("OA pagination did not terminate")
-
             try:
                 actual_fingerprint = (
                     build_live_pending_workflows_fingerprint(raw_records)
@@ -381,80 +307,22 @@ class LiveOAReadProvider:
                 raise OALiveRequestError("OA response processing failed")
             return collection
         finally:
-            cookie_header = ""
             credential = None
-            opener = None
-            payload = None
-            page_records.clear()
-            pagination = {}
             raw_records.clear()
-            seen_cursors.clear()
-            cursor = None
-            next_cursor = None
-            expected_total = None
             collection = None
 
     async def list_system_messages(
         self,
         credential: OASessionCredential | None = None,
     ) -> OASystemMessageCollection:
-        if credential is None:
-            raise OALiveIdentityUnbound("OA credential is required")
-        cookie_header = ""
-        opener: OpenerDirector | None = None
-        payload: dict[str, Any] | None = None
         raw_records: list[Any] = []
         collection: OASystemMessageCollection | None = None
 
         try:
-            ttl_status = _credential_ttl_status(
-                credential.expires_at,
-                self._clock(),
+            raw_records = await self._list_message_center_records(
+                credential,
+                self._system_messages_form,
             )
-            if ttl_status == "invalid":
-                raise OALiveRequestError("OA credential expiry is invalid")
-            if ttl_status == "expired":
-                raise OALiveIdentityExpired("OA Session has expired")
-            cookie_header = _build_cookie_header(credential.cookies)
-            opener = self._opener_factory()
-            payload = await self._request_system_message_page(
-                opener=opener,
-                cookie_header=cookie_header,
-            )
-            page_error_kind: str | None = None
-            try:
-                _raise_for_business_error(payload)
-                raw_records = _read_system_message_page(payload)
-                if len(raw_records) > _SYSTEM_MESSAGE_PAGE_SIZE:
-                    raise OALivePayloadInvalid(
-                        "OA system-message page exceeds the record limit"
-                    )
-            except OALiveIdentityExpired:
-                page_error_kind = "identity_expired"
-            except OALivePermissionDenied:
-                page_error_kind = "permission_denied"
-            except OALiveProviderError:
-                page_error_kind = "payload_invalid"
-            except Exception:
-                _log_provider_failure("payload_processing")
-                page_error_kind = "request_error"
-            if page_error_kind is not None:
-                payload = None
-                raw_records.clear()
-                if page_error_kind == "identity_expired":
-                    raise OALiveIdentityExpired(
-                        "OA Session is no longer valid"
-                    )
-                if page_error_kind == "permission_denied":
-                    raise OALivePermissionDenied(
-                        "OA permission was denied"
-                    )
-                if page_error_kind == "request_error":
-                    raise OALiveRequestError(
-                        "OA response processing failed"
-                    )
-                raise OALivePayloadInvalid("OA response payload is invalid")
-
             try:
                 actual_fingerprint = build_live_system_messages_fingerprint(
                     raw_records
@@ -478,7 +346,8 @@ class LiveOAReadProvider:
             try:
                 collection = normalize_system_message_records(
                     raw_records,
-                    page_size=_SYSTEM_MESSAGE_PAGE_SIZE,
+                    record_limit=self._max_records,
+                    is_complete=True,
                     link_normalizer=self._normalize_system_message_link,
                 )
             except (TypeError, ValueError):
@@ -495,12 +364,157 @@ class LiveOAReadProvider:
                 raise OALiveRequestError("OA response processing failed")
             return collection
         finally:
+            credential = None
+            raw_records.clear()
+            collection = None
+
+    async def _list_message_center_records(
+        self,
+        credential: OASessionCredential | None,
+        form: Mapping[str, str],
+    ) -> list[Any]:
+        if credential is None:
+            raise OALiveIdentityUnbound("OA credential is required")
+        cookie_header = ""
+        opener: OpenerDirector | None = None
+        payload: dict[str, Any] | None = None
+        page_records: list[Any] = []
+        raw_records: list[Any] = []
+        completed_records: list[Any] | None = None
+        seen_record_fingerprints: set[bytes] = set()
+        cursor = ("", "")
+        next_cursor = ("", "")
+        payload_error_message = ""
+        payload_error_reason = "payload_invalid"
+
+        try:
+            ttl_status = _credential_ttl_status(
+                credential.expires_at,
+                self._clock(),
+            )
+            if ttl_status == "invalid":
+                raise OALiveRequestError("OA credential expiry is invalid")
+            if ttl_status == "expired":
+                raise OALiveIdentityExpired("OA Session has expired")
+            cookie_header = _build_cookie_header(credential.cookies)
+            opener = self._opener_factory()
+
+            # Inferred pending P2-OA-INTRANET-SMOKE-001: feed each response's
+            # msgid/mintime back into the same-named request fields verbatim;
+            # require every later page to keep the first page's exact envelope;
+            # and treat only an explicit empty data page as successful termination.
+            # Any conflicting signal fails closed through cursor, shape, or limit checks.
+            for page_number in range(1, self._max_pages + 1):
+                assert opener is not None
+                payload = await self._request_message_center_page(
+                    opener=opener,
+                    cookie_header=cookie_header,
+                    form=form,
+                    cursor=cursor,
+                )
+                page_error_kind: str | None = None
+                is_complete = False
+                try:
+                    _raise_for_business_error(payload)
+                    page_records, next_cursor = _read_message_center_page(payload)
+                    if len(page_records) > self._page_size:
+                        raise OALivePayloadInvalid(
+                            "OA message-center page exceeds the record limit"
+                        )
+                    aggregate_record_count = len(raw_records) + len(page_records)
+                    if aggregate_record_count > self._max_records:
+                        raise OALivePayloadInvalid(
+                            "OA message-center aggregate exceeds the record limit"
+                        )
+                    is_complete = not page_records
+                    if next_cursor == cursor and (page_number > 1 or page_records):
+                        raise OALivePayloadInvalid(
+                            "OA message-center pagination cursor did not advance"
+                        )
+                    for record in page_records:
+                        record_fingerprint = _message_center_record_fingerprint(record)
+                        if record_fingerprint in seen_record_fingerprints:
+                            raise OALivePayloadInvalid(
+                                "OA message-center record repeated across pages"
+                            )
+                        seen_record_fingerprints.add(record_fingerprint)
+                except OALiveIdentityExpired:
+                    page_error_kind = "identity_expired"
+                except OALivePermissionDenied:
+                    page_error_kind = "permission_denied"
+                except OALivePayloadInvalid as exc:
+                    payload_error_message, payload_error_reason = (
+                        _safe_message_center_payload_error(exc)
+                    )
+                    page_error_kind = "payload_invalid"
+                except OALiveProviderError:
+                    page_error_kind = "payload_invalid"
+                except Exception:
+                    _log_provider_failure("payload_processing")
+                    page_error_kind = "request_error"
+                if page_error_kind is not None:
+                    if page_error_kind == "payload_invalid":
+                        _log_message_center_payload_rejection(
+                            reason=payload_error_reason,
+                            page_number=page_number,
+                            payload=payload,
+                            aggregate_record_count=len(raw_records),
+                            cursor=cursor,
+                            next_cursor=next_cursor,
+                        )
+                    payload = None
+                    page_records.clear()
+                    if page_error_kind == "identity_expired":
+                        raise OALiveIdentityExpired(
+                            "OA Session is no longer valid"
+                        )
+                    if page_error_kind == "permission_denied":
+                        raise OALivePermissionDenied(
+                            "OA permission was denied"
+                        )
+                    if page_error_kind == "request_error":
+                        raise OALiveRequestError(
+                            "OA response processing failed"
+                        )
+                    raise OALivePayloadInvalid(
+                        payload_error_message or "OA response payload is invalid"
+                    )
+
+                raw_records.extend(page_records)
+                page_records.clear()
+                if is_complete:
+                    completed_records = raw_records
+                    raw_records = []
+                    return completed_records
+                if page_number == self._max_pages:
+                    _log_message_center_payload_rejection(
+                        reason="pagination_page_limit",
+                        page_number=page_number,
+                        payload=payload,
+                        aggregate_record_count=len(raw_records),
+                        cursor=cursor,
+                        next_cursor=next_cursor,
+                    )
+                    raise OALivePayloadInvalid(
+                        "OA message-center pagination may be truncated at the page limit"
+                    )
+                cursor = next_cursor
+            raise OALivePayloadInvalid(
+                "OA message-center pagination did not terminate"
+            )  # pragma: no cover
+        finally:
             cookie_header = ""
             credential = None
             opener = None
             payload = None
+            page_records.clear()
             raw_records.clear()
-            collection = None
+            completed_records = None
+            seen_record_fingerprints.clear()
+            cursor = ("", "")
+            next_cursor = ("", "")
+            payload_error_message = ""
+            payload_error_reason = ""
 
     def _build_isolated_opener(self) -> OpenerDirector:
         return build_opener(
@@ -534,103 +548,21 @@ class LiveOAReadProvider:
             raise ValueError("OA system-message link is not host-relative")
         return value
 
-    async def _request_page(
+    async def _request_message_center_page(
         self,
         *,
         opener: OpenerDirector,
         cookie_header: str,
-        page_number: int,
-        cursor: str | None,
+        form: Mapping[str, str],
+        cursor: tuple[str, str],
     ) -> dict[str, Any]:
         parameters = {
-            "page": str(page_number),
-            "pageSize": str(_DEFAULT_PAGE_SIZE),
-        }
-        if cursor is not None:
-            parameters["cursor"] = cursor
-        payload: dict[str, Any] | None = None
-        error_kind: str | None = None
-        request: Request | None = None
-        try:
-            request = Request(
-                f"{self._base_url}{self._pending_workflows_endpoint_path}"
-                f"?{urlencode(parameters)}",
-                headers={
-                    "Accept": "application/json",
-                    "Cookie": cookie_header,
-                    "User-Agent": "EternalAI-OA-Read/1",
-                },
-                method="GET",
-            )
-            payload = await asyncio.to_thread(self._open_json, opener, request)
-        except HTTPError as exc:
-            error_kind = _http_error_kind(int(exc.code))
-        except OALiveIdentityUnbound:
-            error_kind = "identity_unbound"
-        except OALiveIdentityExpired:
-            error_kind = "identity_expired"
-        except OALivePermissionDenied:
-            error_kind = "permission_denied"
-        except OALiveTimeout:
-            error_kind = "timeout"
-        except OALiveHTTPServerError:
-            error_kind = "http_server"
-        except OALivePayloadInvalid:
-            error_kind = "payload_invalid"
-        except OALiveProviderError:
-            error_kind = "request_error"
-        except (TimeoutError, socket.timeout):
-            error_kind = "timeout"
-        except URLError as exc:
-            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-                error_kind = "timeout"
-            else:
-                error_kind = "request_error"
-        except (UnicodeError, json.JSONDecodeError, ValueError):
-            error_kind = "payload_invalid"
-        except OSError:
-            error_kind = "request_error"
-        except Exception:
-            _log_provider_failure("http_request")
-            error_kind = "request_error"
-        finally:
-            request = None
-            parameters.clear()
-            del cursor
-            del cookie_header
-            del opener
-
-        if error_kind == "identity_unbound":
-            raise OALiveIdentityUnbound("OA credential is required")
-        if error_kind == "identity_expired":
-            raise OALiveIdentityExpired("OA Session is no longer valid")
-        if error_kind == "permission_denied":
-            raise OALivePermissionDenied("OA permission was denied")
-        if error_kind == "timeout":
-            raise OALiveTimeout("OA request timed out")
-        if error_kind == "http_server":
-            raise OALiveHTTPServerError("OA returned a server error")
-        if error_kind == "payload_invalid":
-            raise OALivePayloadInvalid("OA response is not valid JSON")
-        if error_kind is not None:
-            raise OALiveRequestError("OA network request failed")
-        if payload is None:
-            raise OALiveRequestError("OA response is unavailable")
-        return payload
-
-    async def _request_system_message_page(
-        self,
-        *,
-        opener: OpenerDirector,
-        cookie_header: str,
-    ) -> dict[str, Any]:
-        parameters = {
-            "pagesize": str(_SYSTEM_MESSAGE_PAGE_SIZE),
-            "selectState": "0",
-            "msgid": "",
-            "bizstate": "",
-            "mintime": "",
-            "id": "",
+            "id": form["id"],
+            "pagesize": str(self._page_size),
+            "msgid": cursor[0],
+            "mintime": cursor[1],
+            "bizstate": form["bizstate"],
+            "selectState": form["selectState"],
         }
         encoded_parameters = b""
         payload: dict[str, Any] | None = None
@@ -639,7 +571,7 @@ class LiveOAReadProvider:
         try:
             encoded_parameters = urlencode(parameters).encode("ascii")
             request = Request(
-                f"{self._base_url}{self._system_messages_endpoint_path}",
+                f"{self._base_url}{self._message_center_endpoint_path}",
                 data=encoded_parameters,
                 headers={
                     "Accept": "application/json",
@@ -688,6 +620,8 @@ class LiveOAReadProvider:
             request = None
             encoded_parameters = b""
             parameters.clear()
+            del cursor
+            del form
             del cookie_header
             del opener
 
@@ -907,6 +841,49 @@ def _log_provider_failure(stage: str) -> None:
     )
 
 
+def _safe_message_center_payload_error(
+    error: OALivePayloadInvalid,
+) -> tuple[str, str]:
+    message = str(error)
+    reason = _MESSAGE_CENTER_PAYLOAD_REASON_CODES.get(message)
+    if reason is None:
+        return "OA response payload is invalid", "payload_invalid"
+    return message, reason
+
+
+def _log_message_center_payload_rejection(
+    *,
+    reason: str,
+    page_number: int,
+    payload: Mapping[str, Any] | None,
+    aggregate_record_count: int,
+    cursor: tuple[str, str],
+    next_cursor: tuple[str, str],
+) -> None:
+    data = payload.get("data") if payload is not None else None
+    page_record_count = len(data) if isinstance(data, list) else -1
+    cursor_fields = (
+        "".join(
+            "1" if payload is not None and key in payload else "0"
+            for key in ("maxtime", "mintime", "msgid")
+        )
+        if payload is not None
+        else "000"
+    )
+    logging.getLogger(__name__).warning(
+        "oa_live_message_center_payload_rejected reason=%s page=%d "
+        "page_records=%d aggregate_records=%d cursor_fields=%s "
+        "cursor_advanced=%s",
+        reason,
+        page_number,
+        page_record_count,
+        aggregate_record_count,
+        cursor_fields,
+        next_cursor != cursor,
+    )
+    data = None
+
+
 def report_oa_structural_drift(report: OAStructuralDriftReport) -> None:
     """Emit only value-free structural metadata for production Live drift."""
 
@@ -950,109 +927,96 @@ def _raise_for_business_error(payload: Mapping[str, Any]) -> None:
             raise OALivePermissionDenied("OA permission was denied")
 
 
-def _read_page(
-    payload: Mapping[str, Any],
-) -> tuple[list[Any], Mapping[str, Any]]:
-    data = payload.get("data")
-    if not isinstance(data, Mapping):
-        raise OALivePayloadInvalid("OA response data is invalid")
-    records = data.get("records")
-    if not isinstance(records, list):
-        raise OALivePayloadInvalid("OA response records are invalid")
-    return records, data
-
-
-def _read_system_message_page(payload: Mapping[str, Any]) -> list[Any]:
-    if payload.get("status") != "1":
-        raise OALivePayloadInvalid("OA system-message response status is invalid")
-    records = payload.get("data")
-    if not isinstance(records, list):
-        raise OALivePayloadInvalid("OA system-message response data is invalid")
-    return records
-
-
-def _resolve_pagination(
-    pagination: Mapping[str, Any],
+def _validate_message_center_form(
     *,
-    expected_signal_keys: frozenset[str],
-    page_record_count: int,
-    aggregate_record_count: int,
-) -> tuple[bool, str | None, int | None]:
-    observed_signal_keys = frozenset(
-        key for key in _KNOWN_PAGINATION_SIGNAL_KEYS if key in pagination
-    )
-    if observed_signal_keys != expected_signal_keys:
-        raise OALivePayloadInvalid("OA pagination signal shape changed")
-    completion_signals: list[bool] = []
-
-    has_more = _read_alias(pagination, "hasMore", "has_more")
-    if has_more is not _MISSING:
-        if not isinstance(has_more, bool):
-            raise OALivePayloadInvalid("OA has-more signal is invalid")
-        completion_signals.append(not has_more)
-
-    total = pagination.get("total", _MISSING)
-    validated_total: int | None = None
-    if total is not _MISSING:
-        if not isinstance(total, int) or isinstance(total, bool) or total < 0:
-            raise OALivePayloadInvalid("OA total signal is invalid")
-        if aggregate_record_count > total:
-            raise OALivePayloadInvalid("OA total signal contradicts the records")
-        validated_total = total
-        completion_signals.append(aggregate_record_count == total)
-
-    next_cursor_raw = _read_alias(pagination, "nextCursor", "next_cursor")
-    next_cursor: str | None = None
-    if next_cursor_raw is not _MISSING:
-        if next_cursor_raw is None or next_cursor_raw == "":
-            completion_signals.append(True)
-        elif (
-            isinstance(next_cursor_raw, str)
-            and next_cursor_raw
-            and next_cursor_raw == next_cursor_raw.strip()
-        ):
-            next_cursor = next_cursor_raw
-            completion_signals.append(False)
-        else:
-            raise OALivePayloadInvalid("OA next-cursor signal is invalid")
-
-    if not completion_signals:
-        raise OALivePayloadInvalid("OA pagination has no termination signal")
-    if any(signal != completion_signals[0] for signal in completion_signals[1:]):
-        raise OALivePayloadInvalid("OA pagination signals contradict each other")
-    if not completion_signals[0] and page_record_count == 0:
-        raise OALivePayloadInvalid("OA pagination cannot continue after an empty page")
-    return completion_signals[0], next_cursor, validated_total
+    category_id: str,
+    bizstate: str,
+    select_state: str,
+    allow_empty_category: bool,
+) -> Mapping[str, str]:
+    return {
+        "id": _validate_message_center_form_value(
+            category_id,
+            name="category id",
+            allow_empty=allow_empty_category,
+        ),
+        "bizstate": _validate_message_center_form_value(
+            bizstate,
+            name="business state",
+            allow_empty=True,
+        ),
+        "selectState": _validate_message_center_form_value(
+            select_state,
+            name="selection state",
+            allow_empty=True,
+        ),
+    }
 
 
-def _validate_pagination_signal_keys(
-    value: frozenset[str],
-) -> frozenset[str]:
+def _validate_message_center_form_value(
+    value: str,
+    *,
+    name: str,
+    allow_empty: bool,
+) -> str:
     if (
-        not isinstance(value, frozenset)
-        or not value
-        or not value.issubset(_KNOWN_PAGINATION_SIGNAL_KEYS)
-        or {"hasMore", "has_more"}.issubset(value)
-        or {"nextCursor", "next_cursor"}.issubset(value)
+        not isinstance(value, str)
+        or value != value.strip()
+        or (not value and not allow_empty)
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
     ):
-        raise ValueError("OA pagination signal profile is invalid")
+        raise ValueError(f"OA message-center {name} is invalid")
     return value
 
 
-def _read_alias(
+def _read_message_center_page(
     payload: Mapping[str, Any],
-    camel_case: str,
-    snake_case: str,
-) -> Any:
-    camel_value = payload.get(camel_case, _MISSING)
-    snake_value = payload.get(snake_case, _MISSING)
-    if camel_value is not _MISSING and snake_value is not _MISSING:
-        if camel_value != snake_value:
-            raise OALivePayloadInvalid("OA pagination aliases contradict each other")
-        return camel_value
-    if camel_value is not _MISSING:
-        return camel_value
-    return snake_value
+) -> tuple[list[Any], tuple[str, str]]:
+    expected_keys = {"data", "maxtime", "mintime", "msgid", "status"}
+    if set(payload) != expected_keys:
+        raise OALivePayloadInvalid("OA message-center response shape changed")
+    if payload.get("status") != "1":
+        raise OALivePayloadInvalid("OA message-center response status is invalid")
+    records = payload.get("data")
+    if not isinstance(records, list):
+        raise OALivePayloadInvalid("OA message-center response data is invalid")
+    cursor_values: list[str] = []
+    for key in ("maxtime", "mintime", "msgid"):
+        value = payload.get(key)
+        if not isinstance(value, str) or value != value.strip():
+            cursor_values.clear()
+            raise OALivePayloadInvalid(
+                "OA message-center response cursor is invalid"
+            )
+        cursor_values.append(value)
+    cursor = (cursor_values[2], cursor_values[1])
+    cursor_values.clear()
+    return records, cursor
+
+
+def _message_center_record_fingerprint(record: Any) -> bytes:
+    identity = ""
+    serialized = ""
+    try:
+        if isinstance(record, Mapping):
+            for key in ("messageid", "workflowId"):
+                value = record.get(key)
+                if isinstance(value, str) and value:
+                    identity = f"{key}\u0000{value}"
+                    break
+        if not identity:
+            serialized = json.dumps(
+                record,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            identity = f"record\u0000{serialized}"
+        return hashlib.sha256(identity.encode("utf-8")).digest()
+    finally:
+        identity = ""
+        serialized = ""
 
 
 __all__ = (

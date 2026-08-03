@@ -552,8 +552,13 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
-                pending_workflows_endpoint_path="/api/pending",
-                system_messages_endpoint_path="/api/messages",
+                message_center_endpoint_path="/api/messages",
+                pending_workflows_category_id="101",
+                pending_workflows_bizstate="pending-business-state",
+                pending_workflows_select_state="pending-selection-state",
+                system_messages_category_id="202",
+                system_messages_bizstate="system-business-state",
+                system_messages_select_state="system-selection-state",
                 timeout_seconds=2.0,
                 pending_workflows_contract_pack_dir=CONTRACT_PACK,
                 system_messages_contract_pack_dir=(
@@ -815,8 +820,13 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
-                pending_workflows_endpoint_path="/api/pending",
-                system_messages_endpoint_path="/api/messages",
+                message_center_endpoint_path="/api/messages",
+                pending_workflows_category_id="101",
+                pending_workflows_bizstate="pending-business-state",
+                pending_workflows_select_state="pending-selection-state",
+                system_messages_category_id="202",
+                system_messages_bizstate="system-business-state",
+                system_messages_select_state="system-selection-state",
                 timeout_seconds=2.0,
                 pending_workflows_contract_pack_dir=CONTRACT_PACK,
                 system_messages_contract_pack_dir=(
