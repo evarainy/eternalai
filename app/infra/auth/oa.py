@@ -205,7 +205,7 @@ class OACredentialVerifier:
                 login_result.get("loginstatus")
             ):
                 raise ValueError("OA rejected the credential")
-            oa_user_id = _required_string(login_result, "userid")
+            oa_user_id = _required_oa_user_id(login_result)
             cookies = session.cookies()
             if not _REQUIRED_OA_COOKIES.issubset(cookies):
                 raise ValueError("OA response is missing required cookies")
@@ -292,6 +292,17 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if value is None:
         raise ValueError("OA response is missing a required field")
     return value
+
+
+def _required_oa_user_id(payload: dict[str, Any]) -> str:
+    value = payload.get("userid")
+    if isinstance(value, bool):
+        raise ValueError("OA response userid is invalid")
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ValueError("OA response userid is invalid")
 
 
 def _optional_string(payload: dict[str, Any], key: str) -> str | None:
