@@ -97,7 +97,7 @@ class HARFixtureOpener:
         rsa_code: str,
         expected_login_digest: bytes,
         expected_password_digest: bytes,
-        oa_user_id: str,
+        oa_user_id: object,
         cookie_values: dict[str, str],
         login_succeeds: bool,
         rsa_flag: str | None,
@@ -112,6 +112,7 @@ class HARFixtureOpener:
         self._login_succeeds = login_succeeds
         self._rsa_flag = rsa_flag
         self.check_login_calls = 0
+        self.requested_user_ids: list[str] = []
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -155,6 +156,8 @@ class HARFixtureOpener:
                 }
             )
         if path == "/api/hrm/usericon/getUserIcon":
+            parameters = parse_qs(urlparse(request.full_url).query, strict_parsing=True)
+            self.requested_user_ids.append(parameters["userId"][0])
             return FakeResponse({"lastname": "Synthetic User"})
         raise AssertionError(f"Unexpected OA fixture path: {path}")
 
@@ -194,6 +197,7 @@ def _fixture(
     rsa_flag: str | None = "RSA",
     credential_store: CredentialStorePort | None = None,
     loginid_override: str | None = None,
+    oa_user_id: object = 123,
 ) -> tuple[
     OACredentialVerifier,
     RecordingCredentialStore,
@@ -204,7 +208,6 @@ def _fixture(
     rsa_code = "synthetic-rsa-code"
     loginid = loginid_override or "1" * 17 + "X"
     password = "synthetic-" + "password"
-    oa_user_id = "synthetic-oa-user"
     cookie_values = {
         "ecology_JSessionid": "synthetic-cookie-a",
         "loginidweaver": "synthetic-cookie-b",
@@ -265,6 +268,7 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     assert len(store.records) == 1
     stored_user_id, stored_credential = store.records[0]
     assert stored_user_id == principal.ai_user_id
+    assert stored_credential.oa_user_id.get_secret_value() == "123"
     assert set(stored_credential.cookies) == {
         "ecology_JSessionid",
         "loginidweaver",
@@ -274,6 +278,118 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
         2026, 7, 24, tzinfo=UTC
     ) + timedelta(hours=2)
     assert openers[0].check_login_calls == 1
+    assert openers[0].requested_user_ids == ["123"]
+
+
+def test_oa_string_userid_shape_remains_compatible() -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        oa_user_id="123",
+    )
+
+    principal = asyncio.run(verifier.authenticate(credential))
+
+    assert store.records[0][0] == principal.ai_user_id
+    assert store.records[0][1].oa_user_id.get_secret_value() == "123"
+    assert openers[0].requested_user_ids == ["123"]
+
+
+@pytest.mark.parametrize(
+    "oa_user_id",
+    [True, False, None, 123.0, "", "   ", [], {}],
+)
+def test_oa_invalid_userid_shapes_remain_fail_closed(oa_user_id: object) -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        oa_user_id=oa_user_id,
+    )
+
+    with pytest.raises(AuthenticationError, match="authentication failed"):
+        asyncio.run(verifier.authenticate(credential))
+
+    assert store.records == []
+    assert openers[0].requested_user_ids == []
+
+
+def test_integer_and_string_userid_share_one_principal_credential_and_mapping() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+    from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+
+    database_url = _require_test_db()
+    loginid = f"{uuid4().hex[:17]}X"
+    expected_ai_user_id = identity_surrogate(loginid, key=bytes(range(32)))
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        try:
+            store = PostgreSQLCredentialStore(
+                session_factory=factory,
+                encryption_key=bytes(range(32)),
+            )
+            integer_verifier, _, integer_openers, credential = _fixture(
+                login_succeeds=True,
+                credential_store=store,
+                loginid_override=loginid,
+                oa_user_id=123,
+            )
+            string_verifier, _, string_openers, _ = _fixture(
+                login_succeeds=True,
+                credential_store=store,
+                loginid_override=loginid,
+                oa_user_id="123",
+            )
+
+            integer_principal = await integer_verifier.authenticate(credential)
+            string_principal = await string_verifier.authenticate(credential)
+
+            assert integer_principal.ai_user_id == expected_ai_user_id
+            assert string_principal.ai_user_id == expected_ai_user_id
+            assert integer_openers[0].requested_user_ids == ["123"]
+            assert string_openers[0].requested_user_ids == ["123"]
+
+            stored_credential = await store.load(expected_ai_user_id)
+            assert stored_credential is not None
+            assert stored_credential.oa_user_id.get_secret_value() == "123"
+
+            async with factory() as session:
+                credential_row_count = (
+                    await session.execute(
+                        text(
+                            "SELECT COUNT(*) FROM oa_session_credentials"
+                            " WHERE ai_user_id = :ai_user_id"
+                        ),
+                        {"ai_user_id": expected_ai_user_id},
+                    )
+                ).scalar_one()
+
+            mapping = PostgreSQLOAIdentityMapping(
+                session_factory=factory,
+                now=lambda: datetime(2026, 7, 24, tzinfo=UTC),
+            )
+            identity_mappings = await mapping.list_mappings(
+                expected_ai_user_id,
+                "oa",
+            )
+
+            assert credential_row_count == 1
+            assert len(identity_mappings) == 1
+            assert identity_mappings[0].binding_id == (
+                f"oa-session-v1:{expected_ai_user_id}"
+            )
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": expected_ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
 
 
 def test_oa_rejection_is_generic_fail_closed_and_never_retries() -> None:
