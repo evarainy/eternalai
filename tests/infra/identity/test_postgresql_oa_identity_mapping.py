@@ -34,6 +34,12 @@ CONTRACT_PACK = (
     / "oa"
     / "ecology9-pending-workflows-v1"
 )
+SYSTEM_MESSAGE_CONTRACT_PACK = (
+    Path(__file__).resolve().parents[2]
+    / "contract_packs"
+    / "oa"
+    / "ecology9-system-messages-v1"
+)
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -546,9 +552,13 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
-                endpoint_path="/api/pending",
+                pending_workflows_endpoint_path="/api/pending",
+                system_messages_endpoint_path="/api/messages",
                 timeout_seconds=2.0,
-                contract_pack_dir=CONTRACT_PACK,
+                pending_workflows_contract_pack_dir=CONTRACT_PACK,
+                system_messages_contract_pack_dir=(
+                    SYSTEM_MESSAGE_CONTRACT_PACK
+                ),
                 opener_factory=forbidden_opener_factory,
                 clock=lambda: NOW,
             )
@@ -805,9 +815,13 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
-                endpoint_path="/api/pending",
+                pending_workflows_endpoint_path="/api/pending",
+                system_messages_endpoint_path="/api/messages",
                 timeout_seconds=2.0,
-                contract_pack_dir=CONTRACT_PACK,
+                pending_workflows_contract_pack_dir=CONTRACT_PACK,
+                system_messages_contract_pack_dir=(
+                    SYSTEM_MESSAGE_CONTRACT_PACK
+                ),
                 opener_factory=forbidden_opener_factory,
                 clock=lambda: NOW,
             )

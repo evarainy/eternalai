@@ -161,25 +161,54 @@ def build_oa_read_adapter(
     if settings.oa_read_adapter_mode == "mock":
         return MockOAAdapter()
 
-    contract_pack_dir = settings.oa_read_contract_pack_dir
-    if contract_pack_dir is None or not contract_pack_dir.is_dir():
-        raise RuntimeError(
-            "OA_READ_CONTRACT_PACK_DIR must be an existing directory"
-        )
     if settings.oa_read_adapter_mode == "replay":
+        contract_pack_dir = settings.oa_read_contract_pack_dir
+        if contract_pack_dir is None or not contract_pack_dir.is_dir():
+            raise RuntimeError(
+                "OA_READ_CONTRACT_PACK_DIR must be an existing directory"
+            )
         return OAReadAdapter(ReplayOAReadProvider(contract_pack_dir))
     if settings.oa_read_adapter_mode == "live":
-        endpoint_path = settings.oa_pending_workflows_path
-        if endpoint_path is None:
+        pending_contract_pack_dir = (
+            settings.oa_pending_workflows_contract_pack_dir
+        )
+        if (
+            pending_contract_pack_dir is None
+            or not pending_contract_pack_dir.is_dir()
+        ):
+            raise RuntimeError(
+                "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR must be an existing directory"
+            )
+        system_message_contract_pack_dir = (
+            settings.oa_system_messages_contract_pack_dir
+        )
+        if (
+            system_message_contract_pack_dir is None
+            or not system_message_contract_pack_dir.is_dir()
+        ):
+            raise RuntimeError(
+                "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR must be an existing directory"
+            )
+        pending_endpoint_path = settings.oa_pending_workflows_path
+        if pending_endpoint_path is None:
             raise RuntimeError(
                 "OA_PENDING_WORKFLOWS_PATH is required for live mode"
+            )
+        system_message_endpoint_path = settings.oa_system_messages_path
+        if system_message_endpoint_path is None:
+            raise RuntimeError(
+                "OA_SYSTEM_MESSAGES_PATH is required for live mode"
             )
         return OAReadAdapter(
             LiveOAReadProvider(
                 base_url=settings.oa_base_url,
-                endpoint_path=endpoint_path,
+                pending_workflows_endpoint_path=pending_endpoint_path,
+                system_messages_endpoint_path=system_message_endpoint_path,
                 timeout_seconds=settings.oa_timeout_seconds,
-                contract_pack_dir=contract_pack_dir,
+                pending_workflows_contract_pack_dir=pending_contract_pack_dir,
+                system_messages_contract_pack_dir=(
+                    system_message_contract_pack_dir
+                ),
                 drift_reporter=report_oa_structural_drift,
             ),
             secret_provider=CredentialStoreSecretProvider(
