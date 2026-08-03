@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any, Final, Literal
 
@@ -43,6 +43,19 @@ _LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
     "createdAt": "created_at",
     "expired": "expired",
 }
+_LIVE_SYSTEM_MESSAGE_FIELD_NAMES: Final[Mapping[str, str]] = {
+    "messageid": "message_id",
+    "title": "title",
+    "context": "content",
+    "name": "source_name",
+    "time": "occurred_at",
+    "bizstate": "business_state",
+    "link": "link",
+    "linkmobileurl": "mobile_link",
+}
+_LIVE_SYSTEM_MESSAGE_IGNORED_FIELDS: Final = frozenset(
+    {"gomethod", "gomethodpc", "showimage"}
+)
 _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
@@ -363,6 +376,36 @@ def build_live_pending_workflows_fingerprint(
     )
 
 
+def build_live_system_messages_fingerprint(
+    records: list[Any],
+) -> dict[str, Any]:
+    """Fingerprint one bounded Live system-message page without wire values."""
+
+    common_wire_fields = set(_LIVE_SYSTEM_MESSAGE_FIELD_NAMES)
+    for record in records:
+        if not isinstance(record, Mapping):
+            common_wire_fields.clear()
+            break
+        common_wire_fields.intersection_update(
+            key for key in record if isinstance(key, str)
+        )
+    projected_records = [
+        _project_live_system_message_record(
+            record,
+            common_wire_fields=common_wire_fields,
+        )
+        for record in records
+    ]
+    return _build_structural_fingerprint(
+        {
+            "messages": projected_records,
+            "returned_count": 0,
+            "is_complete": False,
+        },
+        include_contract_exemplar=True,
+    )
+
+
 def _build_structural_fingerprint(
     payload: Any,
     *,
@@ -426,6 +469,28 @@ def _project_live_workflow_record(
         ignored_fields=(
             frozenset(_LIVE_PENDING_WORKFLOW_FIELD_NAMES)
             - common_wire_fields
+        ),
+    )
+
+
+def _project_live_system_message_record(
+    record: Any,
+    *,
+    common_wire_fields: set[str],
+) -> Any:
+    if not isinstance(record, Mapping):
+        return _project_json_structure(record)
+    common_field_names = {
+        key: normalized_name
+        for key, normalized_name in _LIVE_SYSTEM_MESSAGE_FIELD_NAMES.items()
+        if key in common_wire_fields
+    }
+    return _project_json_mapping(
+        record,
+        field_names=common_field_names,
+        ignored_fields=(
+            (frozenset(_LIVE_SYSTEM_MESSAGE_FIELD_NAMES) - common_wire_fields)
+            | _LIVE_SYSTEM_MESSAGE_IGNORED_FIELDS
         ),
     )
 
@@ -569,6 +634,95 @@ def normalize_pending_workflow_records(
         raise ValueError("normalized OA workflow collection is invalid") from None
 
 
+def normalize_system_message_records(
+    records: list[Any],
+    *,
+    page_size: int,
+    link_normalizer: Callable[[str], str] | None = None,
+) -> OASystemMessageCollection:
+    """Whitelist and normalize one bounded Live OA system-message page."""
+
+    if page_size <= 0 or len(records) > page_size:
+        raise ValueError("OA system-message page exceeds the record limit")
+    normalized: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("OA system-message record must be an object")
+        normalized.append(
+            {
+                "message_id": _required_live_system_message_string(
+                    record,
+                    "messageid",
+                ),
+                "title": _required_live_system_message_string(record, "title"),
+                "content": _required_live_system_message_string(
+                    record,
+                    "context",
+                ),
+                "source_name": _required_live_system_message_string(
+                    record,
+                    "name",
+                ),
+                "occurred_at": _required_live_system_message_string(
+                    record,
+                    "time",
+                ),
+                "business_state": _required_live_system_message_string(
+                    record,
+                    "bizstate",
+                ),
+                "link": _optional_live_blankable_string(
+                    record,
+                    "link",
+                    normalizer=link_normalizer,
+                ),
+                "mobile_link": _optional_live_blankable_string(
+                    record,
+                    "linkmobileurl",
+                    normalizer=link_normalizer,
+                ),
+            }
+        )
+    try:
+        return OASystemMessageCollection.model_validate(
+            {
+                "messages": normalized,
+                "returned_count": len(normalized),
+                "is_complete": len(normalized) < page_size,
+            },
+            strict=True,
+        )
+    except ValidationError:
+        raise ValueError(
+            "normalized OA system-message collection is invalid"
+        ) from None
+
+
+def _required_live_system_message_string(
+    record: Mapping[str, Any],
+    key: str,
+) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("OA system-message required string is invalid")
+    return value.strip()
+
+
+def _optional_live_blankable_string(
+    record: Mapping[str, Any],
+    key: str,
+    *,
+    normalizer: Callable[[str], str] | None = None,
+) -> str | None:
+    value = record.get(key)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("OA system-message optional string is invalid")
+    normalized = value.strip()
+    return normalizer(normalized) if normalizer is not None else normalized
+
+
 def _required_live_string(record: Mapping[str, Any], key: str) -> str:
     value = record.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -673,7 +827,9 @@ __all__ = (
     "OAStructuralNode",
     "STRUCTURAL_FINGERPRINT_ALGORITHM",
     "build_live_pending_workflows_fingerprint",
+    "build_live_system_messages_fingerprint",
     "build_structural_fingerprint",
     "compare_structural_fingerprints",
     "normalize_pending_workflow_records",
+    "normalize_system_message_records",
 )

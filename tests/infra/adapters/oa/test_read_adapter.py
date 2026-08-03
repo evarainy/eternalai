@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import copy
 import json
 import logging
+import re
 import secrets
 import shutil
 import threading
@@ -24,11 +26,13 @@ from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
     build_live_pending_workflows_fingerprint,
+    build_live_system_messages_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
 )
 from app.infra.adapters.oa.provider import (
     LiveOAReadProvider,
+    OAContractPackPayloadInvalid,
     OALiveIdentityExpired,
     OALivePayloadInvalid,
     OALiveRequestError,
@@ -168,11 +172,25 @@ class SequencedOpener:
     def __init__(self, *responses: FakeHTTPResponse | Exception) -> None:
         self._responses = list(responses)
         self.request_queries: list[dict[str, list[str]]] = []
+        self.request_forms: list[dict[str, list[str]]] = []
+        self.request_methods: list[str] = []
+        self.request_header_names: list[frozenset[str]] = []
         self.cookie_header_present: list[bool] = []
 
     def open(self, request: Request, *, timeout: float) -> FakeHTTPResponse:
         assert timeout > 0
         self.request_queries.append(parse_qs(urlsplit(request.full_url).query))
+        request_data = request.data
+        self.request_forms.append(
+            parse_qs(
+                request_data.decode("ascii") if request_data is not None else "",
+                keep_blank_values=True,
+            )
+        )
+        self.request_methods.append(request.get_method())
+        self.request_header_names.append(
+            frozenset(name.casefold() for name, _value in request.header_items())
+        )
         self.cookie_header_present.append(request.has_header("Cookie"))
         response = self._responses.pop(0)
         if isinstance(response, Exception):
@@ -237,9 +255,11 @@ def _live_provider(
 ) -> LiveOAReadProvider:
     return LiveOAReadProvider(
         base_url="https://oa.synthetic.invalid",
-        endpoint_path="/api/pending",
+        pending_workflows_endpoint_path="/api/pending",
+        system_messages_endpoint_path="/api/messages",
         timeout_seconds=2.0,
-        contract_pack_dir=CONTRACT_PACK,
+        pending_workflows_contract_pack_dir=CONTRACT_PACK,
+        system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
         drift_reporter=drift_reporter,
         max_pages=max_pages,
         opener_factory=lambda: cast(OpenerDirector, opener),
@@ -265,6 +285,284 @@ def _matching_live_workflows() -> list[dict[str, Any]]:
     second = _raw_workflow(2)
     second["createdAt"] = None
     return [first, second]
+
+
+def _raw_system_message(index: int) -> dict[str, Any]:
+    return {
+        "messageid": f"live-message-{index}",
+        "title": f"live-title-{index}",
+        "context": f"live-content-{index}",
+        "name": f"live-source-{index}",
+        "time": "2026-08-03 12:00:00",
+        "bizstate": "1",
+        "link": f"/messages/desktop/{index}",
+        "linkmobileurl": f"/messages/mobile/{index}",
+        "gomethod": "synthetic-desktop-method",
+        "gomethodpc": "synthetic-mobile-method",
+        "showimage": "synthetic-image-flag",
+    }
+
+
+def _matching_live_system_messages() -> list[dict[str, Any]]:
+    first = _raw_system_message(1)
+    first["link"] = "https://oa.synthetic.invalid/messages/desktop/1"
+    first["linkmobileurl"] = (
+        "https://oa.synthetic.invalid/messages/mobile/1"
+    )
+    second = _raw_system_message(2)
+    second["link"] = ""
+    second["linkmobileurl"] = ""
+    return [first, second]
+
+
+def test_live_pending_provider_keeps_rejecting_backslash_endpoint_path() -> None:
+    with pytest.raises(ValueError, match="endpoint path"):
+        LiveOAReadProvider(
+            base_url="https://oa.synthetic.invalid",
+            pending_workflows_endpoint_path=r"/api\pending",
+            system_messages_endpoint_path="/api/messages",
+            timeout_seconds=2.0,
+            pending_workflows_contract_pack_dir=CONTRACT_PACK,
+            system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
+        )
+
+
+def test_live_system_message_provider_rejects_pending_pack() -> None:
+    with pytest.raises(
+        OAContractPackPayloadInvalid,
+        match="system-message provider requires its matching Contract Pack",
+    ):
+        LiveOAReadProvider(
+            base_url="https://oa.synthetic.invalid",
+            pending_workflows_endpoint_path="/api/pending",
+            system_messages_endpoint_path="/api/messages",
+            timeout_seconds=2.0,
+            pending_workflows_contract_pack_dir=CONTRACT_PACK,
+            system_messages_contract_pack_dir=CONTRACT_PACK,
+        )
+
+
+def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
+    reports: list[Any] = []
+    records = _matching_live_system_messages()
+    opener = SequencedOpener(
+        FakeHTTPResponse(
+            {
+                "status": "1",
+                "data": records,
+                "maxtime": "synthetic-upper-bound",
+                "mintime": "synthetic-lower-bound",
+                "msgid": "synthetic-message-cursor",
+            }
+        )
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, drift_reporter=reports.append),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_system_messages",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "success"
+    assert result.error_code is None
+    assert result.data == {
+        "messages": [
+            {
+                "message_id": "live-message-1",
+                "title": "live-title-1",
+                "content": "live-content-1",
+                "source_name": "live-source-1",
+                "occurred_at": "2026-08-03 12:00:00",
+                "business_state": "1",
+                "link": "/messages/desktop/1",
+                "mobile_link": "/messages/mobile/1",
+            },
+            {
+                "message_id": "live-message-2",
+                "title": "live-title-2",
+                "content": "live-content-2",
+                "source_name": "live-source-2",
+                "occurred_at": "2026-08-03 12:00:00",
+                "business_state": "1",
+                "link": None,
+                "mobile_link": None,
+            },
+        ],
+        "returned_count": 2,
+        "is_complete": True,
+    }
+    assert opener.request_methods == ["POST"]
+    assert opener.request_queries == [{}]
+    assert opener.request_forms == [
+        {
+            "pagesize": ["20"],
+            "selectState": ["0"],
+            "msgid": [""],
+            "bizstate": [""],
+            "mintime": [""],
+            "id": [""],
+        }
+    ]
+    assert opener.cookie_header_present == [True]
+    assert {
+        "accept",
+        "content-type",
+        "cookie",
+        "origin",
+        "user-agent",
+        "x-requested-with",
+    }.issubset(opener.request_header_names[0])
+    assert len(reports) == 1
+    report = reports[0]
+    expected_fingerprint = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report.matches is True
+    assert report.expected_sha256 == expected_fingerprint["sha256"]
+    assert report.actual_sha256 == expected_fingerprint["sha256"]
+
+
+def test_live_system_message_full_page_is_explicitly_incomplete() -> None:
+    records = [_raw_system_message(index) for index in range(1, 21)]
+    opener = SequencedOpener(
+        FakeHTTPResponse({"status": "1", "data": records})
+    )
+
+    collection = asyncio.run(
+        _live_provider(opener).list_system_messages(_credential())
+    )
+
+    assert collection.returned_count == 20
+    assert collection.is_complete is False
+    assert len(collection.messages) == 20
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "0", "data": []},
+        {
+            "status": "1",
+            "data": [_raw_system_message(index) for index in range(1, 22)],
+        },
+        {
+            "status": "1",
+            "data": [
+                {
+                    **_raw_system_message(1),
+                    "link": "https://other.synthetic.invalid/messages/1",
+                }
+            ],
+        },
+    ],
+)
+def test_live_system_message_invalid_status_bounds_and_links_fail_closed(
+    payload: dict[str, Any],
+) -> None:
+    opener = SequencedOpener(FakeHTTPResponse(payload))
+    adapter = OAReadAdapter(
+        _live_provider(opener),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_system_messages",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
+    reports: list[Any] = []
+    records = _matching_live_system_messages()
+    runtime_field_name = f"vendorField{secrets.token_hex(8)}"
+    runtime_business_value = f"business-{secrets.token_hex(24)}"
+    records[0][runtime_field_name] = runtime_business_value
+    opener = SequencedOpener(
+        FakeHTTPResponse({"status": "1", "data": records})
+    )
+
+    collection = asyncio.run(
+        _live_provider(
+            opener,
+            drift_reporter=reports.append,
+        ).list_system_messages(_credential())
+    )
+
+    assert collection.returned_count == 2
+    assert len(reports) == 1
+    report = reports[0]
+    rendered = report.model_dump_json()
+    assert report.matches is False
+    assert [node.path for node in report.added] == [
+        "$.messages[].unknown_field_001"
+    ]
+    assert runtime_field_name not in rendered
+    assert runtime_business_value not in rendered
+
+
+def test_live_system_message_error_discards_sensitive_traceback_locals() -> None:
+    marker = secrets.token_hex(32)
+    provider = _live_provider(SequencedOpener(TimeoutError(marker)))
+
+    with pytest.raises(OALiveTimeout) as exc_info:
+        asyncio.run(
+            provider.list_system_messages(_credential(cookie_value=marker))
+        )
+
+    assert marker not in str(exc_info.value)
+    _assert_provider_traceback_is_redacted(exc_info.value, marker)
+
+
+def test_live_system_message_fingerprint_matches_frozen_pack_shape() -> None:
+    expected = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    report = compare_structural_fingerprints(
+        expected,
+        build_live_system_messages_fingerprint(
+            _matching_live_system_messages()
+        ),
+    )
+
+    assert report.matches is True
+
+
+def test_live_provider_source_has_no_hardcoded_transport_secret_literal() -> None:
+    provider_file = oa_provider.__file__
+    assert provider_file is not None
+    source = Path(provider_file).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    string_literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    secret_shape = re.compile(
+        r"(?i)(?:cookie|session(?:id)?|token)\s*[:=]\s*[^\s\"']{9,}"
+    )
+
+    assert [
+        literal for literal in string_literals if secret_shape.search(literal)
+    ] == []
+    assert "Live system-message reads are not configured" not in source
 
 
 def test_live_default_opener_ignores_all_environment_proxies(
@@ -305,9 +603,11 @@ def test_live_default_opener_ignores_all_environment_proxies(
         monkeypatch.setenv(name, "proxy-bypass.synthetic.invalid")
     provider = LiveOAReadProvider(
         base_url=f"http://{oa_host}",
-        endpoint_path="/api/pending",
+        pending_workflows_endpoint_path="/api/pending",
+        system_messages_endpoint_path="/api/messages",
         timeout_seconds=2.0,
-        contract_pack_dir=CONTRACT_PACK,
+        pending_workflows_contract_pack_dir=CONTRACT_PACK,
+        system_messages_contract_pack_dir=SYSTEM_MESSAGE_CONTRACT_PACK,
     )
 
     try:
@@ -522,7 +822,13 @@ def test_extra_capability_arguments_fail_closed_without_provider_call() -> None:
     assert provider.calls == 0
 
 
-def test_live_adapter_requires_server_issued_credential_reference() -> None:
+@pytest.mark.parametrize(
+    "capability_id",
+    ["oa.list_pending_workflows", "oa.list_system_messages"],
+)
+def test_live_adapter_requires_server_issued_credential_reference(
+    capability_id: str,
+) -> None:
     opener = SequencedOpener(
         FakeHTTPResponse(
             {
@@ -541,7 +847,7 @@ def test_live_adapter_requires_server_issued_credential_reference() -> None:
         secret_provider=secret_provider,
     )
 
-    result = asyncio.run(adapter.execute("oa.list_pending_workflows", {}, {}))
+    result = asyncio.run(adapter.execute(capability_id, {}, {}))
 
     assert result.status == "error"
     assert result.error_code == "identity_unbound"
@@ -1209,7 +1515,12 @@ def test_live_pagination_fails_closed_when_total_changes_between_pages() -> None
         (CredentialStorageError(), "adapter_error"),
     ],
 )
+@pytest.mark.parametrize(
+    "capability_id",
+    ["oa.list_pending_workflows", "oa.list_system_messages"],
+)
 def test_secret_resolution_errors_are_safely_mapped(
+    capability_id: str,
     error: Exception,
     expected_error_code: str,
 ) -> None:
@@ -1232,7 +1543,7 @@ def test_secret_resolution_errors_are_safely_mapped(
 
     result = asyncio.run(
         adapter.execute(
-            "oa.list_pending_workflows",
+            capability_id,
             {},
             {"credential_ref": "oa-session-v1:server-surrogate"},
         )

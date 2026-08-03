@@ -150,7 +150,10 @@ class ProductionSettings:
     csrf_allowed_origins: frozenset[str] = field(default_factory=frozenset)
     oa_read_adapter_mode: OAReadAdapterMode = "mock"
     oa_read_contract_pack_dir: Path | None = None
+    oa_pending_workflows_contract_pack_dir: Path | None = None
+    oa_system_messages_contract_pack_dir: Path | None = None
     oa_pending_workflows_path: str | None = None
+    oa_system_messages_path: str | None = None
     phase0_mock_mode: bool = False
 
     @classmethod
@@ -164,6 +167,10 @@ class ProductionSettings:
             or "production"
         )
         oa_read_adapter_mode = _oa_read_adapter_mode(source)
+        oa_read_contract_pack_dir = _oa_read_contract_pack_dir(
+            source,
+            oa_read_adapter_mode,
+        )
         phase0_mock_mode = _boolean(
             source,
             "PHASE0_MOCK_MODE",
@@ -267,13 +274,27 @@ class ProductionSettings:
             ),
             csrf_allowed_origins=_csrf_allowed_origins(source),
             oa_read_adapter_mode=oa_read_adapter_mode,
-            oa_read_contract_pack_dir=_oa_read_contract_pack_dir(
+            oa_read_contract_pack_dir=oa_read_contract_pack_dir,
+            oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
                 source,
                 oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
+                fallback=oa_read_contract_pack_dir,
             ),
-            oa_pending_workflows_path=_oa_pending_workflows_path(
+            oa_system_messages_contract_pack_dir=_oa_live_contract_pack_dir(
                 source,
                 oa_read_adapter_mode,
+                "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
+            ),
+            oa_pending_workflows_path=_oa_capability_path(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_PATH",
+            ),
+            oa_system_messages_path=_oa_capability_path(
+                source,
+                oa_read_adapter_mode,
+                "OA_SYSTEM_MESSAGES_PATH",
             ),
             phase0_mock_mode=phase0_mock_mode,
         )
@@ -409,22 +430,38 @@ def _oa_read_contract_pack_dir(
 ) -> Path | None:
     raw = source.get("OA_READ_CONTRACT_PACK_DIR")
     if raw is None or not raw.strip():
-        if mode in {"replay", "live"}:
-            raise RuntimeError(
-                "OA_READ_CONTRACT_PACK_DIR is required for replay or live mode"
-            )
+        if mode == "replay":
+            raise RuntimeError("OA_READ_CONTRACT_PACK_DIR is required for replay mode")
         return None
     return Path(raw.strip())
 
 
-def _oa_pending_workflows_path(
+def _oa_live_contract_pack_dir(
     source: Mapping[str, str],
     mode: OAReadAdapterMode,
-) -> str | None:
-    raw = source.get("OA_PENDING_WORKFLOWS_PATH")
+    name: str,
+    *,
+    fallback: Path | None = None,
+) -> Path | None:
+    raw = source.get(name)
     if raw is None or not raw.strip():
         if mode == "live":
-            raise RuntimeError("OA_PENDING_WORKFLOWS_PATH is required for live mode")
+            if fallback is not None:
+                return fallback
+            raise RuntimeError(f"{name} is required for live mode")
+        return None
+    return Path(raw.strip())
+
+
+def _oa_capability_path(
+    source: Mapping[str, str],
+    mode: OAReadAdapterMode,
+    name: str,
+) -> str | None:
+    raw = source.get(name)
+    if raw is None or not raw.strip():
+        if mode == "live":
+            raise RuntimeError(f"{name} is required for live mode")
         return None
     value = raw.strip()
     parsed = urlsplit(value)
@@ -437,9 +474,7 @@ def _oa_pending_workflows_path(
         or parsed.fragment
         or any(part == ".." for part in parsed.path.split("/"))
     ):
-        raise RuntimeError(
-            "OA_PENDING_WORKFLOWS_PATH must be a relative path on the OA host"
-        )
+        raise RuntimeError(f"{name} must be a relative path on the OA host")
     return value
 
 

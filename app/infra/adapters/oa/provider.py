@@ -30,13 +30,16 @@ from app.infra.adapters.oa.contracts import (
     OAStructuralDriftReport,
     OASystemMessageCollection,
     build_live_pending_workflows_fingerprint,
+    build_live_system_messages_fingerprint,
     build_structural_fingerprint,
     compare_structural_fingerprints,
     normalize_pending_workflow_records,
+    normalize_system_message_records,
 )
 from app.ports.auth import OASessionCredential
 
 _DEFAULT_PAGE_SIZE = 100
+_SYSTEM_MESSAGE_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
 _DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _DEFAULT_PAGINATION_SIGNAL_KEYS = frozenset(
@@ -178,9 +181,11 @@ class LiveOAReadProvider:
         self,
         *,
         base_url: str,
-        endpoint_path: str,
+        pending_workflows_endpoint_path: str,
+        system_messages_endpoint_path: str,
         timeout_seconds: float,
-        contract_pack_dir: Path,
+        pending_workflows_contract_pack_dir: Path,
+        system_messages_contract_pack_dir: Path,
         drift_reporter: OAStructuralDriftReporter | None = None,
         max_pages: int = _DEFAULT_MAX_PAGES,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
@@ -189,17 +194,31 @@ class LiveOAReadProvider:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._base_url, self._allowed_origin = _validate_base_url(base_url)
-        self._endpoint_path = _validate_endpoint_path(endpoint_path)
+        self._pending_workflows_endpoint_path = _validate_endpoint_path(
+            pending_workflows_endpoint_path
+        )
+        self._system_messages_endpoint_path = _validate_endpoint_path(
+            system_messages_endpoint_path
+        )
         if timeout_seconds <= 0:
             raise ValueError("OA HTTP timeout must be positive")
         if not 1 <= max_pages <= _MAX_CONFIGURED_PAGES:
             raise ValueError("OA maximum page count is outside the allowed range")
         if not 1 <= max_response_bytes <= _MAX_CONFIGURED_RESPONSE_BYTES:
             raise ValueError("OA response size limit is outside the allowed range")
-        collection, expected_fingerprint = _load_contract_pack(contract_pack_dir)
-        if not isinstance(collection, OAPendingWorkflowCollection):
+        pending_collection, pending_expected_fingerprint = _load_contract_pack(
+            pending_workflows_contract_pack_dir
+        )
+        if not isinstance(pending_collection, OAPendingWorkflowCollection):
             raise OAContractPackPayloadInvalid(
                 "Live pending-workflow provider requires its matching Contract Pack"
+            )
+        system_message_collection, system_message_expected_fingerprint = (
+            _load_contract_pack(system_messages_contract_pack_dir)
+        )
+        if not isinstance(system_message_collection, OASystemMessageCollection):
+            raise OAContractPackPayloadInvalid(
+                "Live system-message provider requires its matching Contract Pack"
             )
 
         self._timeout_seconds = timeout_seconds
@@ -208,7 +227,10 @@ class LiveOAReadProvider:
         self._pagination_signal_keys = _validate_pagination_signal_keys(
             pagination_signal_keys
         )
-        self._expected_fingerprint = expected_fingerprint
+        self._pending_expected_fingerprint = pending_expected_fingerprint
+        self._system_message_expected_fingerprint = (
+            system_message_expected_fingerprint
+        )
         self._drift_reporter = drift_reporter
         self._opener_factory = opener_factory or self._build_isolated_opener
         self._clock = clock
@@ -328,7 +350,7 @@ class LiveOAReadProvider:
                     build_live_pending_workflows_fingerprint(raw_records)
                 )
                 drift_report = compare_structural_fingerprints(
-                    self._expected_fingerprint,
+                    self._pending_expected_fingerprint,
                     actual_fingerprint,
                 )
             except (TypeError, ValueError):
@@ -376,16 +398,141 @@ class LiveOAReadProvider:
         self,
         credential: OASessionCredential | None = None,
     ) -> OASystemMessageCollection:
-        del credential
-        raise OALiveRequestError(
-            "Live system-message reads are not configured in this lane"
-        )
+        if credential is None:
+            raise OALiveIdentityUnbound("OA credential is required")
+        cookie_header = ""
+        opener: OpenerDirector | None = None
+        payload: dict[str, Any] | None = None
+        raw_records: list[Any] = []
+        collection: OASystemMessageCollection | None = None
+
+        try:
+            ttl_status = _credential_ttl_status(
+                credential.expires_at,
+                self._clock(),
+            )
+            if ttl_status == "invalid":
+                raise OALiveRequestError("OA credential expiry is invalid")
+            if ttl_status == "expired":
+                raise OALiveIdentityExpired("OA Session has expired")
+            cookie_header = _build_cookie_header(credential.cookies)
+            opener = self._opener_factory()
+            payload = await self._request_system_message_page(
+                opener=opener,
+                cookie_header=cookie_header,
+            )
+            page_error_kind: str | None = None
+            try:
+                _raise_for_business_error(payload)
+                raw_records = _read_system_message_page(payload)
+                if len(raw_records) > _SYSTEM_MESSAGE_PAGE_SIZE:
+                    raise OALivePayloadInvalid(
+                        "OA system-message page exceeds the record limit"
+                    )
+            except OALiveIdentityExpired:
+                page_error_kind = "identity_expired"
+            except OALivePermissionDenied:
+                page_error_kind = "permission_denied"
+            except OALiveProviderError:
+                page_error_kind = "payload_invalid"
+            except Exception:
+                _log_provider_failure("payload_processing")
+                page_error_kind = "request_error"
+            if page_error_kind is not None:
+                payload = None
+                raw_records.clear()
+                if page_error_kind == "identity_expired":
+                    raise OALiveIdentityExpired(
+                        "OA Session is no longer valid"
+                    )
+                if page_error_kind == "permission_denied":
+                    raise OALivePermissionDenied(
+                        "OA permission was denied"
+                    )
+                if page_error_kind == "request_error":
+                    raise OALiveRequestError(
+                        "OA response processing failed"
+                    )
+                raise OALivePayloadInvalid("OA response payload is invalid")
+
+            try:
+                actual_fingerprint = build_live_system_messages_fingerprint(
+                    raw_records
+                )
+                drift_report = compare_structural_fingerprints(
+                    self._system_message_expected_fingerprint,
+                    actual_fingerprint,
+                )
+            except (TypeError, ValueError):
+                raise OALivePayloadInvalid(
+                    "OA payload structure cannot be fingerprinted"
+                ) from None
+            except Exception:
+                _log_provider_failure("structural_fingerprint")
+                raise OALiveRequestError(
+                    "OA response processing failed"
+                ) from None
+            if self._drift_reporter is not None:
+                self._drift_reporter(drift_report)
+
+            try:
+                collection = normalize_system_message_records(
+                    raw_records,
+                    page_size=_SYSTEM_MESSAGE_PAGE_SIZE,
+                    link_normalizer=self._normalize_system_message_link,
+                )
+            except (TypeError, ValueError):
+                raise OALivePayloadInvalid(
+                    "OA payload violates the normalized contract"
+                ) from None
+            except Exception:
+                _log_provider_failure("normalization")
+                raise OALiveRequestError(
+                    "OA response processing failed"
+                ) from None
+            if collection is None:
+                _log_provider_failure("normalization")
+                raise OALiveRequestError("OA response processing failed")
+            return collection
+        finally:
+            cookie_header = ""
+            credential = None
+            opener = None
+            payload = None
+            raw_records.clear()
+            collection = None
 
     def _build_isolated_opener(self) -> OpenerDirector:
         return build_opener(
             ProxyHandler({}),
             _SameOriginRedirectHandler(self._allowed_origin),
         )
+
+    def _normalize_system_message_link(self, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or parsed.hostname is None
+                or parsed.username is not None
+                or parsed.password is not None
+                or _origin_tuple(parsed) != self._allowed_origin
+            ):
+                raise ValueError("OA system-message link is not same-origin")
+            relative = parsed.path or "/"
+            if parsed.query:
+                relative = f"{relative}?{parsed.query}"
+            if parsed.fragment:
+                relative = f"{relative}#{parsed.fragment}"
+            return relative
+        if not value.startswith("/") or value.startswith("//"):
+            raise ValueError("OA system-message link is not host-relative")
+        return value
 
     async def _request_page(
         self,
@@ -406,7 +553,8 @@ class LiveOAReadProvider:
         request: Request | None = None
         try:
             request = Request(
-                f"{self._base_url}{self._endpoint_path}?{urlencode(parameters)}",
+                f"{self._base_url}{self._pending_workflows_endpoint_path}"
+                f"?{urlencode(parameters)}",
                 headers={
                     "Accept": "application/json",
                     "Cookie": cookie_header,
@@ -449,6 +597,97 @@ class LiveOAReadProvider:
             request = None
             parameters.clear()
             del cursor
+            del cookie_header
+            del opener
+
+        if error_kind == "identity_unbound":
+            raise OALiveIdentityUnbound("OA credential is required")
+        if error_kind == "identity_expired":
+            raise OALiveIdentityExpired("OA Session is no longer valid")
+        if error_kind == "permission_denied":
+            raise OALivePermissionDenied("OA permission was denied")
+        if error_kind == "timeout":
+            raise OALiveTimeout("OA request timed out")
+        if error_kind == "http_server":
+            raise OALiveHTTPServerError("OA returned a server error")
+        if error_kind == "payload_invalid":
+            raise OALivePayloadInvalid("OA response is not valid JSON")
+        if error_kind is not None:
+            raise OALiveRequestError("OA network request failed")
+        if payload is None:
+            raise OALiveRequestError("OA response is unavailable")
+        return payload
+
+    async def _request_system_message_page(
+        self,
+        *,
+        opener: OpenerDirector,
+        cookie_header: str,
+    ) -> dict[str, Any]:
+        parameters = {
+            "pagesize": str(_SYSTEM_MESSAGE_PAGE_SIZE),
+            "selectState": "0",
+            "msgid": "",
+            "bizstate": "",
+            "mintime": "",
+            "id": "",
+        }
+        encoded_parameters = b""
+        payload: dict[str, Any] | None = None
+        error_kind: str | None = None
+        request: Request | None = None
+        try:
+            encoded_parameters = urlencode(parameters).encode("ascii")
+            request = Request(
+                f"{self._base_url}{self._system_messages_endpoint_path}",
+                data=encoded_parameters,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": (
+                        "application/x-www-form-urlencoded; charset=utf-8"
+                    ),
+                    "Cookie": cookie_header,
+                    "Origin": self._base_url,
+                    "User-Agent": "EternalAI-OA-Read/1",
+                    "X-Requested-With": "XMLHttpRequest",
+                },
+                method="POST",
+            )
+            payload = await asyncio.to_thread(self._open_json, opener, request)
+        except HTTPError as exc:
+            error_kind = _http_error_kind(int(exc.code))
+        except OALiveIdentityUnbound:
+            error_kind = "identity_unbound"
+        except OALiveIdentityExpired:
+            error_kind = "identity_expired"
+        except OALivePermissionDenied:
+            error_kind = "permission_denied"
+        except OALiveTimeout:
+            error_kind = "timeout"
+        except OALiveHTTPServerError:
+            error_kind = "http_server"
+        except OALivePayloadInvalid:
+            error_kind = "payload_invalid"
+        except OALiveProviderError:
+            error_kind = "request_error"
+        except (TimeoutError, socket.timeout):
+            error_kind = "timeout"
+        except URLError as exc:
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                error_kind = "timeout"
+            else:
+                error_kind = "request_error"
+        except (UnicodeError, json.JSONDecodeError, ValueError):
+            error_kind = "payload_invalid"
+        except OSError:
+            error_kind = "request_error"
+        except Exception:
+            _log_provider_failure("http_request")
+            error_kind = "request_error"
+        finally:
+            request = None
+            encoded_parameters = b""
+            parameters.clear()
             del cookie_header
             del opener
 
@@ -721,6 +960,15 @@ def _read_page(
     if not isinstance(records, list):
         raise OALivePayloadInvalid("OA response records are invalid")
     return records, data
+
+
+def _read_system_message_page(payload: Mapping[str, Any]) -> list[Any]:
+    if payload.get("status") != "1":
+        raise OALivePayloadInvalid("OA system-message response status is invalid")
+    records = payload.get("data")
+    if not isinstance(records, list):
+        raise OALivePayloadInvalid("OA system-message response data is invalid")
+    return records
 
 
 def _resolve_pagination(

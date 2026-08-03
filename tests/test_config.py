@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,7 +51,10 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.credential_encryption_key == _TEST_KEY
     assert settings.oa_read_adapter_mode == "mock"
     assert settings.oa_read_contract_pack_dir is None
+    assert settings.oa_pending_workflows_contract_pack_dir is None
+    assert settings.oa_system_messages_contract_pack_dir is None
     assert settings.oa_pending_workflows_path is None
+    assert settings.oa_system_messages_path is None
     assert settings.phase0_mock_mode is True
 
 
@@ -209,38 +213,89 @@ def test_invalid_redis_url_error_masks_password_and_keeps_host() -> None:
     assert "redis.invalid" in str(captured.value)
 
 
-@pytest.mark.parametrize("mode", ["replay", "live"])
-def test_oa_read_non_mock_modes_require_explicit_contract_pack(mode: str) -> None:
+def test_oa_read_replay_mode_requires_explicit_contract_pack() -> None:
     environment = _environment()
-    environment["OA_READ_ADAPTER_MODE"] = mode
-    if mode == "live":
-        environment["OA_PENDING_WORKFLOWS_PATH"] = "/api/workflow/pending"
+    environment["OA_READ_ADAPTER_MODE"] = "replay"
 
     with pytest.raises(RuntimeError, match="OA_READ_CONTRACT_PACK_DIR"):
         ProductionSettings.from_environment(environment)
 
 
-def test_oa_read_live_mode_requires_safe_host_relative_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "missing_name",
+    [
+        "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
+        "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
+        "OA_PENDING_WORKFLOWS_PATH",
+        "OA_SYSTEM_MESSAGES_PATH",
+    ],
+)
+def test_oa_read_live_mode_requires_each_capability_configuration(
+    missing_name: str,
+    tmp_path: Path,
+) -> None:
     environment = _environment()
     environment.update(
         {
             "OA_READ_ADAPTER_MODE": "live",
-            "OA_READ_CONTRACT_PACK_DIR": str(tmp_path),
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
+            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
+            "OA_PENDING_WORKFLOWS_PATH": "/api/workflow/pending",
+            "OA_SYSTEM_MESSAGES_PATH": "/api/system/messages",
         }
     )
+    environment.pop(missing_name)
 
-    with pytest.raises(RuntimeError, match="OA_PENDING_WORKFLOWS_PATH"):
+    with pytest.raises(RuntimeError, match=re.escape(missing_name)):
         ProductionSettings.from_environment(environment)
 
+
+@pytest.mark.parametrize(
+    "path_name",
+    ["OA_PENDING_WORKFLOWS_PATH", "OA_SYSTEM_MESSAGES_PATH"],
+)
+def test_oa_read_live_mode_requires_safe_host_relative_paths(
+    path_name: str,
+    tmp_path: Path,
+) -> None:
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": "live",
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
+            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
+            "OA_PENDING_WORKFLOWS_PATH": "/api/workflow/pending",
+            "OA_SYSTEM_MESSAGES_PATH": "/api/system/messages",
+        }
+    )
     for unsafe_path in (
         "https://other.invalid/pending",
         "//other.invalid/pending",
         "/api/../admin",
         "/api/pending?cookie=unsafe",
     ):
-        environment["OA_PENDING_WORKFLOWS_PATH"] = unsafe_path
+        environment[path_name] = unsafe_path
         with pytest.raises(RuntimeError, match="relative path"):
             ProductionSettings.from_environment(environment)
+
+
+def test_pending_workflows_config_keeps_existing_backslash_semantics(
+    tmp_path: Path,
+) -> None:
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": "live",
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
+            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
+            "OA_PENDING_WORKFLOWS_PATH": r"/api\workflow\pending",
+            "OA_SYSTEM_MESSAGES_PATH": "/api/system/messages",
+        }
+    )
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.oa_pending_workflows_path == r"/api\workflow\pending"
 
 
 @pytest.mark.parametrize("mode", ["replay", "live"])
@@ -257,12 +312,54 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
         }
     )
     if mode == "live":
-        environment["OA_PENDING_WORKFLOWS_PATH"] = "/api/workflow/pending"
+        environment.update(
+            {
+                "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(
+                    tmp_path / "ecology9-system-messages-v1"
+                ),
+                "OA_PENDING_WORKFLOWS_PATH": "/api/workflow/pending",
+                "OA_SYSTEM_MESSAGES_PATH": "/api/system/messages",
+            }
+        )
 
     settings = ProductionSettings.from_environment(environment)
 
     assert settings.oa_read_adapter_mode == mode
     assert settings.oa_read_contract_pack_dir == contract_pack
+    assert settings.oa_pending_workflows_contract_pack_dir == (
+        contract_pack if mode == "live" else None
+    )
+    assert settings.oa_system_messages_contract_pack_dir == (
+        tmp_path / "ecology9-system-messages-v1" if mode == "live" else None
+    )
     assert settings.oa_pending_workflows_path == (
         "/api/workflow/pending" if mode == "live" else None
     )
+    assert settings.oa_system_messages_path == (
+        "/api/system/messages" if mode == "live" else None
+    )
+
+
+def test_live_explicit_pending_pack_takes_priority_over_legacy_alias(
+    tmp_path: Path,
+) -> None:
+    legacy_pack = tmp_path / "legacy-pending"
+    pending_pack = tmp_path / "pending"
+    system_pack = tmp_path / "messages"
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": "live",
+            "OA_READ_CONTRACT_PACK_DIR": str(legacy_pack),
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(pending_pack),
+            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(system_pack),
+            "OA_PENDING_WORKFLOWS_PATH": "/api/workflow/pending",
+            "OA_SYSTEM_MESSAGES_PATH": "/api/system/messages",
+        }
+    )
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.oa_read_contract_pack_dir == legacy_pack
+    assert settings.oa_pending_workflows_contract_pack_dir == pending_pack
+    assert settings.oa_system_messages_contract_pack_dir == system_pack
