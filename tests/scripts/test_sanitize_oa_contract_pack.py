@@ -328,6 +328,166 @@ def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
                 assert raw_value not in all_output
 
 
+@pytest.mark.parametrize(
+    "page_size_case",
+    ("missing", "non_numeric", "zero", "too_large", "disagrees"),
+)
+def test_system_message_page_size_failures_leave_zero_output(
+    tmp_path: Path,
+    page_size_case: str,
+) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    if page_size_case == "missing":
+        post_data["params"] = [{"name": "selectState", "value": "0"}]
+        post_data["text"] = "selectState=0"
+    elif page_size_case == "disagrees":
+        post_data["text"] = "pagesize=5&selectState=0"
+    else:
+        invalid_value = {
+            "non_numeric": "abc",
+            "zero": "0",
+            "too_large": "10001",
+        }[page_size_case]
+        post_data["params"][0]["value"] = invalid_value
+        post_data["text"] = f"pagesize={invalid_value}&selectState=0"
+    input_har = tmp_path / f"system-message-page-size-{page_size_case}.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "system_message_page_size_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_system_message_short_page_is_explicitly_complete(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    post_data["params"][0]["value"] = "3"
+    post_data["text"] = "pagesize=3&selectState=0"
+    input_har = tmp_path / "system-message-short-page.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 0
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert sample["returned_count"] == 2
+    assert sample["is_complete"] is True
+
+
+def test_system_message_records_cannot_exceed_page_size(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    post_data = har["log"]["entries"][1]["request"]["postData"]
+    post_data["params"][0]["value"] = "1"
+    post_data["text"] = "pagesize=1&selectState=0"
+    input_har = tmp_path / "system-message-overfull-page.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "system_message_page_size_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_selected_entry_must_have_system_message_shape(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    content = har["log"]["entries"][1]["response"]["content"]
+    content["text"] = json.dumps({"data": {"records": []}})
+    input_har = tmp_path / "wrong-system-message-shape.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "selected_entry_not_system_message_response" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_selected_system_message_response_requires_text(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    har["log"]["entries"][1]["response"]["content"].pop("text")
+    input_har = tmp_path / "missing-system-message-text.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "selected_entry_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_auto_selection_requires_one_candidate(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    duplicate = json.loads(json.dumps(har["log"]["entries"][1]))
+    har["log"]["entries"].append(duplicate)
+    input_har = tmp_path / "ambiguous-system-message.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
+    assert "system_message_response_not_unique" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_profile_accepts_only_one_entry_index(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    input_har = tmp_path / "multiple-system-message-indices.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1, 1])
+
+    assert completed.returncode == 2
+    assert "system_message_entry_index_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_system_message_optional_fields_reject_invalid_types(tmp_path: Path) -> None:
+    har, _raw_records = _system_message_har()
+    content = har["log"]["entries"][1]["response"]["content"]
+    payload = json.loads(content["text"])
+    payload["data"][0]["link"] = 42
+    content["text"] = json.dumps(payload, ensure_ascii=False)
+    input_har = tmp_path / "invalid-system-message-link.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 2
+    assert "response_optional_string_invalid" in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_external_source_ignores_headers_but_keeps_parameter_detection() -> None:
+    har, _raw_records = _system_message_har()
+    request = har["log"]["entries"][1]["request"]
+    header_value = "external-session-header-value"
+    parameter_value = "external-account-password-value"
+    request["headers"] = [{"name": "Cookie", "value": header_value}]
+    request["url"] = f"https://synthetic.invalid/messages?password={parameter_value}"
+
+    sensitive_values = sanitizer._collect_sensitive_values(
+        har,
+        include_transport_headers=False,
+    )
+
+    assert header_value not in sensitive_values
+    assert parameter_value in sensitive_values
+
+
 def test_sensitive_profile_version_is_rejected_without_output(
     tmp_path: Path,
 ) -> None:
@@ -747,6 +907,36 @@ def test_invalid_base64_unselected_response_remains_fail_closed_with_selector(
 
     assert completed.returncode != 0
     assert "encoded_response_invalid" in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_unsupported_unselected_response_encoding_remains_fail_closed(
+    tmp_path: Path,
+) -> None:
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "encoding": "gzip",
+                    "text": "opaque-encoded-response",
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "multi-entry-unsupported-encoding.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[0])
+
+    assert completed.returncode == 2
+    assert "encoded_response_not_supported" in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 

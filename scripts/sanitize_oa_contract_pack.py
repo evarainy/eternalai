@@ -156,7 +156,7 @@ def sanitize_har_to_contract_pack(
         source_warning = EXTERNAL_SANITIZATION_WARNING
     sensitive_values = _collect_sensitive_values(
         har,
-        include_transport_credentials=(
+        include_transport_headers=(
             profile_version == _PENDING_WORKFLOW_PROFILE_VERSION
         ),
     )
@@ -604,7 +604,7 @@ def _synthetic_relative_path(
 def _collect_sensitive_values(
     har: Mapping[str, Any],
     *,
-    include_transport_credentials: bool = True,
+    include_transport_headers: bool = True,
 ) -> set[str]:
     values: set[str] = set()
     _collect_sensitive_fields(har, values)
@@ -616,8 +616,11 @@ def _collect_sensitive_values(
                 decoded_payload = _decoded_entry_response_json(entry)
                 if decoded_payload is not None:
                     _collect_sensitive_fields(decoded_payload, values)
-                if include_transport_credentials:
-                    _collect_entry_credentials(entry, values)
+                _collect_entry_credentials(
+                    entry,
+                    values,
+                    include_transport_headers=include_transport_headers,
+                )
     return {value for value in values if value}
 
 
@@ -682,15 +685,21 @@ def _bounded_json_loads(value: str) -> Any:
     return json.loads(value)
 
 
-def _collect_entry_credentials(entry: Any, output: set[str]) -> None:
+def _collect_entry_credentials(
+    entry: Any,
+    output: set[str],
+    *,
+    include_transport_headers: bool,
+) -> None:
     if not isinstance(entry, Mapping):
         return
     for side_name in ("request", "response"):
         side = entry.get(side_name)
         if not isinstance(side, Mapping):
             continue
-        _collect_header_values(side.get("headers"), output)
-        _collect_cookie_values(side.get("cookies"), output)
+        if include_transport_headers:
+            _collect_header_values(side.get("headers"), output)
+            _collect_cookie_values(side.get("cookies"), output)
         if side_name == "request":
             _collect_request_parameter_values(side, output)
 
