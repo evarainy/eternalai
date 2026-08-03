@@ -480,11 +480,22 @@ def test_oa_read_adapter_mode_builds_configured_provider(
         oa_system_messages_contract_pack_dir=(
             system_message_contract_pack_dir if mode == "live" else None
         ),
-        oa_pending_workflows_path=(
-            "/api/workflow/pending" if mode == "live" else None
+        oa_message_center_path=(
+            "/api/message-center/list" if mode == "live" else None
         ),
-        oa_system_messages_path=(
-            "/api/system/messages" if mode == "live" else None
+        oa_pending_workflows_category_id=("101" if mode == "live" else None),
+        oa_pending_workflows_bizstate=(
+            "pending-business-state" if mode == "live" else None
+        ),
+        oa_pending_workflows_select_state=(
+            "pending-selection-state" if mode == "live" else None
+        ),
+        oa_system_messages_category_id=("202" if mode == "live" else None),
+        oa_system_messages_bizstate=(
+            "system-business-state" if mode == "live" else None
+        ),
+        oa_system_messages_select_state=(
+            "system-selection-state" if mode == "live" else None
         ),
     )
 
@@ -543,8 +554,13 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
         oa_system_messages_contract_pack_dir=(
             system_message_contract_pack_dir
         ),
-        oa_pending_workflows_path="/api/workflow/pending",
-        oa_system_messages_path="/api/system/messages",
+        oa_message_center_path="/api/message-center/list",
+        oa_pending_workflows_category_id="101",
+        oa_pending_workflows_bizstate="pending-business-state",
+        oa_pending_workflows_select_state="pending-selection-state",
+        oa_system_messages_category_id="202",
+        oa_system_messages_bizstate="system-business-state",
+        oa_system_messages_select_state="system-selection-state",
     )
     overrides = {override: cast(Any, object())}
 

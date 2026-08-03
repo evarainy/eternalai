@@ -189,27 +189,52 @@ def build_oa_read_adapter(
             raise RuntimeError(
                 "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR must be an existing directory"
             )
-        pending_endpoint_path = settings.oa_pending_workflows_path
-        if pending_endpoint_path is None:
-            raise RuntimeError(
-                "OA_PENDING_WORKFLOWS_PATH is required for live mode"
+        message_center_path = settings.oa_message_center_path
+        if message_center_path is None:
+            raise RuntimeError("OA_MESSAGE_CENTER_PATH is required for live mode")
+        pending_category_id = settings.oa_pending_workflows_category_id
+        pending_bizstate = settings.oa_pending_workflows_bizstate
+        pending_select_state = settings.oa_pending_workflows_select_state
+        system_category_id = settings.oa_system_messages_category_id
+        system_bizstate = settings.oa_system_messages_bizstate
+        system_select_state = settings.oa_system_messages_select_state
+        if any(
+            value is None
+            for value in (
+                pending_category_id,
+                pending_bizstate,
+                pending_select_state,
+                system_category_id,
+                system_bizstate,
+                system_select_state,
             )
-        system_message_endpoint_path = settings.oa_system_messages_path
-        if system_message_endpoint_path is None:
+        ):
             raise RuntimeError(
-                "OA_SYSTEM_MESSAGES_PATH is required for live mode"
+                "OA message-center capability parameters are required for live mode"
             )
+        assert pending_category_id is not None
+        assert pending_bizstate is not None
+        assert pending_select_state is not None
+        assert system_category_id is not None
+        assert system_bizstate is not None
+        assert system_select_state is not None
         return OAReadAdapter(
             LiveOAReadProvider(
                 base_url=settings.oa_base_url,
-                pending_workflows_endpoint_path=pending_endpoint_path,
-                system_messages_endpoint_path=system_message_endpoint_path,
+                message_center_endpoint_path=message_center_path,
+                pending_workflows_category_id=pending_category_id,
+                pending_workflows_bizstate=pending_bizstate,
+                pending_workflows_select_state=pending_select_state,
+                system_messages_category_id=system_category_id,
+                system_messages_bizstate=system_bizstate,
+                system_messages_select_state=system_select_state,
                 timeout_seconds=settings.oa_timeout_seconds,
                 pending_workflows_contract_pack_dir=pending_contract_pack_dir,
                 system_messages_contract_pack_dir=(
                     system_message_contract_pack_dir
                 ),
                 drift_reporter=report_oa_structural_drift,
+                page_size=settings.oa_message_center_page_size,
             ),
             secret_provider=CredentialStoreSecretProvider(
                 credential_store=credential_store

@@ -379,7 +379,7 @@ def build_live_pending_workflows_fingerprint(
 def build_live_system_messages_fingerprint(
     records: list[Any],
 ) -> dict[str, Any]:
-    """Fingerprint one bounded Live system-message page without wire values."""
+    """Fingerprint one bounded Live system-message aggregate without wire values."""
 
     common_wire_fields = set(_LIVE_SYSTEM_MESSAGE_FIELD_NAMES)
     for record in records:
@@ -637,13 +637,14 @@ def normalize_pending_workflow_records(
 def normalize_system_message_records(
     records: list[Any],
     *,
-    page_size: int,
+    record_limit: int,
+    is_complete: bool,
     link_normalizer: Callable[[str], str] | None = None,
 ) -> OASystemMessageCollection:
-    """Whitelist and normalize one bounded Live OA system-message page."""
+    """Whitelist and normalize one bounded complete Live message aggregate."""
 
-    if page_size <= 0 or len(records) > page_size:
-        raise ValueError("OA system-message page exceeds the record limit")
+    if record_limit <= 0 or len(records) > record_limit:
+        raise ValueError("OA system-message aggregate exceeds the record limit")
     normalized: list[dict[str, Any]] = []
     for record in records:
         if not isinstance(record, Mapping):
@@ -688,7 +689,7 @@ def normalize_system_message_records(
             {
                 "messages": normalized,
                 "returned_count": len(normalized),
-                "is_complete": len(normalized) < page_size,
+                "is_complete": is_complete,
             },
             strict=True,
         )
