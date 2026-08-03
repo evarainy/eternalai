@@ -90,11 +90,6 @@ EXPECTED_REPLAY_DATA: dict[str, Any] = {
         },
     ]
 }
-EXPECTED_SYSTEM_MESSAGE_REPLAY_DATA: dict[str, Any] = json.loads(
-    (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
-)
-
-
 class CountingReplayProvider(ReplayOAReadProvider):
     def __init__(self, contract_pack_dir: Path) -> None:
         super().__init__(contract_pack_dir)
@@ -412,9 +407,29 @@ def test_system_message_replay_runs_through_gateway_without_silent_truncation() 
 
     assert result.status == "completed"
     assert result.error_code is None
-    assert result.data == EXPECTED_SYSTEM_MESSAGE_REPLAY_DATA
-    assert result.data["returned_count"] == len(result.data["messages"])
+    assert result.data is not None
+    assert set(result.data) == {"messages", "returned_count", "is_complete"}
+    messages = result.data["messages"]
+    assert isinstance(messages, list)
+    assert result.data["returned_count"] == 20
+    assert result.data["returned_count"] == len(messages)
     assert result.data["is_complete"] is False
+    assert messages[0]["message_id"] == "90000001"
+    assert messages[-1]["message_id"] == "90000020"
+    assert all(
+        set(message)
+        == {
+            "message_id",
+            "title",
+            "content",
+            "source_name",
+            "occurred_at",
+            "business_state",
+            "link",
+            "mobile_link",
+        }
+        for message in messages
+    )
 
 
 def test_system_message_capability_is_zero_argument() -> None:

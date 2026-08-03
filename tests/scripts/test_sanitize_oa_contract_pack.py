@@ -328,6 +328,38 @@ def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
                 assert raw_value not in all_output
 
 
+def test_selected_textual_base64_matches_plaintext_pack(tmp_path: Path) -> None:
+    plain_har, _raw_records = _system_message_har()
+    encoded_har = json.loads(json.dumps(plain_har))
+    encoded_content = encoded_har["log"]["entries"][1]["response"]["content"]
+    plaintext = encoded_content["text"].encode("utf-8")
+    encoded_content["encoding"] = "base64"
+    encoded_content["text"] = base64.b64encode(plaintext).decode("ascii")
+    plain_input = tmp_path / "plain-system-message.har"
+    encoded_input = tmp_path / "base64-system-message.har"
+    plain_input.write_text(json.dumps(plain_har, ensure_ascii=False), encoding="utf-8")
+    encoded_input.write_text(
+        json.dumps(encoded_har, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    plain_parent = tmp_path / "plain"
+    encoded_parent = tmp_path / "encoded"
+    plain_parent.mkdir()
+    encoded_parent.mkdir()
+    plain_output = plain_parent / SYSTEM_MESSAGE_PROFILE_VERSION
+    encoded_output = encoded_parent / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    plain_completed = _run_script(plain_input, plain_output, entry_indices=[1])
+    encoded_completed = _run_script(encoded_input, encoded_output, entry_indices=[1])
+
+    assert plain_completed.returncode == 0
+    assert encoded_completed.returncode == 0
+    for file_name in ("profile.json", "sample.json", "fingerprint.json"):
+        assert (encoded_output / file_name).read_bytes() == (
+            plain_output / file_name
+        ).read_bytes()
+
+
 @pytest.mark.parametrize(
     "page_size_case",
     ("missing", "non_numeric", "zero", "too_large", "disagrees"),
@@ -1266,6 +1298,44 @@ def test_sensitive_value_in_other_json_response_cannot_reach_output(
     completed = _run_script(input_har, output_dir)
 
     assert completed.returncode != 0
+    assert "raw_sensitive_value_survived" in completed.stderr
+    assert other_response_value not in completed.stdout
+    assert other_response_value not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_sensitive_value_in_base64_json_response_cannot_reach_output(
+    tmp_path: Path,
+) -> None:
+    other_response_value = "pending"
+    encoded_payload = base64.b64encode(
+        json.dumps(
+            {"unrelated": {"accessToken": other_response_value}}
+        ).encode("utf-8")
+    ).decode("ascii")
+    har = _har()
+    har["log"]["entries"].append(
+        {
+            "request": {"headers": [], "cookies": []},
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "encoding": "base64",
+                    "text": encoded_payload,
+                },
+            },
+        }
+    )
+    input_har = tmp_path / "base64-other-response.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
     assert "raw_sensitive_value_survived" in completed.stderr
     assert other_response_value not in completed.stdout
     assert other_response_value not in completed.stderr
