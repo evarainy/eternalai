@@ -40,6 +40,9 @@ _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
 _MAX_RECORDS = 10_000
 _MAX_EMBEDDED_JSON_DEPTH = 8
+# At the 32 MiB scan bound, random hex collisions fall from 0.78% at 8
+# characters to 0.049% at 9 characters.
+_MIN_SENSITIVE_SUBSTRING_LENGTH = 9
 _SYNTHETIC_TIMESTAMP = "2000-01-01T00:00:00+00:00"
 _ALLOWED_RAW_PENDING_STATUSES = frozenset({"pending"})
 
@@ -156,8 +159,8 @@ def sanitize_har_to_contract_pack(
         source_warning = EXTERNAL_SANITIZATION_WARNING
     sensitive_values = _collect_sensitive_values(
         har,
-        include_transport_headers=(
-            profile_version == _PENDING_WORKFLOW_PROFILE_VERSION
+        short_transport_as_full_token=(
+            source_kind == "externally_sanitized_capture"
         ),
     )
     for raw_payload in raw_payloads:
@@ -604,7 +607,7 @@ def _synthetic_relative_path(
 def _collect_sensitive_values(
     har: Mapping[str, Any],
     *,
-    include_transport_headers: bool = True,
+    short_transport_as_full_token: bool = False,
 ) -> set[str]:
     values: set[str] = set()
     _collect_sensitive_fields(har, values)
@@ -619,7 +622,7 @@ def _collect_sensitive_values(
                 _collect_entry_credentials(
                     entry,
                     values,
-                    include_transport_headers=include_transport_headers,
+                    short_transport_as_full_token=short_transport_as_full_token,
                 )
     return {value for value in values if value}
 
@@ -689,7 +692,7 @@ def _collect_entry_credentials(
     entry: Any,
     output: set[str],
     *,
-    include_transport_headers: bool,
+    short_transport_as_full_token: bool,
 ) -> None:
     if not isinstance(entry, Mapping):
         return
@@ -697,9 +700,16 @@ def _collect_entry_credentials(
         side = entry.get(side_name)
         if not isinstance(side, Mapping):
             continue
-        if include_transport_headers:
-            _collect_header_values(side.get("headers"), output)
-            _collect_cookie_values(side.get("cookies"), output)
+        _collect_header_values(
+            side.get("headers"),
+            output,
+            short_transport_as_full_token=short_transport_as_full_token,
+        )
+        _collect_cookie_values(
+            side.get("cookies"),
+            output,
+            short_transport_as_full_token=short_transport_as_full_token,
+        )
         if side_name == "request":
             _collect_request_parameter_values(side, output)
 
@@ -886,7 +896,12 @@ def _decoded_response_text(
         raise SanitizationError("encoded_response_invalid") from None
 
 
-def _collect_header_values(headers: Any, output: set[str]) -> None:
+def _collect_header_values(
+    headers: Any,
+    output: set[str],
+    *,
+    short_transport_as_full_token: bool = False,
+) -> None:
     if not isinstance(headers, list):
         return
     for header in headers:
@@ -901,11 +916,28 @@ def _collect_header_values(headers: Any, output: set[str]) -> None:
             normalized_name in _SENSITIVE_HEADER_KEYS
             or normalized_name in _FORBIDDEN_KEYS
         ):
-            output.add(value)
-            output.update(_credential_components(value))
+            components = _credential_components(value)
+            if (
+                not short_transport_as_full_token
+                or len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            ):
+                output.add(value)
+            else:
+                output.add(f"{name}: {value}")
+            output.update(
+                component
+                for component in components
+                if not short_transport_as_full_token
+                or len(component) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
 
 
-def _collect_cookie_values(cookies: Any, output: set[str]) -> None:
+def _collect_cookie_values(
+    cookies: Any,
+    output: set[str],
+    *,
+    short_transport_as_full_token: bool = False,
+) -> None:
     if not isinstance(cookies, list):
         return
     for cookie in cookies:
@@ -913,10 +945,24 @@ def _collect_cookie_values(cookies: Any, output: set[str]) -> None:
             continue
         name = cookie.get("name")
         value = cookie.get("value")
-        if isinstance(name, str):
+        if (
+            isinstance(name, str)
+            and (
+                not short_transport_as_full_token
+                or len(name) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
+        ):
             output.add(name)
-        if isinstance(value, str):
+        if (
+            isinstance(value, str)
+            and (
+                not short_transport_as_full_token
+                or len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH
+            )
+        ):
             output.add(value)
+        if isinstance(name, str) and isinstance(value, str):
+            output.add(f"{name}={value}")
 
 
 def _credential_components(value: str) -> set[str]:
@@ -956,8 +1002,19 @@ def _assert_sensitive_values_absent(
         json.dumps(payload, ensure_ascii=False, sort_keys=True)
         for payload in candidate_payloads.values()
     )
-    if any(value in rendered for value in sensitive_values):
-        raise SanitizationError("raw_sensitive_value_survived")
+    for value in sensitive_values:
+        if len(value) >= _MIN_SENSITIVE_SUBSTRING_LENGTH:
+            survived = value in rendered
+        else:
+            survived = (
+                re.search(
+                    rf"(?<!\w){re.escape(value)}(?!\w)",
+                    rendered,
+                )
+                is not None
+            )
+        if survived:
+            raise SanitizationError("raw_sensitive_value_survived")
 
 
 def _scan_forbidden_output(candidate_payloads: Mapping[str, Any]) -> None:

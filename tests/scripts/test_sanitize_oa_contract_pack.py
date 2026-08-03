@@ -503,21 +503,141 @@ def test_system_message_optional_fields_reject_invalid_types(tmp_path: Path) -> 
     assert not output_dir.exists()
 
 
-def test_external_source_ignores_headers_but_keeps_parameter_detection() -> None:
+def test_non_external_source_keeps_short_transport_values_strict() -> None:
     har, _raw_records = _system_message_har()
     request = har["log"]["entries"][1]["request"]
     header_value = "external-session-header-value"
     parameter_value = "external-account-password-value"
     request["headers"] = [{"name": "Cookie", "value": header_value}]
+    request["cookies"] = [{"name": "r", "value": "7"}]
     request["url"] = f"https://synthetic.invalid/messages?password={parameter_value}"
 
+    sensitive_values = sanitizer._collect_sensitive_values(har)
+
+    assert header_value in sensitive_values
+    assert "7" in sensitive_values
+    assert parameter_value in sensitive_values
+
+
+def test_external_source_long_session_cookie_cannot_survive_in_output() -> None:
+    har, _raw_records = _system_message_har()
+    synthetic_session_cookie = (
+        "Q7mV2pN9xK4rT8wY1cD6fH3jL5sA0bE2uG7zC9qM4nR8tP1vX6kF3dJ5"
+    )
+    request = har["log"]["entries"][1]["request"]
+    request["headers"] = [
+        {
+            "name": "Cookie",
+            "value": f"ecology_JSessionid={synthetic_session_cookie}",
+        }
+    ]
+    request["cookies"] = [
+        {"name": "ecology_JSessionid", "value": synthetic_session_cookie}
+    ]
     sensitive_values = sanitizer._collect_sensitive_values(
         har,
-        include_transport_headers=False,
+        short_transport_as_full_token=True,
+    )
+    candidate_payloads = {
+        "sample.json": {"leaked_value": synthetic_session_cookie}
+    }
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            candidate_payloads,
+        )
+
+
+def test_external_short_cookie_is_checked_as_full_transport_token() -> None:
+    har, _raw_records = _system_message_har()
+    request = har["log"]["entries"][1]["request"]
+    request["headers"] = [{"name": "Token", "value": "7"}]
+    request["cookies"] = [{"name": "r", "value": "7"}]
+    sensitive_values = sanitizer._collect_sensitive_values(
+        har,
+        short_transport_as_full_token=True,
     )
 
-    assert header_value not in sensitive_values
-    assert parameter_value in sensitive_values
+    assert "7" not in sensitive_values
+    assert "r" not in sensitive_values
+    assert "Token: 7" in sensitive_values
+    assert "r=7" in sensitive_values
+    sanitizer._assert_sensitive_values_absent(
+        sensitive_values,
+        {"sample.json": {"business_state": "7"}},
+    )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            {"sample.json": {"transport": "r=7"}},
+        )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            sensitive_values,
+            {"sample.json": {"transport": "Token: 7"}},
+        )
+
+
+def test_short_sensitive_value_requires_complete_token_match() -> None:
+    short_value = "Q7mV2"
+
+    sanitizer._assert_sensitive_values_absent(
+        {short_value},
+        {"sample.json": {"synthetic": f"prefix{short_value}suffix"}},
+    )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ):
+        sanitizer._assert_sensitive_values_absent(
+            {short_value},
+            {"sample.json": {"synthetic": f"prefix-{short_value}-suffix"}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("length", "substring_must_match"),
+    [
+        (sanitizer._MIN_SENSITIVE_SUBSTRING_LENGTH - 1, False),
+        (sanitizer._MIN_SENSITIVE_SUBSTRING_LENGTH, True),
+    ],
+)
+def test_sensitive_substring_matching_starts_at_threshold(
+    length: int,
+    substring_must_match: bool,
+) -> None:
+    sensitive_value = ("Q7mV2pN9xK4rT8wY" * 2)[:length]
+    candidate_payloads = {
+        "sample.json": {"synthetic": f"prefix{sensitive_value}suffix"}
+    }
+
+    if substring_must_match:
+        with pytest.raises(
+            sanitizer.SanitizationError,
+            match="raw_sensitive_value_survived",
+        ):
+            sanitizer._assert_sensitive_values_absent(
+                {sensitive_value},
+                candidate_payloads,
+            )
+    else:
+        sanitizer._assert_sensitive_values_absent(
+            {sensitive_value},
+            candidate_payloads,
+        )
 
 
 def test_sensitive_profile_version_is_rejected_without_output(
