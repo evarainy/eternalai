@@ -9,11 +9,21 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 STRUCTURAL_FINGERPRINT_ALGORITHM: Final[
     Literal["eternalai-structural-v1"]
 ] = "eternalai-structural-v1"
+EXTERNAL_SANITIZATION_WARNING: Final = (
+    "Source was sanitized externally; leakage assertions are not evidence "
+    "of EternalAI sanitizer verification."
+)
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _STRUCTURAL_PATH_PATTERN = re.compile(
     r"^\$(?:(?:\.[A-Za-z_][A-Za-z0-9_]*)|\[\])*$"
@@ -33,7 +43,7 @@ _LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
     "createdAt": "created_at",
     "expired": "expired",
 }
-_STRUCTURAL_SCHEMA_EXEMPLAR = {
+_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
             "workflow_id": "",
@@ -56,6 +66,32 @@ _STRUCTURAL_SCHEMA_EXEMPLAR = {
             "expired": False,
         },
     ]
+}
+_SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR = {
+    "messages": [
+        {
+            "message_id": "",
+            "title": "",
+            "content": "",
+            "source_name": "",
+            "occurred_at": "",
+            "business_state": "",
+            "link": "",
+            "mobile_link": "",
+        },
+        {
+            "message_id": "",
+            "title": "",
+            "content": "",
+            "source_name": "",
+            "occurred_at": "",
+            "business_state": "",
+            "link": None,
+            "mobile_link": None,
+        },
+    ],
+    "returned_count": 0,
+    "is_complete": False,
 }
 
 
@@ -111,15 +147,78 @@ class OAPendingWorkflowCollection(BaseModel):
     workflows: list[OAPendingWorkflow]
 
 
+class OASystemMessage(BaseModel):
+    """Normalized, credential-free system-message data returned by OA."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    message_id: str
+    title: str
+    content: str
+    source_name: str
+    occurred_at: str
+    business_state: str
+    link: str | None
+    mobile_link: str | None
+
+    @field_validator(
+        "message_id",
+        "title",
+        "content",
+        "source_name",
+        "occurred_at",
+        "business_state",
+    )
+    @classmethod
+    def _require_non_empty_string(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("system-message text fields must not be empty")
+        return value
+
+    @field_validator("link", "mobile_link")
+    @classmethod
+    def _validate_optional_link(cls, value: str | None) -> str | None:
+        if value is not None and (not value.strip() or not value.startswith("/")):
+            raise ValueError("system-message links must be null or relative paths")
+        return value
+
+
+class OASystemMessageCollection(BaseModel):
+    """Bounded result for ``oa.list_system_messages`` with explicit completeness."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    messages: list[OASystemMessage]
+    returned_count: int
+    is_complete: bool
+
+    @model_validator(mode="after")
+    def _validate_returned_count(self) -> OASystemMessageCollection:
+        if self.returned_count != len(self.messages):
+            raise ValueError("returned_count must match the message collection")
+        return self
+
+
 class OAContractPackProfile(BaseModel):
     """Metadata required to bind a Replay provider to one immutable pack."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     profile_version: str
-    capability_id: Literal["oa.list_pending_workflows"]
-    source_kind: Literal["synthetic", "sanitized_capture"]
-    sanitizer_version: Literal["1"]
+    capability_id: Literal[
+        "oa.list_pending_workflows",
+        "oa.list_system_messages",
+    ]
+    source_kind: Literal[
+        "synthetic",
+        "sanitized_capture",
+        "externally_sanitized_capture",
+    ]
+    source_warning: Literal[
+        "Source was sanitized externally; leakage assertions are not evidence "
+        "of EternalAI sanitizer verification."
+    ] | None = None
+    sanitizer_version: Literal["1", "2"]
     sample_file: Literal["sample.json"]
     fingerprint_file: Literal["fingerprint.json"]
 
@@ -129,6 +228,15 @@ class OAContractPackProfile(BaseModel):
         if _PROFILE_VERSION_PATTERN.fullmatch(value) is None:
             raise ValueError("profile_version must use safe lowercase path characters")
         return value
+
+    @model_validator(mode="after")
+    def _validate_source_warning(self) -> OAContractPackProfile:
+        is_external = self.source_kind == "externally_sanitized_capture"
+        if is_external != (self.source_warning == EXTERNAL_SANITIZATION_WARNING):
+            raise ValueError(
+                "externally sanitized sources require the fixed assurance warning"
+            )
+        return self
 
 
 class OAStructuralNode(BaseModel):
@@ -262,7 +370,7 @@ def _build_structural_fingerprint(
 ) -> dict[str, Any]:
     observations: dict[str, _StructuralObservation] = {}
     if include_contract_exemplar:
-        _observe_structure(_STRUCTURAL_SCHEMA_EXEMPLAR, "$", observations)
+        _observe_structure(_contract_exemplar(payload), "$", observations)
     _observe_structure(payload, "$", observations)
     nodes = [
         {
@@ -292,6 +400,12 @@ def _build_structural_fingerprint(
         "nodes": nodes,
         "sha256": hashlib.sha256(canonical).hexdigest(),
     }
+
+
+def _contract_exemplar(payload: Any) -> Mapping[str, Any]:
+    if isinstance(payload, Mapping) and "messages" in payload:
+        return _SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR
+    return _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR
 
 
 def _project_live_workflow_record(
@@ -548,9 +662,12 @@ def _json_type(value: Any) -> str:
 
 
 __all__ = (
+    "EXTERNAL_SANITIZATION_WARNING",
     "OAContractPackProfile",
     "OAPendingWorkflow",
     "OAPendingWorkflowCollection",
+    "OASystemMessage",
+    "OASystemMessageCollection",
     "OAStructuralDriftReport",
     "OAStructuralFingerprint",
     "OAStructuralNode",

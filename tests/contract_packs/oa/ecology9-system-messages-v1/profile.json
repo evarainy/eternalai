@@ -1,0 +1,9 @@
+{
+  "profile_version": "ecology9-system-messages-v1",
+  "capability_id": "oa.list_system_messages",
+  "source_kind": "externally_sanitized_capture",
+  "sanitizer_version": "2",
+  "sample_file": "sample.json",
+  "fingerprint_file": "fingerprint.json",
+  "source_warning": "Source was sanitized externally; leakage assertions are not evidence of EternalAI sanitizer verification."
+}

@@ -1,0 +1,84 @@
+{
+  "algorithm": "eternalai-structural-v1",
+  "nodes": [
+    {
+      "path": "$",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.is_complete",
+      "json_type": "boolean",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages",
+      "json_type": "array",
+      "nullable": false,
+      "array_shape": "items:object"
+    },
+    {
+      "path": "$.messages[]",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].business_state",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].content",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].link",
+      "json_type": "string",
+      "nullable": true,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].message_id",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].mobile_link",
+      "json_type": "string",
+      "nullable": true,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].occurred_at",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].source_name",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.messages[].title",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.returned_count",
+      "json_type": "integer",
+      "nullable": false,
+      "array_shape": null
+    }
+  ],
+  "sha256": "c2241f27912b41d6b4fd04cb9eeb4babc58d7a74100d64db912062ef93065272"
+}

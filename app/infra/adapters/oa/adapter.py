@@ -35,10 +35,17 @@ from app.ports.secret_provider import (
 )
 
 OA_LIST_PENDING_WORKFLOWS = "oa.list_pending_workflows"
+OA_LIST_SYSTEM_MESSAGES = "oa.list_system_messages"
 
 
 class ListPendingWorkflowsArguments(BaseModel):
     """Frozen GT-001 zero-argument capability input."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class ListSystemMessagesArguments(BaseModel):
+    """Natural-language system-message read with provider-internal pagination."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -64,7 +71,11 @@ class OAReadAdapter:
                 OA_LIST_PENDING_WORKFLOWS: _CapabilityBinding(
                     arguments_model=ListPendingWorkflowsArguments,
                     handler=self._list_pending_workflows,
-                )
+                ),
+                OA_LIST_SYSTEM_MESSAGES: _CapabilityBinding(
+                    arguments_model=ListSystemMessagesArguments,
+                    handler=self._list_system_messages,
+                ),
             }
         )
 
@@ -87,6 +98,28 @@ class OAReadAdapter:
         self,
         execution_context: dict[str, Any],
     ) -> AdapterResult:
+        return await self._execute_read(
+            OA_LIST_PENDING_WORKFLOWS,
+            execution_context,
+            self._provider.list_pending_workflows,
+        )
+
+    async def _list_system_messages(
+        self,
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        return await self._execute_read(
+            OA_LIST_SYSTEM_MESSAGES,
+            execution_context,
+            self._provider.list_system_messages,
+        )
+
+    async def _execute_read(
+        self,
+        capability_id: str,
+        execution_context: dict[str, Any],
+        provider_call: Callable[[OASessionCredential | None], Awaitable[BaseModel]],
+    ) -> AdapterResult:
         credential: OASessionCredential | None = None
         stage = "provider_configuration"
         try:
@@ -101,7 +134,7 @@ class OAReadAdapter:
                     credential_ref
                 )
             stage = "provider_call"
-            collection = await self._provider.list_pending_workflows(credential)
+            collection = await provider_call(credential)
             stage = "response_serialization"
             return AdapterResult(
                 status="success",
@@ -148,7 +181,7 @@ class OAReadAdapter:
             logging.getLogger(__name__).error(
                 "oa_read_adapter_failure capability_id=%s stage=%s "
                 "exception_type=%s classification=%s",
-                OA_LIST_PENDING_WORKFLOWS,
+                capability_id,
                 stage,
                 type(exc).__name__,
                 "adapter_error",
@@ -168,6 +201,8 @@ def _adapter_error() -> AdapterResult:
 
 __all__ = (
     "ListPendingWorkflowsArguments",
+    "ListSystemMessagesArguments",
     "OA_LIST_PENDING_WORKFLOWS",
+    "OA_LIST_SYSTEM_MESSAGES",
     "OAReadAdapter",
 )

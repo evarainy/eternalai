@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -8,7 +9,10 @@ from typing import Any
 
 import pytest
 
-from app.infra.adapters.oa.contracts import build_structural_fingerprint
+from app.infra.adapters.oa.contracts import (
+    EXTERNAL_SANITIZATION_WARNING,
+    build_structural_fingerprint,
+)
 from scripts import sanitize_oa_contract_pack as sanitizer
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +20,7 @@ SCRIPT = REPO_ROOT / "scripts" / "sanitize_oa_contract_pack.py"
 COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
+SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
 
 
 def _har(
@@ -81,6 +86,92 @@ def _har(
             ],
         }
     }
+
+
+def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw_records = [
+        {
+            "messageid": "83000001",
+            "title": "真实系统消息标题甲乙丙丁戊己庚辛",
+            "context": "真实系统消息正文甲乙丙丁戊己庚辛壬癸子丑寅卯",
+            "name": "真实消息来源甲",
+            "time": "2026-08-03 10:00:00",
+            "bizstate": "0",
+            "link": "https://internal.example.invalid/message/83000001/detail",
+            "linkmobileurl": "https://internal.example.invalid/mobile/83000001/detail",
+        },
+        {
+            "messageid": "83000002",
+            "title": "真实系统消息标题第二条甲乙丙丁戊己庚辛壬癸",
+            "context": "真实系统消息正文第二条甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳",
+            "name": "真实消息来源乙",
+            "time": "2026-08-03 09:00:00",
+            "bizstate": "1",
+            "link": "",
+            "linkmobileurl": "",
+        },
+    ]
+    image_bytes = b"\x89PNG\r\n\x1a\nsynthetic-image"
+    return (
+        {
+            "log": {
+                "version": "1.2",
+                "entries": [
+                    {
+                        "request": {"headers": [], "cookies": []},
+                        "response": {
+                            "headers": [],
+                            "cookies": [],
+                            "content": {
+                                "mimeType": "image/png",
+                                "encoding": "base64",
+                                "text": base64.b64encode(image_bytes).decode("ascii"),
+                            },
+                        },
+                    },
+                    {
+                        "request": {
+                            "headers": [
+                                {
+                                    "name": "Cookie",
+                                    "value": "ecology_JSessionid=1",
+                                }
+                            ],
+                            "cookies": [
+                                {"name": "ecology_JSessionid", "value": "1"}
+                            ],
+                            "postData": {
+                                "mimeType": "application/x-www-form-urlencoded",
+                                "params": [
+                                    {"name": "pagesize", "value": "2"},
+                                    {"name": "selectState", "value": "0"},
+                                ],
+                                "text": "pagesize=2&selectState=0",
+                            },
+                        },
+                        "response": {
+                            "headers": [],
+                            "cookies": [],
+                            "content": {
+                                "mimeType": "application/json",
+                                "text": json.dumps(
+                                    {
+                                        "data": raw_records,
+                                        "mintime": "2026-08-03 09:00:00",
+                                        "msgid": "cursor-raw-001",
+                                        "maxtime": "2026-08-03 10:00:00",
+                                        "status": "1",
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        },
+                    },
+                ],
+            }
+        },
+        raw_records,
+    )
 
 
 def _run_script(
@@ -172,6 +263,69 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         "must-not-be-copied",
     ):
         assert forbidden not in all_output
+
+
+def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(input_har, output_dir, entry_indices=[1])
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    assert profile == {
+        "profile_version": SYSTEM_MESSAGE_PROFILE_VERSION,
+        "capability_id": "oa.list_system_messages",
+        "source_kind": "externally_sanitized_capture",
+        "sanitizer_version": "2",
+        "sample_file": "sample.json",
+        "fingerprint_file": "fingerprint.json",
+        "source_warning": EXTERNAL_SANITIZATION_WARNING,
+    }
+    assert sample["returned_count"] == 2
+    assert sample["is_complete"] is False
+    assert len(sample["messages"]) == len(raw_records)
+    for raw_record, synthetic_record in zip(raw_records, sample["messages"], strict=True):
+        for raw_key, synthetic_key in (
+            ("messageid", "message_id"),
+            ("title", "title"),
+            ("context", "content"),
+            ("name", "source_name"),
+            ("time", "occurred_at"),
+            ("bizstate", "business_state"),
+        ):
+            assert len(synthetic_record[synthetic_key]) == len(raw_record[raw_key])
+        assert all("\u4e00" <= character <= "\u9fff" for character in synthetic_record["title"])
+        assert all("\u4e00" <= character <= "\u9fff" for character in synthetic_record["content"])
+    assert sample["messages"][0]["link"].startswith("/")
+    assert len(sample["messages"][0]["link"]) == len(raw_records[0]["link"])
+    assert sample["messages"][1]["link"] is None
+    assert sample["messages"][1]["mobile_link"] is None
+    assert json.loads(
+        (output_dir / "fingerprint.json").read_text(encoding="utf-8")
+    ) == build_structural_fingerprint(sample)
+    all_output = "\n".join(
+        path.read_text(encoding="utf-8") for path in output_dir.iterdir()
+    )
+    for raw_record in raw_records:
+        for key in (
+            "messageid",
+            "title",
+            "context",
+            "name",
+            "time",
+            "link",
+            "linkmobileurl",
+        ):
+            raw_value = raw_record[key]
+            if raw_value:
+                assert raw_value not in all_output
 
 
 def test_sensitive_profile_version_is_rejected_without_output(
@@ -563,7 +717,7 @@ def test_unselected_query_and_form_credentials_fail_with_zero_output(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_encoded_unselected_response_remains_fail_closed_with_selector(
+def test_invalid_base64_unselected_response_remains_fail_closed_with_selector(
     tmp_path: Path,
 ) -> None:
     har = _har()
@@ -592,7 +746,7 @@ def test_encoded_unselected_response_remains_fail_closed_with_selector(
     )
 
     assert completed.returncode != 0
-    assert "encoded_response_not_supported" in completed.stderr
+    assert "encoded_response_invalid" in completed.stderr
     assert not output_dir.exists()
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
