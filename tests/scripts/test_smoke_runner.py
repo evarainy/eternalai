@@ -14,6 +14,7 @@ from app.infra.adapters.oa.contracts import (
     build_structural_fingerprint,
     compare_structural_fingerprints,
 )
+from app.infra.auth.oa import OAAuthenticationError
 from app.ports.auth import AuthenticationError
 from scripts.smoke import environment as smoke_environment
 from scripts.smoke import runner as smoke_runner
@@ -609,7 +610,7 @@ def test_each_start_failure_path_runs_retry_cleanup(
     monkeypatch.setattr(
         smoke_runner,
         "_cold_login_preflight",
-        lambda _oa_base_url: failed_stage != "login",
+        lambda _oa_base_url, **_kwargs: failed_stage != "login",
     )
     monkeypatch.setattr(
         smoke_runner,
@@ -668,7 +669,7 @@ def test_successful_start_prints_plain_next_step(
     monkeypatch.setattr(
         smoke_runner,
         "_cold_login_preflight",
-        lambda _oa_base_url: True,
+        lambda _oa_base_url, **_kwargs: True,
     )
     monkeypatch.setattr(
         smoke_runner,
@@ -752,6 +753,7 @@ def test_spawn_service_discards_old_configuration_marker(
 
 
 def test_cold_login_unreachable_stops_before_credential_prompt(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -766,13 +768,137 @@ def test_cold_login_unreachable_stops_before_credential_prompt(
         lambda: pytest.fail("unreachable OA must not prompt for credentials"),
     )
 
-    result = smoke_runner._cold_login_preflight("https://synthetic.invalid")
+    result = smoke_runner._cold_login_preflight(
+        "https://synthetic.invalid",
+        backend_log_path=tmp_path / "backend.log",
+    )
 
     assert result is False
     assert capsys.readouterr().out.splitlines() == [
         "oa_reachability=false",
         "cold_login_preflight=connection_failed",
     ]
+
+
+def test_latest_authentication_failure_stage_uses_only_last_allowlisted_marker(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "backend.log"
+    log_path.write_text(
+        "oa_authentication_failure_stage=oa_rsa_request_failed\n"
+        "oa_authentication_failure_stage=untrusted_raw_detail\n"
+        "oa_authentication_failure_stage=oa_credentials_rejected\n",
+        encoding="utf-8",
+    )
+
+    stage = smoke_runner._latest_authentication_failure_stage(log_path)
+
+    assert stage == "oa_credentials_rejected"
+
+
+def test_latest_authentication_failure_stage_does_not_reuse_old_marker(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "backend.log"
+    log_path.write_text(
+        "oa_authentication_failure_stage=oa_credentials_rejected\n",
+        encoding="utf-8",
+    )
+    start_offset = log_path.stat().st_size
+    with log_path.open("a", encoding="utf-8") as writer:
+        writer.write("unrelated current request line\n")
+
+    stage = smoke_runner._latest_authentication_failure_stage(
+        log_path,
+        start_offset=start_offset,
+    )
+
+    assert stage is None
+
+
+def test_cold_login_prints_current_backend_failure_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    log_path = tmp_path / "backend.log"
+    log_path.write_text(
+        "oa_authentication_failure_stage=oa_rsa_request_failed\n",
+        encoding="utf-8",
+    )
+
+    class _FailedLoginResponse:
+        def __enter__(self) -> _FailedLoginResponse:
+            with log_path.open("a", encoding="utf-8") as writer:
+                writer.write(
+                    "oa_authentication_failure_stage=oa_credentials_rejected\n"
+                )
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"authenticated": false}'
+
+    monkeypatch.setattr(smoke_runner, "_oa_endpoint_reachable", lambda _url: True)
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+    monkeypatch.setattr(
+        smoke_runner._LOCAL_OPENER,
+        "open",
+        lambda *_args, **_kwargs: _FailedLoginResponse(),
+    )
+
+    result = smoke_runner._cold_login_preflight(
+        "https://synthetic.invalid",
+        backend_log_path=log_path,
+    )
+
+    output = capsys.readouterr().out
+    assert result is False
+    assert "cold_login_preflight=oa_credentials_rejected" in output
+    assert "oa_rsa_request_failed" not in output
+    assert "synthetic-account" not in output
+    assert "synthetic-password" not in output
+
+
+def test_authentication_failure_output_is_fixed_and_value_free(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    smoke_runner._print_authentication_failure(
+        "oa_credentials_rejected",
+        result_name="cold_login_preflight",
+    )
+
+    output = capsys.readouterr().out
+    assert "cold_login_preflight=oa_credentials_rejected" in output
+    assert "OA 登录接口明确拒绝了本次账号密码" in output
+    assert "loginid=" not in output
+    assert "userpassword=" not in output
+
+
+def test_prompt_credentials_prints_only_input_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    values = iter((" synthetic-account ", "synthetic-password"))
+    monkeypatch.setattr(smoke_runner.getpass, "getpass", lambda _prompt: next(values))
+
+    account, password = smoke_runner._prompt_credentials()
+
+    output = capsys.readouterr().out
+    assert account == " synthetic-account "
+    assert password == "synthetic-password"
+    assert "account_input_characters=19" in output
+    assert "password_input_characters=18" in output
+    assert "account_has_outer_whitespace=true" in output
+    assert "password_has_outer_whitespace=false" in output
+    assert account not in output
+    assert password not in output
 
 
 def test_verify_unreachable_stops_before_credential_prompt(
@@ -854,3 +980,57 @@ def test_verify_reachable_authentication_error_is_classified_without_details(
     output = capsys.readouterr().out
     assert output.splitlines() == ["oa_reachability=true"]
     assert "synthetic-sensitive-detail" not in str(exc_info.value)
+
+
+def test_verify_typed_authentication_error_prints_fixed_stage_without_values(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _FakeEngine:
+        async def dispose(self) -> None:
+            return None
+
+    class _FakeAuthentication:
+        async def authenticate(self, _credential: object) -> object:
+            raise OAAuthenticationError("oa_rsa_response_invalid")
+
+    settings = SimpleNamespace(
+        oa_base_url="https://synthetic.invalid",
+        database_url="postgresql://synthetic.invalid/db",
+        credential_encryption_key="synthetic-encryption-key",
+        oa_timeout_seconds=5,
+        identity_hmac_key="synthetic-hmac-key",
+        oa_credential_ttl_seconds=60,
+    )
+    monkeypatch.setattr(smoke_runner, "_oa_endpoint_reachable", lambda _url: True)
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+    monkeypatch.setattr(smoke_runner, "make_async_engine", lambda _url: _FakeEngine())
+    monkeypatch.setattr(
+        smoke_runner,
+        "make_async_session_factory",
+        lambda _engine: object(),
+    )
+    monkeypatch.setattr(smoke_runner, "build_credential_store", lambda **_kw: object())
+    monkeypatch.setattr(
+        smoke_runner,
+        "build_principal_role_reader",
+        lambda **_kw: object(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "build_authentication_port",
+        lambda **_kw: _FakeAuthentication(),
+    )
+
+    with pytest.raises(SmokeError, match="oa_rsa_response_invalid"):
+        asyncio.run(smoke_runner._run_live_checks(settings))
+
+    output = capsys.readouterr().out
+    assert "verify_login=oa_rsa_response_invalid" in output
+    assert "OA 返回的 RSA 参数结构不完整" in output
+    assert "synthetic-account" not in output
+    assert "synthetic-password" not in output

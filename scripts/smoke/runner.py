@@ -47,6 +47,7 @@ from app.infra.adapters.oa.provider import (
     OALiveRequestError,
     OALiveTimeout,
 )
+from app.infra.auth.oa import OAAuthenticationError
 from app.ports.auth import AuthenticationError, LoginCredential, OASessionCredential
 from scripts import sanitize_oa_contract_pack as sanitizer
 from scripts.smoke.environment import (
@@ -84,6 +85,27 @@ _CONFIGURATION_ERROR_MARKERS = (
     "ETERNALAI_SESSION_BINDING_KEY_B64",
     "CSRF_ALLOWED_ORIGINS",
 )
+_AUTH_FAILURE_STAGE_PATTERN = re.compile(
+    r"oa_authentication_failure_stage=([a-z_]+)"
+)
+_AUTH_FAILURE_DETAILS = {
+    "oa_session_setup_failed": "无法创建 OA 登录会话。",
+    "oa_rsa_request_failed": "无法取得 OA 登录所需的 RSA 参数。",
+    "oa_rsa_response_invalid": "OA 返回的 RSA 参数结构不完整。",
+    "oa_credential_encryption_failed": "无法按 OA 规则加密账号密码。",
+    "oa_login_request_failed": "OA 登录接口没有返回可识别结果。",
+    "oa_credentials_rejected": "OA 登录接口明确拒绝了本次账号密码。",
+    "oa_identity_response_invalid": "OA 登录成功响应缺少有效用户编号。",
+    "oa_required_cookies_missing": "OA 登录响应缺少后续访问所需的 Cookie。",
+    "oa_remind_login_failed": "OA 登录后的会话确认步骤失败。",
+    "oa_timezone_setup_failed": "OA 登录后的时区初始化步骤失败。",
+    "oa_user_info_request_failed": "无法读取 OA 当前用户信息。",
+    "oa_user_info_response_invalid": "OA 当前用户信息结构不完整。",
+    "local_identity_derivation_failed": "本地用户标识生成失败。",
+    "local_role_lookup_failed": "本地角色读取失败。",
+    "local_credential_store_failed": "OA 会话写入本地安全存储失败。",
+    "local_principal_build_failed": "本地登录身份生成失败。",
+}
 
 
 class _NoEchoParser(argparse.ArgumentParser):
@@ -367,7 +389,10 @@ def _command_start(layout: Layout) -> int:
         print(f"backend_url={_BACKEND_URL}")
         print(f"frontend_url={_FRONTEND_URL}")
         print(f"chat_url={_FRONTEND_URL}/chat")
-        if not _cold_login_preflight(settings.oa_base_url):
+        if not _cold_login_preflight(
+            settings.oa_base_url,
+            backend_log_path=layout.scratch / _BACKEND_LOG_NAME,
+        ):
             _print_stop_instruction()
             return 1
         print("cold_login_preflight=passed")
@@ -514,13 +539,18 @@ def _frontend_ready() -> bool:
         return False
 
 
-def _cold_login_preflight(oa_base_url: str) -> bool:
+def _cold_login_preflight(
+    oa_base_url: str,
+    *,
+    backend_log_path: Path,
+) -> bool:
     reachable = _oa_endpoint_reachable(oa_base_url)
     print(f"oa_reachability={_bool(reachable)}")
     if not reachable:
         print("cold_login_preflight=connection_failed")
         return False
     account, password = _prompt_credentials()
+    authentication_log_offset = _file_size(backend_log_path)
     raw_body = b""
     try:
         raw_body = json.dumps(
@@ -540,14 +570,26 @@ def _cold_login_preflight(oa_base_url: str) -> bool:
         with _LOCAL_OPENER.open(request, timeout=40) as response:
             result = json.loads(response.read(64 * 1024).decode("utf-8"))
         if not isinstance(result, dict) or result.get("authenticated") is not True:
-            print("cold_login_preflight=authentication_failed")
+            _print_authentication_failure(
+                _latest_authentication_failure_stage(
+                    backend_log_path,
+                    start_offset=authentication_log_offset,
+                ),
+                result_name="cold_login_preflight",
+            )
             return False
         return True
     except HTTPError as exc:
         if exc.code == 403:
             print("cold_login_preflight=local_csrf_failed")
         elif exc.code in {400, 401, 422}:
-            print("cold_login_preflight=authentication_failed")
+            _print_authentication_failure(
+                _latest_authentication_failure_stage(
+                    backend_log_path,
+                    start_offset=authentication_log_offset,
+                ),
+                result_name="cold_login_preflight",
+            )
         else:
             print("cold_login_preflight=local_backend_failed")
         return False
@@ -765,6 +807,50 @@ def _backend_log_indicates_configuration_error(log_path: Path) -> bool:
         rendered = ""
 
 
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _latest_authentication_failure_stage(
+    log_path: Path,
+    *,
+    start_offset: int = 0,
+) -> str | None:
+    try:
+        with log_path.open("rb") as reader:
+            reader.seek(0, os.SEEK_END)
+            size = reader.tell()
+            bounded_start = min(max(0, start_offset), size)
+            reader.seek(max(bounded_start, size - (1024 * 1024)))
+            rendered = reader.read(1024 * 1024).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    try:
+        matches = _AUTH_FAILURE_STAGE_PATTERN.findall(rendered)
+        if not matches:
+            return None
+        stage = matches[-1]
+        return stage if stage in _AUTH_FAILURE_DETAILS else None
+    finally:
+        rendered = ""
+
+
+def _print_authentication_failure(
+    stage: str | None,
+    *,
+    result_name: str,
+) -> None:
+    if stage is None or stage not in _AUTH_FAILURE_DETAILS:
+        print(f"{result_name}=authentication_failed")
+        print("authentication_failure_detail=没有取得更细的安全失败阶段。")
+        return
+    print(f"{result_name}={stage}")
+    print(f"authentication_failure_detail={_AUTH_FAILURE_DETAILS[stage]}")
+
+
 def _command_verify(
     layout: Layout,
     *,
@@ -834,6 +920,12 @@ async def _run_live_checks(
                     userpassword=SecretStr(password),
                 )
             )
+        except OAAuthenticationError as exc:
+            _print_authentication_failure(
+                exc.stage,
+                result_name="verify_login",
+            )
+            raise SmokeError(exc.stage) from None
         except AuthenticationError:
             raise SmokeError("authentication_failed") from None
         credential = await store.load(principal.ai_user_id)
@@ -956,6 +1048,10 @@ def _prompt_credentials() -> tuple[str, str]:
         account = ""
         password = ""
         raise SmokeError("credential_input_empty")
+    print(f"account_input_characters={len(account)}")
+    print(f"password_input_characters={len(password)}")
+    print(f"account_has_outer_whitespace={_bool(account != account.strip())}")
+    print(f"password_has_outer_whitespace={_bool(password != password.strip())}")
     return account, password
 
 

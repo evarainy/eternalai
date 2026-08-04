@@ -21,7 +21,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from app.infra.auth.crypto import identity_surrogate
-from app.infra.auth.oa import OACredentialVerifier, make_urllib_session_factory
+from app.infra.auth.oa import (
+    OAAuthenticationError,
+    OACredentialVerifier,
+    make_urllib_session_factory,
+)
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
 from app.ports.auth import (
     AuthenticationError,
@@ -112,6 +116,8 @@ class HARFixtureOpener:
         self._login_succeeds = login_succeeds
         self._rsa_flag = rsa_flag
         self.check_login_calls = 0
+        self.remind_login_calls = 0
+        self.timezone_calls = 0
         self.requested_user_ids: list[str] = []
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
@@ -133,7 +139,52 @@ class HARFixtureOpener:
         if path == "/api/hrm/login/checkLogin":
             self.check_login_calls += 1
             assert request.data is not None
-            fields = parse_qs(request.data.decode("utf-8"), strict_parsing=True)
+            fields = parse_qs(
+                request.data.decode("utf-8"),
+                keep_blank_values=True,
+                strict_parsing=True,
+            )
+            assert set(fields) == {
+                "",
+                "appid",
+                "dynamicPassword",
+                "isie",
+                "isRememberPassword",
+                "islanguid",
+                "loginid",
+                "logintype",
+                "messages",
+                "service",
+                "tokenAuthKey",
+                "userpassword",
+                "validateCodeKey",
+                "validatecode",
+            }
+            assert {
+                key: values
+                for key, values in fields.items()
+                if key not in {"loginid", "userpassword"}
+            } == {
+                "": [""],
+                "appid": [""],
+                "dynamicPassword": [""],
+                "isie": ["false"],
+                "isRememberPassword": ["false"],
+                "islanguid": ["7"],
+                "logintype": ["1"],
+                "messages": [""],
+                "service": [""],
+                "tokenAuthKey": [""],
+                "validateCodeKey": [""],
+                "validatecode": [""],
+            }
+            headers = {name.lower(): value for name, value in request.header_items()}
+            assert headers["accept"] == "*/*"
+            assert headers["origin"] == "https://oa.invalid"
+            assert headers["referer"] == "https://oa.invalid/wui/index.html"
+            assert headers["x-requested-with"] == "XMLHttpRequest"
+            assert headers["content-type"] == "application/x-www-form-urlencoded"
+            assert headers["user-agent"].startswith("Mozilla/5.0")
             login_plaintext = self._decrypt(fields["loginid"][0])
             password_plaintext = self._decrypt(fields["userpassword"][0])
             assert hmac.compare_digest(
@@ -155,6 +206,28 @@ class HARFixtureOpener:
                     "userid": self._oa_user_id,
                 }
             )
+        if path == "/api/hrm/login/remindLogin":
+            self.remind_login_calls += 1
+            assert request.data is not None
+            assert parse_qs(
+                request.data.decode("utf-8"),
+                keep_blank_values=True,
+                strict_parsing=True,
+            ) == {
+                "appid": [""],
+                "logintype": ["1"],
+                "service": [""],
+            }
+            return FakeResponse({"status": "1"})
+        if path == "/api/dateformat/timezone":
+            self.timezone_calls += 1
+            assert request.data is not None
+            assert parse_qs(
+                request.data.decode("utf-8"),
+                keep_blank_values=True,
+                strict_parsing=True,
+            ) == {"timeZoneOffset": ["-480"]}
+            return FakeResponse({"status": "1"})
         if path == "/api/hrm/usericon/getUserIcon":
             parameters = parse_qs(urlparse(request.full_url).query, strict_parsing=True)
             self.requested_user_ids.append(parameters["userId"][0])
@@ -278,6 +351,8 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
         2026, 7, 24, tzinfo=UTC
     ) + timedelta(hours=2)
     assert openers[0].check_login_calls == 1
+    assert openers[0].remind_login_calls == 1
+    assert openers[0].timezone_calls == 1
     assert openers[0].requested_user_ids == ["123"]
 
 
@@ -304,9 +379,10 @@ def test_oa_invalid_userid_shapes_remain_fail_closed(oa_user_id: object) -> None
         oa_user_id=oa_user_id,
     )
 
-    with pytest.raises(AuthenticationError, match="authentication failed"):
+    with pytest.raises(OAAuthenticationError, match="authentication failed") as exc_info:
         asyncio.run(verifier.authenticate(credential))
 
+    assert exc_info.value.stage == "oa_identity_response_invalid"
     assert store.records == []
     assert openers[0].requested_user_ids == []
 
@@ -392,17 +468,66 @@ def test_integer_and_string_userid_share_one_principal_credential_and_mapping() 
     asyncio.run(exercise())
 
 
-def test_oa_rejection_is_generic_fail_closed_and_never_retries() -> None:
+def test_oa_rejection_is_fixed_stage_fail_closed_and_never_retries(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     verifier, store, openers, credential = _fixture(login_succeeds=False)
 
-    with pytest.raises(AuthenticationError, match="authentication failed") as exc_info:
-        asyncio.run(verifier.authenticate(credential))
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(
+            OAAuthenticationError,
+            match="authentication failed",
+        ) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
 
+    assert exc_info.value.stage == "oa_credentials_rejected"
     assert exc_info.value.__context__ is None
     assert credential.loginid.get_secret_value() not in str(exc_info.value)
     assert credential.userpassword.get_secret_value() not in str(exc_info.value)
+    assert "oa_authentication_failure_stage=oa_credentials_rejected" in caplog.text
+    assert credential.loginid.get_secret_value() not in caplog.text
+    assert credential.userpassword.get_secret_value() not in caplog.text
     assert store.records == []
     assert openers[0].check_login_calls == 1
+    assert openers[0].remind_login_calls == 0
+    assert openers[0].timezone_calls == 0
+
+
+def test_oa_rsa_transport_failure_reports_only_fixed_stage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    verifier, store, _, credential = _fixture(login_succeeds=True)
+    sensitive_detail = "synthetic-sensitive-transport-detail"
+
+    class _FailingSession:
+        async def get_json(
+            self,
+            _path: str,
+            _parameters: dict[str, str],
+        ) -> dict[str, object]:
+            raise OSError(sensitive_detail)
+
+        async def post_form(
+            self,
+            _path: str,
+            _fields: dict[str, str],
+        ) -> dict[str, object]:
+            raise AssertionError("RSA failure must stop before login")
+
+        def cookies(self) -> dict[str, str]:
+            raise AssertionError("RSA failure must stop before cookies")
+
+    verifier._session_factory = _FailingSession  # type: ignore[assignment]
+
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(OAAuthenticationError) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
+
+    assert exc_info.value.stage == "oa_rsa_request_failed"
+    assert str(exc_info.value) == "authentication failed"
+    assert "oa_authentication_failure_stage=oa_rsa_request_failed" in caplog.text
+    assert sensitive_detail not in caplog.text
+    assert store.records == []
 
 
 def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:

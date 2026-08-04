@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.cookiejar import CookieJar
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 from urllib.parse import urlencode
 from urllib.request import (
     HTTPCookieProcessor,
@@ -40,6 +41,34 @@ _REQUIRED_OA_COOKIES = frozenset(
     }
 )
 _MAX_RESPONSE_BYTES = 1_048_576
+_AUTH_FAILURE_LOG_PREFIX = "oa_authentication_failure_stage="
+
+OAAuthenticationFailureStage: TypeAlias = Literal[
+    "oa_session_setup_failed",
+    "oa_rsa_request_failed",
+    "oa_rsa_response_invalid",
+    "oa_credential_encryption_failed",
+    "oa_login_request_failed",
+    "oa_credentials_rejected",
+    "oa_identity_response_invalid",
+    "oa_required_cookies_missing",
+    "oa_remind_login_failed",
+    "oa_timezone_setup_failed",
+    "oa_user_info_request_failed",
+    "oa_user_info_response_invalid",
+    "local_identity_derivation_failed",
+    "local_role_lookup_failed",
+    "local_credential_store_failed",
+    "local_principal_build_failed",
+]
+
+
+class OAAuthenticationError(AuthenticationError):
+    """Generic authentication failure carrying only a fixed, value-free stage."""
+
+    def __init__(self, stage: OAAuthenticationFailureStage) -> None:
+        super().__init__("authentication failed")
+        self.stage = stage
 
 
 class OAHttpSession(Protocol):
@@ -80,6 +109,18 @@ class UrllibOASession:
         self._base_url = normalized_base_url
         self._timeout_seconds = timeout_seconds
         self._cookie_jar = CookieJar()
+        self._common_headers = {
+            "Accept": "*/*",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Origin": normalized_base_url,
+            "Referer": f"{normalized_base_url}/wui/index.html",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/86.0.4240.111 Safari/537.36"
+            ),
+            "X-Requested-With": "XMLHttpRequest",
+        }
         factory = opener_factory or _default_opener
         self._opener = factory(self._cookie_jar)
 
@@ -91,11 +132,7 @@ class UrllibOASession:
         url = f"{self._base_url}{path}?{urlencode(parameters)}"
         request = Request(
             url,
-            headers={
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "zh-CN,zh;q=0.9",
-                "User-Agent": "EternalAI-OA-Auth/1",
-            },
+            headers=self._common_headers,
             method="GET",
         )
         return await asyncio.to_thread(self._open_json, request)
@@ -109,9 +146,8 @@ class UrllibOASession:
             f"{self._base_url}{path}",
             data=urlencode(fields).encode("utf-8"),
             headers={
-                "Accept": "application/json, text/plain, */*",
+                **self._common_headers,
                 "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "EternalAI-OA-Auth/1",
             },
             method="POST",
         )
@@ -161,22 +197,22 @@ class OACredentialVerifier:
         self._clock = clock
 
     async def authenticate(self, credential: LoginCredential) -> Principal:
-        principal = await self._authenticate_once(credential)
-        if principal is None:
-            raise AuthenticationError("authentication failed")
-        return principal
+        return await self._authenticate_once(credential)
 
     async def _authenticate_once(
         self,
         credential: LoginCredential,
-    ) -> Principal | None:
+    ) -> Principal:
+        failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
         try:
             session = self._session_factory()
             now = self._clock()
+            failure_stage = "oa_rsa_request_failed"
             rsa_info = await session.get_json(
                 "/rsa/weaver.rsa.GetRsaInfo",
                 {"ts": _timestamp_millis(now)},
             )
+            failure_stage = "oa_rsa_response_invalid"
             rsa_pub = _required_string(rsa_info, "rsa_pub")
             rsa_code = _required_string(rsa_info, "rsa_code")
             rsa_flag = rsa_info.get("rsa_flag", "RSA")
@@ -185,31 +221,66 @@ class OACredentialVerifier:
 
             loginid = credential.loginid.get_secret_value()
             password = credential.userpassword.get_secret_value()
+            failure_stage = "oa_credential_encryption_failed"
+            encrypted_loginid = _encrypt_oa_value(
+                loginid,
+                rsa_pub,
+                rsa_code,
+                rsa_flag,
+            )
+            encrypted_password = _encrypt_oa_value(
+                password,
+                rsa_pub,
+                rsa_code,
+                rsa_flag,
+            )
+            failure_stage = "oa_login_request_failed"
             login_result = await session.post_form(
                 "/api/hrm/login/checkLogin",
                 {
                     "islanguid": "7",
-                    "loginid": _encrypt_oa_value(loginid, rsa_pub, rsa_code, rsa_flag),
-                    "userpassword": _encrypt_oa_value(
-                        password,
-                        rsa_pub,
-                        rsa_code,
-                        rsa_flag,
-                    ),
+                    "loginid": encrypted_loginid,
+                    "userpassword": encrypted_password,
+                    "dynamicPassword": "",
+                    "tokenAuthKey": "",
+                    "validatecode": "",
+                    "validateCodeKey": "",
                     "logintype": "1",
-                    "isie": "0",
-                    "isRememberPassword": "0",
+                    "messages": "",
+                    "isie": "false",
+                    "appid": "",
+                    "service": "",
+                    "isRememberPassword": "false",
+                    "": "",
                 },
             )
             if str(login_result.get("msgcode", "")) != "0" or not _is_true(
                 login_result.get("loginstatus")
             ):
+                failure_stage = "oa_credentials_rejected"
                 raise ValueError("OA rejected the credential")
+            failure_stage = "oa_identity_response_invalid"
             oa_user_id = _required_oa_user_id(login_result)
+            failure_stage = "oa_required_cookies_missing"
             cookies = session.cookies()
             if not _REQUIRED_OA_COOKIES.issubset(cookies):
                 raise ValueError("OA response is missing required cookies")
 
+            failure_stage = "oa_remind_login_failed"
+            await session.post_form(
+                "/api/hrm/login/remindLogin",
+                {
+                    "logintype": "1",
+                    "appid": "",
+                    "service": "",
+                },
+            )
+            failure_stage = "oa_timezone_setup_failed"
+            await session.post_form(
+                "/api/dateformat/timezone",
+                {"timeZoneOffset": "-480"},
+            )
+            failure_stage = "oa_user_info_request_failed"
             user_info = await session.get_json(
                 "/api/hrm/usericon/getUserIcon",
                 {
@@ -217,6 +288,7 @@ class OACredentialVerifier:
                     "__random__": _timestamp_millis(now),
                 },
             )
+            failure_stage = "oa_user_info_response_invalid"
             display_name = _optional_string(user_info, "lastname") or _optional_string(
                 user_info,
                 "shortname",
@@ -224,8 +296,11 @@ class OACredentialVerifier:
             if display_name is None:
                 raise ValueError("OA response is missing the display name")
 
+            failure_stage = "local_identity_derivation_failed"
             ai_user_id = identity_surrogate(loginid, key=self._identity_hmac_key)
+            failure_stage = "local_role_lookup_failed"
             roles = tuple(sorted(set(await self._role_reader.list_roles(ai_user_id))))
+            failure_stage = "local_credential_store_failed"
             await self._credential_store.store(
                 ai_user_id,
                 OASessionCredential(
@@ -237,6 +312,7 @@ class OACredentialVerifier:
                     expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
                 ),
             )
+            failure_stage = "local_principal_build_failed"
             return Principal(
                 ai_user_id=ai_user_id,
                 display_name=display_name,
@@ -244,7 +320,12 @@ class OACredentialVerifier:
                 org_ctx=PrincipalOrgContext(),
             )
         except Exception:
-            return None
+            logging.getLogger(__name__).warning(
+                "%s%s",
+                _AUTH_FAILURE_LOG_PREFIX,
+                failure_stage,
+            )
+        raise OAAuthenticationError(failure_stage)
 
 
 def make_urllib_session_factory(
@@ -329,6 +410,8 @@ if TYPE_CHECKING:
 
 
 __all__ = (
+    "OAAuthenticationError",
+    "OAAuthenticationFailureStage",
     "OAHttpSession",
     "OACredentialVerifier",
     "PrincipalRoleReader",
