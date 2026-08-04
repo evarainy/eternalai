@@ -106,6 +106,8 @@ def _candidate_signature(entry: Any) -> tuple[str, str, str, str] | None:
         return None
     if form["pagesize"] != _EXPECTED_PAGE_SIZE:
         raise SmokeError("message_center_page_size_mismatch")
+    if form["msgid"] != "0" or form["mintime"] != "0":
+        raise SmokeError("message_center_initial_cursor_mismatch")
 
     parsed = urlsplit(raw_url)
     if (

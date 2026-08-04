@@ -43,6 +43,7 @@ _DEFAULT_MESSAGE_CENTER_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
 _DEFAULT_MAX_RECORDS = 5_000
 _DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_INITIAL_MESSAGE_CENTER_CURSOR = ("0", "0")
 _MAX_CONFIGURED_PAGES = 1_000
 _MAX_CONFIGURED_PAGE_SIZE = 1_000
 _MAX_CONFIGURED_RECORDS = 1_000_000
@@ -382,8 +383,8 @@ class LiveOAReadProvider:
         raw_records: list[Any] = []
         completed_records: list[Any] | None = None
         seen_record_fingerprints: set[bytes] = set()
-        cursor = ("", "")
-        next_cursor = ("", "")
+        cursor = _INITIAL_MESSAGE_CENTER_CURSOR
+        next_cursor = _INITIAL_MESSAGE_CENTER_CURSOR
         payload_error_message = ""
         payload_error_reason = "payload_invalid"
 
@@ -511,8 +512,8 @@ class LiveOAReadProvider:
             raw_records.clear()
             completed_records = None
             seen_record_fingerprints.clear()
-            cursor = ("", "")
-            next_cursor = ("", "")
+            cursor = _INITIAL_MESSAGE_CENTER_CURSOR
+            next_cursor = _INITIAL_MESSAGE_CENTER_CURSOR
             payload_error_message = ""
             payload_error_reason = ""
 
@@ -574,7 +575,7 @@ class LiveOAReadProvider:
                 f"{self._base_url}{self._message_center_endpoint_path}",
                 data=encoded_parameters,
                 headers={
-                    "Accept": "application/json",
+                    "Accept": "*/*",
                     "Accept-Language": "zh-CN,zh;q=0.9",
                     "Content-Type": (
                         "application/x-www-form-urlencoded; charset=utf-8"

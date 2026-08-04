@@ -257,6 +257,7 @@ def _assert_browser_like_oa_headers(
 ) -> None:
     assert len(opener.request_headers) == request_count
     for headers in opener.request_headers:
+        assert headers["accept"] == "*/*"
         assert headers["accept-language"] == "zh-CN,zh;q=0.9"
         assert headers["referer"] == (
             "https://oa.synthetic.invalid/wui/index.html"
@@ -473,9 +474,9 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
         {
             "pagesize": ["20"],
             "selectState": ["system-selection-state"],
-            "msgid": [""],
+            "msgid": ["0"],
             "bizstate": ["system-business-state"],
-            "mintime": [""],
+            "mintime": ["0"],
             "id": ["202"],
         },
         {
@@ -560,13 +561,13 @@ def test_live_system_messages_fetches_all_three_cursor_pages() -> None:
         ["202"],
     ]
     assert [form["msgid"] for form in opener.request_forms] == [
-        [""],
+        ["0"],
         ["synthetic-cursor-1"],
         ["synthetic-cursor-2"],
         ["synthetic-cursor-3"],
     ]
     assert [form["mintime"] for form in opener.request_forms] == [
-        [""],
+        ["0"],
         ["synthetic-lower-1"],
         ["synthetic-lower-2"],
         ["synthetic-lower-3"],
@@ -1139,8 +1140,8 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
         {
             "id": ["101"],
             "pagesize": ["1"],
-            "msgid": [""],
-            "mintime": [""],
+            "msgid": ["0"],
+            "mintime": ["0"],
             "bizstate": ["pending-business-state"],
             "selectState": ["pending-selection-state"],
         },

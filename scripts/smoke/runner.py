@@ -967,6 +967,10 @@ def _command_verify(
         raise SmokeError("report_write_failed") from None
     print(f"system_messages_drift={_drift_state(system)}")
     print(f"pending_workflows_drift={_drift_state(pending)}")
+    if system.protocol.http_status_code is not None:
+        print(f"system_messages_http_status={system.protocol.http_status_code}")
+    if pending.protocol.http_status_code is not None:
+        print(f"pending_workflows_http_status={pending.protocol.http_status_code}")
     print(f"report={report_path.name}")
     if capture_created:
         print("pending_v2_capture=created")
@@ -1277,6 +1281,7 @@ def _outcome_markdown(outcome: LiveOutcome) -> list[str]:
         f"- 配置表单一致：{_yes_no(outcome.protocol.configured_form_matches)}",
         f"- 归一化完成：{_yes_no(outcome.normalized)}",
         f"- 失败分类：{outcome.error_kind or '无'}",
+        f"- HTTP 状态码：{outcome.protocol.http_status_code or '无'}",
         f"- 传输失败细分：{outcome.protocol.transport_failure_kind or '无'}",
     ]
     if drift is None:

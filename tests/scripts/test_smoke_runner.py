@@ -6,6 +6,7 @@ import json
 from http.client import RemoteDisconnected
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -45,12 +46,14 @@ def _message_center_entry(
     url: str = "https://synthetic.invalid/api/message-center",
     bizstate: str = "synthetic-biz",
     select_state: str = "synthetic-select",
+    msgid: str = "0",
+    mintime: str = "0",
 ) -> dict[str, object]:
     values = {
         "id": "synthetic-category",
         "pagesize": "20",
-        "msgid": "",
-        "mintime": "",
+        "msgid": msgid,
+        "mintime": mintime,
         "bizstate": bizstate,
         "selectState": select_state,
     }
@@ -116,6 +119,16 @@ def test_extract_message_center_contract_stops_when_unrecognized(
     _write_har(path, [{"request": {"url": "https://synthetic.invalid/other"}}])
 
     with pytest.raises(SmokeError, match="message_center_entry_not_found"):
+        extract_message_center_contract(path)
+
+
+def test_extract_message_center_contract_rejects_nonzero_initial_cursor(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic.har"
+    _write_har(path, [_message_center_entry(msgid="synthetic-cursor")])
+
+    with pytest.raises(SmokeError, match="message_center_initial_cursor_mismatch"):
         extract_message_center_contract(path)
 
 
@@ -374,8 +387,8 @@ def test_protocol_evidence_keeps_only_structure_counts_and_cursor_booleans() -> 
     evidence = ProtocolEvidence(expected_form=expected)
     first_form = {
         **expected,
-        "msgid": "",
-        "mintime": "",
+        "msgid": "0",
+        "mintime": "0",
     }
     first_payload = {
         "data": [{"messageid": "secret-id", "title": "secret-title"}],
@@ -459,6 +472,7 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         envelope_fields=("data", "mintime", "msgid", "status"),
         record_field_types={"messageid": ("string",), "title": ("string",)},
         transport_failure_kind="remote_disconnected",
+        http_status_code=502,
     )
     system = LiveOutcome(
         drift=drift,
@@ -496,6 +510,7 @@ def test_report_is_built_only_from_structural_metadata() -> None:
     assert "任一命令失败就马上停止" in report
     assert "不要自行改文件，也不要切换运行模式" in report
     assert "传输失败细分：remote_disconnected" in report
+    assert "HTTP 状态码：502" in report
     assert "messageid" in report
     assert "title" in report
 
@@ -1044,7 +1059,31 @@ def test_recording_opener_classifies_disconnect_without_detail_leak() -> None:
         opener.open(Request("https://synthetic.invalid"), timeout=3)
 
     summary = evidence.summary()
+    assert summary.request_count == 1
     assert summary.transport_failure_kind == "remote_disconnected"
+    assert summary.http_status_code is None
+    assert marker not in repr(summary)
+
+
+def test_recording_opener_records_only_http_error_status() -> None:
+    marker = "synthetic-sensitive-http-detail"
+    evidence = ProtocolEvidence(expected_form={})
+    opener = RecordingOpener(evidence)
+
+    class _FailingOpener:
+        def open(self, request: Request, timeout: float) -> object:
+            assert timeout > 0
+            raise HTTPError(request.full_url, 503, marker, None, None)
+
+    opener._opener = _FailingOpener()  # type: ignore[assignment]
+
+    with pytest.raises(HTTPError):
+        opener.open(Request("https://synthetic.invalid"), timeout=3)
+
+    summary = evidence.summary()
+    assert summary.request_count == 1
+    assert summary.response_count == 0
+    assert summary.http_status_code == 503
     assert marker not in repr(summary)
 
 
