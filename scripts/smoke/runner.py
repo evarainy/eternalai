@@ -32,6 +32,7 @@ from app.composition import (
 )
 from app.config import ProductionSettings
 from app.db.session import make_async_engine, make_async_session_factory
+from app.event_loop import make_event_loop
 from app.infra.adapters.oa.contracts import (
     OAStructuralDriftReport,
     compare_structural_fingerprints,
@@ -951,7 +952,7 @@ def _command_verify(
     )
     settings = _validate_settings(environment)
     resolved_timestamp = _validated_timestamp(timestamp)
-    system, pending = asyncio.run(_run_live_checks(settings))
+    system, pending = _run_live_checks_with_supported_loop(settings)
     capture_created = False
     if har_directory is not None:
         _build_optional_pending_v2(layout, har_directory, resolved_timestamp)
@@ -973,6 +974,13 @@ def _command_verify(
         return 0
     _print_stop_instruction()
     return 1
+
+
+def _run_live_checks_with_supported_loop(
+    settings: ProductionSettings,
+) -> tuple[LiveOutcome, LiveOutcome]:
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        return runner.run(_run_live_checks(settings))
 
 
 async def _run_live_checks(
@@ -1269,6 +1277,7 @@ def _outcome_markdown(outcome: LiveOutcome) -> list[str]:
         f"- 配置表单一致：{_yes_no(outcome.protocol.configured_form_matches)}",
         f"- 归一化完成：{_yes_no(outcome.normalized)}",
         f"- 失败分类：{outcome.error_kind or '无'}",
+        f"- 传输失败细分：{outcome.protocol.transport_failure_kind or '无'}",
     ]
     if drift is None:
         lines.extend(

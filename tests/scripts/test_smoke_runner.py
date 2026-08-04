@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from http.client import RemoteDisconnected
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -24,6 +25,7 @@ from scripts.smoke.har import MessageCenterContract, extract_message_center_cont
 from scripts.smoke.live import (
     ProtocolEvidence,
     ProtocolSummary,
+    RecordingOpener,
     compare_record_structures,
 )
 from scripts.smoke.runner import (
@@ -456,6 +458,7 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         successful_envelopes=True,
         envelope_fields=("data", "mintime", "msgid", "status"),
         record_field_types={"messageid": ("string",), "title": ("string",)},
+        transport_failure_kind="remote_disconnected",
     )
     system = LiveOutcome(
         drift=drift,
@@ -492,6 +495,7 @@ def test_report_is_built_only_from_structural_metadata() -> None:
     assert "完成后回到命令行运行 `./smoke.ps1 verify`" in report
     assert "任一命令失败就马上停止" in report
     assert "不要自行改文件，也不要切换运行模式" in report
+    assert "传输失败细分：remote_disconnected" in report
     assert "messageid" in report
     assert "title" in report
 
@@ -992,6 +996,56 @@ def test_verify_unreachable_stops_before_credential_prompt(
         )
 
     assert capsys.readouterr().out.splitlines() == ["oa_reachability=false"]
+
+
+def test_verify_uses_production_supported_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop_factory_calls = 0
+    running_loop_is_selector: list[bool] = []
+    expected = (object(), object())
+
+    def supported_loop_factory() -> asyncio.AbstractEventLoop:
+        nonlocal loop_factory_calls
+        loop_factory_calls += 1
+        return asyncio.SelectorEventLoop()
+
+    async def fake_live_checks(_settings: object) -> tuple[object, object]:
+        running_loop_is_selector.append(
+            isinstance(asyncio.get_running_loop(), asyncio.SelectorEventLoop)
+        )
+        return expected
+
+    monkeypatch.setattr(smoke_runner, "make_event_loop", supported_loop_factory)
+    monkeypatch.setattr(smoke_runner, "_run_live_checks", fake_live_checks)
+
+    result = smoke_runner._run_live_checks_with_supported_loop(  # type: ignore[arg-type]
+        object()
+    )
+
+    assert result == expected
+    assert loop_factory_calls == 1
+    assert running_loop_is_selector == [True]
+
+
+def test_recording_opener_classifies_disconnect_without_detail_leak() -> None:
+    marker = "synthetic-sensitive-transport-detail"
+    evidence = ProtocolEvidence(expected_form={})
+    opener = RecordingOpener(evidence)
+
+    class _DisconnectingOpener:
+        def open(self, _request: Request, timeout: float) -> object:
+            assert timeout > 0
+            raise RemoteDisconnected(marker)
+
+    opener._opener = _DisconnectingOpener()  # type: ignore[assignment]
+
+    with pytest.raises(RemoteDisconnected):
+        opener.open(Request("https://synthetic.invalid"), timeout=3)
+
+    summary = evidence.summary()
+    assert summary.transport_failure_kind == "remote_disconnected"
+    assert marker not in repr(summary)
 
 
 def test_verify_reachable_authentication_error_is_classified_without_details(

@@ -6,8 +6,9 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from http.client import HTTPMessage
+from http.client import HTTPMessage, RemoteDisconnected
 from typing import IO, Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -30,6 +31,7 @@ class ProtocolSummary:
     successful_envelopes: bool
     envelope_fields: tuple[str, ...]
     record_field_types: dict[str, tuple[str, ...]]
+    transport_failure_kind: str | None = None
 
 
 @dataclass(repr=False, slots=True)
@@ -46,6 +48,7 @@ class ProtocolEvidence:
     successful_envelopes: bool = True
     envelope_fields: set[str] = field(default_factory=set)
     record_field_types: dict[str, set[str]] = field(default_factory=dict)
+    transport_failure_kind: str | None = None
     _last_cursor_digest: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
@@ -126,6 +129,7 @@ class ProtocolEvidence:
                 key: tuple(sorted(types))
                 for key, types in sorted(self.record_field_types.items())
             },
+            transport_failure_kind=self.transport_failure_kind,
         )
 
     def clear_transient_state(self) -> None:
@@ -140,7 +144,28 @@ class RecordingOpener:
         self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     def open(self, request: Request, timeout: float) -> _RecordingResponse:
-        response = self._opener.open(request, timeout=timeout)
+        try:
+            response = self._opener.open(request, timeout=timeout)
+        except HTTPError:
+            raise
+        except RemoteDisconnected:
+            self._evidence.transport_failure_kind = "remote_disconnected"
+            raise
+        except ConnectionResetError:
+            self._evidence.transport_failure_kind = "connection_reset"
+            raise
+        except ConnectionRefusedError:
+            self._evidence.transport_failure_kind = "connection_refused"
+            raise
+        except TimeoutError:
+            self._evidence.transport_failure_kind = "timeout"
+            raise
+        except URLError as exc:
+            self._evidence.transport_failure_kind = _url_error_kind(exc)
+            raise
+        except OSError:
+            self._evidence.transport_failure_kind = "transport_error"
+            raise
         return _RecordingResponse(response, request, self._evidence)
 
 
@@ -156,6 +181,19 @@ class _NoRedirectHandler(HTTPRedirectHandler):
     ) -> Request | None:
         del req, fp, code, msg, headers, newurl
         return None
+
+
+def _url_error_kind(error: URLError) -> str:
+    reason = error.reason
+    if isinstance(reason, RemoteDisconnected):
+        return "remote_disconnected"
+    if isinstance(reason, ConnectionResetError):
+        return "connection_reset"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection_refused"
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    return "url_error"
 
 
 class _RecordingResponse:
