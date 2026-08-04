@@ -97,8 +97,6 @@ _AUTH_FAILURE_DETAILS = {
     "oa_credentials_rejected": "OA 登录接口明确拒绝了本次账号密码。",
     "oa_identity_response_invalid": "OA 登录成功响应缺少有效用户编号。",
     "oa_required_cookies_missing": "OA 登录响应缺少后续访问所需的 Cookie。",
-    "oa_remind_login_failed": "OA 登录后的会话确认步骤失败。",
-    "oa_timezone_setup_failed": "OA 登录后的时区初始化步骤失败。",
     "oa_user_info_request_failed": "无法读取 OA 当前用户信息。",
     "oa_user_info_response_invalid": "OA 当前用户信息结构不完整。",
     "local_identity_derivation_failed": "本地用户标识生成失败。",

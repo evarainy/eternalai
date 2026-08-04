@@ -116,8 +116,7 @@ class HARFixtureOpener:
         self._login_succeeds = login_succeeds
         self._rsa_flag = rsa_flag
         self.check_login_calls = 0
-        self.remind_login_calls = 0
-        self.timezone_calls = 0
+        self.requested_paths: list[str] = []
         self.requested_user_ids: list[str] = []
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
@@ -128,6 +127,7 @@ class HARFixtureOpener:
     def open(self, request: Request, timeout: float) -> FakeResponse:
         assert timeout > 0
         path = urlparse(request.full_url).path
+        self.requested_paths.append(path)
         if path == "/rsa/weaver.rsa.GetRsaInfo":
             payload = {
                 "rsa_pub": self._rsa_pub,
@@ -206,28 +206,6 @@ class HARFixtureOpener:
                     "userid": self._oa_user_id,
                 }
             )
-        if path == "/api/hrm/login/remindLogin":
-            self.remind_login_calls += 1
-            assert request.data is not None
-            assert parse_qs(
-                request.data.decode("utf-8"),
-                keep_blank_values=True,
-                strict_parsing=True,
-            ) == {
-                "appid": [""],
-                "logintype": ["1"],
-                "service": [""],
-            }
-            return FakeResponse({"status": "1"})
-        if path == "/api/dateformat/timezone":
-            self.timezone_calls += 1
-            assert request.data is not None
-            assert parse_qs(
-                request.data.decode("utf-8"),
-                keep_blank_values=True,
-                strict_parsing=True,
-            ) == {"timeZoneOffset": ["-480"]}
-            return FakeResponse({"status": "1"})
         if path == "/api/hrm/usericon/getUserIcon":
             parameters = parse_qs(urlparse(request.full_url).query, strict_parsing=True)
             self.requested_user_ids.append(parameters["userId"][0])
@@ -351,8 +329,6 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
         2026, 7, 24, tzinfo=UTC
     ) + timedelta(hours=2)
     assert openers[0].check_login_calls == 1
-    assert openers[0].remind_login_calls == 1
-    assert openers[0].timezone_calls == 1
     assert openers[0].requested_user_ids == ["123"]
 
 
@@ -367,6 +343,18 @@ def test_oa_string_userid_shape_remains_compatible() -> None:
     assert store.records[0][0] == principal.ai_user_id
     assert store.records[0][1].oa_user_id.get_secret_value() == "123"
     assert openers[0].requested_user_ids == ["123"]
+
+
+def test_oa_success_does_not_require_undocumented_session_initializer_calls() -> None:
+    verifier, _, openers, credential = _fixture(login_succeeds=True)
+
+    asyncio.run(verifier.authenticate(credential))
+
+    assert openers[0].requested_paths == [
+        "/rsa/weaver.rsa.GetRsaInfo",
+        "/api/hrm/login/checkLogin",
+        "/api/hrm/usericon/getUserIcon",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -489,8 +477,6 @@ def test_oa_rejection_is_fixed_stage_fail_closed_and_never_retries(
     assert credential.userpassword.get_secret_value() not in caplog.text
     assert store.records == []
     assert openers[0].check_login_calls == 1
-    assert openers[0].remind_login_calls == 0
-    assert openers[0].timezone_calls == 0
 
 
 def test_oa_rsa_transport_failure_reports_only_fixed_stage(

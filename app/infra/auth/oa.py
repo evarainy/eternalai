@@ -52,8 +52,6 @@ OAAuthenticationFailureStage: TypeAlias = Literal[
     "oa_credentials_rejected",
     "oa_identity_response_invalid",
     "oa_required_cookies_missing",
-    "oa_remind_login_failed",
-    "oa_timezone_setup_failed",
     "oa_user_info_request_failed",
     "oa_user_info_response_invalid",
     "local_identity_derivation_failed",
@@ -266,20 +264,6 @@ class OACredentialVerifier:
             if not _REQUIRED_OA_COOKIES.issubset(cookies):
                 raise ValueError("OA response is missing required cookies")
 
-            failure_stage = "oa_remind_login_failed"
-            await session.post_form(
-                "/api/hrm/login/remindLogin",
-                {
-                    "logintype": "1",
-                    "appid": "",
-                    "service": "",
-                },
-            )
-            failure_stage = "oa_timezone_setup_failed"
-            await session.post_form(
-                "/api/dateformat/timezone",
-                {"timeZoneOffset": "-480"},
-            )
             failure_stage = "oa_user_info_request_failed"
             user_info = await session.get_json(
                 "/api/hrm/usericon/getUserIcon",

@@ -100,20 +100,14 @@ class FakeOAHttpSession:
         path: str,
         fields: dict[str, str],
     ) -> dict[str, Any]:
-        if path == "/api/hrm/login/checkLogin":
-            assert fields["loginid"] != _LOGIN_ID
-            assert fields["userpassword"] != _PASSWORD
-            return {
-                "msgcode": "0",
-                "loginstatus": True,
-                "userid": "fixture-oa-user",
-            }
-        if path == "/api/hrm/login/remindLogin":
-            assert fields == {"logintype": "1", "appid": "", "service": ""}
-            return {"status": "1"}
-        assert path == "/api/dateformat/timezone"
-        assert fields == {"timeZoneOffset": "-480"}
-        return {"status": "1"}
+        assert path == "/api/hrm/login/checkLogin"
+        assert fields["loginid"] != _LOGIN_ID
+        assert fields["userpassword"] != _PASSWORD
+        return {
+            "msgcode": "0",
+            "loginstatus": True,
+            "userid": "fixture-oa-user",
+        }
 
     def cookies(self) -> dict[str, str]:
         return dict(_COOKIE_SENTINELS)
