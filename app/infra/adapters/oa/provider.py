@@ -575,12 +575,18 @@ class LiveOAReadProvider:
                 data=encoded_parameters,
                 headers={
                     "Accept": "application/json",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
                     "Content-Type": (
                         "application/x-www-form-urlencoded; charset=utf-8"
                     ),
                     "Cookie": cookie_header,
                     "Origin": self._base_url,
-                    "User-Agent": "EternalAI-OA-Read/1",
+                    "Referer": f"{self._base_url}/wui/index.html",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/86.0.4240.111 Safari/537.36"
+                    ),
                     "X-Requested-With": "XMLHttpRequest",
                 },
                 method="POST",

@@ -175,6 +175,7 @@ class SequencedOpener:
         self.request_forms: list[dict[str, list[str]]] = []
         self.request_methods: list[str] = []
         self.request_header_names: list[frozenset[str]] = []
+        self.request_headers: list[dict[str, str]] = []
         self.cookie_header_present: list[bool] = []
 
     def open(self, request: Request, *, timeout: float) -> FakeHTTPResponse:
@@ -190,6 +191,12 @@ class SequencedOpener:
         self.request_methods.append(request.get_method())
         self.request_header_names.append(
             frozenset(name.casefold() for name, _value in request.header_items())
+        )
+        self.request_headers.append(
+            {
+                name.casefold(): value
+                for name, value in request.header_items()
+            }
         )
         self.cookie_header_present.append(request.has_header("Cookie"))
         response = self._responses.pop(0)
@@ -241,6 +248,24 @@ def _start_recording_server(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
+
+
+def _assert_browser_like_oa_headers(
+    opener: SequencedOpener,
+    *,
+    request_count: int,
+) -> None:
+    assert len(opener.request_headers) == request_count
+    for headers in opener.request_headers:
+        assert headers["accept-language"] == "zh-CN,zh;q=0.9"
+        assert headers["referer"] == (
+            "https://oa.synthetic.invalid/wui/index.html"
+        )
+        assert headers["user-agent"] == (
+            "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/86.0.4240.111 Safari/537.36"
+        )
 
 
 def _credential(*, cookie_value: str | None = None) -> OASessionCredential:
@@ -465,12 +490,15 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
     assert opener.cookie_header_present == [True, True]
     assert {
         "accept",
+        "accept-language",
         "content-type",
         "cookie",
         "origin",
+        "referer",
         "user-agent",
         "x-requested-with",
     }.issubset(opener.request_header_names[0])
+    _assert_browser_like_oa_headers(opener, request_count=2)
     assert len(reports) == 1
     report = reports[0]
     expected_fingerprint = json.loads(
@@ -1134,6 +1162,7 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
         },
     ]
     assert opener.cookie_header_present == [True, True, True]
+    _assert_browser_like_oa_headers(opener, request_count=3)
     assert secret_provider.calls == ["oa-session-v1:server-surrogate"]
 
 
