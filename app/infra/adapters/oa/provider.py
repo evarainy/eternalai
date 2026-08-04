@@ -428,7 +428,7 @@ class LiveOAReadProvider:
                             "OA message-center aggregate exceeds the record limit"
                         )
                     is_complete = not page_records
-                    if next_cursor == cursor and (page_number > 1 or page_records):
+                    if page_records and next_cursor == cursor:
                         raise OALivePayloadInvalid(
                             "OA message-center pagination cursor did not advance"
                         )

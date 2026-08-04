@@ -1499,7 +1499,7 @@ def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
     assert len(opener.request_forms) == 2
 
 
-def test_live_pagination_fails_closed_on_empty_page_with_repeated_cursor() -> None:
+def test_live_pagination_accepts_terminal_empty_page_with_repeated_cursor() -> None:
     opener = SequencedOpener(
         FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
         FakeHTTPResponse(_message_center_page([], cursor_index=1)),
@@ -1517,8 +1517,11 @@ def test_live_pagination_fails_closed_on_empty_page_with_repeated_cursor() -> No
         )
     )
 
-    assert result.status == "error"
-    assert result.error_code == "adapter_payload_invalid"
+    assert result.status == "success"
+    assert result.error_code is None
+    assert result.data is not None
+    assert len(result.data["workflows"]) == 1
+    assert result.data["workflows"][0]["workflow_id"] == "live-workflow-1"
     assert len(opener.request_forms) == 2
 
 
