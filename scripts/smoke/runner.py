@@ -88,10 +88,40 @@ _CONFIGURATION_ERROR_MARKERS = (
 _AUTH_FAILURE_STAGE_PATTERN = re.compile(
     r"oa_authentication_failure_stage=([a-z_]+)"
 )
+_AUTH_DIAGNOSTIC_PATTERN = re.compile(
+    r"oa_authentication_failure_diagnostic_([a-z_]+)=([a-z0-9]+)"
+)
+_AUTH_DIAGNOSTIC_ORDER = (
+    "rsa_response_field_count",
+    "rsa_pub_present",
+    "rsa_pub_type",
+    "rsa_pub_character_count",
+    "rsa_code_present",
+    "rsa_code_type",
+    "rsa_code_character_count",
+    "rsa_flag_present",
+    "rsa_flag_type",
+    "rsa_flag_character_count",
+)
+_AUTH_DIAGNOSTIC_TYPES = frozenset(
+    {
+        "array",
+        "boolean",
+        "integer",
+        "missing",
+        "null",
+        "number",
+        "object",
+        "other",
+        "string",
+    }
+)
 _AUTH_FAILURE_DETAILS = {
     "oa_session_setup_failed": "无法创建 OA 登录会话。",
     "oa_rsa_request_failed": "无法取得 OA 登录所需的 RSA 参数。",
-    "oa_rsa_response_invalid": "OA 返回的 RSA 参数结构不完整。",
+    "oa_rsa_public_key_missing_or_invalid": "OA 返回的 RSA 公钥缺失或格式无效。",
+    "oa_rsa_code_type_invalid": "OA 返回的 RSA 随机码类型无效。",
+    "oa_rsa_flag_type_invalid": "OA 返回的 RSA 标记类型无效。",
     "oa_credential_encryption_failed": "无法按 OA 规则加密账号密码。",
     "oa_login_request_failed": "OA 登录接口没有返回可识别结果。",
     "oa_credentials_rejected": "OA 登录接口明确拒绝了本次账号密码。",
@@ -574,6 +604,10 @@ def _cold_login_preflight(
                     start_offset=authentication_log_offset,
                 ),
                 result_name="cold_login_preflight",
+                diagnostics=_latest_authentication_failure_diagnostics(
+                    backend_log_path,
+                    start_offset=authentication_log_offset,
+                ),
             )
             return False
         return True
@@ -587,6 +621,10 @@ def _cold_login_preflight(
                     start_offset=authentication_log_offset,
                 ),
                 result_name="cold_login_preflight",
+                diagnostics=_latest_authentication_failure_diagnostics(
+                    backend_log_path,
+                    start_offset=authentication_log_offset,
+                ),
             )
         else:
             print("cold_login_preflight=local_backend_failed")
@@ -836,10 +874,58 @@ def _latest_authentication_failure_stage(
         rendered = ""
 
 
+def _latest_authentication_failure_diagnostics(
+    log_path: Path,
+    *,
+    start_offset: int = 0,
+) -> dict[str, str]:
+    try:
+        with log_path.open("rb") as reader:
+            reader.seek(0, os.SEEK_END)
+            size = reader.tell()
+            bounded_start = min(max(0, start_offset), size)
+            reader.seek(max(bounded_start, size - (1024 * 1024)))
+            rendered = reader.read(1024 * 1024).decode("utf-8", errors="replace")
+    except OSError:
+        return {}
+    try:
+        stage_matches = list(_AUTH_FAILURE_STAGE_PATTERN.finditer(rendered))
+        if not stage_matches:
+            return {}
+        current_failure = rendered[stage_matches[-1].end() :]
+        observed = dict(_AUTH_DIAGNOSTIC_PATTERN.findall(current_failure))
+        return _safe_authentication_diagnostics(observed)
+    finally:
+        rendered = ""
+
+
+def _safe_authentication_diagnostics(
+    diagnostics: dict[str, str],
+) -> dict[str, str]:
+    safe: dict[str, str] = {}
+    for name in _AUTH_DIAGNOSTIC_ORDER:
+        value = diagnostics.get(name)
+        if value is None:
+            continue
+        if name.endswith("_present") and value in {"false", "true"}:
+            safe[name] = value
+        elif name.endswith("_type") and value in _AUTH_DIAGNOSTIC_TYPES:
+            safe[name] = value
+        elif (
+            name.endswith("_count")
+            and len(value) <= 7
+            and value.isascii()
+            and value.isdecimal()
+        ):
+            safe[name] = value
+    return safe
+
+
 def _print_authentication_failure(
     stage: str | None,
     *,
     result_name: str,
+    diagnostics: dict[str, str] | None = None,
 ) -> None:
     if stage is None or stage not in _AUTH_FAILURE_DETAILS:
         print(f"{result_name}=authentication_failed")
@@ -847,6 +933,10 @@ def _print_authentication_failure(
         return
     print(f"{result_name}={stage}")
     print(f"authentication_failure_detail={_AUTH_FAILURE_DETAILS[stage]}")
+    safe_diagnostics = _safe_authentication_diagnostics(diagnostics or {})
+    for name in _AUTH_DIAGNOSTIC_ORDER:
+        if name in safe_diagnostics:
+            print(f"{name}={safe_diagnostics[name]}")
 
 
 def _command_verify(
@@ -922,6 +1012,7 @@ async def _run_live_checks(
             _print_authentication_failure(
                 exc.stage,
                 result_name="verify_login",
+                diagnostics=exc.diagnostics,
             )
             raise SmokeError(exc.stage) from None
         except AuthenticationError:

@@ -816,6 +816,64 @@ def test_latest_authentication_failure_stage_does_not_reuse_old_marker(
     assert stage is None
 
 
+def test_latest_authentication_failure_diagnostics_are_allowlisted_shape_only(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "backend.log"
+    log_path.write_text(
+        "oa_authentication_failure_stage=oa_rsa_flag_type_invalid\n"
+        "oa_authentication_failure_diagnostic_rsa_response_field_count=3\n"
+        "oa_authentication_failure_diagnostic_rsa_pub_present=true\n"
+        "oa_authentication_failure_diagnostic_rsa_pub_type=string\n"
+        "oa_authentication_failure_diagnostic_rsa_pub_character_count=392\n"
+        "oa_authentication_failure_diagnostic_rsa_code_present=true\n"
+        "oa_authentication_failure_diagnostic_rsa_code_type=string\n"
+        "oa_authentication_failure_diagnostic_rsa_code_character_count=8\n"
+        "oa_authentication_failure_diagnostic_rsa_flag_present=true\n"
+        "oa_authentication_failure_diagnostic_rsa_flag_type=string\n"
+        "oa_authentication_failure_diagnostic_rsa_flag_character_count=7\n"
+        "oa_authentication_failure_diagnostic_untrusted=secret\n"
+        "oa_authentication_failure_diagnostic_rsa_pub_type=secret\n"
+        "oa_authentication_failure_diagnostic_rsa_pub_character_count="
+        "12345678\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = smoke_runner._latest_authentication_failure_diagnostics(log_path)
+
+    assert diagnostics == {
+        "rsa_response_field_count": "3",
+        "rsa_pub_present": "true",
+        "rsa_code_present": "true",
+        "rsa_code_type": "string",
+        "rsa_code_character_count": "8",
+        "rsa_flag_present": "true",
+        "rsa_flag_type": "string",
+        "rsa_flag_character_count": "7",
+    }
+
+
+def test_latest_authentication_failure_diagnostics_do_not_reuse_old_marker(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "backend.log"
+    log_path.write_text(
+        "oa_authentication_failure_stage=oa_rsa_flag_type_invalid\n"
+        "oa_authentication_failure_diagnostic_rsa_response_field_count=3\n",
+        encoding="utf-8",
+    )
+    start_offset = log_path.stat().st_size
+    with log_path.open("a", encoding="utf-8") as writer:
+        writer.write("unrelated current request line\n")
+
+    diagnostics = smoke_runner._latest_authentication_failure_diagnostics(
+        log_path,
+        start_offset=start_offset,
+    )
+
+    assert diagnostics == {}
+
+
 def test_cold_login_prints_current_backend_failure_stage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -831,7 +889,12 @@ def test_cold_login_prints_current_backend_failure_stage(
         def __enter__(self) -> _FailedLoginResponse:
             with log_path.open("a", encoding="utf-8") as writer:
                 writer.write(
-                    "oa_authentication_failure_stage=oa_credentials_rejected\n"
+                    "oa_authentication_failure_stage=oa_rsa_flag_type_invalid\n"
+                    "oa_authentication_failure_diagnostic_"
+                    "rsa_response_field_count=3\n"
+                    "oa_authentication_failure_diagnostic_rsa_flag_present=true\n"
+                    "oa_authentication_failure_diagnostic_rsa_flag_type=integer\n"
+                    "oa_authentication_failure_diagnostic_untrusted=secret\n"
                 )
             return self
 
@@ -860,7 +923,12 @@ def test_cold_login_prints_current_backend_failure_stage(
 
     output = capsys.readouterr().out
     assert result is False
-    assert "cold_login_preflight=oa_credentials_rejected" in output
+    assert "cold_login_preflight=oa_rsa_flag_type_invalid" in output
+    assert "rsa_response_field_count=3" in output
+    assert "rsa_flag_present=true" in output
+    assert "rsa_flag_type=integer" in output
+    assert "untrusted" not in output
+    assert "secret" not in output
     assert "oa_rsa_request_failed" not in output
     assert "synthetic-account" not in output
     assert "synthetic-password" not in output
@@ -992,7 +1060,16 @@ def test_verify_typed_authentication_error_prints_fixed_stage_without_values(
 
     class _FakeAuthentication:
         async def authenticate(self, _credential: object) -> object:
-            raise OAAuthenticationError("oa_rsa_response_invalid")
+            raise OAAuthenticationError(
+                "oa_rsa_flag_type_invalid",
+                diagnostics={
+                    "rsa_response_field_count": "3",
+                    "rsa_flag_present": "true",
+                    "rsa_flag_type": "string",
+                    "rsa_flag_character_count": "7",
+                    "untrusted": "synthetic-sensitive-detail",
+                },
+            )
 
     settings = SimpleNamespace(
         oa_base_url="https://synthetic.invalid",
@@ -1026,11 +1103,17 @@ def test_verify_typed_authentication_error_prints_fixed_stage_without_values(
         lambda **_kw: _FakeAuthentication(),
     )
 
-    with pytest.raises(SmokeError, match="oa_rsa_response_invalid"):
+    with pytest.raises(SmokeError, match="oa_rsa_flag_type_invalid"):
         asyncio.run(smoke_runner._run_live_checks(settings))
 
     output = capsys.readouterr().out
-    assert "verify_login=oa_rsa_response_invalid" in output
-    assert "OA 返回的 RSA 参数结构不完整" in output
+    assert "verify_login=oa_rsa_flag_type_invalid" in output
+    assert "OA 返回的 RSA 标记类型无效" in output
+    assert "rsa_response_field_count=3" in output
+    assert "rsa_flag_present=true" in output
+    assert "rsa_flag_type=string" in output
+    assert "rsa_flag_character_count=7" in output
+    assert "untrusted" not in output
+    assert "synthetic-sensitive-detail" not in output
     assert "synthetic-account" not in output
     assert "synthetic-password" not in output

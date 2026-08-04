@@ -42,11 +42,35 @@ _REQUIRED_OA_COOKIES = frozenset(
 )
 _MAX_RESPONSE_BYTES = 1_048_576
 _AUTH_FAILURE_LOG_PREFIX = "oa_authentication_failure_stage="
+_AUTH_DIAGNOSTIC_LOG_PREFIX = "oa_authentication_failure_diagnostic_"
+_RSA_RESPONSE_FAILURE_STAGES = frozenset(
+    {
+        "oa_rsa_public_key_missing_or_invalid",
+        "oa_rsa_code_type_invalid",
+        "oa_rsa_flag_type_invalid",
+    }
+)
+_RSA_DIAGNOSTIC_FIELDS = ("rsa_pub", "rsa_code", "rsa_flag")
+_RSA_DIAGNOSTIC_TYPES = frozenset(
+    {
+        "array",
+        "boolean",
+        "integer",
+        "missing",
+        "null",
+        "number",
+        "object",
+        "other",
+        "string",
+    }
+)
 
 OAAuthenticationFailureStage: TypeAlias = Literal[
     "oa_session_setup_failed",
     "oa_rsa_request_failed",
-    "oa_rsa_response_invalid",
+    "oa_rsa_public_key_missing_or_invalid",
+    "oa_rsa_code_type_invalid",
+    "oa_rsa_flag_type_invalid",
     "oa_credential_encryption_failed",
     "oa_login_request_failed",
     "oa_credentials_rejected",
@@ -64,9 +88,15 @@ OAAuthenticationFailureStage: TypeAlias = Literal[
 class OAAuthenticationError(AuthenticationError):
     """Generic authentication failure carrying only a fixed, value-free stage."""
 
-    def __init__(self, stage: OAAuthenticationFailureStage) -> None:
+    def __init__(
+        self,
+        stage: OAAuthenticationFailureStage,
+        *,
+        diagnostics: dict[str, str] | None = None,
+    ) -> None:
         super().__init__("authentication failed")
         self.stage = stage
+        self.diagnostics = _safe_authentication_diagnostics(diagnostics or {})
 
 
 class OAHttpSession(Protocol):
@@ -202,6 +232,7 @@ class OACredentialVerifier:
         credential: LoginCredential,
     ) -> Principal:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
+        failure_diagnostics: dict[str, str] = {}
         try:
             session = self._session_factory()
             now = self._clock()
@@ -210,12 +241,13 @@ class OACredentialVerifier:
                 "/rsa/weaver.rsa.GetRsaInfo",
                 {"ts": _timestamp_millis(now)},
             )
-            failure_stage = "oa_rsa_response_invalid"
+            failure_diagnostics = _rsa_response_diagnostics(rsa_info)
+            failure_stage = "oa_rsa_public_key_missing_or_invalid"
             rsa_pub = _required_string(rsa_info, "rsa_pub")
-            rsa_code = _required_string(rsa_info, "rsa_code")
-            rsa_flag = rsa_info.get("rsa_flag", "RSA")
-            if rsa_flag != "RSA":
-                raise ValueError("OA RSA flag is invalid")
+            failure_stage = "oa_rsa_code_type_invalid"
+            rsa_code = _optional_rsa_string(rsa_info, "rsa_code")
+            failure_stage = "oa_rsa_flag_type_invalid"
+            rsa_flag = _optional_rsa_string(rsa_info, "rsa_flag")
 
             loginid = credential.loginid.get_secret_value()
             password = credential.userpassword.get_secret_value()
@@ -309,7 +341,22 @@ class OACredentialVerifier:
                 _AUTH_FAILURE_LOG_PREFIX,
                 failure_stage,
             )
-        raise OAAuthenticationError(failure_stage)
+            if failure_stage in _RSA_RESPONSE_FAILURE_STAGES:
+                for name, value in sorted(failure_diagnostics.items()):
+                    logging.getLogger(__name__).warning(
+                        "%s%s=%s",
+                        _AUTH_DIAGNOSTIC_LOG_PREFIX,
+                        name,
+                        value,
+                    )
+        raise OAAuthenticationError(
+            failure_stage,
+            diagnostics=(
+                failure_diagnostics
+                if failure_stage in _RSA_RESPONSE_FAILURE_STAGES
+                else None
+            ),
+        )
 
 
 def make_urllib_session_factory(
@@ -357,6 +404,76 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     if value is None:
         raise ValueError("OA response is missing a required field")
     return value
+
+
+def _optional_rsa_string(payload: dict[str, Any], key: str) -> str:
+    if key not in payload:
+        return ""
+    value = payload[key]
+    if isinstance(value, str):
+        return value
+    raise ValueError("OA RSA response field type is invalid")
+
+
+def _rsa_response_diagnostics(payload: dict[str, Any]) -> dict[str, str]:
+    diagnostics = {"rsa_response_field_count": str(len(payload))}
+    for field in _RSA_DIAGNOSTIC_FIELDS:
+        present = field in payload
+        value = payload.get(field)
+        diagnostics[f"{field}_present"] = str(present).lower()
+        diagnostics[f"{field}_type"] = _safe_diagnostic_type(value, present=present)
+        if isinstance(value, str):
+            diagnostics[f"{field}_character_count"] = str(len(value))
+    return diagnostics
+
+
+def _safe_diagnostic_type(value: Any, *, present: bool) -> str:
+    if not present:
+        return "missing"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "other"
+
+
+def _safe_authentication_diagnostics(
+    diagnostics: dict[str, str],
+) -> dict[str, str]:
+    safe: dict[str, str] = {}
+    allowed_boolean_keys = {
+        f"{field}_present" for field in _RSA_DIAGNOSTIC_FIELDS
+    }
+    allowed_type_keys = {
+        f"{field}_type" for field in _RSA_DIAGNOSTIC_FIELDS
+    }
+    allowed_count_keys = {
+        "rsa_response_field_count",
+        *(f"{field}_character_count" for field in _RSA_DIAGNOSTIC_FIELDS),
+    }
+    for name, value in diagnostics.items():
+        if name in allowed_boolean_keys and value in {"false", "true"}:
+            safe[name] = value
+        elif name in allowed_type_keys and value in _RSA_DIAGNOSTIC_TYPES:
+            safe[name] = value
+        elif (
+            name in allowed_count_keys
+            and len(value) <= 7
+            and value.isascii()
+            and value.isdecimal()
+        ):
+            safe[name] = value
+    return safe
 
 
 def _required_oa_user_id(payload: dict[str, Any]) -> str:
