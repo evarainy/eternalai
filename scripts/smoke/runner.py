@@ -40,6 +40,7 @@ from app.db.session import make_async_engine, make_async_session_factory
 from app.event_loop import make_event_loop
 from app.infra.adapters.oa.contracts import (
     OAStructuralDriftReport,
+    OAStructuralNode,
     compare_structural_fingerprints,
 )
 from app.infra.adapters.oa.provider import (
@@ -1412,13 +1413,13 @@ def _print_drift_nodes(
     for index, node in enumerate(drift.added, start=1):
         _print_drift_node(
             f"{result_name}_drift_added_{index:03d}",
-            {"path": node.path, "json_type": node.json_type},
+            _structural_node_payload(node),
         )
     print(f"{result_name}_drift_removed_count={len(drift.removed)}")
     for index, node in enumerate(drift.removed, start=1):
         _print_drift_node(
             f"{result_name}_drift_removed_{index:03d}",
-            {"path": node.path, "json_type": node.json_type},
+            _structural_node_payload(node),
         )
     print(f"{result_name}_drift_changed_count={len(drift.changed)}")
     for index, (expected, actual) in enumerate(
@@ -1427,19 +1428,34 @@ def _print_drift_nodes(
     ):
         _print_drift_node(
             f"{result_name}_drift_changed_{index:03d}",
-            {
-                "path": actual.path,
-                "expected_json_type": expected.json_type,
-                "actual_json_type": actual.json_type,
-            },
+            _changed_structural_node_payload(expected, actual),
         )
 
 
-def _print_drift_node(name: str, node: dict[str, str]) -> None:
+def _structural_node_payload(node: OAStructuralNode) -> dict[str, Any]:
+    return {
+        "path": node.path,
+        "json_type": node.json_type,
+        "nullable": node.nullable,
+        "array_shape": node.array_shape,
+    }
+
+
+def _changed_structural_node_payload(
+    expected: OAStructuralNode,
+    actual: OAStructuralNode,
+) -> dict[str, Any]:
+    return {
+        "expected": _structural_node_payload(expected),
+        "actual": _structural_node_payload(actual),
+    }
+
+
+def _print_drift_node(name: str, node: dict[str, Any]) -> None:
     print(f"{name}=" + _render_drift_node(node))
 
 
-def _render_drift_node(node: dict[str, str]) -> str:
+def _render_drift_node(node: dict[str, Any]) -> str:
     return json.dumps(
         node,
         ensure_ascii=True,
@@ -1955,28 +1971,20 @@ def _drift_markdown(drift: OAStructuralDriftReport) -> list[str]:
     lines = [f"- 新增结构节点数：{len(drift.added)}"]
     lines.extend(
         f"- 新增结构节点 {index:03d}："
-        + _render_drift_node(
-            {"path": node.path, "json_type": node.json_type}
-        )
+        + _render_drift_node(_structural_node_payload(node))
         for index, node in enumerate(drift.added, start=1)
     )
     lines.append(f"- 缺失结构节点数：{len(drift.removed)}")
     lines.extend(
         f"- 缺失结构节点 {index:03d}："
-        + _render_drift_node(
-            {"path": node.path, "json_type": node.json_type}
-        )
+        + _render_drift_node(_structural_node_payload(node))
         for index, node in enumerate(drift.removed, start=1)
     )
     lines.append(f"- 变化结构节点数：{len(drift.changed)}")
     lines.extend(
         f"- 变化结构节点 {index:03d}："
         + _render_drift_node(
-            {
-                "path": actual.path,
-                "expected_json_type": expected.json_type,
-                "actual_json_type": actual.json_type,
-            }
+            _changed_structural_node_payload(expected, actual)
         )
         for index, (expected, actual) in enumerate(
             zip(drift.changed_expected, drift.changed, strict=True),

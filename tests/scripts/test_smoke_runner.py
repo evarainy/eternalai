@@ -158,7 +158,8 @@ def test_rehearse_prints_full_value_free_actual_drift_nodes(
     output = capsys.readouterr().out
     assert result == 1
     assert (
-        'fingerprint_drift_added_001={"json_type":"string",'
+        'fingerprint_drift_added_001={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].wire_gomethod"}'
     ) in output
     assert "sensitive-value-not-rendered" not in output
@@ -1849,42 +1850,53 @@ def test_verify_prints_deterministic_value_free_drift_nodes(
     assert "system_messages_drift=removed_or_changed" in output
     assert "pending_workflows_drift=added" in output
     assert (
-        'system_messages_drift_added_001={"json_type":"string",'
+        'system_messages_drift_added_001={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].added_a"}'
     ) in output
     assert (
-        'system_messages_drift_added_002={"json_type":"string",'
+        'system_messages_drift_added_002={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].added_z"}'
     ) in output
     assert (
-        'system_messages_drift_removed_001={"json_type":"string",'
+        'system_messages_drift_removed_001={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].removed_a"}'
     ) in output
     assert (
-        'system_messages_drift_removed_002={"json_type":"string",'
+        'system_messages_drift_removed_002={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].removed_z"}'
     ) in output
     assert (
-        'system_messages_drift_changed_001={"actual_json_type":"array",'
-        '"expected_json_type":"array",'
-        '"path":"$.messages[].changed_array"}'
+        'system_messages_drift_changed_001={"actual":'
+        '{"array_shape":"items:integer","json_type":"array",'
+        '"nullable":false,"path":"$.messages[].changed_array"},'
+        '"expected":{"array_shape":"items:string","json_type":"array",'
+        '"nullable":false,"path":"$.messages[].changed_array"}}'
     ) in output
     assert (
-        'system_messages_drift_changed_002={"actual_json_type":"integer",'
-        '"expected_json_type":"string",'
-        '"path":"$.messages[].changed_array[]"}'
+        'system_messages_drift_changed_002={"actual":'
+        '{"array_shape":null,"json_type":"integer","nullable":false,'
+        '"path":"$.messages[].changed_array[]"},"expected":'
+        '{"array_shape":null,"json_type":"string","nullable":false,'
+        '"path":"$.messages[].changed_array[]"}}'
     ) in output
     assert (
-        'system_messages_drift_changed_003={"actual_json_type":"string",'
-        '"expected_json_type":"string",'
-        '"path":"$.messages[].changed_nullable"}'
+        'system_messages_drift_changed_003={"actual":'
+        '{"array_shape":null,"json_type":"string","nullable":true,'
+        '"path":"$.messages[].changed_nullable"},"expected":'
+        '{"array_shape":null,"json_type":"string","nullable":false,'
+        '"path":"$.messages[].changed_nullable"}}'
     ) in output
     assert "system_messages_drift_added_count=2" in output
     assert "system_messages_drift_removed_count=2" in output
     assert "system_messages_drift_changed_count=3" in output
     assert "pending_workflows_drift_added_count=1" in output
     assert (
-        'pending_workflows_drift_added_001={"json_type":"string",'
+        'pending_workflows_drift_added_001={"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].pending_added"}'
     ) in output
     assert "pending_workflows_drift_removed_count=0" in output
@@ -1904,29 +1916,40 @@ def test_verify_prints_deterministic_value_free_drift_nodes(
         layout.scratch / "smoke_result_20260805_131500.md"
     ).read_text(encoding="utf-8")
     expected_report_lines = (
-        '- 新增结构节点 001：{"json_type":"string",'
+        '- 新增结构节点 001：{"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].added_a"}',
-        '- 新增结构节点 002：{"json_type":"string",'
+        '- 新增结构节点 002：{"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].added_z"}',
-        '- 缺失结构节点 001：{"json_type":"string",'
+        '- 缺失结构节点 001：{"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].removed_a"}',
-        '- 缺失结构节点 002：{"json_type":"string",'
+        '- 缺失结构节点 002：{"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].removed_z"}',
-        '- 变化结构节点 001：{"actual_json_type":"array",'
-        '"expected_json_type":"array",'
-        '"path":"$.messages[].changed_array"}',
-        '- 变化结构节点 002：{"actual_json_type":"integer",'
-        '"expected_json_type":"string",'
-        '"path":"$.messages[].changed_array[]"}',
-        '- 变化结构节点 003：{"actual_json_type":"string",'
-        '"expected_json_type":"string",'
-        '"path":"$.messages[].changed_nullable"}',
+        '- 变化结构节点 001：{"actual":'
+        '{"array_shape":"items:integer","json_type":"array",'
+        '"nullable":false,"path":"$.messages[].changed_array"},'
+        '"expected":{"array_shape":"items:string","json_type":"array",'
+        '"nullable":false,"path":"$.messages[].changed_array"}}',
+        '- 变化结构节点 002：{"actual":'
+        '{"array_shape":null,"json_type":"integer","nullable":false,'
+        '"path":"$.messages[].changed_array[]"},"expected":'
+        '{"array_shape":null,"json_type":"string","nullable":false,'
+        '"path":"$.messages[].changed_array[]"}}',
+        '- 变化结构节点 003：{"actual":'
+        '{"array_shape":null,"json_type":"string","nullable":true,'
+        '"path":"$.messages[].changed_nullable"},"expected":'
+        '{"array_shape":null,"json_type":"string","nullable":false,'
+        '"path":"$.messages[].changed_nullable"}}',
     )
     assert "- 新增结构节点数：2" in report_text
     assert "- 缺失结构节点数：2" in report_text
     assert "- 变化结构节点数：3" in report_text
     assert (
-        '- 新增结构节点 001：{"json_type":"string",'
+        '- 新增结构节点 001：{"array_shape":null,'
+        '"json_type":"string","nullable":false,'
         '"path":"$.messages[].pending_added"}'
     ) in report_text
     for line in expected_report_lines:
