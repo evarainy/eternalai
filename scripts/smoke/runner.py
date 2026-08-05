@@ -86,6 +86,16 @@ _SYSTEM_PROFILE = "ecology9-system-messages-v1"
 _PENDING_V2_PROFILE = "ecology9-pending-workflows-v2"
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9]{8}_[0-9]{6}$")
 _BACKEND_URL = "http://127.0.0.1:8000"
+_BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
+_BACKEND_HEALTH_TIMEOUT_MARGIN_SECONDS = 2.0
+_BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS = (
+    _BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS + _BACKEND_HEALTH_TIMEOUT_MARGIN_SECONDS
+)
+_BACKEND_HEALTH_COMPONENTS = ("database", "redis", "vllm")
+_BACKEND_HEALTH_COMPONENT_STATES = frozenset({"ok", "failed"})
+_BACKEND_HEALTH_RESPONSE_INVALID = "health_response_invalid"
+_BACKEND_HEALTH_COMPONENT_FAILED = "health_component_failed"
+_BACKEND_HEALTH_CONNECTION_FAILED = "health_connection_failed"
 _FRONTEND_URL = "http://127.0.0.1:5173"
 _LOGIN_ORIGIN = _FRONTEND_URL
 _LOCAL_OPENER = build_opener(ProxyHandler({}))
@@ -639,31 +649,66 @@ def _wait_for_backend(
 
 def _backend_health() -> tuple[bool, tuple[str, ...]]:
     payload: Any = None
+    status_code: int | None = None
     try:
         with _LOCAL_OPENER.open(
-            f"{_BACKEND_URL}/api/v1/health", timeout=5
+            f"{_BACKEND_URL}/api/v1/health",
+            timeout=_BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS,
         ) as response:
-            payload = json.loads(response.read(64 * 1024).decode("utf-8"))
+            status_code = response.getcode()
+            payload = _read_backend_health_payload(response)
     except HTTPError as exc:
-        try:
-            payload = json.loads(exc.read(64 * 1024).decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError):
+        if exc.code != 503:
+            return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+        status_code = exc.code
+        payload = _read_backend_health_payload(exc)
+    except URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             return False, ()
-    except (OSError, URLError, UnicodeError, json.JSONDecodeError):
+        return False, (_BACKEND_HEALTH_CONNECTION_FAILED,)
+    except (TimeoutError, socket.timeout):
         return False, ()
+    except OSError:
+        return False, (_BACKEND_HEALTH_CONNECTION_FAILED,)
     if not isinstance(payload, dict):
-        return False, ()
+        return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+    health_status = payload.get("status")
+    if health_status not in {"ok", "unhealthy"}:
+        return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
     checks = payload.get("checks")
     if not isinstance(checks, dict):
-        return False, ()
+        return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+    if not set(_BACKEND_HEALTH_COMPONENTS).issubset(checks):
+        return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+    if any(
+        not isinstance(key, str)
+        or not isinstance(value, str)
+        or value not in _BACKEND_HEALTH_COMPONENT_STATES
+        for key, value in checks.items()
+    ):
+        return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+    if any(
+        checks[component] == "failed"
+        for component in checks.keys() - set(_BACKEND_HEALTH_COMPONENTS)
+    ):
+        return False, (_BACKEND_HEALTH_COMPONENT_FAILED,)
     failed = tuple(
-        sorted(
-            key
-            for key, value in checks.items()
-            if isinstance(key, str) and value != "ok"
-        )
+        component
+        for component in _BACKEND_HEALTH_COMPONENTS
+        if checks[component] == "failed"
     )
-    return payload.get("status") == "ok" and not failed, failed
+    if status_code == 200 and health_status == "ok" and not failed:
+        return True, ()
+    if status_code == 503 and health_status == "unhealthy" and failed:
+        return False, failed
+    return False, (_BACKEND_HEALTH_RESPONSE_INVALID,)
+
+
+def _read_backend_health_payload(response: Any) -> Any:
+    try:
+        return json.loads(response.read(64 * 1024).decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
 
 
 def _wait_for_frontend(process: subprocess.Popen[bytes] | None) -> bool:
@@ -1231,6 +1276,12 @@ def _classify_backend_failure(
     process_exited: bool,
     log_path: Path,
 ) -> str:
+    if _BACKEND_HEALTH_RESPONSE_INVALID in failed_checks:
+        return _BACKEND_HEALTH_RESPONSE_INVALID
+    if _BACKEND_HEALTH_COMPONENT_FAILED in failed_checks:
+        return _BACKEND_HEALTH_COMPONENT_FAILED
+    if _BACKEND_HEALTH_CONNECTION_FAILED in failed_checks:
+        return _BACKEND_HEALTH_CONNECTION_FAILED
     if "database" in failed_checks:
         if "redis" in failed_checks:
             return "database_and_redis_unreachable"

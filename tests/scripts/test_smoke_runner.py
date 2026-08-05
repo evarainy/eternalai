@@ -6,9 +6,10 @@ import json
 import secrets
 from dataclasses import replace
 from http.client import RemoteDisconnected
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request
 
@@ -1248,12 +1249,21 @@ def test_failed_start_cleanup_terminates_only_new_processes(
     assert state["frontend_pid"] is None
 
 
-@pytest.mark.parametrize("failed_stage", ["backend", "frontend", "login"])
+@pytest.mark.parametrize(
+    ("failed_stage", "backend_failure"),
+    [
+        ("backend", "vllm_unreachable"),
+        ("backend", "health_connection_failed"),
+        ("frontend", None),
+        ("login", None),
+    ],
+)
 def test_each_start_failure_path_runs_retry_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     failed_stage: str,
+    backend_failure: str | None,
 ) -> None:
     layout = Layout(
         repo_root=tmp_path,
@@ -1284,9 +1294,7 @@ def test_each_start_failure_path_runs_retry_cleanup(
         smoke_runner,
         "_wait_for_backend",
         lambda *_args, **_kwargs: (
-            (False, "configuration_error")
-            if failed_stage == "backend"
-            else (True, None)
+            (False, backend_failure) if failed_stage == "backend" else (True, None)
         ),
     )
     monkeypatch.setattr(
@@ -1322,7 +1330,7 @@ def test_each_start_failure_path_runs_retry_cleanup(
     if failed_stage == "backend":
         assert cleanups[0][1] is None
         output = capsys.readouterr().out
-        assert "backend_start_failed=configuration_error" in output
+        assert f"backend_start_failed={backend_failure}" in output
         assert "请停止操作" in output
     else:
         assert cleanups[0][1] is frontend
@@ -1985,6 +1993,10 @@ def test_verify_prints_deterministic_value_free_drift_nodes(
             "",
             "database_and_redis_unreachable",
         ),
+        (("vllm",), False, "", "vllm_unreachable"),
+        (("health_response_invalid",), False, "", "health_response_invalid"),
+        (("health_component_failed",), False, "", "health_component_failed"),
+        (("health_connection_failed",), False, "", "health_connection_failed"),
         ((), True, "RuntimeError: OA_BASE_URL is required", "configuration_error"),
         ((), True, "synthetic process failure", "process_exited"),
         ((), False, "", "health_timeout"),
@@ -2039,6 +2051,261 @@ def test_spawn_service_discards_old_configuration_marker(
     assert spawned is process
     assert log_path.read_bytes() == b""
     assert classification == "process_exited"
+
+
+def test_backend_health_receives_boundary_503_and_classifies_vllm_without_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "sensitive-backend-health-canary"
+    body = json.dumps(
+        {
+            "status": "unhealthy",
+            "checks": {"database": "ok", "redis": "ok", "vllm": "failed"},
+            "detail": canary,
+        }
+    ).encode("utf-8")
+    observed_timeouts: list[float] = []
+
+    def open_health(url: str, *, timeout: float) -> None:
+        observed_timeouts.append(timeout)
+        if timeout <= smoke_runner._BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS:
+            raise TimeoutError
+        raise HTTPError(url, 503, canary, None, BytesIO(body))
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+    report = _build_report(
+        _verification_outcome(),
+        _verification_outcome(),
+        capture_created=False,
+    )
+
+    assert healthy is False
+    assert failed_checks == ("vllm",)
+    assert classification == "vllm_unreachable"
+    assert observed_timeouts == [smoke_runner._BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS]
+    assert smoke_runner._BACKEND_HEALTH_TIMEOUT_MARGIN_SECONDS > 0
+    assert smoke_runner._BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS == (
+        smoke_runner._BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS
+        + smoke_runner._BACKEND_HEALTH_TIMEOUT_MARGIN_SECONDS
+    )
+    assert (
+        smoke_runner._BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS
+        > smoke_runner._BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS
+    )
+    assert canary not in capsys.readouterr().out
+    assert canary not in caplog.text
+    assert canary not in report
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"not-json",
+        json.dumps(
+            {
+                "status": "unhealthy",
+                "checks": {
+                    "database": "ok",
+                    "redis": "ok",
+                    "vllm": "unknown",
+                },
+            }
+        ).encode("utf-8"),
+    ],
+)
+def test_backend_health_invalid_503_response_is_safely_classified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+) -> None:
+    def open_health(url: str, *, timeout: float) -> None:
+        raise HTTPError(url, 503, "synthetic", None, BytesIO(body))
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+
+    assert healthy is False
+    assert failed_checks == ("health_response_invalid",)
+    assert classification == "health_response_invalid"
+
+
+def test_backend_health_unknown_failed_component_is_safely_classified(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = json.dumps(
+        {
+            "status": "unhealthy",
+            "checks": {
+                "database": "ok",
+                "redis": "ok",
+                "vllm": "ok",
+                "synthetic_new_component": "failed",
+            },
+        }
+    ).encode("utf-8")
+
+    def open_health(url: str, *, timeout: float) -> None:
+        raise HTTPError(url, 503, "synthetic", None, BytesIO(body))
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+
+    assert healthy is False
+    assert failed_checks == ("health_component_failed",)
+    assert classification == "health_component_failed"
+
+
+def test_backend_health_timeout_after_new_budget_remains_health_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeouts: list[float] = []
+
+    def open_health(_url: str, *, timeout: float) -> None:
+        observed_timeouts.append(timeout)
+        raise TimeoutError
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+
+    assert observed_timeouts == [smoke_runner._BACKEND_HEALTH_HTTP_TIMEOUT_SECONDS]
+    assert healthy is False
+    assert failed_checks == ()
+    assert classification == "health_timeout"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TimeoutError("direct-timeout-canary"), id="direct-timeout"),
+        pytest.param(smoke_runner.socket.timeout("socket-timeout-canary"), id="socket"),
+        pytest.param(
+            URLError(TimeoutError("wrapped-timeout-canary")),
+            id="wrapped-timeout",
+        ),
+        pytest.param(
+            URLError(smoke_runner.socket.timeout("wrapped-socket-timeout-canary")),
+            id="wrapped-socket",
+        ),
+    ],
+)
+def test_backend_health_only_timeout_errors_retain_health_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    error: OSError,
+) -> None:
+    def open_health(_url: str, *, timeout: float) -> None:
+        raise error
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+
+    assert healthy is False
+    assert failed_checks == ()
+    assert classification == "health_timeout"
+    assert capsys.readouterr().out == ""
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            ConnectionRefusedError("connection-refused-canary"),
+            id="connection-refused",
+        ),
+        pytest.param(URLError("generic-url-error-canary"), id="generic-url-error"),
+        pytest.param(
+            RemoteDisconnected("remote-disconnected-canary"),
+            id="remote-disconnected",
+        ),
+    ],
+)
+def test_backend_health_non_timeout_transport_errors_are_connection_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    error: OSError,
+) -> None:
+    def open_health(_url: str, *, timeout: float) -> None:
+        raise error
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_LOCAL_OPENER",
+        SimpleNamespace(open=open_health),
+    )
+
+    healthy, failed_checks = smoke_runner._backend_health()
+    classification = _classify_backend_failure(
+        failed_checks=failed_checks,
+        process_exited=False,
+        log_path=tmp_path / "backend.log",
+    )
+
+    assert healthy is False
+    assert failed_checks == ("health_connection_failed",)
+    assert classification == "health_connection_failed"
+    assert capsys.readouterr().out == ""
+    assert caplog.text == ""
 
 
 def test_cold_login_unreachable_stops_before_credential_prompt(
