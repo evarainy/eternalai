@@ -27,6 +27,7 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
     OAContractPackProfile,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
+    build_live_system_messages_fingerprint,
     build_structural_fingerprint,
 )
 
@@ -241,6 +242,24 @@ def _load_har(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SanitizationError("har_root_invalid")
     return payload
+
+
+def build_live_system_message_har_fingerprint(
+    *,
+    input_har: Path,
+    entry_index: int,
+) -> dict[str, Any]:
+    """Fingerprint actual system-message record structure without wire values."""
+
+    har = _load_har(input_har)
+    raw_payload, _page_size = _select_system_message_payload(
+        har,
+        entry_indices=[entry_index],
+    )
+    records = raw_payload.get("data")
+    if not isinstance(records, list):
+        raise SanitizationError("system_message_records_invalid")
+    return build_live_system_messages_fingerprint(records)
 
 
 def _load_json_file(path: Path) -> Any:

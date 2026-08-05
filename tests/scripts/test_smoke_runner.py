@@ -102,6 +102,68 @@ def test_cli_parser_accepts_each_command(command: str) -> None:
     assert args.command == command
 
 
+def test_rehearse_prints_full_value_free_actual_drift_nodes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = build_structural_fingerprint(
+        {"messages": [{"message_id": ""}]}
+    )
+    actual = build_structural_fingerprint(
+        {
+            "messages": [
+                {
+                    "message_id": "",
+                    "wire_gomethod": "sensitive-value-not-rendered",
+                }
+            ]
+        }
+    )
+    drift = compare_structural_fingerprints(expected, actual)
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "system-messages.har",
+        scratch=tmp_path / "_scratch",
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "load_runtime_environment",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_rehearsal",
+        lambda _layout, _environment: smoke_runner.RehearsalResult(
+            node_count=len(actual["nodes"]),
+            added_count=1,
+            removed_count=0,
+            changed_count=0,
+            sha_matches=False,
+            replay_composition_ok=True,
+            drift=drift,
+        ),
+    )
+
+    result = smoke_runner._command_rehearse(layout)
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert (
+        'fingerprint_drift_added_001={"json_type":"string",'
+        '"path":"$.messages[].wire_gomethod"}'
+    ) in output
+    assert "sensitive-value-not-rendered" not in output
+
+
 def test_extract_message_center_contract_from_unique_fake_har(
     tmp_path: Path,
 ) -> None:

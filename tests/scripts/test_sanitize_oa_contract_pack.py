@@ -100,6 +100,9 @@ def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
             "bizstate": "0",
             "link": "https://internal.example.invalid/message/83000001/detail",
             "linkmobileurl": "https://internal.example.invalid/mobile/83000001/detail",
+            "gomethod": "synthetic-desktop-method",
+            "gomethodpc": "synthetic-mobile-method",
+            "showimage": "synthetic-image-flag",
         },
         {
             "messageid": "83000002",
@@ -110,6 +113,9 @@ def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
             "bizstate": "1",
             "link": "",
             "linkmobileurl": "",
+            "gomethod": "synthetic-desktop-method",
+            "gomethodpc": "synthetic-mobile-method",
+            "showimage": "synthetic-image-flag",
         },
     ]
     image_bytes = b"\x89PNG\r\n\x1a\nsynthetic-image"
@@ -327,6 +333,34 @@ def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
             raw_value = raw_record[key]
             if raw_value:
                 assert raw_value not in all_output
+
+
+def test_live_system_message_har_fingerprint_uses_actual_value_free_shape(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+
+    fingerprint = sanitizer.build_live_system_message_har_fingerprint(
+        input_har=input_har,
+        entry_index=1,
+    )
+
+    nodes = {
+        (node["path"], node["json_type"])
+        for node in fingerprint["nodes"]
+    }
+    assert {
+        ("$.messages[].wire_gomethod", "string"),
+        ("$.messages[].wire_gomethodpc", "string"),
+        ("$.messages[].wire_showimage", "string"),
+    }.issubset(nodes)
+    rendered = json.dumps(fingerprint, sort_keys=True)
+    for record in raw_records:
+        for value in record.values():
+            if len(value) >= 9:
+                assert value not in rendered
 
 
 def test_selected_textual_base64_matches_plaintext_pack(tmp_path: Path) -> None:

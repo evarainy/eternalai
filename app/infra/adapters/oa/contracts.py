@@ -33,6 +33,7 @@ _STRUCTURAL_JSON_TYPES = frozenset(
 )
 _STRUCTURAL_ARRAY_SHAPE_PATTERN = re.compile(r"^[a-z:<>|]+$")
 _STRUCTURAL_SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_SAFE_WIRE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
     "workflowId": "workflow_id",
     "title": "title",
@@ -460,12 +461,17 @@ def _project_live_workflow_record(
     raw_path: str,
 ) -> Any:
     if not isinstance(record, Mapping):
-        return _project_json_structure(record, raw_path=raw_path)
+        return _project_json_structure(
+            record,
+            raw_path=raw_path,
+            expose_safe_wire_names=True,
+        )
     return _project_json_mapping(
         record,
         field_names=field_names,
         ignored_fields=frozenset(),
         raw_path=raw_path,
+        expose_safe_wire_names=True,
     )
 
 
@@ -476,12 +482,17 @@ def _project_live_system_message_record(
     raw_path: str,
 ) -> Any:
     if not isinstance(record, Mapping):
-        return _project_json_structure(record, raw_path=raw_path)
+        return _project_json_structure(
+            record,
+            raw_path=raw_path,
+            expose_safe_wire_names=True,
+        )
     return _project_json_mapping(
         record,
         field_names=field_names,
         ignored_fields=frozenset(),
         raw_path=raw_path,
+        expose_safe_wire_names=True,
     )
 
 
@@ -502,11 +513,47 @@ def _live_record_field_names(
         for key in sorted(observed_fields & normalized_field_names.keys())
     }
     unknown_fields = sorted(observed_fields - normalized_field_names.keys())
-    field_names.update(_anonymous_field_names(unknown_fields, raw_path=raw_path))
+    field_names.update(
+        _wire_field_names(
+            unknown_fields,
+            raw_path=raw_path,
+            reserved_names=frozenset(normalized_field_names.values()),
+        )
+    )
     return field_names
 
 
-def _project_json_structure(value: Any, *, raw_path: str) -> Any:
+def _wire_field_names(
+    keys: list[str],
+    *,
+    raw_path: str,
+    reserved_names: frozenset[str],
+) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    allocated = set(reserved_names)
+    for key in sorted(keys):
+        candidate = (
+            f"wire_{key}"
+            if _SAFE_WIRE_IDENTIFIER_PATTERN.fullmatch(key)
+            else _anonymous_field_name(_raw_mapping_child_path(raw_path, key))
+        )
+        if candidate in allocated:
+            candidate = _anonymous_field_name(
+                _raw_mapping_child_path(raw_path, key)
+            )
+        if candidate in allocated:
+            raise ValueError("wire structural field collision")
+        aliases[key] = candidate
+        allocated.add(candidate)
+    return aliases
+
+
+def _project_json_structure(
+    value: Any,
+    *,
+    raw_path: str,
+    expose_safe_wire_names: bool,
+) -> Any:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -523,10 +570,15 @@ def _project_json_structure(value: Any, *, raw_path: str) -> Any:
             field_names={},
             ignored_fields=frozenset(),
             raw_path=raw_path,
+            expose_safe_wire_names=expose_safe_wire_names,
         )
     if isinstance(value, list):
         return [
-            _project_json_structure(item, raw_path=f"{raw_path}[]")
+            _project_json_structure(
+                item,
+                raw_path=f"{raw_path}[]",
+                expose_safe_wire_names=expose_safe_wire_names,
+            )
             for item in value
         ]
     raise TypeError("Live OA payload must contain JSON-compatible values")
@@ -538,6 +590,7 @@ def _project_json_mapping(
     field_names: Mapping[str, str],
     ignored_fields: frozenset[str] | set[str],
     raw_path: str,
+    expose_safe_wire_names: bool,
 ) -> dict[str, Any]:
     keys = list(value)
     if any(not isinstance(key, str) for key in keys):
@@ -550,9 +603,14 @@ def _project_json_mapping(
     unknown_keys = sorted(
         key for key in string_keys if key not in field_names
     )
-    safe_unknown_names = _anonymous_field_names(
-        unknown_keys,
-        raw_path=raw_path,
+    safe_unknown_names = (
+        _wire_field_names(
+            unknown_keys,
+            raw_path=raw_path,
+            reserved_names=frozenset(field_names.values()),
+        )
+        if expose_safe_wire_names
+        else _anonymous_field_names(unknown_keys, raw_path=raw_path)
     )
     projected: dict[str, Any] = {}
     for key in string_keys:
@@ -564,6 +622,7 @@ def _project_json_mapping(
         projected[safe_key] = _project_json_structure(
             value[key],
             raw_path=_raw_mapping_child_path(raw_path, key),
+            expose_safe_wire_names=expose_safe_wire_names,
         )
     return projected
 

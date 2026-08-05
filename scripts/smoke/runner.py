@@ -203,6 +203,7 @@ class RehearsalResult:
     changed_count: int
     sha_matches: bool
     replay_composition_ok: bool
+    drift: OAStructuralDriftReport
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +365,7 @@ def _command_rehearse(layout: Layout) -> int:
     print(f"fingerprint_added={result.added_count}")
     print(f"fingerprint_removed={result.removed_count}")
     print(f"fingerprint_changed={result.changed_count}")
+    _print_drift_nodes("fingerprint", result.drift)
     print(f"fingerprint_sha_matches={_bool(result.sha_matches)}")
     print(f"replay_composition={_passed(result.replay_composition_ok)}")
     if (
@@ -390,7 +392,10 @@ def _run_rehearsal(
         profile_version=_SYSTEM_PROFILE,
         entry_indices=[contract.source_entry_index],
     )
-    generated = _load_json_object(output_dir / "fingerprint.json")
+    generated = sanitizer.build_live_system_message_har_fingerprint(
+        input_har=layout.source_har,
+        entry_index=contract.source_entry_index,
+    )
     frozen = _load_json_object(
         layout.repo_root
         / "tests"
@@ -421,6 +426,7 @@ def _run_rehearsal(
         changed_count=len(report.changed),
         sha_matches=report.expected_sha256 == report.actual_sha256,
         replay_composition_ok=replay_ok,
+        drift=report,
     )
 
 

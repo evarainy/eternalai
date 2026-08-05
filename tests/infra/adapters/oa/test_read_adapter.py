@@ -386,6 +386,19 @@ def _assert_anonymous_node_paths(
     return paths
 
 
+def _assert_wire_node_paths(
+    nodes: tuple[Any, ...] | list[dict[str, Any]],
+    *,
+    root_path: str,
+    raw_keys: set[str],
+) -> None:
+    paths = {
+        node.path if hasattr(node, "path") else node["path"]
+        for node in nodes
+    }
+    assert paths == {f"{root_path}.wire_{key}" for key in raw_keys}
+
+
 def _message_center_page(
     records: list[dict[str, Any]],
     *,
@@ -657,7 +670,7 @@ def test_live_system_message_invalid_status_bounds_and_links_fail_closed(
     assert result.data is None
 
 
-def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
+def test_live_system_message_drift_reports_safe_wire_names_without_values() -> None:
     reports: list[Any] = []
     records = _matching_live_system_messages()
     runtime_field_name = f"vendorField{secrets.token_hex(8)}"
@@ -680,12 +693,17 @@ def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
     report = reports[0]
     rendered = report.model_dump_json()
     assert report.matches is False
-    _assert_anonymous_node_paths(
+    _assert_wire_node_paths(
         report.added,
         root_path="$.messages[]",
-        expected_count=4,
+        raw_keys={
+            "gomethod",
+            "gomethodpc",
+            "showimage",
+            runtime_field_name,
+        },
     )
-    assert runtime_field_name not in rendered
+    assert f"wire_{runtime_field_name}" in rendered
     assert runtime_business_value not in rendered
 
 
@@ -717,10 +735,10 @@ def test_live_system_message_fingerprint_reports_all_actual_wire_fields() -> Non
     )
 
     assert report.matches is False
-    _assert_anonymous_node_paths(
+    _assert_wire_node_paths(
         report.added,
         root_path="$.messages[]",
-        expected_count=3,
+        raw_keys={"gomethod", "gomethodpc", "showimage"},
     )
     assert {node.json_type for node in report.added} == {"string"}
     assert report.removed == ()
@@ -1947,25 +1965,22 @@ def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
     unknown_paths = [
         node["path"]
         for node in fingerprint["nodes"]
-        if node["path"].startswith(f"{root_path}.unknown_field_")
+        if node["path"].startswith(f"{root_path}.wire_")
     ]
 
-    expected_unknown_count = 2 + (3 if root_path == "$.messages[]" else 0)
-    _assert_anonymous_node_paths(
+    expected_raw_keys = {first_field_canary, second_field_canary}
+    if root_path == "$.messages[]":
+        expected_raw_keys.update({"gomethod", "gomethodpc", "showimage"})
+    _assert_wire_node_paths(
         [
             node
             for node in fingerprint["nodes"]
             if node["path"] in unknown_paths
         ],
         root_path=root_path,
-        expected_count=expected_unknown_count,
+        raw_keys=expected_raw_keys,
     )
-    for canary in (
-        first_field_canary,
-        second_field_canary,
-        first_value_canary,
-        second_value_canary,
-    ):
+    for canary in (first_value_canary, second_value_canary):
         assert canary not in rendered
 
     records[0][first_field_canary] = f"changed-{secrets.token_hex(24)}"
@@ -1974,7 +1989,7 @@ def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
     assert builder(records) == fingerprint
 
 
-def test_live_unknown_pseudonym_is_stable_when_earlier_key_is_added() -> None:
+def test_live_pending_unknown_wire_name_is_stable_when_earlier_key_is_added() -> None:
     earlier_field_canary = f"aSensitiveField{secrets.token_hex(8)}"
     retained_field_canary = f"zSensitiveField{secrets.token_hex(8)}"
     value_canary = f"sensitive-value-{secrets.token_hex(24)}"
@@ -1989,21 +2004,44 @@ def test_live_unknown_pseudonym_is_stable_when_earlier_key_is_added() -> None:
     )
     report = compare_structural_fingerprints(baseline, candidate)
 
-    _assert_anonymous_node_paths(
+    _assert_wire_node_paths(
         report.added,
         root_path="$.workflows[]",
-        expected_count=1,
+        raw_keys={earlier_field_canary},
     )
     assert report.added[0].json_type == "integer"
     assert report.removed == ()
     assert report.changed == ()
     rendered = report.model_dump_json()
-    for canary in (
-        earlier_field_canary,
-        retained_field_canary,
-        value_canary,
-    ):
-        assert canary not in rendered
+    assert f"wire_{earlier_field_canary}" in rendered
+    assert f"wire_{retained_field_canary}" not in rendered
+    assert value_canary not in rendered
+
+
+def test_live_invalid_wire_key_uses_stable_digest_without_value() -> None:
+    record = _raw_workflow(1)
+    value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    record["invalid-wire-key"] = value_canary
+
+    fingerprint = build_live_pending_workflows_fingerprint([record])
+    rendered = json.dumps(fingerprint, sort_keys=True)
+    digest_paths = [
+        node["path"]
+        for node in fingerprint["nodes"]
+        if node["path"].startswith("$.workflows[].unknown_field_")
+    ]
+
+    _assert_anonymous_node_paths(
+        [
+            node
+            for node in fingerprint["nodes"]
+            if node["path"] in digest_paths
+        ],
+        root_path="$.workflows[]",
+        expected_count=1,
+    )
+    assert "invalid-wire-key" not in rendered
+    assert value_canary not in rendered
 
 
 def test_live_nested_unknown_fields_do_not_fold_and_are_order_independent() -> None:
@@ -2021,28 +2059,21 @@ def test_live_nested_unknown_fields_do_not_fold_and_are_order_independent() -> N
     nested_paths = [
         node["path"]
         for node in forward["nodes"]
-        if node["path"].count(".unknown_field_") == 2
+        if node["path"].count(".wire_") == 2
     ]
 
     assert forward == reversed_order
     assert len(nested_paths) == 2
     assert len(set(nested_paths)) == 2
-    assert all(
-        re.fullmatch(
-            r"\$\.workflows\[\]\.unknown_field_[a-f0-9]{64}"
-            r"\.unknown_field_[a-f0-9]{64}",
-            path,
-        )
-        for path in nested_paths
-    )
+    assert set(nested_paths) == {
+        f"$.workflows[].wire_{outer_field_canary}.wire_{first_child_canary}",
+        f"$.workflows[].wire_{outer_field_canary}.wire_{second_child_canary}",
+    }
     rendered = json.dumps(forward, sort_keys=True)
-    for canary in (
-        outer_field_canary,
-        first_child_canary,
-        second_child_canary,
-        value_canary,
-    ):
-        assert canary not in rendered
+    assert f"wire_{outer_field_canary}" in rendered
+    assert f"wire_{first_child_canary}" in rendered
+    assert f"wire_{second_child_canary}" in rendered
+    assert value_canary not in rendered
 
 
 def test_live_provider_unknown_field_union_is_stable_across_page_and_record_order(
@@ -2087,10 +2118,10 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
 
     assert forward.actual_sha256 == reversed_order.actual_sha256
     assert forward.added == reversed_order.added
-    _assert_anonymous_node_paths(
+    _assert_wire_node_paths(
         forward.added,
         root_path="$.workflows[]",
-        expected_count=2,
+        raw_keys={first_field_canary, second_field_canary},
     )
     assert {node.json_type for node in forward.added} == {
         "integer",
@@ -2099,12 +2130,9 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
     assert forward.removed == ()
     assert forward.changed == ()
     rendered = forward.model_dump_json() + reversed_order.model_dump_json()
-    for canary in (
-        first_field_canary,
-        second_field_canary,
-        first_value_canary,
-    ):
-        assert canary not in rendered
+    assert f"wire_{first_field_canary}" in rendered
+    assert f"wire_{second_field_canary}" in rendered
+    assert first_value_canary not in rendered
 
 
 def test_structural_drift_report_contains_no_business_values_or_lengths() -> None:
