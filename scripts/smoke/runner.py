@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import getpass
 import hashlib
 import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +26,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, OperationalError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 
 from app.composition import (
     build_authentication_port,
@@ -49,8 +54,19 @@ from app.infra.adapters.oa.provider import (
     OALiveTimeout,
 )
 from app.infra.auth.oa import OAAuthenticationError
+from app.infra.persistence.capability_registry.repository import (
+    PostgreSQLCapabilityRegistry,
+)
+from app.knowledge import BasicKnowledge
 from app.ports.auth import AuthenticationError, LoginCredential, OASessionCredential
+from app.ports.capability_registry import CapabilitySpec
+from app.runtime.intent_router import _bound_generated_knowledge
 from scripts import sanitize_oa_contract_pack as sanitizer
+from scripts.smoke.capabilities import (
+    OA_CAPABILITY_CONTEXT_PROBES,
+    REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+    expected_oa_capabilities,
+)
 from scripts.smoke.environment import (
     PreparedEnvironment,
     load_runtime_environment,
@@ -73,6 +89,7 @@ _FRONTEND_URL = "http://127.0.0.1:5173"
 _LOGIN_ORIGIN = _FRONTEND_URL
 _LOCAL_OPENER = build_opener(ProxyHandler({}))
 _BACKEND_LOG_NAME = "smoke_backend.log"
+_PROCESS_STATE_VERSION = 3
 _CONFIGURATION_ERROR_MARKERS = (
     "ProductionSettings.from_environment",
     "OA_READ_ADAPTER_MODE",
@@ -115,6 +132,32 @@ _AUTH_DIAGNOSTIC_TYPES = frozenset(
         "object",
         "other",
         "string",
+    }
+)
+_SAFE_PROTOCOL_FIELD_NAMES = frozenset(
+    {
+        "applicant",
+        "approver",
+        "bizstate",
+        "context",
+        "createdAt",
+        "currentStep",
+        "data",
+        "expired",
+        "gomethod",
+        "gomethodpc",
+        "link",
+        "linkmobileurl",
+        "maxtime",
+        "messageid",
+        "mintime",
+        "msgid",
+        "name",
+        "showimage",
+        "status",
+        "time",
+        "title",
+        "workflowId",
     }
 )
 _AUTH_FAILURE_DETAILS = {
@@ -168,6 +211,16 @@ class LiveOutcome:
     protocol: ProtocolSummary
     normalized: bool
     error_kind: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityRegistryPreflight:
+    state: str
+    found_count: int
+    valid_count: int
+    unexpected_active_count: int
+    active_total_count: int
+    visible_probe_count: int
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -395,11 +448,12 @@ def _command_start(layout: Layout) -> int:
         smoke_env_path=layout.smoke_env,
     )
     settings = _validate_settings(environment)
+    candidate_sha256 = _candidate_fingerprint(layout, environment)
     backend: subprocess.Popen[bytes] | None = None
     frontend: subprocess.Popen[bytes] | None = None
     completed = False
     try:
-        backend = _start_backend(layout, environment)
+        backend = _start_backend(layout, environment, candidate_sha256)
         backend_ok, backend_failure = _wait_for_backend(
             backend,
             log_path=layout.scratch / _BACKEND_LOG_NAME,
@@ -408,13 +462,28 @@ def _command_start(layout: Layout) -> int:
             print(f"backend_start_failed={backend_failure}")
             _print_stop_instruction()
             return 1
-        _write_process_state(layout, backend, None, environment)
-        frontend = _start_frontend(layout, environment)
+        if not _run_capability_registry_preflight(settings):
+            _print_stop_instruction()
+            return 1
+        _write_process_state(
+            layout,
+            backend,
+            None,
+            environment,
+            candidate_sha256,
+        )
+        frontend = _start_frontend(layout, environment, candidate_sha256)
         if not _wait_for_frontend(frontend):
             print("frontend_start_failed=process_or_timeout")
             _print_stop_instruction()
             return 1
-        _write_process_state(layout, backend, frontend, environment)
+        _write_process_state(
+            layout,
+            backend,
+            frontend,
+            environment,
+            candidate_sha256,
+        )
         print(f"backend_url={_BACKEND_URL}")
         print(f"frontend_url={_FRONTEND_URL}")
         print(f"chat_url={_FRONTEND_URL}/chat")
@@ -426,8 +495,9 @@ def _command_start(layout: Layout) -> int:
             return 1
         print("cold_login_preflight=passed")
         print(
-            "next_step=只打开上面打印的 /chat 地址并试一次；"
-            "完成后回到命令行运行 .\\smoke.ps1 verify。"
+            "next_step=命令行里的登录只是在检查 OA；浏览器登录是另外一回事。"
+            "现在打开上面打印的 /chat 地址；如果看到登录页，就在浏览器登录。"
+            "登录后只查询一次，完成后回到命令行运行 .\\smoke.ps1 verify。"
         )
         completed = True
         return 0
@@ -439,11 +509,27 @@ def _command_start(layout: Layout) -> int:
 def _start_backend(
     layout: Layout,
     environment: dict[str, str],
+    candidate_sha256: str,
 ) -> subprocess.Popen[bytes] | None:
     if _backend_health()[0]:
-        if _owned_service_is_reusable(layout, "backend_pid", environment):
+        ownership = _owned_service_status(
+            layout,
+            "backend_pid",
+            candidate_sha256,
+        )
+        if ownership == "reusable":
             return None
-        raise SmokeError("backend_already_running_not_owned")
+        if ownership != "stale_owned":
+            raise SmokeError("backend_already_running_not_owned")
+        _restart_stale_owned_service(
+            layout,
+            "backend_pid",
+            environment,
+            candidate_sha256,
+            ready=lambda: _backend_health()[0],
+        )
+    elif _local_port_in_use(8000):
+        raise SmokeError("backend_port_in_use_unhealthy")
     return _spawn_service(
         ["uv", "run", "python", "-m", "app.server"],
         cwd=layout.repo_root,
@@ -455,11 +541,27 @@ def _start_backend(
 def _start_frontend(
     layout: Layout,
     environment: dict[str, str],
+    candidate_sha256: str,
 ) -> subprocess.Popen[bytes] | None:
     if _frontend_ready():
-        if _owned_service_is_reusable(layout, "frontend_pid", environment):
+        ownership = _owned_service_status(
+            layout,
+            "frontend_pid",
+            candidate_sha256,
+        )
+        if ownership == "reusable":
             return None
-        raise SmokeError("frontend_already_running_not_owned")
+        if ownership != "stale_owned":
+            raise SmokeError("frontend_already_running_not_owned")
+        _restart_stale_owned_service(
+            layout,
+            "frontend_pid",
+            environment,
+            candidate_sha256,
+            ready=_frontend_ready,
+        )
+    elif _local_port_in_use(5173):
+        raise SmokeError("frontend_port_in_use_unhealthy")
     npm = shutil.which("npm.cmd") or shutil.which("npm")
     if npm is None:
         raise SmokeError("npm_not_found")
@@ -469,6 +571,14 @@ def _start_frontend(
         environment=environment,
         log_path=layout.scratch / "smoke_frontend.log",
     )
+
+
+def _local_port_in_use(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def _spawn_service(
@@ -644,14 +754,36 @@ def _write_process_state(
     backend: subprocess.Popen[bytes] | None,
     frontend: subprocess.Popen[bytes] | None,
     environment: dict[str, str],
+    candidate_sha256: str,
 ) -> None:
     existing = _read_process_state(layout)
+    backend_pid = backend.pid if backend is not None else existing.get("backend_pid")
+    frontend_pid = (
+        frontend.pid if frontend is not None else existing.get("frontend_pid")
+    )
     state = {
-        "backend_pid": (
-            backend.pid if backend is not None else existing.get("backend_pid")
+        "state_version": _PROCESS_STATE_VERSION,
+        "backend_pid": backend_pid,
+        "backend_identity_sha256": (
+            _required_process_identity(backend.pid)
+            if backend is not None
+            else existing.get("backend_identity_sha256")
         ),
-        "frontend_pid": (
-            frontend.pid if frontend is not None else existing.get("frontend_pid")
+        "backend_candidate_sha256": (
+            candidate_sha256
+            if backend is not None
+            else existing.get("backend_candidate_sha256")
+        ),
+        "frontend_pid": frontend_pid,
+        "frontend_identity_sha256": (
+            _required_process_identity(frontend.pid)
+            if frontend is not None
+            else existing.get("frontend_identity_sha256")
+        ),
+        "frontend_candidate_sha256": (
+            candidate_sha256
+            if frontend is not None
+            else existing.get("frontend_candidate_sha256")
         ),
         "configuration_sha256": _configuration_fingerprint(environment),
     }
@@ -675,12 +807,17 @@ def _cleanup_failed_start(
         and state.get("backend_pid") == backend.pid
     ):
         state["backend_pid"] = None
+        state["backend_identity_sha256"] = None
+        state["backend_candidate_sha256"] = None
     if (
         frontend is not None
         and terminated.get(frontend.pid) is True
         and state.get("frontend_pid") == frontend.pid
     ):
         state["frontend_pid"] = None
+        state["frontend_identity_sha256"] = None
+        state["frontend_candidate_sha256"] = None
+    state["state_version"] = _PROCESS_STATE_VERSION
     state["configuration_sha256"] = _configuration_fingerprint(environment)
     _write_process_state_payload(layout, state)
     if not all(terminated.values()):
@@ -744,20 +881,81 @@ def _write_process_state_payload(layout: Layout, state: dict[str, Any]) -> None:
                 pass
 
 
-def _owned_service_is_reusable(
+def _owned_service_status(
+    layout: Layout,
+    pid_key: str,
+    candidate_sha256: str,
+) -> str:
+    state = _read_process_state(layout)
+    pid = state.get(pid_key)
+    identity_key = _identity_key(pid_key)
+    candidate_key = _candidate_key(pid_key)
+    expected_identity = state.get(identity_key)
+    if (
+        state.get("state_version") != _PROCESS_STATE_VERSION
+        or not isinstance(pid, int)
+        or pid <= 0
+        or not isinstance(expected_identity, str)
+        or len(expected_identity) != 64
+    ):
+        return "unowned"
+    current_identity = _process_identity(pid)
+    if current_identity is None or current_identity != expected_identity:
+        return "unowned"
+    if state.get(candidate_key) == candidate_sha256:
+        return "reusable"
+    return "stale_owned"
+
+
+def _restart_stale_owned_service(
     layout: Layout,
     pid_key: str,
     environment: dict[str, str],
-) -> bool:
+    candidate_sha256: str,
+    *,
+    ready: Callable[[], bool],
+) -> None:
     state = _read_process_state(layout)
     pid = state.get(pid_key)
-    return (
-        isinstance(pid, int)
-        and pid > 0
-        and state.get("configuration_sha256")
-        == _configuration_fingerprint(environment)
-        and _process_exists(pid)
-    )
+    identity_key = _identity_key(pid_key)
+    candidate_key = _candidate_key(pid_key)
+    expected_identity = state.get(identity_key)
+    if (
+        _owned_service_status(layout, pid_key, candidate_sha256) != "stale_owned"
+        or not isinstance(pid, int)
+        or not isinstance(expected_identity, str)
+    ):
+        raise SmokeError("service_restart_ownership_lost")
+    if not _terminate_owned_pid(pid, expected_identity):
+        raise SmokeError("service_restart_failed")
+    state[pid_key] = None
+    state[identity_key] = None
+    state[candidate_key] = None
+    state["state_version"] = _PROCESS_STATE_VERSION
+    state["configuration_sha256"] = _configuration_fingerprint(environment)
+    _write_process_state_payload(layout, state)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not ready():
+            return
+        time.sleep(0.2)
+    raise SmokeError("service_restart_port_still_in_use")
+
+
+def _identity_key(pid_key: str) -> str:
+    if pid_key == "backend_pid":
+        return "backend_identity_sha256"
+    if pid_key == "frontend_pid":
+        return "frontend_identity_sha256"
+    raise SmokeError("process_state_invalid")
+
+
+def _candidate_key(pid_key: str) -> str:
+    if pid_key == "backend_pid":
+        return "backend_candidate_sha256"
+    if pid_key == "frontend_pid":
+        return "frontend_candidate_sha256"
+    raise SmokeError("process_state_invalid")
 
 
 def _read_process_state(layout: Layout) -> dict[str, Any]:
@@ -780,15 +978,135 @@ def _process_exists(pid: int) -> bool:
         return False
 
 
+def _required_process_identity(pid: int) -> str:
+    identity = _process_identity(pid)
+    if identity is None:
+        raise SmokeError("process_identity_unavailable")
+    return identity
+
+
+def _process_identity(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    if os.name == "nt":
+        return _windows_process_identity(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        closing = stat.rfind(")")
+        if closing < 0:
+            return None
+        fields = stat[closing + 2 :].split()
+        start_time = fields[19]
+    except (OSError, UnicodeError, IndexError):
+        return None
+    return hashlib.sha256(f"{pid}:{start_time}".encode("ascii")).hexdigest()
+
+
+def _windows_process_identity(pid: int) -> str | None:
+    class _FileTime(ctypes.Structure):
+        _fields_ = (
+            ("low", ctypes.c_ulong),
+            ("high", ctypes.c_ulong),
+        )
+
+    process_query_limited_information = 0x1000
+    handle: Any = None
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        )
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetProcessTimes.argtypes = (
+            ctypes.c_void_p,
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+            ctypes.POINTER(_FileTime),
+        )
+        kernel32.GetProcessTimes.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(
+            process_query_limited_information,
+            False,
+            pid,
+        )
+        if not handle:
+            return None
+        creation = _FileTime()
+        exit_time = _FileTime()
+        kernel_time = _FileTime()
+        user_time = _FileTime()
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        ):
+            return None
+        creation_value = (creation.high << 32) | creation.low
+        return hashlib.sha256(
+            f"{pid}:{creation_value}".encode("ascii")
+        ).hexdigest()
+    except (AttributeError, OSError, ValueError):
+        return None
+    finally:
+        if handle:
+            try:
+                kernel32.CloseHandle(handle)
+            except (AttributeError, OSError):
+                pass
+
+
+def _terminate_owned_pid(pid: int, expected_identity: str) -> bool:
+    if _process_identity(pid) != expected_identity:
+        return False
+    try:
+        if os.name == "nt":
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+            if completed.returncode != 0 and _process_identity(pid) == expected_identity:
+                return False
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        current_identity = _process_identity(pid)
+        if current_identity is None or current_identity != expected_identity:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def _configuration_fingerprint(environment: dict[str, str]) -> str:
     names = (
+        "ENV",
         "API_HOST",
         "API_PORT",
         "DATABASE_URL",
         "REDIS_URL",
         "OA_BASE_URL",
+        "OA_TIMEOUT_S",
+        "OA_CREDENTIAL_TTL_S",
+        "SESSION_COOKIE_TTL_S",
+        "CSRF_ALLOWED_ORIGINS",
         "OA_READ_ADAPTER_MODE",
+        "OA_READ_CONTRACT_PACK_DIR",
+        "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
+        "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
         "OA_MESSAGE_CENTER_PATH",
+        "OA_MESSAGE_CENTER_PAGE_SIZE",
         "OA_PENDING_WORKFLOWS_CATEGORY_ID",
         "OA_PENDING_WORKFLOWS_BIZSTATE",
         "OA_PENDING_WORKFLOWS_SELECT_STATE",
@@ -799,6 +1117,17 @@ def _configuration_fingerprint(environment: dict[str, str]) -> str:
         "ETERNALAI_IDENTITY_HMAC_KEY_B64",
         "ETERNALAI_SESSION_SIGNING_KEY_B64",
         "ETERNALAI_SESSION_BINDING_KEY_B64",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_TIMEOUT_S",
+        "LLM_MAX_TOKENS",
+        "LLM_TEMPERATURE",
+        "LLM_TOP_P",
+        "LLM_TOP_K",
+        "LLM_ENABLE_THINKING",
+        "HEALTH_TIMEOUT_S",
+        "PHASE0_MOCK_MODE",
+        "ETERNALAI_BACKEND_URL",
     )
     encoded = json.dumps(
         [(name, environment.get(name, "")) for name in names],
@@ -806,6 +1135,87 @@ def _configuration_fingerprint(environment: dict[str, str]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _candidate_fingerprint(
+    layout: Layout,
+    environment: dict[str, str],
+) -> str:
+    configuration_sha256 = _configuration_fingerprint(environment)
+    code_sha256 = _code_fingerprint(layout.repo_root)
+    return hashlib.sha256(
+        f"{configuration_sha256}:{code_sha256}".encode("ascii")
+    ).hexdigest()
+
+
+def _code_fingerprint(repo_root: Path) -> str:
+    head = b""
+    diff = b""
+    untracked = b""
+    try:
+        head_result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+        diff_result = subprocess.run(
+            ["git", "-C", str(repo_root), "diff", "--binary", "HEAD", "--"],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+        untracked_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                "app",
+                "web",
+                "scripts",
+                "smoke.ps1",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=15,
+        )
+        if (
+            head_result.returncode != 0
+            or diff_result.returncode != 0
+            or untracked_result.returncode != 0
+        ):
+            raise SmokeError("candidate_fingerprint_failed")
+        head = head_result.stdout.strip()
+        diff = diff_result.stdout
+        untracked = untracked_result.stdout
+        if not head:
+            raise SmokeError("candidate_fingerprint_failed")
+        digest = hashlib.sha256()
+        digest.update(head)
+        digest.update(b"\x00")
+        digest.update(diff)
+        resolved_root = repo_root.resolve()
+        for raw_path in sorted(item for item in untracked.split(b"\x00") if item):
+            relative_path = raw_path.decode("utf-8")
+            candidate_path = (repo_root / relative_path).resolve()
+            if not candidate_path.is_relative_to(resolved_root):
+                raise SmokeError("candidate_fingerprint_failed")
+            digest.update(b"\x00")
+            digest.update(raw_path)
+            digest.update(b"\x00")
+            digest.update(candidate_path.read_bytes())
+        return digest.hexdigest()
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        raise SmokeError("candidate_fingerprint_failed") from None
+    finally:
+        head = b""
+        diff = b""
+        untracked = b""
 
 
 def _classify_backend_failure(
@@ -951,6 +1361,9 @@ def _command_verify(
         smoke_env_path=layout.smoke_env,
     )
     settings = _validate_settings(environment)
+    if not _run_capability_registry_preflight(settings):
+        _print_stop_instruction()
+        return 1
     resolved_timestamp = _validated_timestamp(timestamp)
     system, pending = _run_live_checks_with_supported_loop(settings)
     capture_created = False
@@ -967,6 +1380,8 @@ def _command_verify(
         raise SmokeError("report_write_failed") from None
     print(f"system_messages_drift={_drift_state(system)}")
     print(f"pending_workflows_drift={_drift_state(pending)}")
+    _print_drift_nodes("system_messages", system.drift)
+    _print_drift_nodes("pending_workflows", pending.drift)
     if system.protocol.http_status_code is not None:
         print(f"system_messages_http_status={system.protocol.http_status_code}")
     if pending.protocol.http_status_code is not None:
@@ -978,6 +1393,171 @@ def _command_verify(
         return 0
     _print_stop_instruction()
     return 1
+
+
+def _print_drift_nodes(
+    result_name: str,
+    drift: OAStructuralDriftReport | None,
+) -> None:
+    if drift is None:
+        print(f"{result_name}_drift_report=missing")
+        return
+    print(f"{result_name}_drift_added_count={len(drift.added)}")
+    for index, node in enumerate(drift.added, start=1):
+        _print_drift_node(
+            f"{result_name}_drift_added_{index:03d}",
+            {"path": node.path, "json_type": node.json_type},
+        )
+    print(f"{result_name}_drift_removed_count={len(drift.removed)}")
+    for index, node in enumerate(drift.removed, start=1):
+        _print_drift_node(
+            f"{result_name}_drift_removed_{index:03d}",
+            {"path": node.path, "json_type": node.json_type},
+        )
+    print(f"{result_name}_drift_changed_count={len(drift.changed)}")
+    for index, (expected, actual) in enumerate(
+        zip(drift.changed_expected, drift.changed, strict=True),
+        start=1,
+    ):
+        _print_drift_node(
+            f"{result_name}_drift_changed_{index:03d}",
+            {
+                "path": actual.path,
+                "expected_json_type": expected.json_type,
+                "actual_json_type": actual.json_type,
+            },
+        )
+
+
+def _print_drift_node(name: str, node: dict[str, str]) -> None:
+    print(f"{name}=" + _render_drift_node(node))
+
+
+def _render_drift_node(node: dict[str, str]) -> str:
+    return json.dumps(
+        node,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _run_capability_registry_preflight(settings: ProductionSettings) -> bool:
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        result = runner.run(_inspect_capability_registry(settings))
+    print(f"capability_registry_preflight={result.state}")
+    print(
+        "required_capabilities_expected="
+        f"{len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)}"
+    )
+    print(f"required_capabilities_found={result.found_count}")
+    print(f"required_capabilities_valid={result.valid_count}")
+    print(f"unexpected_active_oa={result.unexpected_active_count}")
+    print(f"active_capabilities_total={result.active_total_count}")
+    print(f"intent_context_probes_expected={len(OA_CAPABILITY_CONTEXT_PROBES)}")
+    print(f"intent_context_probes_visible={result.visible_probe_count}")
+    print("intent_semantic_preflight=deterministic_context_only")
+    return result.state == "passed"
+
+
+async def _inspect_capability_registry(
+    settings: ProductionSettings,
+) -> CapabilityRegistryPreflight:
+    engine = None
+    try:
+        engine = make_async_engine(settings.database_url)
+        registry = PostgreSQLCapabilityRegistry(
+            make_async_session_factory(engine)
+        )
+        catalog = tuple(await registry.list())
+    except ValidationError:
+        return _empty_capability_registry_preflight("registry_payload_invalid")
+    except (
+        DisconnectionError,
+        OperationalError,
+        SATimeoutError,
+        ConnectionError,
+        OSError,
+        TimeoutError,
+    ):
+        return _empty_capability_registry_preflight("connection_failed")
+    except DBAPIError:
+        return _empty_capability_registry_preflight("registry_inspection_failed")
+    except Exception:
+        return _empty_capability_registry_preflight("registry_inspection_failed")
+    finally:
+        if engine is not None:
+            try:
+                await engine.dispose()
+            except Exception:
+                pass
+    return _classify_capability_registry(catalog)
+
+
+def _empty_capability_registry_preflight(state: str) -> CapabilityRegistryPreflight:
+    return CapabilityRegistryPreflight(
+        state=state,
+        found_count=0,
+        valid_count=0,
+        unexpected_active_count=0,
+        active_total_count=0,
+        visible_probe_count=0,
+    )
+
+
+def _classify_capability_registry(
+    catalog: tuple[CapabilitySpec, ...],
+) -> CapabilityRegistryPreflight:
+    expected = expected_oa_capabilities()
+    by_id = {item.capability_id: item for item in catalog}
+    found = tuple(
+        by_id[capability_id]
+        for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+        if capability_id in by_id
+    )
+    valid = tuple(
+        item
+        for expected_item in expected
+        if (item := by_id.get(expected_item.capability_id)) == expected_item
+    )
+    active = tuple(item for item in catalog if item.status == "active")
+    unexpected_active = tuple(
+        item
+        for item in active
+        if item.target_system == "oa"
+        and item.capability_id not in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+    )
+    visible_probe_count = sum(
+        all(
+            capability_id in "\n".join(
+                _bound_generated_knowledge(
+                    BasicKnowledge().context_items(probe, active)
+                )
+            )
+            for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+        )
+        for probe in OA_CAPABILITY_CONTEXT_PROBES
+    )
+    if len(found) != len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS):
+        state = "missing"
+    elif any(item.status != "active" for item in found):
+        state = "inactive"
+    elif len(valid) != len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS):
+        state = "contract_mismatch"
+    elif unexpected_active:
+        state = "unexpected_active"
+    elif visible_probe_count != len(OA_CAPABILITY_CONTEXT_PROBES):
+        state = "context_truncated"
+    else:
+        state = "passed"
+    return CapabilityRegistryPreflight(
+        state=state,
+        found_count=len(found),
+        valid_count=len(valid),
+        unexpected_active_count=len(unexpected_active),
+        active_total_count=len(active),
+        visible_probe_count=visible_probe_count,
+    )
 
 
 def _run_live_checks_with_supported_loop(
@@ -1032,22 +1612,64 @@ async def _run_live_checks(
         credential = await store.load(principal.ai_user_id)
         if credential is None:
             raise SmokeError("oa_credential_not_persisted")
-        system = await _run_one_live_check(
-            settings,
-            credential,
-            capability="system_messages",
-        )
-        pending = await _run_one_live_check(
-            settings,
-            credential,
-            capability="pending_workflows",
-        )
-        return system, pending
+        return await _run_both_live_checks(settings, credential)
     finally:
         account = ""
         password = ""
         credential = None
         await engine.dispose()
+
+
+async def _run_both_live_checks(
+    settings: ProductionSettings,
+    credential: OASessionCredential,
+) -> tuple[LiveOutcome, LiveOutcome]:
+    system = await _run_isolated_live_check(
+        settings,
+        credential,
+        capability="system_messages",
+    )
+    pending = await _run_isolated_live_check(
+        settings,
+        credential,
+        capability="pending_workflows",
+    )
+    return system, pending
+
+
+async def _run_isolated_live_check(
+    settings: ProductionSettings,
+    credential: OASessionCredential,
+    *,
+    capability: str,
+) -> LiveOutcome:
+    try:
+        return await _run_one_live_check(
+            settings,
+            credential,
+            capability=capability,
+        )
+    except Exception:
+        return LiveOutcome(
+            drift=None,
+            protocol=_empty_protocol_summary(),
+            normalized=False,
+            error_kind="unexpected_error",
+        )
+
+
+def _empty_protocol_summary() -> ProtocolSummary:
+    return ProtocolSummary(
+        request_count=0,
+        response_count=0,
+        record_count=0,
+        terminal_empty_page=False,
+        cursor_chain_matches=False,
+        configured_form_matches=False,
+        successful_envelopes=False,
+        envelope_fields=(),
+        record_field_types={},
+    )
 
 
 async def _run_one_live_check(
@@ -1207,6 +1829,9 @@ def _build_report(
         system.protocol,
         pending.protocol,
     )
+    safe_added = _safe_protocol_field_names(added)
+    safe_removed = _safe_protocol_field_names(removed)
+    safe_changed = _safe_protocol_field_names(changed)
     lines = [
         "# P2-SMOKE-RUNNER-001 现场结构报告",
         "",
@@ -1244,9 +1869,9 @@ def _build_report(
         (
             "4. 待办与系统消息记录结构："
             f"{'一致' if structures_match else '不一致'}；"
-            f"待办新增字段={_field_list(added)}；"
-            f"待办缺失字段={_field_list(removed)}；"
-            f"类型变化字段={_field_list(changed)}。"
+            f"待办新增字段={_field_list(safe_added)}；"
+            f"待办缺失字段={_field_list(safe_removed)}；"
+            f"类型变化字段={_field_list(safe_changed)}。"
         ),
         (
             "5. 消息量级：系统消息 "
@@ -1260,8 +1885,15 @@ def _build_report(
             "1. 到内网后，在项目目录运行 `./smoke.ps1 start`。按提示输入 OA 账号和"
             "密码；输入时屏幕不会显示内容，这是正常的。"
         ),
-        "2. `start` 成功后，只打开上面打印的 `/chat` 地址并试一次。",
-        "3. 完成后回到命令行运行 `./smoke.ps1 verify`；再次输入时屏幕同样不会显示内容。",
+        (
+            "2. 命令行里的登录只是在检查 OA；浏览器登录是另外一回事。"
+            "`start` 成功后，打开上面打印的 `/chat` 地址；如果看到登录页，"
+            "就在浏览器登录。登录后只查询一次。"
+        ),
+        (
+            "3. 完成后回到命令行运行 `./smoke.ps1 verify`；"
+            "再次输入时屏幕同样不会显示内容。"
+        ),
         (
             "4. 任一命令失败就马上停止；保留屏幕上的错误和已经生成的报告，"
             "不要自行改文件，也不要切换运行模式。"
@@ -1288,28 +1920,82 @@ def _outcome_markdown(outcome: LiveOutcome) -> list[str]:
         lines.extend(
             [
                 "- 指纹报告：未形成",
-                "- 新增字段路径：无",
-                "- 缺失字段路径：无",
-                "- 类型变化路径：无",
+                "- 新增结构节点数：0",
+                "- 缺失结构节点数：0",
+                "- 变化结构节点数：0",
             ]
         )
     else:
-        lines.extend(
-            [
-                f"- 指纹匹配：{_yes_no(drift.matches)}",
-                f"- 新增字段路径：{_field_list(tuple(node.path for node in drift.added))}",
-                f"- 缺失字段路径：{_field_list(tuple(node.path for node in drift.removed))}",
-                f"- 类型变化路径：{_field_list(tuple(node.path for node in drift.changed))}",
-            ]
-        )
+        lines.append(f"- 指纹匹配：{_yes_no(drift.matches)}")
+        lines.extend(_drift_markdown(drift))
     lines.append(
-        "- 响应字段名：" + _field_list(outcome.protocol.envelope_fields)
+        "- 响应字段名："
+        + _field_list(
+            _safe_protocol_field_names(outcome.protocol.envelope_fields)
+        )
     )
     lines.append(
         "- 记录字段名："
-        + _field_list(tuple(outcome.protocol.record_field_types))
+        + _field_list(
+            _safe_protocol_field_names(
+                tuple(outcome.protocol.record_field_types)
+            )
+        )
     )
     return lines
+
+
+def _drift_markdown(drift: OAStructuralDriftReport) -> list[str]:
+    lines = [f"- 新增结构节点数：{len(drift.added)}"]
+    lines.extend(
+        f"- 新增结构节点 {index:03d}："
+        + _render_drift_node(
+            {"path": node.path, "json_type": node.json_type}
+        )
+        for index, node in enumerate(drift.added, start=1)
+    )
+    lines.append(f"- 缺失结构节点数：{len(drift.removed)}")
+    lines.extend(
+        f"- 缺失结构节点 {index:03d}："
+        + _render_drift_node(
+            {"path": node.path, "json_type": node.json_type}
+        )
+        for index, node in enumerate(drift.removed, start=1)
+    )
+    lines.append(f"- 变化结构节点数：{len(drift.changed)}")
+    lines.extend(
+        f"- 变化结构节点 {index:03d}："
+        + _render_drift_node(
+            {
+                "path": actual.path,
+                "expected_json_type": expected.json_type,
+                "actual_json_type": actual.json_type,
+            }
+        )
+        for index, (expected, actual) in enumerate(
+            zip(drift.changed_expected, drift.changed, strict=True),
+            start=1,
+        )
+    )
+    return lines
+
+
+def _safe_protocol_field_names(fields: tuple[str, ...]) -> tuple[str, ...]:
+    unique_fields = set(fields)
+    safe_fields = sorted(unique_fields & _SAFE_PROTOCOL_FIELD_NAMES)
+    unknown_aliases = {
+        "unknown_field_"
+        + hashlib.sha256(
+            ("protocol-field:" + field).encode("utf-8")
+        ).hexdigest()
+        for field in unique_fields - _SAFE_PROTOCOL_FIELD_NAMES
+    }
+    if len(unknown_aliases) != len(
+        unique_fields - _SAFE_PROTOCOL_FIELD_NAMES
+    ):
+        raise SmokeError("anonymous_protocol_field_collision")
+    safe_fields.extend(sorted(unknown_aliases))
+    return tuple(safe_fields)
 
 
 def _pagination_sentence(protocol: ProtocolSummary) -> str:
@@ -1340,10 +2026,11 @@ def _verify_success(system: LiveOutcome, pending: LiveOutcome) -> bool:
     )
     pending_ok = (
         pending.drift is not None
+        and pending.drift.matches
+        and pending.normalized
         and pending.protocol.terminal_empty_page
         and pending.protocol.cursor_chain_matches
-        and pending.error_kind
-        in {None, "normalization_or_structure_drift"}
+        and pending.error_kind is None
     )
     return system_ok and pending_ok
 
@@ -1418,9 +2105,13 @@ def _field_list(fields: tuple[str, ...]) -> str:
 
 
 def _drift_state(outcome: LiveOutcome) -> str:
-    if outcome.drift is None:
-        return outcome.error_kind or "not_measured"
-    return "none" if outcome.drift.matches else "detected"
+    if not outcome.normalized or outcome.drift is None:
+        return "normalization_failed"
+    if outcome.drift.removed or outcome.drift.changed:
+        return "removed_or_changed"
+    if outcome.drift.added:
+        return "added"
+    return "none"
 
 
 def _bool(value: bool) -> str:

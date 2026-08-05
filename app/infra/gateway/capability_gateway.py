@@ -307,6 +307,11 @@ class CapabilityGateway:
             "ok",
             capability_id=capability_id,
             error_code=result.error_code,
+            attributes=(
+                adapter_result.trace_metadata.model_dump(mode="json")
+                if adapter_result.trace_metadata is not None
+                else None
+            ),
         )
         await self._record_step(
             trace_id,
@@ -339,6 +344,7 @@ class CapabilityGateway:
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
+        attributes: dict[str, Any] | None = None,
     ) -> None:
         if self._trace_port is None:
             return
@@ -350,6 +356,7 @@ class CapabilityGateway:
             status=status,
             capability_id=capability_id,
             error_code=error_code,
+            attributes=attributes,
         )
 
 

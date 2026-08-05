@@ -53,9 +53,6 @@ _LIVE_SYSTEM_MESSAGE_FIELD_NAMES: Final[Mapping[str, str]] = {
     "link": "link",
     "linkmobileurl": "mobile_link",
 }
-_LIVE_SYSTEM_MESSAGE_IGNORED_FIELDS: Final = frozenset(
-    {"gomethod", "gomethodpc", "showimage"}
-)
 _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
@@ -331,6 +328,7 @@ class OAStructuralDriftReport(BaseModel):
     actual_sha256: str
     added: tuple[OAStructuralNode, ...]
     removed: tuple[OAStructuralNode, ...]
+    changed_expected: tuple[OAStructuralNode, ...]
     changed: tuple[OAStructuralNode, ...]
 
     @field_validator("expected_sha256", "actual_sha256")
@@ -339,6 +337,14 @@ class OAStructuralDriftReport(BaseModel):
         if _STRUCTURAL_SHA256_PATTERN.fullmatch(value) is None:
             raise ValueError("drift report SHA-256 is invalid")
         return value
+
+    @model_validator(mode="after")
+    def _validate_changed_pairs(self) -> OAStructuralDriftReport:
+        expected_paths = tuple(node.path for node in self.changed_expected)
+        actual_paths = tuple(node.path for node in self.changed)
+        if expected_paths != actual_paths:
+            raise ValueError("changed structural nodes must have matching paths")
+        return self
 
 
 def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
@@ -355,18 +361,16 @@ def build_live_pending_workflows_fingerprint(
 ) -> dict[str, Any]:
     """Fingerprint one Live aggregate from value-free normalized wire structure."""
 
-    common_wire_fields = set(_LIVE_PENDING_WORKFLOW_FIELD_NAMES)
-    for record in records:
-        if not isinstance(record, Mapping):
-            common_wire_fields.clear()
-            break
-        common_wire_fields.intersection_update(
-            key for key in record if isinstance(key, str)
-        )
+    field_names = _live_record_field_names(
+        records,
+        normalized_field_names=_LIVE_PENDING_WORKFLOW_FIELD_NAMES,
+        raw_path="$.workflows[]",
+    )
     projected_records = [
         _project_live_workflow_record(
             record,
-            common_wire_fields=common_wire_fields,
+            field_names=field_names,
+            raw_path="$.workflows[]",
         )
         for record in records
     ]
@@ -381,18 +385,16 @@ def build_live_system_messages_fingerprint(
 ) -> dict[str, Any]:
     """Fingerprint one bounded Live system-message aggregate without wire values."""
 
-    common_wire_fields = set(_LIVE_SYSTEM_MESSAGE_FIELD_NAMES)
-    for record in records:
-        if not isinstance(record, Mapping):
-            common_wire_fields.clear()
-            break
-        common_wire_fields.intersection_update(
-            key for key in record if isinstance(key, str)
-        )
+    field_names = _live_record_field_names(
+        records,
+        normalized_field_names=_LIVE_SYSTEM_MESSAGE_FIELD_NAMES,
+        raw_path="$.messages[]",
+    )
     projected_records = [
         _project_live_system_message_record(
             record,
-            common_wire_fields=common_wire_fields,
+            field_names=field_names,
+            raw_path="$.messages[]",
         )
         for record in records
     ]
@@ -402,7 +404,7 @@ def build_live_system_messages_fingerprint(
             "returned_count": 0,
             "is_complete": False,
         },
-        include_contract_exemplar=True,
+        include_contract_exemplar=False,
     )
 
 
@@ -454,48 +456,57 @@ def _contract_exemplar(payload: Any) -> Mapping[str, Any]:
 def _project_live_workflow_record(
     record: Any,
     *,
-    common_wire_fields: set[str],
+    field_names: Mapping[str, str],
+    raw_path: str,
 ) -> Any:
     if not isinstance(record, Mapping):
-        return _project_json_structure(record)
-    common_field_names = {
-        key: normalized_name
-        for key, normalized_name in _LIVE_PENDING_WORKFLOW_FIELD_NAMES.items()
-        if key in common_wire_fields
-    }
+        return _project_json_structure(record, raw_path=raw_path)
     return _project_json_mapping(
         record,
-        field_names=common_field_names,
-        ignored_fields=(
-            frozenset(_LIVE_PENDING_WORKFLOW_FIELD_NAMES)
-            - common_wire_fields
-        ),
+        field_names=field_names,
+        ignored_fields=frozenset(),
+        raw_path=raw_path,
     )
 
 
 def _project_live_system_message_record(
     record: Any,
     *,
-    common_wire_fields: set[str],
+    field_names: Mapping[str, str],
+    raw_path: str,
 ) -> Any:
     if not isinstance(record, Mapping):
-        return _project_json_structure(record)
-    common_field_names = {
-        key: normalized_name
-        for key, normalized_name in _LIVE_SYSTEM_MESSAGE_FIELD_NAMES.items()
-        if key in common_wire_fields
-    }
+        return _project_json_structure(record, raw_path=raw_path)
     return _project_json_mapping(
         record,
-        field_names=common_field_names,
-        ignored_fields=(
-            (frozenset(_LIVE_SYSTEM_MESSAGE_FIELD_NAMES) - common_wire_fields)
-            | _LIVE_SYSTEM_MESSAGE_IGNORED_FIELDS
-        ),
+        field_names=field_names,
+        ignored_fields=frozenset(),
+        raw_path=raw_path,
     )
 
 
-def _project_json_structure(value: Any) -> Any:
+def _live_record_field_names(
+    records: list[Any],
+    *,
+    normalized_field_names: Mapping[str, str],
+    raw_path: str,
+) -> dict[str, str]:
+    observed_fields: set[str] = set()
+    for record in records:
+        if isinstance(record, Mapping):
+            observed_fields.update(
+                key for key in record if isinstance(key, str)
+            )
+    field_names = {
+        key: normalized_field_names[key]
+        for key in sorted(observed_fields & normalized_field_names.keys())
+    }
+    unknown_fields = sorted(observed_fields - normalized_field_names.keys())
+    field_names.update(_anonymous_field_names(unknown_fields, raw_path=raw_path))
+    return field_names
+
+
+def _project_json_structure(value: Any, *, raw_path: str) -> Any:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -511,9 +522,13 @@ def _project_json_structure(value: Any) -> Any:
             value,
             field_names={},
             ignored_fields=frozenset(),
+            raw_path=raw_path,
         )
     if isinstance(value, list):
-        return [_project_json_structure(item) for item in value]
+        return [
+            _project_json_structure(item, raw_path=f"{raw_path}[]")
+            for item in value
+        ]
     raise TypeError("Live OA payload must contain JSON-compatible values")
 
 
@@ -522,6 +537,7 @@ def _project_json_mapping(
     *,
     field_names: Mapping[str, str],
     ignored_fields: frozenset[str] | set[str],
+    raw_path: str,
 ) -> dict[str, Any]:
     keys = list(value)
     if any(not isinstance(key, str) for key in keys):
@@ -534,10 +550,10 @@ def _project_json_mapping(
     unknown_keys = sorted(
         key for key in string_keys if key not in field_names
     )
-    safe_unknown_names = {
-        key: f"unknown_field_{index:03d}"
-        for index, key in enumerate(unknown_keys, start=1)
-    }
+    safe_unknown_names = _anonymous_field_names(
+        unknown_keys,
+        raw_path=raw_path,
+    )
     projected: dict[str, Any] = {}
     for key in string_keys:
         safe_key = (
@@ -545,8 +561,39 @@ def _project_json_mapping(
             if key in field_names
             else safe_unknown_names[key]
         )
-        projected[safe_key] = _project_json_structure(value[key])
+        projected[safe_key] = _project_json_structure(
+            value[key],
+            raw_path=_raw_mapping_child_path(raw_path, key),
+        )
     return projected
+
+
+def _anonymous_field_names(
+    keys: list[str],
+    *,
+    raw_path: str,
+) -> dict[str, str]:
+    aliases = {
+        key: _anonymous_field_name(_raw_mapping_child_path(raw_path, key))
+        for key in sorted(keys)
+    }
+    if len(set(aliases.values())) != len(aliases):
+        raise ValueError("anonymous structural field collision")
+    return aliases
+
+
+def _anonymous_field_name(raw_path: str) -> str:
+    digest = hashlib.sha256(raw_path.encode("utf-8")).hexdigest()
+    return f"unknown_field_{digest}"
+
+
+def _raw_mapping_child_path(raw_path: str, key: str) -> str:
+    encoded_key = json.dumps(
+        key,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"{raw_path}[{encoded_key}]"
 
 
 def compare_structural_fingerprints(
@@ -581,11 +628,13 @@ def compare_structural_fingerprints(
         expected_nodes[path]
         for path in sorted(expected_nodes.keys() - actual_nodes.keys())
     )
-    changed = tuple(
-        actual_nodes[path]
+    changed_paths = tuple(
+        path
         for path in sorted(expected_nodes.keys() & actual_nodes.keys())
         if actual_nodes[path] != expected_nodes[path]
     )
+    changed_expected = tuple(expected_nodes[path] for path in changed_paths)
+    changed = tuple(actual_nodes[path] for path in changed_paths)
     matches = (
         expected_fingerprint.algorithm == actual_fingerprint.algorithm
         and expected_fingerprint.sha256 == actual_fingerprint.sha256
@@ -600,6 +649,7 @@ def compare_structural_fingerprints(
         actual_sha256=actual_fingerprint.sha256,
         added=added,
         removed=removed,
+        changed_expected=changed_expected,
         changed=changed,
     )
 

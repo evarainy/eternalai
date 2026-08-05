@@ -5,11 +5,19 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ports.capability_gateway import ErrorCode
 
 AdapterStatus: TypeAlias = Literal["success", "error", "timeout", "permission_denied"]
+
+AdapterFailureStage: TypeAlias = Literal[
+    "argument_validation",
+    "credential_read",
+    "provider_transport",
+    "normalization",
+    "unknown",
+]
 
 MockErrorMode: TypeAlias = Literal[
     "timeout",
@@ -32,6 +40,22 @@ MOCK_ERROR_MODE_TO_ERROR_CODE: Mapping[MockErrorMode, ErrorCode] = MappingProxyT
 )
 
 
+class AdapterTraceMetadata(BaseModel):
+    """Bounded adapter diagnostics safe for persistent Trace attributes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    argument_keys: tuple[str, ...] = ()
+    failure_stage: AdapterFailureStage | None = None
+
+    @field_validator("argument_keys")
+    @classmethod
+    def _require_sorted_unique_keys(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("argument_keys must be sorted and unique")
+        return value
+
+
 class AdapterResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,6 +63,11 @@ class AdapterResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     raw_payload_ref: str | None = None
+    trace_metadata: AdapterTraceMetadata | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
 
 class AdapterPort(Protocol):
