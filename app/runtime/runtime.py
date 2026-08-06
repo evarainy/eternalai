@@ -883,6 +883,21 @@ def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
     return None
 
 
+def _completeness_note(data: dict[str, Any], noun: str) -> str:
+    """Report completeness only when the producer actually claims it.
+
+    A producer that omits ``is_complete`` makes no claim; calling the result
+    incomplete there would state a fact we do not have.
+    """
+
+    is_complete = data.get("is_complete")
+    if is_complete is True:
+        return "（结果完整）"
+    if is_complete is False:
+        return f"（结果不完整，可能还有更多{noun}）"
+    return ""
+
+
 def _format_capability_response(
     capability_id: str,
     data: dict[str, Any] | None,
@@ -896,24 +911,14 @@ def _format_capability_response(
         # Only title/occurred_at/link carry self-evident meaning. source_name and
         # business_state have no confirmed semantics, so they stay out of replies.
         titles = _joined_scalar_values(workflows, ("title",))
-        scope = (
-            "结果完整"
-            if data.get("is_complete") is True
-            else "结果不完整，可能还有更多待办"
-        )
-        prefix = f"OA待办共{count}条（{scope}）"
+        prefix = f"OA待办共{count}条{_completeness_note(data, '待办')}"
         return f"{prefix}: {titles}" if titles else prefix
 
     if capability_id == "oa.list_system_messages":
         messages = data.get("messages")
         count = len(messages) if isinstance(messages, list) else 0
         titles = _joined_scalar_values(messages, ("title",))
-        scope = (
-            "结果完整"
-            if data.get("is_complete") is True
-            else "结果不完整，可能还有更多消息"
-        )
-        prefix = f"OA系统消息返回{count}条（{scope}）"
+        prefix = f"OA系统消息返回{count}条{_completeness_note(data, '消息')}"
         return f"{prefix}: {titles}" if titles else prefix
 
     if capability_id == "oa.get_workflow_status":
