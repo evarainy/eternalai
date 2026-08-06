@@ -22,6 +22,8 @@ from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 
 _SAFE_ERROR_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
 _SAFE_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
+# Schema keywords whose verdict may still change once a binding is resolved.
+_BINDING_DERIVED_KEYWORDS = frozenset({"required"})
 
 
 def _map_adapter_status(adapter_result: AdapterResult) -> ExecutionStatus:
@@ -109,6 +111,28 @@ class CapabilityGateway:
                     error_code="capability_not_found",
                     trace_id=trace_id,
                 )
+        # Argument validation is split in two on purpose. Everything that only
+        # depends on what the caller sent -- additionalProperties, type, enum,
+        # format -- is decided here, before identity: leaving it downstream let a
+        # caller read binding scope off the differing error codes (schema error vs
+        # identity error), which is an oracle. Only `required` waits for identity,
+        # because a missing argument may be one the binding supplies (GT-012 asks
+        # for binding-scope clarification there, not a schema error).
+        if capability_spec is not None:
+            caller_diagnostics = _validate_arguments(
+                capability_spec.input_schema,
+                arguments,
+                binding_derived=False,
+            )
+            if caller_diagnostics is not None:
+                return await self._reject_invalid_arguments(
+                    trace_id,
+                    task_id,
+                    session_id,
+                    capability_id,
+                    caller_diagnostics,
+                )
+
         if (
             capability_spec is not None
             and capability_spec.target_system is not None
@@ -177,30 +201,21 @@ class CapabilityGateway:
             ):
                 credential_ref = identity_result.binding_id
 
-        # Runs after identity resolution on purpose: an input_schema may require
-        # arguments that come from the caller's binding, so validating the raw
-        # request first would report a schema error where the honest answer is
-        # an identity one (GT-012 asks for binding-scope clarification here).
+        # Second half of the split above: `required` runs after identity because
+        # the binding may be what supplies the missing argument.
         if capability_spec is not None:
-            validation_diagnostics = _validate_arguments(
+            binding_diagnostics = _validate_arguments(
                 capability_spec.input_schema,
                 arguments,
+                binding_derived=True,
             )
-            if validation_diagnostics is not None:
-                if self._trace_port is not None:
-                    await self._trace_port.record_gateway_call(
-                        trace_id=trace_id,
-                        task_id=task_id,
-                        session_id=session_id,
-                        status="failed",
-                        capability_id=capability_id,
-                        error_code="adapter_error",
-                        attributes=validation_diagnostics,
-                    )
-                return ExecutionResult(
-                    status="failed",
-                    error_code="adapter_error",
-                    trace_id=trace_id,
+            if binding_diagnostics is not None:
+                return await self._reject_invalid_arguments(
+                    trace_id,
+                    task_id,
+                    session_id,
+                    capability_id,
+                    binding_diagnostics,
                 )
 
         if self._policy_guard is not None:
@@ -367,6 +382,30 @@ class CapabilityGateway:
 
         return result
 
+    async def _reject_invalid_arguments(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        capability_id: str,
+        diagnostics: dict[str, Any],
+    ) -> ExecutionResult:
+        if self._trace_port is not None:
+            await self._trace_port.record_gateway_call(
+                trace_id=trace_id,
+                task_id=task_id,
+                session_id=session_id,
+                status="failed",
+                capability_id=capability_id,
+                error_code="adapter_error",
+                attributes=diagnostics,
+            )
+        return ExecutionResult(
+            status="failed",
+            error_code="adapter_error",
+            trace_id=trace_id,
+        )
+
     async def _record_step(
         self,
         trace_id: str,
@@ -403,11 +442,37 @@ def _map_execution_to_trace_status(status: ExecutionStatus) -> TraceEventStatus:
 def _validate_arguments(
     input_schema: dict[str, Any],
     arguments: dict[str, Any],
+    *,
+    binding_derived: bool,
 ) -> dict[str, Any] | None:
+    """Report the first schema violation belonging to one validation stage.
+
+    ``binding_derived=False`` answers only from the caller's own payload;
+    ``binding_derived=True`` answers the keywords a binding may still satisfy.
+    """
+    error: ValidationError | None
     try:
         Draft202012Validator.check_schema(input_schema)
-        Draft202012Validator(input_schema).validate(arguments)
-    except ValidationError as error:
+        error = next(
+            (
+                candidate
+                for candidate in Draft202012Validator(input_schema).iter_errors(
+                    arguments
+                )
+                if (candidate.validator in _BINDING_DERIVED_KEYWORDS)
+                is binding_derived
+            ),
+            None,
+        )
+    except SchemaError:
+        # A malformed registry schema is not caller-supplied either way, so it is
+        # answered in the caller-only stage and never reaches the binding stage.
+        if binding_derived:
+            return None
+        error_type = "schema_error"
+    else:
+        if error is None:
+            return None
         raw_error_type = error.validator
         error_type = (
             raw_error_type
@@ -415,10 +480,6 @@ def _validate_arguments(
             and _SAFE_ERROR_TYPE.fullmatch(raw_error_type) is not None
             else "validation_error"
         )
-    except SchemaError:
-        error_type = "schema_error"
-    else:
-        return None
     return {
         "error_path": "$.arguments",
         "error_type": error_type,

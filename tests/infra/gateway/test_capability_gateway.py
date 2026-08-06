@@ -402,7 +402,7 @@ def test_capability_registry_missing_short_circuits_without_adapter_and_records_
     _assert_trace_not_finalized(trace)
 
 
-def test_registry_input_schema_rejects_extra_argument_after_identity_before_policy(
+def test_registry_input_schema_rejects_extra_argument_before_identity_and_policy(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     canary = "must-not-enter-trace-log-or-result"
@@ -434,13 +434,14 @@ def test_registry_input_schema_rejects_extra_argument_after_identity_before_poli
     assert result.error_code == "adapter_error"
     assert result.data is None
     assert registry.call_count == 1
-    # Identity resolves first: an input_schema may require binding-derived
-    # arguments, so a schema error must not preempt an identity answer.
-    assert identity_mapping.call_count == 1
+    # An extra property is decided by the caller's payload alone, so identity is
+    # never consulted: otherwise the two different error codes would leak whether
+    # the caller holds a binding.
+    assert identity_mapping.call_count == 0
     assert policy_guard.call_count == 0
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 1
-    _assert_step_events(trace, ["identity_check", "gateway_pre_recorded"])
+    _assert_step_events(trace, ["gateway_pre_recorded"])
     assert trace.steps[-1]["attributes"] == {
         "error_path": "$.arguments",
         "error_type": "additionalProperties",
@@ -449,6 +450,89 @@ def test_registry_input_schema_rejects_extra_argument_after_identity_before_poli
     serialized = repr((result, trace.steps))
     assert canary not in serialized
     assert canary not in caplog.text
+
+
+def test_registry_input_schema_defers_missing_required_argument_until_identity() -> None:
+    registry = FakeRegistry(
+        _capability_spec(
+            input_schema={
+                "type": "object",
+                "properties": {"account_set_id": {"type": "string"}},
+                "required": ["account_set_id"],
+                "additionalProperties": False,
+            }
+        )
+    )
+    identity_mapping = FakeIdentityMapping(_identity_result("active"))
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        policy_guard,
+        trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway, {})
+
+    assert result.status == "failed"
+    assert result.error_code == "adapter_error"
+    # GT-012 depends on this ordering: a binding can be what supplies
+    # account_set_id, so `required` must not preempt the identity answer.
+    assert identity_mapping.call_count == 1
+    assert policy_guard.call_count == 0
+    assert adapter.call_count == 0
+    _assert_step_events(trace, ["identity_check", "gateway_pre_recorded"])
+    assert trace.steps[-1]["attributes"] == {
+        "error_path": "$.arguments",
+        "error_type": "required",
+        "argument_keys": [],
+    }
+
+
+@pytest.mark.parametrize("bind_status", ["active", "unbound"])
+def test_invalid_argument_answer_is_identical_with_and_without_a_binding(
+    bind_status: str,
+) -> None:
+    registry = FakeRegistry(
+        _capability_spec(
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+        )
+    )
+    identity_mapping = FakeIdentityMapping(_identity_result(bind_status))
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        policy_guard,
+        trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway, {"user": "probe"})
+
+    # Same illegal payload, both binding states: one answer, so nothing about the
+    # caller's binding scope can be read off the reply.
+    assert result.status == "failed"
+    assert result.error_code == "adapter_error"
+    assert identity_mapping.call_count == 0
+    assert adapter.call_count == 0
+    _assert_step_events(trace, ["gateway_pre_recorded"])
+    assert trace.steps[-1]["error_code"] == "adapter_error"
+    assert trace.steps[-1]["attributes"] == {
+        "error_path": "$.arguments",
+        "error_type": "additionalProperties",
+        "argument_keys": ["user"],
+    }
 
 
 def test_registry_input_schema_accepts_empty_arguments_through_existing_path() -> None:
