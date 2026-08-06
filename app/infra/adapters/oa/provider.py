@@ -293,7 +293,12 @@ class LiveOAReadProvider:
                 self._drift_reporter(drift_report)
 
             try:
-                collection = normalize_pending_workflow_records(raw_records)
+                collection = normalize_pending_workflow_records(
+                    raw_records,
+                    record_limit=self._max_records,
+                    is_complete=True,
+                    link_normalizer=self._normalize_system_message_link,
+                )
             except (TypeError, ValueError):
                 raise OALivePayloadInvalid(
                     "OA payload violates the normalized contract"
@@ -1006,7 +1011,8 @@ def _message_center_record_fingerprint(record: Any) -> bytes:
     serialized = ""
     try:
         if isinstance(record, Mapping):
-            for key in ("messageid", "workflowId"):
+            # Both message-center capabilities key on the same wire id.
+            for key in ("messageid",):
                 value = record.get(key)
                 if isinstance(value, str) and value:
                     identity = f"{key}\u0000{value}"

@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from datetime import datetime
 from typing import Any, Final, Literal
 
 from pydantic import (
@@ -34,17 +33,10 @@ _STRUCTURAL_JSON_TYPES = frozenset(
 _STRUCTURAL_ARRAY_SHAPE_PATTERN = re.compile(r"^[a-z:<>|]+$")
 _STRUCTURAL_SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 _SAFE_WIRE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
-    "workflowId": "workflow_id",
-    "title": "title",
-    "status": "status",
-    "applicant": "applicant",
-    "currentStep": "current_step",
-    "approver": "approver",
-    "createdAt": "created_at",
-    "expired": "expired",
-}
-_LIVE_SYSTEM_MESSAGE_FIELD_NAMES: Final[Mapping[str, str]] = {
+# Both message-center capabilities read the same ``getMsgList`` endpoint and
+# return the same record shape; only the category id differs. Keeping one map
+# is what stops the two capabilities from drifting apart again.
+_LIVE_MESSAGE_CENTER_FIELD_NAMES: Final[Mapping[str, str]] = {
     "messageid": "message_id",
     "title": "title",
     "context": "content",
@@ -54,29 +46,38 @@ _LIVE_SYSTEM_MESSAGE_FIELD_NAMES: Final[Mapping[str, str]] = {
     "link": "link",
     "linkmobileurl": "mobile_link",
 }
+# OA navigation hints, not business data; every captured real record carries
+# them as empty strings. Enumerated key by key rather than exempted as a class,
+# so adding or removing one always shows up in a diff. If a later capture shows
+# them carrying values, revisit this list instead of leaving them ignored.
+_LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"gomethod", "gomethodpc", "showimage"}
+)
 _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
-            "workflow_id": "",
+            "message_id": "",
             "title": "",
-            "status": "pending",
-            "applicant": "",
-            "current_step": "",
-            "approver": "",
-            "created_at": "2000-01-01T00:00:00+00:00",
-            "expired": False,
+            "content": "",
+            "source_name": "",
+            "occurred_at": "",
+            "business_state": "",
+            "link": "",
+            "mobile_link": "",
         },
         {
-            "workflow_id": "",
+            "message_id": "",
             "title": "",
-            "status": "pending",
-            "applicant": "",
-            "current_step": "",
-            "approver": None,
-            "created_at": None,
-            "expired": False,
+            "content": "",
+            "source_name": "",
+            "occurred_at": "",
+            "business_state": "",
+            "link": None,
+            "mobile_link": None,
         },
-    ]
+    ],
+    "returned_count": 0,
+    "is_complete": False,
 }
 _SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "messages": [
@@ -106,60 +107,12 @@ _SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR = {
 }
 
 
-class OAPendingWorkflow(BaseModel):
-    """Normalized, credential-free workflow data returned by the OA provider."""
+class OAMessageCenterRecord(BaseModel):
+    """One normalized, credential-free OA message-center record.
 
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    workflow_id: str
-    title: str
-    status: Literal["pending"]
-    applicant: str
-    current_step: str
-    approver: str | None
-    created_at: str | None
-    expired: bool
-
-    @field_validator(
-        "workflow_id",
-        "title",
-        "status",
-        "applicant",
-        "current_step",
-    )
-    @classmethod
-    def _require_non_empty_string(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("workflow text fields must not be empty")
-        return value
-
-    @field_validator("approver")
-    @classmethod
-    def _validate_optional_approver(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("approver must be null or a non-empty string")
-        return value
-
-    @field_validator("created_at")
-    @classmethod
-    def _validate_optional_timestamp(cls, value: str | None) -> str | None:
-        if value is not None:
-            parsed = datetime.fromisoformat(value)
-            if parsed.tzinfo is None:
-                raise ValueError("created_at must include a timezone")
-        return value
-
-
-class OAPendingWorkflowCollection(BaseModel):
-    """Normalized result for ``oa.list_pending_workflows``."""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    workflows: list[OAPendingWorkflow]
-
-
-class OASystemMessage(BaseModel):
-    """Normalized, credential-free system-message data returned by OA."""
+    Both ``oa.list_system_messages`` and ``oa.list_pending_workflows`` read the
+    same endpoint and return this shape; only the category id differs.
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -194,12 +147,16 @@ class OASystemMessage(BaseModel):
         return value
 
 
+# Name kept for the system-message call sites that predate the shared record.
+OASystemMessage = OAMessageCenterRecord
+
+
 class OASystemMessageCollection(BaseModel):
     """Bounded result for ``oa.list_system_messages`` with explicit completeness."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    messages: list[OASystemMessage]
+    messages: list[OAMessageCenterRecord]
     returned_count: int
     is_complete: bool
 
@@ -207,6 +164,27 @@ class OASystemMessageCollection(BaseModel):
     def _validate_returned_count(self) -> OASystemMessageCollection:
         if self.returned_count != len(self.messages):
             raise ValueError("returned_count must match the message collection")
+        return self
+
+
+class OAPendingWorkflowCollection(BaseModel):
+    """Bounded result for ``oa.list_pending_workflows``.
+
+    The pending category of the OA message center. ``returned_count`` and
+    ``is_complete`` are what keep a silently truncated page from reading as a
+    complete answer.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    workflows: list[OAMessageCenterRecord]
+    returned_count: int
+    is_complete: bool
+
+    @model_validator(mode="after")
+    def _validate_returned_count(self) -> OAPendingWorkflowCollection:
+        if self.returned_count != len(self.workflows):
+            raise ValueError("returned_count must match the workflow collection")
         return self
 
 
@@ -364,11 +342,11 @@ def build_live_pending_workflows_fingerprint(
 
     field_names = _live_record_field_names(
         records,
-        normalized_field_names=_LIVE_PENDING_WORKFLOW_FIELD_NAMES,
+        normalized_field_names=_LIVE_MESSAGE_CENTER_FIELD_NAMES,
         raw_path="$.workflows[]",
     )
     projected_records = [
-        _project_live_workflow_record(
+        _project_live_message_center_record(
             record,
             field_names=field_names,
             raw_path="$.workflows[]",
@@ -388,11 +366,11 @@ def build_live_system_messages_fingerprint(
 
     field_names = _live_record_field_names(
         records,
-        normalized_field_names=_LIVE_SYSTEM_MESSAGE_FIELD_NAMES,
+        normalized_field_names=_LIVE_MESSAGE_CENTER_FIELD_NAMES,
         raw_path="$.messages[]",
     )
     projected_records = [
-        _project_live_system_message_record(
+        _project_live_message_center_record(
             record,
             field_names=field_names,
             raw_path="$.messages[]",
@@ -454,7 +432,7 @@ def _contract_exemplar(payload: Any) -> Mapping[str, Any]:
     return _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR
 
 
-def _project_live_workflow_record(
+def _project_live_message_center_record(
     record: Any,
     *,
     field_names: Mapping[str, str],
@@ -469,28 +447,7 @@ def _project_live_workflow_record(
     return _project_json_mapping(
         record,
         field_names=field_names,
-        ignored_fields=frozenset(),
-        raw_path=raw_path,
-        expose_safe_wire_names=True,
-    )
-
-
-def _project_live_system_message_record(
-    record: Any,
-    *,
-    field_names: Mapping[str, str],
-    raw_path: str,
-) -> Any:
-    if not isinstance(record, Mapping):
-        return _project_json_structure(
-            record,
-            raw_path=raw_path,
-            expose_safe_wire_names=True,
-        )
-    return _project_json_mapping(
-        record,
-        field_names=field_names,
-        ignored_fields=frozenset(),
+        ignored_fields=_LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS,
         raw_path=raw_path,
         expose_safe_wire_names=True,
     )
@@ -715,28 +672,25 @@ def compare_structural_fingerprints(
 
 def normalize_pending_workflow_records(
     records: list[Any],
+    *,
+    record_limit: int,
+    is_complete: bool,
+    link_normalizer: Callable[[str], str] | None = None,
 ) -> OAPendingWorkflowCollection:
-    """Whitelist and normalize one or more Live OA workflow record pages."""
+    """Whitelist and normalize one bounded complete Live pending aggregate."""
 
-    normalized: list[dict[str, Any]] = []
-    for record in records:
-        if not isinstance(record, Mapping):
-            raise ValueError("OA workflow record must be an object")
-        normalized.append(
-            {
-                "workflow_id": _required_live_string(record, "workflowId"),
-                "title": _required_live_string(record, "title"),
-                "status": _required_live_pending_status(record),
-                "applicant": _required_live_string(record, "applicant"),
-                "current_step": _required_live_string(record, "currentStep"),
-                "approver": _optional_live_string(record, "approver"),
-                "created_at": _optional_live_string(record, "createdAt"),
-                "expired": _required_live_boolean(record, "expired"),
-            }
-        )
+    normalized = _normalize_message_center_records(
+        records,
+        record_limit=record_limit,
+        link_normalizer=link_normalizer,
+    )
     try:
         return OAPendingWorkflowCollection.model_validate(
-            {"workflows": normalized},
+            {
+                "workflows": normalized,
+                "returned_count": len(normalized),
+                "is_complete": is_complete,
+            },
             strict=True,
         )
     except ValidationError:
@@ -751,6 +705,34 @@ def normalize_system_message_records(
     link_normalizer: Callable[[str], str] | None = None,
 ) -> OASystemMessageCollection:
     """Whitelist and normalize one bounded complete Live message aggregate."""
+
+    normalized = _normalize_message_center_records(
+        records,
+        record_limit=record_limit,
+        link_normalizer=link_normalizer,
+    )
+    try:
+        return OASystemMessageCollection.model_validate(
+            {
+                "messages": normalized,
+                "returned_count": len(normalized),
+                "is_complete": is_complete,
+            },
+            strict=True,
+        )
+    except ValidationError:
+        raise ValueError(
+            "normalized OA system-message collection is invalid"
+        ) from None
+
+
+def _normalize_message_center_records(
+    records: list[Any],
+    *,
+    record_limit: int,
+    link_normalizer: Callable[[str], str] | None,
+) -> list[dict[str, Any]]:
+    """Whitelist the shared message-center record shape for both capabilities."""
 
     if record_limit <= 0 or len(records) > record_limit:
         raise ValueError("OA system-message aggregate exceeds the record limit")
@@ -793,19 +775,7 @@ def normalize_system_message_records(
                 ),
             }
         )
-    try:
-        return OASystemMessageCollection.model_validate(
-            {
-                "messages": normalized,
-                "returned_count": len(normalized),
-                "is_complete": is_complete,
-            },
-            strict=True,
-        )
-    except ValidationError:
-        raise ValueError(
-            "normalized OA system-message collection is invalid"
-        ) from None
+    return normalized
 
 
 def _required_live_system_message_string(
@@ -831,38 +801,6 @@ def _optional_live_blankable_string(
         raise ValueError("OA system-message optional string is invalid")
     normalized = value.strip()
     return normalizer(normalized) if normalizer is not None else normalized
-
-
-def _required_live_string(record: Mapping[str, Any], key: str) -> str:
-    value = record.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("OA workflow required string is invalid")
-    return value.strip()
-
-
-def _optional_live_string(
-    record: Mapping[str, Any],
-    key: str,
-) -> str | None:
-    value = record.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("OA workflow optional string is invalid")
-    return value.strip()
-
-
-def _required_live_pending_status(record: Mapping[str, Any]) -> Literal["pending"]:
-    if record.get("status") != "pending":
-        raise ValueError("OA workflow status is invalid")
-    return "pending"
-
-
-def _required_live_boolean(record: Mapping[str, Any], key: str) -> bool:
-    value = record.get(key)
-    if not isinstance(value, bool):
-        raise ValueError("OA workflow boolean is invalid")
-    return value
 
 
 class _StructuralObservation:
@@ -928,7 +866,7 @@ def _json_type(value: Any) -> str:
 __all__ = (
     "EXTERNAL_SANITIZATION_WARNING",
     "OAContractPackProfile",
-    "OAPendingWorkflow",
+    "OAMessageCenterRecord",
     "OAPendingWorkflowCollection",
     "OASystemMessage",
     "OASystemMessageCollection",

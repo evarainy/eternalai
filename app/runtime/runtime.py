@@ -170,6 +170,17 @@ class RuntimeImpl:
         )
 
         if not parse_ok or capability_ref is None:
+            # With no active capability at all, the honest answer is that the
+            # function is not integrated yet — not that the parse blew up. Only
+            # a parse failure against a non-empty catalogue is an internal fault.
+            if not capability_snapshot:
+                return await self._finish_no_capability_found(
+                    response_id,
+                    task_id,
+                    session_id,
+                    trace_id,
+                    reason="no_active_capability_registered",
+                )
             return await self._finish_intent_failure(
                 response_id,
                 task_id,
@@ -882,8 +893,16 @@ def _format_capability_response(
     if capability_id == "oa.list_pending_workflows":
         workflows = data.get("workflows")
         count = len(workflows) if isinstance(workflows, list) else 0
-        identifiers = _joined_scalar_values(workflows, ("workflow_id", "title"))
-        return f"OA待办共{count}条: {identifiers}" if identifiers else f"OA待办共{count}条"
+        # Only title/occurred_at/link carry self-evident meaning. source_name and
+        # business_state have no confirmed semantics, so they stay out of replies.
+        titles = _joined_scalar_values(workflows, ("title",))
+        scope = (
+            "结果完整"
+            if data.get("is_complete") is True
+            else "结果不完整，可能还有更多待办"
+        )
+        prefix = f"OA待办共{count}条（{scope}）"
+        return f"{prefix}: {titles}" if titles else prefix
 
     if capability_id == "oa.list_system_messages":
         messages = data.get("messages")

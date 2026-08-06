@@ -153,8 +153,9 @@ def test_runtime_injects_only_active_registry_capabilities() -> None:
     )
 
     prompt = llm_provider.calls[0]["messages"][1].content
-    assert "id=oa.active.query" in prompt
-    assert "status=active" in prompt
+    assert '"capability_id":"oa.active.query"' in prompt
+    assert '"status":"active"' in prompt
+    assert '"capability_type":' in prompt
     for inactive_id in (
         "oa.draft.query",
         "oa.disabled.query",

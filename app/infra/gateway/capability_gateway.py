@@ -109,27 +109,6 @@ class CapabilityGateway:
                     error_code="capability_not_found",
                     trace_id=trace_id,
                 )
-            validation_diagnostics = _validate_arguments(
-                capability_spec.input_schema,
-                arguments,
-            )
-            if validation_diagnostics is not None:
-                if self._trace_port is not None:
-                    await self._trace_port.record_gateway_call(
-                        trace_id=trace_id,
-                        task_id=task_id,
-                        session_id=session_id,
-                        status="failed",
-                        capability_id=capability_id,
-                        error_code="adapter_error",
-                        attributes=validation_diagnostics,
-                    )
-                return ExecutionResult(
-                    status="failed",
-                    error_code="adapter_error",
-                    trace_id=trace_id,
-                )
-
         if (
             capability_spec is not None
             and capability_spec.target_system is not None
@@ -197,6 +176,32 @@ class CapabilityGateway:
                 and identity_result.binding_id is not None
             ):
                 credential_ref = identity_result.binding_id
+
+        # Runs after identity resolution on purpose: an input_schema may require
+        # arguments that come from the caller's binding, so validating the raw
+        # request first would report a schema error where the honest answer is
+        # an identity one (GT-012 asks for binding-scope clarification here).
+        if capability_spec is not None:
+            validation_diagnostics = _validate_arguments(
+                capability_spec.input_schema,
+                arguments,
+            )
+            if validation_diagnostics is not None:
+                if self._trace_port is not None:
+                    await self._trace_port.record_gateway_call(
+                        trace_id=trace_id,
+                        task_id=task_id,
+                        session_id=session_id,
+                        status="failed",
+                        capability_id=capability_id,
+                        error_code="adapter_error",
+                        attributes=validation_diagnostics,
+                    )
+                return ExecutionResult(
+                    status="failed",
+                    error_code="adapter_error",
+                    trace_id=trace_id,
+                )
 
         if self._policy_guard is not None:
             policy_decision = await self._policy_guard.decide(

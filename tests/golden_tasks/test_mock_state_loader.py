@@ -44,7 +44,7 @@ def test_gt001_oa_state_reset_clears_injected_data(
 
     assert result.status == "success"
     data_str = str(result.data)
-    assert "OA-WF-2026-0001" not in data_str
+    assert "OA-MSG-2026-0001" not in data_str
 
 
 def test_two_successive_gt_loads_do_not_leak_state(

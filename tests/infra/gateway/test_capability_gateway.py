@@ -402,7 +402,7 @@ def test_capability_registry_missing_short_circuits_without_adapter_and_records_
     _assert_trace_not_finalized(trace)
 
 
-def test_registry_input_schema_rejects_extra_argument_before_identity_policy_and_adapter(
+def test_registry_input_schema_rejects_extra_argument_after_identity_before_policy(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     canary = "must-not-enter-trace-log-or-result"
@@ -434,12 +434,14 @@ def test_registry_input_schema_rejects_extra_argument_before_identity_policy_and
     assert result.error_code == "adapter_error"
     assert result.data is None
     assert registry.call_count == 1
-    assert identity_mapping.call_count == 0
+    # Identity resolves first: an input_schema may require binding-derived
+    # arguments, so a schema error must not preempt an identity answer.
+    assert identity_mapping.call_count == 1
     assert policy_guard.call_count == 0
     assert adapter.call_count == 0
     assert trace.record_gateway_call_count == 1
-    _assert_step_events(trace, ["gateway_pre_recorded"])
-    assert trace.steps[0]["attributes"] == {
+    _assert_step_events(trace, ["identity_check", "gateway_pre_recorded"])
+    assert trace.steps[-1]["attributes"] == {
         "error_path": "$.arguments",
         "error_type": "additionalProperties",
         "argument_keys": ["user"],
