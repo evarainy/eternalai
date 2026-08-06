@@ -30,6 +30,7 @@ from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
     OAStructuralDriftReport,
     OASystemMessageCollection,
+    build_contract_drift_baseline_fingerprint,
     build_live_pending_workflows_fingerprint,
     build_live_system_messages_fingerprint,
     build_structural_fingerprint,
@@ -730,7 +731,8 @@ def _load_contract_pack(
         ) from None
     if not isinstance(fingerprint_payload, dict):
         raise OAContractPackError("Contract Pack fingerprint is invalid")
-    return collection, {str(key): value for key, value in fingerprint_payload.items()}
+    drift_baseline = build_contract_drift_baseline_fingerprint(sample_payload)
+    return collection, drift_baseline
 
 
 def _load_json(path: Path) -> Any:

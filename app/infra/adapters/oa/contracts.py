@@ -23,6 +23,11 @@ EXTERNAL_SANITIZATION_WARNING: Final = (
     "Source was sanitized externally; leakage assertions are not evidence "
     "of EternalAI sanitizer verification."
 )
+PENDING_WORKFLOW_DERIVATION_WARNING: Final = (
+    "Structure was derived from a real system-message capture after both OA "
+    "message-center categories were verified to share the same field set; "
+    "the pending category was not captured directly."
+)
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _STRUCTURAL_PATH_PATTERN = re.compile(
     r"^\$(?:(?:\.[A-Za-z_][A-Za-z0-9_]*)|\[\])*$"
@@ -202,10 +207,14 @@ class OAContractPackProfile(BaseModel):
         "synthetic",
         "sanitized_capture",
         "externally_sanitized_capture",
+        "derived_from_sibling_capture",
     ]
     source_warning: Literal[
         "Source was sanitized externally; leakage assertions are not evidence "
-        "of EternalAI sanitizer verification."
+        "of EternalAI sanitizer verification.",
+        "Structure was derived from a real system-message capture after both OA "
+        "message-center categories were verified to share the same field set; "
+        "the pending category was not captured directly.",
     ] | None = None
     sanitizer_version: Literal["1", "2"]
     sample_file: Literal["sample.json"]
@@ -220,11 +229,13 @@ class OAContractPackProfile(BaseModel):
 
     @model_validator(mode="after")
     def _validate_source_warning(self) -> OAContractPackProfile:
-        is_external = self.source_kind == "externally_sanitized_capture"
-        if is_external != (self.source_warning == EXTERNAL_SANITIZATION_WARNING):
-            raise ValueError(
-                "externally sanitized sources require the fixed assurance warning"
-            )
+        expected_warning = None
+        if self.source_kind == "externally_sanitized_capture":
+            expected_warning = EXTERNAL_SANITIZATION_WARNING
+        elif self.source_kind == "derived_from_sibling_capture":
+            expected_warning = PENDING_WORKFLOW_DERIVATION_WARNING
+        if self.source_warning != expected_warning:
+            raise ValueError("capture source requires its fixed assurance warning")
         return self
 
 
@@ -335,6 +346,20 @@ def build_structural_fingerprint(payload: Any) -> dict[str, Any]:
     )
 
 
+def build_contract_drift_baseline_fingerprint(payload: Any) -> dict[str, Any]:
+    """Baseline for comparing live structure against a Contract Pack sample.
+
+    Excludes the contract exemplar on purpose: the exemplar declares what the
+    contract permits, while drift asks whether reality still matches what was
+    recorded. Mixing the two reports a change on every exemplar-only nullable.
+    """
+
+    return _build_structural_fingerprint(
+        payload,
+        include_contract_exemplar=False,
+    )
+
+
 def build_live_pending_workflows_fingerprint(
     records: list[Any],
 ) -> dict[str, Any]:
@@ -354,7 +379,11 @@ def build_live_pending_workflows_fingerprint(
         for record in records
     ]
     return _build_structural_fingerprint(
-        {"workflows": projected_records},
+        {
+            "workflows": projected_records,
+            "returned_count": 0,
+            "is_complete": False,
+        },
         include_contract_exemplar=False,
     )
 
@@ -865,6 +894,7 @@ def _json_type(value: Any) -> str:
 
 __all__ = (
     "EXTERNAL_SANITIZATION_WARNING",
+    "PENDING_WORKFLOW_DERIVATION_WARNING",
     "OAContractPackProfile",
     "OAMessageCenterRecord",
     "OAPendingWorkflowCollection",
@@ -874,6 +904,7 @@ __all__ = (
     "OAStructuralFingerprint",
     "OAStructuralNode",
     "STRUCTURAL_FINGERPRINT_ALGORITHM",
+    "build_contract_drift_baseline_fingerprint",
     "build_live_pending_workflows_fingerprint",
     "build_live_system_messages_fingerprint",
     "build_structural_fingerprint",

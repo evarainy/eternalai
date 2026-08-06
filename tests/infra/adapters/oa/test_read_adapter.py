@@ -24,8 +24,12 @@ from pydantic import SecretStr
 from app.infra.adapters.oa import provider as oa_provider
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
+    _LIVE_MESSAGE_CENTER_FIELD_NAMES,
+    _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS,
+    OAMessageCenterRecord,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
+    build_contract_drift_baseline_fingerprint,
     build_live_pending_workflows_fingerprint,
     build_live_system_messages_fingerprint,
     build_structural_fingerprint,
@@ -77,30 +81,16 @@ SYSTEM_MESSAGE_CONTRACT_PACK = (
     / "oa"
     / "ecology9-system-messages-v1"
 )
+_SYSTEM_MESSAGE_REPLAY_DATA = json.loads(
+    (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+)
 EXPECTED_REPLAY_DATA: dict[str, Any] = {
-    "workflows": [
-        {
-            "workflow_id": "workflow-synthetic-001",
-            "title": "workflow-title-synthetic-001",
-            "status": "pending",
-            "applicant": "applicant-synthetic-001",
-            "current_step": "step-synthetic-001",
-            "approver": "approver-synthetic-001",
-            "created_at": "2000-01-01T00:00:00+00:00",
-            "expired": False,
-        },
-        {
-            "workflow_id": "workflow-synthetic-002",
-            "title": "workflow-title-synthetic-002",
-            "status": "pending",
-            "applicant": "applicant-synthetic-002",
-            "current_step": "step-synthetic-002",
-            "approver": None,
-            "created_at": None,
-            "expired": True,
-        },
-    ]
+    "workflows": _SYSTEM_MESSAGE_REPLAY_DATA["messages"],
+    "returned_count": _SYSTEM_MESSAGE_REPLAY_DATA["returned_count"],
+    "is_complete": _SYSTEM_MESSAGE_REPLAY_DATA["is_complete"],
 }
+
+
 class CountingReplayProvider(ReplayOAReadProvider):
     def __init__(self, contract_pack_dir: Path) -> None:
         super().__init__(contract_pack_dir)
@@ -320,22 +310,23 @@ def _live_provider(
 
 def _raw_workflow(index: int) -> dict[str, Any]:
     return {
-        "workflowId": f"live-workflow-{index}",
+        "messageid": f"live-workflow-{index}",
         "title": f"live-title-{index}",
-        "status": "pending",
-        "applicant": f"live-applicant-{index}",
-        "currentStep": f"live-step-{index}",
-        "approver": None,
-        "createdAt": "2026-07-30T00:00:00+00:00",
-        "expired": False,
+        "context": f"live-content-{index}",
+        "name": f"live-source-{index}",
+        "time": "2026-07-30 00:00:00",
+        "bizstate": "1",
+        "link": f"/workflows/desktop/{index}",
+        "linkmobileurl": f"/workflows/mobile/{index}",
+        "gomethod": "",
+        "gomethodpc": "",
+        "showimage": "",
     }
 
 
 def _matching_live_workflows() -> list[dict[str, Any]]:
     first = _raw_workflow(1)
-    first["approver"] = "live-approver-1"
     second = _raw_workflow(2)
-    second["createdAt"] = None
     return [first, second]
 
 
@@ -412,6 +403,91 @@ def _message_center_page(
         "mintime": f"synthetic-lower-{cursor_index}",
         "msgid": f"synthetic-cursor-{cursor_index}",
     }
+
+
+def test_message_center_record_excludes_disproved_pending_fields() -> None:
+    disproved_fields = {
+        "workflow_id",
+        "applicant",
+        "approver",
+        "created_at",
+        "current_step",
+        "expired",
+        "status",
+    }
+
+    assert disproved_fields.isdisjoint(OAMessageCenterRecord.model_fields)
+
+
+def test_message_center_ignored_wire_fields_are_exactly_enumerated() -> None:
+    assert _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS == frozenset(
+        {"gomethod", "gomethodpc", "showimage"}
+    )
+
+
+def test_pending_and_system_fingerprints_share_one_field_mapping_object() -> None:
+    pending_mapping = build_live_pending_workflows_fingerprint.__globals__[
+        "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
+    ]
+    system_mapping = build_live_system_messages_fingerprint.__globals__[
+        "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
+    ]
+
+    assert pending_mapping is system_mapping
+    assert pending_mapping is _LIVE_MESSAGE_CENTER_FIELD_NAMES
+
+
+def test_pending_collection_rejects_mismatched_returned_count() -> None:
+    with pytest.raises(ValueError, match="returned_count"):
+        OAPendingWorkflowCollection.model_validate(
+            {"workflows": [], "returned_count": 1, "is_complete": True},
+            strict=True,
+        )
+
+
+def test_frozen_system_pack_fingerprint_remains_pack_self_consistent() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+    frozen = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    rebuilt = build_structural_fingerprint(sample)
+
+    assert rebuilt["sha256"] == frozen["sha256"]
+    assert rebuilt == frozen
+
+
+def test_system_pack_drift_baseline_excludes_exemplar_only_nullable() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+
+    baseline = build_contract_drift_baseline_fingerprint(sample)
+    nodes = {node["path"]: node for node in baseline["nodes"]}
+
+    assert nodes["$.messages[].link"]["nullable"] is False
+    assert nodes["$.messages[].mobile_link"]["nullable"] is False
+
+
+def test_live_system_shape_matches_data_derived_contract_baseline() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+    baseline = build_contract_drift_baseline_fingerprint(sample)
+    actual = build_live_system_messages_fingerprint(
+        _matching_live_system_messages()
+    )
+
+    report = compare_structural_fingerprints(baseline, actual)
+
+    assert report.matches is True
+    assert report.added == ()
+    assert report.removed == ()
+    assert report.changed == ()
 
 
 def test_live_pending_provider_keeps_rejecting_backslash_endpoint_path() -> None:
@@ -541,28 +617,19 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
     _assert_browser_like_oa_headers(opener, request_count=2)
     assert len(reports) == 1
     report = reports[0]
-    expected_fingerprint = json.loads(
-        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
-            encoding="utf-8"
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads(
+            (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(
+                encoding="utf-8"
+            )
         )
     )
-    assert report.matches is False
+    assert report.matches is True
     assert report.expected_sha256 == expected_fingerprint["sha256"]
-    assert report.actual_sha256 != expected_fingerprint["sha256"]
-    _assert_anonymous_node_paths(
-        report.added,
-        root_path="$.messages[]",
-        expected_count=3,
-    )
-    assert {node.json_type for node in report.added} == {"string"}
+    assert report.actual_sha256 == expected_fingerprint["sha256"]
+    assert report.added == ()
     assert report.removed == ()
-    assert [node.path for node in report.changed] == [
-        "$.messages[].link",
-        "$.messages[].mobile_link",
-    ]
-    assert {node.json_type for node in report.changed} == {"string"}
-    assert all(node.nullable is True for node in report.changed_expected)
-    assert all(node.nullable is False for node in report.changed)
+    assert report.changed == ()
 
 
 def test_live_system_message_full_page_at_page_limit_fails_closed() -> None:
@@ -696,12 +763,7 @@ def test_live_system_message_drift_reports_safe_wire_names_without_values() -> N
     _assert_wire_node_paths(
         report.added,
         root_path="$.messages[]",
-        raw_keys={
-            "gomethod",
-            "gomethodpc",
-            "showimage",
-            runtime_field_name,
-        },
+        raw_keys={runtime_field_name},
     )
     assert f"wire_{runtime_field_name}" in rendered
     assert runtime_business_value not in rendered
@@ -720,10 +782,13 @@ def test_live_system_message_error_discards_sensitive_traceback_locals() -> None
     _assert_provider_traceback_is_redacted(exc_info.value, marker)
 
 
-def test_live_system_message_fingerprint_reports_all_actual_wire_fields() -> None:
-    expected = json.loads(
-        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
-            encoding="utf-8"
+def test_live_system_message_fingerprint_ignores_only_enumerated_navigation_fields(
+) -> None:
+    expected = build_contract_drift_baseline_fingerprint(
+        json.loads(
+            (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(
+                encoding="utf-8"
+            )
         )
     )
 
@@ -734,19 +799,10 @@ def test_live_system_message_fingerprint_reports_all_actual_wire_fields() -> Non
         ),
     )
 
-    assert report.matches is False
-    _assert_wire_node_paths(
-        report.added,
-        root_path="$.messages[]",
-        raw_keys={"gomethod", "gomethodpc", "showimage"},
-    )
-    assert {node.json_type for node in report.added} == {"string"}
+    assert report.matches is True
+    assert report.added == ()
     assert report.removed == ()
-    assert [node.path for node in report.changed] == [
-        "$.messages[].link",
-        "$.messages[].mobile_link",
-    ]
-    assert {node.json_type for node in report.changed} == {"string"}
+    assert report.changed == ()
     assert all(node.nullable is True for node in report.changed_expected)
     assert all(node.nullable is False for node in report.changed)
 
@@ -833,7 +889,7 @@ def test_live_default_opener_ignores_all_environment_proxies(
         oa_thread.join(timeout=2)
         proxy_thread.join(timeout=2)
 
-    assert [workflow.workflow_id for workflow in collection.workflows] == [
+    assert [workflow.message_id for workflow in collection.workflows] == [
         "live-workflow-1"
     ]
     assert proxy_server.requests == []
@@ -1078,7 +1134,7 @@ def test_replay_rejects_structural_fingerprint_mismatch(tmp_path: Path) -> None:
     shutil.copytree(CONTRACT_PACK, pack)
     sample_path = pack / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
-    sample["workflows"][0]["status"] = 1
+    sample["workflows"][0]["message_id"] = 1
     sample_path.write_text(json.dumps(sample), encoding="utf-8")
     adapter = OAReadAdapter(ReplayOAReadProvider(pack))
 
@@ -1111,22 +1167,30 @@ def test_replay_maps_model_violation_to_payload_invalid(tmp_path: Path) -> None:
 
 
 def test_structural_fingerprint_excludes_values_and_array_length() -> None:
-    first = {"workflows": [copy.deepcopy(EXPECTED_REPLAY_DATA["workflows"][0])]}
+    first = {
+        "workflows": [copy.deepcopy(EXPECTED_REPLAY_DATA["workflows"][0])],
+        "returned_count": 1,
+        "is_complete": False,
+    }
     second_item = copy.deepcopy(first["workflows"][0])
     second_item.update(
         {
-            "workflow_id": "completely-different-workflow",
+            "message_id": "completely-different-workflow",
             "title": "completely-different-title",
-            "status": "different-status",
-            "applicant": "completely-different-applicant",
-            "current_step": "completely-different-step",
-            "approver": "completely-different-approver",
-            "created_at": "2099-12-31T23:59:59+00:00",
-            "expired": True,
+            "content": "completely-different-content",
+            "source_name": "completely-different-source",
+            "occurred_at": "2099-12-31 23:59:59",
+            "business_state": "different-state",
+            "link": "/completely-different-link",
+            "mobile_link": "/completely-different-mobile-link",
         }
     )
-    second = {"workflows": [second_item, copy.deepcopy(second_item)]}
-    empty = {"workflows": []}
+    second = {
+        "workflows": [second_item, copy.deepcopy(second_item)],
+        "returned_count": 2,
+        "is_complete": False,
+    }
+    empty = {"workflows": [], "returned_count": 0, "is_complete": True}
 
     first_fingerprint = build_structural_fingerprint(first)
     second_fingerprint = build_structural_fingerprint(second)
@@ -1136,13 +1200,14 @@ def test_structural_fingerprint_excludes_values_and_array_length() -> None:
     assert first_fingerprint == empty_fingerprint
     rendered = json.dumps(first_fingerprint)
     for business_value in first["workflows"][0].values():
-        assert str(business_value) not in rendered
+        if business_value is not None and len(str(business_value)) >= 9:
+            assert str(business_value) not in rendered
 
 
 def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
     pack = tmp_path / CONTRACT_PACK.name
     shutil.copytree(CONTRACT_PACK, pack)
-    empty_sample = {"workflows": []}
+    empty_sample = {"workflows": [], "returned_count": 0, "is_complete": True}
     (pack / "sample.json").write_text(
         json.dumps(empty_sample),
         encoding="utf-8",
@@ -1157,7 +1222,7 @@ def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
 
     assert result.status == "success"
     assert result.error_code is None
-    assert result.data == {"workflows": []}
+    assert result.data == empty_sample
 
 
 def test_replay_never_resolves_or_uses_a_credential() -> None:
@@ -1208,26 +1273,28 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
     assert result.data == {
         "workflows": [
             {
-                "workflow_id": "live-workflow-1",
+                "message_id": "live-workflow-1",
                 "title": "live-title-1",
-                "status": "pending",
-                "applicant": "live-applicant-1",
-                "current_step": "live-step-1",
-                "approver": None,
-                "created_at": "2026-07-30T00:00:00+00:00",
-                "expired": False,
+                "content": "live-content-1",
+                "source_name": "live-source-1",
+                "occurred_at": "2026-07-30 00:00:00",
+                "business_state": "1",
+                "link": "/workflows/desktop/1",
+                "mobile_link": "/workflows/mobile/1",
             },
             {
-                "workflow_id": "live-workflow-2",
+                "message_id": "live-workflow-2",
                 "title": "live-title-2",
-                "status": "pending",
-                "applicant": "live-applicant-2",
-                "current_step": "live-step-2",
-                "approver": None,
-                "created_at": "2026-07-30T00:00:00+00:00",
-                "expired": False,
+                "content": "live-content-2",
+                "source_name": "live-source-2",
+                "occurred_at": "2026-07-30 00:00:00",
+                "business_state": "1",
+                "link": "/workflows/desktop/2",
+                "mobile_link": "/workflows/mobile/2",
             },
-        ]
+        ],
+        "returned_count": 2,
+        "is_complete": True,
     }
     assert opener.request_forms == [
         {
@@ -1368,7 +1435,11 @@ def test_live_provider_accepts_a_legal_empty_collection() -> None:
         _live_provider(opener).list_pending_workflows(_credential())
     )
 
-    assert collection.model_dump(mode="json") == {"workflows": []}
+    assert collection.model_dump(mode="json") == {
+        "workflows": [],
+        "returned_count": 0,
+        "is_complete": True,
+    }
     assert len(opener.request_forms) == 1
 
 
@@ -1448,7 +1519,7 @@ def test_live_business_session_expiry_requires_reauthentication() -> None:
                     [
                         {
                             **_raw_workflow(1),
-                            "status": "not-pending",
+                            "title": 7,
                         }
                     ]
                 )
@@ -1614,7 +1685,7 @@ def test_live_pagination_accepts_terminal_empty_page_with_repeated_cursor() -> N
     assert result.error_code is None
     assert result.data is not None
     assert len(result.data["workflows"]) == 1
-    assert result.data["workflows"][0]["workflow_id"] == "live-workflow-1"
+    assert result.data["workflows"][0]["message_id"] == "live-workflow-1"
     assert len(opener.request_forms) == 2
 
 
@@ -1815,8 +1886,8 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         ).list_pending_workflows(_credential())
     )
 
-    expected_fingerprint = json.loads(
-        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
     assert len(collection.workflows) == len(records)
     assert len(reports) == 1
@@ -1840,7 +1911,7 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         ),
         ("removed", "removed", "$.workflows[].title", "error"),
         ("type", "changed", "$.workflows[].title", "error"),
-        ("nullable", "changed", "$.workflows[].approver", "success"),
+        ("nullable", "changed", "$.workflows[].link", "success"),
         ("array_shape", "changed", "$.workflows[].title", "error"),
     ],
 )
@@ -1863,8 +1934,7 @@ def test_live_reports_reachable_structural_drift_without_values(
         for record in records:
             record["title"] = 7
     elif change_kind == "nullable":
-        for record in records:
-            record["approver"] = runtime_business_value
+        records[0]["link"] = None
     elif change_kind == "array_shape":
         for record in records:
             record["title"] = [runtime_business_value]
@@ -1897,26 +1967,25 @@ def test_live_reports_reachable_structural_drift_without_values(
     assert report.matches is False
     bucket = getattr(report, expected_bucket)
     if change_kind == "added":
-        _assert_anonymous_node_paths(
+        _assert_wire_node_paths(
             bucket,
             root_path="$.workflows[]",
-            expected_count=1,
+            raw_keys={runtime_field_name},
         )
     else:
         assert [node.path for node in bucket] == [expected_path]
     if change_kind == "array_shape":
         assert report.changed[0].array_shape == "items:string"
     assert runtime_business_value not in rendered
-    assert runtime_field_name not in rendered
     if change_kind == "added":
         assert runtime_business_value not in repr(result)
-        assert runtime_field_name not in repr(result)
+        assert f"wire_{runtime_field_name}" in rendered
 
 
 def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
     records = _matching_live_workflows()
-    expected_fingerprint = json.loads(
-        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
     records[0]["title"] = None
 
@@ -1969,8 +2038,6 @@ def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
     ]
 
     expected_raw_keys = {first_field_canary, second_field_canary}
-    if root_path == "$.messages[]":
-        expected_raw_keys.update({"gomethod", "gomethodpc", "showimage"})
     _assert_wire_node_paths(
         [
             node
@@ -2084,8 +2151,6 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
     second_value_canary = 73
     first_page = _matching_live_workflows()
     second_page = [_raw_workflow(3), _raw_workflow(4)]
-    second_page[0]["approver"] = "live-approver-3"
-    second_page[1]["createdAt"] = None
     first_page[0][first_field_canary] = second_value_canary
     second_page[1][second_field_canary] = first_value_canary
 

@@ -24,6 +24,7 @@ from pydantic import ValidationError  # noqa: E402
 
 from app.infra.adapters.oa.contracts import (  # noqa: E402
     EXTERNAL_SANITIZATION_WARNING,
+    PENDING_WORKFLOW_DERIVATION_WARNING,
     OAContractPackProfile,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
@@ -44,8 +45,6 @@ _MAX_EMBEDDED_JSON_DEPTH = 8
 # At the 32 MiB scan bound, random hex collisions fall from 0.78% at 8
 # characters to 0.049% at 9 characters.
 _MIN_SENSITIVE_SUBSTRING_LENGTH = 9
-_SYNTHETIC_TIMESTAMP = "2000-01-01T00:00:00+00:00"
-_ALLOWED_RAW_PENDING_STATUSES = frozenset({"pending"})
 
 _FORBIDDEN_KEYS = frozenset(
     {
@@ -69,16 +68,6 @@ _FORBIDDEN_KEYS = frozenset(
         "userid",
         "workcode",
         "employeeno",
-    }
-)
-_SYNTHESIZED_SOURCE_KEYS = frozenset(
-    {
-        "workflowid",
-        "title",
-        "applicant",
-        "currentstep",
-        "approver",
-        "createdat",
     }
 )
 _SENSITIVE_HEADER_KEYS = frozenset(
@@ -141,17 +130,17 @@ def sanitize_har_to_contract_pack(
 
     har = _load_har(input_har)
     if profile_kind == "pending_workflows":
-        raw_payloads = _select_pending_workflow_payloads(
+        raw_payload, message_center_page_size = _select_pending_workflow_payload(
             har,
             entry_indices=entry_indices,
         )
-        system_message_page_size = None
+        raw_payloads = [raw_payload]
         capability_id = "oa.list_pending_workflows"
-        source_kind = "sanitized_capture"
-        sanitizer_version = "1"
-        source_warning = None
+        source_kind = "derived_from_sibling_capture"
+        sanitizer_version = "2"
+        source_warning = PENDING_WORKFLOW_DERIVATION_WARNING
     else:
-        raw_payload, system_message_page_size = _select_system_message_payload(
+        raw_payload, message_center_page_size = _select_system_message_payload(
             har,
             entry_indices=entry_indices,
         )
@@ -162,22 +151,28 @@ def sanitize_har_to_contract_pack(
         source_warning = EXTERNAL_SANITIZATION_WARNING
     sensitive_values = _collect_sensitive_values(
         har,
-        short_transport_as_full_token=(
-            source_kind == "externally_sanitized_capture"
-        ),
+        short_transport_as_full_token=(sanitizer_version == "2"),
     )
     for raw_payload in raw_payloads:
         _collect_sensitive_fields(raw_payload, sensitive_values)
         _assert_response_payload_has_no_forbidden_keys(raw_payload)
+    sensitive_values.update(_system_message_source_values(raw_payloads[0]))
+    shared_sample = _normalize_system_message_sample(
+        raw_payloads[0],
+        page_size=message_center_page_size,
+    )
     if profile_kind == "system_messages":
-        sensitive_values.update(_system_message_source_values(raw_payloads[0]))
-        assert system_message_page_size is not None
-        sample = _normalize_system_message_sample(
-            raw_payloads[0],
-            page_size=system_message_page_size,
-        )
+        sample = shared_sample
     else:
-        sample = _normalize_pending_workflow_sample(raw_payloads)
+        sample = {
+            "workflows": shared_sample["messages"],
+            "returned_count": shared_sample["returned_count"],
+            "is_complete": shared_sample["is_complete"],
+        }
+        try:
+            OAPendingWorkflowCollection.model_validate(sample, strict=True)
+        except ValidationError:
+            raise SanitizationError("normalized_sample_invalid") from None
     fingerprint = build_structural_fingerprint(sample)
     profile = {
         "profile_version": profile_version,
@@ -274,11 +269,11 @@ def _load_json_file(path: Path) -> Any:
     return payload
 
 
-def _select_pending_workflow_payloads(
+def _select_pending_workflow_payload(
     har: Mapping[str, Any],
     *,
     entry_indices: Sequence[int] | None,
-) -> list[Mapping[str, Any]]:
+) -> tuple[Mapping[str, Any], int]:
     log = har.get("log")
     if not isinstance(log, Mapping):
         raise SanitizationError("har_log_missing")
@@ -290,29 +285,25 @@ def _select_pending_workflow_payloads(
         candidates: list[Mapping[str, Any]] = []
         for entry in entries:
             payload = _response_json(entry)
-            if payload is not None and _is_pending_workflow_payload(payload):
-                candidates.append(payload)
+            if payload is not None and _is_system_message_payload(payload):
+                candidates.append(entry)
         if len(candidates) != 1:
             raise SanitizationError("pending_workflow_response_not_unique")
-        return candidates
-
-    if not entry_indices:
-        raise SanitizationError("entry_index_missing")
-    selected_payloads: list[Mapping[str, Any]] = []
-    seen_indices: set[int] = set()
-    for entry_index in entry_indices:
+        selected_entry = candidates[0]
+    else:
+        if len(entry_indices) != 1:
+            raise SanitizationError("pending_workflow_entry_index_invalid")
+        entry_index = entry_indices[0]
         if not isinstance(entry_index, int) or isinstance(entry_index, bool):
             raise SanitizationError("entry_index_invalid")
         if entry_index < 0 or entry_index >= len(entries):
             raise SanitizationError("entry_index_out_of_range")
-        if entry_index in seen_indices:
-            raise SanitizationError("entry_index_duplicate")
-        seen_indices.add(entry_index)
-        payload = _response_json(entries[entry_index], selected=True)
-        if payload is None or not _is_pending_workflow_payload(payload):
-            raise SanitizationError("selected_entry_not_pending_workflow_response")
-        selected_payloads.append(payload)
-    return selected_payloads
+        selected_entry = entries[entry_index]
+
+    payload = _response_json(selected_entry, selected=True)
+    if payload is None or not _is_system_message_payload(payload):
+        raise SanitizationError("selected_entry_not_pending_workflow_response")
+    return payload, _system_message_page_size(selected_entry)
 
 
 def _select_system_message_payload(
@@ -395,11 +386,6 @@ def _response_json(
     return payload
 
 
-def _is_pending_workflow_payload(payload: Mapping[str, Any]) -> bool:
-    data = payload.get("data")
-    return isinstance(data, Mapping) and isinstance(data.get("records"), list)
-
-
 def _is_system_message_payload(payload: Mapping[str, Any]) -> bool:
     records = payload.get("data")
     return (
@@ -410,65 +396,6 @@ def _is_system_message_payload(payload: Mapping[str, Any]) -> bool:
             for record in records
         )
     )
-
-
-def _normalize_pending_workflow_sample(
-    raw_payloads: Iterable[Mapping[str, Any]],
-) -> dict[str, Any]:
-    workflows: list[dict[str, Any]] = []
-    for raw_payload in raw_payloads:
-        data = raw_payload.get("data")
-        if not isinstance(data, Mapping):
-            raise SanitizationError("response_data_invalid")
-        records = data.get("records")
-        if not isinstance(records, list):
-            raise SanitizationError("response_records_invalid")
-        if len(workflows) + len(records) > _MAX_RECORDS:
-            raise SanitizationError("response_records_invalid")
-
-        for record in records:
-            if not isinstance(record, Mapping):
-                raise SanitizationError("response_record_invalid")
-            _require_string(record, "workflowId")
-            _require_string(record, "title")
-            raw_status = _require_string(record, "status")
-            if raw_status not in _ALLOWED_RAW_PENDING_STATUSES:
-                raise SanitizationError("response_status_invalid")
-            _require_string(record, "applicant")
-            _require_string(record, "currentStep")
-            approver = _optional_string(record, "approver")
-            created_at = _optional_string(record, "createdAt")
-            expired = record.get("expired")
-            if not isinstance(expired, bool):
-                raise SanitizationError("response_expired_invalid")
-            index = len(workflows) + 1
-            workflows.append(
-                {
-                    "workflow_id": f"workflow-synthetic-{index:03d}",
-                    "title": f"workflow-title-synthetic-{index:03d}",
-                    "status": "pending",
-                    "applicant": f"applicant-synthetic-{index:03d}",
-                    "current_step": f"step-synthetic-{index:03d}",
-                    "approver": (
-                        f"approver-synthetic-{index:03d}"
-                        if approver is not None
-                        else None
-                    ),
-                    "created_at": (
-                        _SYNTHETIC_TIMESTAMP if created_at is not None else None
-                    ),
-                    "expired": expired,
-                }
-            )
-    sample = {"workflows": workflows}
-    sample_invalid = False
-    try:
-        OAPendingWorkflowCollection.model_validate(sample, strict=True)
-    except ValidationError:
-        sample_invalid = True
-    if sample_invalid:
-        raise SanitizationError("normalized_sample_invalid")
-    return sample
 
 
 def _normalize_system_message_sample(
@@ -563,15 +490,6 @@ def _require_string(record: Mapping[str, Any], key: str) -> str:
     return value
 
 
-def _optional_string(record: Mapping[str, Any], key: str) -> str | None:
-    value = record.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise SanitizationError("response_optional_string_invalid")
-    return value
-
-
 def _optional_blankable_string(
     record: Mapping[str, Any],
     key: str,
@@ -654,7 +572,6 @@ def _collect_sensitive_fields(value: Any, output: set[str]) -> None:
             normalized_key = _normalize_key(str(key))
             if (
                 normalized_key in _FORBIDDEN_KEYS
-                or normalized_key in _SYNTHESIZED_SOURCE_KEYS
             ):
                 output.update(_flatten_strings(child))
             _collect_sensitive_fields(child, output)

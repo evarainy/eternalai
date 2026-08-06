@@ -402,9 +402,8 @@ def _run_rehearsal(
         profile_version=_SYSTEM_PROFILE,
         entry_indices=[contract.source_entry_index],
     )
-    generated = sanitizer.build_live_system_message_har_fingerprint(
-        input_har=layout.source_har,
-        entry_index=contract.source_entry_index,
+    generated = _load_json_object(
+        output_dir / "fingerprint.json"
     )
     frozen = _load_json_object(
         layout.repo_root

@@ -11,6 +11,8 @@ import pytest
 
 from app.infra.adapters.oa.contracts import (
     EXTERNAL_SANITIZATION_WARNING,
+    PENDING_WORKFLOW_DERIVATION_WARNING,
+    OAPendingWorkflowCollection,
     build_structural_fingerprint,
 )
 from scripts import sanitize_oa_contract_pack as sanitizer
@@ -26,28 +28,32 @@ SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
 
 def _har(
     *,
-    status: str = "pending",
+    status: str = "1",
     cookie_value: str = COOKIE_VALUE,
     extra_record_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
-        "workflowId": "raw-workflow-employee-001",
+        "messageid": "raw-message-employee-001",
         "title": "Raw confidential workflow title",
-        "status": status,
-        "applicant": "Synthetic Raw Person",
-        "currentStep": "Raw manager review",
-        "approver": "Synthetic Raw Approver",
-        "createdAt": "2026-07-29T09:30:00+09:00",
-        "expired": False,
+        "context": "Raw confidential workflow content",
+        "name": "Synthetic Raw Message Type",
+        "time": "2026-07-29 09:30:00",
+        "bizstate": status,
+        "link": "/workflow/desktop/raw-message-employee-001",
+        "linkmobileurl": "/workflow/mobile/raw-message-employee-001",
+        "gomethod": "",
+        "gomethodpc": "",
+        "showimage": "",
         "ignoredField": "must-not-be-copied",
     }
     if extra_record_fields is not None:
         record.update(extra_record_fields)
     response_body = {
-        "data": {
-            "records": [record],
-            "ignoredPageValue": "must-not-be-copied",
-        }
+        "status": "1",
+        "data": [record],
+        "maxtime": "synthetic-upper-bound",
+        "mintime": "synthetic-lower-bound",
+        "msgid": "synthetic-message-cursor",
     }
     return {
         "log": {
@@ -72,6 +78,11 @@ def _har(
                                 "value": cookie_value,
                             }
                         ],
+                        "postData": {
+                            "mimeType": "application/x-www-form-urlencoded",
+                            "params": [{"name": "pagesize", "value": "20"}],
+                            "text": "pagesize=20",
+                        },
                     },
                     "response": {
                         "headers": [
@@ -235,25 +246,27 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
     assert profile == {
         "profile_version": PROFILE_VERSION,
         "capability_id": "oa.list_pending_workflows",
-        "source_kind": "sanitized_capture",
-        "sanitizer_version": "1",
+        "source_kind": "derived_from_sibling_capture",
+        "sanitizer_version": "2",
         "sample_file": "sample.json",
         "fingerprint_file": "fingerprint.json",
+        "source_warning": PENDING_WORKFLOW_DERIVATION_WARNING,
     }
-    assert sample == {
-        "workflows": [
-            {
-                "workflow_id": "workflow-synthetic-001",
-                "title": "workflow-title-synthetic-001",
-                "status": "pending",
-                "applicant": "applicant-synthetic-001",
-                "current_step": "step-synthetic-001",
-                "approver": "approver-synthetic-001",
-                "created_at": "2000-01-01T00:00:00+00:00",
-                "expired": False,
-            }
-        ]
+    assert set(sample) == {"workflows", "returned_count", "is_complete"}
+    assert sample["returned_count"] == 1
+    assert sample["is_complete"] is True
+    assert len(sample["workflows"]) == 1
+    assert set(sample["workflows"][0]) == {
+        "message_id",
+        "title",
+        "content",
+        "source_name",
+        "occurred_at",
+        "business_state",
+        "link",
+        "mobile_link",
     }
+    OAPendingWorkflowCollection.model_validate(sample, strict=True)
     assert fingerprint == build_structural_fingerprint(sample)
     all_output = "\n".join(
         path.read_text(encoding="utf-8") for path in output_dir.iterdir()
@@ -261,12 +274,11 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
     for forbidden in (
         COOKIE_VALUE,
         TOKEN_VALUE,
-        "raw-workflow-employee-001",
+        "raw-message-employee-001",
         "Raw confidential workflow title",
-        "Synthetic Raw Person",
-        "Raw manager review",
-        "Synthetic Raw Approver",
-        "2026-07-29T09:30:00+09:00",
+        "Raw confidential workflow content",
+        "Synthetic Raw Message Type",
+        "2026-07-29 09:30:00",
         "must-not-be-copied",
     ):
         assert forbidden not in all_output
@@ -351,11 +363,11 @@ def test_live_system_message_har_fingerprint_uses_actual_value_free_shape(
         (node["path"], node["json_type"])
         for node in fingerprint["nodes"]
     }
-    assert {
-        ("$.messages[].wire_gomethod", "string"),
-        ("$.messages[].wire_gomethodpc", "string"),
-        ("$.messages[].wire_showimage", "string"),
-    }.issubset(nodes)
+    assert not {
+        "$.messages[].wire_gomethod",
+        "$.messages[].wire_gomethodpc",
+        "$.messages[].wire_showimage",
+    }.intersection(path for path, _json_type in nodes)
     rendered = json.dumps(fingerprint, sort_keys=True)
     for record in raw_records:
         for value in record.values():
@@ -732,7 +744,12 @@ def test_v2_sensitive_value_still_exits_two_without_output(
     har["log"]["entries"].append(
         {
             "request": {
-                "headers": [{"name": "Cookie", "value": "pending"}],
+                "headers": [
+                    {
+                        "name": "Cookie",
+                        "value": "derived_from_sibling_capture",
+                    }
+                ],
                 "cookies": [],
             },
             "response": {
@@ -859,7 +876,7 @@ def test_cli_syntax_errors_do_not_echo_known_values_or_retain_exception_context(
     assert sensitive_cli_value not in (repr(exc_info.value) + str(exc_info.value))
 
 
-def test_repeated_entry_indices_aggregate_pages_in_selector_order(
+def test_pending_profile_rejects_multiple_selected_message_center_pages(
     tmp_path: Path,
 ) -> None:
     har = _har()
@@ -875,13 +892,7 @@ def test_repeated_entry_indices_aggregate_pages_in_selector_order(
             },
         },
     }
-    second_page = _har(
-        extra_record_fields={
-            "expired": True,
-            "approver": None,
-            "createdAt": None,
-        }
-    )["log"]["entries"][0]
+    second_page = _har(status="2")["log"]["entries"][0]
     har["log"]["entries"] = [first_page, unrelated_entry, second_page]
     input_har = tmp_path / "multi-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -893,30 +904,16 @@ def test_repeated_entry_indices_aggregate_pages_in_selector_order(
         entry_indices=[2, 0],
     )
 
-    assert completed.returncode == 0
-    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
-    assert [workflow["workflow_id"] for workflow in sample["workflows"]] == [
-        "workflow-synthetic-001",
-        "workflow-synthetic-002",
-    ]
-    assert [workflow["expired"] for workflow in sample["workflows"]] == [True, False]
-    assert sample["workflows"][0]["approver"] is None
-    assert sample["workflows"][0]["created_at"] is None
-    assert sample["workflows"][1]["approver"] == "approver-synthetic-002"
-    assert sample["workflows"][1]["created_at"] == "2000-01-01T00:00:00+00:00"
+    assert completed.returncode == 2
+    assert "pending_workflow_entry_index_invalid" in completed.stderr
+    assert not output_dir.exists()
 
 
 def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
     tmp_path: Path,
 ) -> None:
     har = _har()
-    selected_page = _har(
-        extra_record_fields={
-            "expired": True,
-            "approver": None,
-            "createdAt": None,
-        }
-    )["log"]["entries"][0]
+    selected_page = _har(status="2")["log"]["entries"][0]
     har["log"]["entries"].append(selected_page)
     input_har = tmp_path / "single-selected-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -931,9 +928,9 @@ def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
     assert completed.returncode == 0
     sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
     assert len(sample["workflows"]) == 1
-    assert sample["workflows"][0]["expired"] is True
-    assert sample["workflows"][0]["approver"] is None
-    assert sample["workflows"][0]["created_at"] is None
+    assert sample["workflows"][0]["business_state"] == "2"
+    assert sample["returned_count"] == 1
+    assert sample["is_complete"] is True
 
 
 def test_multiple_candidates_without_selector_fail_with_zero_output(
@@ -957,7 +954,7 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     har = _har()
     entry = har["log"]["entries"][0]
     response_body = json.loads(entry["response"]["content"]["text"])
-    response_body["data"]["records"] = []
+    response_body["data"] = []
     entry["response"]["content"]["text"] = json.dumps(response_body)
     input_har = tmp_path / "empty.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -970,22 +967,28 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     fingerprint = json.loads(
         (output_dir / "fingerprint.json").read_text(encoding="utf-8")
     )
-    assert sample == {"workflows": []}
+    assert sample == {
+        "workflows": [],
+        "returned_count": 0,
+        "is_complete": True,
+    }
     assert fingerprint == build_structural_fingerprint(sample)
     assert fingerprint == build_structural_fingerprint(
         {
             "workflows": [
                 {
-                    "workflow_id": "different",
+                    "message_id": "different",
                     "title": "different",
-                    "status": "pending",
-                    "applicant": "different",
-                    "current_step": "different",
-                    "approver": None,
-                    "created_at": None,
-                    "expired": False,
+                    "content": "different",
+                    "source_name": "different",
+                    "occurred_at": "different",
+                    "business_state": "different",
+                    "link": None,
+                    "mobile_link": None,
                 }
-            ]
+            ],
+            "returned_count": 1,
+            "is_complete": False,
         }
     )
 
@@ -997,7 +1000,12 @@ def test_cookie_from_unselected_entry_is_scanned_across_whole_har(
     har["log"]["entries"].append(
         {
             "request": {
-                "headers": [{"name": "Cookie", "value": "pending"}],
+                "headers": [
+                    {
+                        "name": "Cookie",
+                        "value": "derived_from_sibling_capture",
+                    }
+                ],
                 "cookies": [],
             },
             "response": {
@@ -1159,7 +1167,7 @@ def test_unsupported_unselected_response_encoding_remains_fail_closed(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_every_selected_response_is_checked_for_forbidden_keys(
+def test_selected_response_is_checked_for_forbidden_keys(
     tmp_path: Path,
 ) -> None:
     selected_cookie_value = "selected-page-cookie-927315"
@@ -1178,7 +1186,7 @@ def test_every_selected_response_is_checked_for_forbidden_keys(
     completed = _run_script(
         input_har,
         output_dir,
-        entry_indices=[0, 1],
+        entry_indices=[1],
     )
 
     assert completed.returncode != 0
@@ -1194,7 +1202,7 @@ def test_every_selected_response_is_checked_for_forbidden_keys(
     [
         ([-1], "entry_index_out_of_range"),
         ([1], "entry_index_out_of_range"),
-        ([0, 0], "entry_index_duplicate"),
+        ([0, 0], "pending_workflow_entry_index_invalid"),
     ],
 )
 def test_invalid_entry_indices_fail_with_zero_output(
@@ -1318,12 +1326,12 @@ def test_selected_structurally_invalid_entry_fails_with_zero_output(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
+def test_cookie_value_reaching_candidate_metadata_fails_with_zero_output(
     tmp_path: Path,
 ) -> None:
     input_har = tmp_path / "cookie-leak.har"
     input_har.write_text(
-        json.dumps(_har(cookie_value="pending")),
+        json.dumps(_har(cookie_value="derived_from_sibling_capture")),
         encoding="utf-8",
     )
     output_dir = tmp_path / PROFILE_VERSION
@@ -1611,7 +1619,7 @@ def test_oversized_non_candidate_response_is_rejected_before_candidate(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
+def test_unmapped_business_state_is_not_copied_to_output(tmp_path: Path) -> None:
     private_status = "private-business-status-927315"
     input_har = tmp_path / "unrecognized-status.har"
     input_har.write_text(
@@ -1622,12 +1630,13 @@ def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
 
     completed = _run_script(input_har, output_dir)
 
-    assert completed.returncode != 0
-    assert "response_status_invalid" in completed.stderr
+    assert completed.returncode == 0
     assert private_status not in completed.stdout
     assert private_status not in completed.stderr
-    assert not output_dir.exists()
-    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+    rendered = "\n".join(
+        path.read_text(encoding="utf-8") for path in output_dir.iterdir()
+    )
+    assert private_status not in rendered
 
 
 def test_existing_output_is_rejected_without_overwrite_or_delete(tmp_path: Path) -> None:
