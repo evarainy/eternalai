@@ -252,19 +252,21 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         "fingerprint_file": "fingerprint.json",
         "source_warning": PENDING_WORKFLOW_DERIVATION_WARNING,
     }
-    assert set(sample) == {"workflows", "returned_count", "is_complete"}
-    assert sample["returned_count"] == 1
-    assert sample["is_complete"] is True
-    assert len(sample["workflows"]) == 1
-    assert set(sample["workflows"][0]) == {
-        "message_id",
-        "title",
-        "content",
-        "source_name",
-        "occurred_at",
-        "business_state",
-        "link",
-        "mobile_link",
+    assert sample == {
+        "workflows": [
+            {
+                "message_id": "900000019000000190000001",
+                "title": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容",
+                "content": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知",
+                "source_name": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样",
+                "occurred_at": "2000-01-01 00:00:00",
+                "business_state": "2",
+                "link": "/oa/system-messages/desktop/001xxxxxxxxxxx",
+                "mobile_link": "/oa/system-messages/mobile/001xxxxxxxxxxx",
+            }
+        ],
+        "returned_count": 1,
+        "is_complete": True,
     }
     OAPendingWorkflowCollection.model_validate(sample, strict=True)
     assert fingerprint == build_structural_fingerprint(sample)

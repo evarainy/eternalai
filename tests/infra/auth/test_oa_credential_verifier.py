@@ -118,6 +118,7 @@ class HARFixtureOpener:
         self.check_login_calls = 0
         self.requested_paths: list[str] = []
         self.requested_user_ids: list[str] = []
+        self.encrypted_fields: list[str] = []
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -213,6 +214,7 @@ class HARFixtureOpener:
         raise AssertionError(f"Unexpected OA fixture path: {path}")
 
     def _decrypt(self, encrypted_value: str) -> bytes:
+        self.encrypted_fields.append(encrypted_value)
         suffix = self._rsa_flag if isinstance(self._rsa_flag, str) else ""
         assert encrypted_value.endswith(suffix)
         encrypted_payload = (
@@ -616,6 +618,31 @@ def test_oa_missing_rsa_flag_uses_empty_suffix() -> None:
 
     assert store.records[0][0] == principal.ai_user_id
     assert openers[0].check_login_calls == 1
+
+
+def test_oa_backtick_rsa_flag_observed_on_the_real_deployment_is_used_verbatim() -> None:
+    # Measured against the real OA: GET /rsa/weaver.rsa.GetRsaInfo answers with
+    # the flag wrapped in backticks (`RSA`), not the bare "RSA" the vendor
+    # document shows. The flag is only the base64 ciphertext suffix -- padding is
+    # PKCS1v15 regardless -- so it must be echoed verbatim and never "corrected"
+    # back to the documented spelling, which no real login would accept.
+    real_flag = "`RSA`"
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        rsa_flag=real_flag,
+    )
+
+    principal = asyncio.run(verifier.authenticate(credential))
+
+    assert store.records[0][0] == principal.ai_user_id
+    assert openers[0].check_login_calls == 1
+    assert len(openers[0].encrypted_fields) == 2
+    for encrypted_field in openers[0].encrypted_fields:
+        assert encrypted_field.endswith(real_flag)
+        assert base64.b64decode(
+            encrypted_field[: -len(real_flag)],
+            validate=True,
+        )
 
 
 def test_oa_server_supplied_non_rsa_flag_is_preserved() -> None:
