@@ -7,11 +7,15 @@ from typing import Any, cast
 
 import pytest
 
+from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import (
     CapabilitySpec,
@@ -20,6 +24,7 @@ from app.ports.capability_registry import (
     CapabilityType,
 )
 from app.ports.llm_provider import LLMCompletionResponse
+from app.ports.policy_guard import PolicyDecision
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
@@ -115,8 +120,25 @@ class RecordingTracePort:
     async def record_policy_decision(self, *args: Any, **kwargs: Any) -> None:
         return None
 
-    async def record_gateway_call(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    async def record_gateway_call(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        status: str,
+        capability_id: str | None = None,
+        error_code: str | None = None,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self.steps.append(
+            {
+                "event_type": "gateway_pre_recorded",
+                "status": status,
+                "capability_id": capability_id,
+                "error_code": error_code,
+                "attributes": attributes or {},
+            }
+        )
 
     async def finalize_task_trace(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -147,6 +169,45 @@ class RecordingGateway:
             data={"selected": capability_id},
             trace_id=request_context.request_id,
         )
+
+
+class RecordingPolicyGuard:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def decide(self, **kwargs: Any) -> PolicyDecision:
+        self.call_count += 1
+        return PolicyDecision(decision="allow")
+
+
+class RecordingAdapter:
+    def __init__(self, delegate: OAReadAdapter) -> None:
+        self._delegate = delegate
+        self.call_count = 0
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        self.call_count += 1
+        return await self._delegate.execute(capability_id, arguments, execution_context)
+
+
+class SentinelOAProvider:
+    requires_credential = False
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def list_pending_workflows(self, credential: Any = None) -> Any:
+        self.call_count += 1
+        raise AssertionError("OA provider must not be called for invalid arguments")
+
+    async def list_system_messages(self, credential: Any = None) -> Any:
+        self.call_count += 1
+        raise AssertionError("OA provider must not be called for invalid arguments")
 
 
 class StaticRegistry:
@@ -191,12 +252,14 @@ def _capability(
     status: CapabilityStatus = "active",
     intent_tags: list[str] | None = None,
     capability_type: CapabilityType = "query",
+    input_schema: dict[str, Any] | None = None,
 ) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
         type=capability_type,
         intent_tags=intent_tags or [],
+        input_schema=input_schema or {},
         input_schema_digest=f"input-{capability_id}",
         output_schema_digest=f"output-{capability_id}",
         risk_level="low",
@@ -219,6 +282,7 @@ def _run_runtime(
     capability_type: CapabilityType | None = None,
     llm_completion: LLMCompletionResponse | None = None,
     malformed_intent: bool = False,
+    structured_output_override: Any | None = None,
 ) -> tuple[
     ResponseEnvelope,
     RecordingTaskStore,
@@ -230,21 +294,22 @@ def _run_runtime(
     trace_port = RecordingTracePort()
     gateway = RecordingGateway()
     registry = StaticRegistry(capabilities)
-    structured_output = MockStructuredOutputProvider()
+    structured_output = structured_output_override or MockStructuredOutputProvider()
     message = f"select {selector}"
-    if malformed_intent:
-        structured_output.register_malformed(message, CapabilityRef)
-    else:
-        structured_output.register(
-            message,
-            CapabilityRef,
-            CapabilityRef(
-                capability_id=selector,
-                arguments={"request": "value"},
-                target_system=target_system,
-                capability_type=capability_type,
-            ),
-        )
+    if isinstance(structured_output, MockStructuredOutputProvider):
+        if malformed_intent:
+            structured_output.register_malformed(message, CapabilityRef)
+        else:
+            structured_output.register(
+                message,
+                CapabilityRef,
+                CapabilityRef(
+                    capability_id=selector,
+                    arguments={"request": "value"},
+                    target_system=target_system,
+                    capability_type=capability_type,
+                ),
+            )
     llm_provider = MockLLMProvider()
     if llm_completion is not None:
         llm_provider.register(message, llm_completion)
@@ -602,3 +667,121 @@ def test_intent_boundary_failures_return_safe_failed_envelopes_without_registry_
         (envelope, task_store.status_updates, trace.steps, gateway.calls)
     )
     assert canary not in serialized
+
+
+def test_intent_validation_trace_has_only_safe_diagnostics_and_no_rejected_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "must-not-enter-trace-log-or-response"
+    raw_intent = (
+        '{"capability_id":"oa.safe","arguments":{"user":"'
+        + canary
+        + '"},"target_system":"oa","capability_type":"query","'
+        + canary
+        + '":"rejected-extra-value"}'
+    )
+    capability = _capability("oa.safe")
+
+    envelope, task_store, trace, gateway, registry = _run_runtime(
+        capability.capability_id,
+        [capability],
+        llm_completion=LLMCompletionResponse(content=raw_intent),
+        structured_output_override=JSONStructuredOutputProvider(),
+    )
+
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
+    assert registry.get_calls == []
+    assert gateway.calls == []
+    intent_event = next(
+        step for step in trace.steps if step["event_type"] == "intent_parsed"
+    )
+    assert intent_event["attributes"] == {
+        "result": "invalid",
+        "reason": "structured_output_error",
+        "structured_output_error_code": "validation_error",
+        "error_path": "$",
+        "error_type": "extra_forbidden",
+        "argument_keys": ["user"],
+    }
+    serialized = repr((envelope, task_store.status_updates, trace.steps, gateway.calls))
+    assert canary not in serialized
+    assert canary not in caplog.text
+    assert "Admin Lite" not in envelope.message
+
+
+def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_adapter_and_oa(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "must-not-enter-runtime-response-trace-or-log"
+    capability = _capability(
+        "oa.list_pending_workflows",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    )
+    registry = StaticRegistry([capability])
+    task_store = RecordingTaskStore()
+    trace = RecordingTracePort()
+    policy = RecordingPolicyGuard()
+    oa_provider = SentinelOAProvider()
+    adapter = RecordingAdapter(OAReadAdapter(oa_provider))
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=registry,
+        policy_guard=policy,
+        trace_port=trace,
+    )
+    message = "query pending workflows"
+    llm_provider = MockLLMProvider()
+    llm_provider.register(
+        message,
+        LLMCompletionResponse(
+            content=(
+                '{"capability_id":"oa.list_pending_workflows",'
+                f'"arguments":{{"user":"{canary}"}},'
+                '"target_system":"oa","capability_type":"query"}'
+            )
+        ),
+    )
+    runtime = RuntimeImpl(
+        task_store=task_store,
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        gateway=gateway,
+        trace_port=trace,
+        llm_provider=llm_provider,
+        structured_output=JSONStructuredOutputProvider(),
+        intent_model="test-intent-model",
+        response_builder=ResponseEnvelopeBuilder(),
+    )
+
+    envelope = asyncio.run(
+        runtime.handle_user_message(
+            channel="web",
+            ai_user_id="ai-user-1",
+            session_id="session-web",
+            message=message,
+            client_capabilities={},
+        )
+    )
+
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1][1:] == ("failed", "adapter_error")
+    assert policy.call_count == 0
+    assert adapter.call_count == 0
+    assert oa_provider.call_count == 0
+    gateway_event = next(
+        step for step in trace.steps if step["event_type"] == "gateway_pre_recorded"
+    )
+    assert gateway_event["attributes"] == {
+        "error_path": "$.arguments",
+        "error_type": "additionalProperties",
+        "argument_keys": ["user"],
+    }
+    serialized = repr((envelope, task_store.status_updates, trace.steps))
+    assert canary not in serialized
+    assert canary not in caplog.text

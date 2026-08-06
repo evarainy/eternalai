@@ -88,11 +88,16 @@ def test_error_modes_return_execution_result_with_mapped_status_and_error_code(
     assert result.data is None
 
 
-def _capability_spec(target_system: str | None = "oa") -> CapabilitySpec:
+def _capability_spec(
+    target_system: str | None = "oa",
+    *,
+    input_schema: dict[str, Any] | None = None,
+) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id="oa.workflow_status.get",
         name="Workflow Status",
         type="query",
+        input_schema=input_schema or {},
         input_schema_digest="input-digest",
         output_schema_digest="output-digest",
         risk_level="low",
@@ -395,6 +400,88 @@ def test_capability_registry_missing_short_circuits_without_adapter_and_records_
     assert trace.record_gateway_call_count == 0
     _assert_step_events(trace, ["no_capability_found"])
     _assert_trace_not_finalized(trace)
+
+
+def test_registry_input_schema_rejects_extra_argument_before_identity_policy_and_adapter(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    canary = "must-not-enter-trace-log-or-result"
+    registry = FakeRegistry(
+        _capability_spec(
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            }
+        )
+    )
+    identity_mapping = FakeIdentityMapping(_identity_result("active"))
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        identity_mapping,
+        policy_guard,
+        trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway, {"user": canary})
+
+    assert result.status == "failed"
+    assert result.error_code == "adapter_error"
+    assert result.data is None
+    assert registry.call_count == 1
+    assert identity_mapping.call_count == 0
+    assert policy_guard.call_count == 0
+    assert adapter.call_count == 0
+    assert trace.record_gateway_call_count == 1
+    _assert_step_events(trace, ["gateway_pre_recorded"])
+    assert trace.steps[0]["attributes"] == {
+        "error_path": "$.arguments",
+        "error_type": "additionalProperties",
+        "argument_keys": ["user"],
+    }
+    serialized = repr((result, trace.steps))
+    assert canary not in serialized
+    assert canary not in caplog.text
+
+
+def test_registry_input_schema_accepts_empty_arguments_through_existing_path() -> None:
+    registry = FakeRegistry(
+        _capability_spec(
+            target_system=None,
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+    )
+    policy_guard = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = FakeAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter,
+        registry,
+        policy_guard=policy_guard,
+        trace_port=trace,
+    )
+
+    result = _execute_gateway_with_ports(gateway, {})
+
+    assert result.status == "completed"
+    assert result.error_code is None
+    assert policy_guard.call_count == 1
+    assert adapter.call_count == 1
+    assert trace.record_gateway_call_count == 1
+    _assert_step_events(
+        trace,
+        ["policy_checked", "gateway_pre_recorded", "adapter_called", "gateway_post_recorded"],
+    )
 
 
 def test_identity_unbound_short_circuits_without_adapter_and_records_trace() -> None:

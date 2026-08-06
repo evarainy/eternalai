@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from app.ports.adapter import AdapterPort, AdapterResult
 from app.ports.capability_gateway import (
@@ -15,6 +19,9 @@ from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
+
+_SAFE_ERROR_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
+_SAFE_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
 
 
 def _map_adapter_status(adapter_result: AdapterResult) -> ExecutionStatus:
@@ -100,6 +107,26 @@ class CapabilityGateway:
                 return ExecutionResult(
                     status="no_capability_found",
                     error_code="capability_not_found",
+                    trace_id=trace_id,
+                )
+            validation_diagnostics = _validate_arguments(
+                capability_spec.input_schema,
+                arguments,
+            )
+            if validation_diagnostics is not None:
+                if self._trace_port is not None:
+                    await self._trace_port.record_gateway_call(
+                        trace_id=trace_id,
+                        task_id=task_id,
+                        session_id=session_id,
+                        status="failed",
+                        capability_id=capability_id,
+                        error_code="adapter_error",
+                        attributes=validation_diagnostics,
+                    )
+                return ExecutionResult(
+                    status="failed",
+                    error_code="adapter_error",
                     trace_id=trace_id,
                 )
 
@@ -366,3 +393,32 @@ def _map_execution_to_trace_status(status: ExecutionStatus) -> TraceEventStatus:
     if status in {"denied", "binding_required", "no_capability_found", "waiting_user"}:
         return "blocked"
     return "failed"
+
+
+def _validate_arguments(
+    input_schema: dict[str, Any],
+    arguments: dict[str, Any],
+) -> dict[str, Any] | None:
+    try:
+        Draft202012Validator.check_schema(input_schema)
+        Draft202012Validator(input_schema).validate(arguments)
+    except ValidationError as error:
+        raw_error_type = error.validator
+        error_type = (
+            raw_error_type
+            if isinstance(raw_error_type, str)
+            and _SAFE_ERROR_TYPE.fullmatch(raw_error_type) is not None
+            else "validation_error"
+        )
+    except SchemaError:
+        error_type = "schema_error"
+    else:
+        return None
+    return {
+        "error_path": "$.arguments",
+        "error_type": error_type,
+        "argument_keys": [
+            key if _SAFE_ARGUMENT_KEY.fullmatch(key) is not None else "[REDACTED]"
+            for key in sorted(arguments)[:32]
+        ],
+    }

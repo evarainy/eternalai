@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.memory import SessionMemorySummary
 from app.ports.llm_provider import LLMCompletionResponse
@@ -259,13 +260,16 @@ def test_router_adds_only_structured_success_summaries_when_memory_exists() -> N
 
 def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
     bounded = _bound_generated_knowledge(
-        tuple(f"item-{index}:" + (str(index) * 260) for index in range(10))
+        tuple(
+            f"item-{index}:" + (str(index) * (MAX_KNOWLEDGE_ITEM_LENGTH + 20))
+            for index in range(10)
+        )
     )
 
     assert MAX_KNOWLEDGE_ITEMS == 8
     assert MAX_KNOWLEDGE_ITEM_LENGTH == 240
     assert len(bounded) == 8
-    assert all(len(item) == 240 for item in bounded)
+    assert all(len(item) == MAX_KNOWLEDGE_ITEM_LENGTH for item in bounded)
     assert bounded[0].startswith("item-0:")
     assert bounded[7].startswith("item-7:")
     assert all("item-8:" not in item and "item-9:" not in item for item in bounded)
@@ -287,11 +291,15 @@ def test_router_injects_at_most_eight_registry_derived_capabilities() -> None:
     messages = llm_provider.calls[0]["messages"]
     assert [message.role for message in messages] == ["system", "system", "user"]
     payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
-    injected = payload["semantic_system_knowledge"]
+    assert payload["semantic_system_knowledge"] == []
+    injected = payload["capability_input_contracts"]
     assert len(injected) == 8
-    assert "id=oa.item-0" in injected[0]
-    assert "id=oa.item-7" in injected[7]
-    assert all("oa.item-8" not in item and "oa.item-9" not in item for item in injected)
+    assert injected[0]["capability_id"] == "oa.item-0"
+    assert injected[7]["capability_id"] == "oa.item-7"
+    assert all(
+        item["capability_id"] not in {"oa.item-8", "oa.item-9"}
+        for item in injected
+    )
 
 
 def test_router_keeps_knowledge_and_memory_in_independent_system_messages() -> None:
@@ -353,6 +361,126 @@ def test_router_has_no_registry_free_text_prompt_entry() -> None:
     asyncio.run(router.parse("request", capabilities=(capability,)))
 
     prompt = llm_provider.calls[0]["messages"][1].content
-    assert "id=oa.safe.query" in prompt
+    payload = json.loads(prompt.split("\n", maxsplit=1)[1])
+    contract = payload["capability_input_contracts"][0]
+    assert contract["capability_id"] == "oa.safe.query"
     for marker in free_text_markers:
         assert marker not in prompt
+
+
+def test_router_prompt_requires_empty_arguments_for_zero_argument_capability() -> None:
+    llm_provider = MockLLMProvider()
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+    )
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+    capability = active_capability("oa.list_pending_workflows").model_copy(
+        update={
+            "target_system": "oa",
+            "input_schema": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        }
+    )
+
+    asyncio.run(router.parse("查询 OA 待办", capabilities=(capability,)))
+
+    messages = llm_provider.calls[0]["messages"]
+    assert "When a contract says arguments must be {}, emit exactly {}" in messages[0].content
+    payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
+    assert payload["semantic_system_knowledge"]
+    contract = payload["capability_input_contracts"][0]
+    assert contract["allowed_argument_keys"] == []
+    assert contract["required_argument_keys"] == []
+    assert contract["additionalProperties"] is False
+    assert contract["arguments_must_be"] == {}
+
+
+def test_router_injects_complete_long_contract_outside_text_truncation_path() -> None:
+    long_key = "workflow_" + ("x" * 180)
+    allowed_keys = ["department_id", long_key, "region-code"]
+    required_keys = [long_key, "department_id"]
+    capability = active_capability("oa.complete-contract.query").model_copy(
+        update={
+            "target_system": "oa",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    key: {
+                        "type": "string",
+                        "description": "schema-description-must-not-enter",
+                        "default": "schema-default-must-not-enter",
+                        "example": "schema-example-must-not-enter",
+                    }
+                    for key in allowed_keys
+                },
+                "required": required_keys,
+                "additionalProperties": False,
+            },
+        }
+    )
+    llm_provider = MockLLMProvider()
+    router = IntentRouter(
+        llm_provider,
+        RecordingStructuredOutput(
+            StructuredOutputResult(
+                parsed=CapabilityRef(capability_id=capability.capability_id)
+            )
+        ),
+        "qwen-test",
+    )
+
+    asyncio.run(router.parse("request", capabilities=(capability,)))
+
+    prompt = llm_provider.calls[0]["messages"][1].content
+    payload = json.loads(prompt.split("\n", maxsplit=1)[1])
+    contract = payload["capability_input_contracts"][0]
+    assert payload["semantic_system_knowledge"] == []
+    assert len(json.dumps(contract, ensure_ascii=True)) > MAX_KNOWLEDGE_ITEM_LENGTH
+    assert contract["capability_id"] == capability.capability_id
+    assert contract["capability_type"] == "query"
+    assert contract["target_system"] == "oa"
+    assert contract["allowed_argument_keys"] == sorted(allowed_keys)
+    assert contract["required_argument_keys"] == sorted(required_keys)
+    assert contract["additionalProperties"] is False
+    assert "schema-description-must-not-enter" not in prompt
+    assert "schema-default-must-not-enter" not in prompt
+    assert "schema-example-must-not-enter" not in prompt
+
+
+def test_router_preserves_only_safe_pydantic_validation_diagnostics(caplog: Any) -> None:
+    canary = "must-not-enter-trace-log-or-response"
+    llm_provider = MockLLMProvider()
+    llm_provider.register(
+        "invalid intent",
+        LLMCompletionResponse(
+            content=json.dumps(
+                {
+                    "capability_id": "oa.safe.query",
+                    "arguments": {"user": canary},
+                    "target_system": "oa",
+                    "capability_type": "query",
+                    canary: "rejected-extra-value",
+                }
+            )
+        ),
+    )
+    router = IntentRouter(
+        llm_provider,
+        JSONStructuredOutputProvider(),
+        "qwen-test",
+    )
+
+    result = asyncio.run(router.parse("invalid intent"))
+
+    assert result.capability_ref is None
+    assert result.failure_reason == "structured_output_error"
+    assert result.structured_output_error_code == "validation_error"
+    assert result.validation_error_path == "$"
+    assert result.validation_error_type == "extra_forbidden"
+    assert result.argument_keys == ("user",)
+    assert canary not in repr(result)
+    assert canary not in caplog.text

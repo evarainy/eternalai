@@ -163,6 +163,9 @@ class RuntimeImpl:
                 capability_ref,
                 intent_result.failure_reason,
                 intent_result.structured_output_error_code,
+                intent_result.validation_error_path,
+                intent_result.validation_error_type,
+                intent_result.argument_keys,
             ),
         )
 
@@ -809,14 +812,23 @@ def _intent_trace_attributes(
     intent: CapabilityRef | None,
     failure_reason: IntentFailureReason | None,
     structured_output_error_code: StructuredOutputErrorCode | None,
+    validation_error_path: str | None = None,
+    validation_error_type: str | None = None,
+    argument_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     if intent is None:
-        attributes = {
+        attributes: dict[str, Any] = {
             "result": "invalid",
             "reason": failure_reason or "schema_invalid",
         }
         if structured_output_error_code is not None:
             attributes["structured_output_error_code"] = structured_output_error_code
+        if validation_error_path is not None:
+            attributes["error_path"] = validation_error_path
+        if validation_error_type is not None:
+            attributes["error_type"] = validation_error_type
+        if validation_error_path is not None or validation_error_type is not None:
+            attributes["argument_keys"] = list(argument_keys)
         return attributes
     attributes = {
         "result": "valid",
