@@ -390,7 +390,7 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v1"
+        / "ecology9-pending-workflows-v2"
     )
     settings = replace(
         ProductionSettings.from_environment(),
@@ -462,7 +462,7 @@ def test_oa_read_adapter_mode_builds_configured_provider(
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v1"
+        / "ecology9-pending-workflows-v2"
     )
     system_message_contract_pack_dir = (
         Path(__file__).parents[1]
@@ -538,7 +538,7 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v1"
+        / "ecology9-pending-workflows-v2"
     )
     system_message_contract_pack_dir = (
         Path(__file__).parents[1]

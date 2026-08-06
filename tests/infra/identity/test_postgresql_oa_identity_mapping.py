@@ -32,7 +32,7 @@ CONTRACT_PACK = (
     Path(__file__).resolve().parents[2]
     / "contract_packs"
     / "oa"
-    / "ecology9-pending-workflows-v1"
+    / "ecology9-pending-workflows-v2"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
     Path(__file__).resolve().parents[2]

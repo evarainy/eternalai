@@ -1,9 +1,8 @@
 {
   "profile_version": "ecology9-pending-workflows-v1",
   "capability_id": "oa.list_pending_workflows",
-  "source_kind": "derived_from_sibling_capture",
-  "sanitizer_version": "2",
+  "source_kind": "synthetic",
+  "sanitizer_version": "1",
   "sample_file": "sample.json",
-  "fingerprint_file": "fingerprint.json",
-  "source_warning": "Structure was derived from a real system-message capture after both OA message-center categories were verified to share the same field set; the pending category was not captured directly."
+  "fingerprint_file": "fingerprint.json"
 }

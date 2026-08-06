@@ -72,7 +72,7 @@ CONTRACT_PACK = (
     / "tests"
     / "contract_packs"
     / "oa"
-    / "ecology9-pending-workflows-v1"
+    / "ecology9-pending-workflows-v2"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
     REPO_ROOT
@@ -705,6 +705,58 @@ def _message_center_page(
         "mintime": f"synthetic-lower-{cursor_index}",
         "msgid": f"synthetic-cursor-{cursor_index}",
     }
+
+
+def test_published_pending_pack_versions_stay_immutable_and_distinct() -> None:
+    """A published pack version is a fixed structure, never edited in place.
+
+    The v1 pack is the retired synthetic guess and the v2 pack is the structure
+    derived from the real sibling capture. Both shas are written out here so a
+    rewrite of either directory fails instead of silently redefining a version
+    other artifacts already reference.
+    """
+
+    retired_pack = CONTRACT_PACK.parent / "ecology9-pending-workflows-v1"
+    retired_profile = json.loads(
+        (retired_pack / "profile.json").read_text(encoding="utf-8")
+    )
+    retired_fingerprint = json.loads(
+        (retired_pack / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    current_profile = json.loads(
+        (CONTRACT_PACK / "profile.json").read_text(encoding="utf-8")
+    )
+    current_fingerprint = json.loads(
+        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    )
+
+    assert CONTRACT_PACK.name == "ecology9-pending-workflows-v2"
+    assert retired_profile["profile_version"] == retired_pack.name
+    assert retired_profile["source_kind"] == "synthetic"
+    assert (
+        retired_fingerprint["sha256"]
+        == "cbea86fd8abcd32fdf54e1c405dfedc8df442d816fe40bb301be44eb28ae991f"
+    )
+    assert current_profile["profile_version"] == CONTRACT_PACK.name
+    assert current_profile["source_kind"] == "derived_from_sibling_capture"
+    assert (
+        current_fingerprint["sha256"]
+        == "12effb9199346f8a35c8d25f97b0c1ff43f55ace80f5bb3ae34273a655ca769e"
+    )
+    assert current_fingerprint == build_structural_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
+    )
+    # v1 was sealed before the fingerprint builder started overlaying the
+    # contract exemplar, so the current builder cannot reproduce it. That is
+    # what retirement looks like; the fix is a new version, never a rewrite of
+    # this directory to make it self-consistent again.
+    assert retired_fingerprint != build_structural_fingerprint(
+        json.loads((retired_pack / "sample.json").read_text(encoding="utf-8"))
+    )
+    with pytest.raises(OAContractPackError):
+        asyncio.run(
+            ReplayOAReadProvider(retired_pack).list_pending_workflows(_credential())
+        )
 
 
 def test_message_center_record_excludes_disproved_pending_fields() -> None:

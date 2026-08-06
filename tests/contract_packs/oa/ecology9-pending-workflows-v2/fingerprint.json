@@ -8,6 +8,18 @@
       "array_shape": null
     },
     {
+      "path": "$.is_complete",
+      "json_type": "boolean",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.returned_count",
+      "json_type": "integer",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
       "path": "$.workflows",
       "json_type": "array",
       "nullable": false,
@@ -20,37 +32,43 @@
       "array_shape": null
     },
     {
-      "path": "$.workflows[].applicant",
+      "path": "$.workflows[].business_state",
       "json_type": "string",
       "nullable": false,
       "array_shape": null
     },
     {
-      "path": "$.workflows[].approver",
+      "path": "$.workflows[].content",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].link",
       "json_type": "string",
       "nullable": true,
       "array_shape": null
     },
     {
-      "path": "$.workflows[].created_at",
+      "path": "$.workflows[].message_id",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].mobile_link",
       "json_type": "string",
       "nullable": true,
       "array_shape": null
     },
     {
-      "path": "$.workflows[].current_step",
+      "path": "$.workflows[].occurred_at",
       "json_type": "string",
       "nullable": false,
       "array_shape": null
     },
     {
-      "path": "$.workflows[].expired",
-      "json_type": "boolean",
-      "nullable": false,
-      "array_shape": null
-    },
-    {
-      "path": "$.workflows[].status",
+      "path": "$.workflows[].source_name",
       "json_type": "string",
       "nullable": false,
       "array_shape": null
@@ -60,13 +78,7 @@
       "json_type": "string",
       "nullable": false,
       "array_shape": null
-    },
-    {
-      "path": "$.workflows[].workflow_id",
-      "json_type": "string",
-      "nullable": false,
-      "array_shape": null
     }
   ],
-  "sha256": "cbea86fd8abcd32fdf54e1c405dfedc8df442d816fe40bb301be44eb28ae991f"
+  "sha256": "12effb9199346f8a35c8d25f97b0c1ff43f55ace80f5bb3ae34273a655ca769e"
 }

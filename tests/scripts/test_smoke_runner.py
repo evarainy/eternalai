@@ -231,7 +231,7 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
     before_hash = hashlib.sha256(base_env.read_bytes()).hexdigest()
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v1",
+        "ecology9-pending-workflows-v2",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -290,7 +290,7 @@ def test_prepare_completes_a_half_filled_file_then_is_idempotent(
     )
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v1",
+        "ecology9-pending-workflows-v2",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -377,7 +377,7 @@ def test_prepare_does_not_replace_existing_blank_value(
     smoke_env = tmp_path / ".env.smoke"
     smoke_env.write_text("OA_BASE_URL=\n", encoding="utf-8")
     for profile in (
-        "ecology9-pending-workflows-v1",
+        "ecology9-pending-workflows-v2",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -416,7 +416,7 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
     )
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v1",
+        "ecology9-pending-workflows-v2",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
