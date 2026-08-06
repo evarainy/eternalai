@@ -26,7 +26,7 @@ from app.ports.capability_gateway import (
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
-from app.ports.structured_output import StructuredOutputPort
+from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.ports.task_store import (
     SessionRecord,
     SessionStorePort,
@@ -162,11 +162,12 @@ class RuntimeImpl:
             attributes=_intent_trace_attributes(
                 capability_ref,
                 intent_result.failure_reason,
+                intent_result.structured_output_error_code,
             ),
         )
 
         if not parse_ok or capability_ref is None:
-            return await self._finish_no_capability_found(
+            return await self._finish_intent_failure(
                 response_id,
                 task_id,
                 session_id,
@@ -452,6 +453,57 @@ class RuntimeImpl:
         if len(matches) != 1:
             return None
         return _CapabilitySelection(matches[0], "unique_intent_tag")
+
+    async def _finish_intent_failure(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        trace_id: str,
+        *,
+        reason: IntentFailureReason,
+    ) -> ResponseEnvelope:
+        message, fallback_text = _intent_failure_message(reason)
+        await self._task_store.update_status(task_id, "failed", "internal_error")
+        envelope = self._response_builder.build_message(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            status="failed",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="task_failed",
+            status="failed",
+            error_code="internal_error",
+        )
+        await self._record_terminal_evaluation(
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            business_status="failed",
+            error_code="internal_error",
+        )
+        await self._trace_port.finalize_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            status="failed",
+            error_code="internal_error",
+        )
+        return envelope
 
     async def _finish_no_capability_found(
         self,
@@ -756,13 +808,17 @@ def _matches_intent_constraints(
 def _intent_trace_attributes(
     intent: CapabilityRef | None,
     failure_reason: IntentFailureReason | None,
+    structured_output_error_code: StructuredOutputErrorCode | None,
 ) -> dict[str, Any]:
     if intent is None:
-        return {
+        attributes = {
             "result": "invalid",
             "reason": failure_reason or "schema_invalid",
         }
-    attributes: dict[str, Any] = {
+        if structured_output_error_code is not None:
+            attributes["structured_output_error_code"] = structured_output_error_code
+        return attributes
+    attributes = {
         "result": "valid",
         "intent_fingerprint": _intent_fingerprint(intent.capability_id),
     }
@@ -771,6 +827,23 @@ def _intent_trace_attributes(
     if intent.capability_type is not None:
         attributes["capability_type"] = intent.capability_type
     return attributes
+
+
+def _intent_failure_message(reason: IntentFailureReason) -> tuple[str, str]:
+    if reason == "provider_error":
+        return (
+            "模型服务暂时无法连接或响应，请稍后重试。",
+            "The model service is temporarily unavailable. Please retry later.",
+        )
+    if reason == "blank_input":
+        return (
+            "没有收到可处理的查询内容，请重新输入。",
+            "No query content was received. Please enter it again.",
+        )
+    return (
+        "模型返回的查询结果暂时无法识别，请重新提交一次。",
+        "The model response could not be recognized. Please submit the query again.",
+    )
 
 
 def _intent_fingerprint(selector: str) -> str:

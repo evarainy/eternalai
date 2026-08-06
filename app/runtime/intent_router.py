@@ -12,7 +12,7 @@ from app.knowledge import BasicKnowledge, sanitize_knowledge_text
 from app.memory import SessionMemorySummary
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.llm_provider import LLMMessage, LLMProviderPort
-from app.ports.structured_output import StructuredOutputPort
+from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.runtime.models import CapabilityRef
 
 JSON_OBJECT_RESPONSE_FORMAT: dict[str, str] = {"type": "json_object"}
@@ -47,6 +47,7 @@ _KNOWLEDGE_SYSTEM_PROMPT = (
 class IntentParseResult:
     capability_ref: CapabilityRef | None = None
     failure_reason: IntentFailureReason | None = None
+    structured_output_error_code: StructuredOutputErrorCode | None = None
 
 
 class IntentRouter:
@@ -146,12 +147,23 @@ class IntentRouter:
             CapabilityRef,
             trace_metadata=parser_metadata,
         )
-        if result.error is not None or result.parsed is None:
-            return IntentParseResult(failure_reason="structured_output_error")
+        if result.error is not None:
+            return IntentParseResult(
+                failure_reason="structured_output_error",
+                structured_output_error_code=result.error.error_code,
+            )
+        if result.parsed is None:
+            return IntentParseResult(
+                failure_reason="structured_output_error",
+                structured_output_error_code="schema_error",
+            )
         try:
             capability_ref = CapabilityRef.model_validate(result.parsed)
         except ValidationError:
-            return IntentParseResult(failure_reason="schema_invalid")
+            return IntentParseResult(
+                failure_reason="schema_invalid",
+                structured_output_error_code="validation_error",
+            )
         return IntentParseResult(capability_ref=capability_ref)
 
 

@@ -116,6 +116,7 @@ def test_production_settings_allow_all_vllm_endpoint_overrides() -> None:
         {
             "LLM_BASE_URL": "http://vllm.invalid:8000/v1",
             "LLM_MODEL": "qwen-restored",
+            "LLM_TIMEOUT_S": "300",
             "LLM_TEMPERATURE": "0.2",
             "LLM_TOP_P": "0.8",
             "LLM_TOP_K": "10",
@@ -126,6 +127,7 @@ def test_production_settings_allow_all_vllm_endpoint_overrides() -> None:
 
     assert settings.llm_base_url == "http://vllm.invalid:8000/v1"
     assert settings.llm_model == "qwen-restored"
+    assert settings.llm_timeout_seconds == 300
     assert settings.llm_temperature == 0.2
     assert settings.llm_top_p == 0.8
     assert settings.llm_top_k == 10

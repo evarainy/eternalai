@@ -420,7 +420,7 @@ def test_evaluator_exception_does_not_change_business_terminal_state(
     assert "do-not-record-evaluator-error" not in repr(error_trace.steps)
 
 
-def test_no_capability_terminal_path_records_exactly_one_failed_evaluation() -> None:
+def test_intent_failure_terminal_path_records_exactly_one_failed_evaluation() -> None:
     runtime, task_store, trace, gateway = _runtime(
         ExecutionResult(status="completed", trace_id="unused"),
         malformed_intent=True,
@@ -429,18 +429,16 @@ def test_no_capability_terminal_path_records_exactly_one_failed_evaluation() -> 
     envelope = _handle(runtime)
 
     events = _evaluation_events(trace)
-    assert envelope.status == "no_capability_found"
-    assert task_store.status_updates == [
-        ("no_capability_found", "capability_not_found")
-    ]
+    assert envelope.status == "failed"
+    assert task_store.status_updates == [("failed", "internal_error")]
     assert gateway.calls == 0
     assert len(events) == 1
     assert events[0]["status"] == "failed"
-    assert events[0]["error_code"] == "capability_not_found"
+    assert events[0]["error_code"] == "internal_error"
     assert events[0]["attributes"] == {
         "rule_id": "terminal_status_v1",
-        "business_status": "no_capability_found",
-        "business_error_code": "capability_not_found",
+        "business_status": "failed",
+        "business_error_code": "internal_error",
         "evaluation_result": "failed",
         "reason": "business_not_completed",
     }

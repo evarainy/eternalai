@@ -528,44 +528,77 @@ def test_model_generated_intent_is_fingerprinted_before_trace() -> None:
     )
 
 
-def test_provider_failure_and_invalid_intent_have_distinct_safe_trace_reasons() -> None:
+@pytest.mark.parametrize(
+    (
+        "llm_completion",
+        "malformed_intent",
+        "expected_reason",
+        "expected_subcode",
+        "message_fragment",
+    ),
+    [
+        (
+            LLMCompletionResponse(
+                error_code="provider_error",
+                error_message="sensitive-model-failure-detail",
+            ),
+            False,
+            "provider_error",
+            None,
+            "模型服务暂时无法连接或响应",
+        ),
+        (
+            LLMCompletionResponse(content=None),
+            False,
+            "empty_response",
+            None,
+            "模型返回的查询结果暂时无法识别",
+        ),
+        (
+            None,
+            True,
+            "structured_output_error",
+            "parse_error",
+            "模型返回的查询结果暂时无法识别",
+        ),
+    ],
+)
+def test_intent_boundary_failures_return_safe_failed_envelopes_without_registry_advice(
+    llm_completion: LLMCompletionResponse | None,
+    malformed_intent: bool,
+    expected_reason: str,
+    expected_subcode: str | None,
+    message_fragment: str,
+) -> None:
     capability = _capability("oa.safe")
-    cases: list[tuple[LLMCompletionResponse | None, bool, str]] = [
-        (LLMCompletionResponse(error_code="timeout"), False, "provider_error"),
-        (None, True, "structured_output_error"),
+    canary = "sensitive-model-failure-detail"
+
+    envelope, task_store, trace, gateway, registry = _run_runtime(
+        capability.capability_id,
+        [capability],
+        llm_completion=llm_completion,
+        malformed_intent=malformed_intent,
+    )
+
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
+    assert registry.get_calls == []
+    assert registry.list_calls == [
+        {"target_system": None, "type": None, "status": "active"}
     ]
-    observed_reasons: list[str] = []
-
-    for llm_completion, malformed_intent, expected_reason in cases:
-        envelope, task_store, trace, gateway, registry = _run_runtime(
-            capability.capability_id,
-            [capability],
-            llm_completion=llm_completion,
-            malformed_intent=malformed_intent,
-        )
-
-        assert envelope.status == "no_capability_found"
-        assert task_store.status_updates[-1][1:] == (
-            "no_capability_found",
-            "capability_not_found",
-        )
-        assert registry.get_calls == []
-        assert registry.list_calls == [
-            {"target_system": None, "type": None, "status": "active"},
-            {"target_system": None, "type": None, "status": "active"},
-        ]
-        assert gateway.calls == []
-        intent_event = next(
-            step for step in trace.steps if step["event_type"] == "intent_parsed"
-        )
-        no_capability_event = next(
-            step for step in trace.steps if step["event_type"] == "no_capability_found"
-        )
-        assert intent_event["attributes"] == {
-            "result": "invalid",
-            "reason": expected_reason,
-        }
-        assert no_capability_event["attributes"] == {"reason": expected_reason}
-        observed_reasons.append(expected_reason)
-
-    assert observed_reasons == ["provider_error", "structured_output_error"]
+    assert gateway.calls == []
+    assert message_fragment in envelope.message
+    assert "暂未接入该能力" not in envelope.message
+    assert "Admin Lite" not in envelope.message
+    assert all(step["event_type"] != "no_capability_found" for step in trace.steps)
+    intent_event = next(
+        step for step in trace.steps if step["event_type"] == "intent_parsed"
+    )
+    expected_attributes = {"result": "invalid", "reason": expected_reason}
+    if expected_subcode is not None:
+        expected_attributes["structured_output_error_code"] = expected_subcode
+    assert intent_event["attributes"] == expected_attributes
+    serialized = repr(
+        (envelope, task_store.status_updates, trace.steps, gateway.calls)
+    )
+    assert canary not in serialized

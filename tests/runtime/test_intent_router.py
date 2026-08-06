@@ -13,6 +13,7 @@ from app.memory import SessionMemorySummary
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.structured_output import (
     StructuredOutputError,
+    StructuredOutputErrorCode,
     StructuredOutputResult,
 )
 from app.runtime.intent_router import (
@@ -115,7 +116,10 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
         (LLMCompletionResponse(content=None), "empty_response"),
         (LLMCompletionResponse(content="   "), "empty_response"),
         (
-            LLMCompletionResponse(error_code="provider_error", error_message="failed"),
+            LLMCompletionResponse(
+                error_code="provider_error",
+                error_message="sensitive-provider-detail",
+            ),
             "provider_error",
         ),
     ],
@@ -135,52 +139,68 @@ def test_router_fails_closed_before_structured_output_on_llm_failure(
 
     assert result.capability_ref is None
     assert result.failure_reason == expected_reason
+    assert result.structured_output_error_code is None
+    assert "sensitive-provider-detail" not in repr(result)
     assert len(llm_provider.calls) == 1
     assert structured_output.calls == []
 
 
 @pytest.mark.parametrize(
-    ("structured_result", "expected_reason"),
+    ("error_code",),
     [
-        (
-            StructuredOutputResult(
-                error=StructuredOutputError(
-                    error_code="validation_error",
-                    error_message="invalid intent",
-                )
-            ),
-            "structured_output_error",
-        ),
-        (
-            StructuredOutputResult(parsed={"capability_id": "", "arguments": {}}),
-            "schema_invalid",
-        ),
-        (
-            StructuredOutputResult(parsed={"capability_id": "   ", "arguments": {}}),
-            "schema_invalid",
-        ),
-        (
-            StructuredOutputResult(
-                parsed={"capability_id": "intent", "target_system": "unknown"}
-            ),
-            "schema_invalid",
-        ),
+        ("parse_error",),
+        ("validation_error",),
+        ("schema_error",),
     ],
 )
-def test_router_rejects_structured_output_errors_and_invalid_pydantic_results(
-    structured_result: StructuredOutputResult,
-    expected_reason: str,
+def test_router_preserves_safe_structured_output_error_code_without_raw_content(
+    error_code: StructuredOutputErrorCode,
 ) -> None:
+    canary = "sensitive-structured-output-detail"
     llm_provider = MockLLMProvider()
-    structured_output = RecordingStructuredOutput(structured_result)
+    structured_output = RecordingStructuredOutput(
+        StructuredOutputResult(
+            error=StructuredOutputError(
+                error_code=error_code,
+                error_message=canary,
+                raw_response=canary,
+            ),
+            raw_response=canary,
+        )
+    )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
 
     result = asyncio.run(router.parse("raw-json"))
 
     assert result.capability_ref is None
-    assert result.failure_reason == expected_reason
+    assert result.failure_reason == "structured_output_error"
+    assert result.structured_output_error_code == error_code
+    assert canary not in repr(result)
     assert len(structured_output.calls) == 1
     assert structured_output.calls[0]["schema_type"] is CapabilityRef
+
+
+@pytest.mark.parametrize(
+    "parsed",
+    [
+        {"capability_id": "", "arguments": {}},
+        {"capability_id": "   ", "arguments": {}},
+        {"capability_id": "intent", "target_system": "unknown"},
+    ],
+)
+def test_router_classifies_invalid_pydantic_results_without_raw_content(
+    parsed: dict[str, Any],
+) -> None:
+    llm_provider = MockLLMProvider()
+    structured_output = RecordingStructuredOutput(StructuredOutputResult(parsed=parsed))
+    router = IntentRouter(llm_provider, structured_output, "qwen-test")
+
+    result = asyncio.run(router.parse("raw-json"))
+
+    assert result.capability_ref is None
+    assert result.failure_reason == "schema_invalid"
+    assert result.structured_output_error_code == "validation_error"
+    assert repr(parsed) not in repr(result)
 
 
 def test_router_rejects_blank_input_without_calling_either_boundary() -> None:
