@@ -147,7 +147,14 @@ class OAMessageCenterRecord(BaseModel):
     @field_validator("link", "mobile_link")
     @classmethod
     def _validate_optional_link(cls, value: str | None) -> str | None:
-        if value is not None and (not value.strip() or not value.startswith("/")):
+        # "//host/path" is protocol-relative, i.e. off-origin, and would become a
+        # cross-origin redirect once rendered as an href. The Live normalizer
+        # already rejects it; the model must too, or the Replay path lets it in.
+        if value is not None and (
+            not value.strip()
+            or not value.startswith("/")
+            or value.startswith("//")
+        ):
             raise ValueError("system-message links must be null or relative paths")
         return value
 

@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import OpenerDirector, Request
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.infra.adapters.oa import provider as oa_provider
 from app.infra.adapters.oa.adapter import OAReadAdapter
@@ -81,13 +81,315 @@ SYSTEM_MESSAGE_CONTRACT_PACK = (
     / "oa"
     / "ecology9-system-messages-v1"
 )
-_SYSTEM_MESSAGE_REPLAY_DATA = json.loads(
-    (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
-)
+# Written out by hand, not read back from the pack under test: an expectation
+# sourced from the artifact family it verifies would stay green through any
+# rewrite of that artifact.
 EXPECTED_REPLAY_DATA: dict[str, Any] = {
-    "workflows": _SYSTEM_MESSAGE_REPLAY_DATA["messages"],
-    "returned_count": _SYSTEM_MESSAGE_REPLAY_DATA["returned_count"],
-    "is_complete": _SYSTEM_MESSAGE_REPLAY_DATA["is_complete"],
+    "workflows": [
+        {
+            "message_id": "90000001",
+            "title": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内",
+            "content": (
+                "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统"
+            ),
+            "source_name": "统消息合成样本",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000002",
+            "title": (
+                "消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消"
+                "息合成"
+            ),
+            "content": (
+                "消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消"
+            ),
+            "source_name": "消息合成样本文",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/002xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/002xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000003",
+            "title": "息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系",
+            "content": (
+                "息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息"
+            ),
+            "source_name": "息合成样本文本",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/003xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/003xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000004",
+            "title": "合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提",
+            "content": (
+                "合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合"
+            ),
+            "source_name": "合成样本文本内",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/004xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/004xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000005",
+            "title": (
+                "成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成"
+                "样本文"
+            ),
+            "content": (
+                "成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成"
+            ),
+            "source_name": "成样本文本内容",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "6",
+            "link": "/oa/system-messages/desktop/005xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/005xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000006",
+            "title": "样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查",
+            "content": (
+                "样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样"
+            ),
+            "source_name": "样本文本内容通",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "7",
+            "link": "/oa/system-messages/desktop/006xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/006xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000007",
+            "title": (
+                "本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本"
+                "文本内容通"
+            ),
+            "content": (
+                "本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本"
+            ),
+            "source_name": "本文本内容通知",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "8",
+            "link": "/oa/system-messages/desktop/007xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/007xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000008",
+            "title": (
+                "文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文"
+                "本内容通知"
+            ),
+            "content": (
+                "文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文"
+            ),
+            "source_name": "文本内容通知提",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "1",
+            "link": "/oa/system-messages/desktop/008xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/008xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000009",
+            "title": (
+                "本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本"
+                "内容通知提"
+            ),
+            "content": (
+                "本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本"
+            ),
+            "source_name": "本内容通知提醒",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/009xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/009xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000010",
+            "title": "内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统",
+            "content": (
+                "内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内"
+            ),
+            "source_name": "内容通知提醒待",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/010xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/010xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000011",
+            "title": "容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本",
+            "content": (
+                "容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容"
+            ),
+            "source_name": "容通知提醒待办",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/011xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/011xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000012",
+            "title": "通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消",
+            "content": (
+                "通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通"
+            ),
+            "source_name": "通知提醒待办查",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/012xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/012xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000013",
+            "title": "知提醒待办查阅系统消息合成样本文本内容通知提醒待办查",
+            "content": (
+                "知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知"
+            ),
+            "source_name": "知提醒待办查阅",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "6",
+            "link": "/oa/system-messages/desktop/013xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/013xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000014",
+            "title": "提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成",
+            "content": (
+                "提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提"
+            ),
+            "source_name": "提醒待办查阅系",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "7",
+            "link": "/oa/system-messages/desktop/014xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/014xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000015",
+            "title": "醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通",
+            "content": (
+                "醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒"
+            ),
+            "source_name": "醒待办查阅系统",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "8",
+            "link": "/oa/system-messages/desktop/015xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/015xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000016",
+            "title": (
+                "待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待"
+                "办查阅系统消息合成样本文本内容通知提醒"
+            ),
+            "content": (
+                "待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待"
+            ),
+            "source_name": "待办查阅系统消",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "1",
+            "link": "/oa/system-messages/desktop/016xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/016xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000017",
+            "title": (
+                "办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办"
+                "查阅系统消息合成样本文本内容通知提"
+            ),
+            "content": (
+                "办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办"
+            ),
+            "source_name": "办查阅系统消息",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/017xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/017xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000018",
+            "title": "查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本",
+            "content": (
+                "查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查"
+            ),
+            "source_name": "查阅系统消息合",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/018xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/018xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000019",
+            "title": "阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本",
+            "content": (
+                "阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅"
+            ),
+            "source_name": "阅系统消息合成",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/019xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/019xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000020",
+            "title": "系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文",
+            "content": (
+                "系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系"
+            ),
+            "source_name": "系统消息合成样",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/020xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/020xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+    ],
+    "returned_count": 20,
+    "is_complete": False,
 }
 
 
@@ -417,6 +719,47 @@ def test_message_center_record_excludes_disproved_pending_fields() -> None:
     }
 
     assert disproved_fields.isdisjoint(OAMessageCenterRecord.model_fields)
+
+
+def _message_center_record(**overrides: Any) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "message_id": "90000001",
+        "title": "synthetic-title",
+        "content": "synthetic-content",
+        "source_name": "synthetic-source",
+        "occurred_at": "2000-01-01 00:00:00",
+        "business_state": "2",
+        "link": "/oa/system-messages/desktop/001",
+        "mobile_link": "/oa/system-messages/mobile/001",
+    }
+    record.update(overrides)
+    return record
+
+
+@pytest.mark.parametrize("field_name", ["link", "mobile_link"])
+def test_message_center_record_rejects_protocol_relative_links(
+    field_name: str,
+) -> None:
+    # "//evil.example/steal" starts with "/" but is protocol-relative: rendered
+    # as an href it is a cross-origin jump, not a same-origin path.
+    with pytest.raises(ValidationError, match="null or relative paths"):
+        OAMessageCenterRecord.model_validate(
+            _message_center_record(**{field_name: "//evil.example/steal"}),
+            strict=True,
+        )
+
+
+@pytest.mark.parametrize("accepted_link", ["/ok/path", None])
+def test_message_center_record_still_accepts_same_origin_and_absent_links(
+    accepted_link: str | None,
+) -> None:
+    record = OAMessageCenterRecord.model_validate(
+        _message_center_record(link=accepted_link),
+        strict=True,
+    )
+
+    assert record.link == accepted_link
+    assert record.mobile_link == "/oa/system-messages/mobile/001"
 
 
 def test_message_center_ignored_wire_fields_are_exactly_enumerated() -> None:
