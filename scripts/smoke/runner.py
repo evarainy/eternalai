@@ -61,7 +61,6 @@ from app.infra.persistence.capability_registry.repository import (
 from app.knowledge import BasicKnowledge
 from app.ports.auth import AuthenticationError, LoginCredential, OASessionCredential
 from app.ports.capability_registry import CapabilitySpec
-from app.runtime.intent_router import _bound_generated_knowledge
 from scripts import sanitize_oa_contract_pack as sanitizer
 from scripts.smoke.capabilities import (
     OA_CAPABILITY_CONTEXT_PROBES,
@@ -1600,17 +1599,49 @@ def _classify_capability_registry(
         if item.target_system == "oa"
         and item.capability_id not in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
     )
-    visible_probe_count = sum(
-        all(
-            capability_id in "\n".join(
-                _bound_generated_knowledge(
-                    BasicKnowledge().context_items(probe, active)
-                )
-            )
-            for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+    visible_contract_ids = {
+        capability_id
+        for contract in BasicKnowledge().capability_input_contracts(active)
+        if isinstance((capability_id := contract.get("capability_id")), str)
+    }
+    if len(OA_CAPABILITY_CONTEXT_PROBES) != len(
+        REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+    ):
+        raise RuntimeError(
+            "OA capability probes and required IDs must be one-to-one"
         )
-        for probe in OA_CAPABILITY_CONTEXT_PROBES
+    probe_capability_pairs = tuple(
+        zip(
+            OA_CAPABILITY_CONTEXT_PROBES,
+            REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+            strict=True,
+        )
     )
+    if not probe_capability_pairs:
+        raise RuntimeError(
+            "OA capability probe and required ID pairs must not be empty"
+        )
+    if any(
+        not probe.strip() or not capability_id.strip()
+        for probe, capability_id in probe_capability_pairs
+    ):
+        raise RuntimeError(
+            "OA capability probes and required IDs must be non-empty"
+        )
+    if (
+        len({probe for probe, _ in probe_capability_pairs})
+        != len(probe_capability_pairs)
+        or len({capability_id for _, capability_id in probe_capability_pairs})
+        != len(probe_capability_pairs)
+    ):
+        raise RuntimeError(
+            "OA capability probes and required IDs must be unique"
+        )
+    probe_contract_visibility = {
+        probe: capability_id in visible_contract_ids
+        for probe, capability_id in probe_capability_pairs
+    }
+    visible_probe_count = sum(probe_contract_visibility.values())
     if len(found) != len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS):
         state = "missing"
     elif any(item.status != "active" for item in found):

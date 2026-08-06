@@ -1537,13 +1537,80 @@ def test_registry_preflight_fails_closed_for_invalid_or_extra_active_capability(
 
 
 def test_registry_preflight_passes_only_exact_runtime_visible_contracts() -> None:
-    result = smoke_runner._classify_capability_registry(
-        expected_oa_capabilities()
-    )
+    catalog = expected_oa_capabilities()
+    contracts = smoke_runner.BasicKnowledge().capability_input_contracts(catalog)
+    result = smoke_runner._classify_capability_registry(catalog)
 
     assert result.state == "passed"
     assert result.active_total_count == 2
     assert result.visible_probe_count == 2
+    assert {item["capability_id"] for item in contracts} == {
+        "oa.list_pending_workflows",
+        "oa.list_system_messages",
+    }
+    assert all(item["allowed_argument_keys"] == [] for item in contracts)
+    assert all(item["required_argument_keys"] == [] for item in contracts)
+    assert all(item["additionalProperties"] is False for item in contracts)
+    assert all(item["arguments_must_be"] == {} for item in contracts)
+
+
+def test_registry_preflight_uses_structured_contracts_not_legacy_context_text() -> None:
+    catalog = expected_oa_capabilities()
+    knowledge = smoke_runner.BasicKnowledge()
+
+    legacy_contexts = tuple(
+        "\n".join(knowledge.context_items(probe, catalog))
+        for probe in smoke_runner.OA_CAPABILITY_CONTEXT_PROBES
+    )
+    result = smoke_runner._classify_capability_registry(catalog)
+
+    assert all(
+        capability_id not in context
+        for context in legacy_contexts
+        for capability_id in smoke_runner.REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+    )
+    assert result.state == "passed"
+    assert result.visible_probe_count == 2
+
+
+def test_registry_preflight_contract_channel_ignores_registry_free_text_and_schema_values() -> None:
+    markers = (
+        "registry-name-marker",
+        "registry-owner-marker",
+        "registry-description-marker",
+        "schema-description-marker",
+        "schema-default-marker",
+        "schema-example-marker",
+    )
+    poisoned = tuple(
+        _capability_copy(
+            capability,
+            name=markers[0],
+            owner=markers[1],
+            short_description=markers[2],
+            intent_tags=["registry-intent-marker"],
+            input_schema={
+                **capability.input_schema,
+                "description": markers[3],
+                "default": markers[4],
+                "examples": [markers[5]],
+            },
+        )
+        for capability in expected_oa_capabilities()
+    )
+
+    contracts = smoke_runner.BasicKnowledge().capability_input_contracts(poisoned)
+    result = smoke_runner._classify_capability_registry(poisoned)
+    serialized = json.dumps(contracts, ensure_ascii=False)
+
+    assert result.state == "contract_mismatch"
+    assert result.visible_probe_count == 2
+    assert {item["capability_id"] for item in contracts} == {
+        "oa.list_pending_workflows",
+        "oa.list_system_messages",
+    }
+    for marker in (*markers, "registry-intent-marker"):
+        assert marker not in serialized
 
 
 def test_registry_preflight_rejects_required_capabilities_truncated_from_context() -> None:
@@ -1563,6 +1630,139 @@ def test_registry_preflight_rejects_required_capabilities_truncated_from_context
 
     assert result.state == "context_truncated"
     assert result.active_total_count == 9
+    assert result.visible_probe_count == 1
+
+
+def test_registry_preflight_counts_each_probe_contract_pair_independently() -> None:
+    pending, system_messages = expected_oa_capabilities()
+    oversized_pending = _capability_copy(
+        pending,
+        input_schema={
+            **pending.input_schema,
+            "properties": {
+                f"field_{index:03d}": {"type": "string"}
+                for index in range(400)
+            },
+        },
+    )
+
+    result = smoke_runner._classify_capability_registry(
+        (oversized_pending, system_messages)
+    )
+
+    assert result.state == "contract_mismatch"
+    assert result.visible_probe_count == 1
+
+
+def test_registry_preflight_rejects_probe_contract_length_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        smoke_runner,
+        "OA_CAPABILITY_CONTEXT_PROBES",
+        ("查询我的待办",),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="OA capability probes and required IDs must be one-to-one",
+    ):
+        smoke_runner._classify_capability_registry(expected_oa_capabilities())
+
+
+def test_registry_preflight_rejects_empty_probe_contract_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(smoke_runner, "OA_CAPABILITY_CONTEXT_PROBES", ())
+    monkeypatch.setattr(smoke_runner, "REQUIRED_ACTIVE_OA_CAPABILITY_IDS", ())
+
+    with pytest.raises(
+        RuntimeError,
+        match="OA capability probe and required ID pairs must not be empty",
+    ):
+        smoke_runner._classify_capability_registry(expected_oa_capabilities())
+
+
+@pytest.mark.parametrize(
+    ("probes", "required_ids"),
+    [
+        (
+            (" ", "查询我的系统消息"),
+            ("oa.list_pending_workflows", "oa.list_system_messages"),
+        ),
+        (
+            ("查询我的待办", "查询我的系统消息"),
+            (" ", "oa.list_system_messages"),
+        ),
+    ],
+)
+def test_registry_preflight_rejects_blank_probe_or_required_id(
+    monkeypatch: pytest.MonkeyPatch,
+    probes: tuple[str, ...],
+    required_ids: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(smoke_runner, "OA_CAPABILITY_CONTEXT_PROBES", probes)
+    monkeypatch.setattr(
+        smoke_runner,
+        "REQUIRED_ACTIVE_OA_CAPABILITY_IDS",
+        required_ids,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="OA capability probes and required IDs must be non-empty",
+    ):
+        smoke_runner._classify_capability_registry(expected_oa_capabilities())
+
+
+@pytest.mark.parametrize(
+    ("probes", "required_ids"),
+    [
+        (
+            ("查询我的待办", "查询我的待办"),
+            ("oa.list_pending_workflows", "oa.list_system_messages"),
+        ),
+        (
+            ("查询我的待办", "查询我的系统消息"),
+            ("oa.list_pending_workflows", "oa.list_pending_workflows"),
+        ),
+    ],
+)
+def test_registry_preflight_rejects_duplicate_probe_or_required_id(
+    monkeypatch: pytest.MonkeyPatch,
+    probes: tuple[str, ...],
+    required_ids: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(smoke_runner, "OA_CAPABILITY_CONTEXT_PROBES", probes)
+    monkeypatch.setattr(
+        smoke_runner,
+        "REQUIRED_ACTIVE_OA_CAPABILITY_IDS",
+        required_ids,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="OA capability probes and required IDs must be unique",
+    ):
+        smoke_runner._classify_capability_registry(expected_oa_capabilities())
+
+
+def test_registry_preflight_counts_zero_when_both_contracts_are_truncated() -> None:
+    pending = expected_oa_capabilities()[0]
+    earlier_capabilities = tuple(
+        _capability_copy(
+            pending,
+            capability_id=f"aaa.synthetic.{index}",
+            target_system="u8",
+        )
+        for index in range(8)
+    )
+
+    result = smoke_runner._classify_capability_registry(
+        earlier_capabilities + expected_oa_capabilities()
+    )
+
+    assert result.state == "context_truncated"
     assert result.visible_probe_count == 0
 
 
