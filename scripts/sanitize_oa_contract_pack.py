@@ -33,8 +33,11 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
 )
 
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_PENDING_WORKFLOW_PROFILE_VERSION = "ecology9-pending-workflows-v1"
 _SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
+# The OA message-center form field that selects the category being read. Both
+# capabilities post to the same endpoint, so this value is the only thing in the
+# capture that says which category the recorded response actually belongs to.
+_MESSAGE_CENTER_CATEGORY_FIELD = "id"
 _PENDING_WORKFLOW_PROFILE_VERSION_PATTERN = re.compile(
     r"^ecology9-pending-workflows-v[1-9][0-9]*$"
 )
@@ -117,10 +120,18 @@ def sanitize_har_to_contract_pack(
     output_dir: Path,
     profile_version: str,
     entry_indices: Sequence[int] | None = None,
+    pending_capture_category_id: str | None = None,
 ) -> None:
     """Create a Contract Pack atomically or leave the target absent."""
 
     profile_kind = _capture_profile_kind(profile_version)
+    declared_category_id: str | None = None
+    if profile_kind == "pending_workflows":
+        if pending_capture_category_id is None:
+            raise SanitizationError("pending_capture_category_required")
+        declared_category_id = _validated_category_id(pending_capture_category_id)
+    elif pending_capture_category_id is not None:
+        raise SanitizationError("pending_capture_category_not_applicable")
     if output_dir.name != profile_version:
         raise SanitizationError("profile_output_name_mismatch")
     if output_dir.exists():
@@ -129,16 +140,30 @@ def sanitize_har_to_contract_pack(
         raise SanitizationError("output_parent_missing")
 
     har = _load_har(input_har)
+    source_kind: str
+    source_warning: str | None
     if profile_kind == "pending_workflows":
-        raw_payload, message_center_page_size = _select_pending_workflow_payload(
+        (
+            raw_payload,
+            message_center_page_size,
+            captured_category_id,
+        ) = _select_pending_workflow_payload(
             har,
             entry_indices=entry_indices,
         )
         raw_payloads = [raw_payload]
         capability_id = "oa.list_pending_workflows"
-        source_kind = "derived_from_sibling_capture"
         sanitizer_version = "2"
-        source_warning = PENDING_WORKFLOW_DERIVATION_WARNING
+        # Provenance is read off the capture, never assumed: only a response
+        # recorded under the declared pending category is a direct capture of
+        # this capability. Anything else is a sibling category and must keep
+        # saying so.
+        if captured_category_id == declared_category_id:
+            source_kind = "sanitized_capture"
+            source_warning = None
+        else:
+            source_kind = "derived_from_sibling_capture"
+            source_warning = PENDING_WORKFLOW_DERIVATION_WARNING
     else:
         raw_payload, message_center_page_size = _select_system_message_payload(
             har,
@@ -269,11 +294,22 @@ def _load_json_file(path: Path) -> Any:
     return payload
 
 
+def _validated_category_id(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise SanitizationError("pending_capture_category_invalid")
+    return value
+
+
 def _select_pending_workflow_payload(
     har: Mapping[str, Any],
     *,
     entry_indices: Sequence[int] | None,
-) -> tuple[Mapping[str, Any], int]:
+) -> tuple[Mapping[str, Any], int, str]:
     log = har.get("log")
     if not isinstance(log, Mapping):
         raise SanitizationError("har_log_missing")
@@ -303,7 +339,11 @@ def _select_pending_workflow_payload(
     payload = _response_json(selected_entry, selected=True)
     if payload is None or not _is_system_message_payload(payload):
         raise SanitizationError("selected_entry_not_pending_workflow_response")
-    return payload, _system_message_page_size(selected_entry)
+    return (
+        payload,
+        _system_message_page_size(selected_entry),
+        _captured_category_id(selected_entry),
+    )
 
 
 def _select_system_message_payload(
@@ -731,7 +771,9 @@ def _collect_named_parameter_values(
             output.update(_credential_components(value))
 
 
-def _system_message_page_size(entry: Any) -> int:
+def _message_center_form_values(entry: Any, field_name: str) -> list[str]:
+    """Collect every value the recorded request posted for one form field."""
+
     if not isinstance(entry, Mapping):
         raise SanitizationError("selected_entry_invalid")
     request = entry.get("request")
@@ -746,7 +788,7 @@ def _system_message_page_size(entry: Any) -> int:
                 if (
                     isinstance(parameter, Mapping)
                     and _normalize_key(str(parameter.get("name", "")))
-                    == "pagesize"
+                    == field_name
                     and isinstance(parameter.get("value"), str)
                 ):
                     observed.append(parameter["value"])
@@ -763,8 +805,25 @@ def _system_message_page_size(entry: Any) -> int:
             observed.extend(
                 value
                 for name, value in form_parameters
-                if _normalize_key(name) == "pagesize"
+                if _normalize_key(name) == field_name
             )
+    return observed
+
+
+def _captured_category_id(entry: Any) -> str:
+    observed = _message_center_form_values(entry, _MESSAGE_CENTER_CATEGORY_FIELD)
+    if (
+        not observed
+        or any(value != observed[0] for value in observed[1:])
+        or not observed[0]
+        or observed[0] != observed[0].strip()
+    ):
+        raise SanitizationError("capture_category_id_invalid")
+    return observed[0]
+
+
+def _system_message_page_size(entry: Any) -> int:
+    observed = _message_center_form_values(entry, "pagesize")
     if not observed or any(value != observed[0] for value in observed[1:]):
         raise SanitizationError("system_message_page_size_invalid")
     try:
@@ -1027,6 +1086,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "pending-workflow capture."
         ),
     )
+    parser.add_argument(
+        "--pending-category-id",
+        dest="pending_capture_category_id",
+        default=None,
+        help=(
+            "Message-center category id the pending pack represents. Required "
+            "for pending profiles and rejected for others; the capture's own "
+            "category decides whether the pack is recorded as a direct capture "
+            "or as derived from a sibling category."
+        ),
+    )
     return parser
 
 
@@ -1067,6 +1137,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
             profile_version=args.profile_version,
             entry_indices=_parse_entry_indices(args.entry_indices),
+            pending_capture_category_id=args.pending_capture_category_id,
         )
     except SanitizationError as exc:
         print(f"sanitization failed: {exc}", file=sys.stderr)

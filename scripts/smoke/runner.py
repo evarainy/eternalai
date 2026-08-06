@@ -82,7 +82,10 @@ from scripts.smoke.live import (
 )
 
 _SYSTEM_PROFILE = "ecology9-system-messages-v1"
-_PENDING_V2_PROFILE = "ecology9-pending-workflows-v2"
+# The committed v2 pack is derived from the sibling system-message capture. An
+# onsite capture of the pending category is a different provenance, so it must
+# claim the next version instead of colliding with a published one.
+_PENDING_CAPTURE_PROFILE = "ecology9-pending-workflows-v3"
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9]{8}_[0-9]{6}$")
 _BACKEND_URL = "http://127.0.0.1:8000"
 _BACKEND_HEALTH_CHECK_TIMEOUT_SECONDS = 5.0
@@ -422,7 +425,7 @@ def _run_rehearsal(
         {
             "OA_READ_ADAPTER_MODE": "replay",
             "OA_READ_CONTRACT_PACK_DIR": (
-                "tests/contract_packs/oa/ecology9-pending-workflows-v1"
+                "tests/contract_packs/oa/ecology9-pending-workflows-v2"
             ),
             "PHASE0_MOCK_MODE": "false",
         }
@@ -1424,7 +1427,12 @@ def _command_verify(
     system, pending = _run_live_checks_with_supported_loop(settings)
     capture_created = False
     if har_directory is not None:
-        _build_optional_pending_v2(layout, har_directory, resolved_timestamp)
+        _build_optional_pending_capture(
+            layout,
+            har_directory,
+            resolved_timestamp,
+            _required_live_values(settings)["pending_category"],
+        )
         capture_created = True
     report_path = layout.scratch / f"smoke_result_{resolved_timestamp}.md"
     report_text = _build_report(system, pending, capture_created=capture_created)
@@ -1444,7 +1452,7 @@ def _command_verify(
         print(f"pending_workflows_http_status={pending.protocol.http_status_code}")
     print(f"report={report_path.name}")
     if capture_created:
-        print("pending_v2_capture=created")
+        print(f"pending_capture={_PENDING_CAPTURE_PROFILE}")
     if _verify_success(system, pending):
         return 0
     _print_stop_instruction()
@@ -1895,10 +1903,11 @@ def _oa_endpoint_reachable(base_url: str) -> bool:
         return False
 
 
-def _build_optional_pending_v2(
+def _build_optional_pending_capture(
     layout: Layout,
     har_directory: Path,
     timestamp: str,
+    pending_category_id: str,
 ) -> None:
     try:
         candidates = sorted(
@@ -1917,8 +1926,9 @@ def _build_optional_pending_v2(
         raise SmokeError("fallback_output_create_failed") from None
     sanitizer.sanitize_har_to_contract_pack(
         input_har=candidates[0],
-        output_dir=output_parent / _PENDING_V2_PROFILE,
-        profile_version=_PENDING_V2_PROFILE,
+        output_dir=output_parent / _PENDING_CAPTURE_PROFILE,
+        profile_version=_PENDING_CAPTURE_PROFILE,
+        pending_capture_category_id=pending_category_id,
     )
 
 
@@ -1943,7 +1953,10 @@ def _build_report(
         f"- 系统消息结构漂移：{_drift_state(system)}",
         f"- 待办结构漂移：{_drift_state(pending)}（预期允许大面积漂移）",
         f"- 两类记录结构一致：{_yes_no(structures_match)}",
-        f"- 现场 v2 脱敏包：{'已生成' if capture_created else '未请求'}",
+        (
+            f"- 现场待办脱敏包（{_PENDING_CAPTURE_PROFILE}）："
+            f"{'已生成' if capture_created else '未请求'}"
+        ),
         "",
         "## 系统消息 Live 指纹",
         "",

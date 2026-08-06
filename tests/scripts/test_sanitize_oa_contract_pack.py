@@ -24,12 +24,18 @@ TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
 PROFILE_VERSION_V2 = "ecology9-pending-workflows-v2"
 SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
+PENDING_PROFILE_PREFIX = "ecology9-pending-workflows-v"
+# The category the pending pack claims to represent, and the sibling category a
+# system-message capture is actually recorded under.
+PENDING_CATEGORY_ID = "217"
+SIBLING_CATEGORY_ID = "2,31"
 
 
 def _har(
     *,
     status: str = "1",
     cookie_value: str = COOKIE_VALUE,
+    category_id: str = SIBLING_CATEGORY_ID,
     extra_record_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
@@ -80,8 +86,11 @@ def _har(
                         ],
                         "postData": {
                             "mimeType": "application/x-www-form-urlencoded",
-                            "params": [{"name": "pagesize", "value": "20"}],
-                            "text": "pagesize=20",
+                            "params": [
+                                {"name": "id", "value": category_id},
+                                {"name": "pagesize", "value": "20"},
+                            ],
+                            "text": f"id={category_id}&pagesize=20",
                         },
                     },
                     "response": {
@@ -198,6 +207,7 @@ def _run_script(
     *,
     entry_indices: list[int | str] | None = None,
     extra_args: list[str] | None = None,
+    pending_category_id: str | None = PENDING_CATEGORY_ID,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -211,6 +221,10 @@ def _run_script(
     ]
     for entry_index in entry_indices or []:
         command.extend(["--entry-index", str(entry_index)])
+    if pending_category_id is not None and output_dir.name.startswith(
+        PENDING_PROFILE_PREFIX
+    ):
+        command.extend(["--pending-category-id", pending_category_id])
     command.extend(extra_args or [])
     return subprocess.run(
         command,
@@ -284,6 +298,135 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         "must-not-be-copied",
     ):
         assert forbidden not in all_output
+
+
+def test_direct_pending_capture_is_never_labelled_derived(tmp_path: Path) -> None:
+    input_har = tmp_path / "direct-pending.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    assert profile["source_kind"] == "sanitized_capture"
+    assert "source_warning" not in profile
+    assert PENDING_WORKFLOW_DERIVATION_WARNING not in json.dumps(
+        profile,
+        ensure_ascii=False,
+    )
+
+
+def test_sibling_capture_is_never_labelled_a_direct_pending_capture(
+    tmp_path: Path,
+) -> None:
+    input_har = tmp_path / "sibling-pending.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=SIBLING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    assert profile["source_kind"] == "derived_from_sibling_capture"
+    assert profile["source_warning"] == PENDING_WORKFLOW_DERIVATION_WARNING
+
+
+def test_pending_capture_category_has_no_default_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    input_har = tmp_path / "no-declared-category.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir, pending_category_id=None)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_required\n"
+    )
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize("declared", ["", " 217", "217 "])
+def test_declared_pending_category_must_be_a_clean_value(
+    tmp_path: Path,
+    declared: str,
+) -> None:
+    input_har = tmp_path / "declared-category-invalid.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir, pending_category_id=declared)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_invalid\n"
+    )
+    assert not output_dir.exists()
+
+
+def test_pending_capture_without_a_recorded_category_fails_closed(
+    tmp_path: Path,
+) -> None:
+    har = _har(category_id=PENDING_CATEGORY_ID)
+    post_data = har["log"]["entries"][0]["request"]["postData"]
+    post_data["params"] = [{"name": "pagesize", "value": "20"}]
+    post_data["text"] = "pagesize=20"
+    input_har = tmp_path / "unrecorded-category.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: capture_category_id_invalid\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_declared_pending_category_is_rejected_for_other_profiles(
+    tmp_path: Path,
+) -> None:
+    har, _raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+        extra_args=["--pending-category-id", PENDING_CATEGORY_ID],
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_not_applicable\n"
+    )
+    assert not output_dir.exists()
 
 
 def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
@@ -1686,6 +1829,7 @@ def test_third_layer_pattern_scan_runs_before_any_candidate_write(
             input_har=input_har,
             output_dir=output_dir,
             profile_version=output_dir.name,
+            pending_capture_category_id=PENDING_CATEGORY_ID,
         )
 
     assert write_calls == 0
@@ -1714,6 +1858,7 @@ def test_malformed_har_exception_chain_never_retains_raw_input(
             input_har=input_har,
             output_dir=output_dir,
             profile_version=output_dir.name,
+            pending_capture_category_id=PENDING_CATEGORY_ID,
         )
 
     assert exc_info.value.__context__ is None
