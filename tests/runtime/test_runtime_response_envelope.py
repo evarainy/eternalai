@@ -231,7 +231,7 @@ def test_happy_path_trace_event_sequence_matches_spec() -> None:
     ]
 
 
-def test_parse_error_trace_event_sequence_matches_no_capability_found_spec() -> None:
+def test_parse_error_trace_event_sequence_matches_failed_spec() -> None:
     runtime, _task_store, trace_port, _gateway = _make_runtime(malformed=True)
 
     result = _run_runtime(runtime)
@@ -240,22 +240,23 @@ def test_parse_error_trace_event_sequence_matches_no_capability_found_spec() -> 
     assert [step["event_type"] for step in trace_port.steps] == [
         "task_created",
         "intent_parsed",
-        "no_capability_found",
         "response_envelope_created",
         "task_failed",
         "evaluation_recorded",
     ]
 
 
-def test_parse_error_skips_gateway_and_returns_no_capability_found_envelope() -> None:
+def test_parse_error_skips_gateway_and_returns_failed_envelope() -> None:
     runtime, task_store, _trace_port, gateway = _make_runtime(malformed=True)
 
     result = _run_runtime(runtime)
 
     assert gateway.calls == 0
-    assert task_store.status_updates[-1][1] == "no_capability_found"
+    assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
     assert isinstance(result, ResponseEnvelope)
-    assert result.status == "no_capability_found"
+    assert result.status == "failed"
+    assert "模型返回的查询结果暂时无法识别" in result.message
+    assert "Admin Lite" not in result.message
 
 
 def test_response_envelope_is_pydantic_model_not_bare_dict() -> None:

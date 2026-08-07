@@ -221,7 +221,16 @@ async def _run_pilot_request() -> PilotObservation:
     adapter.set_state(
         {
             "pending_workflows": [
-                {"workflow_id": "fixture-workflow", "title": "Fixture workflow"}
+                {
+                    "message_id": "fixture-message",
+                    "title": "Fixture workflow",
+                    "content": "Fixture workflow content",
+                    "source_name": "Fixture workflow type",
+                    "occurred_at": "2026-08-06 09:00:00",
+                    "business_state": "1",
+                    "link": "/workflow/fixture-message",
+                    "mobile_link": "/mobile/workflow/fixture-message",
+                }
             ]
         }
     )
@@ -307,7 +316,16 @@ async def _run_pilot_request() -> PilotObservation:
         assert envelope["session_id"] != "pilot-client-session"
         assert envelope["data"] == {
             "workflows": [
-                {"workflow_id": "fixture-workflow", "title": "Fixture workflow"}
+                {
+                    "message_id": "fixture-message",
+                    "title": "Fixture workflow",
+                    "content": "Fixture workflow content",
+                    "source_name": "Fixture workflow type",
+                    "occurred_at": "2026-08-06 09:00:00",
+                    "business_state": "1",
+                    "link": "/workflow/fixture-message",
+                    "mobile_link": "/mobile/workflow/fixture-message",
+                }
             ]
         }
 

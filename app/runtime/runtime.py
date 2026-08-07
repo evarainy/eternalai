@@ -26,7 +26,7 @@ from app.ports.capability_gateway import (
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
-from app.ports.structured_output import StructuredOutputPort
+from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.ports.task_store import (
     SessionRecord,
     SessionStorePort,
@@ -162,11 +162,26 @@ class RuntimeImpl:
             attributes=_intent_trace_attributes(
                 capability_ref,
                 intent_result.failure_reason,
+                intent_result.structured_output_error_code,
+                intent_result.validation_error_path,
+                intent_result.validation_error_type,
+                intent_result.argument_keys,
             ),
         )
 
         if not parse_ok or capability_ref is None:
-            return await self._finish_no_capability_found(
+            # With no active capability at all, the honest answer is that the
+            # function is not integrated yet — not that the parse blew up. Only
+            # a parse failure against a non-empty catalogue is an internal fault.
+            if not capability_snapshot:
+                return await self._finish_no_capability_found(
+                    response_id,
+                    task_id,
+                    session_id,
+                    trace_id,
+                    reason="no_active_capability_registered",
+                )
+            return await self._finish_intent_failure(
                 response_id,
                 task_id,
                 session_id,
@@ -452,6 +467,57 @@ class RuntimeImpl:
         if len(matches) != 1:
             return None
         return _CapabilitySelection(matches[0], "unique_intent_tag")
+
+    async def _finish_intent_failure(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        trace_id: str,
+        *,
+        reason: IntentFailureReason,
+    ) -> ResponseEnvelope:
+        message, fallback_text = _intent_failure_message(reason)
+        await self._task_store.update_status(task_id, "failed", "internal_error")
+        envelope = self._response_builder.build_message(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            status="failed",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="task_failed",
+            status="failed",
+            error_code="internal_error",
+        )
+        await self._record_terminal_evaluation(
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            business_status="failed",
+            error_code="internal_error",
+        )
+        await self._trace_port.finalize_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            status="failed",
+            error_code="internal_error",
+        )
+        return envelope
 
     async def _finish_no_capability_found(
         self,
@@ -756,13 +822,26 @@ def _matches_intent_constraints(
 def _intent_trace_attributes(
     intent: CapabilityRef | None,
     failure_reason: IntentFailureReason | None,
+    structured_output_error_code: StructuredOutputErrorCode | None,
+    validation_error_path: str | None = None,
+    validation_error_type: str | None = None,
+    argument_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     if intent is None:
-        return {
+        attributes: dict[str, Any] = {
             "result": "invalid",
             "reason": failure_reason or "schema_invalid",
         }
-    attributes: dict[str, Any] = {
+        if structured_output_error_code is not None:
+            attributes["structured_output_error_code"] = structured_output_error_code
+        if validation_error_path is not None:
+            attributes["error_path"] = validation_error_path
+        if validation_error_type is not None:
+            attributes["error_type"] = validation_error_type
+        if validation_error_path is not None or validation_error_type is not None:
+            attributes["argument_keys"] = list(argument_keys)
+        return attributes
+    attributes = {
         "result": "valid",
         "intent_fingerprint": _intent_fingerprint(intent.capability_id),
     }
@@ -771,6 +850,23 @@ def _intent_trace_attributes(
     if intent.capability_type is not None:
         attributes["capability_type"] = intent.capability_type
     return attributes
+
+
+def _intent_failure_message(reason: IntentFailureReason) -> tuple[str, str]:
+    if reason == "provider_error":
+        return (
+            "模型服务暂时无法连接或响应，请稍后重试。",
+            "The model service is temporarily unavailable. Please retry later.",
+        )
+    if reason == "blank_input":
+        return (
+            "没有收到可处理的查询内容，请重新输入。",
+            "No query content was received. Please enter it again.",
+        )
+    return (
+        "模型返回的查询结果暂时无法识别，请重新提交一次。",
+        "The model response could not be recognized. Please submit the query again.",
+    )
 
 
 def _intent_fingerprint(selector: str) -> str:
@@ -787,6 +883,21 @@ def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
     return None
 
 
+def _completeness_note(data: dict[str, Any], noun: str) -> str:
+    """Report completeness only when the producer actually claims it.
+
+    A producer that omits ``is_complete`` makes no claim; calling the result
+    incomplete there would state a fact we do not have.
+    """
+
+    is_complete = data.get("is_complete")
+    if is_complete is True:
+        return "（结果完整）"
+    if is_complete is False:
+        return f"（结果不完整，可能还有更多{noun}）"
+    return ""
+
+
 def _format_capability_response(
     capability_id: str,
     data: dict[str, Any] | None,
@@ -797,19 +908,17 @@ def _format_capability_response(
     if capability_id == "oa.list_pending_workflows":
         workflows = data.get("workflows")
         count = len(workflows) if isinstance(workflows, list) else 0
-        identifiers = _joined_scalar_values(workflows, ("workflow_id", "title"))
-        return f"OA待办共{count}条: {identifiers}" if identifiers else f"OA待办共{count}条"
+        # Only title/occurred_at/link carry self-evident meaning. source_name and
+        # business_state have no confirmed semantics, so they stay out of replies.
+        titles = _joined_scalar_values(workflows, ("title",))
+        prefix = f"OA待办共{count}条{_completeness_note(data, '待办')}"
+        return f"{prefix}: {titles}" if titles else prefix
 
     if capability_id == "oa.list_system_messages":
         messages = data.get("messages")
         count = len(messages) if isinstance(messages, list) else 0
         titles = _joined_scalar_values(messages, ("title",))
-        scope = (
-            "结果完整"
-            if data.get("is_complete") is True
-            else "结果不完整，可能还有更多消息"
-        )
-        prefix = f"OA系统消息返回{count}条（{scope}）"
+        prefix = f"OA系统消息返回{count}条{_completeness_note(data, '消息')}"
         return f"{prefix}: {titles}" if titles else prefix
 
     if capability_id == "oa.get_workflow_status":

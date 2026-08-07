@@ -11,6 +11,8 @@ import pytest
 
 from app.infra.adapters.oa.contracts import (
     EXTERNAL_SANITIZATION_WARNING,
+    PENDING_WORKFLOW_DERIVATION_WARNING,
+    OAPendingWorkflowCollection,
     build_structural_fingerprint,
 )
 from scripts import sanitize_oa_contract_pack as sanitizer
@@ -22,32 +24,42 @@ TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
 PROFILE_VERSION_V2 = "ecology9-pending-workflows-v2"
 SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
+PENDING_PROFILE_PREFIX = "ecology9-pending-workflows-v"
+# The category the pending pack claims to represent, and the sibling category a
+# system-message capture is actually recorded under.
+PENDING_CATEGORY_ID = "217"
+SIBLING_CATEGORY_ID = "2,31"
 
 
 def _har(
     *,
-    status: str = "pending",
+    status: str = "1",
     cookie_value: str = COOKIE_VALUE,
+    category_id: str = SIBLING_CATEGORY_ID,
     extra_record_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
-        "workflowId": "raw-workflow-employee-001",
+        "messageid": "raw-message-employee-001",
         "title": "Raw confidential workflow title",
-        "status": status,
-        "applicant": "Synthetic Raw Person",
-        "currentStep": "Raw manager review",
-        "approver": "Synthetic Raw Approver",
-        "createdAt": "2026-07-29T09:30:00+09:00",
-        "expired": False,
+        "context": "Raw confidential workflow content",
+        "name": "Synthetic Raw Message Type",
+        "time": "2026-07-29 09:30:00",
+        "bizstate": status,
+        "link": "/workflow/desktop/raw-message-employee-001",
+        "linkmobileurl": "/workflow/mobile/raw-message-employee-001",
+        "gomethod": "",
+        "gomethodpc": "",
+        "showimage": "",
         "ignoredField": "must-not-be-copied",
     }
     if extra_record_fields is not None:
         record.update(extra_record_fields)
     response_body = {
-        "data": {
-            "records": [record],
-            "ignoredPageValue": "must-not-be-copied",
-        }
+        "status": "1",
+        "data": [record],
+        "maxtime": "synthetic-upper-bound",
+        "mintime": "synthetic-lower-bound",
+        "msgid": "synthetic-message-cursor",
     }
     return {
         "log": {
@@ -72,6 +84,14 @@ def _har(
                                 "value": cookie_value,
                             }
                         ],
+                        "postData": {
+                            "mimeType": "application/x-www-form-urlencoded",
+                            "params": [
+                                {"name": "id", "value": category_id},
+                                {"name": "pagesize", "value": "20"},
+                            ],
+                            "text": f"id={category_id}&pagesize=20",
+                        },
                     },
                     "response": {
                         "headers": [
@@ -100,6 +120,9 @@ def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
             "bizstate": "0",
             "link": "https://internal.example.invalid/message/83000001/detail",
             "linkmobileurl": "https://internal.example.invalid/mobile/83000001/detail",
+            "gomethod": "synthetic-desktop-method",
+            "gomethodpc": "synthetic-mobile-method",
+            "showimage": "synthetic-image-flag",
         },
         {
             "messageid": "83000002",
@@ -110,6 +133,9 @@ def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
             "bizstate": "1",
             "link": "",
             "linkmobileurl": "",
+            "gomethod": "synthetic-desktop-method",
+            "gomethodpc": "synthetic-mobile-method",
+            "showimage": "synthetic-image-flag",
         },
     ]
     image_bytes = b"\x89PNG\r\n\x1a\nsynthetic-image"
@@ -181,6 +207,7 @@ def _run_script(
     *,
     entry_indices: list[int | str] | None = None,
     extra_args: list[str] | None = None,
+    pending_category_id: str | None = PENDING_CATEGORY_ID,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -194,6 +221,10 @@ def _run_script(
     ]
     for entry_index in entry_indices or []:
         command.extend(["--entry-index", str(entry_index)])
+    if pending_category_id is not None and output_dir.name.startswith(
+        PENDING_PROFILE_PREFIX
+    ):
+        command.extend(["--pending-category-id", pending_category_id])
     command.extend(extra_args or [])
     return subprocess.run(
         command,
@@ -229,25 +260,29 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
     assert profile == {
         "profile_version": PROFILE_VERSION,
         "capability_id": "oa.list_pending_workflows",
-        "source_kind": "sanitized_capture",
-        "sanitizer_version": "1",
+        "source_kind": "derived_from_sibling_capture",
+        "sanitizer_version": "2",
         "sample_file": "sample.json",
         "fingerprint_file": "fingerprint.json",
+        "source_warning": PENDING_WORKFLOW_DERIVATION_WARNING,
     }
     assert sample == {
         "workflows": [
             {
-                "workflow_id": "workflow-synthetic-001",
-                "title": "workflow-title-synthetic-001",
-                "status": "pending",
-                "applicant": "applicant-synthetic-001",
-                "current_step": "step-synthetic-001",
-                "approver": "approver-synthetic-001",
-                "created_at": "2000-01-01T00:00:00+00:00",
-                "expired": False,
+                "message_id": "900000019000000190000001",
+                "title": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容",
+                "content": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知",
+                "source_name": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样",
+                "occurred_at": "2000-01-01 00:00:00",
+                "business_state": "2",
+                "link": "/oa/system-messages/desktop/001xxxxxxxxxxx",
+                "mobile_link": "/oa/system-messages/mobile/001xxxxxxxxxxx",
             }
-        ]
+        ],
+        "returned_count": 1,
+        "is_complete": True,
     }
+    OAPendingWorkflowCollection.model_validate(sample, strict=True)
     assert fingerprint == build_structural_fingerprint(sample)
     all_output = "\n".join(
         path.read_text(encoding="utf-8") for path in output_dir.iterdir()
@@ -255,15 +290,143 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
     for forbidden in (
         COOKIE_VALUE,
         TOKEN_VALUE,
-        "raw-workflow-employee-001",
+        "raw-message-employee-001",
         "Raw confidential workflow title",
-        "Synthetic Raw Person",
-        "Raw manager review",
-        "Synthetic Raw Approver",
-        "2026-07-29T09:30:00+09:00",
+        "Raw confidential workflow content",
+        "Synthetic Raw Message Type",
+        "2026-07-29 09:30:00",
         "must-not-be-copied",
     ):
         assert forbidden not in all_output
+
+
+def test_direct_pending_capture_is_never_labelled_derived(tmp_path: Path) -> None:
+    input_har = tmp_path / "direct-pending.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    assert profile["source_kind"] == "sanitized_capture"
+    assert "source_warning" not in profile
+    assert PENDING_WORKFLOW_DERIVATION_WARNING not in json.dumps(
+        profile,
+        ensure_ascii=False,
+    )
+
+
+def test_sibling_capture_is_never_labelled_a_direct_pending_capture(
+    tmp_path: Path,
+) -> None:
+    input_har = tmp_path / "sibling-pending.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=SIBLING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    assert profile["source_kind"] == "derived_from_sibling_capture"
+    assert profile["source_warning"] == PENDING_WORKFLOW_DERIVATION_WARNING
+
+
+def test_pending_capture_category_has_no_default_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    input_har = tmp_path / "no-declared-category.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir, pending_category_id=None)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_required\n"
+    )
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize("declared", ["", " 217", "217 "])
+def test_declared_pending_category_must_be_a_clean_value(
+    tmp_path: Path,
+    declared: str,
+) -> None:
+    input_har = tmp_path / "declared-category-invalid.har"
+    input_har.write_text(
+        json.dumps(_har(category_id=PENDING_CATEGORY_ID)),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir, pending_category_id=declared)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_invalid\n"
+    )
+    assert not output_dir.exists()
+
+
+def test_pending_capture_without_a_recorded_category_fails_closed(
+    tmp_path: Path,
+) -> None:
+    har = _har(category_id=PENDING_CATEGORY_ID)
+    post_data = har["log"]["entries"][0]["request"]["postData"]
+    post_data["params"] = [{"name": "pagesize", "value": "20"}]
+    post_data["text"] = "pagesize=20"
+    input_har = tmp_path / "unrecorded-category.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V2
+
+    completed = _run_script(input_har, output_dir)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: capture_category_id_invalid\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_declared_pending_category_is_rejected_for_other_profiles(
+    tmp_path: Path,
+) -> None:
+    har, _raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / SYSTEM_MESSAGE_PROFILE_VERSION
+
+    completed = _run_script(
+        input_har,
+        output_dir,
+        entry_indices=[1],
+        extra_args=["--pending-category-id", PENDING_CATEGORY_ID],
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert (
+        completed.stderr
+        == "sanitization failed: pending_capture_category_not_applicable\n"
+    )
+    assert not output_dir.exists()
 
 
 def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
@@ -327,6 +490,34 @@ def test_system_message_capture_is_shape_preserving_and_explicitly_partial(
             raw_value = raw_record[key]
             if raw_value:
                 assert raw_value not in all_output
+
+
+def test_live_system_message_har_fingerprint_uses_actual_value_free_shape(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _system_message_har()
+    input_har = tmp_path / "system-messages.har"
+    input_har.write_text(json.dumps(har, ensure_ascii=False), encoding="utf-8")
+
+    fingerprint = sanitizer.build_live_system_message_har_fingerprint(
+        input_har=input_har,
+        entry_index=1,
+    )
+
+    nodes = {
+        (node["path"], node["json_type"])
+        for node in fingerprint["nodes"]
+    }
+    assert not {
+        "$.messages[].wire_gomethod",
+        "$.messages[].wire_gomethodpc",
+        "$.messages[].wire_showimage",
+    }.intersection(path for path, _json_type in nodes)
+    rendered = json.dumps(fingerprint, sort_keys=True)
+    for record in raw_records:
+        for value in record.values():
+            if len(value) >= 9:
+                assert value not in rendered
 
 
 def test_selected_textual_base64_matches_plaintext_pack(tmp_path: Path) -> None:
@@ -698,7 +889,12 @@ def test_v2_sensitive_value_still_exits_two_without_output(
     har["log"]["entries"].append(
         {
             "request": {
-                "headers": [{"name": "Cookie", "value": "pending"}],
+                "headers": [
+                    {
+                        "name": "Cookie",
+                        "value": "derived_from_sibling_capture",
+                    }
+                ],
                 "cookies": [],
             },
             "response": {
@@ -825,7 +1021,7 @@ def test_cli_syntax_errors_do_not_echo_known_values_or_retain_exception_context(
     assert sensitive_cli_value not in (repr(exc_info.value) + str(exc_info.value))
 
 
-def test_repeated_entry_indices_aggregate_pages_in_selector_order(
+def test_pending_profile_rejects_multiple_selected_message_center_pages(
     tmp_path: Path,
 ) -> None:
     har = _har()
@@ -841,13 +1037,7 @@ def test_repeated_entry_indices_aggregate_pages_in_selector_order(
             },
         },
     }
-    second_page = _har(
-        extra_record_fields={
-            "expired": True,
-            "approver": None,
-            "createdAt": None,
-        }
-    )["log"]["entries"][0]
+    second_page = _har(status="2")["log"]["entries"][0]
     har["log"]["entries"] = [first_page, unrelated_entry, second_page]
     input_har = tmp_path / "multi-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -859,30 +1049,16 @@ def test_repeated_entry_indices_aggregate_pages_in_selector_order(
         entry_indices=[2, 0],
     )
 
-    assert completed.returncode == 0
-    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
-    assert [workflow["workflow_id"] for workflow in sample["workflows"]] == [
-        "workflow-synthetic-001",
-        "workflow-synthetic-002",
-    ]
-    assert [workflow["expired"] for workflow in sample["workflows"]] == [True, False]
-    assert sample["workflows"][0]["approver"] is None
-    assert sample["workflows"][0]["created_at"] is None
-    assert sample["workflows"][1]["approver"] == "approver-synthetic-002"
-    assert sample["workflows"][1]["created_at"] == "2000-01-01T00:00:00+00:00"
+    assert completed.returncode == 2
+    assert "pending_workflow_entry_index_invalid" in completed.stderr
+    assert not output_dir.exists()
 
 
 def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
     tmp_path: Path,
 ) -> None:
     har = _har()
-    selected_page = _har(
-        extra_record_fields={
-            "expired": True,
-            "approver": None,
-            "createdAt": None,
-        }
-    )["log"]["entries"][0]
+    selected_page = _har(status="2")["log"]["entries"][0]
     har["log"]["entries"].append(selected_page)
     input_har = tmp_path / "single-selected-page.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -897,9 +1073,9 @@ def test_explicit_single_entry_selects_one_page_from_multiple_candidates(
     assert completed.returncode == 0
     sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
     assert len(sample["workflows"]) == 1
-    assert sample["workflows"][0]["expired"] is True
-    assert sample["workflows"][0]["approver"] is None
-    assert sample["workflows"][0]["created_at"] is None
+    assert sample["workflows"][0]["business_state"] == "2"
+    assert sample["returned_count"] == 1
+    assert sample["is_complete"] is True
 
 
 def test_multiple_candidates_without_selector_fail_with_zero_output(
@@ -923,7 +1099,7 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     har = _har()
     entry = har["log"]["entries"][0]
     response_body = json.loads(entry["response"]["content"]["text"])
-    response_body["data"]["records"] = []
+    response_body["data"] = []
     entry["response"]["content"]["text"] = json.dumps(response_body)
     input_har = tmp_path / "empty.har"
     input_har.write_text(json.dumps(har), encoding="utf-8")
@@ -936,22 +1112,28 @@ def test_sanitizer_accepts_empty_pending_workflow_list(tmp_path: Path) -> None:
     fingerprint = json.loads(
         (output_dir / "fingerprint.json").read_text(encoding="utf-8")
     )
-    assert sample == {"workflows": []}
+    assert sample == {
+        "workflows": [],
+        "returned_count": 0,
+        "is_complete": True,
+    }
     assert fingerprint == build_structural_fingerprint(sample)
     assert fingerprint == build_structural_fingerprint(
         {
             "workflows": [
                 {
-                    "workflow_id": "different",
+                    "message_id": "different",
                     "title": "different",
-                    "status": "pending",
-                    "applicant": "different",
-                    "current_step": "different",
-                    "approver": None,
-                    "created_at": None,
-                    "expired": False,
+                    "content": "different",
+                    "source_name": "different",
+                    "occurred_at": "different",
+                    "business_state": "different",
+                    "link": None,
+                    "mobile_link": None,
                 }
-            ]
+            ],
+            "returned_count": 1,
+            "is_complete": False,
         }
     )
 
@@ -963,7 +1145,12 @@ def test_cookie_from_unselected_entry_is_scanned_across_whole_har(
     har["log"]["entries"].append(
         {
             "request": {
-                "headers": [{"name": "Cookie", "value": "pending"}],
+                "headers": [
+                    {
+                        "name": "Cookie",
+                        "value": "derived_from_sibling_capture",
+                    }
+                ],
                 "cookies": [],
             },
             "response": {
@@ -1125,7 +1312,7 @@ def test_unsupported_unselected_response_encoding_remains_fail_closed(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_every_selected_response_is_checked_for_forbidden_keys(
+def test_selected_response_is_checked_for_forbidden_keys(
     tmp_path: Path,
 ) -> None:
     selected_cookie_value = "selected-page-cookie-927315"
@@ -1144,7 +1331,7 @@ def test_every_selected_response_is_checked_for_forbidden_keys(
     completed = _run_script(
         input_har,
         output_dir,
-        entry_indices=[0, 1],
+        entry_indices=[1],
     )
 
     assert completed.returncode != 0
@@ -1160,7 +1347,7 @@ def test_every_selected_response_is_checked_for_forbidden_keys(
     [
         ([-1], "entry_index_out_of_range"),
         ([1], "entry_index_out_of_range"),
-        ([0, 0], "entry_index_duplicate"),
+        ([0, 0], "pending_workflow_entry_index_invalid"),
     ],
 )
 def test_invalid_entry_indices_fail_with_zero_output(
@@ -1284,12 +1471,12 @@ def test_selected_structurally_invalid_entry_fails_with_zero_output(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_cookie_value_reaching_whitelisted_field_fails_with_zero_output(
+def test_cookie_value_reaching_candidate_metadata_fails_with_zero_output(
     tmp_path: Path,
 ) -> None:
     input_har = tmp_path / "cookie-leak.har"
     input_har.write_text(
-        json.dumps(_har(cookie_value="pending")),
+        json.dumps(_har(cookie_value="derived_from_sibling_capture")),
         encoding="utf-8",
     )
     output_dir = tmp_path / PROFILE_VERSION
@@ -1577,7 +1764,7 @@ def test_oversized_non_candidate_response_is_rejected_before_candidate(
     assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
-def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
+def test_unmapped_business_state_is_not_copied_to_output(tmp_path: Path) -> None:
     private_status = "private-business-status-927315"
     input_har = tmp_path / "unrecognized-status.har"
     input_har.write_text(
@@ -1588,12 +1775,13 @@ def test_unrecognized_status_is_not_copied_to_output(tmp_path: Path) -> None:
 
     completed = _run_script(input_har, output_dir)
 
-    assert completed.returncode != 0
-    assert "response_status_invalid" in completed.stderr
+    assert completed.returncode == 0
     assert private_status not in completed.stdout
     assert private_status not in completed.stderr
-    assert not output_dir.exists()
-    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+    rendered = "\n".join(
+        path.read_text(encoding="utf-8") for path in output_dir.iterdir()
+    )
+    assert private_status not in rendered
 
 
 def test_existing_output_is_rejected_without_overwrite_or_delete(tmp_path: Path) -> None:
@@ -1641,6 +1829,7 @@ def test_third_layer_pattern_scan_runs_before_any_candidate_write(
             input_har=input_har,
             output_dir=output_dir,
             profile_version=output_dir.name,
+            pending_capture_category_id=PENDING_CATEGORY_ID,
         )
 
     assert write_calls == 0
@@ -1669,6 +1858,7 @@ def test_malformed_har_exception_chain_never_retains_raw_input(
             input_har=input_har,
             output_dir=output_dir,
             profile_version=output_dir.name,
+            pending_capture_category_id=PENDING_CATEGORY_ID,
         )
 
     assert exc_info.value.__context__ is None

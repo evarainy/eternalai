@@ -6,8 +6,9 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from http.client import HTTPMessage
+from http.client import HTTPMessage, RemoteDisconnected
 from typing import IO, Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -17,6 +18,7 @@ _EXPECTED_FORM_FIELDS = frozenset(
     {"id", "pagesize", "msgid", "mintime", "bizstate", "selectState"}
 )
 _CURSOR_FIELDS = ("msgid", "mintime")
+_INITIAL_CURSOR = {"msgid": "0", "mintime": "0"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +32,8 @@ class ProtocolSummary:
     successful_envelopes: bool
     envelope_fields: tuple[str, ...]
     record_field_types: dict[str, tuple[str, ...]]
+    transport_failure_kind: str | None = None
+    http_status_code: int | None = None
 
 
 @dataclass(repr=False, slots=True)
@@ -46,14 +50,15 @@ class ProtocolEvidence:
     successful_envelopes: bool = True
     envelope_fields: set[str] = field(default_factory=set)
     record_field_types: dict[str, set[str]] = field(default_factory=dict)
+    transport_failure_kind: str | None = None
+    http_status_code: int | None = None
     _last_cursor_digest: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
         return "ProtocolEvidence(structural_only=True)"
 
-    def observe(self, request: Request, raw_response: bytes) -> None:
-        """Observe one exchange and discard all raw request/response values."""
-
+    def observe_request(self, request: Request) -> None:
+        """Observe one outgoing request without retaining any wire value."""
         form = _parse_request_form(request.data)
         self.request_count += 1
         if set(form) != _EXPECTED_FORM_FIELDS:
@@ -64,10 +69,21 @@ class ProtocolEvidence:
 
         request_cursor_digest = _cursor_digest(form)
         if self.request_count == 1:
-            if any(form.get(key) for key in _CURSOR_FIELDS):
+            if any(
+                form.get(key) != _INITIAL_CURSOR[key]
+                for key in _CURSOR_FIELDS
+            ):
                 self.cursor_chain_matches = False
         elif request_cursor_digest != self._last_cursor_digest:
             self.cursor_chain_matches = False
+
+    def observe_http_status(self, status_code: int) -> None:
+        """Retain only a bounded HTTP status code, never response details."""
+
+        self.http_status_code = status_code if 100 <= status_code <= 599 else None
+
+    def observe_response(self, raw_response: bytes) -> None:
+        """Observe one response body and discard all raw response values."""
 
         payload: Any = None
         try:
@@ -112,6 +128,12 @@ class ProtocolEvidence:
         payload = None
         records = []
 
+    def observe(self, request: Request, raw_response: bytes) -> None:
+        """Observe one exchange and discard all raw request/response values."""
+
+        self.observe_request(request)
+        self.observe_response(raw_response)
+
     def summary(self) -> ProtocolSummary:
         return ProtocolSummary(
             request_count=self.request_count,
@@ -126,6 +148,8 @@ class ProtocolEvidence:
                 key: tuple(sorted(types))
                 for key, types in sorted(self.record_field_types.items())
             },
+            transport_failure_kind=self.transport_failure_kind,
+            http_status_code=self.http_status_code,
         )
 
     def clear_transient_state(self) -> None:
@@ -140,7 +164,31 @@ class RecordingOpener:
         self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
     def open(self, request: Request, timeout: float) -> _RecordingResponse:
-        response = self._opener.open(request, timeout=timeout)
+        self._evidence.observe_request(request)
+        try:
+            response = self._opener.open(request, timeout=timeout)
+        except HTTPError as exc:
+            self._evidence.observe_http_status(int(exc.code))
+            raise
+        except RemoteDisconnected:
+            self._evidence.transport_failure_kind = "remote_disconnected"
+            raise
+        except ConnectionResetError:
+            self._evidence.transport_failure_kind = "connection_reset"
+            raise
+        except ConnectionRefusedError:
+            self._evidence.transport_failure_kind = "connection_refused"
+            raise
+        except TimeoutError:
+            self._evidence.transport_failure_kind = "timeout"
+            raise
+        except URLError as exc:
+            self._evidence.transport_failure_kind = _url_error_kind(exc)
+            raise
+        except OSError:
+            self._evidence.transport_failure_kind = "transport_error"
+            raise
+        self._evidence.observe_http_status(int(response.getcode()))
         return _RecordingResponse(response, request, self._evidence)
 
 
@@ -156,6 +204,19 @@ class _NoRedirectHandler(HTTPRedirectHandler):
     ) -> Request | None:
         del req, fp, code, msg, headers, newurl
         return None
+
+
+def _url_error_kind(error: URLError) -> str:
+    reason = error.reason
+    if isinstance(reason, RemoteDisconnected):
+        return "remote_disconnected"
+    if isinstance(reason, ConnectionResetError):
+        return "connection_reset"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection_refused"
+    if isinstance(reason, TimeoutError):
+        return "timeout"
+    return "url_error"
 
 
 class _RecordingResponse:
@@ -191,7 +252,7 @@ class _RecordingResponse:
     def read(self, amount: int = -1) -> bytes:
         raw = self._response.read(amount)
         if not self._observed:
-            self._evidence.observe(self._request, raw)
+            self._evidence.observe_response(raw)
             self._observed = True
         return raw
 

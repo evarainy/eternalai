@@ -11,9 +11,11 @@ from pydantic import ValidationError
 
 from app.ports.adapter import (
     MOCK_ERROR_MODE_TO_ERROR_CODE,
+    AdapterFailureStage,
     AdapterPort,
     AdapterResult,
     AdapterStatus,
+    AdapterTraceMetadata,
     MockErrorMode,
 )
 from app.ports.capability_gateway import ErrorCode
@@ -26,6 +28,7 @@ EXPECTED_ADAPTER_RESULT_FIELDS = {
     "data",
     "error_code",
     "raw_payload_ref",
+    "trace_metadata",
 }
 
 EXPECTED_ADAPTER_STATUS_VALUES = (
@@ -33,6 +36,14 @@ EXPECTED_ADAPTER_STATUS_VALUES = (
     "error",
     "timeout",
     "permission_denied",
+)
+
+EXPECTED_ADAPTER_FAILURE_STAGE_VALUES = (
+    "argument_validation",
+    "credential_read",
+    "provider_transport",
+    "normalization",
+    "unknown",
 )
 
 EXPECTED_MOCK_ERROR_MODE_VALUES = (
@@ -62,6 +73,10 @@ def test_adapter_status_literal_values_match_contract() -> None:
     assert get_args(AdapterStatus) == EXPECTED_ADAPTER_STATUS_VALUES
 
 
+def test_adapter_failure_stage_literal_values_match_bounded_trace_contract() -> None:
+    assert get_args(AdapterFailureStage) == EXPECTED_ADAPTER_FAILURE_STAGE_VALUES
+
+
 def test_adapter_result_rejects_status_outside_contract() -> None:
     with pytest.raises(ValidationError) as exc_info:
         AdapterResult(status="ok")
@@ -75,6 +90,34 @@ def test_adapter_result_defaults_match_contract() -> None:
     assert result.data is None
     assert result.error_code is None
     assert result.raw_payload_ref is None
+    assert result.trace_metadata is None
+
+
+def test_adapter_trace_metadata_is_bounded_frozen_and_not_business_serialized() -> None:
+    metadata = AdapterTraceMetadata(
+        argument_keys=("alpha", "zeta"),
+        failure_stage="argument_validation",
+    )
+    result = AdapterResult(status="error", trace_metadata=metadata)
+
+    assert metadata.model_dump(mode="json") == {
+        "argument_keys": ["alpha", "zeta"],
+        "failure_stage": "argument_validation",
+    }
+    assert set(AdapterTraceMetadata.model_fields) == {
+        "argument_keys",
+        "failure_stage",
+    }
+    assert AdapterTraceMetadata.model_config["extra"] == "forbid"
+    assert AdapterTraceMetadata.model_config["frozen"] is True
+    assert "trace_metadata" not in result.model_dump(mode="json")
+    assert "trace_metadata" not in repr(result)
+    with pytest.raises(ValidationError):
+        AdapterTraceMetadata(argument_keys=("zeta", "alpha"))
+    with pytest.raises(ValidationError):
+        AdapterTraceMetadata(argument_keys=("alpha",), raw_value="forbidden")
+    with pytest.raises(ValidationError):
+        metadata.failure_stage = "unknown"
 
 
 def test_adapter_result_rejects_extra_fields() -> None:

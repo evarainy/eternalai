@@ -46,31 +46,34 @@
     "mock_oa_state": {
       "pending_workflows": [
         {
-          "workflow_id": "OA-WF-2026-0001",
+          "message_id": "OA-MSG-2026-0001",
           "title": "办公用品采购审批",
-          "status": "pending",
-          "applicant": "张三",
-          "current_step": "pending",
-          "approver": "李四",
-          "created_at": "2026-05-07T09:30:00+09:00"
+          "content": "办公用品采购审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-07 09:30",
+          "business_state": "1",
+          "link": "/spa/workflow/index.html#/req/0001",
+          "mobile_link": "/spa/workflow/mobile.html#/req/0001"
         },
         {
-          "workflow_id": "OA-WF-2026-0002",
+          "message_id": "OA-MSG-2026-0002",
           "title": "差旅报销审批",
-          "status": "pending",
-          "applicant": "王五",
-          "current_step": "pending",
-          "approver": "赵六",
-          "created_at": "2026-05-06T11:00:00+09:00"
+          "content": "差旅报销审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-06 11:00",
+          "business_state": "1",
+          "link": "/spa/workflow/index.html#/req/0002",
+          "mobile_link": null
         },
         {
-          "workflow_id": "OA-WF-2026-0003",
+          "message_id": "OA-MSG-2026-0003",
           "title": "过期合同审批",
-          "status": "pending",
-          "applicant": "陈七",
-          "current_step": "pending",
-          "approver": "李四",
-          "expired": true
+          "content": "过期合同审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-05 08:15",
+          "business_state": "2",
+          "link": null,
+          "mobile_link": null
         }
       ]
     }

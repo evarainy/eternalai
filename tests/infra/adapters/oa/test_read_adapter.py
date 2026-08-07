@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,13 +19,17 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import OpenerDirector, Request
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.infra.adapters.oa import provider as oa_provider
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
+    _LIVE_MESSAGE_CENTER_FIELD_NAMES,
+    _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS,
+    OAMessageCenterRecord,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
+    build_contract_drift_baseline_fingerprint,
     build_live_pending_workflows_fingerprint,
     build_live_system_messages_fingerprint,
     build_structural_fingerprint,
@@ -32,9 +37,14 @@ from app.infra.adapters.oa.contracts import (
 )
 from app.infra.adapters.oa.provider import (
     LiveOAReadProvider,
+    OAContractPackError,
     OAContractPackPayloadInvalid,
+    OALiveHTTPServerError,
     OALiveIdentityExpired,
+    OALiveIdentityUnbound,
     OALivePayloadInvalid,
+    OALivePermissionDenied,
+    OALiveProviderError,
     OALiveRequestError,
     OALiveTimeout,
     ReplayOAReadProvider,
@@ -53,6 +63,7 @@ from app.ports.secret_provider import (
     CredentialNotFoundError,
     CredentialStorageError,
     InvalidCredentialReferenceError,
+    SecretProviderError,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -61,7 +72,7 @@ CONTRACT_PACK = (
     / "tests"
     / "contract_packs"
     / "oa"
-    / "ecology9-pending-workflows-v1"
+    / "ecology9-pending-workflows-v2"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
     REPO_ROOT
@@ -70,30 +81,318 @@ SYSTEM_MESSAGE_CONTRACT_PACK = (
     / "oa"
     / "ecology9-system-messages-v1"
 )
+# Written out by hand, not read back from the pack under test: an expectation
+# sourced from the artifact family it verifies would stay green through any
+# rewrite of that artifact.
 EXPECTED_REPLAY_DATA: dict[str, Any] = {
     "workflows": [
         {
-            "workflow_id": "workflow-synthetic-001",
-            "title": "workflow-title-synthetic-001",
-            "status": "pending",
-            "applicant": "applicant-synthetic-001",
-            "current_step": "step-synthetic-001",
-            "approver": "approver-synthetic-001",
-            "created_at": "2000-01-01T00:00:00+00:00",
-            "expired": False,
+            "message_id": "90000001",
+            "title": "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内",
+            "content": (
+                "统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统"
+            ),
+            "source_name": "统消息合成样本",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/001xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
         },
         {
-            "workflow_id": "workflow-synthetic-002",
-            "title": "workflow-title-synthetic-002",
-            "status": "pending",
-            "applicant": "applicant-synthetic-002",
-            "current_step": "step-synthetic-002",
-            "approver": None,
-            "created_at": None,
-            "expired": True,
+            "message_id": "90000002",
+            "title": (
+                "消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消"
+                "息合成"
+            ),
+            "content": (
+                "消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消"
+            ),
+            "source_name": "消息合成样本文",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/002xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/002xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
         },
-    ]
+        {
+            "message_id": "90000003",
+            "title": "息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系",
+            "content": (
+                "息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息"
+            ),
+            "source_name": "息合成样本文本",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/003xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/003xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000004",
+            "title": "合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提",
+            "content": (
+                "合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合"
+            ),
+            "source_name": "合成样本文本内",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/004xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/004xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000005",
+            "title": (
+                "成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成"
+                "样本文"
+            ),
+            "content": (
+                "成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成"
+            ),
+            "source_name": "成样本文本内容",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "6",
+            "link": "/oa/system-messages/desktop/005xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/005xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000006",
+            "title": "样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查",
+            "content": (
+                "样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样"
+            ),
+            "source_name": "样本文本内容通",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "7",
+            "link": "/oa/system-messages/desktop/006xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/006xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000007",
+            "title": (
+                "本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本"
+                "文本内容通"
+            ),
+            "content": (
+                "本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本"
+            ),
+            "source_name": "本文本内容通知",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "8",
+            "link": "/oa/system-messages/desktop/007xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/007xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000008",
+            "title": (
+                "文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文"
+                "本内容通知"
+            ),
+            "content": (
+                "文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文"
+            ),
+            "source_name": "文本内容通知提",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "1",
+            "link": "/oa/system-messages/desktop/008xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/008xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000009",
+            "title": (
+                "本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本"
+                "内容通知提"
+            ),
+            "content": (
+                "本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本"
+            ),
+            "source_name": "本内容通知提醒",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/009xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/009xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000010",
+            "title": "内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统",
+            "content": (
+                "内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内"
+            ),
+            "source_name": "内容通知提醒待",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/010xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/010xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000011",
+            "title": "容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本",
+            "content": (
+                "容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容"
+            ),
+            "source_name": "容通知提醒待办",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/011xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/011xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000012",
+            "title": "通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消",
+            "content": (
+                "通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通"
+            ),
+            "source_name": "通知提醒待办查",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/012xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/012xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000013",
+            "title": "知提醒待办查阅系统消息合成样本文本内容通知提醒待办查",
+            "content": (
+                "知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知"
+            ),
+            "source_name": "知提醒待办查阅",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "6",
+            "link": "/oa/system-messages/desktop/013xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/013xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000014",
+            "title": "提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成",
+            "content": (
+                "提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提"
+            ),
+            "source_name": "提醒待办查阅系",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "7",
+            "link": "/oa/system-messages/desktop/014xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/014xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000015",
+            "title": "醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通",
+            "content": (
+                "醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒"
+            ),
+            "source_name": "醒待办查阅系统",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "8",
+            "link": "/oa/system-messages/desktop/015xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/015xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000016",
+            "title": (
+                "待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待"
+                "办查阅系统消息合成样本文本内容通知提醒"
+            ),
+            "content": (
+                "待办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待"
+            ),
+            "source_name": "待办查阅系统消",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "1",
+            "link": "/oa/system-messages/desktop/016xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/016xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000017",
+            "title": (
+                "办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办"
+                "查阅系统消息合成样本文本内容通知提"
+            ),
+            "content": (
+                "办查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办"
+            ),
+            "source_name": "办查阅系统消息",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "2",
+            "link": "/oa/system-messages/desktop/017xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/017xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000018",
+            "title": "查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本",
+            "content": (
+                "查阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查"
+            ),
+            "source_name": "查阅系统消息合",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "3",
+            "link": "/oa/system-messages/desktop/018xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/018xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000019",
+            "title": "阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本",
+            "content": (
+                "阅系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅"
+            ),
+            "source_name": "阅系统消息合成",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "4",
+            "link": "/oa/system-messages/desktop/019xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/019xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+        {
+            "message_id": "90000020",
+            "title": "系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文",
+            "content": (
+                "系统消息合成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提醒待办查阅系"
+            ),
+            "source_name": "系统消息合成样",
+            "occurred_at": "2000-01-01 00:00:00",
+            "business_state": "5",
+            "link": "/oa/system-messages/desktop/020xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "mobile_link": (
+                "/oa/system-messages/mobile/020xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            ),
+        },
+    ],
+    "returned_count": 20,
+    "is_complete": False,
 }
+
+
 class CountingReplayProvider(ReplayOAReadProvider):
     def __init__(self, contract_pack_dir: Path) -> None:
         super().__init__(contract_pack_dir)
@@ -175,6 +474,7 @@ class SequencedOpener:
         self.request_forms: list[dict[str, list[str]]] = []
         self.request_methods: list[str] = []
         self.request_header_names: list[frozenset[str]] = []
+        self.request_headers: list[dict[str, str]] = []
         self.cookie_header_present: list[bool] = []
 
     def open(self, request: Request, *, timeout: float) -> FakeHTTPResponse:
@@ -190,6 +490,12 @@ class SequencedOpener:
         self.request_methods.append(request.get_method())
         self.request_header_names.append(
             frozenset(name.casefold() for name, _value in request.header_items())
+        )
+        self.request_headers.append(
+            {
+                name.casefold(): value
+                for name, value in request.header_items()
+            }
         )
         self.cookie_header_present.append(request.has_header("Cookie"))
         response = self._responses.pop(0)
@@ -243,6 +549,25 @@ def _start_recording_server(
     return server, thread
 
 
+def _assert_browser_like_oa_headers(
+    opener: SequencedOpener,
+    *,
+    request_count: int,
+) -> None:
+    assert len(opener.request_headers) == request_count
+    for headers in opener.request_headers:
+        assert headers["accept"] == "*/*"
+        assert headers["accept-language"] == "zh-CN,zh;q=0.9"
+        assert headers["referer"] == (
+            "https://oa.synthetic.invalid/wui/index.html"
+        )
+        assert headers["user-agent"] == (
+            "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/86.0.4240.111 Safari/537.36"
+        )
+
+
 def _credential(*, cookie_value: str | None = None) -> OASessionCredential:
     return OASessionCredential(
         oa_user_id=SecretStr(secrets.token_hex(16)),
@@ -287,22 +612,23 @@ def _live_provider(
 
 def _raw_workflow(index: int) -> dict[str, Any]:
     return {
-        "workflowId": f"live-workflow-{index}",
+        "messageid": f"live-workflow-{index}",
         "title": f"live-title-{index}",
-        "status": "pending",
-        "applicant": f"live-applicant-{index}",
-        "currentStep": f"live-step-{index}",
-        "approver": None,
-        "createdAt": "2026-07-30T00:00:00+00:00",
-        "expired": False,
+        "context": f"live-content-{index}",
+        "name": f"live-source-{index}",
+        "time": "2026-07-30 00:00:00",
+        "bizstate": "1",
+        "link": f"/workflows/desktop/{index}",
+        "linkmobileurl": f"/workflows/mobile/{index}",
+        "gomethod": "",
+        "gomethodpc": "",
+        "showimage": "",
     }
 
 
 def _matching_live_workflows() -> list[dict[str, Any]]:
     first = _raw_workflow(1)
-    first["approver"] = "live-approver-1"
     second = _raw_workflow(2)
-    second["createdAt"] = None
     return [first, second]
 
 
@@ -334,6 +660,38 @@ def _matching_live_system_messages() -> list[dict[str, Any]]:
     return [first, second]
 
 
+def _assert_anonymous_node_paths(
+    nodes: tuple[Any, ...] | list[dict[str, Any]],
+    *,
+    root_path: str,
+    expected_count: int,
+) -> list[str]:
+    paths = [
+        node.path if hasattr(node, "path") else node["path"]
+        for node in nodes
+    ]
+    pattern = re.compile(
+        rf"{re.escape(root_path)}\.unknown_field_[a-f0-9]{{64}}$"
+    )
+    assert len(paths) == expected_count
+    assert len(set(paths)) == expected_count
+    assert all(pattern.fullmatch(path) for path in paths)
+    return paths
+
+
+def _assert_wire_node_paths(
+    nodes: tuple[Any, ...] | list[dict[str, Any]],
+    *,
+    root_path: str,
+    raw_keys: set[str],
+) -> None:
+    paths = {
+        node.path if hasattr(node, "path") else node["path"]
+        for node in nodes
+    }
+    assert paths == {f"{root_path}.wire_{key}" for key in raw_keys}
+
+
 def _message_center_page(
     records: list[dict[str, Any]],
     *,
@@ -347,6 +705,184 @@ def _message_center_page(
         "mintime": f"synthetic-lower-{cursor_index}",
         "msgid": f"synthetic-cursor-{cursor_index}",
     }
+
+
+def test_published_pending_pack_versions_stay_immutable_and_distinct() -> None:
+    """A published pack version is a fixed structure, never edited in place.
+
+    The v1 pack is the retired synthetic guess and the v2 pack is the structure
+    derived from the real sibling capture. Both shas are written out here so a
+    rewrite of either directory fails instead of silently redefining a version
+    other artifacts already reference.
+    """
+
+    retired_pack = CONTRACT_PACK.parent / "ecology9-pending-workflows-v1"
+    retired_profile = json.loads(
+        (retired_pack / "profile.json").read_text(encoding="utf-8")
+    )
+    retired_fingerprint = json.loads(
+        (retired_pack / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    current_profile = json.loads(
+        (CONTRACT_PACK / "profile.json").read_text(encoding="utf-8")
+    )
+    current_fingerprint = json.loads(
+        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    )
+
+    assert CONTRACT_PACK.name == "ecology9-pending-workflows-v2"
+    assert retired_profile["profile_version"] == retired_pack.name
+    assert retired_profile["source_kind"] == "synthetic"
+    assert (
+        retired_fingerprint["sha256"]
+        == "cbea86fd8abcd32fdf54e1c405dfedc8df442d816fe40bb301be44eb28ae991f"
+    )
+    assert current_profile["profile_version"] == CONTRACT_PACK.name
+    assert current_profile["source_kind"] == "derived_from_sibling_capture"
+    assert (
+        current_fingerprint["sha256"]
+        == "12effb9199346f8a35c8d25f97b0c1ff43f55ace80f5bb3ae34273a655ca769e"
+    )
+    assert current_fingerprint == build_structural_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
+    )
+    # v1 was sealed before the fingerprint builder started overlaying the
+    # contract exemplar, so the current builder cannot reproduce it. That is
+    # what retirement looks like; the fix is a new version, never a rewrite of
+    # this directory to make it self-consistent again.
+    assert retired_fingerprint != build_structural_fingerprint(
+        json.loads((retired_pack / "sample.json").read_text(encoding="utf-8"))
+    )
+    with pytest.raises(OAContractPackError):
+        asyncio.run(
+            ReplayOAReadProvider(retired_pack).list_pending_workflows(_credential())
+        )
+
+
+def test_message_center_record_excludes_disproved_pending_fields() -> None:
+    disproved_fields = {
+        "workflow_id",
+        "applicant",
+        "approver",
+        "created_at",
+        "current_step",
+        "expired",
+        "status",
+    }
+
+    assert disproved_fields.isdisjoint(OAMessageCenterRecord.model_fields)
+
+
+def _message_center_record(**overrides: Any) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "message_id": "90000001",
+        "title": "synthetic-title",
+        "content": "synthetic-content",
+        "source_name": "synthetic-source",
+        "occurred_at": "2000-01-01 00:00:00",
+        "business_state": "2",
+        "link": "/oa/system-messages/desktop/001",
+        "mobile_link": "/oa/system-messages/mobile/001",
+    }
+    record.update(overrides)
+    return record
+
+
+@pytest.mark.parametrize("field_name", ["link", "mobile_link"])
+def test_message_center_record_rejects_protocol_relative_links(
+    field_name: str,
+) -> None:
+    # "//evil.example/steal" starts with "/" but is protocol-relative: rendered
+    # as an href it is a cross-origin jump, not a same-origin path.
+    with pytest.raises(ValidationError, match="null or relative paths"):
+        OAMessageCenterRecord.model_validate(
+            _message_center_record(**{field_name: "//evil.example/steal"}),
+            strict=True,
+        )
+
+
+@pytest.mark.parametrize("accepted_link", ["/ok/path", None])
+def test_message_center_record_still_accepts_same_origin_and_absent_links(
+    accepted_link: str | None,
+) -> None:
+    record = OAMessageCenterRecord.model_validate(
+        _message_center_record(link=accepted_link),
+        strict=True,
+    )
+
+    assert record.link == accepted_link
+    assert record.mobile_link == "/oa/system-messages/mobile/001"
+
+
+def test_message_center_ignored_wire_fields_are_exactly_enumerated() -> None:
+    assert _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS == frozenset(
+        {"gomethod", "gomethodpc", "showimage"}
+    )
+
+
+def test_pending_and_system_fingerprints_share_one_field_mapping_object() -> None:
+    pending_mapping = build_live_pending_workflows_fingerprint.__globals__[
+        "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
+    ]
+    system_mapping = build_live_system_messages_fingerprint.__globals__[
+        "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
+    ]
+
+    assert pending_mapping is system_mapping
+    assert pending_mapping is _LIVE_MESSAGE_CENTER_FIELD_NAMES
+
+
+def test_pending_collection_rejects_mismatched_returned_count() -> None:
+    with pytest.raises(ValueError, match="returned_count"):
+        OAPendingWorkflowCollection.model_validate(
+            {"workflows": [], "returned_count": 1, "is_complete": True},
+            strict=True,
+        )
+
+
+def test_frozen_system_pack_fingerprint_remains_pack_self_consistent() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+    frozen = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    rebuilt = build_structural_fingerprint(sample)
+
+    assert rebuilt["sha256"] == frozen["sha256"]
+    assert rebuilt == frozen
+
+
+def test_system_pack_drift_baseline_excludes_exemplar_only_nullable() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+
+    baseline = build_contract_drift_baseline_fingerprint(sample)
+    nodes = {node["path"]: node for node in baseline["nodes"]}
+
+    assert nodes["$.messages[].link"]["nullable"] is False
+    assert nodes["$.messages[].mobile_link"]["nullable"] is False
+
+
+def test_live_system_shape_matches_data_derived_contract_baseline() -> None:
+    sample = json.loads(
+        (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(encoding="utf-8")
+    )
+    baseline = build_contract_drift_baseline_fingerprint(sample)
+    actual = build_live_system_messages_fingerprint(
+        _matching_live_system_messages()
+    )
+
+    report = compare_structural_fingerprints(baseline, actual)
+
+    assert report.matches is True
+    assert report.added == ()
+    assert report.removed == ()
+    assert report.changed == ()
 
 
 def test_live_pending_provider_keeps_rejecting_backslash_endpoint_path() -> None:
@@ -448,9 +984,9 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
         {
             "pagesize": ["20"],
             "selectState": ["system-selection-state"],
-            "msgid": [""],
+            "msgid": ["0"],
             "bizstate": ["system-business-state"],
-            "mintime": [""],
+            "mintime": ["0"],
             "id": ["202"],
         },
         {
@@ -465,22 +1001,30 @@ def test_live_system_messages_use_bounded_post_and_match_contract() -> None:
     assert opener.cookie_header_present == [True, True]
     assert {
         "accept",
+        "accept-language",
         "content-type",
         "cookie",
         "origin",
+        "referer",
         "user-agent",
         "x-requested-with",
     }.issubset(opener.request_header_names[0])
+    _assert_browser_like_oa_headers(opener, request_count=2)
     assert len(reports) == 1
     report = reports[0]
-    expected_fingerprint = json.loads(
-        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
-            encoding="utf-8"
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads(
+            (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(
+                encoding="utf-8"
+            )
         )
     )
     assert report.matches is True
     assert report.expected_sha256 == expected_fingerprint["sha256"]
     assert report.actual_sha256 == expected_fingerprint["sha256"]
+    assert report.added == ()
+    assert report.removed == ()
+    assert report.changed == ()
 
 
 def test_live_system_message_full_page_at_page_limit_fails_closed() -> None:
@@ -532,13 +1076,13 @@ def test_live_system_messages_fetches_all_three_cursor_pages() -> None:
         ["202"],
     ]
     assert [form["msgid"] for form in opener.request_forms] == [
-        [""],
+        ["0"],
         ["synthetic-cursor-1"],
         ["synthetic-cursor-2"],
         ["synthetic-cursor-3"],
     ]
     assert [form["mintime"] for form in opener.request_forms] == [
-        [""],
+        ["0"],
         ["synthetic-lower-1"],
         ["synthetic-lower-2"],
         ["synthetic-lower-3"],
@@ -588,7 +1132,7 @@ def test_live_system_message_invalid_status_bounds_and_links_fail_closed(
     assert result.data is None
 
 
-def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
+def test_live_system_message_drift_reports_safe_wire_names_without_values() -> None:
     reports: list[Any] = []
     records = _matching_live_system_messages()
     runtime_field_name = f"vendorField{secrets.token_hex(8)}"
@@ -611,10 +1155,12 @@ def test_live_system_message_drift_hides_unknown_names_and_values() -> None:
     report = reports[0]
     rendered = report.model_dump_json()
     assert report.matches is False
-    assert [node.path for node in report.added] == [
-        "$.messages[].unknown_field_001"
-    ]
-    assert runtime_field_name not in rendered
+    _assert_wire_node_paths(
+        report.added,
+        root_path="$.messages[]",
+        raw_keys={runtime_field_name},
+    )
+    assert f"wire_{runtime_field_name}" in rendered
     assert runtime_business_value not in rendered
 
 
@@ -631,10 +1177,13 @@ def test_live_system_message_error_discards_sensitive_traceback_locals() -> None
     _assert_provider_traceback_is_redacted(exc_info.value, marker)
 
 
-def test_live_system_message_fingerprint_matches_frozen_pack_shape() -> None:
-    expected = json.loads(
-        (SYSTEM_MESSAGE_CONTRACT_PACK / "fingerprint.json").read_text(
-            encoding="utf-8"
+def test_live_system_message_fingerprint_ignores_only_enumerated_navigation_fields(
+) -> None:
+    expected = build_contract_drift_baseline_fingerprint(
+        json.loads(
+            (SYSTEM_MESSAGE_CONTRACT_PACK / "sample.json").read_text(
+                encoding="utf-8"
+            )
         )
     )
 
@@ -646,6 +1195,22 @@ def test_live_system_message_fingerprint_matches_frozen_pack_shape() -> None:
     )
 
     assert report.matches is True
+    assert report.added == ()
+    assert report.removed == ()
+    assert report.changed == ()
+    assert all(node.nullable is True for node in report.changed_expected)
+    assert all(node.nullable is False for node in report.changed)
+
+
+def test_empty_live_aggregates_do_not_inject_contract_record_fields() -> None:
+    for fingerprint, root_path in (
+        (build_live_pending_workflows_fingerprint([]), "$.workflows[]"),
+        (build_live_system_messages_fingerprint([]), "$.messages[]"),
+    ):
+        assert all(
+            not node["path"].startswith(root_path)
+            for node in fingerprint["nodes"]
+        )
 
 
 def test_live_provider_source_has_no_hardcoded_transport_secret_literal() -> None:
@@ -719,7 +1284,7 @@ def test_live_default_opener_ignores_all_environment_proxies(
         oa_thread.join(timeout=2)
         proxy_thread.join(timeout=2)
 
-    assert [workflow.workflow_id for workflow in collection.workflows] == [
+    assert [workflow.message_id for workflow in collection.workflows] == [
         "live-workflow-1"
     ]
     assert proxy_server.requests == []
@@ -763,6 +1328,9 @@ def test_replay_adapter_returns_every_normalized_field_exactly() -> None:
     assert result.error_code is None
     assert result.raw_payload_ref is None
     assert result.data == EXPECTED_REPLAY_DATA
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.argument_keys == ()
+    assert result.trace_metadata.failure_stage is None
 
 
 def test_replay_adapter_runs_through_gateway_with_completed_status() -> None:
@@ -893,6 +1461,8 @@ def test_unknown_capability_returns_adapter_error_and_gateway_failed() -> None:
     assert direct_result.status == "error"
     assert direct_result.error_code == "adapter_error"
     assert direct_result.data is None
+    assert direct_result.trace_metadata is not None
+    assert direct_result.trace_metadata.failure_stage == "unknown"
     assert gateway_result.status == "failed"
     assert gateway_result.error_code == "adapter_error"
     assert gateway_result.data is None
@@ -914,6 +1484,9 @@ def test_extra_capability_arguments_fail_closed_without_provider_call() -> None:
     assert result.status == "error"
     assert result.error_code == "adapter_error"
     assert result.data is None
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.argument_keys == ("page_size",)
+    assert result.trace_metadata.failure_stage == "argument_validation"
     assert provider.calls == 0
 
 
@@ -956,7 +1529,7 @@ def test_replay_rejects_structural_fingerprint_mismatch(tmp_path: Path) -> None:
     shutil.copytree(CONTRACT_PACK, pack)
     sample_path = pack / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
-    sample["workflows"][0]["status"] = 1
+    sample["workflows"][0]["message_id"] = 1
     sample_path.write_text(json.dumps(sample), encoding="utf-8")
     adapter = OAReadAdapter(ReplayOAReadProvider(pack))
 
@@ -989,22 +1562,30 @@ def test_replay_maps_model_violation_to_payload_invalid(tmp_path: Path) -> None:
 
 
 def test_structural_fingerprint_excludes_values_and_array_length() -> None:
-    first = {"workflows": [copy.deepcopy(EXPECTED_REPLAY_DATA["workflows"][0])]}
+    first = {
+        "workflows": [copy.deepcopy(EXPECTED_REPLAY_DATA["workflows"][0])],
+        "returned_count": 1,
+        "is_complete": False,
+    }
     second_item = copy.deepcopy(first["workflows"][0])
     second_item.update(
         {
-            "workflow_id": "completely-different-workflow",
+            "message_id": "completely-different-workflow",
             "title": "completely-different-title",
-            "status": "different-status",
-            "applicant": "completely-different-applicant",
-            "current_step": "completely-different-step",
-            "approver": "completely-different-approver",
-            "created_at": "2099-12-31T23:59:59+00:00",
-            "expired": True,
+            "content": "completely-different-content",
+            "source_name": "completely-different-source",
+            "occurred_at": "2099-12-31 23:59:59",
+            "business_state": "different-state",
+            "link": "/completely-different-link",
+            "mobile_link": "/completely-different-mobile-link",
         }
     )
-    second = {"workflows": [second_item, copy.deepcopy(second_item)]}
-    empty = {"workflows": []}
+    second = {
+        "workflows": [second_item, copy.deepcopy(second_item)],
+        "returned_count": 2,
+        "is_complete": False,
+    }
+    empty = {"workflows": [], "returned_count": 0, "is_complete": True}
 
     first_fingerprint = build_structural_fingerprint(first)
     second_fingerprint = build_structural_fingerprint(second)
@@ -1014,13 +1595,14 @@ def test_structural_fingerprint_excludes_values_and_array_length() -> None:
     assert first_fingerprint == empty_fingerprint
     rendered = json.dumps(first_fingerprint)
     for business_value in first["workflows"][0].values():
-        assert str(business_value) not in rendered
+        if business_value is not None and len(str(business_value)) >= 9:
+            assert str(business_value) not in rendered
 
 
 def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
     pack = tmp_path / CONTRACT_PACK.name
     shutil.copytree(CONTRACT_PACK, pack)
-    empty_sample = {"workflows": []}
+    empty_sample = {"workflows": [], "returned_count": 0, "is_complete": True}
     (pack / "sample.json").write_text(
         json.dumps(empty_sample),
         encoding="utf-8",
@@ -1035,7 +1617,7 @@ def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
 
     assert result.status == "success"
     assert result.error_code is None
-    assert result.data == {"workflows": []}
+    assert result.data == empty_sample
 
 
 def test_replay_never_resolves_or_uses_a_credential() -> None:
@@ -1086,33 +1668,35 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
     assert result.data == {
         "workflows": [
             {
-                "workflow_id": "live-workflow-1",
+                "message_id": "live-workflow-1",
                 "title": "live-title-1",
-                "status": "pending",
-                "applicant": "live-applicant-1",
-                "current_step": "live-step-1",
-                "approver": None,
-                "created_at": "2026-07-30T00:00:00+00:00",
-                "expired": False,
+                "content": "live-content-1",
+                "source_name": "live-source-1",
+                "occurred_at": "2026-07-30 00:00:00",
+                "business_state": "1",
+                "link": "/workflows/desktop/1",
+                "mobile_link": "/workflows/mobile/1",
             },
             {
-                "workflow_id": "live-workflow-2",
+                "message_id": "live-workflow-2",
                 "title": "live-title-2",
-                "status": "pending",
-                "applicant": "live-applicant-2",
-                "current_step": "live-step-2",
-                "approver": None,
-                "created_at": "2026-07-30T00:00:00+00:00",
-                "expired": False,
+                "content": "live-content-2",
+                "source_name": "live-source-2",
+                "occurred_at": "2026-07-30 00:00:00",
+                "business_state": "1",
+                "link": "/workflows/desktop/2",
+                "mobile_link": "/workflows/mobile/2",
             },
-        ]
+        ],
+        "returned_count": 2,
+        "is_complete": True,
     }
     assert opener.request_forms == [
         {
             "id": ["101"],
             "pagesize": ["1"],
-            "msgid": [""],
-            "mintime": [""],
+            "msgid": ["0"],
+            "mintime": ["0"],
             "bizstate": ["pending-business-state"],
             "selectState": ["pending-selection-state"],
         },
@@ -1134,6 +1718,7 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
         },
     ]
     assert opener.cookie_header_present == [True, True, True]
+    _assert_browser_like_oa_headers(opener, request_count=3)
     assert secret_provider.calls == ["oa-session-v1:server-surrogate"]
 
 
@@ -1245,7 +1830,11 @@ def test_live_provider_accepts_a_legal_empty_collection() -> None:
         _live_provider(opener).list_pending_workflows(_credential())
     )
 
-    assert collection.model_dump(mode="json") == {"workflows": []}
+    assert collection.model_dump(mode="json") == {
+        "workflows": [],
+        "returned_count": 0,
+        "is_complete": True,
+    }
     assert len(opener.request_forms) == 1
 
 
@@ -1325,7 +1914,7 @@ def test_live_business_session_expiry_requires_reauthentication() -> None:
                     [
                         {
                             **_raw_workflow(1),
-                            "status": "not-pending",
+                            "title": 7,
                         }
                     ]
                 )
@@ -1469,7 +2058,7 @@ def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
     assert len(opener.request_forms) == 2
 
 
-def test_live_pagination_fails_closed_on_empty_page_with_repeated_cursor() -> None:
+def test_live_pagination_accepts_terminal_empty_page_with_repeated_cursor() -> None:
     opener = SequencedOpener(
         FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
         FakeHTTPResponse(_message_center_page([], cursor_index=1)),
@@ -1487,8 +2076,11 @@ def test_live_pagination_fails_closed_on_empty_page_with_repeated_cursor() -> No
         )
     )
 
-    assert result.status == "error"
-    assert result.error_code == "adapter_payload_invalid"
+    assert result.status == "success"
+    assert result.error_code is None
+    assert result.data is not None
+    assert len(result.data["workflows"]) == 1
+    assert result.data["workflows"][0]["message_id"] == "live-workflow-1"
     assert len(opener.request_forms) == 2
 
 
@@ -1630,6 +2222,7 @@ def test_live_pagination_fails_closed_on_cross_page_duplicate() -> None:
         (CredentialExpiredError(), "identity_expired"),
         (InvalidCredentialReferenceError(), "adapter_error"),
         (CredentialStorageError(), "adapter_error"),
+        (SecretProviderError(), "adapter_error"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1668,6 +2261,8 @@ def test_secret_resolution_errors_are_safely_mapped(
 
     assert result.status == "error"
     assert result.error_code == expected_error_code
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.failure_stage == "credential_read"
     assert opener.request_queries == []
 
 
@@ -1686,8 +2281,8 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         ).list_pending_workflows(_credential())
     )
 
-    expected_fingerprint = json.loads(
-        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
     assert len(collection.workflows) == len(records)
     assert len(reports) == 1
@@ -1706,19 +2301,19 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         (
             "added",
             "added",
-            "$.workflows[].unknown_field_001",
+            None,
             "success",
         ),
         ("removed", "removed", "$.workflows[].title", "error"),
         ("type", "changed", "$.workflows[].title", "error"),
-        ("nullable", "changed", "$.workflows[].approver", "success"),
+        ("nullable", "changed", "$.workflows[].link", "success"),
         ("array_shape", "changed", "$.workflows[].title", "error"),
     ],
 )
 def test_live_reports_reachable_structural_drift_without_values(
     change_kind: str,
     expected_bucket: str,
-    expected_path: str,
+    expected_path: str | None,
     expected_status: str,
 ) -> None:
     reports: list[Any] = []
@@ -1728,13 +2323,13 @@ def test_live_reports_reachable_structural_drift_without_values(
     if change_kind == "added":
         records[0][runtime_field_name] = runtime_business_value
     elif change_kind == "removed":
-        records[0].pop("title")
+        for record in records:
+            record.pop("title")
     elif change_kind == "type":
         for record in records:
             record["title"] = 7
     elif change_kind == "nullable":
-        for record in records:
-            record["approver"] = runtime_business_value
+        records[0]["link"] = None
     elif change_kind == "array_shape":
         for record in records:
             record["title"] = [runtime_business_value]
@@ -1765,22 +2360,27 @@ def test_live_reports_reachable_structural_drift_without_values(
     report = reports[0]
     rendered = report.model_dump_json()
     assert report.matches is False
-    assert [
-        node.path for node in getattr(report, expected_bucket)
-    ] == [expected_path]
+    bucket = getattr(report, expected_bucket)
+    if change_kind == "added":
+        _assert_wire_node_paths(
+            bucket,
+            root_path="$.workflows[]",
+            raw_keys={runtime_field_name},
+        )
+    else:
+        assert [node.path for node in bucket] == [expected_path]
     if change_kind == "array_shape":
         assert report.changed[0].array_shape == "items:string"
     assert runtime_business_value not in rendered
-    assert runtime_field_name not in rendered
     if change_kind == "added":
         assert runtime_business_value not in repr(result)
-        assert runtime_field_name not in repr(result)
+        assert f"wire_{runtime_field_name}" in rendered
 
 
 def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
     records = _matching_live_workflows()
-    expected_fingerprint = json.loads(
-        (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
+    expected_fingerprint = build_contract_drift_baseline_fingerprint(
+        json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
     records[0]["title"] = None
 
@@ -1794,6 +2394,205 @@ def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
         "$.workflows[].title"
     ]
     assert report.changed[0].nullable is True
+
+
+@pytest.mark.parametrize(
+    ("builder", "root_path", "records_factory"),
+    [
+        (
+            build_live_pending_workflows_fingerprint,
+            "$.workflows[]",
+            _matching_live_workflows,
+        ),
+        (
+            build_live_system_messages_fingerprint,
+            "$.messages[]",
+            _matching_live_system_messages,
+        ),
+    ],
+)
+def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
+    builder: Callable[[list[Any]], dict[str, Any]],
+    root_path: str,
+    records_factory: Callable[[], list[dict[str, Any]]],
+) -> None:
+    records = records_factory()
+    first_field_canary = f"sensitiveField{secrets.token_hex(8)}"
+    second_field_canary = f"sensitiveField{secrets.token_hex(8)}"
+    first_value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    second_value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    records[0][first_field_canary] = first_value_canary
+    records[1][second_field_canary] = second_value_canary
+
+    fingerprint = builder(records)
+    rendered = json.dumps(fingerprint, sort_keys=True)
+    unknown_paths = [
+        node["path"]
+        for node in fingerprint["nodes"]
+        if node["path"].startswith(f"{root_path}.wire_")
+    ]
+
+    expected_raw_keys = {first_field_canary, second_field_canary}
+    _assert_wire_node_paths(
+        [
+            node
+            for node in fingerprint["nodes"]
+            if node["path"] in unknown_paths
+        ],
+        root_path=root_path,
+        raw_keys=expected_raw_keys,
+    )
+    for canary in (first_value_canary, second_value_canary):
+        assert canary not in rendered
+
+    records[0][first_field_canary] = f"changed-{secrets.token_hex(24)}"
+    records[1][second_field_canary] = f"changed-{secrets.token_hex(24)}"
+
+    assert builder(records) == fingerprint
+
+
+def test_live_pending_unknown_wire_name_is_stable_when_earlier_key_is_added() -> None:
+    earlier_field_canary = f"aSensitiveField{secrets.token_hex(8)}"
+    retained_field_canary = f"zSensitiveField{secrets.token_hex(8)}"
+    value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    retained_record = _raw_workflow(1)
+    retained_record[retained_field_canary] = value_canary
+    earlier_record = _raw_workflow(2)
+    earlier_record[earlier_field_canary] = 73
+
+    baseline = build_live_pending_workflows_fingerprint([retained_record])
+    candidate = build_live_pending_workflows_fingerprint(
+        [earlier_record, retained_record]
+    )
+    report = compare_structural_fingerprints(baseline, candidate)
+
+    _assert_wire_node_paths(
+        report.added,
+        root_path="$.workflows[]",
+        raw_keys={earlier_field_canary},
+    )
+    assert report.added[0].json_type == "integer"
+    assert report.removed == ()
+    assert report.changed == ()
+    rendered = report.model_dump_json()
+    assert f"wire_{earlier_field_canary}" in rendered
+    assert f"wire_{retained_field_canary}" not in rendered
+    assert value_canary not in rendered
+
+
+def test_live_invalid_wire_key_uses_stable_digest_without_value() -> None:
+    record = _raw_workflow(1)
+    value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    record["invalid-wire-key"] = value_canary
+
+    fingerprint = build_live_pending_workflows_fingerprint([record])
+    rendered = json.dumps(fingerprint, sort_keys=True)
+    digest_paths = [
+        node["path"]
+        for node in fingerprint["nodes"]
+        if node["path"].startswith("$.workflows[].unknown_field_")
+    ]
+
+    _assert_anonymous_node_paths(
+        [
+            node
+            for node in fingerprint["nodes"]
+            if node["path"] in digest_paths
+        ],
+        root_path="$.workflows[]",
+        expected_count=1,
+    )
+    assert "invalid-wire-key" not in rendered
+    assert value_canary not in rendered
+
+
+def test_live_nested_unknown_fields_do_not_fold_and_are_order_independent() -> None:
+    outer_field_canary = f"sensitiveOuter{secrets.token_hex(8)}"
+    first_child_canary = f"sensitiveChildA{secrets.token_hex(8)}"
+    second_child_canary = f"sensitiveChildZ{secrets.token_hex(8)}"
+    value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    first = _raw_workflow(1)
+    second = _raw_workflow(2)
+    first[outer_field_canary] = {first_child_canary: value_canary}
+    second[outer_field_canary] = {second_child_canary: 73}
+
+    forward = build_live_pending_workflows_fingerprint([first, second])
+    reversed_order = build_live_pending_workflows_fingerprint([second, first])
+    nested_paths = [
+        node["path"]
+        for node in forward["nodes"]
+        if node["path"].count(".wire_") == 2
+    ]
+
+    assert forward == reversed_order
+    assert len(nested_paths) == 2
+    assert len(set(nested_paths)) == 2
+    assert set(nested_paths) == {
+        f"$.workflows[].wire_{outer_field_canary}.wire_{first_child_canary}",
+        f"$.workflows[].wire_{outer_field_canary}.wire_{second_child_canary}",
+    }
+    rendered = json.dumps(forward, sort_keys=True)
+    assert f"wire_{outer_field_canary}" in rendered
+    assert f"wire_{first_child_canary}" in rendered
+    assert f"wire_{second_child_canary}" in rendered
+    assert value_canary not in rendered
+
+
+def test_live_provider_unknown_field_union_is_stable_across_page_and_record_order(
+) -> None:
+    first_field_canary = f"sensitiveAField{secrets.token_hex(8)}"
+    second_field_canary = f"sensitiveZField{secrets.token_hex(8)}"
+    first_value_canary = f"sensitive-value-{secrets.token_hex(24)}"
+    second_value_canary = 73
+    first_page = _matching_live_workflows()
+    second_page = [_raw_workflow(3), _raw_workflow(4)]
+    first_page[0][first_field_canary] = second_value_canary
+    second_page[1][second_field_canary] = first_value_canary
+
+    def run_pages(pages: list[list[dict[str, Any]]]) -> Any:
+        reports: list[Any] = []
+        opener = SequencedOpener(
+            FakeHTTPResponse(_message_center_page(pages[0], cursor_index=1)),
+            FakeHTTPResponse(_message_center_page(pages[1], cursor_index=2)),
+            FakeHTTPResponse(_message_center_page([], cursor_index=3)),
+        )
+
+        collection = asyncio.run(
+            _live_provider(
+                opener,
+                drift_reporter=reports.append,
+            ).list_pending_workflows(_credential())
+        )
+
+        assert len(collection.workflows) == 4
+        assert len(reports) == 1
+        return reports[0]
+
+    forward = run_pages(copy.deepcopy([first_page, second_page]))
+    reversed_order = run_pages(
+        [
+            list(reversed(copy.deepcopy(second_page))),
+            list(reversed(copy.deepcopy(first_page))),
+        ]
+    )
+
+    assert forward.actual_sha256 == reversed_order.actual_sha256
+    assert forward.added == reversed_order.added
+    _assert_wire_node_paths(
+        forward.added,
+        root_path="$.workflows[]",
+        raw_keys={first_field_canary, second_field_canary},
+    )
+    assert {node.json_type for node in forward.added} == {
+        "integer",
+        "string",
+    }
+    assert forward.removed == ()
+    assert forward.changed == ()
+    rendered = forward.model_dump_json() + reversed_order.model_dump_json()
+    assert f"wire_{first_field_canary}" in rendered
+    assert f"wire_{second_field_canary}" in rendered
+    assert first_value_canary not in rendered
 
 
 def test_structural_drift_report_contains_no_business_values_or_lengths() -> None:
@@ -1859,6 +2658,211 @@ class ExplodingProvider:
         raise RuntimeError("SECRET-CANARY-12345")
 
 
+class RaisingProvider:
+    requires_credential = False
+
+    def __init__(self, error: Exception, *, requires_credential: bool = False) -> None:
+        self._error = error
+        self.requires_credential = requires_credential
+
+    async def list_pending_workflows(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OAPendingWorkflowCollection:
+        if self.requires_credential:
+            assert credential is not None
+        raise self._error
+
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> OASystemMessageCollection:
+        if self.requires_credential:
+            assert credential is not None
+        raise self._error
+
+
+class ExplodingSerializationResult:
+    def model_dump(self, *, mode: str) -> dict[str, Any]:
+        del mode
+        raise RuntimeError("SERIALIZATION-SECRET-CANARY")
+
+
+class ExplodingSerializationProvider:
+    requires_credential = False
+
+    async def list_pending_workflows(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> Any:
+        del credential
+        return ExplodingSerializationResult()
+
+    async def list_system_messages(
+        self,
+        credential: OASessionCredential | None = None,
+    ) -> Any:
+        del credential
+        return ExplodingSerializationResult()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_error_code", "expected_stage"),
+    [
+        (
+            OAContractPackPayloadInvalid("payload-value-must-not-persist"),
+            "error",
+            "adapter_payload_invalid",
+            "normalization",
+        ),
+        (
+            OAContractPackError("pack-value-must-not-persist"),
+            "error",
+            "adapter_error",
+            "unknown",
+        ),
+        (
+            OALiveIdentityUnbound("identity-value-must-not-persist"),
+            "error",
+            "identity_unbound",
+            "provider_transport",
+        ),
+        (
+            OALiveIdentityExpired("identity-value-must-not-persist"),
+            "error",
+            "identity_expired",
+            "provider_transport",
+        ),
+        (
+            OALivePermissionDenied("transport-value-must-not-persist"),
+            "permission_denied",
+            "upstream_permission_denied",
+            "provider_transport",
+        ),
+        (
+            OALiveTimeout("transport-value-must-not-persist"),
+            "timeout",
+            "adapter_timeout",
+            "provider_transport",
+        ),
+        (
+            OALiveHTTPServerError("transport-value-must-not-persist"),
+            "error",
+            "adapter_http_500",
+            "provider_transport",
+        ),
+        (
+            OALiveRequestError("transport-value-must-not-persist"),
+            "error",
+            "adapter_error",
+            "provider_transport",
+        ),
+        (
+            OALivePayloadInvalid("payload-value-must-not-persist"),
+            "error",
+            "adapter_payload_invalid",
+            "normalization",
+        ),
+        (
+            OALiveProviderError("provider-value-must-not-persist"),
+            "error",
+            "adapter_error",
+            "unknown",
+        ),
+        (
+            RuntimeError("runtime-value-must-not-persist"),
+            "error",
+            "adapter_error",
+            "unknown",
+        ),
+    ],
+)
+def test_provider_failure_branches_have_fixed_safe_stage_mapping(
+    error: Exception,
+    expected_status: str,
+    expected_error_code: str,
+    expected_stage: str,
+) -> None:
+    result = asyncio.run(
+        OAReadAdapter(RaisingProvider(error)).execute(
+            "oa.list_pending_workflows",
+            {},
+            {},
+        )
+    )
+
+    assert result.status == expected_status
+    assert result.error_code == expected_error_code
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.argument_keys == ()
+    assert result.trace_metadata.failure_stage == expected_stage
+    assert str(error) not in repr(result.trace_metadata)
+    assert str(error) not in repr(result)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_error_code"),
+    [
+        (OALiveIdentityUnbound("provider-identity-unbound"), "identity_unbound"),
+        (OALiveIdentityExpired("provider-identity-expired"), "identity_expired"),
+    ],
+)
+def test_provider_identity_failure_after_credential_read_is_transport_stage(
+    error: Exception,
+    expected_error_code: str,
+) -> None:
+    secret_provider = StaticSecretProvider(_credential())
+    adapter = OAReadAdapter(
+        RaisingProvider(error, requires_credential=True),
+        secret_provider=secret_provider,
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert secret_provider.calls == ["oa-session-v1:server-surrogate"]
+    assert result.status == "error"
+    assert result.error_code == expected_error_code
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.failure_stage == "provider_transport"
+    assert str(error) not in repr(result)
+
+
+def test_serialization_failure_is_unknown_and_does_not_persist_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="app.infra.adapters.oa.adapter")
+    result = asyncio.run(
+        OAReadAdapter(ExplodingSerializationProvider()).execute(
+            "oa.list_pending_workflows",
+            {},
+            {},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_error"
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.failure_stage == "unknown"
+    rendered = "\n".join(
+        (
+            caplog.text,
+            repr([record.__dict__ for record in caplog.records]),
+            repr([record.args for record in caplog.records]),
+            repr(result),
+            repr(result.trace_metadata),
+            repr(result.model_dump(mode="json")),
+        )
+    )
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "SERIALIZATION-SECRET-CANARY" not in rendered
+
+
 def test_unexpected_failure_log_result_and_repr_do_not_leak_credential(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1898,10 +2902,12 @@ def test_unexpected_failure_log_result_and_repr_do_not_leak_credential(
         "raw_payload_ref": None,
     }
     assert "capability_id=oa.list_pending_workflows" in caplog.text
-    assert "stage=provider_call" in caplog.text
+    assert "stage=unknown" in caplog.text
     assert "exception_type=RuntimeError" in caplog.text
     assert "classification=adapter_error" in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
+    assert result.trace_metadata is not None
+    assert result.trace_metadata.failure_stage == "unknown"
     assert runtime_secret not in rendered
 
 
@@ -1946,4 +2952,145 @@ def test_unexpected_failure_preserves_gateway_response_and_trace(
         ("gateway_post_recorded", "failed", "adapter_error"),
         ("adapter_error_mapped", "failed", "adapter_error"),
     ]
+    adapter_called = next(
+        event for event in trace_events if event["event_type"] == "adapter_called"
+    )
+    assert adapter_called["attributes"] == {
+        "argument_keys": [],
+        "failure_stage": "unknown",
+    }
     assert "SECRET-CANARY-12345" not in repr(trace_events)
+
+
+def test_argument_keys_are_sorted_and_values_never_reach_logs_or_trace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    password_value_canary = "PASSWORD-VALUE-CANARY-12345"
+    cookie_value_canary = "COOKIE-VALUE-CANARY-12345"
+    token_value_canary = "TOKEN-VALUE-CANARY-12345"
+    loginid_value_canary = "LOGINID-VALUE-CANARY-12345"
+    cookie_nested_key_canary = "cookie_nested_key_canary"
+    token_nested_key_canary = "token_nested_key_canary"
+    loginid_nested_key_canary = "loginid_nested_key_canary"
+    trace_logger = logging.getLogger("tests.oa.argument_key_trace")
+    caplog.set_level(logging.DEBUG, logger=trace_logger.name)
+    adapter = OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK))
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        trace_port=NoopTraceWriter(logger=trace_logger),
+    )
+    arguments = {
+        "password": password_value_canary,
+        "cookie": {cookie_nested_key_canary: cookie_value_canary},
+        "token": [{token_nested_key_canary: token_value_canary}],
+        "loginid": {loginid_nested_key_canary: loginid_value_canary},
+    }
+
+    direct_result = asyncio.run(
+        adapter.execute("oa.list_pending_workflows", arguments, {})
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-argument-keys-001",
+            "session-argument-keys-001",
+            "ai-user-argument-keys-001",
+            "oa.list_pending_workflows",
+            arguments,
+            RequestOrgContext(request_id="trace-argument-keys-001"),
+        )
+    )
+    trace_events = [
+        record.trace_event
+        for record in caplog.records
+        if record.name == trace_logger.name
+    ]
+    adapter_called = next(
+        event for event in trace_events if event["event_type"] == "adapter_called"
+    )
+    rendered = "\n".join(
+        (
+            caplog.text,
+            repr([record.__dict__ for record in caplog.records]),
+            repr([record.args for record in caplog.records]),
+            repr(direct_result),
+            repr(direct_result.model_dump(mode="json")),
+            repr(direct_result.trace_metadata),
+            repr(
+                direct_result.trace_metadata.model_dump(mode="json")
+                if direct_result.trace_metadata is not None
+                else None
+            ),
+            repr(result),
+            repr(trace_events),
+            json.dumps(trace_events, sort_keys=True),
+        )
+    )
+
+    assert result.status == "failed"
+    assert direct_result.trace_metadata is not None
+    assert direct_result.trace_metadata.argument_keys == (
+        "cookie",
+        "loginid",
+        "password",
+        "token",
+    )
+    assert adapter_called["attributes"] == {
+        "argument_keys": ["cookie", "loginid", "password", "token"],
+        "failure_stage": "argument_validation",
+    }
+    for canary in (
+        password_value_canary,
+        cookie_value_canary,
+        token_value_canary,
+        loginid_value_canary,
+        cookie_nested_key_canary,
+        token_nested_key_canary,
+        loginid_nested_key_canary,
+    ):
+        assert canary not in rendered
+    assert [
+        event["event_type"] for event in trace_events if event["attributes"]
+    ] == ["adapter_called"]
+
+
+def test_success_trace_persists_empty_keys_and_explicit_none_stage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trace_logger = logging.getLogger("tests.oa.success_trace_metadata")
+    caplog.set_level(logging.DEBUG, logger=trace_logger.name)
+    gateway = CapabilityGateway(
+        adapter=OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK)),
+        trace_port=NoopTraceWriter(logger=trace_logger),
+    )
+
+    result = asyncio.run(
+        gateway.execute_capability(
+            "task-success-metadata-001",
+            "session-success-metadata-001",
+            "ai-user-success-metadata-001",
+            "oa.list_pending_workflows",
+            {},
+            RequestOrgContext(request_id="trace-success-metadata-001"),
+        )
+    )
+    adapter_called = next(
+        record.trace_event
+        for record in caplog.records
+        if record.name == trace_logger.name
+        and record.trace_event["event_type"] == "adapter_called"
+    )
+
+    assert result.status == "completed"
+    assert adapter_called["attributes"] == {
+        "argument_keys": [],
+        "failure_stage": None,
+    }
+    trace_events = [
+        record.trace_event
+        for record in caplog.records
+        if record.name == trace_logger.name
+    ]
+    assert [
+        event["event_type"] for event in trace_events if event["attributes"]
+    ] == ["adapter_called"]

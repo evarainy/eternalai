@@ -30,6 +30,7 @@ from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
     OAStructuralDriftReport,
     OASystemMessageCollection,
+    build_contract_drift_baseline_fingerprint,
     build_live_pending_workflows_fingerprint,
     build_live_system_messages_fingerprint,
     build_structural_fingerprint,
@@ -43,6 +44,7 @@ _DEFAULT_MESSAGE_CENTER_PAGE_SIZE = 20
 _DEFAULT_MAX_PAGES = 50
 _DEFAULT_MAX_RECORDS = 5_000
 _DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+_INITIAL_MESSAGE_CENTER_CURSOR = ("0", "0")
 _MAX_CONFIGURED_PAGES = 1_000
 _MAX_CONFIGURED_PAGE_SIZE = 1_000
 _MAX_CONFIGURED_RECORDS = 1_000_000
@@ -292,7 +294,12 @@ class LiveOAReadProvider:
                 self._drift_reporter(drift_report)
 
             try:
-                collection = normalize_pending_workflow_records(raw_records)
+                collection = normalize_pending_workflow_records(
+                    raw_records,
+                    record_limit=self._max_records,
+                    is_complete=True,
+                    link_normalizer=self._normalize_system_message_link,
+                )
             except (TypeError, ValueError):
                 raise OALivePayloadInvalid(
                     "OA payload violates the normalized contract"
@@ -382,8 +389,8 @@ class LiveOAReadProvider:
         raw_records: list[Any] = []
         completed_records: list[Any] | None = None
         seen_record_fingerprints: set[bytes] = set()
-        cursor = ("", "")
-        next_cursor = ("", "")
+        cursor = _INITIAL_MESSAGE_CENTER_CURSOR
+        next_cursor = _INITIAL_MESSAGE_CENTER_CURSOR
         payload_error_message = ""
         payload_error_reason = "payload_invalid"
 
@@ -427,7 +434,7 @@ class LiveOAReadProvider:
                             "OA message-center aggregate exceeds the record limit"
                         )
                     is_complete = not page_records
-                    if next_cursor == cursor and (page_number > 1 or page_records):
+                    if page_records and next_cursor == cursor:
                         raise OALivePayloadInvalid(
                             "OA message-center pagination cursor did not advance"
                         )
@@ -511,8 +518,8 @@ class LiveOAReadProvider:
             raw_records.clear()
             completed_records = None
             seen_record_fingerprints.clear()
-            cursor = ("", "")
-            next_cursor = ("", "")
+            cursor = _INITIAL_MESSAGE_CENTER_CURSOR
+            next_cursor = _INITIAL_MESSAGE_CENTER_CURSOR
             payload_error_message = ""
             payload_error_reason = ""
 
@@ -574,13 +581,19 @@ class LiveOAReadProvider:
                 f"{self._base_url}{self._message_center_endpoint_path}",
                 data=encoded_parameters,
                 headers={
-                    "Accept": "application/json",
+                    "Accept": "*/*",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
                     "Content-Type": (
                         "application/x-www-form-urlencoded; charset=utf-8"
                     ),
                     "Cookie": cookie_header,
                     "Origin": self._base_url,
-                    "User-Agent": "EternalAI-OA-Read/1",
+                    "Referer": f"{self._base_url}/wui/index.html",
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/86.0.4240.111 Safari/537.36"
+                    ),
                     "X-Requested-With": "XMLHttpRequest",
                 },
                 method="POST",
@@ -718,7 +731,8 @@ def _load_contract_pack(
         ) from None
     if not isinstance(fingerprint_payload, dict):
         raise OAContractPackError("Contract Pack fingerprint is invalid")
-    return collection, {str(key): value for key, value in fingerprint_payload.items()}
+    drift_baseline = build_contract_drift_baseline_fingerprint(sample_payload)
+    return collection, drift_baseline
 
 
 def _load_json(path: Path) -> Any:
@@ -999,7 +1013,8 @@ def _message_center_record_fingerprint(record: Any) -> bytes:
     serialized = ""
     try:
         if isinstance(record, Mapping):
-            for key in ("messageid", "workflowId"):
+            # Both message-center capabilities key on the same wire id.
+            for key in ("messageid",):
                 value = record.get(key)
                 if isinstance(value, str) and value:
                     identity = f"{key}\u0000{value}"

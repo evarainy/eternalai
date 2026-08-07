@@ -1,0 +1,84 @@
+{
+  "algorithm": "eternalai-structural-v1",
+  "nodes": [
+    {
+      "path": "$",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.is_complete",
+      "json_type": "boolean",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.returned_count",
+      "json_type": "integer",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows",
+      "json_type": "array",
+      "nullable": false,
+      "array_shape": "items:object"
+    },
+    {
+      "path": "$.workflows[]",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].business_state",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].content",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].link",
+      "json_type": "string",
+      "nullable": true,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].message_id",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].mobile_link",
+      "json_type": "string",
+      "nullable": true,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].occurred_at",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].source_name",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].title",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    }
+  ],
+  "sha256": "12effb9199346f8a35c8d25f97b0c1ff43f55ace80f5bb3ae34273a655ca769e"
+}

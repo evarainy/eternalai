@@ -21,7 +21,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from app.infra.auth.crypto import identity_surrogate
-from app.infra.auth.oa import OACredentialVerifier, make_urllib_session_factory
+from app.infra.auth.oa import (
+    OAAuthenticationError,
+    OACredentialVerifier,
+    make_urllib_session_factory,
+)
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
 from app.ports.auth import (
     AuthenticationError,
@@ -94,13 +98,13 @@ class HARFixtureOpener:
         *,
         cookie_jar: CookieJar,
         private_key: rsa.RSAPrivateKey,
-        rsa_code: str,
+        rsa_code: object,
         expected_login_digest: bytes,
         expected_password_digest: bytes,
         oa_user_id: object,
         cookie_values: dict[str, str],
         login_succeeds: bool,
-        rsa_flag: str | None,
+        rsa_flag: object | None,
     ) -> None:
         self._cookie_jar = cookie_jar
         self._private_key = private_key
@@ -112,7 +116,9 @@ class HARFixtureOpener:
         self._login_succeeds = login_succeeds
         self._rsa_flag = rsa_flag
         self.check_login_calls = 0
+        self.requested_paths: list[str] = []
         self.requested_user_ids: list[str] = []
+        self.encrypted_fields: list[str] = []
         public_der = private_key.public_key().public_bytes(
             serialization.Encoding.DER,
             serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -122,6 +128,7 @@ class HARFixtureOpener:
     def open(self, request: Request, timeout: float) -> FakeResponse:
         assert timeout > 0
         path = urlparse(request.full_url).path
+        self.requested_paths.append(path)
         if path == "/rsa/weaver.rsa.GetRsaInfo":
             payload = {
                 "rsa_pub": self._rsa_pub,
@@ -133,7 +140,52 @@ class HARFixtureOpener:
         if path == "/api/hrm/login/checkLogin":
             self.check_login_calls += 1
             assert request.data is not None
-            fields = parse_qs(request.data.decode("utf-8"), strict_parsing=True)
+            fields = parse_qs(
+                request.data.decode("utf-8"),
+                keep_blank_values=True,
+                strict_parsing=True,
+            )
+            assert set(fields) == {
+                "",
+                "appid",
+                "dynamicPassword",
+                "isie",
+                "isRememberPassword",
+                "islanguid",
+                "loginid",
+                "logintype",
+                "messages",
+                "service",
+                "tokenAuthKey",
+                "userpassword",
+                "validateCodeKey",
+                "validatecode",
+            }
+            assert {
+                key: values
+                for key, values in fields.items()
+                if key not in {"loginid", "userpassword"}
+            } == {
+                "": [""],
+                "appid": [""],
+                "dynamicPassword": [""],
+                "isie": ["false"],
+                "isRememberPassword": ["false"],
+                "islanguid": ["7"],
+                "logintype": ["1"],
+                "messages": [""],
+                "service": [""],
+                "tokenAuthKey": [""],
+                "validateCodeKey": [""],
+                "validatecode": [""],
+            }
+            headers = {name.lower(): value for name, value in request.header_items()}
+            assert headers["accept"] == "*/*"
+            assert headers["origin"] == "https://oa.invalid"
+            assert headers["referer"] == "https://oa.invalid/wui/index.html"
+            assert headers["x-requested-with"] == "XMLHttpRequest"
+            assert headers["content-type"] == "application/x-www-form-urlencoded"
+            assert headers["user-agent"].startswith("Mozilla/5.0")
             login_plaintext = self._decrypt(fields["loginid"][0])
             password_plaintext = self._decrypt(fields["userpassword"][0])
             assert hmac.compare_digest(
@@ -162,9 +214,14 @@ class HARFixtureOpener:
         raise AssertionError(f"Unexpected OA fixture path: {path}")
 
     def _decrypt(self, encrypted_value: str) -> bytes:
-        assert encrypted_value.endswith("RSA")
+        self.encrypted_fields.append(encrypted_value)
+        suffix = self._rsa_flag if isinstance(self._rsa_flag, str) else ""
+        assert encrypted_value.endswith(suffix)
+        encrypted_payload = (
+            encrypted_value[: -len(suffix)] if suffix else encrypted_value
+        )
         return self._private_key.decrypt(
-            base64.b64decode(encrypted_value[:-3], validate=True),
+            base64.b64decode(encrypted_payload, validate=True),
             padding.PKCS1v15(),
         )
 
@@ -194,7 +251,8 @@ def _cookie(name: str, value: str) -> Cookie:
 def _fixture(
     *,
     login_succeeds: bool,
-    rsa_flag: str | None = "RSA",
+    rsa_code: object = "synthetic-rsa-code",
+    rsa_flag: object | None = "FLAG-V1",
     credential_store: CredentialStorePort | None = None,
     loginid_override: str | None = None,
     oa_user_id: object = 123,
@@ -205,7 +263,7 @@ def _fixture(
     LoginCredential,
 ]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    rsa_code = "synthetic-rsa-code"
+    rsa_code_suffix = rsa_code if isinstance(rsa_code, str) else ""
     loginid = loginid_override or "1" * 17 + "X"
     password = "synthetic-" + "password"
     cookie_values = {
@@ -221,10 +279,10 @@ def _fixture(
             private_key=private_key,
             rsa_code=rsa_code,
             expected_login_digest=hashlib.sha256(
-                (loginid + rsa_code).encode("utf-8")
+                (loginid + rsa_code_suffix).encode("utf-8")
             ).digest(),
             expected_password_digest=hashlib.sha256(
-                (password + rsa_code).encode("utf-8")
+                (password + rsa_code_suffix).encode("utf-8")
             ).digest(),
             oa_user_id=oa_user_id,
             cookie_values=cookie_values,
@@ -294,6 +352,18 @@ def test_oa_string_userid_shape_remains_compatible() -> None:
     assert openers[0].requested_user_ids == ["123"]
 
 
+def test_oa_success_does_not_require_undocumented_session_initializer_calls() -> None:
+    verifier, _, openers, credential = _fixture(login_succeeds=True)
+
+    asyncio.run(verifier.authenticate(credential))
+
+    assert openers[0].requested_paths == [
+        "/rsa/weaver.rsa.GetRsaInfo",
+        "/api/hrm/login/checkLogin",
+        "/api/hrm/usericon/getUserIcon",
+    ]
+
+
 @pytest.mark.parametrize(
     "oa_user_id",
     [True, False, None, 123.0, "", "   ", [], {}],
@@ -304,9 +374,10 @@ def test_oa_invalid_userid_shapes_remain_fail_closed(oa_user_id: object) -> None
         oa_user_id=oa_user_id,
     )
 
-    with pytest.raises(AuthenticationError, match="authentication failed"):
+    with pytest.raises(OAAuthenticationError, match="authentication failed") as exc_info:
         asyncio.run(verifier.authenticate(credential))
 
+    assert exc_info.value.stage == "oa_identity_response_invalid"
     assert store.records == []
     assert openers[0].requested_user_ids == []
 
@@ -392,17 +463,64 @@ def test_integer_and_string_userid_share_one_principal_credential_and_mapping() 
     asyncio.run(exercise())
 
 
-def test_oa_rejection_is_generic_fail_closed_and_never_retries() -> None:
+def test_oa_rejection_is_fixed_stage_fail_closed_and_never_retries(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     verifier, store, openers, credential = _fixture(login_succeeds=False)
 
-    with pytest.raises(AuthenticationError, match="authentication failed") as exc_info:
-        asyncio.run(verifier.authenticate(credential))
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(
+            OAAuthenticationError,
+            match="authentication failed",
+        ) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
 
+    assert exc_info.value.stage == "oa_credentials_rejected"
     assert exc_info.value.__context__ is None
     assert credential.loginid.get_secret_value() not in str(exc_info.value)
     assert credential.userpassword.get_secret_value() not in str(exc_info.value)
+    assert "oa_authentication_failure_stage=oa_credentials_rejected" in caplog.text
+    assert credential.loginid.get_secret_value() not in caplog.text
+    assert credential.userpassword.get_secret_value() not in caplog.text
     assert store.records == []
     assert openers[0].check_login_calls == 1
+
+
+def test_oa_rsa_transport_failure_reports_only_fixed_stage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    verifier, store, _, credential = _fixture(login_succeeds=True)
+    sensitive_detail = "synthetic-sensitive-transport-detail"
+
+    class _FailingSession:
+        async def get_json(
+            self,
+            _path: str,
+            _parameters: dict[str, str],
+        ) -> dict[str, object]:
+            raise OSError(sensitive_detail)
+
+        async def post_form(
+            self,
+            _path: str,
+            _fields: dict[str, str],
+        ) -> dict[str, object]:
+            raise AssertionError("RSA failure must stop before login")
+
+        def cookies(self) -> dict[str, str]:
+            raise AssertionError("RSA failure must stop before cookies")
+
+    verifier._session_factory = _FailingSession  # type: ignore[assignment]
+
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(OAAuthenticationError) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
+
+    assert exc_info.value.stage == "oa_rsa_request_failed"
+    assert str(exc_info.value) == "authentication failed"
+    assert "oa_authentication_failure_stage=oa_rsa_request_failed" in caplog.text
+    assert sensitive_detail not in caplog.text
+    assert store.records == []
 
 
 def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
@@ -490,7 +608,7 @@ def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
     asyncio.run(exercise())
 
 
-def test_oa_rsa_flag_defaults_to_rsa_when_fixture_omits_it() -> None:
+def test_oa_missing_rsa_flag_uses_empty_suffix() -> None:
     verifier, store, openers, credential = _fixture(
         login_succeeds=True,
         rsa_flag=None,
@@ -502,14 +620,134 @@ def test_oa_rsa_flag_defaults_to_rsa_when_fixture_omits_it() -> None:
     assert openers[0].check_login_calls == 1
 
 
-def test_oa_non_rsa_flag_is_generic_fail_closed() -> None:
+def test_oa_backtick_rsa_flag_observed_on_the_real_deployment_is_used_verbatim() -> None:
+    # Measured against the real OA: GET /rsa/weaver.rsa.GetRsaInfo answers with
+    # the flag wrapped in backticks (`RSA`), not the bare "RSA" the vendor
+    # document shows. The flag is only the base64 ciphertext suffix -- padding is
+    # PKCS1v15 regardless -- so it must be echoed verbatim and never "corrected"
+    # back to the documented spelling, which no real login would accept.
+    real_flag = "`RSA`"
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        rsa_flag=real_flag,
+    )
+
+    principal = asyncio.run(verifier.authenticate(credential))
+
+    assert store.records[0][0] == principal.ai_user_id
+    assert openers[0].check_login_calls == 1
+    assert len(openers[0].encrypted_fields) == 2
+    for encrypted_field in openers[0].encrypted_fields:
+        assert encrypted_field.endswith(real_flag)
+        assert base64.b64decode(
+            encrypted_field[: -len(real_flag)],
+            validate=True,
+        )
+
+
+def test_oa_server_supplied_non_rsa_flag_is_preserved() -> None:
     verifier, store, openers, credential = _fixture(
         login_succeeds=True,
         rsa_flag="INVALID",
     )
 
-    with pytest.raises(AuthenticationError, match="authentication failed"):
-        asyncio.run(verifier.authenticate(credential))
+    principal = asyncio.run(verifier.authenticate(credential))
 
+    assert store.records[0][0] == principal.ai_user_id
+    assert openers[0].check_login_calls == 1
+
+
+def test_oa_empty_rsa_code_is_allowed() -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        rsa_code="",
+    )
+
+    principal = asyncio.run(verifier.authenticate(credential))
+
+    assert store.records[0][0] == principal.ai_user_id
+    assert openers[0].check_login_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "expected_stage"),
+    [
+        ("rsa_code", 7, "oa_rsa_code_type_invalid"),
+        ("rsa_flag", 7, "oa_rsa_flag_type_invalid"),
+    ],
+)
+def test_oa_rsa_optional_field_wrong_type_reports_only_safe_shape(
+    field_name: str,
+    field_value: object,
+    expected_stage: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fixture_options: dict[str, object] = {field_name: field_value}
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        **fixture_options,
+    )
+
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(OAAuthenticationError) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
+
+    diagnostics = exc_info.value.diagnostics
+    assert exc_info.value.stage == expected_stage
+    assert diagnostics["rsa_response_field_count"] == "3"
+    assert diagnostics[f"{field_name}_present"] == "true"
+    assert diagnostics[f"{field_name}_type"] == "integer"
+    assert f"{field_name}_character_count" not in diagnostics
+    assert credential.loginid.get_secret_value() not in caplog.text
+    assert credential.userpassword.get_secret_value() not in caplog.text
+    assert "synthetic-rsa-code" not in caplog.text
+    assert "oa_authentication_failure_diagnostic_" in caplog.text
     assert store.records == []
     assert openers[0].check_login_calls == 0
+
+
+def test_oa_missing_rsa_public_key_reports_only_safe_shape(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    verifier, store, _, credential = _fixture(login_succeeds=True)
+
+    class _MissingPublicKeySession:
+        async def get_json(
+            self,
+            _path: str,
+            _parameters: dict[str, str],
+        ) -> dict[str, object]:
+            return {"rsa_code": "", "rsa_flag": "FLAG-V1"}
+
+        async def post_form(
+            self,
+            _path: str,
+            _fields: dict[str, str],
+        ) -> dict[str, object]:
+            raise AssertionError("invalid RSA response must stop before login")
+
+        def cookies(self) -> dict[str, str]:
+            raise AssertionError("invalid RSA response must stop before cookies")
+
+    verifier._session_factory = _MissingPublicKeySession  # type: ignore[assignment]
+
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        with pytest.raises(OAAuthenticationError) as exc_info:
+            asyncio.run(verifier.authenticate(credential))
+
+    assert exc_info.value.stage == "oa_rsa_public_key_missing_or_invalid"
+    assert exc_info.value.diagnostics == {
+        "rsa_code_character_count": "0",
+        "rsa_code_present": "true",
+        "rsa_code_type": "string",
+        "rsa_flag_character_count": "7",
+        "rsa_flag_present": "true",
+        "rsa_flag_type": "string",
+        "rsa_pub_present": "false",
+        "rsa_pub_type": "missing",
+        "rsa_response_field_count": "2",
+    }
+    assert "FLAG-V1" not in caplog.text
+    assert credential.loginid.get_secret_value() not in caplog.text
+    assert credential.userpassword.get_secret_value() not in caplog.text
+    assert store.records == []

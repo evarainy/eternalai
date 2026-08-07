@@ -265,10 +265,9 @@ def test_real_writer_structured_output_parse_failure_has_one_failed_terminal() -
     assert event_types == [
         "task_created",
         "intent_parsed",
-        "no_capability_found",
         "response_envelope_created",
         "task_failed",
         "evaluation_recorded",
     ]
     assert events[-1]["attributes"]["evaluation_result"] == "failed"
-    assert task_store.status_updates[-1][1] == "no_capability_found"
+    assert task_store.status_updates[-1][1:] == ("failed", "internal_error")

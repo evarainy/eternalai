@@ -197,7 +197,7 @@ def _desired_smoke_values(contract: MessageCenterContract) -> dict[str, str]:
         "ETERNALAI_SESSION_BINDING_KEY_B64": key(),
         "OA_READ_ADAPTER_MODE": "live",
         "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": (
-            "tests/contract_packs/oa/ecology9-pending-workflows-v1"
+            "tests/contract_packs/oa/ecology9-pending-workflows-v2"
         ),
         "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": (
             "tests/contract_packs/oa/ecology9-system-messages-v1"

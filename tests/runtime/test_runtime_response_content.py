@@ -313,16 +313,18 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
     assert "结果不完整，可能还有更多消息" in envelope.message
 
 
-def test_no_capability_found_uses_operator_handback_none_without_degrading() -> None:
+def test_intent_failure_uses_failed_message_without_registry_handback() -> None:
     envelope = _run_runtime(
         ExecutionResult(status="completed", trace_id="unused"),
         capability_id="unknown.capability",
         malformed=True,
     )
 
-    assert envelope.status == "no_capability_found"
-    assert envelope.ui.component_type == "operator_handback_card"
+    assert envelope.status == "failed"
+    assert envelope.ui.component_type == "none"
     assert envelope.ui.action == "none"
+    assert "模型返回的查询结果暂时无法识别" in envelope.message
+    assert "Admin Lite" not in envelope.message
 
 
 def test_policy_denied_uses_operator_handback_none_without_failed_degradation() -> None:
