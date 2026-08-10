@@ -6,6 +6,7 @@
  */
 import type {
   AdminBindingListResponse,
+  AdminBindingMutationResponse,
   AdminCapabilityCreate,
   AdminCapabilityListResponse,
   AdminCapabilityView,
@@ -53,6 +54,30 @@ export const listBindings = (
       return customInstance<AdminBindingListResponse>(
       {url: `/api/v1/admin/bindings`, method: 'GET',
         params
+    },
+      );
+    }
+
+/**
+ * @summary Revoke an identity binding
+ */
+export const revokeBinding = (
+    bindingId: string,
+ ) => {
+      return customInstance<AdminBindingMutationResponse>(
+      {url: `/api/v1/admin/bindings/${bindingId}/revoke`, method: 'POST'
+    },
+      );
+    }
+
+/**
+ * @summary Reset an identity binding
+ */
+export const resetBinding = (
+    bindingId: string,
+ ) => {
+      return customInstance<AdminBindingMutationResponse>(
+      {url: `/api/v1/admin/bindings/${bindingId}/reset`, method: 'POST'
     },
       );
     }
@@ -122,6 +147,8 @@ export const disableCapability = (
 export type ListTasksResult = NonNullable<Awaited<ReturnType<typeof listTasks>>>
 export type ListTaskEventsResult = NonNullable<Awaited<ReturnType<typeof listTaskEvents>>>
 export type ListBindingsResult = NonNullable<Awaited<ReturnType<typeof listBindings>>>
+export type RevokeBindingResult = NonNullable<Awaited<ReturnType<typeof revokeBinding>>>
+export type ResetBindingResult = NonNullable<Awaited<ReturnType<typeof resetBinding>>>
 export type ListRegistryResult = NonNullable<Awaited<ReturnType<typeof listRegistry>>>
 export type CreateCapabilityResult = NonNullable<Awaited<ReturnType<typeof createCapability>>>
 export type GetCapabilityResult = NonNullable<Awaited<ReturnType<typeof getCapability>>>

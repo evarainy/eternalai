@@ -14,6 +14,7 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import type { Rule } from 'antd/es/form';
 import { ApiError } from '../../api/mutator';
 import {
   createCapability,
@@ -31,6 +32,11 @@ import type {
   AdminCapabilityCreate,
   AdminCapabilityView,
 } from '../../generated/admin/admin.schemas';
+import {
+  normalizeIntentTags,
+  normalizePromptSafeText,
+  promptSafeLimits,
+} from './registryValidation';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -66,6 +72,33 @@ function parseJsonObject(value: string): Record<string, unknown> {
   }
   return parsed as Record<string, unknown>;
 }
+
+function promptSafeTextRules(label: string, maxLength: number): Rule[] {
+  return [
+    { required: true, message: `${label} 必填` },
+    {
+      validator: async (_, value: unknown) => {
+        if (typeof value === 'string') {
+          normalizePromptSafeText(value, label, maxLength);
+        }
+      },
+    },
+  ];
+}
+
+const intentTagRules: Rule[] = [
+  {
+    validator: async (_, value: unknown) => {
+      if (value === undefined) {
+        return;
+      }
+      if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+        throw new Error('Intent Tags 格式无效');
+      }
+      normalizeIntentTags(value);
+    },
+  },
+];
 
 function errorText(error: unknown): string {
   if (error instanceof ApiError) {
@@ -174,17 +207,21 @@ export default function RegistryPage() {
   const submitCreate = (values: CreateFormValues) => {
     const payload: AdminCapabilityCreate = {
       capability_id: values.capability_id,
-      name: values.name,
+      name: normalizePromptSafeText(values.name, '名称', promptSafeLimits.name),
       type: values.type,
-      intent_tags: values.intent_tags ?? [],
+      intent_tags: normalizeIntentTags(values.intent_tags ?? []),
       input_schema: parseJsonObject(values.input_schema),
       output_schema: parseJsonObject(values.output_schema),
       input_schema_digest: values.input_schema_digest,
       output_schema_digest: values.output_schema_digest,
       risk_level: values.risk_level,
-      owner: values.owner,
+      owner: normalizePromptSafeText(values.owner, 'Owner', promptSafeLimits.owner),
       version: values.version,
-      short_description: values.short_description,
+      short_description: normalizePromptSafeText(
+        values.short_description,
+        '简短描述',
+        promptSafeLimits.short_description,
+      ),
       target_system: values.target_system ?? null,
       execution_identity: values.execution_identity,
       binding_required: values.binding_required,
@@ -252,13 +289,17 @@ export default function RegistryPage() {
           <Form.Item label="Capability ID" name="capability_id" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="名称" name="name" rules={[{ required: true }]}>
+          <Form.Item
+            label="名称"
+            name="name"
+            rules={promptSafeTextRules('名称', promptSafeLimits.name)}
+          >
             <Input />
           </Form.Item>
           <Form.Item label="类型" name="type" rules={[{ required: true }]}>
             <Select options={selectOptions(CapabilityType)} />
           </Form.Item>
-          <Form.Item label="Intent Tags" name="intent_tags">
+          <Form.Item label="Intent Tags" name="intent_tags" rules={intentTagRules}>
             <Select mode="tags" tokenSeparators={[',']} />
           </Form.Item>
           <Form.Item
@@ -306,13 +347,24 @@ export default function RegistryPage() {
           <Form.Item label="风险等级" name="risk_level" rules={[{ required: true }]}>
             <Select options={selectOptions(CapabilityRiskLevel)} />
           </Form.Item>
-          <Form.Item label="Owner" name="owner" rules={[{ required: true }]}>
+          <Form.Item
+            label="Owner"
+            name="owner"
+            rules={promptSafeTextRules('Owner', promptSafeLimits.owner)}
+          >
             <Input />
           </Form.Item>
           <Form.Item label="版本" name="version" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="简短描述" name="short_description" rules={[{ required: true }]}>
+          <Form.Item
+            label="简短描述"
+            name="short_description"
+            rules={promptSafeTextRules(
+              '简短描述',
+              promptSafeLimits.short_description,
+            )}
+          >
             <TextArea rows={2} />
           </Form.Item>
           <Form.Item label="目标系统" name="target_system">
