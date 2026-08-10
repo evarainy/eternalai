@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import json
 import os
 import subprocess
@@ -1008,13 +1009,13 @@ def test_audit_replacement_failure_preserves_previous_record_atomically(
     )
     manager._persist_audit_record(path, initial)
     previous_text = path.read_text(encoding="utf-8")
-    replacements: list[tuple[object, object]] = []
+    replacements: list[tuple[Path, Path]] = []
 
-    def fail_replace(source: object, destination: object) -> None:
+    def fail_replace(source: Path, destination: Path) -> None:
         replacements.append((source, destination))
         raise OSError("synthetic atomic replace failure")
 
-    monkeypatch.setattr(manager.os, "replace", fail_replace)
+    monkeypatch.setattr(manager, "_durable_replace", fail_replace)
     completed = manager._build_audit_record(
         None,
         attempt_id=attempt_id,
@@ -1028,6 +1029,237 @@ def test_audit_replacement_failure_preserves_previous_record_atomically(
     assert len(replacements) == 1
     assert replacements[0][1] == path
     assert path.read_text(encoding="utf-8") == previous_text
+
+
+def test_audit_file_fsync_is_followed_by_durable_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit" / "attempt.json"
+    record = manager._build_audit_record(
+        None,
+        attempt_id="synthetic-attempt",
+        exit_code=1,
+        error_code="apply_incomplete",
+    )
+    events: list[tuple[str, Path | None]] = []
+    actual_fsync = manager.os.fsync
+    actual_replace = manager.os.replace
+
+    def recording_fsync(descriptor: int) -> None:
+        actual_fsync(descriptor)
+        events.append(("file_fsync", None))
+
+    def recording_replace(source: Path, destination: Path) -> None:
+        actual_replace(source, destination)
+        events.append(("durable_replace", destination))
+
+    monkeypatch.setattr(manager.os, "fsync", recording_fsync)
+    monkeypatch.setattr(
+        manager,
+        "_durable_replace",
+        recording_replace,
+        raising=False,
+    )
+
+    manager._persist_audit_record(path, record)
+
+    assert events == [
+        ("file_fsync", None),
+        ("durable_replace", path),
+    ]
+    assert json.loads(path.read_text(encoding="utf-8"))["attempt_id"] == (
+        "synthetic-attempt"
+    )
+
+
+def test_posix_durable_replace_persists_parent_after_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.tmp"
+    destination = tmp_path / "audit.json"
+    events: list[tuple[str, Path]] = []
+
+    def recording_replace(actual_source: Path, actual_destination: Path) -> None:
+        events.append(("replace_source", Path(actual_source)))
+        events.append(("replace_destination", Path(actual_destination)))
+
+    def recording_parent_persistence(directory: Path) -> None:
+        events.append(("persist_parent", directory))
+
+    monkeypatch.setattr(manager.os, "replace", recording_replace)
+    monkeypatch.setattr(
+        manager,
+        "_persist_parent_directory",
+        recording_parent_persistence,
+    )
+
+    manager._replace_posix_and_persist_parent(source, destination)
+
+    assert events == [
+        ("replace_source", source),
+        ("replace_destination", destination),
+        ("persist_parent", destination.parent),
+    ]
+
+
+def test_posix_parent_fsync_failure_still_closes_directory_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, object]] = []
+    expected_flags = manager.os.O_RDONLY | getattr(
+        manager.os,
+        "O_DIRECTORY",
+        0,
+    )
+
+    def open_directory(directory: Path, flags: int) -> int:
+        events.append(("open", (directory, flags)))
+        return 73
+
+    def fail_fsync(descriptor: int) -> None:
+        events.append(("fsync", descriptor))
+        raise OSError("synthetic directory fsync failure")
+
+    def close_directory(descriptor: int) -> None:
+        events.append(("close", descriptor))
+
+    monkeypatch.setattr(manager.os, "open", open_directory)
+    monkeypatch.setattr(manager.os, "fsync", fail_fsync)
+    monkeypatch.setattr(manager.os, "close", close_directory)
+
+    with pytest.raises(OSError, match="directory fsync failure"):
+        manager._persist_parent_directory(tmp_path)
+
+    assert events == [
+        ("open", (tmp_path, expected_flags)),
+        ("fsync", 73),
+        ("close", 73),
+    ]
+
+
+def test_windows_durable_replace_uses_replace_and_write_through_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    class MoveFileEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, source: str, destination: str, flags: int) -> int:
+            calls.append((source, destination, flags))
+            return 1
+
+    class Kernel32:
+        MoveFileExW = MoveFileEx()
+
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda _name, *, use_last_error: Kernel32(),
+        raising=False,
+    )
+    source = tmp_path / "source.tmp"
+    destination = tmp_path / "audit.json"
+
+    manager._replace_windows_write_through(source, destination)
+
+    assert calls == [(str(source), str(destination), 0x00000001 | 0x00000008)]
+
+
+def test_windows_durable_replace_failure_is_an_os_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class MoveFileEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, _source: str, _destination: str, _flags: int) -> int:
+            return 0
+
+    class Kernel32:
+        MoveFileExW = MoveFileEx()
+
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda _name, *, use_last_error: Kernel32(),
+        raising=False,
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "WinError",
+        lambda error_code: OSError(error_code, "synthetic MoveFileExW failure"),
+        raising=False,
+    )
+
+    with pytest.raises(OSError, match="MoveFileExW failure") as exc_info:
+        manager._replace_windows_write_through(
+            tmp_path / "source.tmp",
+            tmp_path / "audit.json",
+        )
+
+    assert exc_info.value.errno == 5
+
+
+def test_parent_directory_persistence_failure_stops_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    database_reads: list[bool] = []
+    management_calls: list[bool] = []
+
+    def read_database_url() -> str:
+        database_reads.append(True)
+        return "synthetic-database-url"
+
+    def fail_durable_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("synthetic parent directory persistence failure")
+
+    async def manage(
+        _database_url: str,
+        *,
+        apply: bool,
+        plan_observer: object,
+    ) -> manager.RegistryManagementPlan:
+        management_calls.append(apply)
+        assert plan_observer is not None
+        return manager.RegistryManagementPlan(
+            state="already_applied",
+            deployment_path="canonical",
+            canonical_found_count=2,
+            canonical_valid_count=2,
+            legacy_active_count=0,
+            unknown_oa_count=0,
+            insert_count=0,
+            disable_count=0,
+        )
+
+    monkeypatch.setattr(manager, "get_database_url", read_database_url)
+    monkeypatch.setattr(manager, "_manage_registry", manage)
+    monkeypatch.setattr(
+        manager,
+        "_durable_replace",
+        fail_durable_replace,
+        raising=False,
+    )
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(tmp_path / "audit")]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert database_reads == []
+    assert management_calls == []
 
 
 def test_plan_audit_failure_rolls_back_before_registry_dml(

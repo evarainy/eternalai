@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import hashlib
 import json
 import os
@@ -365,7 +366,60 @@ def _persist_audit_record(path: Path, record: RegistryAuditRecord) -> None:
         )
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary_path, path)
+    _durable_replace(temporary_path, path)
+
+
+def _durable_replace(source: Path, destination: Path) -> None:
+    if os.name == "nt":
+        _replace_windows_write_through(source, destination)
+        return
+    if os.name != "posix":
+        raise OSError(
+            errno.ENOTSUP,
+            f"durable audit replacement unsupported on os.name={os.name!r}",
+        )
+
+    _replace_posix_and_persist_parent(source, destination)
+
+
+def _replace_posix_and_persist_parent(
+    source: Path,
+    destination: Path,
+) -> None:
+    os.replace(source, destination)
+    _persist_parent_directory(destination.parent)
+
+
+def _persist_parent_directory(directory: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _replace_windows_write_through(source: Path, destination: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    move_file_ex = kernel32.MoveFileExW
+    move_file_ex.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+    ]
+    move_file_ex.restype = wintypes.BOOL
+
+    replace_existing = 0x00000001
+    write_through = 0x00000008
+    if not move_file_ex(
+        str(source),
+        str(destination),
+        replace_existing | write_through,
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
 
 
 def _print_management_result(result: RegistryManagementPlan) -> None:

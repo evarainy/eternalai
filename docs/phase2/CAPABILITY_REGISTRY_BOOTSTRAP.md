@@ -52,7 +52,8 @@ uv run python -m scripts.manage_oa_capabilities --verify
 
 每次 `--apply` 尝试，无论成功还是失败，只保留一个独立 JSON 审计文件：
 
-1. DB 访问前先原子持久化并 `fsync` 一条保守的 `apply_incomplete` 失败记录；若这一步失败，
+1. DB 访问前先原子持久化一条保守的 `apply_incomplete` 失败记录；每次替换都使用平台持久化
+   屏障（POSIX 在 replace 后同步父目录项，Windows 使用 write-through replace）。若这一步失败，
    命令在任何 DB 访问前退出。
 2. plan 生成后、任何 DML 前，用带 plan state、deployment path 和各项计数的失败记录原子替换
    同一个文件。
