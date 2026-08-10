@@ -147,6 +147,11 @@ _TERMINAL_STATE_ALIASES = {
     "capability_not_found": "no_capability_found",
 }
 
+_OA_CREDENTIAL_FIELD_NAMES = ("sessionkey", "datakey")
+_OA_CREDENTIAL_FIELD_ALTERNATION = "|".join(
+    re.escape(name) for name in _OA_CREDENTIAL_FIELD_NAMES
+)
+
 _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bauthorization\s*:\s*(bearer|basic)\s+\S+"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"),
@@ -154,6 +159,10 @@ _CREDENTIAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bsessionid\s*=\s*[^;\s]+"),
     re.compile(r"(?i)\b(access_token|refresh_token|api_key)\s*[:=]\s*[^;\s]+"),
     re.compile(r"(?i)\b(password|passwd)\s*[:=]\s*[^;\s]+"),
+    re.compile(
+        rf"\b(?:{_OA_CREDENTIAL_FIELD_ALTERNATION})\s*[:=]\s*[^;\s]+",
+        re.IGNORECASE,
+    ),
 )
 _INTERNAL_URL_PATTERN = re.compile(
     r"(?i)\bhttps?://(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|"
