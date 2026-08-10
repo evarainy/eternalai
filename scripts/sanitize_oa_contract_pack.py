@@ -26,6 +26,7 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
     EXTERNAL_SANITIZATION_WARNING,
     PENDING_WORKFLOW_DERIVATION_WARNING,
     OAContractPackProfile,
+    OALegacyPendingWorkflowCollection,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
     build_live_system_messages_fingerprint,
@@ -33,13 +34,39 @@ from app.infra.adapters.oa.contracts import (  # noqa: E402
 )
 
 _PROFILE_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_LEGACY_PENDING_WORKFLOW_PROFILE_VERSIONS = frozenset(
+    {
+        "ecology9-pending-workflows-v1",
+        "ecology9-pending-workflows-v2",
+    }
+)
+_TODO_LIST_PROFILE_VERSION = "ecology9-pending-workflows-v3"
 _SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
+_CAPTURE_PROFILE_KINDS = {
+    **{
+        profile_version: "legacy_pending_workflows"
+        for profile_version in _LEGACY_PENDING_WORKFLOW_PROFILE_VERSIONS
+    },
+    _TODO_LIST_PROFILE_VERSION: "todo_list",
+    _SYSTEM_MESSAGE_PROFILE_VERSION: "system_messages",
+}
 # The OA message-center form field that selects the category being read. Both
 # capabilities post to the same endpoint, so this value is the only thing in the
 # capture that says which category the recorded response actually belongs to.
 _MESSAGE_CENTER_CATEGORY_FIELD = "id"
-_PENDING_WORKFLOW_PROFILE_VERSION_PATTERN = re.compile(
-    r"^ecology9-pending-workflows-v[1-9][0-9]*$"
+_TODO_LIST_ENDPOINTS = {
+    "/api/workflow/reqlist/splitPageKey": "split_page_key",
+    "/api/ec/dev/table/datas": "datas",
+    "/api/ec/dev/table/counts": "counts",
+}
+_TODO_LIST_SESSION_KEY_LENGTH = 69
+_TODO_LIST_SOURCE_FIELDS = (
+    "requestid",
+    "requestname",
+    "status",
+    "receivedate",
+    "createdate",
+    "workflowid",
 )
 _MAX_HAR_BYTES = 32 * 1024 * 1024
 _MAX_JSON_CONTAINER_BYTES = 1 * 1024 * 1024
@@ -73,6 +100,9 @@ _FORBIDDEN_KEYS = frozenset(
         "employeeno",
     }
 )
+_PROTOCOL_ASSOCIATION_KEYS = frozenset({"sessionkey", "datakey"})
+_SENSITIVE_INPUT_KEYS = _FORBIDDEN_KEYS | _PROTOCOL_ASSOCIATION_KEYS
+_FORBIDDEN_OUTPUT_KEYS = _FORBIDDEN_KEYS | _PROTOCOL_ASSOCIATION_KEYS
 _SENSITIVE_HEADER_KEYS = frozenset(
     {
         "authorization",
@@ -107,11 +137,10 @@ class _NoEchoArgumentParser(argparse.ArgumentParser):
 def _capture_profile_kind(profile_version: str) -> str:
     if _PROFILE_VERSION_PATTERN.fullmatch(profile_version) is None:
         raise SanitizationError("invalid_profile_version")
-    if _PENDING_WORKFLOW_PROFILE_VERSION_PATTERN.fullmatch(profile_version):
-        return "pending_workflows"
-    if profile_version == _SYSTEM_MESSAGE_PROFILE_VERSION:
-        return "system_messages"
-    raise SanitizationError("invalid_profile_version")
+    profile_kind = _CAPTURE_PROFILE_KINDS.get(profile_version)
+    if profile_kind is None:
+        raise SanitizationError("invalid_profile_version")
+    return profile_kind
 
 
 def sanitize_har_to_contract_pack(
@@ -121,12 +150,42 @@ def sanitize_har_to_contract_pack(
     profile_version: str,
     entry_indices: Sequence[int] | None = None,
     pending_capture_category_id: str | None = None,
+    create_output_parent: bool = False,
 ) -> None:
-    """Create a Contract Pack atomically or leave the target absent."""
+    """Create a Contract Pack without retaining raw HAR data in exceptions."""
+
+    error_code: str | None = None
+    try:
+        _sanitize_har_to_contract_pack_sensitive(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=profile_version,
+            entry_indices=entry_indices,
+            pending_capture_category_id=pending_capture_category_id,
+            create_output_parent=create_output_parent,
+        )
+    except SanitizationError as exc:
+        error_code = str(exc)
+    except Exception:
+        error_code = "contract_pack_sanitization_failed"
+    if error_code is not None:
+        raise SanitizationError(error_code) from None
+
+
+def _sanitize_har_to_contract_pack_sensitive(
+    *,
+    input_har: Path,
+    output_dir: Path,
+    profile_version: str,
+    entry_indices: Sequence[int] | None = None,
+    pending_capture_category_id: str | None = None,
+    create_output_parent: bool = False,
+) -> None:
+    """Process raw capture data behind the public no-traceback-data boundary."""
 
     profile_kind = _capture_profile_kind(profile_version)
     declared_category_id: str | None = None
-    if profile_kind == "pending_workflows":
+    if profile_kind == "legacy_pending_workflows":
         if pending_capture_category_id is None:
             raise SanitizationError("pending_capture_category_required")
         declared_category_id = _validated_category_id(pending_capture_category_id)
@@ -136,13 +195,16 @@ def sanitize_har_to_contract_pack(
         raise SanitizationError("profile_output_name_mismatch")
     if output_dir.exists():
         raise SanitizationError("output_already_exists")
-    if not output_dir.parent.is_dir():
+    if not isinstance(create_output_parent, bool):
+        raise SanitizationError("output_parent_policy_invalid")
+    output_parent_missing = not output_dir.parent.is_dir()
+    if output_parent_missing and not create_output_parent:
         raise SanitizationError("output_parent_missing")
 
     har = _load_har(input_har)
     source_kind: str
     source_warning: str | None
-    if profile_kind == "pending_workflows":
+    if profile_kind == "legacy_pending_workflows":
         (
             raw_payload,
             message_center_page_size,
@@ -164,6 +226,16 @@ def sanitize_har_to_contract_pack(
         else:
             source_kind = "derived_from_sibling_capture"
             source_warning = PENDING_WORKFLOW_DERIVATION_WARNING
+    elif profile_kind == "todo_list":
+        split_payload, datas_payload, counts_payload = _select_todo_list_payloads(
+            har,
+            entry_indices=entry_indices,
+        )
+        raw_payloads = [split_payload, datas_payload, counts_payload]
+        capability_id = "oa.list_pending_workflows"
+        source_kind = "sanitized_capture"
+        sanitizer_version = "2"
+        source_warning = None
     else:
         raw_payload, message_center_page_size = _select_system_message_payload(
             har,
@@ -178,26 +250,36 @@ def sanitize_har_to_contract_pack(
         har,
         short_transport_as_full_token=(sanitizer_version == "2"),
     )
-    for raw_payload in raw_payloads:
+    for payload_index, raw_payload in enumerate(raw_payloads):
         _collect_sensitive_fields(raw_payload, sensitive_values)
-        _assert_response_payload_has_no_forbidden_keys(raw_payload)
-    sensitive_values.update(_system_message_source_values(raw_payloads[0]))
-    shared_sample = _normalize_system_message_sample(
-        raw_payloads[0],
-        page_size=message_center_page_size,
-    )
+        if profile_kind == "todo_list" and payload_index == 1:
+            _assert_todo_list_datas_has_no_unexpected_forbidden_keys(raw_payload)
+        else:
+            _assert_response_payload_has_no_forbidden_keys(raw_payload)
     if profile_kind == "system_messages":
-        sample = shared_sample
-    else:
+        sensitive_values.update(_system_message_source_values(raw_payloads[0]))
+        sample = _normalize_system_message_sample(
+            raw_payloads[0],
+            page_size=message_center_page_size,
+        )
+    elif profile_kind == "legacy_pending_workflows":
+        sensitive_values.update(_system_message_source_values(raw_payloads[0]))
+        shared_sample = _normalize_system_message_sample(
+            raw_payloads[0],
+            page_size=message_center_page_size,
+        )
         sample = {
             "workflows": shared_sample["messages"],
             "returned_count": shared_sample["returned_count"],
             "is_complete": shared_sample["is_complete"],
         }
         try:
-            OAPendingWorkflowCollection.model_validate(sample, strict=True)
+            OALegacyPendingWorkflowCollection.model_validate(sample, strict=True)
         except ValidationError:
             raise SanitizationError("normalized_sample_invalid") from None
+    else:
+        sensitive_values.update(_todo_list_source_values(datas_payload))
+        sample = _normalize_todo_list_sample(datas_payload, counts_payload)
     fingerprint = build_structural_fingerprint(sample)
     profile = {
         "profile_version": profile_version,
@@ -218,13 +300,22 @@ def sanitize_har_to_contract_pack(
     _scan_forbidden_output(candidate_payloads)
     _validate_candidate_pack(candidate_payloads)
 
-    temporary_dir = Path(
-        tempfile.mkdtemp(
-            prefix=f".{profile_version}.",
-            dir=output_dir.parent,
-        )
-    )
+    output_parent_created = False
+    if output_parent_missing:
+        try:
+            output_dir.parent.mkdir(parents=True, exist_ok=False)
+        except OSError:
+            raise SanitizationError("output_parent_create_failed") from None
+        output_parent_created = True
+
+    temporary_dir: Path | None = None
     try:
+        temporary_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{profile_version}.",
+                dir=output_dir.parent,
+            )
+        )
         for file_name, payload in candidate_payloads.items():
             _write_json(temporary_dir / file_name, payload)
         reparsed = {
@@ -236,16 +327,25 @@ def sanitize_har_to_contract_pack(
         _validate_candidate_pack(reparsed)
         os.replace(temporary_dir, output_dir)
     except Exception:
-        cleanup_failed = False
-        try:
-            shutil.rmtree(temporary_dir)
-        except OSError:
-            cleanup_failed = True
+        temporary_cleanup_failed = False
+        if temporary_dir is not None:
+            try:
+                shutil.rmtree(temporary_dir)
+            except OSError:
+                temporary_cleanup_failed = True
+        output_parent_cleanup_failed = False
+        if output_parent_created:
+            try:
+                output_dir.parent.rmdir()
+            except OSError:
+                output_parent_cleanup_failed = True
     else:
         return
 
-    if cleanup_failed:
+    if temporary_cleanup_failed:
         raise SanitizationError("temporary_cleanup_failed")
+    if output_parent_cleanup_failed:
+        raise SanitizationError("output_parent_cleanup_failed")
     raise SanitizationError("contract_pack_publish_failed")
 
 
@@ -344,6 +444,101 @@ def _select_pending_workflow_payload(
         _system_message_page_size(selected_entry),
         _captured_category_id(selected_entry),
     )
+
+
+def _select_todo_list_payloads(
+    har: Mapping[str, Any],
+    *,
+    entry_indices: Sequence[int] | None,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+    log = har.get("log")
+    if not isinstance(log, Mapping):
+        raise SanitizationError("har_log_missing")
+    entries = log.get("entries")
+    if not isinstance(entries, list):
+        raise SanitizationError("har_entries_missing")
+    if entry_indices is None:
+        raise SanitizationError("todo_list_entry_indices_required")
+    if len(entry_indices) != len(_TODO_LIST_ENDPOINTS):
+        raise SanitizationError("todo_list_entry_indices_invalid")
+    if any(
+        not isinstance(entry_index, int) or isinstance(entry_index, bool)
+        for entry_index in entry_indices
+    ):
+        raise SanitizationError("entry_index_invalid")
+    if any(entry_index < 0 or entry_index >= len(entries) for entry_index in entry_indices):
+        raise SanitizationError("entry_index_out_of_range")
+    if len(set(entry_indices)) != len(entry_indices):
+        raise SanitizationError("todo_list_entry_indices_invalid")
+
+    selected: dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]] = {}
+    for entry_index in entry_indices:
+        entry = entries[entry_index]
+        endpoint_kind = _todo_list_endpoint_kind(entry)
+        if endpoint_kind in selected:
+            raise SanitizationError("todo_list_entry_selection_invalid")
+        payload = _response_json(entry, selected=True)
+        if payload is None:
+            raise SanitizationError("todo_list_entry_selection_invalid")
+        selected[endpoint_kind] = (entry, payload)
+    if set(selected) != set(_TODO_LIST_ENDPOINTS.values()):
+        raise SanitizationError("todo_list_entry_selection_invalid")
+
+    split_entry, split_payload = selected["split_page_key"]
+    datas_entry, datas_payload = selected["datas"]
+    counts_entry, counts_payload = selected["counts"]
+    viewconditions = _message_center_form_values(split_entry, "viewcondition")
+    if not viewconditions or any(value != "5" for value in viewconditions):
+        raise SanitizationError("todo_list_viewcondition_invalid")
+
+    session_key = split_payload.get("sessionkey")
+    if (
+        not isinstance(session_key, str)
+        or len(session_key) != _TODO_LIST_SESSION_KEY_LENGTH
+        or session_key != session_key.strip()
+    ):
+        raise SanitizationError("todo_list_session_association_invalid")
+    for entry in (datas_entry, counts_entry):
+        data_keys = _message_center_form_values(entry, "datakey")
+        if not data_keys or any(data_key != session_key for data_key in data_keys):
+            raise SanitizationError("todo_list_session_association_invalid")
+
+    if datas_payload.get("status") is not True:
+        raise SanitizationError("todo_list_datas_status_invalid")
+    records = datas_payload.get("datas")
+    if not isinstance(records, list) or len(records) > _MAX_RECORDS:
+        raise SanitizationError("response_records_invalid")
+    if counts_payload.get("status") is not True:
+        raise SanitizationError("todo_list_counts_status_invalid")
+    authoritative_count = counts_payload.get("count")
+    if (
+        not isinstance(authoritative_count, int)
+        or isinstance(authoritative_count, bool)
+        or not 0 <= authoritative_count <= _MAX_RECORDS
+    ):
+        raise SanitizationError("todo_list_authoritative_count_invalid")
+    if authoritative_count != len(records):
+        raise SanitizationError("todo_list_incomplete_capture")
+    return split_payload, datas_payload, counts_payload
+
+
+def _todo_list_endpoint_kind(entry: Any) -> str:
+    if not isinstance(entry, Mapping):
+        raise SanitizationError("selected_entry_invalid")
+    request = entry.get("request")
+    if not isinstance(request, Mapping) or request.get("method") != "POST":
+        raise SanitizationError("todo_list_entry_selection_invalid")
+    url = request.get("url")
+    if not isinstance(url, str):
+        raise SanitizationError("todo_list_entry_selection_invalid")
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        raise SanitizationError("todo_list_entry_selection_invalid") from None
+    endpoint_kind = _TODO_LIST_ENDPOINTS.get(path)
+    if endpoint_kind is None:
+        raise SanitizationError("todo_list_entry_selection_invalid")
+    return endpoint_kind
 
 
 def _select_system_message_payload(
@@ -497,6 +692,60 @@ def _normalize_system_message_sample(
     return sample
 
 
+def _normalize_todo_list_sample(
+    datas_payload: Mapping[str, Any],
+    counts_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    records = datas_payload.get("datas")
+    authoritative_count = counts_payload.get("count")
+    if (
+        not isinstance(records, list)
+        or len(records) > _MAX_RECORDS
+        or not isinstance(authoritative_count, int)
+        or isinstance(authoritative_count, bool)
+        or authoritative_count != len(records)
+    ):
+        raise SanitizationError("todo_list_incomplete_capture")
+
+    workflows: list[dict[str, str]] = []
+    raw_todo_ids: set[str] = set()
+    for index, record in enumerate(records, start=1):
+        if not isinstance(record, Mapping):
+            raise SanitizationError("response_record_invalid")
+        raw_todo_id = _require_plain_string(record, "requestid")
+        if raw_todo_id in raw_todo_ids:
+            raise SanitizationError("todo_list_duplicate_record")
+        raw_todo_ids.add(raw_todo_id)
+        raw_title = _require_plain_string(record, "requestname")
+        raw_status = _require_plain_string(record, "status")
+        raw_received_at = _require_plain_string(record, "receivedate")
+        raw_created_at = _require_plain_string(record, "createdate")
+        raw_workflow_type_id = _require_plain_string(record, "workflowid")
+        workflows.append(
+            {
+                "todo_id": _synthetic_unique_identifier(len(raw_todo_id), index),
+                "title": _synthetic_chinese_text(len(raw_title), index + 300),
+                "status": _synthetic_machine_text(len(raw_status), index + 300),
+                "received_at": _synthetic_timestamp(len(raw_received_at)),
+                "created_at": _synthetic_timestamp(len(raw_created_at)),
+                "workflow_type_id": _synthetic_identifier(
+                    len(raw_workflow_type_id), index + 300
+                ),
+            }
+        )
+    sample = {
+        "workflows": workflows,
+        "returned_count": len(workflows),
+        "authoritative_count": authoritative_count,
+        "is_complete": True,
+    }
+    try:
+        OAPendingWorkflowCollection.model_validate(sample, strict=True)
+    except ValidationError:
+        raise SanitizationError("normalized_sample_invalid") from None
+    return sample
+
+
 def _system_message_source_values(raw_payload: Mapping[str, Any]) -> set[str]:
     values: set[str] = set()
     records = raw_payload.get("data")
@@ -523,10 +772,31 @@ def _system_message_source_values(raw_payload: Mapping[str, Any]) -> set[str]:
     return values
 
 
+def _todo_list_source_values(datas_payload: Mapping[str, Any]) -> set[str]:
+    values: set[str] = set()
+    records = datas_payload.get("datas")
+    if isinstance(records, list):
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            for key in _TODO_LIST_SOURCE_FIELDS:
+                value = record.get(key)
+                if isinstance(value, str) and value:
+                    values.add(value)
+    return values
+
+
 def _require_string(record: Mapping[str, Any], key: str) -> str:
     value = record.get(key)
     if not isinstance(value, str) or not value.strip():
         raise SanitizationError("response_required_string_invalid")
+    return value
+
+
+def _require_plain_string(record: Mapping[str, Any], key: str) -> str:
+    value = _require_string(record, key)
+    if "<" in value or ">" in value:
+        raise SanitizationError("todo_list_html_field_invalid")
     return value
 
 
@@ -547,6 +817,15 @@ def _synthetic_identifier(length: int, index: int) -> str:
         raise SanitizationError("response_required_string_invalid")
     seed = f"900{index:05d}"
     return (seed * ((length // len(seed)) + 1))[:length]
+
+
+def _synthetic_unique_identifier(length: int, index: int) -> str:
+    if length <= 0:
+        raise SanitizationError("response_required_string_invalid")
+    suffix = str(index)
+    if len(suffix) > length:
+        raise SanitizationError("synthetic_identifier_capacity_exceeded")
+    return f"{'9' * (length - len(suffix))}{suffix}"
 
 
 def _synthetic_chinese_text(length: int, index: int) -> str:
@@ -611,7 +890,7 @@ def _collect_sensitive_fields(value: Any, output: set[str]) -> None:
         for key, child in value.items():
             normalized_key = _normalize_key(str(key))
             if (
-                normalized_key in _FORBIDDEN_KEYS
+                normalized_key in _SENSITIVE_INPUT_KEYS
             ):
                 output.update(_flatten_strings(child))
             _collect_sensitive_fields(child, output)
@@ -637,6 +916,25 @@ def _assert_response_payload_has_no_forbidden_keys(value: Any) -> None:
         decoded = _decode_json_container(value)
         if decoded is not None:
             _assert_response_payload_has_no_forbidden_keys(decoded)
+
+
+def _assert_todo_list_datas_has_no_unexpected_forbidden_keys(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        raise SanitizationError("selected_entry_not_pending_workflow_response")
+    for key, child in value.items():
+        if key != "datas":
+            _assert_response_payload_has_no_forbidden_keys({key: child})
+            continue
+        if not isinstance(child, list):
+            raise SanitizationError("response_records_invalid")
+        for record in child:
+            if not isinstance(record, Mapping):
+                raise SanitizationError("response_record_invalid")
+            for record_key, record_value in record.items():
+                normalized_key = _normalize_key(str(record_key))
+                if normalized_key in _FORBIDDEN_KEYS and normalized_key != "userid":
+                    raise SanitizationError("forbidden_response_key")
+                _assert_response_payload_has_no_forbidden_keys(record_value)
 
 
 def _decode_json_container(value: str) -> Mapping[str, Any] | list[Any] | None:
@@ -764,7 +1062,7 @@ def _collect_named_parameter_values(
     for name, value in parameters:
         normalized_name = _normalize_key(name)
         if (
-            normalized_name in _FORBIDDEN_KEYS
+            normalized_name in _SENSITIVE_INPUT_KEYS
             or normalized_name in _SENSITIVE_HEADER_KEYS
         ):
             output.add(value)
@@ -1022,7 +1320,7 @@ def _scan_forbidden_output(candidate_payloads: Mapping[str, Any]) -> None:
 def _scan_payload(value: Any) -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
-            if _normalize_key(str(key)) in _FORBIDDEN_KEYS:
+            if _normalize_key(str(key)) in _FORBIDDEN_OUTPUT_KEYS:
                 raise SanitizationError("forbidden_output_key")
             _scan_payload(child)
         return
@@ -1043,11 +1341,18 @@ def _validate_candidate_pack(candidate_payloads: Mapping[str, Any]) -> None:
             candidate_payloads["profile.json"],
             strict=True,
         )
-        collection_model = (
-            OAPendingWorkflowCollection
-            if profile.capability_id == "oa.list_pending_workflows"
-            else OASystemMessageCollection
-        )
+        profile_kind = _capture_profile_kind(profile.profile_version)
+        if profile_kind == "legacy_pending_workflows":
+            collection_model = OALegacyPendingWorkflowCollection
+            expected_capability_id = "oa.list_pending_workflows"
+        elif profile_kind == "todo_list":
+            collection_model = OAPendingWorkflowCollection
+            expected_capability_id = "oa.list_pending_workflows"
+        else:
+            collection_model = OASystemMessageCollection
+            expected_capability_id = "oa.list_system_messages"
+        if profile.capability_id != expected_capability_id:
+            raise SanitizationError("candidate_contract_invalid")
         collection_model.model_validate(candidate_payloads["sample.json"], strict=True)
     except (KeyError, ValidationError):
         candidate_invalid = True
@@ -1082,8 +1387,8 @@ def _build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="entry_indices",
         help=(
-            "Zero-based HAR entry index. Repeat only for a multi-page "
-            "pending-workflow capture."
+            "Zero-based HAR entry index. Repeat exactly three times for the "
+            "pending-workflow v3 to-do capture."
         ),
     )
     parser.add_argument(

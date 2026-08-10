@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -26,6 +27,7 @@ from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
     _LIVE_MESSAGE_CENTER_FIELD_NAMES,
     _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS,
+    _LIVE_PENDING_WORKFLOW_FIELD_NAMES,
     OAMessageCenterRecord,
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
@@ -72,7 +74,13 @@ CONTRACT_PACK = (
     / "tests"
     / "contract_packs"
     / "oa"
-    / "ecology9-pending-workflows-v2"
+    / "ecology9-pending-workflows-v3"
+)
+LEGACY_PENDING_V1_CONTRACT_PACK = (
+    CONTRACT_PACK.parent / "ecology9-pending-workflows-v1"
+)
+LEGACY_PENDING_V2_CONTRACT_PACK = (
+    CONTRACT_PACK.parent / "ecology9-pending-workflows-v2"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
     REPO_ROOT
@@ -84,7 +92,7 @@ SYSTEM_MESSAGE_CONTRACT_PACK = (
 # Written out by hand, not read back from the pack under test: an expectation
 # sourced from the artifact family it verifies would stay green through any
 # rewrite of that artifact.
-EXPECTED_REPLAY_DATA: dict[str, Any] = {
+EXPECTED_LEGACY_V2_DATA: dict[str, Any] = {
     "workflows": [
         {
             "message_id": "90000001",
@@ -392,6 +400,62 @@ EXPECTED_REPLAY_DATA: dict[str, Any] = {
     "is_complete": False,
 }
 
+EXPECTED_REPLAY_DATA: dict[str, Any] = {
+    "workflows": [
+        {
+            "todo_id": "999991",
+            "title": "统消息合成样本文本内容通知提醒待办查阅系统消",
+            "status": "666",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "900",
+        },
+        {
+            "todo_id": "999992",
+            "title": "消息合成样本文本内容通知提醒待办查阅系统消息",
+            "status": "777",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "900",
+        },
+        {
+            "todo_id": "999993",
+            "title": "息合成样本文本内容通知提醒待办查阅系统消息",
+            "status": "888",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "900",
+        },
+        {
+            "todo_id": "999994",
+            "title": "合成样本文本内容通知提醒待办查阅系统消息合成",
+            "status": "111",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "900",
+        },
+        {
+            "todo_id": "999995",
+            "title": "成样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知",
+            "status": "222",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "9000",
+        },
+        {
+            "todo_id": "999996",
+            "title": "样本文本内容通知提醒待办查阅系统消息合成样本文本内容通知提",
+            "status": "333",
+            "received_at": "2000-01-01",
+            "created_at": "2000-01-01",
+            "workflow_type_id": "9000",
+        },
+    ],
+    "returned_count": 6,
+    "authoritative_count": 6,
+    "is_complete": True,
+}
+
 
 class CountingReplayProvider(ReplayOAReadProvider):
     def __init__(self, contract_pack_dir: Path) -> None:
@@ -472,6 +536,7 @@ class SequencedOpener:
         self._responses = list(responses)
         self.request_queries: list[dict[str, list[str]]] = []
         self.request_forms: list[dict[str, list[str]]] = []
+        self.request_paths: list[str] = []
         self.request_methods: list[str] = []
         self.request_header_names: list[frozenset[str]] = []
         self.request_headers: list[dict[str, str]] = []
@@ -479,7 +544,9 @@ class SequencedOpener:
 
     def open(self, request: Request, *, timeout: float) -> FakeHTTPResponse:
         assert timeout > 0
-        self.request_queries.append(parse_qs(urlsplit(request.full_url).query))
+        parsed_url = urlsplit(request.full_url)
+        self.request_queries.append(parse_qs(parsed_url.query))
+        self.request_paths.append(parsed_url.path)
         request_data = request.data
         self.request_forms.append(
             parse_qs(
@@ -587,15 +654,20 @@ def _live_provider(
     page_size: int = 20,
     max_pages: int = 50,
     max_records: int = 5_000,
-    pending_category_id: str = "101",
     system_category_id: str = "202",
 ) -> LiveOAReadProvider:
     return LiveOAReadProvider(
         base_url="https://oa.synthetic.invalid",
         message_center_endpoint_path="/api/messages",
-        pending_workflows_category_id=pending_category_id,
-        pending_workflows_bizstate="pending-business-state",
-        pending_workflows_select_state="pending-selection-state",
+        pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+        pending_workflows_counts_path="/api/todo/counts",
+        pending_workflows_datas_path="/api/todo/datas",
+        pending_workflows_actiontype="todo-action",
+        pending_workflows_hide_no_data_tab="todo-hide",
+        pending_workflows_method="todo-method",
+        pending_workflows_offical_type="todo-offical-type",
+        pending_workflows_view_scope="todo-view-scope",
+        pending_workflows_sort_params="todo-sort",
         system_messages_category_id=system_category_id,
         system_messages_bizstate="system-business-state",
         system_messages_select_state="system-selection-state",
@@ -612,17 +684,12 @@ def _live_provider(
 
 def _raw_workflow(index: int) -> dict[str, Any]:
     return {
-        "messageid": f"live-workflow-{index}",
-        "title": f"live-title-{index}",
-        "context": f"live-content-{index}",
-        "name": f"live-source-{index}",
-        "time": "2026-07-30 00:00:00",
-        "bizstate": "1",
-        "link": f"/workflows/desktop/{index}",
-        "linkmobileurl": f"/workflows/mobile/{index}",
-        "gomethod": "",
-        "gomethodpc": "",
-        "showimage": "",
+        "requestid": f"live-workflow-{index}",
+        "requestname": f"live-title-{index}",
+        "status": "1",
+        "receivedate": "2026-07-30",
+        "createdate": "2026-07-29",
+        "workflowid": f"live-workflow-type-{index}",
     }
 
 
@@ -630,6 +697,88 @@ def _matching_live_workflows() -> list[dict[str, Any]]:
     first = _raw_workflow(1)
     second = _raw_workflow(2)
     return [first, second]
+
+
+def _session_key() -> str:
+    sessionkey = secrets.token_hex(35)[:69]
+    assert len(sessionkey) == 69
+    return sessionkey
+
+
+def _pending_split_payload(sessionkey: str) -> dict[str, Any]:
+    return {"sessionkey": sessionkey}
+
+
+def _pending_counts_payload(
+    authoritative_count: Any,
+    *,
+    status: Any = True,
+) -> dict[str, Any]:
+    return {"count": authoritative_count, "status": status}
+
+
+def _pending_datas_payload(
+    records: Any,
+    *,
+    status: Any = True,
+    page_size: Any = "20",
+) -> dict[str, Any]:
+    return {"datas": records, "pageSize": page_size, "status": status}
+
+
+def _expected_pending_split_form() -> dict[str, list[str]]:
+    return {
+        "method": ["todo-method"],
+        "offical": [""],
+        "officalType": ["todo-offical-type"],
+        "hideNoDataTab": ["todo-hide"],
+        "viewScope": ["todo-view-scope"],
+        "complete": ["0"],
+        "viewcondition": ["5"],
+        "defaultTabVal": ["0"],
+        "requestname": [""],
+        "wfcode": [""],
+        "workflowid": [""],
+        "createdateselect": ["0"],
+        "createdatefrom": [""],
+        "createdateto": [""],
+        "creatertype": ["0"],
+        "workcode": [""],
+        "doingStatus": ["0"],
+        "ownerdepartmentid": [""],
+        "creatersubcompanyid": [""],
+        "workflowtype": [""],
+        "requestlevel": [""],
+        "recievedateselect": ["0"],
+        "recievedatefrom": [""],
+        "recievedateto": [""],
+        "wfstatu": ["1"],
+        "nodetype": [""],
+        "unophrmid": [""],
+        "docids": [""],
+        "hrmcreaterid": [""],
+        "crmids": [""],
+        "proids": [""],
+        "menuIds": ["1,13"],
+        "menuPathIds": ["1,13"],
+        "actiontype": ["todo-action"],
+    }
+
+
+def _pending_opener(
+    records: list[dict[str, Any]],
+    *,
+    authoritative_count: int | None = None,
+    sessionkey: str | None = None,
+) -> tuple[SequencedOpener, str]:
+    generated_sessionkey = sessionkey or _session_key()
+    count = len(records) if authoritative_count is None else authoritative_count
+    opener = SequencedOpener(
+        FakeHTTPResponse(_pending_split_payload(generated_sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(count)),
+        FakeHTTPResponse(_pending_datas_payload(records)),
+    )
+    return opener, generated_sessionkey
 
 
 def _raw_system_message(index: int) -> dict[str, Any]:
@@ -708,54 +857,58 @@ def _message_center_page(
 
 
 def test_published_pending_pack_versions_stay_immutable_and_distinct() -> None:
-    """A published pack version is a fixed structure, never edited in place.
+    frozen_bytes = {
+        "ecology9-pending-workflows-v1/fingerprint.json": (
+            "b0539eb6297de583e57d753ddf36aa297bcd2406d8218bd3a42f3e69a3853002"
+        ),
+        "ecology9-pending-workflows-v1/profile.json": (
+            "244a2f4fae563f6b36f690c98f0877aef09574e9bf297fee9634ff94241ab711"
+        ),
+        "ecology9-pending-workflows-v1/sample.json": (
+            "d61a84bf95ce50db056ba16f4fb59bad106aeb6e65f958bb000db2d35ab835fe"
+        ),
+        "ecology9-pending-workflows-v2/fingerprint.json": (
+            "fc9cf2a2204cf5242479b444b4b260c63bcf45b9c68cc3eeb2ae3f3bbf05b304"
+        ),
+        "ecology9-pending-workflows-v2/profile.json": (
+            "6da4616d62c83ddcb8cdc3dacf05202e40b5d95b5fad604f5af455e73d99bfc6"
+        ),
+        "ecology9-pending-workflows-v2/sample.json": (
+            "cf632f5fad451f94c46090a1c86ada9518f37d1c238c2eca90b6db354d7ab743"
+        ),
+    }
+    for relative_path, expected_sha256 in frozen_bytes.items():
+        artifact = CONTRACT_PACK.parent / relative_path
+        assert hashlib.sha256(artifact.read_bytes()).hexdigest() == expected_sha256
+    assert json.loads(
+        (LEGACY_PENDING_V2_CONTRACT_PACK / "sample.json").read_text(
+            encoding="utf-8"
+        )
+    ) == EXPECTED_LEGACY_V2_DATA
 
-    The v1 pack is the retired synthetic guess and the v2 pack is the structure
-    derived from the real sibling capture. Both shas are written out here so a
-    rewrite of either directory fails instead of silently redefining a version
-    other artifacts already reference.
-    """
-
-    retired_pack = CONTRACT_PACK.parent / "ecology9-pending-workflows-v1"
-    retired_profile = json.loads(
-        (retired_pack / "profile.json").read_text(encoding="utf-8")
-    )
-    retired_fingerprint = json.loads(
-        (retired_pack / "fingerprint.json").read_text(encoding="utf-8")
-    )
     current_profile = json.loads(
         (CONTRACT_PACK / "profile.json").read_text(encoding="utf-8")
     )
     current_fingerprint = json.loads(
         (CONTRACT_PACK / "fingerprint.json").read_text(encoding="utf-8")
     )
-
-    assert CONTRACT_PACK.name == "ecology9-pending-workflows-v2"
-    assert retired_profile["profile_version"] == retired_pack.name
-    assert retired_profile["source_kind"] == "synthetic"
-    assert (
-        retired_fingerprint["sha256"]
-        == "cbea86fd8abcd32fdf54e1c405dfedc8df442d816fe40bb301be44eb28ae991f"
-    )
-    assert current_profile["profile_version"] == CONTRACT_PACK.name
-    assert current_profile["source_kind"] == "derived_from_sibling_capture"
-    assert (
-        current_fingerprint["sha256"]
-        == "12effb9199346f8a35c8d25f97b0c1ff43f55ace80f5bb3ae34273a655ca769e"
-    )
+    assert CONTRACT_PACK.name == "ecology9-pending-workflows-v3"
+    assert current_profile == {
+        "profile_version": CONTRACT_PACK.name,
+        "capability_id": "oa.list_pending_workflows",
+        "source_kind": "sanitized_capture",
+        "sanitizer_version": "2",
+        "sample_file": "sample.json",
+        "fingerprint_file": "fingerprint.json",
+    }
     assert current_fingerprint == build_structural_fingerprint(
         json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
-    # v1 was sealed before the fingerprint builder started overlaying the
-    # contract exemplar, so the current builder cannot reproduce it. That is
-    # what retirement looks like; the fix is a new version, never a rewrite of
-    # this directory to make it self-consistent again.
-    assert retired_fingerprint != build_structural_fingerprint(
-        json.loads((retired_pack / "sample.json").read_text(encoding="utf-8"))
-    )
     with pytest.raises(OAContractPackError):
         asyncio.run(
-            ReplayOAReadProvider(retired_pack).list_pending_workflows(_credential())
+            ReplayOAReadProvider(LEGACY_PENDING_V1_CONTRACT_PACK).list_pending_workflows(
+                _credential()
+            )
         )
 
 
@@ -820,22 +973,64 @@ def test_message_center_ignored_wire_fields_are_exactly_enumerated() -> None:
     )
 
 
-def test_pending_and_system_fingerprints_share_one_field_mapping_object() -> None:
+def test_pending_and_system_fingerprints_use_distinct_exact_field_mappings() -> None:
     pending_mapping = build_live_pending_workflows_fingerprint.__globals__[
-        "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
+        "_LIVE_PENDING_WORKFLOW_FIELD_NAMES"
     ]
     system_mapping = build_live_system_messages_fingerprint.__globals__[
         "_LIVE_MESSAGE_CENTER_FIELD_NAMES"
     ]
 
-    assert pending_mapping is system_mapping
-    assert pending_mapping is _LIVE_MESSAGE_CENTER_FIELD_NAMES
+    assert pending_mapping is _LIVE_PENDING_WORKFLOW_FIELD_NAMES
+    assert system_mapping is _LIVE_MESSAGE_CENTER_FIELD_NAMES
+    assert pending_mapping is not system_mapping
+    assert pending_mapping == {
+        "requestid": "todo_id",
+        "requestname": "title",
+        "status": "status",
+        "receivedate": "received_at",
+        "createdate": "created_at",
+        "workflowid": "workflow_type_id",
+    }
 
 
 def test_pending_collection_rejects_mismatched_returned_count() -> None:
     with pytest.raises(ValueError, match="returned_count"):
         OAPendingWorkflowCollection.model_validate(
-            {"workflows": [], "returned_count": 1, "is_complete": True},
+            {
+                "workflows": [],
+                "returned_count": 1,
+                "authoritative_count": 0,
+                "is_complete": True,
+            },
+            strict=True,
+        )
+
+
+def test_pending_collection_rejects_mismatched_authoritative_count() -> None:
+    with pytest.raises(ValueError, match="authoritative_count"):
+        OAPendingWorkflowCollection.model_validate(
+            {
+                "workflows": [],
+                "returned_count": 0,
+                "authoritative_count": 1,
+                "is_complete": True,
+            },
+            strict=True,
+        )
+
+
+def test_pending_collection_rejects_duplicate_todo_ids() -> None:
+    workflow = EXPECTED_REPLAY_DATA["workflows"][0]
+
+    with pytest.raises(ValueError, match="todo_id"):
+        OAPendingWorkflowCollection.model_validate(
+            {
+                "workflows": [workflow, dict(workflow)],
+                "returned_count": 2,
+                "authoritative_count": 2,
+                "is_complete": True,
+            },
             strict=True,
         )
 
@@ -890,9 +1085,15 @@ def test_live_pending_provider_keeps_rejecting_backslash_endpoint_path() -> None
         LiveOAReadProvider(
             base_url="https://oa.synthetic.invalid",
             message_center_endpoint_path=r"/api\messages",
-            pending_workflows_category_id="101",
-            pending_workflows_bizstate="pending-business-state",
-            pending_workflows_select_state="pending-selection-state",
+            pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+            pending_workflows_counts_path="/api/todo/counts",
+            pending_workflows_datas_path="/api/todo/datas",
+            pending_workflows_actiontype="todo-action",
+            pending_workflows_hide_no_data_tab="todo-hide",
+            pending_workflows_method="todo-method",
+            pending_workflows_offical_type="todo-offical-type",
+            pending_workflows_view_scope="todo-view-scope",
+            pending_workflows_sort_params="todo-sort",
             system_messages_category_id="202",
             system_messages_bizstate="system-business-state",
             system_messages_select_state="system-selection-state",
@@ -910,9 +1111,15 @@ def test_live_system_message_provider_rejects_pending_pack() -> None:
         LiveOAReadProvider(
             base_url="https://oa.synthetic.invalid",
             message_center_endpoint_path="/api/messages",
-            pending_workflows_category_id="101",
-            pending_workflows_bizstate="pending-business-state",
-            pending_workflows_select_state="pending-selection-state",
+            pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+            pending_workflows_counts_path="/api/todo/counts",
+            pending_workflows_datas_path="/api/todo/datas",
+            pending_workflows_actiontype="todo-action",
+            pending_workflows_hide_no_data_tab="todo-hide",
+            pending_workflows_method="todo-method",
+            pending_workflows_offical_type="todo-offical-type",
+            pending_workflows_view_scope="todo-view-scope",
+            pending_workflows_sort_params="todo-sort",
             system_messages_category_id="202",
             system_messages_bizstate="system-business-state",
             system_messages_select_state="system-selection-state",
@@ -1236,9 +1443,11 @@ def test_live_provider_source_has_no_hardcoded_transport_secret_literal() -> Non
 def test_live_default_opener_ignores_all_environment_proxies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    sessionkey = _session_key()
     oa_server, oa_thread = _start_recording_server(
-        _message_center_page([_raw_workflow(1)]),
-        _message_center_page([], cursor_index=2),
+        _pending_split_payload(sessionkey),
+        _pending_counts_payload(1),
+        _pending_datas_payload([_raw_workflow(1)]),
     )
     proxy_server, proxy_thread = _start_recording_server(
         _message_center_page([_raw_workflow(99)])
@@ -1259,9 +1468,15 @@ def test_live_default_opener_ignores_all_environment_proxies(
     provider = LiveOAReadProvider(
         base_url=f"http://{oa_host}",
         message_center_endpoint_path="/api/messages",
-        pending_workflows_category_id="101",
-        pending_workflows_bizstate="pending-business-state",
-        pending_workflows_select_state="pending-selection-state",
+        pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+        pending_workflows_counts_path="/api/todo/counts",
+        pending_workflows_datas_path="/api/todo/datas",
+        pending_workflows_actiontype="todo-action",
+        pending_workflows_hide_no_data_tab="todo-hide",
+        pending_workflows_method="todo-method",
+        pending_workflows_offical_type="todo-offical-type",
+        pending_workflows_view_scope="todo-view-scope",
+        pending_workflows_sort_params="todo-sort",
         system_messages_category_id="202",
         system_messages_bizstate="system-business-state",
         system_messages_select_state="system-selection-state",
@@ -1284,15 +1499,20 @@ def test_live_default_opener_ignores_all_environment_proxies(
         oa_thread.join(timeout=2)
         proxy_thread.join(timeout=2)
 
-    assert [workflow.message_id for workflow in collection.workflows] == [
+    assert [workflow.todo_id for workflow in collection.workflows] == [
         "live-workflow-1"
     ]
     assert proxy_server.requests == []
-    assert len(oa_server.requests) == 2
+    assert len(oa_server.requests) == 3
     request_path, request_host, cookie_present = oa_server.requests[0]
     assert request_host == oa_host
-    assert request_path == "/api/messages"
+    assert request_path == "/api/todo/splitPageKey"
     assert cookie_present is True
+    assert [request[0] for request in oa_server.requests] == [
+        "/api/todo/splitPageKey",
+        "/api/todo/counts",
+        "/api/todo/datas",
+    ]
 
 
 def _assert_provider_traceback_is_redacted(
@@ -1529,7 +1749,7 @@ def test_replay_rejects_structural_fingerprint_mismatch(tmp_path: Path) -> None:
     shutil.copytree(CONTRACT_PACK, pack)
     sample_path = pack / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
-    sample["workflows"][0]["message_id"] = 1
+    sample["workflows"][0]["todo_id"] = 1
     sample_path.write_text(json.dumps(sample), encoding="utf-8")
     adapter = OAReadAdapter(ReplayOAReadProvider(pack))
 
@@ -1565,27 +1785,32 @@ def test_structural_fingerprint_excludes_values_and_array_length() -> None:
     first = {
         "workflows": [copy.deepcopy(EXPECTED_REPLAY_DATA["workflows"][0])],
         "returned_count": 1,
-        "is_complete": False,
+        "authoritative_count": 1,
+        "is_complete": True,
     }
     second_item = copy.deepcopy(first["workflows"][0])
     second_item.update(
         {
-            "message_id": "completely-different-workflow",
+            "todo_id": "completely-different-workflow",
             "title": "completely-different-title",
-            "content": "completely-different-content",
-            "source_name": "completely-different-source",
-            "occurred_at": "2099-12-31 23:59:59",
-            "business_state": "different-state",
-            "link": "/completely-different-link",
-            "mobile_link": "/completely-different-mobile-link",
+            "status": "different-state",
+            "received_at": "2099-12-31",
+            "created_at": "2099-12-30",
+            "workflow_type_id": "different-workflow-type",
         }
     )
     second = {
         "workflows": [second_item, copy.deepcopy(second_item)],
         "returned_count": 2,
-        "is_complete": False,
+        "authoritative_count": 2,
+        "is_complete": True,
     }
-    empty = {"workflows": [], "returned_count": 0, "is_complete": True}
+    empty = {
+        "workflows": [],
+        "returned_count": 0,
+        "authoritative_count": 0,
+        "is_complete": True,
+    }
 
     first_fingerprint = build_structural_fingerprint(first)
     second_fingerprint = build_structural_fingerprint(second)
@@ -1602,7 +1827,12 @@ def test_structural_fingerprint_excludes_values_and_array_length() -> None:
 def test_replay_accepts_legal_empty_workflow_collection(tmp_path: Path) -> None:
     pack = tmp_path / CONTRACT_PACK.name
     shutil.copytree(CONTRACT_PACK, pack)
-    empty_sample = {"workflows": [], "returned_count": 0, "is_complete": True}
+    empty_sample = {
+        "workflows": [],
+        "returned_count": 0,
+        "authoritative_count": 0,
+        "is_complete": True,
+    }
     (pack / "sample.json").write_text(
         json.dumps(empty_sample),
         encoding="utf-8",
@@ -1642,12 +1872,12 @@ def test_replay_never_resolves_or_uses_a_credential() -> None:
 
 
 def test_live_provider_paginates_internally_and_normalizes_records() -> None:
+    sessionkey = _session_key()
     opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
-        FakeHTTPResponse(
-            _message_center_page([_raw_workflow(2)], cursor_index=2)
-        ),
-        FakeHTTPResponse(_message_center_page([], cursor_index=3)),
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(2)),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)], page_size="1")),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(2)], page_size="1")),
     )
     secret_provider = StaticSecretProvider(_credential())
     adapter = OAReadAdapter(
@@ -1668,57 +1898,46 @@ def test_live_provider_paginates_internally_and_normalizes_records() -> None:
     assert result.data == {
         "workflows": [
             {
-                "message_id": "live-workflow-1",
+                "todo_id": "live-workflow-1",
                 "title": "live-title-1",
-                "content": "live-content-1",
-                "source_name": "live-source-1",
-                "occurred_at": "2026-07-30 00:00:00",
-                "business_state": "1",
-                "link": "/workflows/desktop/1",
-                "mobile_link": "/workflows/mobile/1",
+                "status": "1",
+                "received_at": "2026-07-30",
+                "created_at": "2026-07-29",
+                "workflow_type_id": "live-workflow-type-1",
             },
             {
-                "message_id": "live-workflow-2",
+                "todo_id": "live-workflow-2",
                 "title": "live-title-2",
-                "content": "live-content-2",
-                "source_name": "live-source-2",
-                "occurred_at": "2026-07-30 00:00:00",
-                "business_state": "1",
-                "link": "/workflows/desktop/2",
-                "mobile_link": "/workflows/mobile/2",
+                "status": "1",
+                "received_at": "2026-07-30",
+                "created_at": "2026-07-29",
+                "workflow_type_id": "live-workflow-type-2",
             },
         ],
         "returned_count": 2,
+        "authoritative_count": 2,
         "is_complete": True,
     }
     assert opener.request_forms == [
-        {
-            "id": ["101"],
-            "pagesize": ["1"],
-            "msgid": ["0"],
-            "mintime": ["0"],
-            "bizstate": ["pending-business-state"],
-            "selectState": ["pending-selection-state"],
-        },
-        {
-            "id": ["101"],
-            "pagesize": ["1"],
-            "msgid": ["synthetic-cursor-1"],
-            "mintime": ["synthetic-lower-1"],
-            "bizstate": ["pending-business-state"],
-            "selectState": ["pending-selection-state"],
-        },
-        {
-            "id": ["101"],
-            "pagesize": ["1"],
-            "msgid": ["synthetic-cursor-2"],
-            "mintime": ["synthetic-lower-2"],
-            "bizstate": ["pending-business-state"],
-            "selectState": ["pending-selection-state"],
-        },
+        _expected_pending_split_form(),
+        {"dataKey": [sessionkey]},
+        {"current": ["1"], "dataKey": [sessionkey], "sortParams": ["todo-sort"]},
+        {"current": ["2"], "dataKey": [sessionkey], "sortParams": ["todo-sort"]},
     ]
-    assert opener.cookie_header_present == [True, True, True]
-    _assert_browser_like_oa_headers(opener, request_count=3)
+    assert len(_expected_pending_split_form()) == 34
+    assert opener.request_paths == [
+        "/api/todo/splitPageKey",
+        "/api/todo/counts",
+        "/api/todo/datas",
+        "/api/todo/datas",
+    ]
+    assert all(
+        "pagesize" not in form and "pageSize" not in form
+        for form in opener.request_forms
+    )
+    assert "/api/messages" not in opener.request_paths
+    assert opener.cookie_header_present == [True, True, True, True]
+    _assert_browser_like_oa_headers(opener, request_count=4)
     assert secret_provider.calls == ["oa-session-v1:server-surrogate"]
 
 
@@ -1778,9 +1997,11 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
             assert loaded_ai_user_id == trusted_ai_user_id
             return credential
 
+    sessionkey = _session_key()
     opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
-        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(1)),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)])),
     )
     secret_provider = CredentialStoreSecretProvider(
         credential_store=cast(Any, CredentialStore()),
@@ -1817,15 +2038,14 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
 
     assert result.status == "completed"
     assert result.error_code is None
-    assert marker not in (rendered_trace + repr(result) + caplog.text)
+    rendered = rendered_trace + repr(result) + caplog.text
+    assert marker not in rendered
+    assert sessionkey not in rendered
     assert credential_ref not in rendered_trace
 
 
 def test_live_provider_accepts_a_legal_empty_collection() -> None:
-    payload = _message_center_page([])
-    payload["mintime"] = ""
-    payload["msgid"] = ""
-    opener = SequencedOpener(FakeHTTPResponse(payload))
+    opener, sessionkey = _pending_opener([], authoritative_count=0)
     collection = asyncio.run(
         _live_provider(opener).list_pending_workflows(_credential())
     )
@@ -1833,9 +2053,18 @@ def test_live_provider_accepts_a_legal_empty_collection() -> None:
     assert collection.model_dump(mode="json") == {
         "workflows": [],
         "returned_count": 0,
+        "authoritative_count": 0,
         "is_complete": True,
     }
-    assert len(opener.request_forms) == 1
+    assert opener.request_paths == [
+        "/api/todo/splitPageKey",
+        "/api/todo/counts",
+        "/api/todo/datas",
+    ]
+    assert opener.request_forms[1:] == [
+        {"dataKey": [sessionkey]},
+        {"current": ["1"], "dataKey": [sessionkey], "sortParams": ["todo-sort"]},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1910,14 +2139,7 @@ def test_live_business_session_expiry_requires_reauthentication() -> None:
         ),
         (
             FakeHTTPResponse(
-                _message_center_page(
-                    [
-                        {
-                            **_raw_workflow(1),
-                            "title": 7,
-                        }
-                    ]
-                )
+                {"sessionkey": []}
             ),
             "adapter_payload_invalid",
         ),
@@ -1927,10 +2149,7 @@ def test_live_timeout_and_payload_failures_are_classified(
     response: FakeHTTPResponse | Exception,
     expected_error_code: str,
 ) -> None:
-    opener = SequencedOpener(
-        response,
-        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
-    )
+    opener = SequencedOpener(response)
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential()),
@@ -2003,8 +2222,9 @@ def test_provider_programming_errors_log_only_safe_classification(
     if stage == "http_request":
         opener = SequencedOpener(RuntimeError(marker))
     else:
+        sessionkey = _session_key()
         opener = SequencedOpener(
-            FakeHTTPResponse(_message_center_page([_raw_workflow(1)]))
+            FakeHTTPResponse(_pending_split_payload(sessionkey))
         )
 
         def explode_payload(_payload: Any) -> Any:
@@ -2012,7 +2232,7 @@ def test_provider_programming_errors_log_only_safe_classification(
 
         monkeypatch.setattr(
             oa_provider,
-            "_read_message_center_page",
+            "_read_pending_workflow_sessionkey",
             explode_payload,
         )
     adapter = OAReadAdapter(
@@ -2035,10 +2255,40 @@ def test_provider_programming_errors_log_only_safe_classification(
     assert marker not in (caplog.text + repr(result))
 
 
-def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
+def test_live_pending_fails_closed_when_count_exceeds_records_at_page_limit() -> None:
+    sessionkey = _session_key()
     opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
-        FakeHTTPResponse(_message_center_page([_raw_workflow(2)])),
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(3)),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)], page_size="1")),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(2)], page_size="1")),
+    )
+    adapter = OAReadAdapter(
+        _live_provider(opener, max_pages=2),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert len(opener.request_forms) == 4
+    assert opener.request_paths[-2:] == ["/api/todo/datas", "/api/todo/datas"]
+
+
+def test_live_pending_fails_closed_on_early_empty_page() -> None:
+    sessionkey = _session_key()
+    opener = SequencedOpener(
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(2)),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)], page_size="1")),
+        FakeHTTPResponse(_pending_datas_payload([], page_size="1")),
     )
     adapter = OAReadAdapter(
         _live_provider(opener, page_size=1),
@@ -2055,44 +2305,60 @@ def test_live_pagination_fails_closed_on_repeated_cursor() -> None:
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_forms) == 2
+    assert result.data is None
+    assert len(opener.request_forms) == 4
 
 
-def test_live_pagination_accepts_terminal_empty_page_with_repeated_cursor() -> None:
-    opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
-        FakeHTTPResponse(_message_center_page([], cursor_index=1)),
-    )
-    adapter = OAReadAdapter(
-        _live_provider(opener, page_size=1),
-        secret_provider=StaticSecretProvider(_credential()),
-    )
-
-    result = asyncio.run(
-        adapter.execute(
-            "oa.list_pending_workflows",
-            {},
-            {"credential_ref": "oa-session-v1:server-surrogate"},
-        )
-    )
-
-    assert result.status == "success"
-    assert result.error_code is None
-    assert result.data is not None
-    assert len(result.data["workflows"]) == 1
-    assert result.data["workflows"][0]["message_id"] == "live-workflow-1"
-    assert len(opener.request_forms) == 2
-
-
-@pytest.mark.parametrize("cursor_key", ["maxtime", "mintime", "msgid"])
-def test_live_pagination_fails_closed_when_cursor_field_is_missing(
-    cursor_key: str,
+@pytest.mark.parametrize(
+    "failure_case",
+    [
+        "split_shape",
+        "split_type",
+        "counts_shape",
+        "counts_status",
+        "counts_type",
+        "datas_shape",
+        "datas_status",
+        "datas_type",
+        "datas_page_size_type",
+    ],
+)
+def test_live_pending_split_counts_and_datas_fail_closed_on_invalid_envelopes(
+    failure_case: str,
 ) -> None:
-    payload = _message_center_page([_raw_workflow(1)])
-    payload.pop(cursor_key)
-    opener = SequencedOpener(
-        FakeHTTPResponse(payload)
-    )
+    sessionkey = _session_key()
+    responses: list[FakeHTTPResponse] = []
+    if failure_case == "split_shape":
+        responses.append(FakeHTTPResponse({}))
+    elif failure_case == "split_type":
+        responses.append(FakeHTTPResponse({"sessionkey": 69}))
+    else:
+        responses.append(FakeHTTPResponse(_pending_split_payload(sessionkey)))
+        if failure_case == "counts_shape":
+            responses.append(FakeHTTPResponse({"status": True}))
+        elif failure_case == "counts_status":
+            responses.append(FakeHTTPResponse(_pending_counts_payload(1, status=False)))
+        elif failure_case == "counts_type":
+            responses.append(FakeHTTPResponse(_pending_counts_payload("1")))
+        else:
+            responses.append(FakeHTTPResponse(_pending_counts_payload(1)))
+            if failure_case == "datas_shape":
+                responses.append(FakeHTTPResponse({"pageSize": "20", "status": True}))
+            elif failure_case == "datas_status":
+                responses.append(
+                    FakeHTTPResponse(
+                        _pending_datas_payload([_raw_workflow(1)], status=False)
+                    )
+                )
+            elif failure_case == "datas_type":
+                responses.append(FakeHTTPResponse(_pending_datas_payload({})))
+            else:
+                responses.append(
+                    FakeHTTPResponse(
+                        _pending_datas_payload([_raw_workflow(1)], page_size=20)
+                    )
+                )
+    opener = SequencedOpener(*responses)
     adapter = OAReadAdapter(
         _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential()),
@@ -2108,18 +2374,23 @@ def test_live_pagination_fails_closed_when_cursor_field_is_missing(
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_forms) == 1
+    assert len(opener.request_forms) == len(responses)
 
 
-def test_live_payload_rejection_logs_only_safe_structure(
+def test_live_pending_payload_rejection_never_logs_business_or_session_values(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     marker = secrets.token_hex(32)
-    payload = _message_center_page([_raw_workflow(1)])
-    payload["data"][0]["title"] = marker
-    payload.pop("msgid")
+    sessionkey = _session_key()
+    record = _raw_workflow(1)
+    record["requestname"] = marker
+    opener = SequencedOpener(
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(1)),
+        FakeHTTPResponse(_pending_datas_payload([record], page_size="0")),
+    )
     adapter = OAReadAdapter(
-        _live_provider(SequencedOpener(FakeHTTPResponse(payload))),
+        _live_provider(opener),
         secret_provider=StaticSecretProvider(_credential(cookie_value=marker)),
     )
     caplog.set_level(logging.WARNING, logger=oa_provider.__name__)
@@ -2134,19 +2405,16 @@ def test_live_payload_rejection_logs_only_safe_structure(
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert "reason=response_shape" in caplog.text
-    assert "page=1" in caplog.text
-    assert "page_records=1" in caplog.text
-    assert "cursor_fields=110" in caplog.text
-    assert "cursor_advanced=False" in caplog.text
-    assert marker not in (caplog.text + repr(result))
+    rendered = caplog.text + repr(result)
+    assert marker not in rendered
+    assert sessionkey not in rendered
 
 
-def test_live_pagination_fails_closed_when_cursor_is_not_verbatim_safe() -> None:
-    payload = _message_center_page([_raw_workflow(1)])
-    payload["msgid"] = "  synthetic-cursor  "
+def test_live_pending_fails_closed_when_sessionkey_is_not_verbatim_safe() -> None:
+    sessionkey = _session_key()
+    unsafe_sessionkey = f" {sessionkey[:-1]}"
     opener = SequencedOpener(
-        FakeHTTPResponse(payload)
+        FakeHTTPResponse(_pending_split_payload(unsafe_sessionkey))
     )
     adapter = OAReadAdapter(
         _live_provider(opener),
@@ -2164,13 +2432,14 @@ def test_live_pagination_fails_closed_when_cursor_is_not_verbatim_safe() -> None
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
     assert len(opener.request_forms) == 1
+    assert unsafe_sessionkey not in repr(result)
 
 
-def test_live_pagination_fails_closed_when_aggregate_exceeds_limit() -> None:
+def test_live_pending_fails_before_datas_when_authoritative_count_exceeds_limit() -> None:
+    sessionkey = _session_key()
     opener = SequencedOpener(
-        FakeHTTPResponse(
-            _message_center_page([_raw_workflow(1), _raw_workflow(2)])
-        )
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(2)),
     )
     adapter = OAReadAdapter(
         _live_provider(opener, max_records=1),
@@ -2187,15 +2456,20 @@ def test_live_pagination_fails_closed_when_aggregate_exceeds_limit() -> None:
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_forms) == 1
+    assert len(opener.request_forms) == 2
+    assert opener.request_paths == [
+        "/api/todo/splitPageKey",
+        "/api/todo/counts",
+    ]
 
 
-def test_live_pagination_fails_closed_on_cross_page_duplicate() -> None:
+def test_live_pending_fails_closed_on_cross_page_duplicate() -> None:
+    sessionkey = _session_key()
     opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page([_raw_workflow(1)])),
-        FakeHTTPResponse(
-            _message_center_page([_raw_workflow(1)], cursor_index=2)
-        ),
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(2)),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)], page_size="1")),
+        FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)], page_size="1")),
     )
     adapter = OAReadAdapter(
         _live_provider(opener, page_size=1),
@@ -2212,7 +2486,183 @@ def test_live_pagination_fails_closed_on_cross_page_duplicate() -> None:
 
     assert result.status == "error"
     assert result.error_code == "adapter_payload_invalid"
-    assert len(opener.request_forms) == 2
+    assert len(opener.request_forms) == 4
+
+
+def test_live_pending_single_result_uses_exact_three_step_protocol() -> None:
+    record = _raw_workflow(1)
+    opener, sessionkey = _pending_opener([record])
+
+    collection = asyncio.run(
+        _live_provider(opener).list_pending_workflows(_credential())
+    )
+
+    assert collection.model_dump(mode="json") == {
+        "workflows": [
+            {
+                "todo_id": "live-workflow-1",
+                "title": "live-title-1",
+                "status": "1",
+                "received_at": "2026-07-30",
+                "created_at": "2026-07-29",
+                "workflow_type_id": "live-workflow-type-1",
+            }
+        ],
+        "returned_count": 1,
+        "authoritative_count": 1,
+        "is_complete": True,
+    }
+    assert opener.request_paths == [
+        "/api/todo/splitPageKey",
+        "/api/todo/counts",
+        "/api/todo/datas",
+    ]
+    assert opener.request_forms == [
+        _expected_pending_split_form(),
+        {"dataKey": [sessionkey]},
+        {"current": ["1"], "dataKey": [sessionkey], "sortParams": ["todo-sort"]},
+    ]
+    assert len(opener.request_forms[0]) == 34
+    assert opener.request_forms[0]["viewcondition"] == ["5"]
+    assert all(
+        "pagesize" not in form and "pageSize" not in form
+        for form in opener.request_forms
+    )
+    assert "/api/messages" not in opener.request_paths
+    assert sessionkey not in repr(collection)
+
+
+def test_live_pending_fails_when_records_exceed_authoritative_count() -> None:
+    sessionkey = _session_key()
+    opener = SequencedOpener(
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(1)),
+        FakeHTTPResponse(
+            _pending_datas_payload([_raw_workflow(1), _raw_workflow(2)])
+        ),
+    )
+
+    with pytest.raises(OALivePayloadInvalid, match="exceeds the authoritative"):
+        asyncio.run(
+            _live_provider(opener).list_pending_workflows(_credential())
+        )
+
+    assert len(opener.request_forms) == 3
+
+
+def test_live_pending_fails_when_page_exceeds_declared_size() -> None:
+    sessionkey = _session_key()
+    opener = SequencedOpener(
+        FakeHTTPResponse(_pending_split_payload(sessionkey)),
+        FakeHTTPResponse(_pending_counts_payload(2)),
+        FakeHTTPResponse(
+            _pending_datas_payload(
+                [_raw_workflow(1), _raw_workflow(2)],
+                page_size="1",
+            )
+        ),
+    )
+
+    with pytest.raises(OALivePayloadInvalid, match="declared size"):
+        asyncio.run(
+            _live_provider(opener).list_pending_workflows(_credential())
+        )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "requestid",
+        "requestname",
+        "status",
+        "receivedate",
+        "createdate",
+        "workflowid",
+    ],
+)
+def test_live_pending_rejects_html_in_every_projected_text_field(
+    field_name: str,
+) -> None:
+    record = _raw_workflow(1)
+    record[field_name] = "<b>synthetic</b>"
+    opener, _sessionkey = _pending_opener([record])
+    adapter = OAReadAdapter(
+        _live_provider(opener),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+def test_pending_sessionkey_never_reaches_exception_or_traceback_locals(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sessionkey = _session_key()
+    provider = _live_provider(
+        SequencedOpener(
+            FakeHTTPResponse(_pending_split_payload(sessionkey)),
+            TimeoutError(sessionkey),
+        )
+    )
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(OALiveTimeout) as exc_info:
+        asyncio.run(provider.list_pending_workflows(_credential()))
+
+    assert sessionkey not in (str(exc_info.value) + repr(exc_info.value) + caplog.text)
+    _assert_provider_traceback_is_redacted(exc_info.value, sessionkey)
+
+
+def test_invalid_pending_sessionkey_is_removed_from_traceback_locals() -> None:
+    sessionkey = f" {_session_key()[:-1]}"
+    provider = _live_provider(
+        SequencedOpener(FakeHTTPResponse(_pending_split_payload(sessionkey)))
+    )
+
+    with pytest.raises(OALivePayloadInvalid) as exc_info:
+        asyncio.run(provider.list_pending_workflows(_credential()))
+
+    assert sessionkey not in (str(exc_info.value) + repr(exc_info.value))
+    _assert_provider_traceback_is_redacted(exc_info.value, sessionkey)
+
+
+def test_pending_sessionkey_never_reaches_adapter_result_or_trace_metadata(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sessionkey = _session_key()
+    adapter = OAReadAdapter(
+        _live_provider(
+            SequencedOpener(
+                FakeHTTPResponse(_pending_split_payload(sessionkey)),
+                TimeoutError(sessionkey),
+            )
+        ),
+        secret_provider=StaticSecretProvider(_credential()),
+    )
+    caplog.set_level(logging.DEBUG)
+
+    result = asyncio.run(
+        adapter.execute(
+            "oa.list_pending_workflows",
+            {},
+            {"credential_ref": "oa-session-v1:server-surrogate"},
+        )
+    )
+
+    rendered = repr(result) + repr(result.trace_metadata) + caplog.text
+    assert result.error_code == "adapter_timeout"
+    assert result.data is None
+    assert sessionkey not in rendered
 
 
 @pytest.mark.parametrize(
@@ -2269,10 +2719,7 @@ def test_secret_resolution_errors_are_safely_mapped(
 def test_live_reports_matching_normalized_contract_structure() -> None:
     reports: list[Any] = []
     records = _matching_live_workflows()
-    opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page(records)),
-        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
-    )
+    opener, _sessionkey = _pending_opener(records)
 
     collection = asyncio.run(
         _live_provider(
@@ -2306,7 +2753,7 @@ def test_live_reports_matching_normalized_contract_structure() -> None:
         ),
         ("removed", "removed", "$.workflows[].title", "error"),
         ("type", "changed", "$.workflows[].title", "error"),
-        ("nullable", "changed", "$.workflows[].link", "success"),
+        ("nullable", "changed", "$.workflows[].title", "error"),
         ("array_shape", "changed", "$.workflows[].title", "error"),
     ],
 )
@@ -2324,22 +2771,19 @@ def test_live_reports_reachable_structural_drift_without_values(
         records[0][runtime_field_name] = runtime_business_value
     elif change_kind == "removed":
         for record in records:
-            record.pop("title")
+            record.pop("requestname")
     elif change_kind == "type":
         for record in records:
-            record["title"] = 7
+            record["requestname"] = 7
     elif change_kind == "nullable":
-        records[0]["link"] = None
+        records[0]["requestname"] = None
     elif change_kind == "array_shape":
         for record in records:
-            record["title"] = [runtime_business_value]
+            record["requestname"] = [runtime_business_value]
     else:  # pragma: no cover - parameter table is closed above
         raise AssertionError("unknown structural change kind")
 
-    opener = SequencedOpener(
-        FakeHTTPResponse(_message_center_page(records)),
-        FakeHTTPResponse(_message_center_page([], cursor_index=2)),
-    )
+    opener, _sessionkey = _pending_opener(records)
     adapter = OAReadAdapter(
         _live_provider(opener, drift_reporter=reports.append),
         secret_provider=StaticSecretProvider(_credential()),
@@ -2362,10 +2806,10 @@ def test_live_reports_reachable_structural_drift_without_values(
     assert report.matches is False
     bucket = getattr(report, expected_bucket)
     if change_kind == "added":
-        _assert_wire_node_paths(
+        _assert_anonymous_node_paths(
             bucket,
             root_path="$.workflows[]",
-            raw_keys={runtime_field_name},
+            expected_count=1,
         )
     else:
         assert [node.path for node in bucket] == [expected_path]
@@ -2374,7 +2818,7 @@ def test_live_reports_reachable_structural_drift_without_values(
     assert runtime_business_value not in rendered
     if change_kind == "added":
         assert runtime_business_value not in repr(result)
-        assert f"wire_{runtime_field_name}" in rendered
+        assert runtime_field_name not in rendered
 
 
 def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
@@ -2382,7 +2826,7 @@ def test_live_actual_fingerprint_is_independent_of_contract_exemplar() -> None:
     expected_fingerprint = build_contract_drift_baseline_fingerprint(
         json.loads((CONTRACT_PACK / "sample.json").read_text(encoding="utf-8"))
     )
-    records[0]["title"] = None
+    records[0]["requestname"] = None
 
     report = compare_structural_fingerprints(
         expected_fingerprint,
@@ -2429,19 +2873,33 @@ def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
     unknown_paths = [
         node["path"]
         for node in fingerprint["nodes"]
-        if node["path"].startswith(f"{root_path}.wire_")
+        if node["path"].startswith(
+            (
+                f"{root_path}.unknown_field_"
+                if builder is build_live_pending_workflows_fingerprint
+                else f"{root_path}.wire_"
+            )
+        )
     ]
 
     expected_raw_keys = {first_field_canary, second_field_canary}
-    _assert_wire_node_paths(
-        [
-            node
-            for node in fingerprint["nodes"]
-            if node["path"] in unknown_paths
-        ],
-        root_path=root_path,
-        raw_keys=expected_raw_keys,
-    )
+    unknown_nodes = [
+        node for node in fingerprint["nodes"] if node["path"] in unknown_paths
+    ]
+    if builder is build_live_pending_workflows_fingerprint:
+        _assert_anonymous_node_paths(
+            unknown_nodes,
+            root_path=root_path,
+            expected_count=2,
+        )
+        for raw_key in expected_raw_keys:
+            assert raw_key not in rendered
+    else:
+        _assert_wire_node_paths(
+            unknown_nodes,
+            root_path=root_path,
+            raw_keys=expected_raw_keys,
+        )
     for canary in (first_value_canary, second_value_canary):
         assert canary not in rendered
 
@@ -2451,7 +2909,7 @@ def test_live_fingerprint_covers_union_of_actual_record_fields_without_values(
     assert builder(records) == fingerprint
 
 
-def test_live_pending_unknown_wire_name_is_stable_when_earlier_key_is_added() -> None:
+def test_live_pending_unknown_name_is_anonymous_and_stable_when_key_is_added() -> None:
     earlier_field_canary = f"aSensitiveField{secrets.token_hex(8)}"
     retained_field_canary = f"zSensitiveField{secrets.token_hex(8)}"
     value_canary = f"sensitive-value-{secrets.token_hex(24)}"
@@ -2466,17 +2924,17 @@ def test_live_pending_unknown_wire_name_is_stable_when_earlier_key_is_added() ->
     )
     report = compare_structural_fingerprints(baseline, candidate)
 
-    _assert_wire_node_paths(
+    _assert_anonymous_node_paths(
         report.added,
         root_path="$.workflows[]",
-        raw_keys={earlier_field_canary},
+        expected_count=1,
     )
     assert report.added[0].json_type == "integer"
     assert report.removed == ()
     assert report.changed == ()
     rendered = report.model_dump_json()
-    assert f"wire_{earlier_field_canary}" in rendered
-    assert f"wire_{retained_field_canary}" not in rendered
+    assert earlier_field_canary not in rendered
+    assert retained_field_canary not in rendered
     assert value_canary not in rendered
 
 
@@ -2521,20 +2979,21 @@ def test_live_nested_unknown_fields_do_not_fold_and_are_order_independent() -> N
     nested_paths = [
         node["path"]
         for node in forward["nodes"]
-        if node["path"].count(".wire_") == 2
+        if node["path"].count(".unknown_field_") == 2
     ]
 
     assert forward == reversed_order
     assert len(nested_paths) == 2
     assert len(set(nested_paths)) == 2
-    assert set(nested_paths) == {
-        f"$.workflows[].wire_{outer_field_canary}.wire_{first_child_canary}",
-        f"$.workflows[].wire_{outer_field_canary}.wire_{second_child_canary}",
-    }
+    nested_pattern = re.compile(
+        r"^\$\.workflows\[\]\.unknown_field_[a-f0-9]{64}"
+        r"\.unknown_field_[a-f0-9]{64}$"
+    )
+    assert all(nested_pattern.fullmatch(path) for path in nested_paths)
     rendered = json.dumps(forward, sort_keys=True)
-    assert f"wire_{outer_field_canary}" in rendered
-    assert f"wire_{first_child_canary}" in rendered
-    assert f"wire_{second_child_canary}" in rendered
+    assert outer_field_canary not in rendered
+    assert first_child_canary not in rendered
+    assert second_child_canary not in rendered
     assert value_canary not in rendered
 
 
@@ -2551,10 +3010,12 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
 
     def run_pages(pages: list[list[dict[str, Any]]]) -> Any:
         reports: list[Any] = []
+        sessionkey = _session_key()
         opener = SequencedOpener(
-            FakeHTTPResponse(_message_center_page(pages[0], cursor_index=1)),
-            FakeHTTPResponse(_message_center_page(pages[1], cursor_index=2)),
-            FakeHTTPResponse(_message_center_page([], cursor_index=3)),
+            FakeHTTPResponse(_pending_split_payload(sessionkey)),
+            FakeHTTPResponse(_pending_counts_payload(4)),
+            FakeHTTPResponse(_pending_datas_payload(pages[0], page_size="2")),
+            FakeHTTPResponse(_pending_datas_payload(pages[1], page_size="2")),
         )
 
         collection = asyncio.run(
@@ -2578,10 +3039,10 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
 
     assert forward.actual_sha256 == reversed_order.actual_sha256
     assert forward.added == reversed_order.added
-    _assert_wire_node_paths(
+    _assert_anonymous_node_paths(
         forward.added,
         root_path="$.workflows[]",
-        raw_keys={first_field_canary, second_field_canary},
+        expected_count=2,
     )
     assert {node.json_type for node in forward.added} == {
         "integer",
@@ -2590,8 +3051,8 @@ def test_live_provider_unknown_field_union_is_stable_across_page_and_record_orde
     assert forward.removed == ()
     assert forward.changed == ()
     rendered = forward.model_dump_json() + reversed_order.model_dump_json()
-    assert f"wire_{first_field_canary}" in rendered
-    assert f"wire_{second_field_canary}" in rendered
+    assert first_field_canary not in rendered
+    assert second_field_canary not in rendered
     assert first_value_canary not in rendered
 
 

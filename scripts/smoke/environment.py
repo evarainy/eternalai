@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from scripts.smoke.errors import SmokeError
-from scripts.smoke.har import MessageCenterContract
+from scripts.smoke.har import MessageCenterContract, TodoListContract
 
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _REQUIRED_RUNTIME_KEYS = (
@@ -34,9 +34,15 @@ _REQUIRED_RUNTIME_KEYS = (
     "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
     "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
     "OA_MESSAGE_CENTER_PATH",
-    "OA_PENDING_WORKFLOWS_CATEGORY_ID",
-    "OA_PENDING_WORKFLOWS_BIZSTATE",
-    "OA_PENDING_WORKFLOWS_SELECT_STATE",
+    "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+    "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+    "OA_PENDING_WORKFLOWS_DATAS_PATH",
+    "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+    "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+    "OA_PENDING_WORKFLOWS_METHOD",
+    "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+    "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+    "OA_PENDING_WORKFLOWS_SORT_PARAMS",
     "OA_SYSTEM_MESSAGES_CATEGORY_ID",
     "OA_SYSTEM_MESSAGES_BIZSTATE",
     "OA_SYSTEM_MESSAGES_SELECT_STATE",
@@ -44,10 +50,18 @@ _REQUIRED_RUNTIME_KEYS = (
 )
 _ALLOW_EMPTY_RUNTIME_KEYS = frozenset(
     {
-        "OA_PENDING_WORKFLOWS_BIZSTATE",
-        "OA_PENDING_WORKFLOWS_SELECT_STATE",
         "OA_SYSTEM_MESSAGES_BIZSTATE",
         "OA_SYSTEM_MESSAGES_SELECT_STATE",
+    }
+)
+_PREPARE_ERROR_CODES = frozenset(
+    {
+        "contract_pack_directory_missing",
+        "env_file_invalid",
+        "env_file_unreadable",
+        "env_value_invalid",
+        "oa_har_base_url_mismatch",
+        "smoke_env_write_failed",
     }
 )
 
@@ -99,14 +113,53 @@ def prepare_environment(
     base_env_path: Path,
     smoke_env_path: Path,
     contract: MessageCenterContract,
+    todo_contract: TodoListContract,
     process_environment: Mapping[str, str] | None = None,
     check_infra: bool = True,
 ) -> PreparedEnvironment:
     """Append missing smoke values, then validate the fully layered environment."""
 
+    failure_code = "smoke_environment_rejected"
+    try:
+        return _prepare_environment(
+            repo_root=repo_root,
+            base_env_path=base_env_path,
+            smoke_env_path=smoke_env_path,
+            contract=contract,
+            todo_contract=todo_contract,
+            process_environment=process_environment,
+            check_infra=check_infra,
+        )
+    except SmokeError as error:
+        failure_code = _safe_prepare_error_code(error)
+    except Exception:
+        failure_code = "smoke_environment_rejected"
+    finally:
+        del (
+            repo_root,
+            base_env_path,
+            smoke_env_path,
+            contract,
+            todo_contract,
+            process_environment,
+            check_infra,
+        )
+    raise SmokeError(failure_code) from None
+
+
+def _prepare_environment(
+    *,
+    repo_root: Path,
+    base_env_path: Path,
+    smoke_env_path: Path,
+    contract: MessageCenterContract,
+    todo_contract: TodoListContract,
+    process_environment: Mapping[str, str] | None,
+    check_infra: bool,
+) -> PreparedEnvironment:
     base = parse_env_file(base_env_path)
     existing = parse_env_file(smoke_env_path)
-    desired = _desired_smoke_values(contract)
+    desired = _desired_smoke_values(contract, todo_contract)
     added = tuple(key for key in desired if key not in existing)
     if added:
         _append_env_values(smoke_env_path, {key: desired[key] for key in added})
@@ -128,6 +181,16 @@ def prepare_environment(
         merged=merged,
         infra=infra,
     )
+
+
+def _safe_prepare_error_code(error: SmokeError) -> str:
+    if (
+        len(error.args) == 1
+        and isinstance(error.args[0], str)
+        and error.args[0] in _PREPARE_ERROR_CODES
+    ):
+        return error.args[0]
+    return "smoke_environment_rejected"
 
 
 def load_runtime_environment(
@@ -175,7 +238,13 @@ def check_infrastructure(environment: Mapping[str, str]) -> InfraStatus:
     )
 
 
-def _desired_smoke_values(contract: MessageCenterContract) -> dict[str, str]:
+def _desired_smoke_values(
+    contract: MessageCenterContract,
+    todo_contract: TodoListContract,
+) -> dict[str, str]:
+    if contract.base_url != todo_contract.base_url:
+        raise SmokeError("oa_har_base_url_mismatch")
+
     def key() -> str:
         return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
@@ -197,15 +266,25 @@ def _desired_smoke_values(contract: MessageCenterContract) -> dict[str, str]:
         "ETERNALAI_SESSION_BINDING_KEY_B64": key(),
         "OA_READ_ADAPTER_MODE": "live",
         "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": (
-            "tests/contract_packs/oa/ecology9-pending-workflows-v2"
+            "tests/contract_packs/oa/ecology9-pending-workflows-v3"
         ),
         "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": (
             "tests/contract_packs/oa/ecology9-system-messages-v1"
         ),
         "OA_MESSAGE_CENTER_PATH": contract.endpoint_path,
-        "OA_PENDING_WORKFLOWS_CATEGORY_ID": "217",
-        "OA_PENDING_WORKFLOWS_BIZSTATE": contract.bizstate,
-        "OA_PENDING_WORKFLOWS_SELECT_STATE": contract.select_state,
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH": (
+            todo_contract.split_page_key_path
+        ),
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH": todo_contract.counts_path,
+        "OA_PENDING_WORKFLOWS_DATAS_PATH": todo_contract.datas_path,
+        "OA_PENDING_WORKFLOWS_ACTIONTYPE": todo_contract.actiontype,
+        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB": (
+            todo_contract.hide_no_data_tab
+        ),
+        "OA_PENDING_WORKFLOWS_METHOD": todo_contract.method,
+        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE": todo_contract.offical_type,
+        "OA_PENDING_WORKFLOWS_VIEW_SCOPE": todo_contract.view_scope,
+        "OA_PENDING_WORKFLOWS_SORT_PARAMS": todo_contract.sort_params,
         "OA_SYSTEM_MESSAGES_CATEGORY_ID": "2,31",
         "OA_SYSTEM_MESSAGES_BIZSTATE": contract.bizstate,
         "OA_SYSTEM_MESSAGES_SELECT_STATE": contract.select_state,
@@ -221,6 +300,7 @@ def _append_env_values(path: Path, values: Mapping[str, str]) -> None:
         or "\n" in value
         or "\r" in value
         or "\x00" in value
+        or not _env_value_round_trips(value)
         for key, value in values.items()
     ):
         raise SmokeError("env_value_invalid")
@@ -246,6 +326,9 @@ def _append_env_values(path: Path, values: Mapping[str, str]) -> None:
             writer.write(appended)
             writer.flush()
             os.fsync(writer.fileno())
+        reparsed = parse_env_file(temporary_path)
+        if any(reparsed.get(key) != value for key, value in values.items()):
+            raise SmokeError("env_value_invalid")
         os.replace(temporary_path, path)
         temporary_path = None
     except OSError:
@@ -256,6 +339,13 @@ def _append_env_values(path: Path, values: Mapping[str, str]) -> None:
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _env_value_round_trips(value: str) -> bool:
+    try:
+        return _parse_env_value(value.strip()) == value
+    except SmokeError:
+        return False
 
 
 def _parse_env_value(raw: str) -> str:

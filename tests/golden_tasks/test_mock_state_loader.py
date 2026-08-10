@@ -2,7 +2,10 @@
 
 import asyncio
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
+
+import pytest
 
 from app.execution_fabric.mock_adapters.hikvision_ivms.mock_hikvision_ivms_adapter import (
     MockHikvisionIVMSAdapter,
@@ -27,10 +30,133 @@ def test_gt001_oa_state_can_be_injected_and_returned(
     result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
 
     assert result.status == "success"
-    assert result.data is not None
-    workflows = result.data.get("workflows") or result.data.get("pending_workflows")
-    assert isinstance(workflows, list)
-    assert len(workflows) == 3
+    assert result.data == {"workflows": mock_state["pending_workflows"]}
+    assert set(result.data) == {"workflows"}
+    assert len(result.data["workflows"]) == 3
+
+
+def test_gt027_structured_oa_state_returns_the_complete_collection(
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-027")
+    mock_state = fixture["given"]["mock_oa_state"]
+    apply_mock_state(oa_adapter, mock_state)
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "success"
+    assert result.error_code is None
+    assert result.data == mock_state["pending_workflows"]
+
+
+def test_gt028_count_mismatch_returns_payload_invalid_without_success_data(
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-028")
+    apply_mock_state(oa_adapter, fixture["given"]["mock_oa_state"])
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+@pytest.mark.parametrize("count_field", ["returned_count", "authoritative_count"])
+def test_structured_pending_counts_must_match_the_workflow_list(
+    count_field: str,
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-027")
+    pending = deepcopy(fixture["given"]["mock_oa_state"]["pending_workflows"])
+    pending[count_field] += 1
+    apply_mock_state(oa_adapter, {"pending_workflows": pending})
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+def test_structured_pending_rejects_duplicate_todo_ids(
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-027")
+    pending = deepcopy(fixture["given"]["mock_oa_state"]["pending_workflows"])
+    pending["workflows"][1]["todo_id"] = pending["workflows"][0]["todo_id"]
+    apply_mock_state(oa_adapter, {"pending_workflows": pending})
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "todo_id",
+        "title",
+        "status",
+        "received_at",
+        "created_at",
+        "workflow_type_id",
+    ],
+)
+def test_structured_pending_rejects_html_in_every_business_field(
+    field: str,
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-027")
+    pending = deepcopy(fixture["given"]["mock_oa_state"]["pending_workflows"])
+    pending["workflows"][0][field] = "<span>synthetic</span>"
+    apply_mock_state(oa_adapter, {"pending_workflows": pending})
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
+
+
+@pytest.mark.parametrize(
+    "shape_case",
+    [
+        "missing_workflow_field",
+        "extra_workflow_field",
+        "extra_collection_field",
+        "incomplete_flag",
+        "non_string_field",
+        "workflows_not_list",
+    ],
+)
+def test_structured_pending_rejects_invalid_model_shapes(
+    shape_case: str,
+    oa_adapter: MockOAAdapter,
+) -> None:
+    fixture = load_fixture("GT-027")
+    pending = deepcopy(fixture["given"]["mock_oa_state"]["pending_workflows"])
+    if shape_case == "missing_workflow_field":
+        pending["workflows"][0].pop("workflow_type_id")
+    elif shape_case == "extra_workflow_field":
+        pending["workflows"][0]["message_id"] = "SYN-MSG-INVALID"
+    elif shape_case == "extra_collection_field":
+        pending["unexpected"] = "synthetic"
+    elif shape_case == "incomplete_flag":
+        pending["is_complete"] = False
+    elif shape_case == "non_string_field":
+        pending["workflows"][0]["status"] = 1
+    else:
+        pending["workflows"] = {}
+    apply_mock_state(oa_adapter, {"pending_workflows": pending})
+
+    result = asyncio.run(oa_adapter.execute("oa.list_pending_workflows", {}, {}))
+
+    assert result.status == "error"
+    assert result.error_code == "adapter_payload_invalid"
+    assert result.data is None
 
 
 def test_gt001_oa_state_reset_clears_injected_data(

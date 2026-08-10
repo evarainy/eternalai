@@ -192,29 +192,49 @@ def build_oa_read_adapter(
         message_center_path = settings.oa_message_center_path
         if message_center_path is None:
             raise RuntimeError("OA_MESSAGE_CENTER_PATH is required for live mode")
-        pending_category_id = settings.oa_pending_workflows_category_id
-        pending_bizstate = settings.oa_pending_workflows_bizstate
-        pending_select_state = settings.oa_pending_workflows_select_state
+        pending_split_path = settings.oa_pending_workflows_split_page_key_path
+        pending_counts_path = settings.oa_pending_workflows_counts_path
+        pending_datas_path = settings.oa_pending_workflows_datas_path
+        pending_actiontype = settings.oa_pending_workflows_actiontype
+        pending_hide_no_data_tab = (
+            settings.oa_pending_workflows_hide_no_data_tab
+        )
+        pending_method = settings.oa_pending_workflows_method
+        pending_offical_type = settings.oa_pending_workflows_offical_type
+        pending_view_scope = settings.oa_pending_workflows_view_scope
+        pending_sort_params = settings.oa_pending_workflows_sort_params
         system_category_id = settings.oa_system_messages_category_id
         system_bizstate = settings.oa_system_messages_bizstate
         system_select_state = settings.oa_system_messages_select_state
         if any(
             value is None
             for value in (
-                pending_category_id,
-                pending_bizstate,
-                pending_select_state,
+                pending_split_path,
+                pending_counts_path,
+                pending_datas_path,
+                pending_actiontype,
+                pending_hide_no_data_tab,
+                pending_method,
+                pending_offical_type,
+                pending_view_scope,
+                pending_sort_params,
                 system_category_id,
                 system_bizstate,
                 system_select_state,
             )
         ):
             raise RuntimeError(
-                "OA message-center capability parameters are required for live mode"
+                "OA capability parameters are required for live mode"
             )
-        assert pending_category_id is not None
-        assert pending_bizstate is not None
-        assert pending_select_state is not None
+        assert pending_split_path is not None
+        assert pending_counts_path is not None
+        assert pending_datas_path is not None
+        assert pending_actiontype is not None
+        assert pending_hide_no_data_tab is not None
+        assert pending_method is not None
+        assert pending_offical_type is not None
+        assert pending_view_scope is not None
+        assert pending_sort_params is not None
         assert system_category_id is not None
         assert system_bizstate is not None
         assert system_select_state is not None
@@ -222,9 +242,15 @@ def build_oa_read_adapter(
             LiveOAReadProvider(
                 base_url=settings.oa_base_url,
                 message_center_endpoint_path=message_center_path,
-                pending_workflows_category_id=pending_category_id,
-                pending_workflows_bizstate=pending_bizstate,
-                pending_workflows_select_state=pending_select_state,
+                pending_workflows_split_page_key_path=pending_split_path,
+                pending_workflows_counts_path=pending_counts_path,
+                pending_workflows_datas_path=pending_datas_path,
+                pending_workflows_actiontype=pending_actiontype,
+                pending_workflows_hide_no_data_tab=pending_hide_no_data_tab,
+                pending_workflows_method=pending_method,
+                pending_workflows_offical_type=pending_offical_type,
+                pending_workflows_view_scope=pending_view_scope,
+                pending_workflows_sort_params=pending_sort_params,
                 system_messages_category_id=system_category_id,
                 system_messages_bizstate=system_bizstate,
                 system_messages_select_state=system_select_state,

@@ -54,6 +54,20 @@ def _known_unchanged_catalog() -> tuple[CapabilitySpec, ...]:
     )
 
 
+def _canonical_predecessor_catalog() -> tuple[CapabilitySpec, CapabilitySpec]:
+    pending, system_messages = expected_oa_capabilities()
+    return (
+        pending.model_copy(
+            update={
+                "name": "Synthetic predecessor pending",
+                "short_description": "Synthetic predecessor contract",
+                "version": "1.0.0",
+            }
+        ),
+        system_messages,
+    )
+
+
 def _fingerprints(catalog: tuple[CapabilitySpec, ...]) -> frozenset[str]:
     return frozenset(manager._capability_fingerprint(item) for item in catalog)
 
@@ -63,6 +77,7 @@ def _install_authorized_sets(
     legacy: tuple[CapabilitySpec, ...],
     known_disabled: tuple[CapabilitySpec, ...] = (),
     known_unchanged: tuple[CapabilitySpec, ...] = (),
+    pending_predecessor: tuple[CapabilitySpec, ...] = (),
 ) -> None:
     monkeypatch.setattr(
         manager,
@@ -82,6 +97,14 @@ def _install_authorized_sets(
             for item in known_unchanged
         ),
     )
+    monkeypatch.setattr(
+        manager,
+        "_PENDING_CANONICAL_PREDECESSOR_FINGERPRINTS",
+        frozenset(
+            manager._exact_capability_fingerprint(item)
+            for item in pending_predecessor
+        ),
+    )
 
 
 def test_canonical_specs_include_exact_schema_digests() -> None:
@@ -99,6 +122,35 @@ def test_canonical_specs_include_exact_schema_digests() -> None:
         assert capability.binding_required is True
 
 
+def test_pending_canonical_spec_keeps_id_and_publishes_todo_business_schema() -> None:
+    pending, system_messages = expected_oa_capabilities()
+
+    assert pending.capability_id == "oa.list_pending_workflows"
+    assert pending.name == "OA 待办事宜查询"
+    assert pending.short_description == "查询当前 OA 用户的待办事宜列表。"
+    assert pending.version == "2.0.0"
+    assert set(pending.output_schema["properties"]) == {
+        "workflows",
+        "returned_count",
+        "authoritative_count",
+        "is_complete",
+    }
+    assert pending.output_schema["properties"]["is_complete"]["const"] is True
+    assert set(pending.output_schema["$defs"]["OAPendingWorkflow"]["properties"]) == {
+        "todo_id",
+        "title",
+        "status",
+        "received_at",
+        "created_at",
+        "workflow_type_id",
+    }
+    assert system_messages.capability_id == "oa.list_system_messages"
+    assert system_messages.version == "1.0.0"
+    assert manager._exact_capability_fingerprint(system_messages) == (
+        "f4ab443e6dbf6e487e0ac63af5ca7f2ad160d6ae3721bd189a4cb52e43837902"
+    )
+
+
 def test_production_legacy_fingerprint_sets_are_exact_and_disjoint() -> None:
     assert len(manager._AUTHORIZED_LEGACY_FINGERPRINTS) == 9
     assert len(manager._KNOWN_PREEXISTING_DISABLED_FINGERPRINTS) == 1
@@ -108,6 +160,103 @@ def test_production_legacy_fingerprint_sets_are_exact_and_disjoint() -> None:
         & manager._KNOWN_PREEXISTING_DISABLED_FINGERPRINTS
         == set()
     )
+    assert manager._PENDING_CANONICAL_PREDECESSOR_FINGERPRINTS == {
+        "6e8fd8061fcfa8bff76167107cd7464c8f1486da7cb91e90aa76ff9795902a40"
+    }
+
+
+def test_plan_accepts_only_exact_pending_canonical_predecessor_update() -> None:
+    predecessor, system_messages = _canonical_predecessor_catalog()
+    predecessor_fingerprints = frozenset(
+        {manager._exact_capability_fingerprint(predecessor)}
+    )
+
+    ready = manager._plan_registry_management(
+        (predecessor, system_messages),
+        authorized_legacy_fingerprints=frozenset(),
+        known_disabled_fingerprints=frozenset(),
+        known_unchanged_fingerprints=frozenset(),
+        pending_predecessor_fingerprints=predecessor_fingerprints,
+    )
+    pending_drift = manager._plan_registry_management(
+        (
+            predecessor.model_copy(update={"owner": "drifted-owner"}),
+            system_messages,
+        ),
+        authorized_legacy_fingerprints=frozenset(),
+        known_disabled_fingerprints=frozenset(),
+        known_unchanged_fingerprints=frozenset(),
+        pending_predecessor_fingerprints=predecessor_fingerprints,
+    )
+    system_drift = manager._plan_registry_management(
+        (
+            predecessor,
+            system_messages.model_copy(update={"owner": "drifted-owner"}),
+        ),
+        authorized_legacy_fingerprints=frozenset(),
+        known_disabled_fingerprints=frozenset(),
+        known_unchanged_fingerprints=frozenset(),
+        pending_predecessor_fingerprints=predecessor_fingerprints,
+    )
+    extra = manager._plan_registry_management(
+        (
+            predecessor,
+            system_messages,
+            predecessor.model_copy(
+                update={"capability_id": "oa.unexpected_extra"}
+            ),
+        ),
+        authorized_legacy_fingerprints=frozenset(),
+        known_disabled_fingerprints=frozenset(),
+        known_unchanged_fingerprints=frozenset(),
+        pending_predecessor_fingerprints=predecessor_fingerprints,
+    )
+
+    assert ready.state == "ready_canonical_update"
+    assert ready.deployment_path == "canonical_update"
+    assert ready.canonical_found_count == 2
+    assert ready.canonical_valid_count == 1
+    assert ready.update_count == 1
+    assert ready.insert_count == 0
+    assert ready.disable_count == 0
+    assert pending_drift.state == "precondition_failed"
+    assert system_drift.state == "precondition_failed"
+    assert extra.state == "precondition_failed"
+    assert extra.unknown_oa_count == 1
+
+
+def test_canonical_update_allows_only_exact_preexisting_managed_residue() -> None:
+    predecessor, system_messages = _canonical_predecessor_catalog()
+    legacy = _legacy_catalog()
+    disabled_legacy = tuple(
+        item.model_copy(update={"status": "disabled"}) for item in legacy
+    )
+    known_disabled = _known_disabled_catalog()
+    known_unchanged = _known_unchanged_catalog()
+
+    result = manager._plan_registry_management(
+        (
+            predecessor,
+            system_messages,
+            *disabled_legacy,
+            *known_disabled,
+            *known_unchanged,
+        ),
+        authorized_legacy_fingerprints=_fingerprints(legacy),
+        known_disabled_fingerprints=_fingerprints(known_disabled),
+        known_unchanged_fingerprints=frozenset(
+            manager._exact_capability_fingerprint(item)
+            for item in known_unchanged
+        ),
+        pending_predecessor_fingerprints=frozenset(
+            {manager._exact_capability_fingerprint(predecessor)}
+        ),
+    )
+
+    assert result.state == "ready_canonical_update"
+    assert result.update_count == 1
+    assert result.legacy_active_count == 0
+    assert result.unknown_oa_count == 0
 
 
 def test_plan_accepts_only_exact_legacy_precondition() -> None:
@@ -331,15 +480,31 @@ class _FakeConnection:
         if isinstance(statement, sa.sql.Select):
             return _FakeResult(self.rows)
         if isinstance(statement, sa.sql.Update):
-            canonical_ids = {item.capability_id for item in expected_oa_capabilities()}
+            values = {
+                getattr(key, "key", str(key)): value.value
+                for key, value in statement._values.items()
+            }
             updated = 0
-            for row in self.rows:
-                if (
-                    row["status"] == "active"
-                    and row["capability_id"] not in canonical_ids
-                ):
-                    row["status"] = "disabled"
-                    updated += 1
+            if set(values) == {"status"}:
+                canonical_ids = {
+                    item.capability_id for item in expected_oa_capabilities()
+                }
+                for row in self.rows:
+                    if (
+                        row["status"] == "active"
+                        and row["capability_id"] not in canonical_ids
+                    ):
+                        row["status"] = values["status"]
+                        updated += 1
+            else:
+                assert "capability_id" not in values
+                for row in self.rows:
+                    if (
+                        row["capability_id"] == "oa.list_pending_workflows"
+                        and row["status"] == "active"
+                    ):
+                        row.update(values)
+                        updated += 1
             return _FakeResult(
                 (),
                 rowcount=(
@@ -447,6 +612,32 @@ def test_empty_registry_dry_run_reports_two_inserts_and_zero_disables(
     assert engine.connection.operations == ["Select"]
 
 
+def test_exact_canonical_predecessor_dry_run_plans_one_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor = _canonical_predecessor_catalog()
+    engine = _FakeEngine(predecessor)
+    _install_authorized_sets(
+        monkeypatch,
+        (),
+        pending_predecessor=(predecessor[0],),
+    )
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    result = asyncio.run(
+        manager._manage_registry("synthetic-database-url", apply=False)
+    )
+
+    assert result.state == "dry_run"
+    assert result.deployment_path == "canonical_update"
+    assert result.canonical_found_count == 2
+    assert result.canonical_valid_count == 1
+    assert result.update_count == 1
+    assert result.insert_count == 0
+    assert result.disable_count == 0
+    assert engine.connection.operations == ["Select"]
+
+
 def test_apply_uses_one_transaction_and_reaches_exact_postcondition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -467,6 +658,39 @@ def test_apply_uses_one_transaction_and_reaches_exact_postcondition(
     assert engine.dispose_count == 1
     assert result.insert_count == 2
     assert result.disable_count == 9
+
+
+def test_apply_updates_only_pending_canonical_row_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor = _canonical_predecessor_catalog()
+    engine = _FakeEngine(predecessor)
+    _install_authorized_sets(
+        monkeypatch,
+        (),
+        pending_predecessor=(predecessor[0],),
+    )
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    result = asyncio.run(
+        manager._manage_registry("synthetic-database-url", apply=True)
+    )
+
+    assert result.state == "applied"
+    assert result.deployment_path == "canonical_update"
+    assert result.update_count == 1
+    assert result.insert_count == 0
+    assert result.disable_count == 0
+    assert engine.connection.operations == ["Select", "Update", "Select"]
+    assert "Insert" not in engine.connection.operations
+    assert "Delete" not in engine.connection.operations
+    assert tuple(row["capability_id"] for row in engine.connection.rows) == (
+        "oa.list_pending_workflows",
+        "oa.list_system_messages",
+    )
+    assert tuple(
+        CapabilitySpec.model_validate(row) for row in engine.connection.rows
+    ) == expected_oa_capabilities()
 
 
 def test_empty_registry_apply_then_reapply_is_idempotent(
@@ -551,6 +775,33 @@ def test_update_rowcount_mismatch_rolls_back_without_inserts(
     assert all(row["status"] == "active" for row in engine.connection.rows)
 
 
+def test_canonical_update_rowcount_mismatch_rolls_back_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor = _canonical_predecessor_catalog()
+    engine = _FakeEngine(predecessor)
+    engine.connection.update_rowcount_override = 0
+    _install_authorized_sets(
+        monkeypatch,
+        (),
+        pending_predecessor=(predecessor[0],),
+    )
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    with pytest.raises(manager.RegistryManagementError) as error:
+        asyncio.run(
+            manager._manage_registry("synthetic-database-url", apply=True)
+        )
+
+    assert error.value.code == "canonical_update_rowcount_mismatch"
+    assert engine.connection.operations == ["Select", "Update"]
+    assert engine.last_transaction is not None
+    assert engine.last_transaction.rolled_back is True
+    assert tuple(
+        CapabilitySpec.model_validate(row) for row in engine.connection.rows
+    ) == predecessor
+
+
 @pytest.mark.parametrize(("argv", "expected_apply"), [([], False), (["--apply"], True)])
 def test_cli_requires_explicit_apply_and_never_prints_database_url(
     monkeypatch: pytest.MonkeyPatch,
@@ -584,6 +835,7 @@ def test_cli_requires_explicit_apply_and_never_prints_database_url(
     assert received == [(private_url, expected_apply)]
     assert private_url not in output.out
     assert private_url not in output.err
+    assert "planned_update=0" in output.out
     assert f"official_apply_command={manager._OFFICIAL_APPLY_COMMAND}" in output.out
 
 

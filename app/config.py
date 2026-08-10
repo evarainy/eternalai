@@ -153,9 +153,15 @@ class ProductionSettings:
     oa_pending_workflows_contract_pack_dir: Path | None = None
     oa_system_messages_contract_pack_dir: Path | None = None
     oa_message_center_path: str | None = None
-    oa_pending_workflows_category_id: str | None = None
-    oa_pending_workflows_bizstate: str | None = None
-    oa_pending_workflows_select_state: str | None = None
+    oa_pending_workflows_split_page_key_path: str | None = None
+    oa_pending_workflows_counts_path: str | None = None
+    oa_pending_workflows_datas_path: str | None = None
+    oa_pending_workflows_actiontype: str | None = None
+    oa_pending_workflows_hide_no_data_tab: str | None = None
+    oa_pending_workflows_method: str | None = None
+    oa_pending_workflows_offical_type: str | None = None
+    oa_pending_workflows_view_scope: str | None = None
+    oa_pending_workflows_sort_params: str | None = None
     oa_system_messages_category_id: str | None = None
     oa_system_messages_bizstate: str | None = None
     oa_system_messages_select_state: str | None = None
@@ -297,23 +303,56 @@ class ProductionSettings:
                 oa_read_adapter_mode,
                 "OA_MESSAGE_CENTER_PATH",
             ),
-            oa_pending_workflows_category_id=_oa_live_form_parameter(
+            oa_pending_workflows_split_page_key_path=_oa_capability_path(
                 source,
                 oa_read_adapter_mode,
-                "OA_PENDING_WORKFLOWS_CATEGORY_ID",
+                "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+            ),
+            oa_pending_workflows_counts_path=_oa_capability_path(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+            ),
+            oa_pending_workflows_datas_path=_oa_capability_path(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_DATAS_PATH",
+            ),
+            oa_pending_workflows_actiontype=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_ACTIONTYPE",
                 allow_empty=False,
             ),
-            oa_pending_workflows_bizstate=_oa_live_form_parameter(
+            oa_pending_workflows_hide_no_data_tab=_oa_live_form_parameter(
                 source,
                 oa_read_adapter_mode,
-                "OA_PENDING_WORKFLOWS_BIZSTATE",
-                allow_empty=True,
+                "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+                allow_empty=False,
             ),
-            oa_pending_workflows_select_state=_oa_live_form_parameter(
+            oa_pending_workflows_method=_oa_live_form_parameter(
                 source,
                 oa_read_adapter_mode,
-                "OA_PENDING_WORKFLOWS_SELECT_STATE",
-                allow_empty=True,
+                "OA_PENDING_WORKFLOWS_METHOD",
+                allow_empty=False,
+            ),
+            oa_pending_workflows_offical_type=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+                allow_empty=False,
+            ),
+            oa_pending_workflows_view_scope=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+                allow_empty=False,
+            ),
+            oa_pending_workflows_sort_params=_oa_live_form_parameter(
+                source,
+                oa_read_adapter_mode,
+                "OA_PENDING_WORKFLOWS_SORT_PARAMS",
+                allow_empty=False,
             ),
             oa_system_messages_category_id=_oa_live_form_parameter(
                 source,

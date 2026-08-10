@@ -2,6 +2,7 @@
 
 - status: accepted
 - date: 2026-07-31
+- last_updated: 2026-08-10
 - task_id: P2-SANITIZE-LEAK-FIX-001
 - decision_makers: [雨爷, Codex]
 - related_capability: `oa.list_pending_workflows`
@@ -25,6 +26,9 @@ CLI 参数和 capture 元数据同样是不可信输入。黑名单只能识别�
 
 ```text
 ecology9-pending-workflows-v1
+ecology9-pending-workflows-v2
+ecology9-pending-workflows-v3
+ecology9-system-messages-v1
 ```
 
 完整值不从 CLI 或 HAR 派生。未来若增加其他 capture profile，必须在代码 allowlist、
@@ -33,6 +37,12 @@ Replay reader 仍按既有安全路径字符契约读取历史 Pack。
 
 profile 校验必须先于 HAR 读取、候选构造和临时目录创建。失败只返回固定规则码，不得
 创建目标目录或临时目录。
+
+`ecology9-pending-workflows-v3` 专用于待办事宜模块直采，必须显式选择并关联
+`splitPageKey`、`datas`、`counts` 三个响应，固定验证 `viewcondition=5`、两个成功
+状态、权威计数等于记录数。`sessionkey` / `dataKey` 仅在单次内存归一化中用于关联，
+两者的完整值必须进入全 HAR 敏感值收集与缺席断言；其键和值均禁止进入 Contract Pack、
+错误、异常链或输出。
 
 ### 2.2 错误只报位置或规则码
 
@@ -62,7 +72,10 @@ CLI 解析器不得调用默认的回显错误路径。参数类型转换先在�
 
 ## 3. Consequences
 
-- 既有 `ecology9-pending-workflows-v1` Contract Pack 无需修改。
+- 既有 `ecology9-pending-workflows-v1` / `v2` 与
+  `ecology9-system-messages-v1` Contract Pack 无需修改。
+- `ecology9-pending-workflows-v3` 使用 `source_kind=sanitized_capture`、
+  `sanitizer_version=2`，并只发布正向白名单业务字段及权威完整性字段。
 - `app/`、Golden fixtures、`FROZEN_GT_IDS` 和冻结产物不变。
 - 非规范 capture profile 会 fail closed，退出非零且零目标/临时产出。
 - CLI 错误的可操作信息来自固定位置和规则码，不再包含原始参数值。

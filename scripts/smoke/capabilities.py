@@ -45,7 +45,7 @@ def expected_oa_capabilities() -> tuple[CapabilitySpec, CapabilitySpec]:
     return (
         CapabilitySpec(
             capability_id="oa.list_pending_workflows",
-            name="OA 待办查询",
+            name="OA 待办事宜查询",
             type="query",
             intent_tags=["oa.pending_workflows", "oa.pending_approvals"],
             input_schema=pending_input,
@@ -54,9 +54,9 @@ def expected_oa_capabilities() -> tuple[CapabilitySpec, CapabilitySpec]:
             output_schema_digest=schema_digest(pending_output),
             risk_level="low",
             owner="eternalai-platform",
-            version="1.0.0",
+            version="2.0.0",
             status="active",
-            short_description="查询当前 OA 用户的待办流程列表。",
+            short_description="查询当前 OA 用户的待办事宜列表。",
             target_system="oa",
             execution_identity="user_delegated",
             binding_required=True,

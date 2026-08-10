@@ -908,8 +908,8 @@ def _format_capability_response(
     if capability_id == "oa.list_pending_workflows":
         workflows = data.get("workflows")
         count = len(workflows) if isinstance(workflows, list) else 0
-        # Only title/occurred_at/link carry self-evident meaning. source_name and
-        # business_state have no confirmed semantics, so they stay out of replies.
+        # Keep the conversational projection narrow: the dedicated to-do module
+        # proves completeness upstream, while only titles belong in plain text.
         titles = _joined_scalar_values(workflows, ("title",))
         prefix = f"OA待办共{count}条{_completeness_note(data, '待办')}"
         return f"{prefix}: {titles}" if titles else prefix

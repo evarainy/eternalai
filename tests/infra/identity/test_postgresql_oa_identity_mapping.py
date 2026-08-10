@@ -32,7 +32,7 @@ CONTRACT_PACK = (
     Path(__file__).resolve().parents[2]
     / "contract_packs"
     / "oa"
-    / "ecology9-pending-workflows-v2"
+    / "ecology9-pending-workflows-v3"
 )
 SYSTEM_MESSAGE_CONTRACT_PACK = (
     Path(__file__).resolve().parents[2]
@@ -553,9 +553,15 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
                 message_center_endpoint_path="/api/messages",
-                pending_workflows_category_id="101",
-                pending_workflows_bizstate="pending-business-state",
-                pending_workflows_select_state="pending-selection-state",
+                pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+                pending_workflows_counts_path="/api/todo/counts",
+                pending_workflows_datas_path="/api/todo/datas",
+                pending_workflows_actiontype="todo-action",
+                pending_workflows_hide_no_data_tab="todo-hide",
+                pending_workflows_method="todo-method",
+                pending_workflows_offical_type="todo-offical-type",
+                pending_workflows_view_scope="todo-view-scope",
+                pending_workflows_sort_params="todo-sort",
                 system_messages_category_id="202",
                 system_messages_bizstate="system-business-state",
                 system_messages_select_state="system-selection-state",
@@ -821,9 +827,15 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
                 message_center_endpoint_path="/api/messages",
-                pending_workflows_category_id="101",
-                pending_workflows_bizstate="pending-business-state",
-                pending_workflows_select_state="pending-selection-state",
+                pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+                pending_workflows_counts_path="/api/todo/counts",
+                pending_workflows_datas_path="/api/todo/datas",
+                pending_workflows_actiontype="todo-action",
+                pending_workflows_hide_no_data_tab="todo-hide",
+                pending_workflows_method="todo-method",
+                pending_workflows_offical_type="todo-offical-type",
+                pending_workflows_view_scope="todo-view-scope",
+                pending_workflows_sort_params="todo-sort",
                 system_messages_category_id="202",
                 system_messages_bizstate="system-business-state",
                 system_messages_select_state="system-selection-state",

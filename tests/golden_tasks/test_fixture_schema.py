@@ -36,6 +36,8 @@ GT_IDS = [
     "GT-024",
     "GT-025",
     "GT-026",
+    "GT-027",
+    "GT-028",
 ]
 REQUIRED_TOP_LEVEL = [
     "golden_task_id",
@@ -58,6 +60,29 @@ REQUIRED_ADAPTER_ASSERTION = [
     "must_be_called",
     "must_not_be_called",
 ]
+PENDING_COLLECTION_FIELDS = {
+    "workflows",
+    "returned_count",
+    "authoritative_count",
+    "is_complete",
+}
+PENDING_WORKFLOW_FIELDS = {
+    "todo_id",
+    "title",
+    "status",
+    "received_at",
+    "created_at",
+    "workflow_type_id",
+}
+MESSAGE_CENTER_FIELDS = {
+    "message_id",
+    "content",
+    "source_name",
+    "occurred_at",
+    "business_state",
+    "link",
+    "mobile_link",
+}
 
 
 @pytest.mark.parametrize("gt_id", GT_IDS)
@@ -304,3 +329,104 @@ def test_gt_024_is_one_confirmation_round_with_definition_drift_trap() -> None:
     assert evidence["source_definition_version_after_first"] == "2.0.0"
     assert evidence["first_round"]["response"]["status"] == "waiting_user"
     assert all(count == 0 for count in evidence["first_round"]["exact_calls"].values())
+
+
+@pytest.mark.parametrize("gt_id", ["GT-027", "GT-028"])
+def test_appended_pending_goldens_register_the_full_todo_output_schema(
+    gt_id: str,
+) -> None:
+    fixture = load_fixture(gt_id)
+    capabilities = fixture["given"]["registered_capabilities"]
+
+    assert len(capabilities) == 1
+    capability = capabilities[0]
+    assert capability["capability_id"] == "oa.list_pending_workflows"
+    assert capability["version"] == "2.0.0"
+    assert capability["input_schema"]["properties"] == {}
+    assert capability["input_schema"]["additionalProperties"] is False
+
+    output_schema = capability["output_schema"]
+    assert output_schema["type"] == "object"
+    assert output_schema["additionalProperties"] is False
+    assert set(output_schema["properties"]) == PENDING_COLLECTION_FIELDS
+    assert set(output_schema["required"]) == PENDING_COLLECTION_FIELDS
+    assert output_schema["properties"]["workflows"]["items"] == {
+        "$ref": "#/$defs/OAPendingWorkflow"
+    }
+    assert output_schema["properties"]["is_complete"]["const"] is True
+
+    definitions = output_schema["$defs"]
+    assert set(definitions) == {"OAPendingWorkflow"}
+    workflow_schema = definitions["OAPendingWorkflow"]
+    assert workflow_schema["type"] == "object"
+    assert workflow_schema["additionalProperties"] is False
+    assert set(workflow_schema["properties"]) == PENDING_WORKFLOW_FIELDS
+    assert set(workflow_schema["required"]) == PENDING_WORKFLOW_FIELDS
+    assert all(
+        workflow_schema["properties"][field]["type"] == "string"
+        for field in PENDING_WORKFLOW_FIELDS
+    )
+    assert capability["output_schema_digest"] == (
+        "87d879295d5ea7c9dd73efa55068e4e4a8c8c682a49607ff06acd739a8bfe320"
+    )
+
+
+def test_gt_027_locks_six_field_todo_model_complete_counts_and_zero_arguments() -> None:
+    fixture = load_fixture("GT-027")
+    collection = fixture["given"]["mock_oa_state"]["pending_workflows"]
+    workflows = collection["workflows"]
+
+    assert set(collection) == PENDING_COLLECTION_FIELDS
+    assert collection["returned_count"] == len(workflows) == 2
+    assert collection["authoritative_count"] == len(workflows)
+    assert collection["is_complete"] is True
+    assert all(set(workflow) == PENDING_WORKFLOW_FIELDS for workflow in workflows)
+    assert all(not (set(workflow) & MESSAGE_CENTER_FIELDS) for workflow in workflows)
+    assert len({workflow["todo_id"] for workflow in workflows}) == len(workflows)
+    assert {workflow["status"] for workflow in workflows} == {"SYNTHETIC_PENDING"}
+
+    response_assertions = fixture["then_response"]["envelope"]
+    for field in PENDING_WORKFLOW_FIELDS:
+        assert response_assertions[f"data.workflows.0.{field}"] == workflows[0][field]
+    assert response_assertions["data.returned_count"] == len(workflows)
+    assert response_assertions["data.authoritative_count"] == len(workflows)
+    assert response_assertions["data.is_complete"] is True
+    assert fixture["adapter_assertion"]["exact_calls"] == {
+        "oa.list_pending_workflows": 1
+    }
+    assert fixture["adapter_assertion"]["exact_arguments"] == {
+        "oa.list_pending_workflows": [{}]
+    }
+
+
+def test_gt_028_locks_count_mismatch_failure_data_null_and_faithful_trace() -> None:
+    fixture = load_fixture("GT-028")
+    collection = fixture["given"]["mock_oa_state"]["pending_workflows"]
+    events = fixture["then_trace"]["event_sequence"]
+    details = fixture["then_trace"]["event_details"]
+
+    assert collection["returned_count"] == len(collection["workflows"])
+    assert collection["authoritative_count"] > collection["returned_count"]
+    assert collection["is_complete"] is True
+    assert fixture["then_response"]["status"] == "failed"
+    assert fixture["then_response"]["envelope"]["data"] is None
+    assert fixture["then_trace"]["reason"] == "adapter_payload_invalid"
+    assert "adapter_error_mapped" in events
+    assert "task_failed" in events
+    assert "task_completed" not in events
+    assert {
+        detail["event_type"]
+        for detail in details
+        if detail.get("error_code") == "adapter_payload_invalid"
+    } == {
+        "adapter_called",
+        "gateway_post_recorded",
+        "adapter_error_mapped",
+        "task_failed",
+    }
+    assert fixture["adapter_assertion"]["exact_calls"] == {
+        "oa.list_pending_workflows": 1
+    }
+    assert fixture["adapter_assertion"]["exact_arguments"] == {
+        "oa.list_pending_workflows": [{}]
+    }
