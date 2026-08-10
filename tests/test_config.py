@@ -363,7 +363,9 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
         }
     )
     if mode == "live":
-        environment.pop("OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR")
+        pending_contract_pack = environment.pop(
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"
+        )
         environment.update(
             {
                 "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(
@@ -373,12 +375,25 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
             }
         )
 
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR "
+                "is required for live mode"
+            ),
+        ):
+            ProductionSettings.from_environment(environment)
+
+        environment["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] = (
+            pending_contract_pack
+        )
+
     settings = ProductionSettings.from_environment(environment)
 
     assert settings.oa_read_adapter_mode == mode
     assert settings.oa_read_contract_pack_dir == contract_pack
     assert settings.oa_pending_workflows_contract_pack_dir == (
-        contract_pack if mode == "live" else None
+        tmp_path / "pending" if mode == "live" else None
     )
     assert settings.oa_system_messages_contract_pack_dir == (
         tmp_path / "ecology9-system-messages-v1" if mode == "live" else None

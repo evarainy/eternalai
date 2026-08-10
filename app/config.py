@@ -291,7 +291,6 @@ class ProductionSettings:
                 source,
                 oa_read_adapter_mode,
                 "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
-                fallback=oa_read_contract_pack_dir,
             ),
             oa_system_messages_contract_pack_dir=_oa_live_contract_pack_dir(
                 source,
@@ -522,14 +521,10 @@ def _oa_live_contract_pack_dir(
     source: Mapping[str, str],
     mode: OAReadAdapterMode,
     name: str,
-    *,
-    fallback: Path | None = None,
 ) -> Path | None:
     raw = source.get(name)
     if raw is None or not raw.strip():
         if mode == "live":
-            if fallback is not None:
-                return fallback
             raise RuntimeError(f"{name} is required for live mode")
         return None
     return Path(raw.strip())
