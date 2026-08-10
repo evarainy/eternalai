@@ -1,18 +1,126 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
-from collections.abc import Sequence
+import uuid
+from collections.abc import Coroutine, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from app.db.session import make_async_engine as real_make_async_engine
+from app.event_loop import make_event_loop
+from app.infra.persistence.capability_registry.schema import (
+    capabilities as production_capabilities,
+)
 from app.ports.capability_registry import CapabilitySpec
 from scripts import manage_oa_capabilities as manager
+from scripts.reset_test_db import validate_test_database_url
 from scripts.smoke.capabilities import expected_oa_capabilities, schema_digest
+
+
+@dataclass(frozen=True, slots=True)
+class _RegistrySandbox:
+    database_url: str
+    schema_name: str
+    table: sa.Table
+
+
+def _run(coroutine: Coroutine[Any, Any, Any]) -> Any:
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        return runner.run(coroutine)
+
+
+@pytest.fixture
+def postgresql_registry_sandbox() -> Iterator[_RegistrySandbox]:
+    raw_database_url = os.environ.get("DATABASE_URL")
+    if raw_database_url is None:
+        raise AssertionError("DATABASE_URL must be set for PostgreSQL proof tests")
+    database_url = validate_test_database_url(raw_database_url)
+    schema_name = f"p2_registry_bootstrap_{uuid.uuid4().hex}"
+    metadata = sa.MetaData()
+    table = production_capabilities.to_metadata(metadata, schema=schema_name)
+
+    async def create_sandbox() -> None:
+        engine = real_make_async_engine(database_url)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(sa.schema.CreateSchema(schema_name))
+                await connection.run_sync(metadata.create_all)
+        finally:
+            await engine.dispose()
+
+    async def drop_sandbox() -> None:
+        assert schema_name.startswith("p2_registry_bootstrap_")
+        engine = real_make_async_engine(database_url)
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(metadata.drop_all)
+                await connection.execute(sa.schema.DropSchema(schema_name))
+        finally:
+            await engine.dispose()
+
+    _run(create_sandbox())
+    try:
+        yield _RegistrySandbox(
+            database_url=database_url,
+            schema_name=schema_name,
+            table=table,
+        )
+    finally:
+        _run(drop_sandbox())
+
+
+async def _read_sandbox_rows(
+    sandbox: _RegistrySandbox,
+) -> tuple[dict[str, Any], ...]:
+    engine = real_make_async_engine(sandbox.database_url)
+    try:
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    sa.select(sandbox.table).order_by(
+                        sandbox.table.c.capability_id
+                    )
+                )
+            ).mappings().all()
+        return tuple(dict(row) for row in rows)
+    finally:
+        await engine.dispose()
+
+
+def _recording_engine_factory(
+    database_url: str,
+    runs: list[list[str]],
+) -> AsyncEngine:
+    operations: list[str] = []
+    runs.append(operations)
+    engine = real_make_async_engine(database_url)
+
+    @sa.event.listens_for(engine.sync_engine, "before_execute")
+    def record_operation(
+        _connection: object,
+        statement: object,
+        _multiparams: object,
+        _params: object,
+        _execution_options: object,
+    ) -> None:
+        operations.append(type(statement).__name__)
+
+    return engine
+
+
+def _read_audit_records(audit_dir: Path) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(audit_dir.glob("*.json"))
+    )
 
 
 def _legacy_catalog(count: int = 9) -> tuple[CapabilitySpec, ...]:
@@ -704,8 +812,16 @@ def test_empty_registry_apply_then_reapply_is_idempotent(
         manager._manage_registry("synthetic-database-url", apply=True)
     )
     first_operations = list(engine.connection.operations)
+    rows_after_first = tuple(
+        CapabilitySpec.model_validate(dict(row))
+        for row in engine.connection.rows
+    )
     second = asyncio.run(
         manager._manage_registry("synthetic-database-url", apply=True)
+    )
+    rows_after_second = tuple(
+        CapabilitySpec.model_validate(dict(row))
+        for row in engine.connection.rows
     )
 
     assert first.state == "applied"
@@ -716,7 +832,11 @@ def test_empty_registry_apply_then_reapply_is_idempotent(
     assert second.state == "already_applied"
     assert second.insert_count == 0
     assert second.disable_count == 0
+    assert second.update_count == 0
+    assert rows_after_first == expected_oa_capabilities()
+    assert rows_after_second == rows_after_first
     assert engine.connection.operations == ["Select", "Insert", "Select", "Select"]
+    assert engine.connection.operations[len(first_operations) :] == ["Select"]
 
 
 def test_apply_rejects_partial_state_without_writes(
@@ -802,19 +922,418 @@ def test_canonical_update_rowcount_mismatch_rolls_back_predecessor(
     ) == predecessor
 
 
-@pytest.mark.parametrize(("argv", "expected_apply"), [([], False), (["--apply"], True)])
+def test_verify_missing_capabilities_is_read_only_and_returns_three(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    engine = _FakeEngine(())
+    monkeypatch.setattr(manager, "get_database_url", lambda: "synthetic-database-url")
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    exit_code = manager.main(["--verify"])
+
+    output = capsys.readouterr()
+    assert exit_code == 3
+    assert "capability_registry_preflight=missing" in output.out
+    assert (
+        "missing_required_capability_ids="
+        "oa.list_pending_workflows,oa.list_system_messages"
+    ) in output.out
+    assert engine.connect_count == 1
+    assert engine.begin_count == 0
+    assert engine.connection.operations == ["Select"]
+    assert engine.connection.rows == []
+
+
+def test_verify_exact_canonical_registry_passes_without_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    engine = _FakeEngine(expected_oa_capabilities())
+    monkeypatch.setattr(manager, "get_database_url", lambda: "synthetic-database-url")
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    exit_code = manager.main(["--verify"])
+
+    output = capsys.readouterr()
+    assert exit_code == 0
+    assert "capability_registry_preflight=passed" in output.out
+    assert "missing_required_capability_ids=none" in output.out
+    assert engine.connect_count == 1
+    assert engine.begin_count == 0
+    assert engine.connection.operations == ["Select"]
+
+
+def test_audit_reservation_failure_stops_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    database_reads: list[bool] = []
+
+    def read_database_url() -> str:
+        database_reads.append(True)
+        return "synthetic-database-url"
+
+    def fail_audit_persistence(
+        _path: Path,
+        _record: manager.RegistryAuditRecord,
+    ) -> None:
+        raise OSError("synthetic audit failure")
+
+    monkeypatch.setattr(manager, "get_database_url", read_database_url)
+    monkeypatch.setattr(manager, "_persist_audit_record", fail_audit_persistence)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(tmp_path / "audit")]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert database_reads == []
+
+
+def test_audit_replacement_failure_preserves_previous_record_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit" / "attempt.json"
+    attempt_id = "synthetic-attempt"
+    initial = manager._build_audit_record(
+        None,
+        attempt_id=attempt_id,
+        exit_code=1,
+        error_code="apply_incomplete",
+    )
+    manager._persist_audit_record(path, initial)
+    previous_text = path.read_text(encoding="utf-8")
+    replacements: list[tuple[object, object]] = []
+
+    def fail_replace(source: object, destination: object) -> None:
+        replacements.append((source, destination))
+        raise OSError("synthetic atomic replace failure")
+
+    monkeypatch.setattr(manager.os, "replace", fail_replace)
+    completed = manager._build_audit_record(
+        None,
+        attempt_id=attempt_id,
+        exit_code=0,
+        error_code=None,
+    )
+
+    with pytest.raises(OSError, match="atomic replace failure"):
+        manager._persist_audit_record(path, completed)
+
+    assert len(replacements) == 1
+    assert replacements[0][1] == path
+    assert path.read_text(encoding="utf-8") == previous_text
+
+
+def test_plan_audit_failure_rolls_back_before_registry_dml(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    audit_dir = tmp_path / "audit"
+    engine = _FakeEngine(())
+    actual_persist = manager._persist_audit_record
+    persistence_count = 0
+
+    def fail_plan_checkpoint(
+        path: Path,
+        record: manager.RegistryAuditRecord,
+    ) -> None:
+        nonlocal persistence_count
+        persistence_count += 1
+        if persistence_count == 2:
+            raise OSError("synthetic plan audit failure")
+        actual_persist(path, record)
+
+    monkeypatch.setattr(manager, "get_database_url", lambda: "synthetic-url")
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+    monkeypatch.setattr(
+        manager,
+        "_persist_audit_record",
+        fail_plan_checkpoint,
+    )
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    (audit,) = _read_audit_records(audit_dir)
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert persistence_count == 3
+    assert engine.connection.operations == ["Select"]
+    assert engine.connection.rows == []
+    assert audit["plan_state"] == "ready_empty"
+    assert audit["planned_insert_count"] == 2
+    assert audit["final_result"] == "failure"
+    assert audit["error_code"] == "audit_record_failed"
+
+
+def test_final_audit_failure_preserves_one_fail_closed_record(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    audit_dir = tmp_path / "audit"
+    actual_persist = manager._persist_audit_record
+    persistence_count = 0
+
+    def fail_final_persistence(
+        path: Path,
+        record: manager.RegistryAuditRecord,
+    ) -> None:
+        nonlocal persistence_count
+        persistence_count += 1
+        if persistence_count == 3:
+            raise OSError("synthetic final audit failure")
+        actual_persist(path, record)
+
+    async def manage(
+        _database_url: str,
+        *,
+        apply: bool,
+        plan_observer: object,
+    ) -> manager.RegistryManagementPlan:
+        assert apply is True
+        plan = manager.RegistryManagementPlan(
+            state="applied",
+            deployment_path="empty",
+            canonical_found_count=2,
+            canonical_valid_count=2,
+            legacy_active_count=0,
+            unknown_oa_count=0,
+            insert_count=2,
+            disable_count=0,
+            plan_state="ready_empty",
+        )
+        assert callable(plan_observer)
+        plan_observer(plan)
+        return plan
+
+    monkeypatch.setattr(manager, "get_database_url", lambda: "synthetic-url")
+    monkeypatch.setattr(manager, "_manage_registry", manage)
+    monkeypatch.setattr(
+        manager,
+        "_persist_audit_record",
+        fail_final_persistence,
+    )
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    (audit,) = _read_audit_records(audit_dir)
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert persistence_count == 3
+    assert audit["plan_state"] == "ready_empty"
+    assert audit["final_result"] == "failure"
+    assert audit["exit_code"] == 1
+    assert audit["error_code"] == "apply_incomplete"
+
+
+def test_failed_apply_persists_safe_audit_and_returns_two(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    private_url = "postgresql+asyncpg://private-user:private-pass@private-host/db"
+    audit_dir = tmp_path / "failed-registry-audit"
+    plan = manager.RegistryManagementPlan(
+        state="ready_empty",
+        deployment_path="empty",
+        canonical_found_count=0,
+        canonical_valid_count=0,
+        legacy_active_count=0,
+        unknown_oa_count=0,
+        insert_count=2,
+        disable_count=0,
+    )
+
+    async def fail_management(
+        _database_url: str,
+        *,
+        apply: bool,
+        plan_observer: object,
+    ) -> manager.RegistryManagementPlan:
+        assert apply is True
+        assert plan_observer is not None
+        raise manager.RegistryManagementError(
+            "postcondition_failed",
+            plan=plan,
+        )
+
+    monkeypatch.setattr(manager, "get_database_url", lambda: private_url)
+    monkeypatch.setattr(manager, "_manage_registry", fail_management)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    (audit,) = _read_audit_records(audit_dir)
+    audit_text = json.dumps(audit)
+    assert exit_code == 2
+    assert "registry management failed: postcondition_failed" in output.err
+    assert audit["attempt_id"]
+    assert audit["plan_state"] == "ready_empty"
+    assert audit["deployment_path"] == "empty"
+    assert audit["planned_insert_count"] == 2
+    assert audit["planned_disable_count"] == 0
+    assert audit["planned_update_count"] == 0
+    assert audit["final_result"] == "failure"
+    assert audit["exit_code"] == 2
+    assert audit["error_code"] == "postcondition_failed"
+    for sensitive_value in (
+        private_url,
+        "private-user",
+        "private-pass",
+        "private-host",
+    ):
+        assert sensitive_value not in audit_text
+
+
+def test_postgresql_apply_is_idempotent_field_by_field(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    postgresql_registry_sandbox: _RegistrySandbox,
+) -> None:
+    sandbox = postgresql_registry_sandbox
+    runs: list[list[str]] = []
+    audit_dir = tmp_path / "idempotent-audit"
+    monkeypatch.setattr(manager, "capabilities", sandbox.table)
+    monkeypatch.setattr(manager, "get_database_url", lambda: sandbox.database_url)
+    monkeypatch.setattr(
+        manager,
+        "make_async_engine",
+        lambda _url: _recording_engine_factory(sandbox.database_url, runs),
+    )
+
+    first_exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+    first_output = capsys.readouterr()
+    rows_after_first = _run(_read_sandbox_rows(sandbox))
+    second_exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+    second_output = capsys.readouterr()
+    rows_after_second = _run(_read_sandbox_rows(sandbox))
+    expected_rows = tuple(
+        item.model_dump(mode="python") for item in expected_oa_capabilities()
+    )
+
+    assert first_exit_code == 0
+    assert "registry_management=applied" in first_output.out
+    assert second_exit_code == 0
+    assert "registry_management=already_applied" in second_output.out
+    assert "planned_insert=0" in second_output.out
+    assert "planned_disable=0" in second_output.out
+    assert "planned_update=0" in second_output.out
+    assert rows_after_first == expected_rows
+    assert rows_after_second == rows_after_first
+    assert runs == [["Select", "Insert", "Select"], ["Select"]]
+    audit_records = _read_audit_records(audit_dir)
+    assert len(audit_records) == 2
+    assert tuple(record["plan_state"] for record in audit_records) == (
+        "ready_empty",
+        "already_applied",
+    )
+    assert all(record["final_result"] == "success" for record in audit_records)
+
+
+def test_postgresql_mid_transaction_failure_rolls_back_and_returns_two(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    postgresql_registry_sandbox: _RegistrySandbox,
+) -> None:
+    sandbox = postgresql_registry_sandbox
+    runs: list[list[str]] = []
+    audit_dir = tmp_path / "rollback-audit"
+    monkeypatch.setattr(manager, "capabilities", sandbox.table)
+    monkeypatch.setattr(manager, "get_database_url", lambda: sandbox.database_url)
+    monkeypatch.setattr(
+        manager,
+        "make_async_engine",
+        lambda _url: _recording_engine_factory(sandbox.database_url, runs),
+    )
+    original_read = manager._read_registry_catalog
+    read_count = 0
+
+    async def fail_after_insert(
+        connection: AsyncConnection,
+        *,
+        for_update: bool,
+    ) -> tuple[CapabilitySpec, ...]:
+        nonlocal read_count
+        read_count += 1
+        if read_count == 2:
+            raise manager.RegistryManagementError(
+                "injected_mid_transaction_failure"
+            )
+        return await original_read(connection, for_update=for_update)
+
+    monkeypatch.setattr(manager, "_read_registry_catalog", fail_after_insert)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+    output = capsys.readouterr()
+    remaining_rows = _run(_read_sandbox_rows(sandbox))
+
+    assert exit_code == 2
+    assert "injected_mid_transaction_failure" in output.err
+    assert runs == [["Select", "Insert"]]
+    assert remaining_rows == ()
+    (audit,) = _read_audit_records(audit_dir)
+    assert audit["attempt_id"]
+    assert audit["plan_state"] == "ready_empty"
+    assert audit["deployment_path"] == "empty"
+    assert audit["canonical_found_count"] == 0
+    assert audit["canonical_valid_count"] == 0
+    assert audit["legacy_active_count"] == 0
+    assert audit["unknown_oa_count"] == 0
+    assert audit["planned_insert_count"] == 2
+    assert audit["planned_disable_count"] == 0
+    assert audit["planned_update_count"] == 0
+    assert audit["final_result"] == "failure"
+    assert audit["exit_code"] == 2
+    assert audit["error_code"] == "injected_mid_transaction_failure"
+
+
+@pytest.mark.parametrize("expected_apply", [False, True])
 def test_cli_requires_explicit_apply_and_never_prints_database_url(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    argv: list[str],
     expected_apply: bool,
+    tmp_path: Path,
 ) -> None:
     private_url = "postgresql+asyncpg://private-user:private-pass@private-host/db"
     received: list[tuple[str, bool]] = []
+    audit_dir = tmp_path / "registry-audit"
+    argv = (
+        ["--apply", "--audit-dir", str(audit_dir)]
+        if expected_apply
+        else []
+    )
 
-    async def manage(database_url: str, *, apply: bool) -> manager.RegistryManagementPlan:
+    async def manage(
+        database_url: str,
+        *,
+        apply: bool,
+        plan_observer: object,
+    ) -> manager.RegistryManagementPlan:
         received.append((database_url, apply))
-        return manager.RegistryManagementPlan(
+        plan = manager.RegistryManagementPlan(
             state="applied" if apply else "dry_run",
             deployment_path="legacy",
             canonical_found_count=0 if not apply else 2,
@@ -823,7 +1342,11 @@ def test_cli_requires_explicit_apply_and_never_prints_database_url(
             unknown_oa_count=0,
             insert_count=2,
             disable_count=9,
+            plan_state="ready_legacy",
         )
+        if callable(plan_observer):
+            plan_observer(plan)
+        return plan
 
     monkeypatch.setattr(manager, "get_database_url", lambda: private_url)
     monkeypatch.setattr(manager, "_manage_registry", manage)
@@ -837,6 +1360,24 @@ def test_cli_requires_explicit_apply_and_never_prints_database_url(
     assert private_url not in output.err
     assert "planned_update=0" in output.out
     assert f"official_apply_command={manager._OFFICIAL_APPLY_COMMAND}" in output.out
+    if expected_apply:
+        (audit,) = _read_audit_records(audit_dir)
+        audit_text = json.dumps(audit)
+        assert audit["attempt_id"]
+        assert audit["plan_state"] == "ready_legacy"
+        assert audit["deployment_path"] == "legacy"
+        assert audit["final_result"] == "success"
+        assert audit["exit_code"] == 0
+        assert audit["error_code"] is None
+        for sensitive_value in (
+            private_url,
+            "private-user",
+            "private-pass",
+            "private-host",
+        ):
+            assert sensitive_value not in audit_text
+    else:
+        assert not audit_dir.exists()
 
 
 @pytest.mark.parametrize(

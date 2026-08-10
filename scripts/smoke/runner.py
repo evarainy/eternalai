@@ -65,7 +65,7 @@ from scripts import sanitize_oa_contract_pack as sanitizer
 from scripts.smoke.capabilities import (
     OA_CAPABILITY_CONTEXT_PROBES,
     REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
-    expected_oa_capabilities,
+    classify_oa_registry,
 )
 from scripts.smoke.environment import (
     PreparedEnvironment,
@@ -1628,87 +1628,19 @@ def _empty_capability_registry_preflight(state: str) -> CapabilityRegistryPrefli
 def _classify_capability_registry(
     catalog: tuple[CapabilitySpec, ...],
 ) -> CapabilityRegistryPreflight:
-    expected = expected_oa_capabilities()
-    by_id = {item.capability_id: item for item in catalog}
-    found = tuple(
-        by_id[capability_id]
-        for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
-        if capability_id in by_id
+    result = classify_oa_registry(
+        catalog,
+        required_capability_ids=REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+        context_probes=OA_CAPABILITY_CONTEXT_PROBES,
+        knowledge=BasicKnowledge(),
     )
-    valid = tuple(
-        item
-        for expected_item in expected
-        if (item := by_id.get(expected_item.capability_id)) == expected_item
-    )
-    active = tuple(item for item in catalog if item.status == "active")
-    unexpected_active = tuple(
-        item
-        for item in active
-        if item.target_system == "oa"
-        and item.capability_id not in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
-    )
-    visible_contract_ids = {
-        capability_id
-        for contract in BasicKnowledge().capability_input_contracts(active)
-        if isinstance((capability_id := contract.get("capability_id")), str)
-    }
-    if len(OA_CAPABILITY_CONTEXT_PROBES) != len(
-        REQUIRED_ACTIVE_OA_CAPABILITY_IDS
-    ):
-        raise RuntimeError(
-            "OA capability probes and required IDs must be one-to-one"
-        )
-    probe_capability_pairs = tuple(
-        zip(
-            OA_CAPABILITY_CONTEXT_PROBES,
-            REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
-            strict=True,
-        )
-    )
-    if not probe_capability_pairs:
-        raise RuntimeError(
-            "OA capability probe and required ID pairs must not be empty"
-        )
-    if any(
-        not probe.strip() or not capability_id.strip()
-        for probe, capability_id in probe_capability_pairs
-    ):
-        raise RuntimeError(
-            "OA capability probes and required IDs must be non-empty"
-        )
-    if (
-        len({probe for probe, _ in probe_capability_pairs})
-        != len(probe_capability_pairs)
-        or len({capability_id for _, capability_id in probe_capability_pairs})
-        != len(probe_capability_pairs)
-    ):
-        raise RuntimeError(
-            "OA capability probes and required IDs must be unique"
-        )
-    probe_contract_visibility = {
-        probe: capability_id in visible_contract_ids
-        for probe, capability_id in probe_capability_pairs
-    }
-    visible_probe_count = sum(probe_contract_visibility.values())
-    if len(found) != len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS):
-        state = "missing"
-    elif any(item.status != "active" for item in found):
-        state = "inactive"
-    elif len(valid) != len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS):
-        state = "contract_mismatch"
-    elif unexpected_active:
-        state = "unexpected_active"
-    elif visible_probe_count != len(OA_CAPABILITY_CONTEXT_PROBES):
-        state = "context_truncated"
-    else:
-        state = "passed"
     return CapabilityRegistryPreflight(
-        state=state,
-        found_count=len(found),
-        valid_count=len(valid),
-        unexpected_active_count=len(unexpected_active),
-        active_total_count=len(active),
-        visible_probe_count=visible_probe_count,
+        state=result.state,
+        found_count=result.found_count,
+        valid_count=result.valid_count,
+        unexpected_active_count=result.unexpected_active_count,
+        active_total_count=result.active_total_count,
+        visible_probe_count=result.visible_probe_count,
     )
 
 
