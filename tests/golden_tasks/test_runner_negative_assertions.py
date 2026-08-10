@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -133,24 +134,166 @@ def test_real_assertion():
     assert strong_findings == []
 
 
-def test_forbidden_credential_value_patterns_raise_assertion_error() -> None:
+def _synthetic_credential_value(label: str) -> str:
+    digest = hashlib.sha256(label.encode("utf-8")).hexdigest()
+    return f"{digest}{digest[:5]}"
+
+
+@pytest.mark.parametrize(
+    "credential_shape",
+    (
+        "authorization_basic",
+        "bare_bearer",
+        "cookie_sessionid",
+        "sessionid",
+        "api_key",
+        "passwd",
+    ),
+)
+def test_forbidden_credential_value_patterns_raise_assertion_error(
+    credential_shape: str,
+) -> None:
+    credential_value = _synthetic_credential_value(credential_shape)
+    credential_text = {
+        "authorization_basic": f"Authorization: Basic {credential_value}",
+        "bare_bearer": f"Bearer {credential_value}",
+        "cookie_sessionid": "Cookie: sessionid=",
+        "sessionid": f"sessionid={credential_value}",
+        "api_key": f"api_key={credential_value}",
+        "passwd": f"passwd={credential_value}",
+    }[credential_shape]
     envelope = {
         "status": "completed",
-        "message": "Authorization: Bearer live-secret-token",
+        "message": credential_text,
         "ui": {"component_type": "none", "action": "none"},
-        "data": {"cookie_header": "cookie: sessionid=abc123"},
+        "data": None,
     }
+
+    with pytest.raises(AssertionError, match="credential"):
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert credential_text == envelope["message"]
+
+
+def test_forbidden_sessionkey_field_name_in_envelope_data_raises() -> None:
+    credential_value = _synthetic_credential_value("envelope-sessionkey")
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"sessionkey": credential_value},
+    }
+
+    with pytest.raises(AssertionError, match="credential"):
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert envelope["data"]["sessionkey"] == credential_value
+
+
+def test_forbidden_sessionkey_field_name_in_deep_trace_attributes_raises() -> None:
+    credential_value = _synthetic_credential_value("trace-sessionkey")
     trace = [
         {
             "event_type": "gateway_pre_recorded",
-            "attributes": {"request_headers": {"cookie": "sessionid=abc123"}},
+            "attributes": {
+                "parameters": [
+                    {"request": {"credentials": {"sessionkey": credential_value}}}
+                ]
+            },
         }
     ]
 
     with pytest.raises(AssertionError, match="credential"):
-        assert_forbidden_absent(["trace_contains_token"], envelope, trace, {})
+        assert_forbidden_absent(
+            ["trace_contains_token"],
+            {"status": "completed", "message": "操作完成", "data": None},
+            trace,
+            {},
+        )
 
-    assert "Bearer" in envelope["message"]
+    assert trace[0]["attributes"]["parameters"][0]["request"]["credentials"] == {
+        "sessionkey": credential_value
+    }
+
+
+@pytest.mark.parametrize("field_name", ("dataKey", "DATAKEY"))
+def test_forbidden_datakey_field_name_is_case_insensitive(field_name: str) -> None:
+    credential_value = _synthetic_credential_value(field_name)
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {field_name: credential_value},
+    }
+
+    with pytest.raises(AssertionError, match="credential"):
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert envelope["data"][field_name] == credential_value
+
+
+def test_forbidden_datakey_field_name_in_deep_parameters_raises() -> None:
+    credential_value = _synthetic_credential_value("nested-datakey")
+    trace = [
+        {
+            "event_type": "gateway_pre_recorded",
+            "attributes": {
+                "parameters": [
+                    {"request": {"nested": [{"dataKey": credential_value}]}}
+                ]
+            },
+        }
+    ]
+
+    with pytest.raises(AssertionError, match="credential"):
+        assert_forbidden_absent(
+            ["trace_contains_token"],
+            {"status": "completed", "message": "操作完成", "data": None},
+            trace,
+            {},
+        )
+
+    assert trace[0]["attributes"]["parameters"][0]["request"]["nested"] == [
+        {"dataKey": credential_value}
+    ]
+
+
+@pytest.mark.parametrize("separator", ("=", ": "))
+def test_forbidden_sessionkey_text_separators_raise(separator: str) -> None:
+    credential_value = _synthetic_credential_value(f"separator-{separator}")
+    envelope = {
+        "status": "completed",
+        "message": f"sessionkey{separator}{credential_value}",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+
+    with pytest.raises(AssertionError, match="credential"):
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert separator in envelope["message"]
+
+
+def test_credential_detection_is_enforced_by_main_judgement() -> None:
+    credential_value = _synthetic_credential_value("main-judgement")
+    result = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": f"sessionkey={credential_value}",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": None,
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=["trace_contains_token"],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={"oa": 0, "u8": 0, "hikvision_ivms": 0},
+    )
+
+    assert result.status == "failed"
+    assert len(result.reasons) == 1
+    assert "credential" in result.reasons[0]
 
 
 def test_unknown_forbidden_item_raises_assertion_error() -> None:

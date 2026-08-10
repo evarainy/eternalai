@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -146,26 +147,48 @@ def test_inactive_identity_terminal_matrix_requires_exact_error_code(
 
 
 def test_forbidden_credentials_ignore_fixture_placeholder_identifiers() -> None:
+    def digest(label: str) -> str:
+        return hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+    input_schema_digest = digest("input-schema")
+    output_schema_digest = digest("output-schema")
+    trace_id = f"trace_{digest('trace-prefix')}{digest('trace-suffix')}"
+    task_id = f"task_{digest('task-prefix')}{digest('task-suffix')}"
+    binding_id = f"binding_{digest('binding-prefix')}{digest('binding-suffix')}"
     envelope: dict[str, Any] = {
         "status": "completed",
         "message": "绑定 bind_oa_001 的用户 user_employee_001 已处理",
         "session_id": "session-1",
         "ui": {"component_type": "none", "action": "none"},
-        "data": {"binding_id": "bind_oa_001", "ai_user_id": "user_employee_001"},
+        "data": {
+            "input_schema_digest": input_schema_digest,
+            "output_schema_digest": output_schema_digest,
+            "binding_id": binding_id,
+            "ai_user_id": "user_employee_001",
+        },
     }
     trace = [
         {
             "event_type": "identity_check",
             "attributes": {
                 "ai_user_id": "user_employee_001",
-                "binding_id": "bind_oa_001",
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "binding_id": binding_id,
             },
         }
     ]
 
     assert_forbidden_absent(["trace_contains_token"], envelope, trace, {})
 
-    assert envelope["data"]["binding_id"] == "bind_oa_001"
+    assert len(envelope["data"]["input_schema_digest"]) == 64
+    assert len(envelope["data"]["output_schema_digest"]) == 64
+    assert trace[0]["attributes"] == {
+        "ai_user_id": "user_employee_001",
+        "trace_id": trace_id,
+        "task_id": task_id,
+        "binding_id": binding_id,
+    }
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:
