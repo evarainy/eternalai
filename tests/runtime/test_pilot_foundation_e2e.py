@@ -264,7 +264,7 @@ async def _run_pilot_request() -> PilotObservation:
             capability_id=_CAPABILITY_ID,
             name="OA pending workflow fixture",
             type="query",
-            intent_tags=["pending workflows"],
+            intent_tags=["pending-workflows"],
             input_schema={},
             output_schema={},
             input_schema_digest="fixture-input",

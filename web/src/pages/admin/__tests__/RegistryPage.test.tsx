@@ -5,6 +5,13 @@ import { App as AntApp, ConfigProvider } from 'antd';
 import { ApiError } from '../../../api/mutator';
 import type { AdminCapabilityView } from '../../../generated/admin/admin.schemas';
 import RegistryPage from '../RegistryPage';
+import { normalizeIntentTags, normalizePromptSafeText } from '../registryValidation';
+
+vi.mock('antd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('antd')>();
+  const { LightweightTable } = await import('../../../test/LightweightTable');
+  return { ...actual, Table: LightweightTable };
+});
 
 const apiMocks = vi.hoisted(() => ({
   listRegistry: vi.fn(),
@@ -58,7 +65,7 @@ function renderPage() {
     },
   });
   return render(
-    <ConfigProvider>
+    <ConfigProvider theme={{ token: { motion: false } }}>
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <RegistryPage />
@@ -68,7 +75,7 @@ function renderPage() {
   );
 }
 
-async function openAndFillCreateForm() {
+function openAndFillCreateForm() {
   fireEvent.click(screen.getByRole('button', { name: '新建能力' }));
   fireEvent.change(screen.getByLabelText('Capability ID'), {
     target: { value: 'cap.created' },
@@ -93,6 +100,22 @@ async function openAndFillCreateForm() {
   });
 }
 
+function renderCreateForm() {
+  apiMocks.listRegistry.mockResolvedValueOnce({ items: [] });
+  renderPage();
+  openAndFillCreateForm();
+}
+
+function addIntentTag(value: string) {
+  const input = screen.getByLabelText('Intent Tags');
+  fireEvent.mouseDown(input);
+  fireEvent.change(input, { target: { value } });
+  fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
+  expect(
+    input.closest('.ant-select')?.querySelector('.ant-select-selection-item'),
+  ).toHaveTextContent(value);
+}
+
 describe('RegistryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -115,11 +138,20 @@ describe('RegistryPage', () => {
   });
 
   it(
-    'submits the exact create body without a status field',
+    'normalizes prompt-safe text and intent tags in the exact create body',
     async () => {
-      renderPage();
-      await screen.findByText('cap.query');
-      await openAndFillCreateForm();
+      renderCreateForm();
+
+      fireEvent.change(screen.getByLabelText('名称'), {
+        target: { value: '  Ｃreated Capability  ' },
+      });
+      fireEvent.change(screen.getByLabelText('Owner'), {
+        target: { value: '  ａｄｍｉｎ－ｌｉｔｅ  ' },
+      });
+      fireEvent.change(screen.getByLabelText('简短描述'), {
+        target: { value: '  Ｃreated from Admin Lite  ' },
+      });
+      addIntentTag('ＳＨＡＲＥＤ－ＩＮＴＥＮＴ');
 
       fireEvent.click(screen.getByRole('button', { name: '创建 draft' }));
 
@@ -128,7 +160,7 @@ describe('RegistryPage', () => {
           capability_id: 'cap.created',
           name: 'Created Capability',
           type: 'query',
-          intent_tags: [],
+          intent_tags: ['shared-intent'],
           input_schema: {},
           output_schema: {},
           input_schema_digest: 'sha256:new-input',
@@ -147,6 +179,44 @@ describe('RegistryPage', () => {
     },
     10_000,
   );
+
+  it.each([
+    ['超长自由文本', '名称', 'n'.repeat(121), 120, '名称 最多 120 个字符'],
+    [
+      '换行',
+      '简短描述',
+      'first line\nsecond line',
+      500,
+      '简短描述 不能包含换行、控制字符或不可打印字符',
+    ],
+    [
+      '控制字符',
+      'Owner',
+      'operations\u0007',
+      120,
+      'Owner 不能包含换行、控制字符或不可打印字符',
+    ],
+    [
+      'prompt 结构字符',
+      'Owner',
+      'operations|admin',
+      120,
+      'Owner 不能包含 prompt 结构字符',
+    ],
+  ])(
+    'rejects %s in the mirrored validator',
+    (_, fieldLabel, value, maxLength, expectedError) => {
+      expect(() => normalizePromptSafeText(value, fieldLabel, maxLength)).toThrow(
+        expectedError,
+      );
+    },
+  );
+
+  it('rejects an invalid intent tag shape in the mirrored validator', () => {
+    expect(() => normalizeIntentTags(['bad tag'])).toThrow(
+      'Intent Tag 必须匹配 a-z、0-9 及单个 ._- 分隔的 slug 形态',
+    );
+  });
 
   it('calls the enable and disable endpoints for the matching row actions', async () => {
     renderPage();

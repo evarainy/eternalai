@@ -569,11 +569,13 @@ def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
 
 def test_model_generated_intent_is_fingerprinted_before_trace() -> None:
     sensitive_intent = "access_token=synthetic-secret-value"
-    capability = _capability("oa.safe", intent_tags=[sensitive_intent])
+    legacy_capability = _capability("oa.safe").model_copy(
+        update={"intent_tags": [sensitive_intent]}
+    )
 
     envelope, _task_store, trace, gateway, _registry = _run_runtime(
         sensitive_intent,
-        [capability],
+        [legacy_capability],
     )
 
     assert envelope.status == "completed"
