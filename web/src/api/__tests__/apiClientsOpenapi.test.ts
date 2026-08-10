@@ -60,6 +60,14 @@ const PROJECTS = [
   },
 ] as const;
 
+const ADMIN_PROJECT = {
+  project: 'admin',
+  input: './openapi/admin.openapi.json',
+  target: './src/generated/admin/admin.ts',
+} as const;
+
+const CLIENT_PROJECTS = [...PROJECTS, ADMIN_PROJECT] as const;
+
 const EXPORT_SCRIPT = String.raw`
 from __future__ import annotations
 
@@ -201,7 +209,7 @@ function readOpenApi(path: string): OpenApiDocument {
 
 describe('FastAPI-derived Orval clients', () => {
   it(
-    're-exports Auth, Runtime, and Admin-Trace then regenerates byte-identical clients',
+    're-exports three FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -209,7 +217,7 @@ describe('FastAPI-derived Orval clients', () => {
 
       try {
         const configSource = readFileSync(resolve(webRoot, 'orval.config.ts'), 'utf8');
-        for (const target of PROJECTS) {
+        for (const target of CLIENT_PROJECTS) {
           expect(configSource).toContain(`  ${target.project}: {`);
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
@@ -235,6 +243,10 @@ describe('FastAPI-derived Orval clients', () => {
           ],
           repositoryRoot,
         );
+
+        const temporaryAdminSpec = resolve(temporaryWeb, ADMIN_PROJECT.input);
+        mkdirSync(dirname(temporaryAdminSpec), { recursive: true });
+        copyFileSync(resolve(webRoot, ADMIN_PROJECT.input), temporaryAdminSpec);
 
         for (const target of PROJECTS) {
           const trackedSpec = resolve(webRoot, target.input);
@@ -282,7 +294,7 @@ describe('FastAPI-derived Orval clients', () => {
         );
 
         const temporaryConfig = Object.fromEntries(
-          PROJECTS.map((target) => {
+          CLIENT_PROJECTS.map((target) => {
             return [
               target.project,
               {
@@ -320,7 +332,7 @@ describe('FastAPI-derived Orval clients', () => {
         );
         run(process.execPath, [temporaryNormalizer], temporaryWeb);
 
-        for (const target of PROJECTS) {
+        for (const target of CLIENT_PROJECTS) {
           const trackedDirectory = dirname(resolve(webRoot, target.target));
           const regeneratedDirectory = dirname(resolve(temporaryWeb, target.target));
           const trackedFiles = relativeFiles(trackedDirectory);

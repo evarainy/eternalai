@@ -86,6 +86,19 @@ def _outcome(*, changed: bool = True) -> IdentityMappingMutationResult:
     )
 
 
+def _noop_outcome() -> IdentityMappingMutationResult:
+    return IdentityMappingMutationResult(
+        mapping=IdentityCheckResult(
+            binding_id=BINDING_ID,
+            target_system="oa",
+            execution_identity="user_delegated",
+            bind_status="active",
+        ),
+        previous_bind_status="active",
+        changed=False,
+    )
+
+
 def _client(
     outcome: IdentityMappingMutationResult | IdentityMappingMutationError | None,
     *,
@@ -148,6 +161,27 @@ def test_mutation_endpoints_return_the_fixed_response_contract(
     }
     assert port.calls == [(operation, BINDING_ID)]
     assert trace.events[0].attributes["action"] == f"bindings_{operation}"
+
+
+def test_revoke_noop_result_cannot_report_http_success() -> None:
+    client, port, trace = _client(_noop_outcome())
+
+    response = client.post(
+        f"/api/v1/admin/bindings/{BINDING_ID}/revoke",
+        headers=TEST_CSRF_HEADERS,
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": {
+            "code": "binding_mutation_unavailable",
+            "message": "Binding mutation provider is unavailable.",
+        }
+    }
+    assert port.calls == [("revoke", BINDING_ID)]
+    assert trace.events[0].status == "failed"
+    assert trace.events[0].attributes["reason_code"] == "binding_mutation_unavailable"
 
 
 @pytest.mark.parametrize("operation", ["revoke", "reset"])

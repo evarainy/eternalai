@@ -3,11 +3,22 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { ApiError } from '../../../api/mutator';
-import type { AdminBindingView } from '../../../generated/admin/admin.schemas';
+import type {
+  AdminBindingMutationResponse,
+  AdminBindingView,
+} from '../../../generated/admin/admin.schemas';
 import BindingsPage from '../BindingsPage';
+
+vi.mock('antd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('antd')>();
+  const { LightweightTable } = await import('../../../test/LightweightTable');
+  return { ...actual, Table: LightweightTable };
+});
 
 const apiMocks = vi.hoisted(() => ({
   listBindings: vi.fn(),
+  revokeBinding: vi.fn(),
+  resetBinding: vi.fn(),
 }));
 
 vi.mock('../../../generated/admin/admin', () => apiMocks);
@@ -25,14 +36,40 @@ const bindings: AdminBindingView[] = [
   },
 ];
 
+const revokedBinding = {
+  binding_id: 'binding-1',
+  target_system: 'oa',
+  execution_identity: 'user_delegated',
+  bind_status: 'revoked',
+  binding_scope: null,
+  account_set_id: null,
+  device_domain_id: null,
+  reason_code: 'identity_revoked',
+} as const;
+
+const revokeResponse: AdminBindingMutationResponse = {
+  action: 'revoke',
+  binding: revokedBinding,
+  changed: true,
+  next_action: 'none',
+};
+
+const resetResponse: AdminBindingMutationResponse = {
+  action: 'reset',
+  binding: revokedBinding,
+  changed: true,
+  next_action: 'reauthenticate',
+};
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
+      mutations: { retry: false },
     },
   });
   return render(
-    <ConfigProvider>
+    <ConfigProvider theme={{ token: { motion: false } }}>
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <BindingsPage />
@@ -53,6 +90,8 @@ describe('BindingsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.listBindings.mockResolvedValue({ ai_user_id: 'user-1', items: bindings });
+    apiMocks.revokeBinding.mockResolvedValue(revokeResponse);
+    apiMocks.resetBinding.mockResolvedValue(resetResponse);
   });
 
   it('does not call listBindings when ai_user_id is empty', async () => {
@@ -96,6 +135,108 @@ describe('BindingsPage', () => {
         target_system: 'u8',
       });
     });
+  });
+
+  it.each([
+    ['撤销', '确认撤销此 Binding？', '确认撤销', 'revokeBinding'],
+    ['重置', '确认重置此 Binding？', '确认重置', 'resetBinding'],
+  ] as const)(
+    'confirms %s, calls the generated client, and refreshes the list',
+    async (action, title, confirmAction, mutationName) => {
+      const otherMutationName =
+        mutationName === 'revokeBinding' ? 'resetBinding' : 'revokeBinding';
+      apiMocks.listBindings
+        .mockResolvedValueOnce({ ai_user_id: 'user-1', items: bindings })
+        .mockResolvedValue({
+          ai_user_id: 'user-1',
+          items: [
+            {
+              ...bindings[0],
+              bind_status: 'revoked',
+              reason_code: 'identity_revoked',
+            },
+          ],
+        });
+      renderPage();
+      submitAiUser();
+      await screen.findByText('binding-1');
+
+      fireEvent.click(
+        screen.getByRole('button', { name: new RegExp(action.split('').join('\\s*')) }),
+      );
+      expect(await screen.findByText(title)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: confirmAction }));
+
+      await waitFor(() => {
+        expect(apiMocks[mutationName]).toHaveBeenCalledWith('binding-1');
+        expect(apiMocks[otherMutationName]).not.toHaveBeenCalled();
+        expect(apiMocks.listBindings).toHaveBeenCalledTimes(2);
+        expect(screen.getByText('revoked')).toBeInTheDocument();
+        expect(screen.getByText('identity_revoked')).toBeInTheDocument();
+      });
+    },
+  );
+
+  it.each([
+    ['撤销', '确认撤销此 Binding？'],
+    ['重置', '确认重置此 Binding？'],
+  ])('does not call either mutation client when %s confirmation is cancelled', async (action, title) => {
+    renderPage();
+    submitAiUser();
+    await screen.findByText('binding-1');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: new RegExp(action.split('').join('\\s*')) }),
+    );
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /取\s*消/ }));
+
+    expect(apiMocks.revokeBinding).not.toHaveBeenCalled();
+    expect(apiMocks.resetBinding).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['撤销', '确认撤销', 404, 'binding_not_found', 'Binding was not found.'],
+    [
+      '重置',
+      '确认重置',
+      503,
+      'binding_mutation_unavailable',
+      'Binding mutation provider is unavailable.',
+    ],
+  ])(
+    'shows the backend code and message when %s fails',
+    async (action, confirmAction, status, code, message) => {
+      const mutationMock = action === '撤销' ? apiMocks.revokeBinding : apiMocks.resetBinding;
+      mutationMock.mockRejectedValueOnce(new ApiError(status, code, message));
+      renderPage();
+      submitAiUser();
+      await screen.findByText('binding-1');
+
+      fireEvent.click(
+        screen.getByRole('button', { name: new RegExp(action.split('').join('\\s*')) }),
+      );
+      fireEvent.click(await screen.findByRole('button', { name: confirmAction }));
+
+      expect(await screen.findByText(`${code}: ${message}`)).toBeInTheDocument();
+      expect(mutationMock).toHaveBeenCalledWith('binding-1');
+      expect(apiMocks.listBindings).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('disables both mutation actions when binding_id is null', async () => {
+    apiMocks.listBindings.mockResolvedValueOnce({
+      ai_user_id: 'user-1',
+      items: [{ ...bindings[0], binding_id: null }],
+    });
+    renderPage();
+    submitAiUser();
+    await screen.findByText('绑定：user-1');
+
+    expect(screen.getByRole('button', { name: /撤\s*销/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /重\s*置/ })).toBeDisabled();
+    expect(apiMocks.revokeBinding).not.toHaveBeenCalled();
+    expect(apiMocks.resetBinding).not.toHaveBeenCalled();
   });
 
   it.each([

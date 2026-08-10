@@ -108,6 +108,107 @@ export interface AdminBindingView {
   reason_code: string | null;
 }
 
+export type AdminBindingMutationViewTargetSystem = typeof AdminBindingMutationViewTargetSystem[keyof typeof AdminBindingMutationViewTargetSystem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewTargetSystem = {
+  oa: 'oa',
+} as const;
+
+export type AdminBindingMutationViewExecutionIdentity = typeof AdminBindingMutationViewExecutionIdentity[keyof typeof AdminBindingMutationViewExecutionIdentity];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewExecutionIdentity = {
+  user_delegated: 'user_delegated',
+} as const;
+
+export type AdminBindingMutationViewBindStatus = typeof AdminBindingMutationViewBindStatus[keyof typeof AdminBindingMutationViewBindStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewBindStatus = {
+  revoked: 'revoked',
+} as const;
+
+/**
+ * @nullable
+ */
+export type AdminBindingMutationViewBindingScope = typeof AdminBindingMutationViewBindingScope[keyof typeof AdminBindingMutationViewBindingScope] | null;
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewBindingScope = {
+} as const;
+
+/**
+ * @nullable
+ */
+export type AdminBindingMutationViewAccountSetId = typeof AdminBindingMutationViewAccountSetId[keyof typeof AdminBindingMutationViewAccountSetId] | null;
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewAccountSetId = {
+} as const;
+
+/**
+ * @nullable
+ */
+export type AdminBindingMutationViewDeviceDomainId = typeof AdminBindingMutationViewDeviceDomainId[keyof typeof AdminBindingMutationViewDeviceDomainId] | null;
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewDeviceDomainId = {
+} as const;
+
+export type AdminBindingMutationViewReasonCode = typeof AdminBindingMutationViewReasonCode[keyof typeof AdminBindingMutationViewReasonCode];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationViewReasonCode = {
+  identity_revoked: 'identity_revoked',
+} as const;
+
+export interface AdminBindingMutationView {
+  binding_id: string;
+  target_system: AdminBindingMutationViewTargetSystem;
+  execution_identity: AdminBindingMutationViewExecutionIdentity;
+  bind_status: AdminBindingMutationViewBindStatus;
+  /** @nullable */
+  binding_scope: AdminBindingMutationViewBindingScope;
+  /** @nullable */
+  account_set_id: AdminBindingMutationViewAccountSetId;
+  /** @nullable */
+  device_domain_id: AdminBindingMutationViewDeviceDomainId;
+  reason_code: AdminBindingMutationViewReasonCode;
+}
+
+export type AdminBindingMutationResponseAction = typeof AdminBindingMutationResponseAction[keyof typeof AdminBindingMutationResponseAction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationResponseAction = {
+  revoke: 'revoke',
+  reset: 'reset',
+} as const;
+
+export type AdminBindingMutationResponseNextAction = typeof AdminBindingMutationResponseNextAction[keyof typeof AdminBindingMutationResponseNextAction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const AdminBindingMutationResponseNextAction = {
+  none: 'none',
+  reauthenticate: 'reauthenticate',
+} as const;
+
+export interface AdminBindingMutationResponse {
+  action: AdminBindingMutationResponseAction;
+  binding: AdminBindingMutationView;
+  changed: boolean;
+  next_action: AdminBindingMutationResponseNextAction;
+}
+
 export interface AdminTaskListResponse {
   items: AdminTaskView[];
 }
@@ -182,16 +283,29 @@ export type AdminCapabilityCreateOutputSchema = { [key: string]: unknown };
 
 export interface AdminCapabilityCreate {
   capability_id: string;
+  /**
+   * @minLength 1
+   * @maxLength 120
+   */
   name: string;
   type: CapabilityType;
+  /** @maxItems 32 */
   intent_tags?: string[];
   input_schema?: AdminCapabilityCreateInputSchema;
   output_schema?: AdminCapabilityCreateOutputSchema;
   input_schema_digest: string;
   output_schema_digest: string;
   risk_level: CapabilityRiskLevel;
+  /**
+   * @minLength 1
+   * @maxLength 120
+   */
   owner: string;
   version: string;
+  /**
+   * @minLength 1
+   * @maxLength 500
+   */
   short_description: string;
   target_system?: CapabilityTargetSystem;
   execution_identity: CapabilityExecutionIdentity;
@@ -257,6 +371,16 @@ export type TaskNotFoundResponse = AdminErrorResponse;
  * The Binding query parameters are invalid
  */
 export type BindingQueryInvalidResponse = AdminErrorResponse;
+
+/**
+ * The Binding was not found
+ */
+export type BindingNotFoundResponse = AdminErrorResponse;
+
+/**
+ * The Binding mutation provider is unavailable
+ */
+export type BindingMutationUnavailableResponse = AdminErrorResponse;
 
 /**
  * The declared roles are insufficient

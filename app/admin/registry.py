@@ -21,8 +21,12 @@ from app.admin.evidence import (
 )
 from app.ports.capability_registry import (
     CapabilityExecutionIdentity,
+    CapabilityIntentTags,
+    CapabilityName,
+    CapabilityOwner,
     CapabilityRegistryPort,
     CapabilityRiskLevel,
+    CapabilityShortDescription,
     CapabilitySpec,
     CapabilityStatus,
     CapabilityTargetSystem,
@@ -53,17 +57,17 @@ class AdminCapabilityCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     capability_id: str
-    name: str
+    name: CapabilityName
     type: CapabilityType
-    intent_tags: list[str] = Field(default_factory=list)
+    intent_tags: CapabilityIntentTags = Field(default_factory=list)
     input_schema: dict[str, Any] = Field(default_factory=dict)
     output_schema: dict[str, Any] = Field(default_factory=dict)
     input_schema_digest: str
     output_schema_digest: str
     risk_level: CapabilityRiskLevel
-    owner: str
+    owner: CapabilityOwner
     version: str
-    short_description: str
+    short_description: CapabilityShortDescription
     target_system: CapabilityTargetSystem | None = None
     execution_identity: CapabilityExecutionIdentity
     binding_required: bool

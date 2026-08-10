@@ -1,9 +1,24 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Form, Input, Select, Space, Table, Typography } from 'antd';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import {
+  Alert,
+  App as AntApp,
+  Button,
+  Form,
+  Input,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Typography,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ApiError } from '../../api/mutator';
-import { listBindings } from '../../generated/admin/admin';
+import {
+  listBindings,
+  resetBinding,
+  revokeBinding,
+} from '../../generated/admin/admin';
 import { TargetSystem } from '../../generated/admin/admin.schemas';
 import type {
   AdminBindingView,
@@ -43,11 +58,42 @@ const targetSystemOptions = Object.values(TargetSystem).map((value) => ({
 export default function BindingsPage() {
   const [submittedQuery, setSubmittedQuery] = useState<SubmittedBindingQuery>();
   const [filterError, setFilterError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
+  const { message } = AntApp.useApp();
 
   const bindingQuery = useQuery({
     queryKey: ['admin', 'bindings', submittedQuery?.filters, submittedQuery?.revision],
     queryFn: () => listBindings(submittedQuery?.filters),
     enabled: submittedQuery !== undefined,
+  });
+
+  const reportMutationError = (error: unknown) => {
+    const text = errorText(error);
+    setActionError(text);
+    void message.error(text);
+  };
+
+  const refreshBindings = async () => {
+    setActionError(undefined);
+    await bindingQuery.refetch();
+  };
+
+  const revokeMutation = useMutation({
+    mutationFn: (bindingId: string) => revokeBinding(bindingId),
+    onSuccess: async () => {
+      await refreshBindings();
+      void message.success('Binding 已撤销');
+    },
+    onError: reportMutationError,
+  });
+
+  const resetMutation = useMutation({
+    mutationFn: (bindingId: string) => resetBinding(bindingId),
+    onSuccess: async () => {
+      await refreshBindings();
+      void message.success('Binding 已重置，请重新认证');
+    },
+    onError: reportMutationError,
   });
 
   const submitFilters = (values: BindingFilterValues) => {
@@ -76,6 +122,7 @@ export default function BindingsPage() {
     }
 
     setFilterError(undefined);
+    setActionError(undefined);
     setSubmittedQuery((current) => ({
       filters,
       revision: (current?.revision ?? 0) + 1,
@@ -120,6 +167,60 @@ export default function BindingsPage() {
       key: 'reason_code',
       render: (value: AdminBindingView['reason_code']) => value ?? '-',
     },
+    {
+      title: '操作',
+      key: 'actions',
+      fixed: 'right',
+      render: (_, binding) => {
+        const bindingId = binding.binding_id;
+        const mutationPending = revokeMutation.isPending || resetMutation.isPending;
+        return (
+          <Space>
+            <Popconfirm
+              title="确认撤销此 Binding？"
+              description="撤销后，后续调用将拒绝使用该身份绑定。"
+              okText="确认撤销"
+              cancelText="取消"
+              disabled={!bindingId}
+              onConfirm={() => {
+                if (bindingId) {
+                  revokeMutation.mutate(bindingId);
+                }
+              }}
+            >
+              <Button
+                danger
+                size="small"
+                disabled={!bindingId || mutationPending}
+                loading={revokeMutation.isPending && revokeMutation.variables === bindingId}
+              >
+                撤销
+              </Button>
+            </Popconfirm>
+            <Popconfirm
+              title="确认重置此 Binding？"
+              description="重置会撤销当前绑定，并要求用户重新认证。"
+              okText="确认重置"
+              cancelText="取消"
+              disabled={!bindingId}
+              onConfirm={() => {
+                if (bindingId) {
+                  resetMutation.mutate(bindingId);
+                }
+              }}
+            >
+              <Button
+                size="small"
+                disabled={!bindingId || mutationPending}
+                loading={resetMutation.isPending && resetMutation.variables === bindingId}
+              >
+                重置
+              </Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
+    },
   ];
 
   const queryError = bindingQuery.error ? errorText(bindingQuery.error) : undefined;
@@ -130,7 +231,7 @@ export default function BindingsPage() {
         <Title level={3} style={{ marginBottom: 0 }}>
           Binding 查看
         </Title>
-        <Text type="secondary">只读查询身份绑定，不提供绑定、解绑或状态变更。</Text>
+        <Text type="secondary">查询身份绑定，并对有 binding_id 的记录执行撤销或重置。</Text>
       </div>
 
       <Form<BindingFilterValues> layout="inline" onFinish={submitFilters}>
@@ -160,6 +261,9 @@ export default function BindingsPage() {
       {queryError && (
         <Alert type="error" showIcon message="Binding 请求失败" description={queryError} />
       )}
+      {actionError && (
+        <Alert type="error" showIcon message="Binding 操作失败" description={actionError} />
+      )}
 
       {bindingQuery.data && (
         <Title level={4} style={{ marginBottom: 0 }}>
@@ -181,7 +285,7 @@ export default function BindingsPage() {
         dataSource={bindingQuery.data?.items ?? []}
         loading={bindingQuery.isLoading}
         pagination={false}
-        scroll={{ x: 1300 }}
+        scroll={{ x: 1450 }}
       />
     </Space>
   );
