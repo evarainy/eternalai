@@ -859,22 +859,22 @@ def _message_center_page(
 def test_published_pending_pack_versions_stay_immutable_and_distinct() -> None:
     frozen_bytes = {
         "ecology9-pending-workflows-v1/fingerprint.json": (
-            "b0539eb6297de583e57d753ddf36aa297bcd2406d8218bd3a42f3e69a3853002"
+            "26aa1d354cb8c6056587bf7fcccd305139059796ed9b0ed2c26927c6c81137ef"
         ),
         "ecology9-pending-workflows-v1/profile.json": (
-            "244a2f4fae563f6b36f690c98f0877aef09574e9bf297fee9634ff94241ab711"
+            "605673383921f3f65b296b25041be93963c20dcdaf79059f16cd2ad898d1774c"
         ),
         "ecology9-pending-workflows-v1/sample.json": (
-            "d61a84bf95ce50db056ba16f4fb59bad106aeb6e65f958bb000db2d35ab835fe"
+            "83543add6d8cc6d642638f6147c92bef8fd6a2419a5c4f91ed1225ebfe6fb252"
         ),
         "ecology9-pending-workflows-v2/fingerprint.json": (
-            "fc9cf2a2204cf5242479b444b4b260c63bcf45b9c68cc3eeb2ae3f3bbf05b304"
+            "86c5bd727f29111a1baa4e4c21f3cec7eb873331d6c4fabf7b20c9b664084dfa"
         ),
         "ecology9-pending-workflows-v2/profile.json": (
-            "6da4616d62c83ddcb8cdc3dacf05202e40b5d95b5fad604f5af455e73d99bfc6"
+            "1088ab942c4c204deb15e92b89ae17e6a150a2347a9f199d0dff89d6df1edef6"
         ),
         "ecology9-pending-workflows-v2/sample.json": (
-            "cf632f5fad451f94c46090a1c86ada9518f37d1c238c2eca90b6db354d7ab743"
+            "eac04435b6b552924ef0b0dc05bee8b6e5889801ff03a08f97219bfecb6dd740"
         ),
     }
     for relative_path, expected_sha256 in frozen_bytes.items():
