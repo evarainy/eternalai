@@ -38,9 +38,9 @@ _STRUCTURAL_JSON_TYPES = frozenset(
 _STRUCTURAL_ARRAY_SHAPE_PATTERN = re.compile(r"^[a-z:<>|]+$")
 _STRUCTURAL_SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 _SAFE_WIRE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-# Both message-center capabilities read the same ``getMsgList`` endpoint and
-# return the same record shape; only the category id differs. Keeping one map
-# is what stops the two capabilities from drifting apart again.
+# ``oa.list_system_messages`` remains a message-center capability. Pending
+# workflows deliberately do not use this map: they come from the dedicated OA
+# to-do module and have a separate business contract below.
 _LIVE_MESSAGE_CENTER_FIELD_NAMES: Final[Mapping[str, str]] = {
     "messageid": "message_id",
     "title": "title",
@@ -58,7 +58,74 @@ _LIVE_MESSAGE_CENTER_FIELD_NAMES: Final[Mapping[str, str]] = {
 _LIVE_MESSAGE_CENTER_IGNORED_WIRE_FIELDS: Final[frozenset[str]] = frozenset(
     {"gomethod", "gomethodpc", "showimage"}
 )
-_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
+_LIVE_PENDING_WORKFLOW_FIELD_NAMES: Final[Mapping[str, str]] = {
+    "requestid": "todo_id",
+    "requestname": "title",
+    "status": "status",
+    "receivedate": "received_at",
+    "createdate": "created_at",
+    "workflowid": "workflow_type_id",
+}
+# Exact fields observed in both selected viewcondition=5 captures but not
+# consumed by this capability. Enumerating them keeps the intentional D4
+# projection reviewable while any newly introduced wire key still appears as
+# an anonymous structural-drift node. HTML ``*span`` twins are never consumed.
+_LIVE_PENDING_WORKFLOW_IGNORED_WIRE_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "createdatespan",
+        "creater",
+        "createrspan",
+        "currentnodeid",
+        "currentnodeidspan",
+        "randomField0",
+        "randomField0span",
+        "randomField1",
+        "randomField1span",
+        "randomField2",
+        "randomField2span",
+        "randomField3",
+        "randomField3span",
+        "randomField4",
+        "randomField4span",
+        "randomField5",
+        "randomField5span",
+        "randomField6",
+        "randomField6span",
+        "randomField7",
+        "randomField7span",
+        "randomField8",
+        "randomField8span",
+        "randomField9",
+        "randomField9span",
+        "randomField10",
+        "randomField10span",
+        "randomField11",
+        "randomField11span",
+        "randomField12",
+        "randomField12span",
+        "randomField13",
+        "randomField13span",
+        "randomField14",
+        "randomField14span",
+        "randomFieldId",
+        "randomFieldIdspan",
+        "receivedatespan",
+        "requestlevel",
+        "requestlevelspan",
+        "requestmark",
+        "requestmarkspan",
+        "requestnamespan",
+        "statusspan",
+        "subwflink",
+        "subwflinkspan",
+        "unoperators",
+        "unoperatorsspan",
+        "userid",
+        "useridspan",
+        "workflowidspan",
+    }
+)
+_LEGACY_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "workflows": [
         {
             "message_id": "",
@@ -83,6 +150,21 @@ _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
     ],
     "returned_count": 0,
     "is_complete": False,
+}
+_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR = {
+    "workflows": [
+        {
+            "todo_id": "",
+            "title": "",
+            "status": "",
+            "received_at": "",
+            "created_at": "",
+            "workflow_type_id": "",
+        }
+    ],
+    "returned_count": 0,
+    "authoritative_count": 0,
+    "is_complete": True,
 }
 _SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR = {
     "messages": [
@@ -179,13 +261,8 @@ class OASystemMessageCollection(BaseModel):
         return self
 
 
-class OAPendingWorkflowCollection(BaseModel):
-    """Bounded result for ``oa.list_pending_workflows``.
-
-    The pending category of the OA message center. ``returned_count`` and
-    ``is_complete`` are what keep a silently truncated page from reading as a
-    complete answer.
-    """
+class OALegacyPendingWorkflowCollection(BaseModel):
+    """Frozen v1/v2 message-center shape, loadable only for pack validation."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -194,9 +271,60 @@ class OAPendingWorkflowCollection(BaseModel):
     is_complete: bool
 
     @model_validator(mode="after")
-    def _validate_returned_count(self) -> OAPendingWorkflowCollection:
+    def _validate_returned_count(self) -> OALegacyPendingWorkflowCollection:
         if self.returned_count != len(self.workflows):
             raise ValueError("returned_count must match the workflow collection")
+        return self
+
+
+class OAPendingWorkflow(BaseModel):
+    """One HTML-free to-do item from OA's dedicated pending-workflow module."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    todo_id: str
+    title: str
+    status: str
+    received_at: str
+    created_at: str
+    workflow_type_id: str
+
+    @field_validator(
+        "todo_id",
+        "title",
+        "status",
+        "received_at",
+        "created_at",
+        "workflow_type_id",
+    )
+    @classmethod
+    def _require_non_empty_string(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("pending-workflow text fields must not be empty")
+        if "<" in value or ">" in value:
+            raise ValueError("pending-workflow text fields must not contain HTML")
+        return value
+
+
+class OAPendingWorkflowCollection(BaseModel):
+    """Complete result proven against the OA to-do module's authoritative count."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    workflows: list[OAPendingWorkflow]
+    returned_count: int
+    authoritative_count: int
+    is_complete: Literal[True]
+
+    @model_validator(mode="after")
+    def _validate_authoritative_count(self) -> OAPendingWorkflowCollection:
+        actual = len(self.workflows)
+        if self.returned_count != actual:
+            raise ValueError("returned_count must match the workflow collection")
+        if self.authoritative_count != actual:
+            raise ValueError("authoritative_count must match the workflow collection")
+        if len({workflow.todo_id for workflow in self.workflows}) != actual:
+            raise ValueError("todo_id must be unique within the workflow collection")
         return self
 
 
@@ -370,18 +498,30 @@ def build_contract_drift_baseline_fingerprint(payload: Any) -> dict[str, Any]:
 def build_live_pending_workflows_fingerprint(
     records: list[Any],
 ) -> dict[str, Any]:
-    """Fingerprint one Live aggregate from value-free normalized wire structure."""
+    """Fingerprint the consumed fields plus anonymous unexpected wire fields."""
 
-    field_names = _live_record_field_names(
-        records,
-        normalized_field_names=_LIVE_MESSAGE_CENTER_FIELD_NAMES,
-        raw_path="$.workflows[]",
-    )
+    field_names = {
+        raw_name: normalized_name
+        for raw_name, normalized_name in _LIVE_PENDING_WORKFLOW_FIELD_NAMES.items()
+        if records
+        and all(
+            isinstance(record, Mapping) and raw_name in record
+            for record in records
+        )
+    }
     projected_records = [
-        _project_live_message_center_record(
+        _project_json_mapping(
             record,
             field_names=field_names,
+            ignored_fields=_LIVE_PENDING_WORKFLOW_IGNORED_WIRE_FIELDS,
             raw_path="$.workflows[]",
+            expose_safe_wire_names=False,
+        )
+        if isinstance(record, Mapping)
+        else _project_json_structure(
+            record,
+            raw_path="$.workflows[]",
+            expose_safe_wire_names=False,
         )
         for record in records
     ]
@@ -389,7 +529,8 @@ def build_live_pending_workflows_fingerprint(
         {
             "workflows": projected_records,
             "returned_count": 0,
-            "is_complete": False,
+            "authoritative_count": 0,
+            "is_complete": True,
         },
         include_contract_exemplar=False,
     )
@@ -465,6 +606,21 @@ def _build_structural_fingerprint(
 def _contract_exemplar(payload: Any) -> Mapping[str, Any]:
     if isinstance(payload, Mapping) and "messages" in payload:
         return _SYSTEM_MESSAGE_STRUCTURAL_SCHEMA_EXEMPLAR
+    if (
+        isinstance(payload, Mapping)
+        and "workflows" in payload
+        and "authoritative_count" not in payload
+    ):
+        return _LEGACY_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR
+    if isinstance(payload, Mapping):
+        workflows = payload.get("workflows")
+        if (
+            isinstance(workflows, list)
+            and workflows
+            and isinstance(workflows[0], Mapping)
+            and "message_id" in workflows[0]
+        ):
+            return _LEGACY_PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR
     return _PENDING_WORKFLOW_STRUCTURAL_SCHEMA_EXEMPLAR
 
 
@@ -494,12 +650,15 @@ def _live_record_field_names(
     *,
     normalized_field_names: Mapping[str, str],
     raw_path: str,
+    ignored_fields: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
     observed_fields: set[str] = set()
     for record in records:
         if isinstance(record, Mapping):
             observed_fields.update(
-                key for key in record if isinstance(key, str)
+                key
+                for key in record
+                if isinstance(key, str) and key not in ignored_fields
             )
     field_names = {
         key: normalized_field_names[key]
@@ -710,27 +869,66 @@ def normalize_pending_workflow_records(
     records: list[Any],
     *,
     record_limit: int,
-    is_complete: bool,
-    link_normalizer: Callable[[str], str] | None = None,
+    authoritative_count: int,
 ) -> OAPendingWorkflowCollection:
-    """Whitelist and normalize one bounded complete Live pending aggregate."""
+    """Whitelist a bounded to-do aggregate and prove count equality."""
 
-    normalized = _normalize_message_center_records(
-        records,
-        record_limit=record_limit,
-        link_normalizer=link_normalizer,
-    )
+    if record_limit <= 0 or len(records) > record_limit:
+        raise ValueError("OA pending-workflow aggregate exceeds the record limit")
+    if (
+        isinstance(authoritative_count, bool)
+        or not isinstance(authoritative_count, int)
+        or authoritative_count < 0
+    ):
+        raise ValueError("OA pending-workflow authoritative count is invalid")
+    normalized: list[dict[str, str]] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("OA pending-workflow record must be an object")
+        normalized.append(
+            {
+                "todo_id": _required_live_pending_workflow_string(
+                    record, "requestid"
+                ),
+                "title": _required_live_pending_workflow_string(
+                    record, "requestname"
+                ),
+                "status": _required_live_pending_workflow_string(record, "status"),
+                "received_at": _required_live_pending_workflow_string(
+                    record, "receivedate"
+                ),
+                "created_at": _required_live_pending_workflow_string(
+                    record, "createdate"
+                ),
+                "workflow_type_id": _required_live_pending_workflow_string(
+                    record, "workflowid"
+                ),
+            }
+        )
     try:
         return OAPendingWorkflowCollection.model_validate(
             {
                 "workflows": normalized,
                 "returned_count": len(normalized),
-                "is_complete": is_complete,
+                "authoritative_count": authoritative_count,
+                "is_complete": True,
             },
             strict=True,
         )
     except ValidationError:
         raise ValueError("normalized OA workflow collection is invalid") from None
+
+
+def _required_live_pending_workflow_string(
+    record: Mapping[str, Any],
+    key: str,
+) -> str:
+    value = record.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("OA pending-workflow required string is invalid")
+    if "<" in value or ">" in value:
+        raise ValueError("OA pending-workflow HTML is forbidden")
+    return value.strip()
 
 
 def normalize_system_message_records(
@@ -768,7 +966,7 @@ def _normalize_message_center_records(
     record_limit: int,
     link_normalizer: Callable[[str], str] | None,
 ) -> list[dict[str, Any]]:
-    """Whitelist the shared message-center record shape for both capabilities."""
+    """Whitelist the system-message and frozen legacy pending record shape."""
 
     if record_limit <= 0 or len(records) > record_limit:
         raise ValueError("OA system-message aggregate exceeds the record limit")
@@ -903,7 +1101,9 @@ __all__ = (
     "EXTERNAL_SANITIZATION_WARNING",
     "PENDING_WORKFLOW_DERIVATION_WARNING",
     "OAContractPackProfile",
+    "OALegacyPendingWorkflowCollection",
     "OAMessageCenterRecord",
+    "OAPendingWorkflow",
     "OAPendingWorkflowCollection",
     "OASystemMessage",
     "OASystemMessageCollection",

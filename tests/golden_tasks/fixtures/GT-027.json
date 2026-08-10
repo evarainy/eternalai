@@ -1,0 +1,205 @@
+{
+  "golden_task_id": "GT-027",
+  "title": "OA 待办事宜模块返回六字段完整业务模型",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_synthetic_todo_027",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "oa",
+        "binding_id": "bind_oa_synthetic_027",
+        "status": "active",
+        "binding_scope": "default"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.list_pending_workflows",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "version": "2.0.0",
+        "input_schema": {
+          "additionalProperties": false,
+          "description": "Frozen GT-001 zero-argument capability input.",
+          "properties": {},
+          "title": "ListPendingWorkflowsArguments",
+          "type": "object"
+        },
+        "output_schema": {
+          "$defs": {
+            "OAPendingWorkflow": {
+              "additionalProperties": false,
+              "description": "One HTML-free to-do item from OA's dedicated pending-workflow module.",
+              "properties": {
+                "todo_id": {
+                  "title": "Todo Id",
+                  "type": "string"
+                },
+                "title": {
+                  "title": "Title",
+                  "type": "string"
+                },
+                "status": {
+                  "title": "Status",
+                  "type": "string"
+                },
+                "received_at": {
+                  "title": "Received At",
+                  "type": "string"
+                },
+                "created_at": {
+                  "title": "Created At",
+                  "type": "string"
+                },
+                "workflow_type_id": {
+                  "title": "Workflow Type Id",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "todo_id",
+                "title",
+                "status",
+                "received_at",
+                "created_at",
+                "workflow_type_id"
+              ],
+              "title": "OAPendingWorkflow",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Complete result proven against the OA to-do module's authoritative count.",
+          "properties": {
+            "workflows": {
+              "items": {
+                "$ref": "#/$defs/OAPendingWorkflow"
+              },
+              "title": "Workflows",
+              "type": "array"
+            },
+            "returned_count": {
+              "title": "Returned Count",
+              "type": "integer"
+            },
+            "authoritative_count": {
+              "title": "Authoritative Count",
+              "type": "integer"
+            },
+            "is_complete": {
+              "const": true,
+              "title": "Is Complete",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "workflows",
+            "returned_count",
+            "authoritative_count",
+            "is_complete"
+          ],
+          "title": "OAPendingWorkflowCollection",
+          "type": "object"
+        },
+        "input_schema_digest": "a449f68efa245eb866569f080c8bf4ae1db4462cdfff6c63872d7104a49868da",
+        "output_schema_digest": "87d879295d5ea7c9dd73efa55068e4e4a8c8c682a49607ff06acd739a8bfe320"
+      }
+    ],
+    "mock_oa_state": {
+      "pending_workflows": {
+        "workflows": [
+          {
+            "todo_id": "SYN-TODO-027-001",
+            "title": "合成预算复核待办",
+            "status": "SYNTHETIC_PENDING",
+            "received_at": "2026-08-09 09:15:00",
+            "created_at": "2026-08-09 08:40:00",
+            "workflow_type_id": "SYN-WFT-027-A"
+          },
+          {
+            "todo_id": "SYN-TODO-027-002",
+            "title": "合成采购确认待办",
+            "status": "SYNTHETIC_PENDING",
+            "received_at": "2026-08-09 10:20:00",
+            "created_at": "2026-08-09 09:55:00",
+            "workflow_type_id": "SYN-WFT-027-B"
+          }
+        ],
+        "returned_count": 2,
+        "authoritative_count": 2,
+        "is_complete": true
+      }
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "查询我的合成 OA 待办事宜",
+    "arguments": {}
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "message_contains": [
+        "OA待办共2条",
+        "合成预算复核待办",
+        "合成采购确认待办"
+      ],
+      "ui.component_type": "none",
+      "data.workflows.length": 2,
+      "data.workflows.0.todo_id": "SYN-TODO-027-001",
+      "data.workflows.0.title": "合成预算复核待办",
+      "data.workflows.0.status": "SYNTHETIC_PENDING",
+      "data.workflows.0.received_at": "2026-08-09 09:15:00",
+      "data.workflows.0.created_at": "2026-08-09 08:40:00",
+      "data.workflows.0.workflow_type_id": "SYN-WFT-027-A",
+      "data.returned_count": 2,
+      "data.authoritative_count": 2,
+      "data.is_complete": true
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "gateway_pre_recorded",
+      "adapter_called",
+      "gateway_post_recorded",
+      "response_envelope_created",
+      "task_completed"
+    ]
+  },
+  "then_forbidden": [
+    "trace_contains_token",
+    "response_contains_internal_url"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "none"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false,
+    "exact_calls": {
+      "oa.list_pending_workflows": 1
+    },
+    "exact_arguments": {
+      "oa.list_pending_workflows": [
+        {}
+      ]
+    }
+  },
+  "policy_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false
+  }
+}

@@ -2,7 +2,7 @@
 
 > 状态：**生效（轻量地图）**。单人开发 + 强模型（Opus 5 / GPT-5.6）下不再走「总体计划 → 每任务 task_id 提示词 → 每任务 SPEC」那套 ceremony：本文件是范围边界 + DAG + BLOCKED 护栏的**地图**，不是逐任务合同；task_id 是路标而非正式 lane 依据，无需「Opus 实审 + 拍板生效」门即可据此开 lane。
 >
-> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 **1735 passed / 0 skipped / 0 failed**；Golden Gate **25/25 passed / 0 skipped / 0 failed**，由 `P2-GOV-SYNC-009` 在 `1bf2ba6c895fec4b847f2369f13f22879920000b` 本地实跑）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
+> 仍然硬约束（与流程无关，不可省）：① 红线动作先问；② 密钥不进代码/日志/Trace/fixture；③ 改完跑验证（基线 **1849 passed / 0 skipped / 0 failed**；Golden Gate **27/27 passed / 0 skipped / 0 failed**，由 `P2-OA-TODOLIST-ADAPTER-001` 本地实跑）；④ **BLOCKED 外部输入未到时不启动、只解除不猜测**；⑤ 命中信任边界（真实认证/凭证/外部 API）的任务仍走 Opus 评审（见 `opus-review-scope-rule`），减的是文档 ceremony，不是信任边界评审。
 
 ## 1. P2 总目标
 
@@ -51,7 +51,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|
 | 真实 LLM / 生产装配 | 内网 vLLM endpoint，以及 `max_model_len`、量化、timeout、`max_tokens`、`enable_thinking` 的实际值。 | ✅ 已到位 | `P1-PARAM-001.md` L3-L7、L24-L59 |
 | 可信试点入口 | 雨爷选择最小试点认证方案，或 infra 提供现有 IAM/SSO 可接入条件；禁止继续把 `X-EternalAI-Roles` 当证明。 | ✅ OA 登录、EternalAI Session Cookie、认证 Principal 与受保护入口已落地；企业 IAM/SSO 是否提前仍开放 | `app/api/v1/auth.py`；`app/api/v1/admin.py`；蓝图 §12.1.5 L2538-L2549 |
-| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | ◐ OA 代码纵切与凭证绑定已落地；2026-08-07 待办现场输入已到位，真实 OA Live 指纹漂移比对仍缺，第二个系统仍待选 | 蓝图 §15 L2870-L2907；机器本地非仓库输入 `todolist1.har`、`home.png`、`wtd.png` 的存在性由 `P2-GOV-SYNC-009` PR body `## Scope` 永久记录；`ADR-P0-SPIKE-005a-oa-api-auth.md` L123-L150、`ADR-P0-SPIKE-005b-u8-api-auth.md` L122-L148、`ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md` L124-L152 |
+| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | ◐ OA 代码纵切、凭证绑定与待办事宜数据源原地替换已落地；真实 OA Live 指纹漂移比对仍缺，第二个系统仍待选 | 蓝图 §15 L2870-L2907；机器本地非仓库输入 `todolist1.har`、`home.png`、`wtd.png` 的存在性由 `P2-GOV-SYNC-009` PR body `## Scope` 永久记录；`tests/contract_packs/oa/ecology9-pending-workflows-v3/profile.json`；`ADR-P0-SPIKE-005a-oa-api-auth.md` L123-L150、`ADR-P0-SPIKE-005b-u8-api-auth.md` L122-L148、`ADR-P0-SPIKE-005c-hikvision-ivms-api-auth.md` L124-L152 |
 | 正式 Secret 管理 | 企业允许的 Vault/KMS/OS secret 方案、密钥责任边界与轮换要求；不填具体产品/参数。 | ✗ **仍缺**（阻塞 IDENTITY-CREDENTIAL 的 Secret 存储子块） | 蓝图 §7.4.3 L1540-L1549、§7.4.6 L1597-L1653、§7.4.7 L1677 |
 | DB Gateway 真实纵切 | 业务负责人/DBA 批准的只读视图、字段/行级范围、测试数据与访问身份。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947 |
 | Memory 与低风险写入验收 | 经批准的知识语料/用户数据边界；以及具体写操作、测试环境、owner、回滚/补偿能力。 | 蓝图 §10.1-§10.2 L2148-L2205、§5.9 L878-L918 |
@@ -60,7 +60,9 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | item | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| `P2-OA-INTRANET-SMOKE-001` 现场验收（部分完成） | 2026-08-07 已取得待办 Adapter 所需 HAR 与页面输入，故待办棒无需再进内网；该采集不等于目标能力 Live 指纹漂移比对，也不自动补齐 Cookie 冷启动与真实 `/chat` 端到端证据 | `P2-OA-INTRANET-SMOKE-001` 剩余现场窗口 | `P2-OA-INTRANET-SMOKE-001` | 真实 smoke 判定最小必需请求头、以全新 Cookie 状态证明冷启动链路，并完成目标能力 Live 指纹漂移比对与真实 `/chat` 端到端 | `P2-GOV-SYNC-009` PR body `## Scope` 永久记录机器本地输入清单与剩余缺口；`tests/contract_packs/oa/ecology9-pending-workflows-v2/profile.json:1-8` 明示现有 v2 只来自 sibling capture、未直接采集 pending；整数 `userid` 缺陷已由 merge `a9bf8b8fc3fbf48448ca511768fe7271d8b8a221` 修复 |
+| `P2-OA-INTRANET-SMOKE-001` 现场验收（部分完成） | 2026-08-07 的待办 HAR 已支持直接发布 v3 脱敏 Contract Pack 和实现三步协议；离线结构证据仍不等于目标能力 Live 指纹漂移比对，也不自动补齐 Cookie 冷启动与真实 `/chat` 端到端证据 | `P2-OA-INTRANET-SMOKE-001` 剩余现场窗口 | `P2-OA-INTRANET-SMOKE-001` | 真实 smoke 判定最小必需请求头、以全新 Cookie 状态证明冷启动链路，并完成目标能力 Live 指纹漂移比对与真实 `/chat` 端到端 | `tests/contract_packs/oa/ecology9-pending-workflows-v3/profile.json` 明示 `source_kind=sanitized_capture`；`scripts/smoke/runner.py::_run_one_live_check` 仍为 Provider 级；整数 `userid` 缺陷已修复 |
+| `P2-SMOKE-E2E-CHAIN-001` 全链 smoke 缺失 | 当前 live smoke 直接构造 `LiveOAReadProvider`，绕过 Runtime / Gateway / Policy / Evaluator / Trace；Provider 级绿不能证明真实用户请求的全链路可用或审计闭环 | 新的独立 Scope；真实现场证据仍依赖 `P2-OA-INTRANET-SMOKE-001` 剩余窗口 | `P2-OA-TODOLIST-ADAPTER-001` | 从真实受保护入口经 Runtime、Gateway、Policy、Adapter、Evaluator、Trace 完成 fail-closed 的现场验收，并明确区分 Provider 与端到端证据 | `scripts/smoke/runner.py::_run_one_live_check` 直接构造 `LiveOAReadProvider`；`scripts/smoke/runner.py::_render_todolist_structure_report` 明示 Provider 级 |
+| Phase 2 「下一棒」指针待裁决 | `P2-SMOKE-E2E-CHAIN-001`、企业密钥运行时管理面、仓库清理、Preselector b1-b4 均有有效理由，候选不唯一；实现棒自行排序会越过 B 类治理边界 | GOV-SYNC 的 B 类 DAG 裁决（尚未分配 task_id） | `P2-OA-TODOLIST-ADAPTER-001` | GOV-SYNC 完成候选优先级裁决，并把唯一后继 `task_id` 逐字同步到三份治理文档；裁决前指针保持空 | 本文件 §4 第 11 项；`AGENTS.md` / `CLAUDE.md` 当前交付状态段；上表各候选欠债 |
 | OA 长会话心跳保活缺失 | OA 登录技术对接文档步骤 6 要求“启动心跳保活”，当前 `app/` 没有心跳实现，长会话可能因 OA Session 超时而中断 | 尚未排期 | `P2-OA-SESSION-KEEPALIVE-001` | `app/` 实现有界、可停止且不泄漏凭证的 OA Session 心跳，并以长会话测试证明续期与失败行为 | `OA登录技术对接文档.md` §4.1、§4.2；本棒只登记，不实现 |
 | `phase0/main` 直推可隐式绕过 required checks | `P2-AUTH-USERID-TYPE-001` 本地合并后普通直推主分支时，两个 required checks 尚未完成，GitHub 回显 `Bypassed rule violations`；执行者未传 bypass 参数，账号权限仍允许绕过 | 外部操作：雨爷修改 GitHub 分支保护（无 task_id） | 每次集成均由 boot rules 强制走 PR | `phase0/main` 打开 **Do not allow bypassing the above settings**，且后续集成均在 required checks 最终全绿后通过 PR 合并 | 违规推送的事后 CI run `30797244405` 最终成功，但事后变绿不追溯消除违规；PR #65 在两个 required checks 成功后合并，是正确样板 |
 | 仓库卫生清理 | 历史 worktree、分支与 scratch 噪声仍占空间，部分 worktree 保有独有文件、未暂存修改或未合入 commit；删除均属红线 | 雨爷按绝对路径逐项授权 | `P2-WORKTREE-AUDIT-001` 只读清单及后续逐项复核 | 每个候选目标均经逐项批准并处置，且 B 类独有内容先获明确裁决 | 2026-08-03 对原清单 66 个 worktree 只读复核：A 61 / B 4 / C 1；藏活为 1 个未跟踪文件、3 个未暂存修改、2 个未合入 commit 计数，暂存 0。早前报告所称 `P1-GOV-SYNC-001` 有 18 个已暂存文件经复核已不成立，当前为 0；不追查去向。原报告另列 72 个本地分支和 88 个 Phase 1 scratch 候选；未获逐项授权前均不删除。两笔后续实现任务各新增 1 个 worktree |
@@ -96,7 +98,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 管理员 pin 属蓝图建议级，不与 `trigger_examples`、`aliases`、`scope/allowed_departments` 三个“必须具备”字段按同一强度登记。
 
-当前 `tests/contract_packs/oa/ecology9-pending-workflows-v1/profile.json` 的 `source_kind` 为 `"synthetic"`，v2 的 `source_kind` 为 `"derived_from_sibling_capture"`；二者都不能替代目标能力真实 OA Live 指纹漂移比对，OA 只读纵切尚不能据此宣告现场验收完成。
+当前 `tests/contract_packs/oa/ecology9-pending-workflows-v1/profile.json` 的 `source_kind` 为 `"synthetic"`，v2 为 `"derived_from_sibling_capture"`，v3 为直接现场原料脱敏后的 `"sanitized_capture"`。v3 能证明已捕获协议的离线结构和权威计数一致，但仍不能替代目标能力真实 OA Live 指纹漂移比对或全链现场验收。
 
 - **仓库卫生清理待办**：当前复核结果、历史证据纠偏、激活条件与逐项授权边界见上表“仓库卫生清理”；本棒未执行任何清理。
 
@@ -124,7 +126,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-SMOKE-RUNNER-001` | 新增不泄漏凭证、结构化报告且 fail-closed 的内网 smoke runner。 | `P2-OA-MSGCENTER-PROTOCOL-001` | Q3 | ✅ 已落地（merge `caaf801fcaa011573fc5c5fe1f1d8565a2cfc287`） |
 | `P2-SMOKE-AUTH-DIAG-001` | 以真实同源抓包发布 pending-workflows-v2、保持 v1 逐字节不变、关闭 Gateway binding-scope oracle，并恢复被弱化断言。 | `P2-SMOKE-RUNNER-001` | Q3 | ✅ 已落地（merge `1bf2ba6c895fec4b847f2369f13f22879920000b`） |
 | `P2-OA-INTRANET-SMOKE-001` | 完成真实 OA 现场 smoke；2026-08-07 已取得待办 Adapter 输入，目标能力 Live 指纹漂移比对、Cookie 冷启动和真实 `/chat` 仍保留。 | `P2-SMOKE-AUTH-DIAG-001` | Q3 | ◐ 部分完成；剩余项需再次进内网 |
-| `P2-OA-TODOLIST-ADAPTER-001` | 基于已到位的 OA 待办现场输入，建立独立业务模型、三步只读编排、权威计数完整性断言与新 Contract Pack；本棒不启用 `output_schema` 返回校验。 | `P2-SMOKE-AUTH-DIAG-001` | Q3 | 否：2026-08-07 现场输入已到位，无需再次进内网；Live 指纹剩余由 `P2-OA-INTRANET-SMOKE-001` 单独保留 |
+| `P2-OA-TODOLIST-ADAPTER-001` | 保留 `oa.list_pending_workflows` ID，把数据源原地替换为待办事宜三步协议，建立六字段业务模型、权威计数完整性断言与 v3 Contract Pack；不启用 `output_schema` 返回校验。 | `P2-SMOKE-AUTH-DIAG-001` | Q3 | ✅ 本棒交付完成；真实 Live 指纹仍由 `P2-OA-INTRANET-SMOKE-001` 单独保留 |
 | `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
 | `P2-PILOT-OPS-001` | 交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。 | `P2-READ-ADAPTER-001` | Q3 | 否（前置解除后） |
 | `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
@@ -134,14 +136,14 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → PILOT_OPS → GOLDEN → LOW_RISK_WRITE`；已落地 OA 现场准备链为 `SYSMSG_PACK → SYSMSG_LIVE → MSGCENTER_PROTOCOL → SMOKE_RUNNER → SMOKE_AUTH_DIAG`，其后由部分完成的 `OA_INTRANET_SMOKE` 与可立即启动的 `OA_TODOLIST_ADAPTER` 并行分叉。`IDENTITY_CREDENTIAL` 的其余绑定/凭证治理与只读两棒并行推进，`DB_GATEWAY`、`MEMORY` 在依赖和外部输入满足后并入 Golden，`SKILL_CANDIDATE` 从真实试点信号后启动，避免先造空池。
 
-当前已落地链推进至 `P2-SMOKE-AUTH-DIAG-001`（merge `1bf2ba6c895fec4b847f2369f13f22879920000b`）；`P2-OA-LOGIN-PARITY-001` 已完成纯只读诊断，无分支无 commit。`P2-OA-INTRANET-SMOKE-001` 为部分完成；下一棒为 `P2-OA-TODOLIST-ADAPTER-001`，它只依赖已完成的 `P2-SMOKE-AUTH-DIAG-001`，不等待剩余 Live 指纹。原主链中 `IDENTITY_CREDENTIAL`、`DB_GATEWAY`、`PILOT_OPS` 与 `GOLDEN` 的范围/依赖偏差仍属待裁决项，本次不替雨爷决定。
+当前交付链推进至 `P2-OA-TODOLIST-ADAPTER-001`；`P2-OA-LOGIN-PARITY-001` 已完成纯只读诊断，无分支无 commit，`P2-OA-INTRANET-SMOKE-001` 仍为部分完成。「下一棒」指针留空：`P2-SMOKE-E2E-CHAIN-001`、企业密钥运行时管理面、仓库清理、Preselector b1-b4 候选不唯一，必须由 GOV-SYNC 做 B 类 DAG 裁决。原主链中 `IDENTITY_CREDENTIAL`、`DB_GATEWAY`、`PILOT_OPS` 与 `GOLDEN` 的范围/依赖偏差仍属待裁决项，本次不替雨爷决定。
 
-> **顺序调整（2026-07-29；2026-08-09 更新现场状态）**：OA 只读拆成两棒。`OA_READ_CONTRACT` 先在气隙环境冻结 Replay/Live 接缝、白名单、Contract Pack 与脱敏工具；`READ_ADAPTER` 再补 Live HTTP、凭证读取、最小 IdentityMapping、现场 smoke 接线和完整运行时闭环。两棒均不等待共享 Secret 方案：已决凭证模型是每用户复用自身 OA Session，不用共享服务账号、不存密码、不静默重登。`IDENTITY_CREDENTIAL` 的其余治理与之并行。真实 OA 现场验收仍由 `P2-OA-INTRANET-SMOKE-001` 承载；2026-08-07 现场采集只解除待办 Adapter 输入，不由 synthetic 或 `derived_from_sibling_capture` Contract Pack、传输链 smoke 代替剩余 Live 指纹验收。
+> **顺序调整（2026-07-29；2026-08-10 更新现场状态）**：OA 只读拆成两棒。`OA_READ_CONTRACT` 先在气隙环境冻结 Replay/Live 接缝、白名单、Contract Pack 与脱敏工具；`READ_ADAPTER` 再补 Live HTTP、凭证读取、最小 IdentityMapping、现场 smoke 接线和完整运行时闭环。两棒均不等待共享 Secret 方案：已决凭证模型是每用户复用自身 OA Session，不用共享服务账号、不存密码、不静默重登。`IDENTITY_CREDENTIAL` 的其余治理与之并行。真实 OA 现场验收仍由 `P2-OA-INTRANET-SMOKE-001` 承载；v3 `sanitized_capture` 只证明已捕获协议的离线结构，不由 Contract Pack 或 Provider 级 smoke 代替剩余 Live 指纹与全链验收。
 
 ## 4. 决策与开放问题
 
 1. **已决（2026-07-24 雨爷拍板）— A1：是。** 生产 composition、真实 LLM 和最小可信试点入口作为 P2 首个硬前置（`P2-PILOT-FOUNDATION-001`）。
-2. **已决（2026-07-29 雨爷拍板；2026-08-09 状态更新）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** Replay/Contract、Live/凭证/IdentityMapping 代码纵切、OpenAPI/Orval、CSRF、Runtime 响应契约、可信登录入口、`/chat` 普通文本入口、`oa.list_system_messages` 并列 pack、Live 路由、消息中心协议、smoke runner 与鉴权诊断均已落地；整数 `userid` 兼容缺陷也已修复。2026-08-07 待办现场输入已到位，真实 OA Live 指纹漂移比对仍是欠债；下一棒 = `P2-OA-TODOLIST-ADAPTER-001`；第二个 Adapter 的启动条件仍开放。
+2. **已决（2026-07-29 雨爷拍板；2026-08-10 状态更新）— 首个真实系统与只读用例：OA `oa.list_pending_workflows`。** Replay/Contract、Live/凭证/IdentityMapping 代码纵切、OpenAPI/Orval、CSRF、Runtime 响应契约、可信登录入口、`/chat` 普通文本入口、`oa.list_system_messages` 并列 pack、Live 路由、消息中心协议、smoke runner、鉴权诊断与待办事宜数据源原地替换均已交付；OA 能力仍为两个，整数 `userid` 兼容缺陷也已修复。真实 OA Live 指纹漂移比对与全链 smoke 仍是欠债；「下一棒」指针留空，等待 GOV-SYNC 在非唯一候选中做 B 类裁决；第二个 Adapter 的启动条件仍开放。
 3. **认证路线**：OA 登录、EternalAI Session Cookie 与认证 Principal 已落地；仅“是否把企业 IAM/SSO 从 Phase 3 提前”仍开放。
 4. **DB Gateway**：Phase 2 路线图写了基础 DB Gateway，但蓝图又限定“仅无 API/报表需求时”；是否已有获批报表用例？
 5. **Skill 候选池**：只允许管理员/用户手工登记，还是允许脱敏 Trace 产生“候选提议”？后者不得变成自动 Skill 生成。

@@ -23,16 +23,24 @@ from app.infra.adapters.oa.contracts import (
 from app.infra.auth.oa import OAAuthenticationError
 from app.ports.auth import AuthenticationError
 from app.ports.capability_registry import CapabilitySpec
+from scripts.sanitize_oa_contract_pack import SanitizationError
 from scripts.smoke import environment as smoke_environment
+from scripts.smoke import har as smoke_har
 from scripts.smoke import runner as smoke_runner
 from scripts.smoke.capabilities import expected_oa_capabilities
 from scripts.smoke.environment import parse_env_file, prepare_environment
 from scripts.smoke.errors import SmokeError
-from scripts.smoke.har import MessageCenterContract, extract_message_center_contract
+from scripts.smoke.har import (
+    MessageCenterContract,
+    TodoListContract,
+    extract_message_center_contract,
+    extract_todo_list_contract,
+)
 from scripts.smoke.live import (
     ProtocolEvidence,
     ProtocolSummary,
     RecordingOpener,
+    TodoProtocolEvidence,
     compare_record_structures,
 )
 from scripts.smoke.runner import (
@@ -45,6 +53,70 @@ from scripts.smoke.runner import (
     _cleanup_failed_start,
     _configuration_fingerprint,
 )
+
+
+def _assert_smoke_har_traceback_is_redacted(
+    error: BaseException,
+    marker: str,
+) -> None:
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    smoke_har_frames = 0
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") == smoke_har.__name__:
+            smoke_har_frames += 1
+            assert all(marker not in repr(value) for value in frame.f_locals.values())
+        traceback = traceback.tb_next
+    assert smoke_har_frames > 0
+
+
+def _assert_smoke_environment_traceback_is_redacted(
+    error: BaseException,
+    *markers: str,
+) -> None:
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    environment_frames: list[str] = []
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") == smoke_environment.__name__:
+            environment_frames.append(frame.f_code.co_name)
+            assert all(
+                marker not in repr(value)
+                for value in frame.f_locals.values()
+                for marker in markers
+            )
+        traceback = traceback.tb_next
+    assert environment_frames == ["prepare_environment"]
+
+
+def _assert_optional_capture_traceback_is_redacted(
+    error: BaseException,
+    *markers: str,
+) -> None:
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    target_modules = {
+        "scripts.sanitize_oa_contract_pack",
+        "scripts.smoke.har",
+        "scripts.smoke.runner",
+    }
+    target_frames = 0
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") in target_modules:
+            target_frames += 1
+            assert all(
+                marker not in repr(value)
+                for value in frame.f_locals.values()
+                for marker in markers
+            )
+        traceback = traceback.tb_next
+    assert target_frames > 0
 
 
 def _message_center_entry(
@@ -93,6 +165,151 @@ def _write_har(path: Path, entries: list[object]) -> None:
     path.write_text(
         json.dumps({"log": {"entries": entries}}),
         encoding="utf-8",
+    )
+
+
+def _todo_list_entries(
+    *,
+    session_key: str,
+    actiontype: str = "synthetic-action",
+    authoritative_count: int = 1,
+    records: list[object] | None = None,
+) -> list[object]:
+    records = [{"requestid": "synthetic-id"}] if records is None else records
+
+    def entry(
+        endpoint: str,
+        form: dict[str, str],
+        response: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "request": {
+                "url": f"https://synthetic.invalid/api/todo/{endpoint}",
+                "postData": {
+                    "params": [
+                        {"name": name, "value": value}
+                        for name, value in form.items()
+                    ]
+                },
+            },
+            "response": {
+                "content": {"text": json.dumps(response)},
+            },
+        }
+
+    return [
+        entry(
+            "splitPageKey",
+            {
+                "actiontype": actiontype,
+                "hideNoDataTab": "synthetic-hide",
+                "method": "synthetic-method",
+                "officalType": "synthetic-offical-type",
+                "viewScope": "synthetic-view-scope",
+                "viewcondition": "5",
+            },
+            {"sessionkey": session_key},
+        ),
+        entry(
+            "datas",
+            {
+                "current": "1",
+                "dataKey": session_key,
+                "sortParams": "synthetic-sort",
+            },
+            {"datas": records, "status": True},
+        ),
+        entry(
+            "counts",
+            {"dataKey": session_key},
+            {"count": authoritative_count, "status": True},
+        ),
+    ]
+
+
+def _todo_list_capture_entries(
+    *,
+    session_key: str,
+    records: list[object],
+) -> list[object]:
+    entries = _todo_list_entries(
+        session_key=session_key,
+        records=records,
+    )
+    for entry, endpoint_path in zip(
+        entries,
+        (
+            "/api/workflow/reqlist/splitPageKey",
+            "/api/ec/dev/table/datas",
+            "/api/ec/dev/table/counts",
+        ),
+        strict=True,
+    ):
+        assert isinstance(entry, dict)
+        request = entry["request"]
+        assert isinstance(request, dict)
+        request["method"] = "POST"
+        request["url"] = f"https://synthetic.invalid{endpoint_path}"
+    return [
+        {"request": {}},
+        entries[0],
+        {"request": {"method": "GET", "url": "https://synthetic.invalid/decoy"}},
+        entries[1],
+        {"response": {}},
+        entries[2],
+    ]
+
+
+def _optional_capture_layout(
+    tmp_path: Path,
+    *,
+    session_key: str,
+    records: list[object],
+) -> tuple[Layout, Path]:
+    har_directory = tmp_path / "har"
+    har_directory.mkdir()
+    source_har = har_directory / "synthetic-todo.har"
+    _write_har(
+        source_har,
+        _todo_list_capture_entries(
+            session_key=session_key,
+            records=records,
+        ),
+    )
+    return (
+        Layout(
+            repo_root=tmp_path,
+            shared_root=tmp_path,
+            base_env=tmp_path / ".env",
+            smoke_env=tmp_path / ".env.smoke",
+            source_har=source_har,
+            scratch=tmp_path / "scratch",
+            todo_source_har=source_har,
+        ),
+        har_directory,
+    )
+
+
+def _synthetic_todo_contract(
+    *,
+    base_url: str = "https://synthetic.invalid",
+) -> TodoListContract:
+    return TodoListContract(
+        split_page_key_source_entry_index=1,
+        counts_source_entry_index=3,
+        datas_source_entry_indices=(2,),
+        matching_sequence_count=1,
+        base_url=base_url,
+        split_page_key_path="/api/todo/splitPageKey",
+        counts_path="/api/todo/counts",
+        datas_path="/api/todo/datas",
+        actiontype="synthetic-action",
+        hide_no_data_tab="synthetic-hide",
+        method="synthetic-method",
+        offical_type="synthetic-offical-type",
+        view_scope="synthetic-view-scope",
+        sort_params="synthetic-sort",
+        authoritative_count_matches=True,
     )
 
 
@@ -219,6 +436,305 @@ def test_extract_message_center_contract_rejects_multiple_signatures(
         extract_message_center_contract(path)
 
 
+def test_extract_todo_list_contract_keeps_only_configuration_and_structure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    query_credential = "s" * 69
+    _write_har(
+        path,
+        [{"request": {}}] + _todo_list_entries(session_key=query_credential),
+    )
+
+    contract = extract_todo_list_contract(path)
+
+    assert contract.split_page_key_source_entry_index == 1
+    assert contract.datas_source_entry_indices == (2,)
+    assert contract.counts_source_entry_index == 3
+    assert contract.matching_sequence_count == 1
+    assert contract.base_url == "https://synthetic.invalid"
+    assert contract.split_page_key_path == "/api/todo/splitPageKey"
+    assert contract.counts_path == "/api/todo/counts"
+    assert contract.datas_path == "/api/todo/datas"
+    assert contract.actiontype == "synthetic-action"
+    assert contract.hide_no_data_tab == "synthetic-hide"
+    assert contract.method == "synthetic-method"
+    assert contract.offical_type == "synthetic-offical-type"
+    assert contract.view_scope == "synthetic-view-scope"
+    assert contract.sort_params == "synthetic-sort"
+    assert contract.authoritative_count_matches is True
+    assert repr(contract) == "TodoListContract(structural_only=True)"
+    assert query_credential not in repr(contract)
+
+
+def test_extract_todo_list_contract_accepts_identical_repeated_sequence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    entries = _todo_list_entries(session_key="a" * 69)
+    entries.extend(_todo_list_entries(session_key="b" * 69))
+    _write_har(path, entries)
+
+    contract = extract_todo_list_contract(path)
+
+    assert contract.matching_sequence_count == 2
+    assert contract.split_page_key_source_entry_index == 0
+    assert contract.datas_source_entry_indices == (1,)
+    assert contract.counts_source_entry_index == 2
+
+
+def test_extract_todo_list_contract_rejects_configuration_ambiguity(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    entries = _todo_list_entries(session_key="a" * 69)
+    entries.extend(
+        _todo_list_entries(
+            session_key="b" * 69,
+            actiontype="different-action",
+        )
+    )
+    _write_har(path, entries)
+
+    with pytest.raises(SmokeError, match="todo_list_entry_ambiguous"):
+        extract_todo_list_contract(path)
+
+
+def test_extract_todo_list_contract_rejects_authoritative_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    query_credential = "a" * 69
+    _write_har(
+        path,
+        _todo_list_entries(
+            session_key=query_credential,
+            authoritative_count=2,
+        ),
+    )
+
+    with pytest.raises(
+        SmokeError,
+        match="todo_list_authoritative_count_mismatch",
+    ) as exc_info:
+        extract_todo_list_contract(path)
+
+    _assert_smoke_har_traceback_is_redacted(exc_info.value, query_credential)
+
+
+@pytest.mark.parametrize(
+    "session_key",
+    ["a" * 68 + " ", "a" * 68 + "\x7f"],
+)
+def test_extract_todo_list_contract_rejects_unsafe_session_key_structure(
+    tmp_path: Path,
+    session_key: str,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    _write_har(path, _todo_list_entries(session_key=session_key))
+
+    with pytest.raises(SmokeError, match="todo_list_entry_not_found"):
+        extract_todo_list_contract(path)
+
+
+def test_optional_pending_capture_passes_exact_todo_entry_indices(
+    tmp_path: Path,
+) -> None:
+    query_credential = "c" * 69
+    raw_record = {
+        "requestid": "raw-todo-identifier",
+        "requestname": "raw-todo-title",
+        "status": "raw-todo-status",
+        "receivedate": "2026-08-10 08:00:00",
+        "createdate": "2026-08-10 07:00:00",
+        "workflowid": "raw-workflow-type",
+    }
+    layout, har_directory = _optional_capture_layout(
+        tmp_path,
+        session_key=query_credential,
+        records=[raw_record],
+    )
+
+    smoke_runner._build_optional_pending_capture(
+        layout,
+        har_directory,
+        "20260810_080000",
+    )
+
+    output_dir = (
+        layout.scratch
+        / "smoke_capture"
+        / "20260810_080000"
+        / "ecology9-pending-workflows-v3"
+    )
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    fingerprint = json.loads(
+        (output_dir / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    serialized_pack = json.dumps(
+        {"profile": profile, "sample": sample, "fingerprint": fingerprint}
+    )
+
+    assert profile["profile_version"] == "ecology9-pending-workflows-v3"
+    assert profile["source_kind"] == "sanitized_capture"
+    assert sample["returned_count"] == 1
+    assert sample["authoritative_count"] == 1
+    assert sample["is_complete"] is True
+    assert len(sample["workflows"]) == 1
+    assert set(sample["workflows"][0]) == {
+        "todo_id",
+        "title",
+        "status",
+        "received_at",
+        "created_at",
+        "workflow_type_id",
+    }
+    assert fingerprint == build_structural_fingerprint(sample)
+    assert query_credential not in serialized_pack
+    assert all(value not in serialized_pack for value in raw_record.values())
+
+
+def test_optional_pending_capture_rejection_creates_no_output_parent(
+    tmp_path: Path,
+) -> None:
+    query_credential = "r" * 69
+    raw_marker = "RAW-CAPTURE-FAILURE-MARKER"
+    layout, har_directory = _optional_capture_layout(
+        tmp_path,
+        session_key=query_credential,
+        records=[
+            {
+                "requestid": "raw-todo-identifier",
+                "requestname": raw_marker,
+                "status": "raw-todo-status",
+                "receivedate": "2026-08-10 08:00:00",
+                "createdate": "2026-08-10 07:00:00",
+            }
+        ],
+    )
+
+    with pytest.raises(
+        SanitizationError,
+        match="response_required_string_invalid",
+    ) as exc_info:
+        smoke_runner._build_optional_pending_capture(
+            layout,
+            har_directory,
+            "20260810_090000",
+        )
+
+    _assert_optional_capture_traceback_is_redacted(
+        exc_info.value,
+        query_credential,
+        raw_marker,
+    )
+    output_parent = layout.scratch / "smoke_capture" / "20260810_090000"
+    assert not output_parent.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_optional_pending_capture_allocation_failure_rolls_back_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query_credential = "p" * 69
+    raw_marker = "RAW-CAPTURE-ALLOCATION-MARKER"
+    layout, har_directory = _optional_capture_layout(
+        tmp_path,
+        session_key=query_credential,
+        records=[
+            {
+                "requestid": "raw-todo-identifier",
+                "requestname": raw_marker,
+                "status": "raw-todo-status",
+                "receivedate": "2026-08-10 08:00:00",
+                "createdate": "2026-08-10 07:00:00",
+                "workflowid": "raw-workflow-type",
+            }
+        ],
+    )
+
+    def fail_allocation(**_kwargs: object) -> str:
+        raise OSError("synthetic allocation failure")
+
+    monkeypatch.setattr(smoke_runner.sanitizer.tempfile, "mkdtemp", fail_allocation)
+
+    with pytest.raises(
+        SanitizationError,
+        match="contract_pack_publish_failed",
+    ) as exc_info:
+        smoke_runner._build_optional_pending_capture(
+            layout,
+            har_directory,
+            "20260810_100000",
+        )
+
+    _assert_optional_capture_traceback_is_redacted(
+        exc_info.value,
+        query_credential,
+        raw_marker,
+    )
+    output_parent = layout.scratch / "smoke_capture" / "20260810_100000"
+    assert not output_parent.exists()
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_prepare_prints_only_todo_har_indices_counts_and_booleans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    message_har = tmp_path / "message.har"
+    todo_har = tmp_path / "todo.har"
+    query_credential = "q" * 69
+    _write_har(message_har, [_message_center_entry()])
+    _write_har(todo_har, _todo_list_entries(session_key=query_credential))
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=message_har,
+        scratch=tmp_path / "_scratch",
+        todo_source_har=todo_har,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "prepare_environment",
+        lambda **_kwargs: SimpleNamespace(
+            added_keys=(),
+            missing_keys=(),
+            merged={},
+            infra=SimpleNamespace(
+                docker_available=False,
+                postgres_reachable=False,
+                redis_reachable=False,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(),
+    )
+
+    result = smoke_runner._command_prepare(layout)
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "todo_har_entries=3" in output
+    assert "todo_list_sequences=1" in output
+    assert "todo_split_source_entry=0" in output
+    assert "todo_counts_source_entry=2" in output
+    assert "todo_datas_source_entries=1" in output
+    assert "todo_authoritative_count_matches=true" in output
+    assert "todo_list_contract_recognized=true" in output
+    assert query_credential not in output
+    assert "synthetic-action" not in output
+    assert "https://" not in output
+
+
 def test_prepare_is_idempotent_and_never_writes_base_env(
     tmp_path: Path,
 ) -> None:
@@ -231,7 +747,7 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
     before_hash = hashlib.sha256(base_env.read_bytes()).hexdigest()
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v2",
+        "ecology9-pending-workflows-v3",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -251,6 +767,7 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
@@ -266,6 +783,9 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
             endpoint_path="/different",
             bizstate="different-biz",
             select_state="different-select",
+        ),
+        todo_contract=_synthetic_todo_contract(
+            base_url="https://different.invalid"
         ),
         process_environment={},
         check_infra=False,
@@ -290,7 +810,7 @@ def test_prepare_completes_a_half_filled_file_then_is_idempotent(
     )
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v2",
+        "ecology9-pending-workflows-v3",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -309,6 +829,7 @@ def test_prepare_completes_a_half_filled_file_then_is_idempotent(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
@@ -324,6 +845,7 @@ def test_prepare_completes_a_half_filled_file_then_is_idempotent(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
@@ -332,6 +854,7 @@ def test_prepare_completes_a_half_filled_file_then_is_idempotent(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
@@ -365,6 +888,108 @@ def test_atomic_smoke_env_failure_preserves_original_file(
     assert not list(tmp_path.glob(".env.smoke.*.tmp"))
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["alpha # beta", " leading", "trailing ", "'quoted'", '"quoted"'],
+)
+def test_append_env_values_rejects_non_round_tripping_dotenv_values(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    smoke_env = tmp_path / ".env.smoke"
+
+    with pytest.raises(SmokeError, match="env_value_invalid"):
+        smoke_environment._append_env_values(smoke_env, {"TODO_VALUE": value})
+
+    assert not smoke_env.exists()
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
+def test_prepare_round_trip_rejection_redacts_dotenv_and_har_values(
+    tmp_path: Path,
+) -> None:
+    active_secret = "ACTIVE-DOTENV-SECRET-MARKER"
+    har_value = "HAR-DERIVED-CONFIG-MARKER # rejected"
+    base_env = tmp_path / ".env"
+    base_env.write_text(f"ACTIVE_SECRET={active_secret}\n", encoding="utf-8")
+    smoke_env = tmp_path / ".env.smoke"
+    contract = MessageCenterContract(
+        source_entry_index=0,
+        matching_entry_count=1,
+        base_url="https://synthetic.invalid",
+        endpoint_path="/api/message-center",
+        bizstate="synthetic-biz",
+        select_state="synthetic-select",
+    )
+    todo_contract = replace(_synthetic_todo_contract(), actiontype=har_value)
+
+    with pytest.raises(SmokeError, match="env_value_invalid") as exc_info:
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=base_env,
+            smoke_env_path=smoke_env,
+            contract=contract,
+            todo_contract=todo_contract,
+            process_environment={},
+            check_infra=False,
+        )
+
+    _assert_smoke_environment_traceback_is_redacted(
+        exc_info.value,
+        active_secret,
+        har_value,
+    )
+    assert not smoke_env.exists()
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
+def test_prepare_unexpected_failure_redacts_dotenv_and_har_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_secret = "ACTIVE-DOTENV-SECRET-MARKER"
+    har_value = "HAR-DERIVED-CONFIG-MARKER"
+    base_env = tmp_path / ".env"
+    base_env.write_text(f"ACTIVE_SECRET={active_secret}\n", encoding="utf-8")
+    smoke_env = tmp_path / ".env.smoke"
+    contract = MessageCenterContract(
+        source_entry_index=0,
+        matching_entry_count=1,
+        base_url="https://synthetic.invalid",
+        endpoint_path="/api/message-center",
+        bizstate="synthetic-biz",
+        select_state="synthetic-select",
+    )
+    todo_contract = replace(_synthetic_todo_contract(), actiontype=har_value)
+
+    def fail_append(_path: Path, _values: object) -> None:
+        raise RuntimeError(har_value)
+
+    monkeypatch.setattr(smoke_environment, "_append_env_values", fail_append)
+
+    with pytest.raises(
+        SmokeError,
+        match="^smoke_environment_rejected$",
+    ) as exc_info:
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=base_env,
+            smoke_env_path=smoke_env,
+            contract=contract,
+            todo_contract=todo_contract,
+            process_environment={},
+            check_infra=False,
+        )
+
+    _assert_smoke_environment_traceback_is_redacted(
+        exc_info.value,
+        active_secret,
+        har_value,
+    )
+    assert not smoke_env.exists()
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
 def test_prepare_does_not_replace_existing_blank_value(
     tmp_path: Path,
 ) -> None:
@@ -377,7 +1002,7 @@ def test_prepare_does_not_replace_existing_blank_value(
     smoke_env = tmp_path / ".env.smoke"
     smoke_env.write_text("OA_BASE_URL=\n", encoding="utf-8")
     for profile in (
-        "ecology9-pending-workflows-v2",
+        "ecology9-pending-workflows-v3",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -397,6 +1022,7 @@ def test_prepare_does_not_replace_existing_blank_value(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
@@ -416,7 +1042,7 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
     )
     smoke_env = tmp_path / ".env.smoke"
     for profile in (
-        "ecology9-pending-workflows-v2",
+        "ecology9-pending-workflows-v3",
         "ecology9-system-messages-v1",
     ):
         (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
@@ -436,14 +1062,47 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
         base_env_path=base_env,
         smoke_env_path=smoke_env,
         contract=contract,
+        todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
     )
 
     assert result.missing_keys == ()
     values = parse_env_file(smoke_env)
-    assert values["OA_PENDING_WORKFLOWS_BIZSTATE"] == ""
+    assert values["OA_SYSTEM_MESSAGES_BIZSTATE"] == ""
     assert values["OA_SYSTEM_MESSAGES_SELECT_STATE"] == ""
+    assert values["OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH"] == (
+        "/api/todo/splitPageKey"
+    )
+    assert values["OA_PENDING_WORKFLOWS_COUNTS_PATH"] == "/api/todo/counts"
+    assert values["OA_PENDING_WORKFLOWS_DATAS_PATH"] == "/api/todo/datas"
+    assert "OA_PENDING_WORKFLOWS_CATEGORY_ID" not in values
+    assert "OA_PENDING_WORKFLOWS_BIZSTATE" not in values
+    assert "OA_PENDING_WORKFLOWS_SELECT_STATE" not in values
+
+
+def test_prepare_rejects_mismatched_oa_har_origins(tmp_path: Path) -> None:
+    with pytest.raises(SmokeError, match="oa_har_base_url_mismatch"):
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=tmp_path / ".env",
+            smoke_env_path=tmp_path / ".env.smoke",
+            contract=MessageCenterContract(
+                source_entry_index=0,
+                matching_entry_count=1,
+                base_url="https://system.synthetic.invalid",
+                endpoint_path="/api/message-center",
+                bizstate="",
+                select_state="",
+            ),
+            todo_contract=_synthetic_todo_contract(
+                base_url="https://todo.synthetic.invalid"
+            ),
+            process_environment={},
+            check_infra=False,
+        )
+
+    assert not (tmp_path / ".env.smoke").exists()
 
 
 def test_protocol_evidence_keeps_only_structure_counts_and_cursor_booleans() -> None:
@@ -511,6 +1170,119 @@ def test_protocol_evidence_keeps_only_structure_counts_and_cursor_booleans() -> 
     assert "secret-next-id" not in rendered
 
 
+def test_todo_protocol_evidence_proves_three_step_count_and_credential_chain() -> None:
+    query_credential = "q" * 69
+    split_form = {
+        "actiontype": "synthetic-action",
+        "hideNoDataTab": "synthetic-hide",
+        "method": "synthetic-method",
+        "officalType": "synthetic-offical-type",
+        "viewScope": "synthetic-view-scope",
+        "viewcondition": "5",
+    }
+    evidence = TodoProtocolEvidence(
+        split_page_key_path="/api/todo/splitPageKey",
+        counts_path="/api/todo/counts",
+        datas_path="/api/todo/datas",
+        expected_split_form={
+            key: value for key, value in split_form.items() if key != "viewcondition"
+        },
+        expected_sort_params="synthetic-sort",
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/todo/splitPageKey",
+            data=urlencode(split_form).encode("ascii"),
+        ),
+        json.dumps({"sessionkey": query_credential}).encode("utf-8"),
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/todo/counts",
+            data=urlencode({"dataKey": query_credential}).encode("ascii"),
+        ),
+        json.dumps({"count": 1, "status": True}).encode("utf-8"),
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/todo/datas",
+            data=urlencode(
+                {
+                    "current": "1",
+                    "dataKey": query_credential,
+                    "sortParams": "synthetic-sort",
+                }
+            ).encode("ascii"),
+        ),
+        json.dumps(
+            {
+                "datas": [{"requestid": "private-business-id"}],
+                "status": True,
+            }
+        ).encode("utf-8"),
+    )
+    evidence.clear_transient_state()
+
+    summary = evidence.summary()
+    rendered = repr(evidence) + repr(summary)
+    assert summary.request_count == 3
+    assert summary.response_count == 3
+    assert summary.record_count == 1
+    assert summary.todo_three_step_matches is True
+    assert summary.authoritative_count_matches is True
+    assert summary.fixed_viewcondition_matches is True
+    assert summary.query_credential_chain_matches is True
+    assert summary.configured_form_matches is True
+    assert summary.successful_envelopes is True
+    assert "sessionkey" not in summary.envelope_fields
+    assert "dataKey" not in summary.envelope_fields
+    assert query_credential not in rendered
+    assert "private-business-id" not in rendered
+
+
+def test_todo_protocol_evidence_rejects_wrong_source_and_partial_count() -> None:
+    query_credential = "q" * 69
+    evidence = TodoProtocolEvidence(
+        split_page_key_path="/api/todo/splitPageKey",
+        counts_path="/api/todo/counts",
+        datas_path="/api/todo/datas",
+        expected_split_form={},
+        expected_sort_params="synthetic-sort",
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/message-center/getMsgList",
+            data=urlencode({"viewcondition": "5"}).encode("ascii"),
+        ),
+        json.dumps({"sessionkey": query_credential}).encode("utf-8"),
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/todo/counts",
+            data=urlencode({"dataKey": query_credential}).encode("ascii"),
+        ),
+        json.dumps({"count": 2, "status": True}).encode("utf-8"),
+    )
+    evidence.observe(
+        Request(
+            "https://synthetic.invalid/api/todo/datas",
+            data=urlencode(
+                {
+                    "current": "1",
+                    "dataKey": query_credential,
+                    "sortParams": "synthetic-sort",
+                }
+            ).encode("ascii"),
+        ),
+        json.dumps({"datas": [{}], "status": True}).encode("utf-8"),
+    )
+
+    summary = evidence.summary()
+    assert summary.todo_three_step_matches is False
+    assert summary.authoritative_count_matches is False
+    assert summary.configured_form_matches is False
+
+
 def test_compare_record_structures_lists_only_field_names() -> None:
     first = ProtocolEvidence(expected_form={})
     second = ProtocolEvidence(expected_form={})
@@ -558,6 +1330,15 @@ def test_report_is_built_only_from_structural_metadata() -> None:
     sensitive_values = {
         "OA_BASE_URL": "https://private.synthetic.invalid",
         "OA_MESSAGE_CENTER_PATH": "/private/synthetic/path",
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH": "/private/todo/split",
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH": "/private/todo/counts",
+        "OA_PENDING_WORKFLOWS_DATAS_PATH": "/private/todo/datas",
+        "OA_PENDING_WORKFLOWS_ACTIONTYPE": "private-actiontype",
+        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB": "private-hide-setting",
+        "OA_PENDING_WORKFLOWS_METHOD": "private-method",
+        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE": "private-offical-type",
+        "OA_PENDING_WORKFLOWS_VIEW_SCOPE": "private-view-scope",
+        "OA_PENDING_WORKFLOWS_SORT_PARAMS": "private-sort-params",
         "DATABASE_URL": "postgresql://private.synthetic.invalid/db",
         "REDIS_URL": "redis://private.synthetic.invalid:6379/0",
         "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64": "sensitive-key-value-001",
@@ -582,8 +1363,18 @@ def test_report_is_built_only_from_structural_metadata() -> None:
     assert "不要自行改文件，也不要切换运行模式" in report
     assert "传输失败细分：remote_disconnected" in report
     assert "HTTP 状态码：502" in report
+    assert "Provider 级；不覆盖 Runtime / Gateway / Policy / Evaluator / Trace" in report
     assert "messageid" in report
     assert "title" in report
+    assert "sessionkey" not in report.casefold()
+    assert "datakey" not in report.casefold()
+
+    for credential_name in ("sessionkey", "dataKey"):
+        with pytest.raises(SmokeError, match="report_contains_sensitive_assignment"):
+            _assert_report_safe(
+                f"{credential_name}=private-query-credential",
+                {},
+            )
 
 
 def _verification_outcome(
@@ -614,6 +1405,10 @@ def _verification_outcome(
             envelope_fields=("data", "status"),
             record_field_types={},
             http_status_code=200,
+            todo_three_step_matches=True,
+            authoritative_count_matches=True,
+            fixed_viewcondition_matches=True,
+            query_credential_chain_matches=True,
         ),
         normalized=normalized,
         error_kind=error_kind,
@@ -625,6 +1420,178 @@ def test_verify_success_rejects_normalized_pending_fingerprint_drift() -> None:
     pending = _verification_outcome(drift_matches=False)
 
     assert smoke_runner._verify_success(system, pending) is False
+
+
+@pytest.mark.parametrize(
+    "failed_field",
+    [
+        "todo_three_step_matches",
+        "authoritative_count_matches",
+        "fixed_viewcondition_matches",
+        "query_credential_chain_matches",
+    ],
+)
+def test_verify_success_rejects_each_pending_todo_protocol_failure(
+    failed_field: str,
+) -> None:
+    system = _verification_outcome()
+    pending = _verification_outcome()
+    pending = replace(
+        pending,
+        protocol=replace(pending.protocol, **{failed_field: False}),
+    )
+
+    assert smoke_runner._verify_success(system, pending) is False
+
+
+def _synthetic_live_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        oa_base_url="https://synthetic.invalid",
+        oa_timeout_seconds=5.0,
+        oa_message_center_path="/api/message-center",
+        oa_message_center_page_size=20,
+        oa_pending_workflows_split_page_key_path="/api/todo/splitPageKey",
+        oa_pending_workflows_counts_path="/api/todo/counts",
+        oa_pending_workflows_datas_path="/api/todo/datas",
+        oa_pending_workflows_actiontype="synthetic-action",
+        oa_pending_workflows_hide_no_data_tab="synthetic-hide",
+        oa_pending_workflows_method="synthetic-method",
+        oa_pending_workflows_offical_type="synthetic-offical-type",
+        oa_pending_workflows_view_scope="synthetic-view-scope",
+        oa_pending_workflows_sort_params="synthetic-sort",
+        oa_system_messages_category_id="synthetic-system-category",
+        oa_system_messages_bizstate="synthetic-system-bizstate",
+        oa_system_messages_select_state="synthetic-system-select-state",
+        oa_pending_workflows_contract_pack_dir=Path("synthetic-pending-pack"),
+        oa_system_messages_contract_pack_dir=Path("synthetic-system-pack"),
+    )
+
+
+def test_provider_level_live_checks_use_distinct_todo_and_message_protocols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructed: list[dict[str, object]] = []
+    evidence_types: list[type[object]] = []
+
+    class FakeProvider:
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(kwargs)
+            opener_factory = kwargs["opener_factory"]
+            assert callable(opener_factory)
+            opener = opener_factory()
+            self.evidence = opener._evidence
+            evidence_types.append(type(self.evidence))
+            self.drift_reporter = kwargs["drift_reporter"]
+
+        async def list_pending_workflows(self, _credential: object) -> None:
+            assert isinstance(self.evidence, TodoProtocolEvidence)
+            query_credential = "q" * 69
+            self.evidence.observe(
+                Request(
+                    "https://synthetic.invalid/api/todo/splitPageKey",
+                    data=urlencode(
+                        {
+                            "actiontype": "synthetic-action",
+                            "hideNoDataTab": "synthetic-hide",
+                            "method": "synthetic-method",
+                            "officalType": "synthetic-offical-type",
+                            "viewScope": "synthetic-view-scope",
+                            "viewcondition": "5",
+                        }
+                    ).encode("ascii"),
+                ),
+                json.dumps({"sessionkey": query_credential}).encode("utf-8"),
+            )
+            self.evidence.observe(
+                Request(
+                    "https://synthetic.invalid/api/todo/counts",
+                    data=urlencode({"dataKey": query_credential}).encode("ascii"),
+                ),
+                json.dumps({"count": 1, "status": True}).encode("utf-8"),
+            )
+            self.evidence.observe(
+                Request(
+                    "https://synthetic.invalid/api/todo/datas",
+                    data=urlencode(
+                        {
+                            "current": "1",
+                            "dataKey": query_credential,
+                            "sortParams": "synthetic-sort",
+                        }
+                    ).encode("ascii"),
+                ),
+                json.dumps({"datas": [{}], "status": True}).encode("utf-8"),
+            )
+            fingerprint = build_structural_fingerprint({"workflows": []})
+            assert callable(self.drift_reporter)
+            self.drift_reporter(
+                compare_structural_fingerprints(fingerprint, fingerprint)
+            )
+
+        async def list_system_messages(self, _credential: object) -> None:
+            assert isinstance(self.evidence, ProtocolEvidence)
+            expected = {
+                "id": "synthetic-system-category",
+                "pagesize": "20",
+                "bizstate": "synthetic-system-bizstate",
+                "selectState": "synthetic-system-select-state",
+            }
+            self.evidence.observe(
+                Request(
+                    "https://synthetic.invalid/api/message-center",
+                    data=urlencode(
+                        {**expected, "msgid": "0", "mintime": "0"}
+                    ).encode("ascii"),
+                ),
+                json.dumps(
+                    {
+                        "data": [],
+                        "status": "1",
+                        "msgid": "synthetic-next-id",
+                        "mintime": "synthetic-next-time",
+                    }
+                ).encode("utf-8"),
+            )
+            fingerprint = build_structural_fingerprint({"messages": []})
+            assert callable(self.drift_reporter)
+            self.drift_reporter(
+                compare_structural_fingerprints(fingerprint, fingerprint)
+            )
+
+    monkeypatch.setattr(smoke_runner, "LiveOAReadProvider", FakeProvider)
+    settings = _synthetic_live_settings()
+
+    pending = asyncio.run(
+        smoke_runner._run_one_live_check(
+            settings,
+            object(),
+            capability="pending_workflows",
+        )
+    )
+    system = asyncio.run(
+        smoke_runner._run_one_live_check(
+            settings,
+            object(),
+            capability="system_messages",
+        )
+    )
+
+    assert evidence_types == [TodoProtocolEvidence, ProtocolEvidence]
+    assert pending.normalized is True
+    assert pending.protocol.todo_three_step_matches is True
+    assert pending.protocol.authoritative_count_matches is True
+    assert system.normalized is True
+    assert system.protocol.terminal_empty_page is True
+    for kwargs in constructed:
+        assert kwargs["pending_workflows_split_page_key_path"] == (
+            "/api/todo/splitPageKey"
+        )
+        assert kwargs["pending_workflows_counts_path"] == "/api/todo/counts"
+        assert kwargs["pending_workflows_datas_path"] == "/api/todo/datas"
+        assert kwargs["message_center_endpoint_path"] == "/api/message-center"
+        assert "pending_workflows_category_id" not in kwargs
+        assert "pending_workflows_bizstate" not in kwargs
+        assert "pending_workflows_select_state" not in kwargs
 
 
 @pytest.mark.parametrize(
@@ -870,6 +1837,17 @@ def test_configuration_fingerprint_is_deterministic_and_value_free() -> None:
 def test_configuration_fingerprint_changes_for_llm_runtime_configuration() -> None:
     first = _configuration_fingerprint({"LLM_MODEL": "model-a"})
     second = _configuration_fingerprint({"LLM_MODEL": "model-b"})
+
+    assert first != second
+
+
+def test_configuration_fingerprint_covers_todo_provider_configuration() -> None:
+    first = _configuration_fingerprint(
+        {"OA_PENDING_WORKFLOWS_ACTIONTYPE": "synthetic-action-a"}
+    )
+    second = _configuration_fingerprint(
+        {"OA_PENDING_WORKFLOWS_ACTIONTYPE": "synthetic-action-b"}
+    )
 
     assert first != second
 

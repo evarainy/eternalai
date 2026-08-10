@@ -73,18 +73,20 @@ from scripts.smoke.environment import (
     prepare_environment,
 )
 from scripts.smoke.errors import SmokeError
-from scripts.smoke.har import extract_message_center_contract, har_entry_count
+from scripts.smoke.har import (
+    extract_message_center_contract,
+    extract_todo_list_contract,
+    har_entry_count,
+)
 from scripts.smoke.live import (
     ProtocolEvidence,
     ProtocolSummary,
     RecordingOpener,
+    TodoProtocolEvidence,
     compare_record_structures,
 )
 
 _SYSTEM_PROFILE = "ecology9-system-messages-v1"
-# The committed v2 pack is derived from the sibling system-message capture. An
-# onsite capture of the pending category is a different provenance, so it must
-# claim the next version instead of colliding with a published one.
 _PENDING_CAPTURE_PROFILE = "ecology9-pending-workflows-v3"
 _TIMESTAMP_PATTERN = re.compile(r"^[0-9]{8}_[0-9]{6}$")
 _BACKEND_URL = "http://127.0.0.1:8000"
@@ -108,6 +110,15 @@ _CONFIGURATION_ERROR_MARKERS = (
     "OA_READ_ADAPTER_MODE",
     "OA_BASE_URL",
     "OA_MESSAGE_CENTER_PATH",
+    "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+    "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+    "OA_PENDING_WORKFLOWS_DATAS_PATH",
+    "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+    "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+    "OA_PENDING_WORKFLOWS_METHOD",
+    "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+    "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+    "OA_PENDING_WORKFLOWS_SORT_PARAMS",
     "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
     "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
     "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
@@ -206,6 +217,7 @@ class Layout:
     smoke_env: Path
     source_har: Path
     scratch: Path
+    todo_source_har: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +309,9 @@ def _resolve_layout() -> Layout:
     source_har = repo_root / "_scratch" / "oa" / "消息中心.har"
     if not source_har.is_file():
         source_har = shared_root / "_scratch" / "oa" / "消息中心.har"
+    todo_source_har = repo_root / "_scratch" / "oa" / "todolist1.har"
+    if not todo_source_har.is_file():
+        todo_source_har = shared_root / "_scratch" / "oa" / "todolist1.har"
     return Layout(
         repo_root=repo_root,
         shared_root=shared_root,
@@ -304,6 +319,7 @@ def _resolve_layout() -> Layout:
         smoke_env=shared_root / ".env.smoke",
         source_har=source_har,
         scratch=repo_root / "_scratch",
+        todo_source_har=todo_source_har,
     )
 
 
@@ -333,16 +349,36 @@ def _shared_worktree_root(repo_root: Path) -> Path:
 
 def _command_prepare(layout: Layout) -> int:
     contract = extract_message_center_contract(layout.source_har)
+    if layout.todo_source_har is None:
+        raise SmokeError("todo_list_har_missing")
+    todo_contract = extract_todo_list_contract(layout.todo_source_har)
     prepared = prepare_environment(
         repo_root=layout.repo_root,
         base_env_path=layout.base_env,
         smoke_env_path=layout.smoke_env,
         contract=contract,
+        todo_contract=todo_contract,
     )
     print(f"har_entries={har_entry_count(layout.source_har)}")
     print(f"message_center_candidates={contract.matching_entry_count}")
     print(f"message_center_source_entry={contract.source_entry_index}")
     print("message_center_contract_recognized=true")
+    print(f"todo_har_entries={har_entry_count(layout.todo_source_har)}")
+    print(f"todo_list_sequences={todo_contract.matching_sequence_count}")
+    print(
+        "todo_split_source_entry="
+        f"{todo_contract.split_page_key_source_entry_index}"
+    )
+    print(f"todo_counts_source_entry={todo_contract.counts_source_entry_index}")
+    print(
+        "todo_datas_source_entries="
+        + ",".join(str(index) for index in todo_contract.datas_source_entry_indices)
+    )
+    print(
+        "todo_authoritative_count_matches="
+        f"{_bool(todo_contract.authoritative_count_matches)}"
+    )
+    print("todo_list_contract_recognized=true")
     print(f"smoke_env_added_keys={len(prepared.added_keys)}")
     _print_infra(prepared)
     if prepared.missing_keys:
@@ -425,7 +461,7 @@ def _run_rehearsal(
         {
             "OA_READ_ADAPTER_MODE": "replay",
             "OA_READ_CONTRACT_PACK_DIR": (
-                "tests/contract_packs/oa/ecology9-pending-workflows-v2"
+                "tests/contract_packs/oa/ecology9-pending-workflows-v3"
             ),
             "PHASE0_MOCK_MODE": "false",
         }
@@ -1160,9 +1196,15 @@ def _configuration_fingerprint(environment: dict[str, str]) -> str:
         "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
         "OA_MESSAGE_CENTER_PATH",
         "OA_MESSAGE_CENTER_PAGE_SIZE",
-        "OA_PENDING_WORKFLOWS_CATEGORY_ID",
-        "OA_PENDING_WORKFLOWS_BIZSTATE",
-        "OA_PENDING_WORKFLOWS_SELECT_STATE",
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+        "OA_PENDING_WORKFLOWS_DATAS_PATH",
+        "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+        "OA_PENDING_WORKFLOWS_METHOD",
+        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+        "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+        "OA_PENDING_WORKFLOWS_SORT_PARAMS",
         "OA_SYSTEM_MESSAGES_CATEGORY_ID",
         "OA_SYSTEM_MESSAGES_BIZSTATE",
         "OA_SYSTEM_MESSAGES_SELECT_STATE",
@@ -1431,7 +1473,6 @@ def _command_verify(
             layout,
             har_directory,
             resolved_timestamp,
-            _required_live_values(settings)["pending_category"],
         )
         capture_created = True
     report_path = layout.scratch / f"smoke_result_{resolved_timestamp}.md"
@@ -1790,29 +1831,43 @@ async def _run_one_live_check(
     capability: str,
 ) -> LiveOutcome:
     values = _required_live_values(settings)
-    expected_form = (
-        {
-            "id": values["system_category"],
-            "pagesize": str(settings.oa_message_center_page_size),
-            "bizstate": values["system_bizstate"],
-            "selectState": values["system_select_state"],
-        }
-        if capability == "system_messages"
-        else {
-            "id": values["pending_category"],
-            "pagesize": str(settings.oa_message_center_page_size),
-            "bizstate": values["pending_bizstate"],
-            "selectState": values["pending_select_state"],
-        }
-    )
-    evidence = ProtocolEvidence(expected_form=expected_form)
+    evidence: ProtocolEvidence | TodoProtocolEvidence
+    if capability == "system_messages":
+        evidence = ProtocolEvidence(
+            expected_form={
+                "id": values["system_category"],
+                "pagesize": str(settings.oa_message_center_page_size),
+                "bizstate": values["system_bizstate"],
+                "selectState": values["system_select_state"],
+            }
+        )
+    else:
+        evidence = TodoProtocolEvidence(
+            split_page_key_path=values["pending_split_path"],
+            counts_path=values["pending_counts_path"],
+            datas_path=values["pending_datas_path"],
+            expected_split_form={
+                "actiontype": values["pending_actiontype"],
+                "hideNoDataTab": values["pending_hide_no_data_tab"],
+                "method": values["pending_method"],
+                "officalType": values["pending_offical_type"],
+                "viewScope": values["pending_view_scope"],
+            },
+            expected_sort_params=values["pending_sort_params"],
+        )
     reports: list[OAStructuralDriftReport] = []
     provider = LiveOAReadProvider(
         base_url=settings.oa_base_url,
-        message_center_endpoint_path=values["path"],
-        pending_workflows_category_id=values["pending_category"],
-        pending_workflows_bizstate=values["pending_bizstate"],
-        pending_workflows_select_state=values["pending_select_state"],
+        message_center_endpoint_path=values["message_center_path"],
+        pending_workflows_split_page_key_path=values["pending_split_path"],
+        pending_workflows_counts_path=values["pending_counts_path"],
+        pending_workflows_datas_path=values["pending_datas_path"],
+        pending_workflows_actiontype=values["pending_actiontype"],
+        pending_workflows_hide_no_data_tab=values["pending_hide_no_data_tab"],
+        pending_workflows_method=values["pending_method"],
+        pending_workflows_offical_type=values["pending_offical_type"],
+        pending_workflows_view_scope=values["pending_view_scope"],
+        pending_workflows_sort_params=values["pending_sort_params"],
         system_messages_category_id=values["system_category"],
         system_messages_bizstate=values["system_bizstate"],
         system_messages_select_state=values["system_select_state"],
@@ -1857,10 +1912,18 @@ async def _run_one_live_check(
 
 def _required_live_values(settings: ProductionSettings) -> dict[str, Any]:
     values: dict[str, Any] = {
-        "path": settings.oa_message_center_path,
-        "pending_category": settings.oa_pending_workflows_category_id,
-        "pending_bizstate": settings.oa_pending_workflows_bizstate,
-        "pending_select_state": settings.oa_pending_workflows_select_state,
+        "message_center_path": settings.oa_message_center_path,
+        "pending_split_path": settings.oa_pending_workflows_split_page_key_path,
+        "pending_counts_path": settings.oa_pending_workflows_counts_path,
+        "pending_datas_path": settings.oa_pending_workflows_datas_path,
+        "pending_actiontype": settings.oa_pending_workflows_actiontype,
+        "pending_hide_no_data_tab": (
+            settings.oa_pending_workflows_hide_no_data_tab
+        ),
+        "pending_method": settings.oa_pending_workflows_method,
+        "pending_offical_type": settings.oa_pending_workflows_offical_type,
+        "pending_view_scope": settings.oa_pending_workflows_view_scope,
+        "pending_sort_params": settings.oa_pending_workflows_sort_params,
         "system_category": settings.oa_system_messages_category_id,
         "system_bizstate": settings.oa_system_messages_bizstate,
         "system_select_state": settings.oa_system_messages_select_state,
@@ -1907,7 +1970,6 @@ def _build_optional_pending_capture(
     layout: Layout,
     har_directory: Path,
     timestamp: str,
-    pending_category_id: str,
 ) -> None:
     try:
         candidates = sorted(
@@ -1917,18 +1979,23 @@ def _build_optional_pending_capture(
         raise SmokeError("fallback_har_directory_unreadable") from None
     if len(candidates) != 1:
         raise SmokeError("fallback_har_not_unique")
+    todo_contract = extract_todo_list_contract(candidates[0])
+    entry_indices = [
+        todo_contract.split_page_key_source_entry_index,
+        *todo_contract.datas_source_entry_indices,
+        todo_contract.counts_source_entry_index,
+    ]
+    del todo_contract
     output_parent = layout.scratch / "smoke_capture" / timestamp
-    try:
-        output_parent.mkdir(parents=True, exist_ok=False)
-    except FileExistsError:
+    output_dir = output_parent / _PENDING_CAPTURE_PROFILE
+    if output_dir.exists():
         raise SmokeError("fallback_output_already_exists") from None
-    except OSError:
-        raise SmokeError("fallback_output_create_failed") from None
     sanitizer.sanitize_har_to_contract_pack(
         input_har=candidates[0],
-        output_dir=output_parent / _PENDING_CAPTURE_PROFILE,
+        output_dir=output_dir,
         profile_version=_PENDING_CAPTURE_PROFILE,
-        pending_capture_category_id=pending_category_id,
+        entry_indices=entry_indices,
+        create_output_parent=True,
     )
 
 
@@ -1946,13 +2013,17 @@ def _build_report(
     safe_removed = _safe_protocol_field_names(removed)
     safe_changed = _safe_protocol_field_names(changed)
     lines = [
-        "# P2-SMOKE-RUNNER-001 现场结构报告",
+        "# P2-OA-TODOLIST-ADAPTER-001 Provider 级现场结构报告",
         "",
         "## 结论",
         "",
         f"- 系统消息结构漂移：{_drift_state(system)}",
-        f"- 待办结构漂移：{_drift_state(pending)}（预期允许大面积漂移）",
+        f"- 待办结构漂移：{_drift_state(pending)}",
         f"- 两类记录结构一致：{_yes_no(structures_match)}",
+        (
+            "- 验收层级：Provider 级；不覆盖 Runtime / Gateway / Policy / "
+            "Evaluator / Trace"
+        ),
         (
             f"- 现场待办脱敏包（{_PENDING_CAPTURE_PROFILE}）："
             f"{'已生成' if capture_created else '未请求'}"
@@ -1960,27 +2031,30 @@ def _build_report(
         "",
         "## 系统消息 Live 指纹",
         "",
-        *_outcome_markdown(system),
+        *_outcome_markdown(system, protocol_kind="message_center"),
         "",
         "## 待办 Live 指纹",
         "",
-        *_outcome_markdown(pending),
+        *_outcome_markdown(pending, protocol_kind="todo_list"),
         "",
         "## 五项现场确认",
         "",
         (
-            "1. 游标续拉与终止：系统消息 "
-            f"{_pagination_sentence(system.protocol)}；待办 "
-            f"{_pagination_sentence(pending.protocol)}。"
+            "1. 协议编排：系统消息 "
+            f"{_pagination_sentence(system.protocol)}；待办三步顺序："
+            f"{_yes_no(pending.protocol.todo_three_step_matches is True)}。"
         ),
         (
             "2. 系统消息真实类别：配置的系统消息类别请求 "
             f"{_accepted_sentence(system.protocol)}。"
         ),
         (
-            "3. bizstate/selectState：两字段均按配置随请求发送；系统消息 "
-            f"{_accepted_sentence(system.protocol)}，待办 "
-            f"{_accepted_sentence(pending.protocol)}。报告不从单次结果臆测业务标签。"
+            "3. 待办限定与完整性：固定待办视图"
+            f"{_yes_no(pending.protocol.fixed_viewcondition_matches is True)}；"
+            "查询凭证仅在三步调用间一致传递"
+            f"{_yes_no(pending.protocol.query_credential_chain_matches is True)}；"
+            "已取条数等于权威计数"
+            f"{_yes_no(pending.protocol.authoritative_count_matches is True)}。"
         ),
         (
             "4. 待办与系统消息记录结构："
@@ -1990,9 +2064,9 @@ def _build_report(
             f"类型变化字段={_field_list(safe_changed)}。"
         ),
         (
-            "5. 消息量级：系统消息 "
-            f"{system.protocol.record_count} 条/{system.protocol.response_count} 页响应；"
-            f"待办 {pending.protocol.record_count} 条/{pending.protocol.response_count} 页响应。"
+            "5. 调用量级：系统消息 "
+            f"{system.protocol.record_count} 条/{system.protocol.response_count} 次响应；"
+            f"待办 {pending.protocol.record_count} 条/{pending.protocol.response_count} 次响应。"
         ),
         "",
         "## 给雨爷的现场操作",
@@ -2018,20 +2092,48 @@ def _build_report(
     return "\n".join(lines) + "\n"
 
 
-def _outcome_markdown(outcome: LiveOutcome) -> list[str]:
+def _outcome_markdown(
+    outcome: LiveOutcome,
+    *,
+    protocol_kind: str,
+) -> list[str]:
     drift = outcome.drift
     lines = [
-        f"- 请求页数：{outcome.protocol.request_count}",
-        f"- 响应页数：{outcome.protocol.response_count}",
+        f"- 请求次数：{outcome.protocol.request_count}",
+        f"- 响应次数：{outcome.protocol.response_count}",
         f"- 记录数：{outcome.protocol.record_count}",
-        f"- 显式空页终止：{_yes_no(outcome.protocol.terminal_empty_page)}",
-        f"- 游标续拉一致：{_yes_no(outcome.protocol.cursor_chain_matches)}",
         f"- 配置表单一致：{_yes_no(outcome.protocol.configured_form_matches)}",
         f"- 归一化完成：{_yes_no(outcome.normalized)}",
         f"- 失败分类：{outcome.error_kind or '无'}",
         f"- HTTP 状态码：{outcome.protocol.http_status_code or '无'}",
         f"- 传输失败细分：{outcome.protocol.transport_failure_kind or '无'}",
     ]
+    if protocol_kind == "message_center":
+        lines[3:3] = [
+            f"- 显式空页终止：{_yes_no(outcome.protocol.terminal_empty_page)}",
+            f"- 游标续拉一致：{_yes_no(outcome.protocol.cursor_chain_matches)}",
+        ]
+    elif protocol_kind == "todo_list":
+        lines[3:3] = [
+            (
+                "- 三步编排一致："
+                f"{_yes_no(outcome.protocol.todo_three_step_matches is True)}"
+            ),
+            (
+                "- 固定待办视图一致："
+                f"{_yes_no(outcome.protocol.fixed_viewcondition_matches is True)}"
+            ),
+            (
+                "- 查询凭证传递一致："
+                f"{_yes_no(outcome.protocol.query_credential_chain_matches is True)}"
+            ),
+            (
+                "- 权威计数一致："
+                f"{_yes_no(outcome.protocol.authoritative_count_matches is True)}"
+            ),
+        ]
+    else:
+        raise SmokeError("unknown_live_protocol_kind")
     if drift is None:
         lines.extend(
             [
@@ -2136,9 +2238,13 @@ def _verify_success(system: LiveOutcome, pending: LiveOutcome) -> bool:
         pending.drift is not None
         and pending.drift.matches
         and pending.normalized
-        and pending.protocol.terminal_empty_page
-        and pending.protocol.cursor_chain_matches
         and pending.error_kind is None
+        and pending.protocol.todo_three_step_matches is True
+        and pending.protocol.authoritative_count_matches is True
+        and pending.protocol.fixed_viewcondition_matches is True
+        and pending.protocol.query_credential_chain_matches is True
+        and pending.protocol.configured_form_matches
+        and pending.protocol.successful_envelopes
     )
     return system_ok and pending_ok
 
@@ -2147,13 +2253,22 @@ def _assert_report_safe(text: str, environment: dict[str, str]) -> None:
     if re.search(r"https?://", text, flags=re.IGNORECASE):
         raise SmokeError("report_contains_url")
     if re.search(
-        r"(?i)(?:cookie|token|password|sessionid)\s*[:=]\s*\S+",
+        r"(?i)(?:cookie|token|password|sessionid|sessionkey|dataKey)\s*[:=]\s*\S+",
         text,
     ):
         raise SmokeError("report_contains_sensitive_assignment")
     sensitive_names = (
         "OA_BASE_URL",
         "OA_MESSAGE_CENTER_PATH",
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+        "OA_PENDING_WORKFLOWS_DATAS_PATH",
+        "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+        "OA_PENDING_WORKFLOWS_METHOD",
+        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+        "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+        "OA_PENDING_WORKFLOWS_SORT_PARAMS",
         "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
         "ETERNALAI_IDENTITY_HMAC_KEY_B64",
         "ETERNALAI_SESSION_SIGNING_KEY_B64",

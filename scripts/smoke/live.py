@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from http.client import HTTPMessage, RemoteDisconnected
 from typing import IO, Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from scripts.smoke.errors import SmokeError
@@ -19,6 +19,8 @@ _EXPECTED_FORM_FIELDS = frozenset(
 )
 _CURSOR_FIELDS = ("msgid", "mintime")
 _INITIAL_CURSOR = {"msgid": "0", "mintime": "0"}
+_TODO_VIEW_CONDITION = "5"
+_TODO_SESSION_KEY_LENGTH = 69
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +36,10 @@ class ProtocolSummary:
     record_field_types: dict[str, tuple[str, ...]]
     transport_failure_kind: str | None = None
     http_status_code: int | None = None
+    todo_three_step_matches: bool | None = None
+    authoritative_count_matches: bool | None = None
+    fixed_viewcondition_matches: bool | None = None
+    query_credential_chain_matches: bool | None = None
 
 
 @dataclass(repr=False, slots=True)
@@ -156,10 +162,214 @@ class ProtocolEvidence:
         self._last_cursor_digest = None
 
 
+@dataclass(repr=False, slots=True)
+class TodoProtocolEvidence:
+    """Observe the to-do three-step protocol without retaining query credentials."""
+
+    split_page_key_path: str = field(repr=False)
+    counts_path: str = field(repr=False)
+    datas_path: str = field(repr=False)
+    expected_split_form: Mapping[str, str] = field(repr=False)
+    expected_sort_params: str = field(repr=False)
+    request_count: int = 0
+    response_count: int = 0
+    record_count: int = 0
+    configured_form_matches: bool = True
+    successful_envelopes: bool = True
+    request_order_matches: bool = True
+    fixed_viewcondition_matches: bool = True
+    query_credential_chain_matches: bool = True
+    envelope_fields: set[str] = field(default_factory=set)
+    record_field_types: dict[str, set[str]] = field(default_factory=dict)
+    transport_failure_kind: str | None = None
+    http_status_code: int | None = None
+    _last_request_kind: str | None = field(default=None, repr=False)
+    _query_credential_digest: str | None = field(default=None, repr=False)
+    _authoritative_count: int | None = field(default=None, repr=False)
+    _datas_request_count: int = field(default=0, repr=False)
+
+    def __repr__(self) -> str:
+        return "TodoProtocolEvidence(structural_only=True)"
+
+    def observe_request(self, request: Request) -> None:
+        """Retain request kind and structural booleans, never request values."""
+
+        self.request_count += 1
+        try:
+            path = urlsplit(request.full_url).path
+        except ValueError:
+            path = ""
+        form = _parse_request_form(request.data)
+        kind = self._request_kind(path)
+        self._last_request_kind = kind
+        expected_kind = (
+            "split"
+            if self.request_count == 1
+            else "counts"
+            if self.request_count == 2
+            else "datas"
+        )
+        if kind != expected_kind:
+            self.request_order_matches = False
+
+        if kind == "split":
+            for key, expected_value in self.expected_split_form.items():
+                if form.get(key) != expected_value:
+                    self.configured_form_matches = False
+            if form.get("viewcondition") != _TODO_VIEW_CONDITION:
+                self.fixed_viewcondition_matches = False
+        elif kind == "counts":
+            if set(form) != {"dataKey"}:
+                self.configured_form_matches = False
+            self._observe_query_credential(form.get("dataKey"))
+        elif kind == "datas":
+            self._datas_request_count += 1
+            if set(form) != {"current", "dataKey", "sortParams"}:
+                self.configured_form_matches = False
+            if form.get("sortParams") != self.expected_sort_params:
+                self.configured_form_matches = False
+            current = form.get("current", "")
+            if not current.isdecimal() or int(current) != self._datas_request_count:
+                self.request_order_matches = False
+            self._observe_query_credential(form.get("dataKey"))
+        else:
+            self.request_order_matches = False
+            self.configured_form_matches = False
+
+    def observe_http_status(self, status_code: int) -> None:
+        self.http_status_code = status_code if 100 <= status_code <= 599 else None
+
+    def observe_response(self, raw_response: bytes) -> None:
+        """Consume and discard raw values after extracting structure and counts."""
+
+        payload: Any = None
+        try:
+            payload = json.loads(raw_response.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            self.successful_envelopes = False
+            return
+        finally:
+            raw_response = b""
+
+        self.response_count += 1
+        if not isinstance(payload, Mapping):
+            self.successful_envelopes = False
+            return
+        self.envelope_fields.update(
+            key
+            for key in payload
+            if isinstance(key, str) and key not in {"sessionkey", "dataKey"}
+        )
+        if self._last_request_kind == "split":
+            query_credential = payload.get("sessionkey")
+            if (
+                not isinstance(query_credential, str)
+                or len(query_credential) != _TODO_SESSION_KEY_LENGTH
+            ):
+                self.successful_envelopes = False
+                self._query_credential_digest = None
+            else:
+                self._query_credential_digest = _value_digest(query_credential)
+        elif self._last_request_kind == "counts":
+            count = payload.get("count")
+            if (
+                payload.get("status") is not True
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                self.successful_envelopes = False
+            else:
+                self._authoritative_count = count
+        elif self._last_request_kind == "datas":
+            records = payload.get("datas")
+            if payload.get("status") is not True or not isinstance(records, list):
+                self.successful_envelopes = False
+            else:
+                self.record_count += len(records)
+                self._observe_records(records)
+                records = []
+        else:
+            self.successful_envelopes = False
+        payload = None
+
+    def observe(self, request: Request, raw_response: bytes) -> None:
+        """Observe one exchange and immediately discard its raw values."""
+
+        self.observe_request(request)
+        self.observe_response(raw_response)
+
+    def summary(self) -> ProtocolSummary:
+        three_step_matches = (
+            self.request_order_matches
+            and self.request_count >= 3
+            and self.response_count == self.request_count
+            and self._datas_request_count >= 1
+        )
+        authoritative_count_matches = (
+            self._authoritative_count is not None
+            and self.record_count == self._authoritative_count
+        )
+        return ProtocolSummary(
+            request_count=self.request_count,
+            response_count=self.response_count,
+            record_count=self.record_count,
+            terminal_empty_page=False,
+            cursor_chain_matches=False,
+            configured_form_matches=self.configured_form_matches,
+            successful_envelopes=self.successful_envelopes,
+            envelope_fields=tuple(sorted(self.envelope_fields)),
+            record_field_types={
+                key: tuple(sorted(types))
+                for key, types in sorted(self.record_field_types.items())
+            },
+            transport_failure_kind=self.transport_failure_kind,
+            http_status_code=self.http_status_code,
+            todo_three_step_matches=three_step_matches,
+            authoritative_count_matches=authoritative_count_matches,
+            fixed_viewcondition_matches=self.fixed_viewcondition_matches,
+            query_credential_chain_matches=self.query_credential_chain_matches,
+        )
+
+    def clear_transient_state(self) -> None:
+        self._last_request_kind = None
+        self._query_credential_digest = None
+
+    def _request_kind(self, path: str) -> str | None:
+        if path == self.split_page_key_path:
+            return "split"
+        if path == self.counts_path:
+            return "counts"
+        if path == self.datas_path:
+            return "datas"
+        return None
+
+    def _observe_query_credential(self, value: str | None) -> None:
+        if (
+            value is None
+            or self._query_credential_digest is None
+            or _value_digest(value) != self._query_credential_digest
+        ):
+            self.query_credential_chain_matches = False
+
+    def _observe_records(self, records: list[Any]) -> None:
+        for record in records:
+            if not isinstance(record, Mapping):
+                self.record_field_types.setdefault("<non_object>", set()).add(
+                    _json_type(record)
+                )
+                continue
+            for key, value in record.items():
+                if isinstance(key, str):
+                    self.record_field_types.setdefault(key, set()).add(
+                        _json_type(value)
+                    )
+
+
 class RecordingOpener:
     """Proxy-free, no-redirect opener that records only safe protocol metadata."""
 
-    def __init__(self, evidence: ProtocolEvidence) -> None:
+    def __init__(self, evidence: ProtocolEvidence | TodoProtocolEvidence) -> None:
         self._evidence = evidence
         self._opener = build_opener(ProxyHandler({}), _NoRedirectHandler())
 
@@ -224,7 +434,7 @@ class _RecordingResponse:
         self,
         response: Any,
         request: Request,
-        evidence: ProtocolEvidence,
+        evidence: ProtocolEvidence | TodoProtocolEvidence,
     ) -> None:
         self._response = response
         self._request = request
@@ -310,6 +520,10 @@ def _cursor_digest(values: Mapping[str, Any]) -> str | None:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _value_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def _json_type(value: Any) -> str:
     if value is None:
         return "null"
@@ -332,5 +546,6 @@ __all__ = (
     "ProtocolEvidence",
     "ProtocolSummary",
     "RecordingOpener",
+    "TodoProtocolEvidence",
     "compare_record_structures",
 )

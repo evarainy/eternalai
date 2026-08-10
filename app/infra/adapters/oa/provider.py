@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from http.client import HTTPMessage
 from pathlib import Path
-from typing import IO, Any, Protocol
+from typing import IO, Any, NoReturn, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import (
@@ -27,6 +27,7 @@ from pydantic import SecretStr, ValidationError
 
 from app.infra.adapters.oa.contracts import (
     OAContractPackProfile,
+    OALegacyPendingWorkflowCollection,
     OAPendingWorkflowCollection,
     OAStructuralDriftReport,
     OASystemMessageCollection,
@@ -49,6 +50,10 @@ _MAX_CONFIGURED_PAGES = 1_000
 _MAX_CONFIGURED_PAGE_SIZE = 1_000
 _MAX_CONFIGURED_RECORDS = 1_000_000
 _MAX_CONFIGURED_RESPONSE_BYTES = 32 * 1024 * 1024
+_PENDING_WORKFLOW_SESSION_KEY_LENGTH = 69
+_LEGACY_PENDING_WORKFLOW_PROFILES = frozenset(
+    {"ecology9-pending-workflows-v1", "ecology9-pending-workflows-v2"}
+)
 _MESSAGE_CENTER_PAYLOAD_REASON_CODES = {
     "OA message-center page exceeds the record limit": "page_limit",
     "OA message-center aggregate exceeds the record limit": "aggregate_limit",
@@ -190,9 +195,15 @@ class LiveOAReadProvider:
         *,
         base_url: str,
         message_center_endpoint_path: str,
-        pending_workflows_category_id: str,
-        pending_workflows_bizstate: str,
-        pending_workflows_select_state: str,
+        pending_workflows_split_page_key_path: str,
+        pending_workflows_counts_path: str,
+        pending_workflows_datas_path: str,
+        pending_workflows_actiontype: str,
+        pending_workflows_hide_no_data_tab: str,
+        pending_workflows_method: str,
+        pending_workflows_offical_type: str,
+        pending_workflows_view_scope: str,
+        pending_workflows_sort_params: str,
         system_messages_category_id: str,
         system_messages_bizstate: str,
         system_messages_select_state: str,
@@ -211,11 +222,25 @@ class LiveOAReadProvider:
         self._message_center_endpoint_path = _validate_endpoint_path(
             message_center_endpoint_path
         )
-        self._pending_workflows_form = _validate_message_center_form(
-            category_id=pending_workflows_category_id,
-            bizstate=pending_workflows_bizstate,
-            select_state=pending_workflows_select_state,
-            allow_empty_category=False,
+        self._pending_workflows_split_page_key_path = _validate_endpoint_path(
+            pending_workflows_split_page_key_path
+        )
+        self._pending_workflows_counts_path = _validate_endpoint_path(
+            pending_workflows_counts_path
+        )
+        self._pending_workflows_datas_path = _validate_endpoint_path(
+            pending_workflows_datas_path
+        )
+        self._pending_workflows_split_form = _build_pending_workflows_split_form(
+            actiontype=pending_workflows_actiontype,
+            hide_no_data_tab=pending_workflows_hide_no_data_tab,
+            method=pending_workflows_method,
+            offical_type=pending_workflows_offical_type,
+            view_scope=pending_workflows_view_scope,
+        )
+        self._pending_workflows_sort_params = _validate_pending_workflow_form_value(
+            pending_workflows_sort_params,
+            field_name="sortParams",
         )
         self._system_messages_form = _validate_message_center_form(
             category_id=system_messages_category_id,
@@ -267,11 +292,11 @@ class LiveOAReadProvider:
     ) -> OAPendingWorkflowCollection:
         raw_records: list[Any] = []
         collection: OAPendingWorkflowCollection | None = None
+        authoritative_count = 0
 
         try:
-            raw_records = await self._list_message_center_records(
-                credential,
-                self._pending_workflows_form,
+            raw_records, authoritative_count = (
+                await self._list_pending_workflow_records(credential)
             )
             try:
                 actual_fingerprint = (
@@ -297,8 +322,7 @@ class LiveOAReadProvider:
                 collection = normalize_pending_workflow_records(
                     raw_records,
                     record_limit=self._max_records,
-                    is_complete=True,
-                    link_normalizer=self._normalize_system_message_link,
+                    authoritative_count=authoritative_count,
                 )
             except (TypeError, ValueError):
                 raise OALivePayloadInvalid(
@@ -317,6 +341,7 @@ class LiveOAReadProvider:
             credential = None
             raw_records.clear()
             collection = None
+            authoritative_count = 0
 
     async def list_system_messages(
         self,
@@ -374,6 +399,174 @@ class LiveOAReadProvider:
             credential = None
             raw_records.clear()
             collection = None
+
+    async def _list_pending_workflow_records(
+        self,
+        credential: OASessionCredential | None,
+    ) -> tuple[list[Any], int]:
+        """Run splitPageKey -> counts -> datas and return only a proven aggregate."""
+
+        if credential is None:
+            raise OALiveIdentityUnbound("OA credential is required")
+        cookie_header = ""
+        sessionkey = ""
+        opener: OpenerDirector | None = None
+        split_payload: dict[str, Any] | None = None
+        counts_payload: dict[str, Any] | None = None
+        datas_payload: dict[str, Any] | None = None
+        raw_records: list[Any] = []
+        completed_records: list[Any] | None = None
+        page_records: list[Any] = []
+        seen_todo_ids: set[str] = set()
+        authoritative_count = 0
+        parsed_value: Any = None
+        payload_error_kind: str | None = None
+        record: Any = None
+        todo_id = ""
+
+        try:
+            ttl_status = _credential_ttl_status(
+                credential.expires_at,
+                self._clock(),
+            )
+            if ttl_status == "invalid":
+                raise OALiveRequestError("OA credential expiry is invalid")
+            if ttl_status == "expired":
+                raise OALiveIdentityExpired("OA Session has expired")
+            cookie_header = _build_cookie_header(credential.cookies)
+            opener = self._opener_factory()
+
+            split_payload = await self._request_form_payload(
+                opener=opener,
+                cookie_header=cookie_header,
+                endpoint_path=self._pending_workflows_split_page_key_path,
+                parameters=self._pending_workflows_split_form,
+            )
+            parsed_value, payload_error_kind = _consume_pending_workflow_value(
+                split_payload,
+                _read_pending_workflow_sessionkey,
+                check_business_envelope=True,
+            )
+            split_payload = None
+            if payload_error_kind is not None:
+                _raise_pending_workflow_payload_error(payload_error_kind)
+            sessionkey = parsed_value
+            parsed_value = None
+            payload_error_kind = None
+
+            # ``getUnoperators`` changes response shape on empty pages, while
+            # ``checks`` and ``getWfListParams`` add no consumed bare business
+            # field. Skip all three; HTML span twins are intentionally excluded.
+            counts_payload = await self._request_form_payload(
+                opener=opener,
+                cookie_header=cookie_header,
+                endpoint_path=self._pending_workflows_counts_path,
+                parameters={"dataKey": sessionkey},
+            )
+            parsed_value, payload_error_kind = _consume_pending_workflow_value(
+                counts_payload,
+                _read_pending_workflow_count,
+                check_business_envelope=True,
+            )
+            counts_payload = None
+            if payload_error_kind is not None:
+                _raise_pending_workflow_payload_error(payload_error_kind)
+            authoritative_count = parsed_value
+            parsed_value = None
+            payload_error_kind = None
+            if authoritative_count > self._max_records:
+                raise OALivePayloadInvalid(
+                    "OA pending-workflow authoritative count exceeds the record limit"
+                )
+
+            for page_number in range(1, self._max_pages + 1):
+                datas_payload = await self._request_form_payload(
+                    opener=opener,
+                    cookie_header=cookie_header,
+                    endpoint_path=self._pending_workflows_datas_path,
+                    parameters={
+                        "current": str(page_number),
+                        "dataKey": sessionkey,
+                        "sortParams": self._pending_workflows_sort_params,
+                    },
+                )
+                parsed_value, payload_error_kind = _consume_pending_workflow_value(
+                    datas_payload,
+                    _read_pending_workflow_page,
+                    check_business_envelope=True,
+                )
+                datas_payload = None
+                if payload_error_kind is not None:
+                    _raise_pending_workflow_payload_error(payload_error_kind)
+                page_records, response_page_size = parsed_value
+                parsed_value = None
+                payload_error_kind = None
+                if len(page_records) > response_page_size:
+                    raise OALivePayloadInvalid(
+                        "OA pending-workflow page exceeds its declared size"
+                    )
+                if not page_records:
+                    if len(raw_records) != authoritative_count:
+                        raise OALivePayloadInvalid(
+                            "OA pending-workflow returned count does not match "
+                            "the authoritative count"
+                        )
+                    completed_records = raw_records
+                    raw_records = []
+                    return completed_records, authoritative_count
+
+                for record in page_records:
+                    parsed_value, payload_error_kind = (
+                        _consume_pending_workflow_value(
+                            record,
+                            _pending_workflow_record_identifier,
+                            check_business_envelope=False,
+                        )
+                    )
+                    record = None
+                    if payload_error_kind is not None:
+                        _raise_pending_workflow_payload_error(payload_error_kind)
+                    todo_id = parsed_value
+                    parsed_value = None
+                    payload_error_kind = None
+                    if todo_id in seen_todo_ids:
+                        raise OALivePayloadInvalid(
+                            "OA pending-workflow record repeated across pages"
+                        )
+                    seen_todo_ids.add(todo_id)
+                raw_records.extend(page_records)
+                page_records.clear()
+                if len(raw_records) > authoritative_count:
+                    raise OALivePayloadInvalid(
+                        "OA pending-workflow returned count exceeds "
+                        "the authoritative count"
+                    )
+                if len(raw_records) == authoritative_count:
+                    completed_records = raw_records
+                    raw_records = []
+                    return completed_records, authoritative_count
+
+            raise OALivePayloadInvalid(
+                "OA pending-workflow returned count does not match "
+                "the authoritative count within the page limit"
+            )
+        finally:
+            credential = None
+            cookie_header = ""
+            sessionkey = ""
+            opener = None
+            split_payload = None
+            counts_payload = None
+            datas_payload = None
+            raw_records.clear()
+            page_records.clear()
+            completed_records = None
+            seen_todo_ids.clear()
+            authoritative_count = 0
+            parsed_value = None
+            payload_error_kind = None
+            record = None
+            todo_id = ""
 
     async def _list_message_center_records(
         self,
@@ -571,14 +764,37 @@ class LiveOAReadProvider:
             "bizstate": form["bizstate"],
             "selectState": form["selectState"],
         }
+        try:
+            return await self._request_form_payload(
+                opener=opener,
+                cookie_header=cookie_header,
+                endpoint_path=self._message_center_endpoint_path,
+                parameters=parameters,
+            )
+        finally:
+            parameters.clear()
+            del cursor
+            del form
+            del cookie_header
+            del opener
+
+    async def _request_form_payload(
+        self,
+        *,
+        opener: OpenerDirector,
+        cookie_header: str,
+        endpoint_path: str,
+        parameters: Mapping[str, str],
+    ) -> dict[str, Any]:
+        owned_parameters = dict(parameters)
         encoded_parameters = b""
         payload: dict[str, Any] | None = None
         error_kind: str | None = None
         request: Request | None = None
         try:
-            encoded_parameters = urlencode(parameters).encode("ascii")
+            encoded_parameters = urlencode(owned_parameters).encode("ascii")
             request = Request(
-                f"{self._base_url}{self._message_center_endpoint_path}",
+                f"{self._base_url}{endpoint_path}",
                 data=encoded_parameters,
                 headers={
                     "Accept": "*/*",
@@ -632,9 +848,9 @@ class LiveOAReadProvider:
         finally:
             request = None
             encoded_parameters = b""
-            parameters.clear()
-            del cursor
-            del form
+            owned_parameters.clear()
+            del parameters
+            del endpoint_path
             del cookie_header
             del opener
 
@@ -697,7 +913,9 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
 def _load_contract_pack(
     contract_pack_dir: Path,
 ) -> tuple[
-    OAPendingWorkflowCollection | OASystemMessageCollection,
+    OALegacyPendingWorkflowCollection
+    | OAPendingWorkflowCollection
+    | OASystemMessageCollection,
     dict[str, Any],
 ]:
     profile_payload = _load_json(contract_pack_dir / "profile.json")
@@ -718,11 +936,18 @@ def _load_contract_pack(
     if fingerprint_payload != built_fingerprint:
         raise OAContractPackError("Contract Pack structural fingerprint mismatch")
 
-    collection_model = (
-        OAPendingWorkflowCollection
-        if profile.capability_id == "oa.list_pending_workflows"
-        else OASystemMessageCollection
+    collection_model: (
+        type[OALegacyPendingWorkflowCollection]
+        | type[OAPendingWorkflowCollection]
+        | type[OASystemMessageCollection]
     )
+    if profile.capability_id == "oa.list_pending_workflows":
+        if profile.profile_version in _LEGACY_PENDING_WORKFLOW_PROFILES:
+            collection_model = OALegacyPendingWorkflowCollection
+        else:
+            collection_model = OAPendingWorkflowCollection
+    else:
+        collection_model = OASystemMessageCollection
     try:
         collection = collection_model.model_validate(sample_payload, strict=True)
     except ValidationError:
@@ -939,6 +1164,199 @@ def _raise_for_business_error(payload: Mapping[str, Any]) -> None:
             raise OALiveIdentityExpired("OA Session is no longer valid")
         if normalized in _PERMISSION_DENIED_CODES:
             raise OALivePermissionDenied("OA permission was denied")
+
+
+def _build_pending_workflows_split_form(
+    *,
+    actiontype: str,
+    hide_no_data_tab: str,
+    method: str,
+    offical_type: str,
+    view_scope: str,
+) -> dict[str, str]:
+    """Build the exact 34-field viewcondition=5 form observed onsite."""
+
+    configured = {
+        "method": _validate_pending_workflow_form_value(
+            method, field_name="method"
+        ),
+        "officalType": _validate_pending_workflow_form_value(
+            offical_type, field_name="officalType"
+        ),
+        "hideNoDataTab": _validate_pending_workflow_form_value(
+            hide_no_data_tab, field_name="hideNoDataTab"
+        ),
+        "viewScope": _validate_pending_workflow_form_value(
+            view_scope, field_name="viewScope"
+        ),
+        "actiontype": _validate_pending_workflow_form_value(
+            actiontype, field_name="actiontype"
+        ),
+    }
+    return {
+        "method": configured["method"],
+        "offical": "",
+        "officalType": configured["officalType"],
+        "hideNoDataTab": configured["hideNoDataTab"],
+        "viewScope": configured["viewScope"],
+        "complete": "0",
+        "viewcondition": "5",
+        "defaultTabVal": "0",
+        "requestname": "",
+        "wfcode": "",
+        "workflowid": "",
+        "createdateselect": "0",
+        "createdatefrom": "",
+        "createdateto": "",
+        "creatertype": "0",
+        "workcode": "",
+        "doingStatus": "0",
+        "ownerdepartmentid": "",
+        "creatersubcompanyid": "",
+        "workflowtype": "",
+        "requestlevel": "",
+        "recievedateselect": "0",
+        "recievedatefrom": "",
+        "recievedateto": "",
+        "wfstatu": "1",
+        "nodetype": "",
+        "unophrmid": "",
+        "docids": "",
+        "hrmcreaterid": "",
+        "crmids": "",
+        "proids": "",
+        "menuIds": "1,13",
+        "menuPathIds": "1,13",
+        "actiontype": configured["actiontype"],
+    }
+
+
+def _validate_pending_workflow_form_value(
+    value: str,
+    *,
+    field_name: str,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > 4_096
+        or any(character in value for character in ("\x00", "\r", "\n"))
+    ):
+        raise ValueError(f"OA pending-workflow {field_name} is invalid")
+    return value
+
+
+def _consume_pending_workflow_value(
+    value: Any,
+    reader: Callable[[Any], Any],
+    *,
+    check_business_envelope: bool,
+) -> tuple[Any, str | None]:
+    """Return a parsed value or a safe error kind without retaining traceback data."""
+
+    parsed_value: Any = None
+    error_kind: str | None = None
+    try:
+        if check_business_envelope:
+            _raise_for_business_error(value)
+        parsed_value = reader(value)
+    except OALiveIdentityExpired:
+        error_kind = "identity_expired"
+    except OALivePermissionDenied:
+        error_kind = "permission_denied"
+    except OALiveProviderError:
+        error_kind = "payload_invalid"
+    except Exception:
+        _log_provider_failure("payload_processing")
+        error_kind = "request_error"
+    finally:
+        value = None
+        del reader
+    return parsed_value, error_kind
+
+
+def _raise_pending_workflow_payload_error(error_kind: str) -> NoReturn:
+    if error_kind == "identity_expired":
+        raise OALiveIdentityExpired("OA Session is no longer valid")
+    if error_kind == "permission_denied":
+        raise OALivePermissionDenied("OA permission was denied")
+    if error_kind == "payload_invalid":
+        raise OALivePayloadInvalid("OA pending-workflow response payload is invalid")
+    raise OALiveRequestError("OA response processing failed")
+
+
+def _read_pending_workflow_sessionkey(payload: Mapping[str, Any]) -> str:
+    sessionkey = payload.get("sessionkey")
+    if (
+        not isinstance(sessionkey, str)
+        or len(sessionkey) != _PENDING_WORKFLOW_SESSION_KEY_LENGTH
+        or sessionkey != sessionkey.strip()
+        or any(
+            ord(character) < 0x20 or ord(character) == 0x7F
+            for character in sessionkey
+        )
+    ):
+        raise OALivePayloadInvalid(
+            "OA pending-workflow split response session key is invalid"
+        )
+    return sessionkey
+
+
+def _read_pending_workflow_count(payload: Mapping[str, Any]) -> int:
+    if payload.get("status") is not True:
+        raise OALivePayloadInvalid(
+            "OA pending-workflow count response status is invalid"
+        )
+    count = payload.get("count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise OALivePayloadInvalid(
+            "OA pending-workflow authoritative count is invalid"
+        )
+    return count
+
+
+def _read_pending_workflow_page(
+    payload: Mapping[str, Any],
+) -> tuple[list[Any], int]:
+    if payload.get("status") is not True:
+        raise OALivePayloadInvalid(
+            "OA pending-workflow data response status is invalid"
+        )
+    records = payload.get("datas")
+    page_size_raw = payload.get("pageSize")
+    if not isinstance(records, list):
+        raise OALivePayloadInvalid(
+            "OA pending-workflow data response records are invalid"
+        )
+    if (
+        not isinstance(page_size_raw, str)
+        or not page_size_raw.isascii()
+        or not page_size_raw.isdecimal()
+        or len(page_size_raw) > len(str(_MAX_CONFIGURED_RECORDS))
+    ):
+        raise OALivePayloadInvalid(
+            "OA pending-workflow data response page size is invalid"
+        )
+    page_size = int(page_size_raw)
+    if not 1 <= page_size <= _MAX_CONFIGURED_RECORDS:
+        raise OALivePayloadInvalid(
+            "OA pending-workflow data response page size is invalid"
+        )
+    return list(records), page_size
+
+
+def _pending_workflow_record_identifier(record: Any) -> str:
+    if not isinstance(record, Mapping):
+        raise OALivePayloadInvalid(
+            "OA pending-workflow record must be an object"
+        )
+    identifier = record.get("requestid")
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise OALivePayloadInvalid(
+            "OA pending-workflow record identifier is invalid"
+        )
+    return identifier.strip()
 
 
 def _validate_message_center_form(

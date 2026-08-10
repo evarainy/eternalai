@@ -1,0 +1,78 @@
+{
+  "algorithm": "eternalai-structural-v1",
+  "nodes": [
+    {
+      "path": "$",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.authoritative_count",
+      "json_type": "integer",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.is_complete",
+      "json_type": "boolean",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.returned_count",
+      "json_type": "integer",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows",
+      "json_type": "array",
+      "nullable": false,
+      "array_shape": "items:object"
+    },
+    {
+      "path": "$.workflows[]",
+      "json_type": "object",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].created_at",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].received_at",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].status",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].title",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].todo_id",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    },
+    {
+      "path": "$.workflows[].workflow_type_id",
+      "json_type": "string",
+      "nullable": false,
+      "array_shape": null
+    }
+  ],
+  "sha256": "e1eebb611dd235cf49ddee823a851de55dbe84b72ac2608ef1f1c6698cf23d6c"
+}

@@ -55,6 +55,13 @@ _KNOWN_PREEXISTING_UNCHANGED_FINGERPRINTS = frozenset(
         "c495cf5daff2919bb7589cc49015af7b5388b3863aea7c8473de8a5fd3f516b1",
     }
 )
+_PENDING_CANONICAL_PREDECESSOR_FINGERPRINTS = frozenset(
+    {
+        # Exact P2-SMOKE-AUTH-DIAG-001 canonical row before the D1 in-place
+        # data-source and output-contract correction. No normalized fields.
+        "6e8fd8061fcfa8bff76167107cd7464c8f1486da7cb91e90aa76ff9795902a40",
+    }
+)
 _OFFICIAL_APPLY_COMMAND = (
     "uv run python -m scripts.manage_oa_capabilities --apply"
 )
@@ -81,6 +88,7 @@ class RegistryManagementPlan:
     unknown_oa_count: int
     insert_count: int
     disable_count: int
+    update_count: int = 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -97,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"unknown_oa={result.unknown_oa_count}")
         print(f"planned_insert={result.insert_count}")
         print(f"planned_disable={result.disable_count}")
+        print(f"planned_update={result.update_count}")
         print(f"registry_deployment_path={result.deployment_path}")
         print(f"official_apply_command={_OFFICIAL_APPLY_COMMAND}")
         return 0 if result.state in {"dry_run", "applied", "already_applied"} else 1
@@ -147,7 +156,11 @@ async def _manage_registry(
             async with engine.connect() as connection:
                 catalog = await _read_registry_catalog(connection, for_update=False)
             plan = _plan_registry_management(catalog)
-            if plan.state in {"ready_empty", "ready_legacy"}:
+            if plan.state in {
+                "ready_canonical_update",
+                "ready_empty",
+                "ready_legacy",
+            }:
                 return RegistryManagementPlan(
                     state="dry_run",
                     deployment_path=plan.deployment_path,
@@ -157,6 +170,7 @@ async def _manage_registry(
                     unknown_oa_count=plan.unknown_oa_count,
                     insert_count=plan.insert_count,
                     disable_count=plan.disable_count,
+                    update_count=plan.update_count,
                 )
             return plan
 
@@ -165,11 +179,32 @@ async def _manage_registry(
             plan = _plan_registry_management(catalog)
             if plan.state == "already_applied":
                 return plan
-            if plan.state not in {"ready_empty", "ready_legacy"}:
+            if plan.state not in {
+                "ready_canonical_update",
+                "ready_empty",
+                "ready_legacy",
+            }:
                 return plan
 
+            if plan.state == "ready_canonical_update":
+                expected_pending = expected_oa_capabilities()[0]
+                update_values = expected_pending.model_dump(mode="python")
+                update_values.pop("capability_id")
+                update_result = await connection.execute(
+                    sa.update(capabilities)
+                    .where(
+                        capabilities.c.capability_id
+                        == expected_pending.capability_id,
+                        capabilities.c.status == "active",
+                    )
+                    .values(**update_values)
+                )
+                if update_result.rowcount != plan.update_count:
+                    raise RegistryManagementError(
+                        "canonical_update_rowcount_mismatch"
+                    )
             legacy_ids = _authorized_active_legacy_ids(catalog)
-            if legacy_ids:
+            if plan.state == "ready_legacy" and legacy_ids:
                 update_result = await connection.execute(
                     sa.update(capabilities)
                     .where(
@@ -180,13 +215,14 @@ async def _manage_registry(
                 )
                 if update_result.rowcount != plan.disable_count:
                     raise RegistryManagementError("update_rowcount_mismatch")
-            await connection.execute(
-                sa.insert(capabilities),
-                [
-                    item.model_dump(mode="python")
-                    for item in expected_oa_capabilities()
-                ],
-            )
+            if plan.insert_count:
+                await connection.execute(
+                    sa.insert(capabilities),
+                    [
+                        item.model_dump(mode="python")
+                        for item in expected_oa_capabilities()
+                    ],
+                )
             updated_catalog = await _read_registry_catalog(
                 connection,
                 for_update=False,
@@ -203,6 +239,7 @@ async def _manage_registry(
                 unknown_oa_count=postcondition.unknown_oa_count,
                 insert_count=plan.insert_count,
                 disable_count=plan.disable_count,
+                update_count=plan.update_count,
             )
     finally:
         try:
@@ -229,6 +266,7 @@ def _plan_registry_management(
     authorized_legacy_fingerprints: frozenset[str] | None = None,
     known_disabled_fingerprints: frozenset[str] | None = None,
     known_unchanged_fingerprints: frozenset[str] | None = None,
+    pending_predecessor_fingerprints: frozenset[str] | None = None,
 ) -> RegistryManagementPlan:
     authorized_legacy_fingerprints = (
         _AUTHORIZED_LEGACY_FINGERPRINTS
@@ -244,6 +282,11 @@ def _plan_registry_management(
         _KNOWN_PREEXISTING_UNCHANGED_FINGERPRINTS
         if known_unchanged_fingerprints is None
         else known_unchanged_fingerprints
+    )
+    pending_predecessor_fingerprints = (
+        _PENDING_CANONICAL_PREDECESSOR_FINGERPRINTS
+        if pending_predecessor_fingerprints is None
+        else pending_predecessor_fingerprints
     )
     expected = {item.capability_id: item for item in expected_oa_capabilities()}
     by_id = {item.capability_id: item for item in catalog}
@@ -293,6 +336,12 @@ def _plan_registry_management(
         item for item in authorized_legacy if item.status == "disabled"
     )
     known_disabled_valid = all(item.status == "disabled" for item in known_disabled)
+    pending_predecessor = by_id.get("oa.list_pending_workflows")
+    pending_predecessor_valid = (
+        pending_predecessor is not None
+        and _exact_capability_fingerprint(pending_predecessor)
+        in pending_predecessor_fingerprints
+    )
 
     if (
         not canonical_found
@@ -302,6 +351,7 @@ def _plan_registry_management(
         deployment_path = "empty"
         insert_count = len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)
         disable_count = 0
+        update_count = 0
     elif (
         not canonical_found
         and len(authorized_legacy) == len(authorized_legacy_fingerprints)
@@ -316,6 +366,25 @@ def _plan_registry_management(
         deployment_path = "legacy"
         insert_count = len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)
         disable_count = len(legacy_active)
+        update_count = 0
+    elif (
+        len(canonical_found) == len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)
+        and len(canonical_valid) == 1
+        and pending_predecessor_valid
+        and len(authorized_legacy)
+        in {0, len(authorized_legacy_fingerprints)}
+        and not legacy_active
+        and len(legacy_disabled) == len(authorized_legacy)
+        and len(known_disabled) in {0, len(known_disabled_fingerprints)}
+        and known_disabled_valid
+        and len(known_unchanged) in {0, len(known_unchanged_fingerprints)}
+        and not unknown_oa
+    ):
+        state = "ready_canonical_update"
+        deployment_path = "canonical_update"
+        insert_count = 0
+        disable_count = 0
+        update_count = 1
     elif (
         len(canonical_valid) == len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)
         and len(authorized_legacy) in {
@@ -333,11 +402,13 @@ def _plan_registry_management(
         deployment_path = "already"
         insert_count = 0
         disable_count = 0
+        update_count = 0
     else:
         state = "precondition_failed"
         deployment_path = "invalid"
         insert_count = 0
         disable_count = 0
+        update_count = 0
 
     return RegistryManagementPlan(
         state=state,
@@ -348,6 +419,7 @@ def _plan_registry_management(
         unknown_oa_count=len(unknown_oa),
         insert_count=insert_count,
         disable_count=disable_count,
+        update_count=update_count,
     )
 
 

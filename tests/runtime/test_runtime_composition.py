@@ -390,7 +390,7 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v2"
+        / "ecology9-pending-workflows-v3"
     )
     settings = replace(
         ProductionSettings.from_environment(),
@@ -462,7 +462,7 @@ def test_oa_read_adapter_mode_builds_configured_provider(
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v2"
+        / "ecology9-pending-workflows-v3"
     )
     system_message_contract_pack_dir = (
         Path(__file__).parents[1]
@@ -483,12 +483,32 @@ def test_oa_read_adapter_mode_builds_configured_provider(
         oa_message_center_path=(
             "/api/message-center/list" if mode == "live" else None
         ),
-        oa_pending_workflows_category_id=("101" if mode == "live" else None),
-        oa_pending_workflows_bizstate=(
-            "pending-business-state" if mode == "live" else None
+        oa_pending_workflows_split_page_key_path=(
+            "/api/table/split" if mode == "live" else None
         ),
-        oa_pending_workflows_select_state=(
-            "pending-selection-state" if mode == "live" else None
+        oa_pending_workflows_counts_path=(
+            "/api/table/counts" if mode == "live" else None
+        ),
+        oa_pending_workflows_datas_path=(
+            "/api/table/datas" if mode == "live" else None
+        ),
+        oa_pending_workflows_actiontype=(
+            "synthetic-action" if mode == "live" else None
+        ),
+        oa_pending_workflows_hide_no_data_tab=(
+            "synthetic-hide" if mode == "live" else None
+        ),
+        oa_pending_workflows_method=(
+            "synthetic-method" if mode == "live" else None
+        ),
+        oa_pending_workflows_offical_type=(
+            "synthetic-offical-type" if mode == "live" else None
+        ),
+        oa_pending_workflows_view_scope=(
+            "synthetic-view-scope" if mode == "live" else None
+        ),
+        oa_pending_workflows_sort_params=(
+            "synthetic-sort" if mode == "live" else None
         ),
         oa_system_messages_category_id=("202" if mode == "live" else None),
         oa_system_messages_bizstate=(
@@ -538,7 +558,7 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
         Path(__file__).parents[1]
         / "contract_packs"
         / "oa"
-        / "ecology9-pending-workflows-v2"
+        / "ecology9-pending-workflows-v3"
     )
     system_message_contract_pack_dir = (
         Path(__file__).parents[1]
@@ -555,9 +575,15 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
             system_message_contract_pack_dir
         ),
         oa_message_center_path="/api/message-center/list",
-        oa_pending_workflows_category_id="101",
-        oa_pending_workflows_bizstate="pending-business-state",
-        oa_pending_workflows_select_state="pending-selection-state",
+        oa_pending_workflows_split_page_key_path="/api/table/split",
+        oa_pending_workflows_counts_path="/api/table/counts",
+        oa_pending_workflows_datas_path="/api/table/datas",
+        oa_pending_workflows_actiontype="synthetic-action",
+        oa_pending_workflows_hide_no_data_tab="synthetic-hide",
+        oa_pending_workflows_method="synthetic-method",
+        oa_pending_workflows_offical_type="synthetic-offical-type",
+        oa_pending_workflows_view_scope="synthetic-view-scope",
+        oa_pending_workflows_sort_params="synthetic-sort",
         oa_system_messages_category_id="202",
         oa_system_messages_bizstate="system-business-state",
         oa_system_messages_select_state="system-selection-state",

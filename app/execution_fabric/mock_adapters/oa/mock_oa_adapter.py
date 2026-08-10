@@ -6,6 +6,20 @@ from typing import Any
 
 from app.ports.adapter import MOCK_ERROR_MODE_TO_ERROR_CODE, AdapterResult
 
+_PENDING_COLLECTION_FIELDS = frozenset(
+    {"workflows", "returned_count", "authoritative_count", "is_complete"}
+)
+_PENDING_WORKFLOW_FIELDS = frozenset(
+    {
+        "todo_id",
+        "title",
+        "status",
+        "received_at",
+        "created_at",
+        "workflow_type_id",
+    }
+)
+
 
 class MockOAAdapter:
     """Deterministic OA adapter that returns AdapterResult without upstream I/O."""
@@ -79,5 +93,54 @@ class MockOAAdapter:
 
         value = self._mock_state[key]
         if key == "pending_workflows":
-            return AdapterResult(status="success", data={"workflows": value})
+            if isinstance(value, list):
+                # Preserve the frozen GT-001 state convention and response shape.
+                return AdapterResult(status="success", data={"workflows": value})
+            if _is_valid_pending_collection(value):
+                return AdapterResult(status="success", data=value)
+            return AdapterResult(
+                status="error",
+                data=None,
+                error_code="adapter_payload_invalid",
+            )
         return AdapterResult(status="success", data=value)
+
+
+def _is_valid_pending_collection(value: Any) -> bool:
+    """Validate the structured Golden-only to-do state without infra imports."""
+
+    if not isinstance(value, dict) or set(value) != _PENDING_COLLECTION_FIELDS:
+        return False
+    workflows = value["workflows"]
+    returned_count = value["returned_count"]
+    authoritative_count = value["authoritative_count"]
+    if not isinstance(workflows, list):
+        return False
+    if not _is_non_negative_int(returned_count):
+        return False
+    if not _is_non_negative_int(authoritative_count):
+        return False
+    if value["is_complete"] is not True:
+        return False
+    if returned_count != len(workflows) or authoritative_count != len(workflows):
+        return False
+    if not all(_is_valid_pending_workflow(workflow) for workflow in workflows):
+        return False
+    todo_ids = [workflow["todo_id"] for workflow in workflows]
+    return len(set(todo_ids)) == len(todo_ids)
+
+
+def _is_valid_pending_workflow(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != _PENDING_WORKFLOW_FIELDS:
+        return False
+    return all(
+        isinstance(field_value, str)
+        and bool(field_value.strip())
+        and "<" not in field_value
+        and ">" not in field_value
+        for field_value in value.values()
+    )
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0

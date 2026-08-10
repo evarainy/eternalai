@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import pytest
 from app.infra.adapters.oa.contracts import (
     EXTERNAL_SANITIZATION_WARNING,
     PENDING_WORKFLOW_DERIVATION_WARNING,
+    OALegacyPendingWorkflowCollection,
     OAPendingWorkflowCollection,
     build_structural_fingerprint,
 )
@@ -23,12 +25,51 @@ COOKIE_VALUE = "fixture-cookie-secret-001"
 TOKEN_VALUE = "fixture-token-secret-001"
 PROFILE_VERSION = "ecology9-pending-workflows-v1"
 PROFILE_VERSION_V2 = "ecology9-pending-workflows-v2"
+PROFILE_VERSION_V3 = "ecology9-pending-workflows-v3"
 SYSTEM_MESSAGE_PROFILE_VERSION = "ecology9-system-messages-v1"
-PENDING_PROFILE_PREFIX = "ecology9-pending-workflows-v"
+LEGACY_PENDING_PROFILE_VERSIONS = frozenset({PROFILE_VERSION, PROFILE_VERSION_V2})
+TODO_SESSION_KEY = "synthetic-todo-session-key-" + ("x" * 42)
+FROZEN_PENDING_PACK_FILE_SHA256 = {
+    "ecology9-pending-workflows-v1/fingerprint.json": (
+        "26aa1d354cb8c6056587bf7fcccd305139059796ed9b0ed2c26927c6c81137ef"
+    ),
+    "ecology9-pending-workflows-v1/profile.json": (
+        "605673383921f3f65b296b25041be93963c20dcdaf79059f16cd2ad898d1774c"
+    ),
+    "ecology9-pending-workflows-v1/sample.json": (
+        "83543add6d8cc6d642638f6147c92bef8fd6a2419a5c4f91ed1225ebfe6fb252"
+    ),
+    "ecology9-pending-workflows-v2/fingerprint.json": (
+        "86c5bd727f29111a1baa4e4c21f3cec7eb873331d6c4fabf7b20c9b664084dfa"
+    ),
+    "ecology9-pending-workflows-v2/profile.json": (
+        "1088ab942c4c204deb15e92b89ae17e6a150a2347a9f199d0dff89d6df1edef6"
+    ),
+    "ecology9-pending-workflows-v2/sample.json": (
+        "eac04435b6b552924ef0b0dc05bee8b6e5889801ff03a08f97219bfecb6dd740"
+    ),
+}
 # The category the pending pack claims to represent, and the sibling category a
 # system-message capture is actually recorded under.
 PENDING_CATEGORY_ID = "217"
 SIBLING_CATEGORY_ID = "2,31"
+
+
+def _assert_sanitizer_traceback_is_redacted(
+    error: BaseException,
+    marker: str,
+) -> None:
+    assert error.__context__ is None
+    assert error.__cause__ is None
+    sanitizer_frames = 0
+    traceback = error.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if frame.f_globals.get("__name__") == sanitizer.__name__:
+            sanitizer_frames += 1
+            assert all(marker not in repr(value) for value in frame.f_locals.values())
+        traceback = traceback.tb_next
+    assert sanitizer_frames > 0
 
 
 def _har(
@@ -201,6 +242,101 @@ def _system_message_har() -> tuple[dict[str, Any], list[dict[str, str]]]:
     )
 
 
+def _todo_list_har(
+    *,
+    session_key: str = TODO_SESSION_KEY,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    raw_records = [
+        {
+            "requestid": "481001",
+            "requestname": "Synthetic confidential todo title alpha",
+            "status": "Raw",
+            "receivedate": "2026-08-09",
+            "createdate": "2026-08-08",
+            "workflowid": "713",
+            "requestnamespan": "<span>never copy alpha</span>",
+            "statusspan": "<span>never copy status alpha</span>",
+            "userid": "synthetic-user-alpha",
+        },
+        {
+            "requestid": "481002",
+            "requestname": "Synthetic confidential todo title beta",
+            "status": "New",
+            "receivedate": "2026-08-10",
+            "createdate": "2026-08-09",
+            "workflowid": "1714",
+            "requestnamespan": "<span>never copy beta</span>",
+            "statusspan": "<span>never copy status beta</span>",
+            "userid": "synthetic-user-beta",
+        },
+    ]
+
+    def _post_entry(
+        path: str,
+        parameters: list[tuple[str, str]],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        encoded_parameters = "&".join(f"{name}={value}" for name, value in parameters)
+        return {
+            "request": {
+                "method": "POST",
+                "url": f"https://synthetic.invalid{path}",
+                "headers": [
+                    {
+                        "name": "Cookie",
+                        "value": f"ecology_JSessionid={COOKIE_VALUE}",
+                    }
+                ],
+                "cookies": [],
+                "postData": {
+                    "mimeType": "application/x-www-form-urlencoded",
+                    "params": [
+                        {"name": name, "value": value}
+                        for name, value in parameters
+                    ],
+                    "text": encoded_parameters,
+                },
+            },
+            "response": {
+                "headers": [],
+                "cookies": [],
+                "content": {
+                    "mimeType": "application/json",
+                    "text": json.dumps(payload),
+                },
+            },
+        }
+
+    split_page_key = _post_entry(
+        "/api/workflow/reqlist/splitPageKey",
+        [("viewcondition", "5")],
+        {
+            "sessionkey": session_key,
+            "isQueryByNewTable": True,
+            "sharearg": {},
+        },
+    )
+    datas = _post_entry(
+        "/api/ec/dev/table/datas",
+        [("current", "1"), ("dataKey", session_key)],
+        {"datas": raw_records, "status": True},
+    )
+    counts = _post_entry(
+        "/api/ec/dev/table/counts",
+        [("dataKey", session_key)],
+        {"count": len(raw_records), "status": True},
+    )
+    return (
+        {
+            "log": {
+                "version": "1.2",
+                "entries": [split_page_key, datas, counts],
+            }
+        },
+        raw_records,
+    )
+
+
 def _run_script(
     input_har: Path,
     output_dir: Path,
@@ -221,8 +357,9 @@ def _run_script(
     ]
     for entry_index in entry_indices or []:
         command.extend(["--entry-index", str(entry_index)])
-    if pending_category_id is not None and output_dir.name.startswith(
-        PENDING_PROFILE_PREFIX
+    if (
+        pending_category_id is not None
+        and output_dir.name in LEGACY_PENDING_PROFILE_VERSIONS
     ):
         command.extend(["--pending-category-id", pending_category_id])
     command.extend(extra_args or [])
@@ -282,7 +419,7 @@ def test_sanitizer_whitelists_and_publishes_atomic_contract_pack(
         "returned_count": 1,
         "is_complete": True,
     }
-    OAPendingWorkflowCollection.model_validate(sample, strict=True)
+    OALegacyPendingWorkflowCollection.model_validate(sample, strict=True)
     assert fingerprint == build_structural_fingerprint(sample)
     all_output = "\n".join(
         path.read_text(encoding="utf-8") for path in output_dir.iterdir()
@@ -338,6 +475,375 @@ def test_sibling_capture_is_never_labelled_a_direct_pending_capture(
     profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
     assert profile["source_kind"] == "derived_from_sibling_capture"
     assert profile["source_warning"] == PENDING_WORKFLOW_DERIVATION_WARNING
+
+
+def test_todo_list_v3_normalizes_three_linked_responses_without_raw_values(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _todo_list_har()
+    input_har = tmp_path / "todo-list.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    completed = _run_script(input_har, output_dir, entry_indices=[2, 0, 1])
+
+    assert completed.returncode == 0
+    assert completed.stdout == "sanitized Contract Pack created\n"
+    assert completed.stderr == ""
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "fingerprint.json",
+        "profile.json",
+        "sample.json",
+    ]
+    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
+    sample = json.loads((output_dir / "sample.json").read_text(encoding="utf-8"))
+    fingerprint = json.loads(
+        (output_dir / "fingerprint.json").read_text(encoding="utf-8")
+    )
+    assert profile == {
+        "profile_version": PROFILE_VERSION_V3,
+        "capability_id": "oa.list_pending_workflows",
+        "source_kind": "sanitized_capture",
+        "sanitizer_version": "2",
+        "sample_file": "sample.json",
+        "fingerprint_file": "fingerprint.json",
+    }
+    assert sample["returned_count"] == len(raw_records) == 2
+    assert sample["authoritative_count"] == len(raw_records)
+    assert sample["is_complete"] is True
+    assert len(sample["workflows"]) == len(raw_records)
+    assert all(
+        set(workflow)
+        == {
+            "todo_id",
+            "title",
+            "status",
+            "received_at",
+            "created_at",
+            "workflow_type_id",
+        }
+        for workflow in sample["workflows"]
+    )
+    assert len({workflow["todo_id"] for workflow in sample["workflows"]}) == len(
+        sample["workflows"]
+    )
+    for raw_record, workflow in zip(raw_records, sample["workflows"], strict=True):
+        assert len(workflow["todo_id"]) == len(raw_record["requestid"])
+        assert len(workflow["title"]) == len(raw_record["requestname"])
+        assert len(workflow["status"]) == len(raw_record["status"])
+        assert len(workflow["received_at"]) == len(raw_record["receivedate"])
+        assert len(workflow["created_at"]) == len(raw_record["createdate"])
+        assert len(workflow["workflow_type_id"]) == len(raw_record["workflowid"])
+    OAPendingWorkflowCollection.model_validate(sample, strict=True)
+    assert fingerprint == build_structural_fingerprint(sample)
+
+    all_output = "\n".join(
+        path.read_text(encoding="utf-8") for path in output_dir.iterdir()
+    )
+    raw_business_values = {
+        str(raw_record[field])
+        for raw_record in raw_records
+        for field in (
+            "requestid",
+            "requestname",
+            "status",
+            "receivedate",
+            "createdate",
+            "workflowid",
+            "requestnamespan",
+            "statusspan",
+            "userid",
+        )
+    }
+    assert TODO_SESSION_KEY not in all_output
+    assert "sessionkey" not in all_output.casefold()
+    assert "datakey" not in all_output.casefold()
+    assert all(value not in all_output for value in raw_business_values)
+
+
+def test_committed_todo_list_v3_pack_is_self_consistent() -> None:
+    pack = REPO_ROOT / "tests" / "contract_packs" / "oa" / PROFILE_VERSION_V3
+    assert sorted(path.name for path in pack.iterdir()) == [
+        "fingerprint.json",
+        "profile.json",
+        "sample.json",
+    ]
+    profile = json.loads((pack / "profile.json").read_text(encoding="utf-8"))
+    sample = json.loads((pack / "sample.json").read_text(encoding="utf-8"))
+    fingerprint = json.loads(
+        (pack / "fingerprint.json").read_text(encoding="utf-8")
+    )
+
+    assert profile == {
+        "profile_version": PROFILE_VERSION_V3,
+        "capability_id": "oa.list_pending_workflows",
+        "source_kind": "sanitized_capture",
+        "sanitizer_version": "2",
+        "sample_file": "sample.json",
+        "fingerprint_file": "fingerprint.json",
+    }
+    validated = OAPendingWorkflowCollection.model_validate(sample, strict=True)
+    assert validated.returned_count == 6
+    assert validated.authoritative_count == 6
+    assert validated.is_complete is True
+    assert len({workflow.todo_id for workflow in validated.workflows}) == 6
+    assert fingerprint == build_structural_fingerprint(sample)
+    rendered = json.dumps(
+        {"profile": profile, "sample": sample, "fingerprint": fingerprint},
+        ensure_ascii=False,
+        sort_keys=True,
+    ).casefold()
+    assert "sessionkey" not in rendered
+    assert "datakey" not in rendered
+
+
+def test_published_pending_v1_v2_pack_files_remain_byte_frozen() -> None:
+    pack_root = REPO_ROOT / "tests" / "contract_packs" / "oa"
+    # Git's canonical text bytes are LF; tolerate only the checkout's CRLF
+    # projection so the same immutable blob guard runs on Windows and Linux.
+    actual = {
+        relative_path: hashlib.sha256(
+            (pack_root / relative_path).read_bytes().replace(b"\r\n", b"\n")
+        ).hexdigest()
+        for relative_path in FROZEN_PENDING_PACK_FILE_SHA256
+    }
+
+    assert actual == FROZEN_PENDING_PACK_FILE_SHA256
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_error"),
+    [
+        ("viewcondition", "todo_list_viewcondition_invalid"),
+        ("datas_key", "todo_list_session_association_invalid"),
+        ("counts_key", "todo_list_session_association_invalid"),
+        ("datas_status", "todo_list_datas_status_invalid"),
+        ("counts_status", "todo_list_counts_status_invalid"),
+        ("authoritative_count", "todo_list_incomplete_capture"),
+    ],
+)
+def test_todo_list_v3_relationship_and_completeness_failures_leave_zero_output(
+    tmp_path: Path,
+    failure_kind: str,
+    expected_error: str,
+) -> None:
+    har, _raw_records = _todo_list_har()
+    entries = har["log"]["entries"]
+    if failure_kind == "viewcondition":
+        entries[0]["request"]["postData"]["params"][0]["value"] = "4"
+        entries[0]["request"]["postData"]["text"] = "viewcondition=4"
+    elif failure_kind == "datas_key":
+        entries[1]["request"]["postData"]["params"][1]["value"] = "mismatch"
+        entries[1]["request"]["postData"]["text"] = "current=1&dataKey=mismatch"
+    elif failure_kind == "counts_key":
+        entries[2]["request"]["postData"]["params"][0]["value"] = "mismatch"
+        entries[2]["request"]["postData"]["text"] = "dataKey=mismatch"
+    elif failure_kind == "datas_status":
+        entries[1]["response"]["content"]["text"] = json.dumps(
+            {"datas": _raw_records, "status": False}
+        )
+    elif failure_kind == "counts_status":
+        entries[2]["response"]["content"]["text"] = json.dumps(
+            {"count": len(_raw_records), "status": False}
+        )
+    else:
+        entries[2]["response"]["content"]["text"] = json.dumps(
+            {"count": len(_raw_records) + 1, "status": True}
+        )
+    input_har = tmp_path / "todo-list-invalid.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    completed = _run_script(input_har, output_dir, entry_indices=[0, 1, 2])
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == f"sanitization failed: {expected_error}\n"
+    assert TODO_SESSION_KEY not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match=expected_error,
+    ) as exc_info:
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=PROFILE_VERSION_V3,
+            entry_indices=[0, 1, 2],
+        )
+
+    _assert_sanitizer_traceback_is_redacted(exc_info.value, TODO_SESSION_KEY)
+
+
+@pytest.mark.parametrize("session_key", ["s" * 68, "s" * 70])
+def test_todo_list_v3_requires_the_exact_session_key_length_without_output(
+    tmp_path: Path,
+    session_key: str,
+) -> None:
+    har, _raw_records = _todo_list_har(session_key=session_key)
+    input_har = tmp_path / "todo-list-session-length.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="todo_list_session_association_invalid",
+    ) as exc_info:
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=PROFILE_VERSION_V3,
+            entry_indices=[0, 1, 2],
+        )
+
+    _assert_sanitizer_traceback_is_redacted(exc_info.value, session_key)
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_todo_list_v3_rejects_duplicate_source_todo_ids_without_output(
+    tmp_path: Path,
+) -> None:
+    har, raw_records = _todo_list_har()
+    raw_records[1]["requestid"] = raw_records[0]["requestid"]
+    har["log"]["entries"][1]["response"]["content"]["text"] = json.dumps(
+        {"datas": raw_records, "status": True}
+    )
+    input_har = tmp_path / "todo-list-duplicate.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="todo_list_duplicate_record",
+    ):
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=PROFILE_VERSION_V3,
+            entry_indices=[0, 1, 2],
+        )
+
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_todo_list_v3_rejects_message_center_substitution(tmp_path: Path) -> None:
+    har, _raw_records = _todo_list_har()
+    har["log"]["entries"][1]["request"]["url"] = (
+        "https://synthetic.invalid/api/ec/dev/message/getMsgList"
+    )
+    input_har = tmp_path / "wrong-source.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    completed = _run_script(input_har, output_dir, entry_indices=[0, 1, 2])
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == (
+        "sanitization failed: todo_list_entry_selection_invalid\n"
+    )
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_todo_list_v3_rejects_html_in_selected_bare_fields(tmp_path: Path) -> None:
+    har, raw_records = _todo_list_har()
+    raw_records[0]["requestname"] = "<span>synthetic raw title</span>"
+    har["log"]["entries"][1]["response"]["content"]["text"] = json.dumps(
+        {"datas": raw_records, "status": True}
+    )
+    input_har = tmp_path / "html-title.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    completed = _run_script(input_har, output_dir, entry_indices=[0, 1, 2])
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == (
+        "sanitization failed: todo_list_html_field_invalid\n"
+    )
+    assert "synthetic raw title" not in completed.stderr
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+@pytest.mark.parametrize(
+    ("entry_indices", "expected_error"),
+    [
+        (None, "todo_list_entry_indices_required"),
+        ([0, 1], "todo_list_entry_indices_invalid"),
+        ([0, 1, 1], "todo_list_entry_indices_invalid"),
+    ],
+)
+def test_todo_list_v3_requires_three_distinct_explicit_entries(
+    tmp_path: Path,
+    entry_indices: list[int] | None,
+    expected_error: str,
+) -> None:
+    har, _raw_records = _todo_list_har()
+    input_har = tmp_path / "entry-selection.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    completed = _run_script(input_har, output_dir, entry_indices=entry_indices)
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == f"sanitization failed: {expected_error}\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
+
+
+def test_todo_list_session_value_is_collected_before_candidate_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    har, _raw_records = _todo_list_har()
+    input_har = tmp_path / "session-leak.har"
+    input_har.write_text(json.dumps(har), encoding="utf-8")
+    output_dir = tmp_path / PROFILE_VERSION_V3
+
+    monkeypatch.setattr(
+        sanitizer,
+        "_normalize_todo_list_sample",
+        lambda _datas, _counts: {
+            "workflows": [
+                {
+                    "todo_id": TODO_SESSION_KEY,
+                    "title": "synthetic title",
+                    "status": "pending",
+                    "received_at": "2000-01-01",
+                    "created_at": "2000-01-01",
+                    "workflow_type_id": "synthetic-type",
+                }
+            ],
+            "returned_count": 1,
+            "authoritative_count": 1,
+            "is_complete": True,
+        },
+    )
+
+    with pytest.raises(
+        sanitizer.SanitizationError,
+        match="raw_sensitive_value_survived",
+    ) as exc_info:
+        sanitizer.sanitize_har_to_contract_pack(
+            input_har=input_har,
+            output_dir=output_dir,
+            profile_version=PROFILE_VERSION_V3,
+            entry_indices=[0, 1, 2],
+        )
+
+    assert TODO_SESSION_KEY not in str(exc_info.value)
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
 def test_pending_capture_category_has_no_default_and_fails_closed(
@@ -863,9 +1369,13 @@ def test_sensitive_profile_version_is_rejected_without_output(
 
 @pytest.mark.parametrize(
     "profile_version",
-    [PROFILE_VERSION_V2, "ecology9-pending-workflows-v3", "ecology9-pending-workflows-v927"],
+    [
+        "ecology9-pending-workflows-v4",
+        "ecology9-pending-workflows-v927",
+        "ecology9-system-messages-v2",
+    ],
 )
-def test_versioned_pending_capture_revision_is_accepted(
+def test_unapproved_profile_revision_fails_closed_without_output(
     tmp_path: Path,
     profile_version: str,
 ) -> None:
@@ -875,11 +1385,11 @@ def test_versioned_pending_capture_revision_is_accepted(
 
     completed = _run_script(input_har, output_dir)
 
-    assert completed.returncode == 0
-    assert completed.stderr == ""
-    profile = json.loads((output_dir / "profile.json").read_text(encoding="utf-8"))
-    assert profile["profile_version"] == profile_version
-    assert profile["capability_id"] == "oa.list_pending_workflows"
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "sanitization failed: invalid_profile_version\n"
+    assert not output_dir.exists()
+    assert not list(tmp_path.glob(f".{output_dir.name}.*"))
 
 
 def test_v2_sensitive_value_still_exits_two_without_output(

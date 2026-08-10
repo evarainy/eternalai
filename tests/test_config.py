@@ -32,6 +32,31 @@ def _environment() -> dict[str, str]:
     }
 
 
+def _live_environment(tmp_path: Path) -> dict[str, str]:
+    environment = _environment()
+    environment.update(
+        {
+            "OA_READ_ADAPTER_MODE": "live",
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
+            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
+            "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
+            "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH": "/api/table/split",
+            "OA_PENDING_WORKFLOWS_COUNTS_PATH": "/api/table/counts",
+            "OA_PENDING_WORKFLOWS_DATAS_PATH": "/api/table/datas",
+            "OA_PENDING_WORKFLOWS_ACTIONTYPE": "synthetic-action",
+            "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB": "synthetic-hide-flag",
+            "OA_PENDING_WORKFLOWS_METHOD": "synthetic-method",
+            "OA_PENDING_WORKFLOWS_OFFICAL_TYPE": "synthetic-offical-type",
+            "OA_PENDING_WORKFLOWS_VIEW_SCOPE": "synthetic-view-scope",
+            "OA_PENDING_WORKFLOWS_SORT_PARAMS": "synthetic-sort",
+            "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
+            "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
+            "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
+        }
+    )
+    return environment
+
+
 def test_production_settings_apply_approved_llm_defaults() -> None:
     settings = ProductionSettings.from_environment(_environment())
 
@@ -54,9 +79,15 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.oa_pending_workflows_contract_pack_dir is None
     assert settings.oa_system_messages_contract_pack_dir is None
     assert settings.oa_message_center_path is None
-    assert settings.oa_pending_workflows_category_id is None
-    assert settings.oa_pending_workflows_bizstate is None
-    assert settings.oa_pending_workflows_select_state is None
+    assert settings.oa_pending_workflows_split_page_key_path is None
+    assert settings.oa_pending_workflows_counts_path is None
+    assert settings.oa_pending_workflows_datas_path is None
+    assert settings.oa_pending_workflows_actiontype is None
+    assert settings.oa_pending_workflows_hide_no_data_tab is None
+    assert settings.oa_pending_workflows_method is None
+    assert settings.oa_pending_workflows_offical_type is None
+    assert settings.oa_pending_workflows_view_scope is None
+    assert settings.oa_pending_workflows_sort_params is None
     assert settings.oa_system_messages_category_id is None
     assert settings.oa_system_messages_bizstate is None
     assert settings.oa_system_messages_select_state is None
@@ -235,9 +266,15 @@ def test_oa_read_replay_mode_requires_explicit_contract_pack() -> None:
         "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR",
         "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR",
         "OA_MESSAGE_CENTER_PATH",
-        "OA_PENDING_WORKFLOWS_CATEGORY_ID",
-        "OA_PENDING_WORKFLOWS_BIZSTATE",
-        "OA_PENDING_WORKFLOWS_SELECT_STATE",
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+        "OA_PENDING_WORKFLOWS_DATAS_PATH",
+        "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+        "OA_PENDING_WORKFLOWS_METHOD",
+        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+        "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+        "OA_PENDING_WORKFLOWS_SORT_PARAMS",
         "OA_SYSTEM_MESSAGES_CATEGORY_ID",
         "OA_SYSTEM_MESSAGES_BIZSTATE",
         "OA_SYSTEM_MESSAGES_SELECT_STATE",
@@ -247,21 +284,7 @@ def test_oa_read_live_mode_requires_each_capability_configuration(
     missing_name: str,
     tmp_path: Path,
 ) -> None:
-    environment = _environment()
-    environment.update(
-        {
-            "OA_READ_ADAPTER_MODE": "live",
-            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
-            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
-            "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
-            "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-            "OA_PENDING_WORKFLOWS_BIZSTATE": "pending-business-state",
-            "OA_PENDING_WORKFLOWS_SELECT_STATE": "pending-selection-state",
-            "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
-            "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
-            "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
-        }
-    )
+    environment = _live_environment(tmp_path)
     environment.pop(missing_name)
 
     with pytest.raises(RuntimeError, match=re.escape(missing_name)):
@@ -271,16 +294,9 @@ def test_oa_read_live_mode_requires_each_capability_configuration(
 def test_oa_read_live_mode_preserves_explicit_empty_message_filters(
     tmp_path: Path,
 ) -> None:
-    environment = _environment()
+    environment = _live_environment(tmp_path)
     environment.update(
         {
-            "OA_READ_ADAPTER_MODE": "live",
-            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
-            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
-            "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
-            "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-            "OA_PENDING_WORKFLOWS_BIZSTATE": "",
-            "OA_PENDING_WORKFLOWS_SELECT_STATE": "",
             "OA_SYSTEM_MESSAGES_CATEGORY_ID": "",
             "OA_SYSTEM_MESSAGES_BIZSTATE": "",
             "OA_SYSTEM_MESSAGES_SELECT_STATE": "",
@@ -289,39 +305,33 @@ def test_oa_read_live_mode_preserves_explicit_empty_message_filters(
 
     settings = ProductionSettings.from_environment(environment)
 
-    assert settings.oa_pending_workflows_category_id == "101"
-    assert settings.oa_pending_workflows_bizstate == ""
-    assert settings.oa_pending_workflows_select_state == ""
+    assert settings.oa_pending_workflows_actiontype == "synthetic-action"
     assert settings.oa_system_messages_category_id == ""
     assert settings.oa_system_messages_bizstate == ""
     assert settings.oa_system_messages_select_state == ""
 
 
+@pytest.mark.parametrize(
+    "path_name",
+    [
+        "OA_MESSAGE_CENTER_PATH",
+        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+        "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+        "OA_PENDING_WORKFLOWS_DATAS_PATH",
+    ],
+)
 def test_oa_read_live_mode_requires_safe_host_relative_paths(
+    path_name: str,
     tmp_path: Path,
 ) -> None:
-    environment = _environment()
-    environment.update(
-        {
-            "OA_READ_ADAPTER_MODE": "live",
-            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
-            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
-            "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
-            "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-            "OA_PENDING_WORKFLOWS_BIZSTATE": "pending-business-state",
-            "OA_PENDING_WORKFLOWS_SELECT_STATE": "pending-selection-state",
-            "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
-            "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
-            "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
-        }
-    )
+    environment = _live_environment(tmp_path)
     for unsafe_path in (
         "https://other.invalid/pending",
         "//other.invalid/pending",
         "/api/../admin",
         "/api/pending?cookie=unsafe",
     ):
-        environment["OA_MESSAGE_CENTER_PATH"] = unsafe_path
+        environment[path_name] = unsafe_path
         with pytest.raises(RuntimeError, match="relative path"):
             ProductionSettings.from_environment(environment)
 
@@ -329,21 +339,8 @@ def test_oa_read_live_mode_requires_safe_host_relative_paths(
 def test_pending_workflows_config_keeps_existing_backslash_semantics(
     tmp_path: Path,
 ) -> None:
-    environment = _environment()
-    environment.update(
-        {
-            "OA_READ_ADAPTER_MODE": "live",
-            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(tmp_path / "pending"),
-            "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(tmp_path / "messages"),
-            "OA_MESSAGE_CENTER_PATH": r"/api\message-center\list",
-            "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-            "OA_PENDING_WORKFLOWS_BIZSTATE": "pending-business-state",
-            "OA_PENDING_WORKFLOWS_SELECT_STATE": "pending-selection-state",
-            "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
-            "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
-            "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
-        }
-    )
+    environment = _live_environment(tmp_path)
+    environment["OA_MESSAGE_CENTER_PATH"] = r"/api\message-center\list"
 
     settings = ProductionSettings.from_environment(environment)
 
@@ -356,7 +353,9 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
     tmp_path: Path,
 ) -> None:
     contract_pack = tmp_path / "ecology9-safe-profile"
-    environment = _environment()
+    environment = (
+        _live_environment(tmp_path) if mode == "live" else _environment()
+    )
     environment.update(
         {
             "OA_READ_ADAPTER_MODE": mode,
@@ -364,20 +363,29 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
         }
     )
     if mode == "live":
+        pending_contract_pack = environment.pop(
+            "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"
+        )
         environment.update(
             {
                 "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(
                     tmp_path / "ecology9-system-messages-v1"
                 ),
-                "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
-                "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-                "OA_PENDING_WORKFLOWS_BIZSTATE": "pending-business-state",
-                "OA_PENDING_WORKFLOWS_SELECT_STATE": "pending-selection-state",
-                "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
-                "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
-                "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
                 "OA_MESSAGE_CENTER_PAGE_SIZE": "40",
             }
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR "
+                "is required for live mode"
+            ),
+        ):
+            ProductionSettings.from_environment(environment)
+
+        environment["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] = (
+            pending_contract_pack
         )
 
     settings = ProductionSettings.from_environment(environment)
@@ -385,7 +393,7 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
     assert settings.oa_read_adapter_mode == mode
     assert settings.oa_read_contract_pack_dir == contract_pack
     assert settings.oa_pending_workflows_contract_pack_dir == (
-        contract_pack if mode == "live" else None
+        tmp_path / "pending" if mode == "live" else None
     )
     assert settings.oa_system_messages_contract_pack_dir == (
         tmp_path / "ecology9-system-messages-v1" if mode == "live" else None
@@ -393,14 +401,32 @@ def test_oa_read_modes_preserve_explicit_safe_configuration(
     assert settings.oa_message_center_path == (
         "/api/message-center/list" if mode == "live" else None
     )
-    assert settings.oa_pending_workflows_category_id == (
-        "101" if mode == "live" else None
+    assert settings.oa_pending_workflows_split_page_key_path == (
+        "/api/table/split" if mode == "live" else None
     )
-    assert settings.oa_pending_workflows_bizstate == (
-        "pending-business-state" if mode == "live" else None
+    assert settings.oa_pending_workflows_counts_path == (
+        "/api/table/counts" if mode == "live" else None
     )
-    assert settings.oa_pending_workflows_select_state == (
-        "pending-selection-state" if mode == "live" else None
+    assert settings.oa_pending_workflows_datas_path == (
+        "/api/table/datas" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_actiontype == (
+        "synthetic-action" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_hide_no_data_tab == (
+        "synthetic-hide-flag" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_method == (
+        "synthetic-method" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_offical_type == (
+        "synthetic-offical-type" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_view_scope == (
+        "synthetic-view-scope" if mode == "live" else None
+    )
+    assert settings.oa_pending_workflows_sort_params == (
+        "synthetic-sort" if mode == "live" else None
     )
     assert settings.oa_system_messages_category_id == (
         "202" if mode == "live" else None
@@ -420,20 +446,13 @@ def test_live_explicit_pending_pack_takes_priority_over_legacy_alias(
     legacy_pack = tmp_path / "legacy-pending"
     pending_pack = tmp_path / "pending"
     system_pack = tmp_path / "messages"
-    environment = _environment()
+    environment = _live_environment(tmp_path)
     environment.update(
         {
             "OA_READ_ADAPTER_MODE": "live",
             "OA_READ_CONTRACT_PACK_DIR": str(legacy_pack),
             "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR": str(pending_pack),
             "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR": str(system_pack),
-            "OA_MESSAGE_CENTER_PATH": "/api/message-center/list",
-            "OA_PENDING_WORKFLOWS_CATEGORY_ID": "101",
-            "OA_PENDING_WORKFLOWS_BIZSTATE": "pending-business-state",
-            "OA_PENDING_WORKFLOWS_SELECT_STATE": "pending-selection-state",
-            "OA_SYSTEM_MESSAGES_CATEGORY_ID": "202",
-            "OA_SYSTEM_MESSAGES_BIZSTATE": "system-business-state",
-            "OA_SYSTEM_MESSAGES_SELECT_STATE": "system-selection-state",
         }
     )
 
