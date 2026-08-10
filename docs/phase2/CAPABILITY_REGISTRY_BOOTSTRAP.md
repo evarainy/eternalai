@@ -54,7 +54,11 @@ uv run python -m scripts.manage_oa_capabilities --verify
 
 1. DB 访问前先原子持久化一条保守的 `apply_incomplete` 失败记录；每次替换都使用平台持久化
    屏障（POSIX 在 replace 后同步父目录项，Windows 使用 write-through replace）。若这一步失败，
-   命令在任何 DB 访问前退出。
+   命令在任何 DB 访问前退出。默认或覆盖目录首次使用时，从最近的既存祖先开始逐级持久创建
+   每一层目录，再写入初始记录：POSIX 从根到叶 mkdir 后按叶到根同步各父目录，Windows 逐层
+   write-through 发布且不替换既有目录；随后发布隐藏的 durable-ready marker，才允许读取 DB
+   配置。不会用一次递归 mkdir 跳过祖先目录项的持久化边界。覆盖路径应指向尚不存在的最终
+   目录或由本命令完成过初始化的目录；已存在但没有 ready marker 的目录会失败闭合。
 2. plan 生成后、任何 DML 前，用带 plan state、deployment path 和各项计数的失败记录原子替换
    同一个文件。
 3. 执行结束后，再原子替换为实际最终结果和退出码。若命令异常中断，文件仍保留失败状态，

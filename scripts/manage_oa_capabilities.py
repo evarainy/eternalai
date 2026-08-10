@@ -8,6 +8,7 @@ import errno
 import hashlib
 import json
 import os
+import stat
 import sys
 import uuid
 from collections.abc import Callable
@@ -82,6 +83,8 @@ _DEFAULT_AUDIT_DIR = (
     / "audit"
     / "capability-registry-bootstrap"
 )
+_AUDIT_DIRECTORY_READY_MARKER = ".capability-registry-bootstrap-ready"
+_AUDIT_DIRECTORY_READY_CONTENT = b"capability-registry-bootstrap-v1\n"
 _VERIFY_FAILED_EXIT_CODE = 3
 
 
@@ -350,7 +353,7 @@ def _classify_failure(error: Exception) -> tuple[int, str]:
 
 
 def _persist_audit_record(path: Path, record: RegistryAuditRecord) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_durable_directory(path.parent)
     temporary_path = path.with_name(
         f".{path.name}.{uuid.uuid4().hex}.tmp"
     )
@@ -367,6 +370,124 @@ def _persist_audit_record(path: Path, record: RegistryAuditRecord) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     _durable_replace(temporary_path, path)
+
+
+def _ensure_durable_directory(directory: Path) -> None:
+    missing_directories: list[Path] = []
+    candidate = directory
+    while True:
+        try:
+            metadata = candidate.stat()
+        except FileNotFoundError:
+            if candidate.is_symlink():
+                raise FileExistsError(
+                    f"audit directory path is a broken symlink: {candidate}"
+                ) from None
+            missing_directories.append(candidate)
+            parent = candidate.parent
+            if parent == candidate:
+                raise FileNotFoundError(
+                    f"no existing ancestor for audit directory: {directory}"
+                ) from None
+            candidate = parent
+            continue
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise NotADirectoryError(
+                f"audit directory ancestor is not a directory: {candidate}"
+            )
+        break
+
+    if missing_directories:
+        _create_missing_directories_durably(tuple(missing_directories))
+        _persist_directory_ready_marker(directory)
+        return
+
+    _require_directory_ready_marker(directory)
+
+
+def _persist_directory_ready_marker(directory: Path) -> None:
+    marker_path = directory / _AUDIT_DIRECTORY_READY_MARKER
+    temporary_path = marker_path.with_name(
+        f".{marker_path.name}.{uuid.uuid4().hex}.tmp"
+    )
+    with temporary_path.open("xb") as stream:
+        stream.write(_AUDIT_DIRECTORY_READY_CONTENT)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _durable_replace(temporary_path, marker_path)
+
+
+def _require_directory_ready_marker(directory: Path) -> None:
+    marker_path = directory / _AUDIT_DIRECTORY_READY_MARKER
+    try:
+        metadata = marker_path.lstat()
+    except FileNotFoundError:
+        raise OSError(
+            errno.ENOENT,
+            "existing audit directory has no durable initialization marker",
+        ) from None
+    if not stat.S_ISREG(metadata.st_mode) or marker_path.is_symlink():
+        raise OSError(
+            errno.EINVAL,
+            "audit directory initialization marker is not a regular file",
+        )
+    expected_size = len(_AUDIT_DIRECTORY_READY_CONTENT)
+    if metadata.st_size != expected_size:
+        raise OSError(
+            errno.EINVAL,
+            "audit directory initialization marker is invalid",
+        )
+    with marker_path.open("rb") as stream:
+        content = stream.read(expected_size + 1)
+    if content != _AUDIT_DIRECTORY_READY_CONTENT:
+        raise OSError(
+            errno.EINVAL,
+            "audit directory initialization marker is invalid",
+        )
+
+
+def _create_missing_directories_durably(
+    missing_directories: tuple[Path, ...],
+) -> None:
+    if os.name == "posix":
+        _create_posix_directories_durably(missing_directories)
+        return
+    if os.name == "nt":
+        _create_windows_directories_durably(missing_directories)
+        return
+    raise OSError(
+        errno.ENOTSUP,
+        f"durable audit directory creation unsupported on os.name={os.name!r}",
+    )
+
+
+def _create_posix_directories_durably(
+    missing_directories: tuple[Path, ...],
+) -> None:
+    for target in reversed(missing_directories):
+        try:
+            target.mkdir()
+        except FileExistsError:
+            if not target.is_dir():
+                raise
+
+    for child in missing_directories:
+        _persist_parent_directory(child.parent)
+
+
+def _create_windows_directories_durably(
+    missing_directories: tuple[Path, ...],
+) -> None:
+    for target in reversed(missing_directories):
+        if target.exists() or target.is_symlink():
+            raise FileExistsError(
+                f"audit directory appeared during durable creation: {target}"
+            )
+        temporary_directory = target.with_name(
+            f".{target.name}.{uuid.uuid4().hex}.tmp"
+        )
+        temporary_directory.mkdir()
+        _publish_windows_directory_write_through(temporary_directory, target)
 
 
 def _durable_replace(source: Path, destination: Path) -> None:
@@ -400,6 +521,30 @@ def _persist_parent_directory(directory: Path) -> None:
 
 
 def _replace_windows_write_through(source: Path, destination: Path) -> None:
+    _move_windows_write_through(
+        source,
+        destination,
+        replace_existing=True,
+    )
+
+
+def _publish_windows_directory_write_through(
+    source: Path,
+    destination: Path,
+) -> None:
+    _move_windows_write_through(
+        source,
+        destination,
+        replace_existing=False,
+    )
+
+
+def _move_windows_write_through(
+    source: Path,
+    destination: Path,
+    *,
+    replace_existing: bool,
+) -> None:
     import ctypes
     from ctypes import wintypes
 
@@ -412,12 +557,15 @@ def _replace_windows_write_through(source: Path, destination: Path) -> None:
     ]
     move_file_ex.restype = wintypes.BOOL
 
-    replace_existing = 0x00000001
+    replace_existing_flag = 0x00000001
     write_through = 0x00000008
+    flags = write_through
+    if replace_existing:
+        flags |= replace_existing_flag
     if not move_file_ex(
         str(source),
         str(destination),
-        replace_existing | write_through,
+        flags,
     ):
         raise ctypes.WinError(ctypes.get_last_error())
 

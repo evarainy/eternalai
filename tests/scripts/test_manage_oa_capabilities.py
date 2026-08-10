@@ -1036,6 +1036,8 @@ def test_audit_file_fsync_is_followed_by_durable_replace(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "audit" / "attempt.json"
+    path.parent.mkdir()
+    manager._persist_directory_ready_marker(path.parent)
     record = manager._build_audit_record(
         None,
         attempt_id="synthetic-attempt",
@@ -1073,6 +1075,56 @@ def test_audit_file_fsync_is_followed_by_durable_replace(
     )
 
 
+def test_first_audit_write_durably_creates_missing_ancestors_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    level1 = tmp_path / "level1"
+    level2 = level1 / "level2"
+    level3 = level2 / "level3"
+    path = level3 / "attempt.json"
+    ready_marker = level3 / ".capability-registry-bootstrap-ready"
+    record = manager._build_audit_record(
+        None,
+        attempt_id="synthetic-attempt",
+        exit_code=1,
+        error_code="apply_incomplete",
+    )
+    destinations: list[Path] = []
+    actual_replace = manager.os.replace
+
+    def recording_directory_creation(
+        missing_directories: tuple[Path, ...],
+    ) -> None:
+        assert missing_directories == (level3, level2, level1)
+        for target in reversed(missing_directories):
+            target.mkdir()
+            destinations.append(target)
+
+    def recording_durable_replace(source: Path, destination: Path) -> None:
+        actual_replace(source, destination)
+        destinations.append(destination)
+
+    monkeypatch.setattr(
+        manager,
+        "_create_missing_directories_durably",
+        recording_directory_creation,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_durable_replace",
+        recording_durable_replace,
+    )
+
+    manager._persist_audit_record(path, record)
+
+    assert destinations == [level1, level2, level3, ready_marker, path]
+    assert json.loads(path.read_text(encoding="utf-8"))["attempt_id"] == (
+        "synthetic-attempt"
+    )
+
+
 def test_posix_durable_replace_persists_parent_after_replace(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1102,6 +1154,116 @@ def test_posix_durable_replace_persists_parent_after_replace(
         ("replace_destination", destination),
         ("persist_parent", destination.parent),
     ]
+
+
+def test_posix_missing_directories_are_created_root_to_leaf_and_synced_back(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    level1 = tmp_path / "level1"
+    level2 = level1 / "level2"
+    level3 = level2 / "level3"
+    events: list[tuple[str, Path]] = []
+    actual_mkdir = Path.mkdir
+
+    def recording_mkdir(directory: Path) -> None:
+        actual_mkdir(directory)
+        events.append(("mkdir", directory))
+
+    def recording_parent_persistence(directory: Path) -> None:
+        events.append(("persist_parent", directory))
+
+    monkeypatch.setattr(Path, "mkdir", recording_mkdir)
+    monkeypatch.setattr(
+        manager,
+        "_persist_parent_directory",
+        recording_parent_persistence,
+    )
+
+    manager._create_posix_directories_durably((level3, level2, level1))
+
+    assert events == [
+        ("mkdir", level1),
+        ("mkdir", level2),
+        ("mkdir", level3),
+        ("persist_parent", level2),
+        ("persist_parent", level1),
+        ("persist_parent", tmp_path),
+    ]
+
+
+def test_posix_directory_race_only_accepts_an_actual_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    raced_directory = tmp_path / "raced-directory"
+    raced_directory.mkdir()
+    not_a_directory = tmp_path / "not-a-directory"
+    not_a_directory.write_text("synthetic", encoding="utf-8")
+    persisted: list[Path] = []
+    monkeypatch.setattr(
+        manager,
+        "_persist_parent_directory",
+        persisted.append,
+    )
+
+    manager._create_posix_directories_durably((raced_directory,))
+
+    assert persisted == [tmp_path]
+    with pytest.raises(FileExistsError):
+        manager._create_posix_directories_durably((not_a_directory,))
+    assert persisted == [tmp_path]
+
+
+def test_windows_missing_directories_publish_root_to_leaf_without_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    level1 = tmp_path / "level1"
+    level2 = level1 / "level2"
+    level3 = level2 / "level3"
+    publications: list[tuple[Path, Path]] = []
+
+    def recording_publish(source: Path, destination: Path) -> None:
+        assert source.parent == destination.parent
+        assert source.name.startswith(f".{destination.name}.")
+        source.rename(destination)
+        publications.append((source, destination))
+
+    monkeypatch.setattr(
+        manager,
+        "_publish_windows_directory_write_through",
+        recording_publish,
+    )
+
+    manager._create_windows_directories_durably((level3, level2, level1))
+
+    assert [destination for _source, destination in publications] == [
+        level1,
+        level2,
+        level3,
+    ]
+    assert level3.is_dir()
+
+
+def test_windows_directory_race_fails_before_staging_or_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "raced-directory"
+    target.mkdir()
+    publications: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(
+        manager,
+        "_publish_windows_directory_write_through",
+        lambda source, destination: publications.append((source, destination)),
+    )
+
+    with pytest.raises(FileExistsError, match="appeared during durable creation"):
+        manager._create_windows_directories_durably((target,))
+
+    assert publications == []
+    assert tuple(tmp_path.glob(".raced-directory.*.tmp")) == ()
 
 
 def test_posix_parent_fsync_failure_still_closes_directory_descriptor(
@@ -1140,7 +1302,7 @@ def test_posix_parent_fsync_failure_still_closes_directory_descriptor(
     ]
 
 
-def test_windows_durable_replace_uses_replace_and_write_through_flags(
+def test_windows_durable_moves_use_expected_write_through_flags(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1165,10 +1327,19 @@ def test_windows_durable_replace_uses_replace_and_write_through_flags(
     )
     source = tmp_path / "source.tmp"
     destination = tmp_path / "audit.json"
+    directory_source = tmp_path / "directory.tmp"
+    directory_destination = tmp_path / "audit"
 
     manager._replace_windows_write_through(source, destination)
+    manager._publish_windows_directory_write_through(
+        directory_source,
+        directory_destination,
+    )
 
-    assert calls == [(str(source), str(destination), 0x00000001 | 0x00000008)]
+    assert calls == [
+        (str(source), str(destination), 0x00000001 | 0x00000008),
+        (str(directory_source), str(directory_destination), 0x00000008),
+    ]
 
 
 def test_windows_durable_replace_failure_is_an_os_error(
@@ -1206,6 +1377,117 @@ def test_windows_durable_replace_failure_is_an_os_error(
         )
 
     assert exc_info.value.errno == 5
+
+
+def test_initial_ancestor_durability_failure_stops_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    level1 = tmp_path / "level1"
+    audit_dir = level1 / "level2" / "level3"
+    destinations: list[Path] = []
+    database_reads: list[bool] = []
+    management_calls: list[bool] = []
+
+    def fail_first_directory(
+        missing_directories: tuple[Path, ...],
+    ) -> None:
+        destinations.append(missing_directories[-1])
+        raise OSError("synthetic ancestor durability failure")
+
+    def fail_final_replace(_source: Path, destination: Path) -> None:
+        destinations.append(destination)
+        raise OSError("synthetic final durability failure")
+
+    def read_database_url() -> str:
+        database_reads.append(True)
+        return "synthetic-database-url"
+
+    async def manage(
+        _database_url: str,
+        *,
+        apply: bool,
+        plan_observer: object,
+    ) -> manager.RegistryManagementPlan:
+        management_calls.append(apply)
+        assert plan_observer is not None
+        raise AssertionError("Registry management must not run")
+
+    monkeypatch.setattr(
+        manager,
+        "_create_missing_directories_durably",
+        fail_first_directory,
+        raising=False,
+    )
+    monkeypatch.setattr(manager, "_durable_replace", fail_final_replace)
+    monkeypatch.setattr(manager, "get_database_url", read_database_url)
+    monkeypatch.setattr(manager, "_manage_registry", manage)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert destinations == [level1]
+    assert database_reads == []
+    assert management_calls == []
+
+
+def test_visible_directory_without_ready_marker_stops_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    audit_dir = tmp_path / "level1" / "level2" / "level3"
+    audit_dir.mkdir(parents=True)
+    database_reads: list[bool] = []
+
+    def unexpected_database_read() -> str:
+        database_reads.append(True)
+        raise AssertionError("database configuration must not be read")
+
+    monkeypatch.setattr(manager, "get_database_url", unexpected_database_read)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert "registry management failed: audit_record_failed" in output.err
+    assert database_reads == []
+    assert tuple(audit_dir.glob("*.json")) == ()
+
+
+def test_invalid_binary_ready_marker_stops_with_fixed_error_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    audit_dir = tmp_path / "level1" / "level2" / "level3"
+    audit_dir.mkdir(parents=True)
+    marker_path = audit_dir / manager._AUDIT_DIRECTORY_READY_MARKER
+    marker_path.write_bytes(b"\xff" * len(manager._AUDIT_DIRECTORY_READY_CONTENT))
+    database_reads: list[bool] = []
+
+    def unexpected_database_read() -> str:
+        database_reads.append(True)
+        raise AssertionError("database configuration must not be read")
+
+    monkeypatch.setattr(manager, "get_database_url", unexpected_database_read)
+
+    exit_code = manager.main(
+        ["--apply", "--audit-dir", str(audit_dir)]
+    )
+
+    output = capsys.readouterr()
+    assert exit_code == 1
+    assert output.err == "registry management failed: audit_record_failed\n"
+    assert database_reads == []
+    assert tuple(audit_dir.glob("*.json")) == ()
 
 
 def test_parent_directory_persistence_failure_stops_before_database_access(
