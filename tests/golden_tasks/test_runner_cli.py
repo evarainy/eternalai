@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+from scripts import run_golden_tasks
+from scripts.golden_task_assertions import judge_assertions
+from scripts.golden_task_evaluator import GoldenTaskResult, build_summary
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHARED_MODULES = (
@@ -93,3 +99,46 @@ runpy.run_path(script_path, run_name="__main__")
         "synthetic evaluator import failure\n"
     )
     assert "Traceback" not in completed.stderr
+
+
+def test_cli_failure_output_does_not_echo_credential_canary(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    credential_value = hashlib.sha256(b"cli-credential-canary").hexdigest()
+    judgement = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": {"password": credential_value},
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=["trace_contains_token"],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={},
+    )
+    result = GoldenTaskResult(
+        golden_task_id="GT-SYNTHETIC-CLI-CREDENTIAL",
+        category="negative",
+        status=judgement.status,
+        reasons=judgement.reasons,
+    )
+
+    monkeypatch.setattr(
+        run_golden_tasks,
+        "_load_runner",
+        lambda: (lambda: [result], build_summary),
+    )
+
+    exit_code = run_golden_tasks.main(["--gate"])
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert summary["failed"] == 1
+    assert summary["results"][0]["status"] == "failed"
+    assert credential_value not in captured.out
+    assert credential_value not in captured.err

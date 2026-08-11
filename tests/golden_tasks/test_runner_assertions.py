@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -189,6 +190,52 @@ def test_forbidden_credentials_ignore_fixture_placeholder_identifiers() -> None:
         "task_id": task_id,
         "binding_id": binding_id,
     }
+
+
+def test_ordinary_json_business_text_does_not_trigger_credential_detection() -> None:
+    opaque_value = hashlib.sha256(b"ordinary-json-opaque-value").hexdigest()
+    envelope = {
+        "status": "completed",
+        "message": json.dumps(
+            {
+                "message": "Please reset your password after the user session ends",
+                "password_policy": opaque_value,
+                "result": "ordinary business text",
+            },
+            sort_keys=True,
+        ),
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert "password" in envelope["message"]
+    assert "session" in envelope["message"]
+    assert opaque_value in envelope["message"]
+
+
+@pytest.mark.parametrize(
+    "ordinary_value",
+    (None, ""),
+)
+def test_value_free_serialized_credential_fields_do_not_false_positive(
+    ordinary_value: Any,
+) -> None:
+    envelope = {
+        "status": "completed",
+        "message": json.dumps(
+            {"password": ordinary_value},
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert "password" in envelope["message"]
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:

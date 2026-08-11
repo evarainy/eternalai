@@ -52,7 +52,10 @@ from app.workflow.models import (
     WorkflowInputRef,
     WorkflowStep,
 )
-from scripts.golden_task_assertions import judge_assertions
+from scripts.golden_task_assertions import (
+    is_credential_failure_reason,
+    judge_assertions,
+)
 from scripts.golden_task_fixture_support import FIXTURES_DIR, apply_mock_state, load_fixture
 
 FROZEN_GT_IDS = (
@@ -474,6 +477,7 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
     reasons: list[str] = []
     primary_status: Literal["passed", "failed"] = "failed"
     injection_status: Literal["passed", "failed"] = "passed"
+    credential_failure = False
     clear_injection()
     try:
         observation = asyncio.run(_run_fixture(fixture))
@@ -484,6 +488,7 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
             trace_steps=observation.trace_steps,
             expected_trace=expected_trace,
             forbidden_items=fixture["then_forbidden"],
+            credential_expectations=_fixture_expectation_blocks(fixture),
             adapter_assertion=fixture["adapter_assertion"],
             adapter_calls=observation.adapter_calls,
             adapter_arguments=observation.adapter_arguments,
@@ -505,12 +510,15 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
         )
         primary_status = judgement.status
         reasons.extend(judgement.reasons)
+        credential_failure = any(
+            is_credential_failure_reason(reason) for reason in judgement.reasons
+        )
     except AssertionError as exc:
         reasons.append(str(exc))
     finally:
         clear_injection()
 
-    if _injection_enabled(fixture):
+    if _injection_enabled(fixture) and not credential_failure:
         try:
             injection_judgement = asyncio.run(_run_injection_companion(fixture))
             injection_status = injection_judgement.status
@@ -564,10 +572,16 @@ def judge_injection_companion_assertions(
         trace_steps=trace_steps,
         expected_trace=expected_trace,
         forbidden_items=forbidden_items,
+        credential_expectations={
+            "mock_failure_injection.expected_error_code": expected_error_code,
+            "adapter_assertion": adapter_assertion,
+        },
         adapter_assertion=adapter_assertion,
         adapter_calls=adapter_calls,
     )
     reasons = list(judgement.reasons)
+    if any(is_credential_failure_reason(reason) for reason in reasons):
+        return RunnerAssertionJudgement(status="failed", reasons=reasons)
     try:
         _assert_expected_error_code_observed(
             envelope,
@@ -932,6 +946,20 @@ def _expected_trace_for_matrix(fixture: dict[str, Any]) -> dict[str, Any]:
     ):
         expected_trace["reason"] = expected_error_code
     return expected_trace
+
+
+def _fixture_expectation_blocks(fixture: Mapping[str, Any]) -> dict[str, Any]:
+    expectation_blocks = {
+        str(key): value
+        for key, value in fixture.items()
+        if key == "expected" or str(key).startswith("then_")
+    }
+    injection = fixture.get("mock_failure_injection")
+    if isinstance(injection, Mapping) and "expected_error_code" in injection:
+        expectation_blocks["mock_failure_injection.expected_error_code"] = injection[
+            "expected_error_code"
+        ]
+    return expectation_blocks
 
 
 def _injection_enabled(fixture: dict[str, Any]) -> bool:
