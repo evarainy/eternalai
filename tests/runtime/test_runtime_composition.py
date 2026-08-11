@@ -360,6 +360,7 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     settings = ProductionSettings.from_environment()
 
     components = build_production_components(settings)
+    gateway = components.runtime._gateway
 
     assert isinstance(components.runtime, RuntimeImpl)
     assert isinstance(components.admin_registry_service, AdminRegistryService)
@@ -375,14 +376,45 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
         JSONStructuredOutputProvider,
     )
     assert isinstance(
-        components.runtime._gateway._identity_mapping,
+        gateway._identity_mapping,
         PostgreSQLOAIdentityMapping,
     )
-    assert isinstance(components.runtime._gateway._adapters["oa"], MockOAAdapter)
+    assert gateway._capability_registry is not None
+    assert gateway._identity_mapping is not None
+    assert gateway._policy_guard is not None
+    assert gateway._trace_port is not None
+    assert gateway._adapters is not None
+    assert isinstance(gateway._adapters["oa"], MockOAAdapter)
     assert isinstance(components.runtime._trace_port, PostgreSQLTraceWriter)
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert components.session_cookie_ttl_seconds > 0
     assert components.health_timeout_seconds == settings.health_timeout_seconds
+
+
+@pytest.mark.parametrize(
+    "dependency_target",
+    [
+        "app.composition.PostgreSQLCapabilityRegistry",
+        "app.composition.PostgreSQLOAIdentityMapping",
+        "app.composition.MinimalPolicyGuard",
+        "app.composition.PostgreSQLTraceWriter",
+        "app.composition.build_oa_read_adapter",
+    ],
+)
+def test_production_composition_rejects_incomplete_gateway_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+    dependency_target: str,
+) -> None:
+    monkeypatch.setattr(
+        dependency_target,
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Production CapabilityGateway wiring is incomplete",
+    ):
+        build_production_components(ProductionSettings.from_environment())
 
 
 def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:

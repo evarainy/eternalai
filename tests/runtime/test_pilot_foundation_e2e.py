@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, cast
 from urllib.request import OpenerDirector, Request
 
 import httpx
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import text
@@ -35,7 +37,14 @@ from app.infra.persistence.capability_registry.repository import (
 )
 from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
 from app.main import create_app
+from app.ports.auth import LoginCredential
 from app.ports.capability_registry import CapabilitySpec
+from scripts.smoke import full_chain as smoke_full_chain
+from scripts.smoke.capabilities import expected_oa_capabilities
+from scripts.smoke.full_chain_contract import FullChainOutcome
+from scripts.smoke.trace_contract import (
+    REQUIRED_TRACE_EVENTS as _REQUIRED_TRACE_EVENTS,
+)
 from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -49,23 +58,6 @@ _COOKIE_SENTINELS = {
     "loginidweaver": "fixture-login-cookie",
     "loginuuids": "fixture-uuid-cookie",
 }
-_REQUIRED_TRACE_EVENTS = frozenset(
-    {
-        "task_created",
-        "intent_parsed",
-        "capability_selected",
-        "identity_check",
-        "policy_checked",
-        "gateway_pre_recorded",
-        "adapter_called",
-        "gateway_post_recorded",
-        "evaluation_recorded",
-        "response_envelope_created",
-        "task_completed",
-    }
-)
-
-
 @dataclass(frozen=True)
 class PilotObservation:
     status_code: int
@@ -175,6 +167,87 @@ def test_pilot_request_uses_verified_principal_and_persists_full_trace() -> None
     assert _REQUIRED_TRACE_EVENTS <= observation.trace_event_types
     assert observation.sensitive_values_absent is True
     assert observation.llm_request_count == 1
+
+
+@pytest.mark.parametrize(
+    ("capability_id", "probe", "pack_name"),
+    [
+        (
+            "oa.list_pending_workflows",
+            "查询我的待办",
+            "ecology9-pending-workflows-v3",
+        ),
+        (
+            "oa.list_system_messages",
+            "查询我的系统消息",
+            "ecology9-system-messages-v1",
+        ),
+    ],
+)
+def test_replay_oa_provider_runs_through_complete_runtime_chain(
+    capability_id: str,
+    probe: str,
+    pack_name: str,
+) -> None:
+    outcome = asyncio.run(
+        _run_replay_full_chain(
+            capability_id=capability_id,
+            probe=probe,
+            pack_name=pack_name,
+        )
+    )
+
+    assert outcome.passed(expected_capability_ids=(capability_id,)) is True
+    assert len(outcome.capabilities) == 1
+    assert outcome.capabilities[0].capability_id == capability_id
+    assert outcome.capabilities[0].trace_events_complete is True
+
+
+async def _run_replay_full_chain(
+    *,
+    capability_id: str,
+    probe: str,
+    pack_name: str,
+) -> FullChainOutcome:
+    base_settings = ProductionSettings.from_environment()
+    pack_dir = Path(__file__).parents[1] / "contract_packs" / "oa" / pack_name
+    settings = replace(
+        base_settings,
+        environment_name="production",
+        oa_read_adapter_mode="replay",
+        oa_read_contract_pack_dir=pack_dir,
+        phase0_mock_mode=False,
+    )
+    session_factory = make_async_session_factory(database_url=settings.database_url)
+    ai_user_id = identity_surrogate(_LOGIN_ID, key=settings.identity_hmac_key)
+    llm_provider, authentication = smoke_full_chain._build_replay_dependencies(
+        settings
+    )
+    capability = next(
+        item
+        for item in expected_oa_capabilities()
+        if item.capability_id == capability_id
+    )
+    await _cleanup(
+        session_factory,
+        ai_user_id,
+        capability_ids=(capability_id,),
+    )
+    await PostgreSQLCapabilityRegistry(session_factory).create(capability)
+    try:
+        return await smoke_full_chain.run_full_chain_check(
+            settings,
+            LoginCredential(loginid=_LOGIN_ID, userpassword=_PASSWORD),
+            probes=((probe, capability_id),),
+            llm_provider=llm_provider,
+            authentication=authentication,
+        )
+    finally:
+        await _cleanup(
+            session_factory,
+            ai_user_id,
+            capability_ids=(capability_id,),
+        )
 
 
 async def _run_pilot_request() -> PilotObservation:
@@ -375,7 +448,12 @@ async def _run_pilot_request() -> PilotObservation:
         await _cleanup(session_factory, ai_user_id)
 
 
-async def _cleanup(session_factory: Any, ai_user_id: str) -> None:
+async def _cleanup(
+    session_factory: Any,
+    ai_user_id: str,
+    *,
+    capability_ids: tuple[str, ...] = (_CAPABILITY_ID,),
+) -> None:
     async with session_factory() as session:
         await session.execute(
             text(
@@ -409,8 +487,12 @@ async def _cleanup(session_factory: Any, ai_user_id: str) -> None:
             text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
             {"ai_user_id": ai_user_id},
         )
-        await session.execute(
-            text("DELETE FROM capabilities WHERE capability_id = :capability_id"),
-            {"capability_id": _CAPABILITY_ID},
-        )
+        for capability_id in capability_ids:
+            await session.execute(
+                text(
+                    "DELETE FROM capabilities"
+                    " WHERE capability_id = :capability_id"
+                ),
+                {"capability_id": capability_id},
+            )
         await session.commit()

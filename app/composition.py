@@ -422,6 +422,7 @@ def build_production_components(
         trace_port=resolved_trace_port,
         adapters=resolved_adapters,
     )
+    gateway.assert_production_wiring()
     production_llm = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
