@@ -81,6 +81,22 @@ class CapabilityGateway:
         self._policy_guard = policy_guard
         self._trace_port = trace_port
 
+    def assert_production_wiring(self) -> None:
+        """Fail closed when production assembly omitted a Gateway layer."""
+
+        adapters = self._adapters
+        if (
+            self._capability_registry is None
+            or self._identity_mapping is None
+            or self._policy_guard is None
+            or self._trace_port is None
+            or adapters is None
+            or adapters.get("oa") is None
+        ):
+            raise RuntimeError(
+                "Production CapabilityGateway wiring is incomplete"
+            )
+
     async def execute_capability(
         self,
         task_id: str,

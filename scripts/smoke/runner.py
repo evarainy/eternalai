@@ -54,6 +54,7 @@ from app.infra.adapters.oa.provider import (
     OALiveRequestError,
     OALiveTimeout,
 )
+from app.infra.auth.crypto import identity_surrogate
 from app.infra.auth.oa import OAAuthenticationError
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
@@ -73,6 +74,7 @@ from scripts.smoke.environment import (
     prepare_environment,
 )
 from scripts.smoke.errors import SmokeError
+from scripts.smoke.full_chain_contract import FullChainOutcome
 from scripts.smoke.har import (
     extract_message_center_contract,
     extract_todo_list_contract,
@@ -104,6 +106,18 @@ _FRONTEND_URL = "http://127.0.0.1:5173"
 _LOGIN_ORIGIN = _FRONTEND_URL
 _LOCAL_OPENER = build_opener(ProxyHandler({}))
 _BACKEND_LOG_NAME = "smoke_backend.log"
+_FULL_CHAIN_SUBPROCESS_TIMEOUT_SECONDS = 300.0
+_MAX_FULL_CHAIN_OUTPUT_BYTES = 16_384
+_REPLAY_FULL_CHAIN_ACCOUNT = "replay-smoke-account"
+_REPLAY_FULL_CHAIN_PASSWORD = "replay-smoke-password"
+_FULL_CHAIN_SUBPROCESS_ERROR_CODES = frozenset(
+    {
+        "full_chain_output_invalid",
+        "full_chain_subprocess_failed",
+        "full_chain_subprocess_timeout",
+        "full_chain_verification_failed",
+    }
+)
 _PROCESS_STATE_VERSION = 3
 _CONFIGURATION_ERROR_MARKERS = (
     "ProductionSettings.from_environment",
@@ -202,6 +216,13 @@ _AUTH_FAILURE_DETAILS = {
     "local_credential_store_failed": "OA 会话写入本地安全存储失败。",
     "local_principal_build_failed": "本地登录身份生成失败。",
 }
+_SMOKE_ENV_REPAIR_ERROR_CODES = frozenset(
+    {
+        "smoke_pending_workflows_keys_missing",
+        "smoke_pending_workflows_obsolete_keys_present",
+        "smoke_pending_workflows_contract_pack_stale",
+    }
+)
 
 
 class _NoEchoParser(argparse.ArgumentParser):
@@ -254,7 +275,10 @@ def main(argv: list[str] | None = None) -> int:
         args = _build_parser().parse_args(argv)
         layout = _resolve_layout()
         if args.command == "prepare":
-            return _command_prepare(layout)
+            return _command_prepare(
+                layout,
+                repair_smoke_env=args.repair_smoke_env,
+            )
         if args.command == "rehearse":
             return _command_rehearse(layout)
         if args.command == "start":
@@ -272,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except SmokeError as exc:
         print(f"smoke failed: {exc.code}", file=sys.stderr)
-        _print_stop_instruction(file=sys.stderr)
+        _print_smoke_error_instruction(exc.code, file=sys.stderr)
         return exc.exit_code
     except KeyboardInterrupt:
         print("smoke failed: interrupted", file=sys.stderr)
@@ -291,7 +315,14 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         parser_class=_NoEchoParser,
     )
-    subparsers.add_parser("prepare")
+    prepare = subparsers.add_parser("prepare")
+    prepare.add_argument(
+        "--repair-smoke-env",
+        action="store_true",
+        help=(
+            "explicitly repair the pending-workflows smoke environment contract"
+        ),
+    )
     subparsers.add_parser("rehearse")
     subparsers.add_parser("start")
     verify = subparsers.add_parser("verify")
@@ -347,7 +378,11 @@ def _shared_worktree_root(repo_root: Path) -> Path:
     return common_dir.parent if common_dir.name == ".git" else repo_root
 
 
-def _command_prepare(layout: Layout) -> int:
+def _command_prepare(
+    layout: Layout,
+    *,
+    repair_smoke_env: bool = False,
+) -> int:
     contract = extract_message_center_contract(layout.source_har)
     if layout.todo_source_har is None:
         raise SmokeError("todo_list_har_missing")
@@ -358,6 +393,7 @@ def _command_prepare(layout: Layout) -> int:
         smoke_env_path=layout.smoke_env,
         contract=contract,
         todo_contract=todo_contract,
+        repair=repair_smoke_env,
     )
     print(f"har_entries={har_entry_count(layout.source_har)}")
     print(f"message_center_candidates={contract.matching_entry_count}")
@@ -408,7 +444,10 @@ def _command_rehearse(layout: Layout) -> int:
         base_env_path=layout.base_env,
         smoke_env_path=layout.smoke_env,
     )
-    _validate_settings(environment)
+    settings = _validate_settings(environment)
+    if not _run_capability_registry_preflight(settings):
+        _print_stop_instruction()
+        return 1
     result = _run_rehearsal(layout, environment)
     print(f"fingerprint_nodes={result.node_count}")
     print(f"fingerprint_added={result.added_count}")
@@ -456,17 +495,29 @@ def _run_rehearsal(
     nodes = generated.get("nodes")
     node_count = len(nodes) if isinstance(nodes, list) else -1
 
-    replay_environment = dict(environment)
-    replay_environment.update(
-        {
-            "OA_READ_ADAPTER_MODE": "replay",
-            "OA_READ_CONTRACT_PACK_DIR": (
-                "tests/contract_packs/oa/ecology9-pending-workflows-v3"
-            ),
-            "PHASE0_MOCK_MODE": "false",
-        }
-    )
-    replay_ok = _check_replay_composition(layout.repo_root, replay_environment)
+    replay_results: list[bool] = []
+    for capability_id, profile in (
+        ("oa.list_pending_workflows", _PENDING_CAPTURE_PROFILE),
+        ("oa.list_system_messages", _SYSTEM_PROFILE),
+    ):
+        replay_environment = dict(environment)
+        replay_environment.update(
+            {
+                "OA_READ_ADAPTER_MODE": "replay",
+                "OA_READ_CONTRACT_PACK_DIR": (
+                    f"tests/contract_packs/oa/{profile}"
+                ),
+                "PHASE0_MOCK_MODE": "false",
+            }
+        )
+        replay_results.append(
+            _check_replay_composition(
+                layout.repo_root,
+                replay_environment,
+                capability_id=capability_id,
+            )
+        )
+    replay_ok = all(replay_results)
     return RehearsalResult(
         node_count=node_count,
         added_count=len(report.added),
@@ -481,19 +532,20 @@ def _run_rehearsal(
 def _check_replay_composition(
     repo_root: Path,
     environment: dict[str, str],
+    *,
+    capability_id: str,
 ) -> bool:
     try:
-        completed = subprocess.run(
-            [sys.executable, "-c", "import app.main"],
-            cwd=repo_root,
-            env=environment,
-            check=False,
-            capture_output=True,
-            timeout=60,
+        outcome = _run_full_chain_subprocess(
+            repo_root=repo_root,
+            environment=environment,
+            account=_REPLAY_FULL_CHAIN_ACCOUNT,
+            password=_REPLAY_FULL_CHAIN_PASSWORD,
+            expected_capability_ids=(capability_id,),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except SmokeError:
         return False
-    return completed.returncode == 0
+    return outcome.passed(expected_capability_ids=(capability_id,)) is True
 
 
 def _command_start(layout: Layout) -> int:
@@ -1466,7 +1518,25 @@ def _command_verify(
         _print_stop_instruction()
         return 1
     resolved_timestamp = _validated_timestamp(timestamp)
-    system, pending = _run_live_checks_with_supported_loop(settings)
+    reachable = _oa_endpoint_reachable(settings.oa_base_url)
+    print(f"oa_reachability={_bool(reachable)}")
+    if not reachable:
+        raise SmokeError("oa_unreachable")
+    account, password = _prompt_credentials()
+    try:
+        full_chain = _run_full_chain_subprocess(
+            repo_root=layout.repo_root,
+            environment=environment,
+            account=account,
+            password=password,
+        )
+        system, pending = _run_persisted_provider_checks_with_supported_loop(
+            settings,
+            account=account,
+        )
+    finally:
+        account = ""
+        password = ""
     capture_created = False
     if har_directory is not None:
         _build_optional_pending_capture(
@@ -1476,7 +1546,12 @@ def _command_verify(
         )
         capture_created = True
     report_path = layout.scratch / f"smoke_result_{resolved_timestamp}.md"
-    report_text = _build_report(system, pending, capture_created=capture_created)
+    report_text = _build_report(
+        system,
+        pending,
+        full_chain,
+        capture_created=capture_created,
+    )
     _assert_report_safe(report_text, environment)
     try:
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1491,10 +1566,12 @@ def _command_verify(
         print(f"system_messages_http_status={system.protocol.http_status_code}")
     if pending.protocol.http_status_code is not None:
         print(f"pending_workflows_http_status={pending.protocol.http_status_code}")
+    print(f"full_chain_capabilities={len(full_chain.capabilities)}")
+    print(f"full_chain_verification={_passed(full_chain.passed())}")
     print(f"report={report_path.name}")
     if capture_created:
         print(f"pending_capture={_PENDING_CAPTURE_PROFILE}")
-    if _verify_success(system, pending):
+    if _verify_success(system, pending, full_chain):
         return 0
     _print_stop_instruction()
     return 1
@@ -1642,6 +1719,142 @@ def _classify_capability_registry(
         active_total_count=result.active_total_count,
         visible_probe_count=result.visible_probe_count,
     )
+
+
+def _run_full_chain_subprocess(
+    *,
+    repo_root: Path,
+    environment: dict[str, str],
+    account: str,
+    password: str,
+    expected_capability_ids: tuple[str, ...] = (
+        REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+    ),
+) -> FullChainOutcome:
+    failure_code = "full_chain_subprocess_failed"
+    try:
+        return _invoke_full_chain_subprocess(
+            repo_root=repo_root,
+            environment=environment,
+            account=account,
+            password=password,
+            expected_capability_ids=expected_capability_ids,
+        )
+    except SmokeError as error:
+        if error.code in _FULL_CHAIN_SUBPROCESS_ERROR_CODES:
+            failure_code = error.code
+    except Exception:
+        failure_code = "full_chain_subprocess_failed"
+    finally:
+        del repo_root, environment, account, password, expected_capability_ids
+    raise SmokeError(failure_code) from None
+
+
+def _invoke_full_chain_subprocess(
+    *,
+    repo_root: Path,
+    environment: dict[str, str],
+    account: str,
+    password: str,
+    expected_capability_ids: tuple[str, ...],
+) -> FullChainOutcome:
+    if (
+        not expected_capability_ids
+        or len(set(expected_capability_ids)) != len(expected_capability_ids)
+        or any(
+            capability_id not in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+            for capability_id in expected_capability_ids
+        )
+        or len(expected_capability_ids) not in {1, len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)}
+    ):
+        raise SmokeError("full_chain_subprocess_failed")
+    command = [sys.executable, "-m", "scripts.smoke.full_chain"]
+    if len(expected_capability_ids) == 1:
+        command.extend(["--capability-id", expected_capability_ids[0]])
+    credential_input = bytearray(
+        json.dumps(
+            {"loginid": account, "userpassword": password},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    try:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=repo_root,
+                env=dict(environment),
+                input=bytes(credential_input),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=_FULL_CHAIN_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            raise SmokeError("full_chain_subprocess_timeout") from None
+        except OSError:
+            raise SmokeError("full_chain_subprocess_failed") from None
+    finally:
+        for index in range(len(credential_input)):
+            credential_input[index] = 0
+        account = ""
+        password = ""
+
+    if completed.returncode != 0:
+        raise SmokeError("full_chain_subprocess_failed")
+    output = completed.stdout
+    if (
+        not isinstance(output, bytes)
+        or not output
+        or len(output) > _MAX_FULL_CHAIN_OUTPUT_BYTES
+    ):
+        raise SmokeError("full_chain_output_invalid")
+    try:
+        outcome = FullChainOutcome.model_validate_json(output, strict=True)
+    except (UnicodeError, ValueError, ValidationError):
+        raise SmokeError("full_chain_output_invalid") from None
+    if not outcome.passed(
+        expected_capability_ids=expected_capability_ids
+    ):
+        raise SmokeError("full_chain_verification_failed")
+    return outcome
+
+
+def _run_persisted_provider_checks_with_supported_loop(
+    settings: ProductionSettings,
+    *,
+    account: str,
+) -> tuple[LiveOutcome, LiveOutcome]:
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        return runner.run(
+            _run_persisted_provider_checks(settings, account=account)
+        )
+
+
+async def _run_persisted_provider_checks(
+    settings: ProductionSettings,
+    *,
+    account: str,
+) -> tuple[LiveOutcome, LiveOutcome]:
+    engine = make_async_engine(settings.database_url)
+    credential: OASessionCredential | None = None
+    try:
+        ai_user_id = identity_surrogate(account, key=settings.identity_hmac_key)
+        store = build_credential_store(
+            session_factory=make_async_session_factory(engine),
+            encryption_key=settings.credential_encryption_key,
+        )
+        try:
+            credential = await store.load(ai_user_id)
+        except Exception:
+            raise SmokeError("oa_credential_not_persisted") from None
+        if credential is None:
+            raise SmokeError("oa_credential_not_persisted")
+        return await _run_both_live_checks(settings, credential)
+    finally:
+        account = ""
+        credential = None
+        await engine.dispose()
 
 
 def _run_live_checks_with_supported_loop(
@@ -1934,6 +2147,7 @@ def _build_optional_pending_capture(
 def _build_report(
     system: LiveOutcome,
     pending: LiveOutcome,
+    full_chain: FullChainOutcome,
     *,
     capture_created: bool,
 ) -> str:
@@ -1944,17 +2158,37 @@ def _build_report(
     safe_added = _safe_protocol_field_names(added)
     safe_removed = _safe_protocol_field_names(removed)
     safe_changed = _safe_protocol_field_names(changed)
+    full_chain_envelopes_complete = all(
+        item.successful_envelope is True for item in full_chain.capabilities
+    )
+    full_chain_traces_complete = all(
+        item.trace_events_complete is True for item in full_chain.capabilities
+    )
     lines = [
-        "# P2-OA-TODOLIST-ADAPTER-001 Provider 级现场结构报告",
+        "# P2-SMOKE-E2E-CHAIN-001 全链与 Provider 协议报告",
         "",
         "## 结论",
         "",
+        f"- 完整运行时链路：{_passed(full_chain.passed())}",
+        f"- 全链自然语言请求数：{len(full_chain.capabilities)}",
+        (
+            "- 全链响应信封全部完成："
+            f"{_yes_no(full_chain_envelopes_complete)}"
+        ),
+        (
+            "- 每个全链请求的必需 Trace 事件齐全："
+            f"{_yes_no(full_chain_traces_complete)}"
+        ),
         f"- 系统消息结构漂移：{_drift_state(system)}",
         f"- 待办结构漂移：{_drift_state(pending)}",
         f"- 两类记录结构一致：{_yes_no(structures_match)}",
         (
-            "- 验收层级：Provider 级；不覆盖 Runtime / Gateway / Policy / "
-            "Evaluator / Trace"
+            "- 证据边界：全链结果与 Provider 协议证据分别判定；"
+            "不比较两次读取的数据内容"
+        ),
+        (
+            "- 现场调用变化：verify 会额外执行一轮全链只读 OA 检查；"
+            "Provider 级协议证据仍独立执行"
         ),
         (
             f"- 现场待办脱敏包（{_PENDING_CAPTURE_PROFILE}）："
@@ -2157,7 +2391,11 @@ def _accepted_sentence(protocol: ProtocolSummary) -> str:
     return "已被服务端接受并形成结构化响应" if accepted else "未完成确认"
 
 
-def _verify_success(system: LiveOutcome, pending: LiveOutcome) -> bool:
+def _verify_success(
+    system: LiveOutcome,
+    pending: LiveOutcome,
+    full_chain: FullChainOutcome,
+) -> bool:
     system_ok = (
         system.drift is not None
         and system.drift.matches
@@ -2178,7 +2416,7 @@ def _verify_success(system: LiveOutcome, pending: LiveOutcome) -> bool:
         and pending.protocol.configured_form_matches
         and pending.protocol.successful_envelopes
     )
-    return system_ok and pending_ok
+    return system_ok and pending_ok and full_chain.passed() is True
 
 
 def _assert_report_safe(text: str, environment: dict[str, str]) -> None:
@@ -2287,6 +2525,26 @@ def _print_stop_instruction(*, file: Any = None) -> None:
         "不要自行改文件，也不要切换运行模式。",
         file=file,
     )
+
+
+def _print_smoke_error_instruction(
+    error_code: str,
+    *,
+    file: Any = None,
+) -> None:
+    if error_code in _SMOKE_ENV_REPAIR_ERROR_CODES:
+        print(
+            r"repair_command=.\smoke.ps1 prepare --repair-smoke-env",
+            file=file,
+        )
+        print("repair_requires_explicit_flag=true", file=file)
+        print("repair_preserves_existing_credentials=true", file=file)
+        print(
+            "仅运行上述固定修复命令，不要手工编辑 .env.smoke。",
+            file=file,
+        )
+        return
+    _print_stop_instruction(file=file)
 
 
 if __name__ == "__main__":

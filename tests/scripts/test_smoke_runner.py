@@ -27,9 +27,17 @@ from scripts.sanitize_oa_contract_pack import SanitizationError
 from scripts.smoke import environment as smoke_environment
 from scripts.smoke import har as smoke_har
 from scripts.smoke import runner as smoke_runner
-from scripts.smoke.capabilities import expected_oa_capabilities
+from scripts.smoke.capabilities import (
+    REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+    expected_oa_capabilities,
+)
 from scripts.smoke.environment import parse_env_file, prepare_environment
 from scripts.smoke.errors import SmokeError
+from scripts.smoke.full_chain_contract import (
+    FULL_CHAIN_SCHEMA_VERSION,
+    CapabilityFullChainOutcome,
+    FullChainOutcome,
+)
 from scripts.smoke.har import (
     MessageCenterContract,
     TodoListContract,
@@ -53,6 +61,7 @@ from scripts.smoke.runner import (
     _cleanup_failed_start,
     _configuration_fingerprint,
 )
+from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
 
 def _assert_smoke_har_traceback_is_redacted(
@@ -75,6 +84,7 @@ def _assert_smoke_har_traceback_is_redacted(
 def _assert_smoke_environment_traceback_is_redacted(
     error: BaseException,
     *markers: str,
+    entrypoint: str = "prepare_environment",
 ) -> None:
     assert error.__context__ is None
     assert error.__cause__ is None
@@ -90,7 +100,7 @@ def _assert_smoke_environment_traceback_is_redacted(
                 for marker in markers
             )
         traceback = traceback.tb_next
-    assert environment_frames == ["prepare_environment"]
+    assert environment_frames == [entrypoint]
 
 
 def _assert_optional_capture_traceback_is_redacted(
@@ -313,11 +323,232 @@ def _synthetic_todo_contract(
     )
 
 
+_D5_PENDING_PROTOCOL_KEYS = (
+    "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+    "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+    "OA_PENDING_WORKFLOWS_DATAS_PATH",
+    "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+    "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+    "OA_PENDING_WORKFLOWS_METHOD",
+    "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+    "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+    "OA_PENDING_WORKFLOWS_SORT_PARAMS",
+)
+_D5_OBSOLETE_PENDING_KEYS = (
+    "OA_PENDING_WORKFLOWS_BIZSTATE",
+    "OA_PENDING_WORKFLOWS_CATEGORY_ID",
+    "OA_PENDING_WORKFLOWS_SELECT_STATE",
+)
+_D5_CREDENTIAL_KEYS = (
+    "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
+    "ETERNALAI_IDENTITY_HMAC_KEY_B64",
+    "ETERNALAI_SESSION_SIGNING_KEY_B64",
+    "ETERNALAI_SESSION_BINDING_KEY_B64",
+)
+_D5_PENDING_PACK_V2 = "tests/contract_packs/oa/ecology9-pending-workflows-v2"
+_D5_PENDING_PACK_V3 = "tests/contract_packs/oa/ecology9-pending-workflows-v3"
+
+
+def _d5_complete_environment(
+    tmp_path: Path,
+) -> tuple[Path, Path, MessageCenterContract, TodoListContract]:
+    base_env = tmp_path / ".env"
+    base_env.write_text(
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        encoding="utf-8",
+    )
+    smoke_env = tmp_path / ".env.smoke"
+    for profile in (
+        "ecology9-pending-workflows-v3",
+        "ecology9-system-messages-v1",
+    ):
+        (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
+            parents=True
+        )
+    contract = MessageCenterContract(
+        source_entry_index=0,
+        matching_entry_count=1,
+        base_url="https://synthetic.invalid",
+        endpoint_path="/api/message-center",
+        bizstate="synthetic-biz",
+        select_state="synthetic-select",
+    )
+    todo_contract = _synthetic_todo_contract()
+    prepare_environment(
+        repo_root=tmp_path,
+        base_env_path=base_env,
+        smoke_env_path=smoke_env,
+        contract=contract,
+        todo_contract=todo_contract,
+        process_environment={},
+        check_infra=False,
+        repair=True,
+    )
+    return base_env, smoke_env, contract, todo_contract
+
+
+def _write_d5_env_values(path: Path, values: dict[str, str]) -> None:
+    path.write_text(
+        "".join(f"{key}={value}\n" for key, value in values.items()),
+        encoding="utf-8",
+    )
+
+
+def _d5_combined_drift_values(
+    smoke_env: Path,
+    *,
+    credential_marker: str,
+    unknown_marker: str,
+) -> dict[str, str]:
+    values = parse_env_file(smoke_env)
+    for key in _D5_PENDING_PROTOCOL_KEYS:
+        values.pop(key)
+    values["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] = _D5_PENDING_PACK_V2
+    values.update(
+        {
+            key: f"obsolete-{index}"
+            for index, key in enumerate(_D5_OBSOLETE_PENDING_KEYS, start=1)
+        }
+    )
+    values["ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64"] = credential_marker
+    values["D5_UNKNOWN_KEY"] = unknown_marker
+    return values
+
+
 @pytest.mark.parametrize("command", ["prepare", "rehearse", "start", "verify"])
 def test_cli_parser_accepts_each_command(command: str) -> None:
     args = _build_parser().parse_args([command])
 
     assert args.command == command
+
+
+def test_cli_prepare_repair_flag_is_explicit_and_prepare_only() -> None:
+    default = _build_parser().parse_args(["prepare"])
+    explicit = _build_parser().parse_args(
+        ["prepare", "--repair-smoke-env"]
+    )
+
+    assert default.repair_smoke_env is False
+    assert explicit.repair_smoke_env is True
+    with pytest.raises(SmokeError, match="^invalid_arguments$"):
+        _build_parser().parse_args(["verify", "--repair-smoke-env"])
+
+
+def test_main_passes_only_explicit_smoke_environment_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[bool] = []
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: object())
+
+    def command_prepare(
+        _layout: object,
+        *,
+        repair_smoke_env: bool,
+    ) -> int:
+        observed.append(repair_smoke_env)
+        return 0
+
+    monkeypatch.setattr(smoke_runner, "_command_prepare", command_prepare)
+
+    assert smoke_runner.main(["prepare"]) == 0
+    assert smoke_runner.main(["prepare", "--repair-smoke-env"]) == 0
+    assert observed == [False, True]
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "smoke_pending_workflows_keys_missing",
+        "smoke_pending_workflows_obsolete_keys_present",
+        "smoke_pending_workflows_contract_pack_stale",
+    ],
+)
+def test_main_prints_fixed_value_free_smoke_environment_repair_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error_code: str,
+) -> None:
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: object())
+
+    def fail_prepare(
+        _layout: object,
+        *,
+        repair_smoke_env: bool,
+    ) -> int:
+        assert repair_smoke_env is False
+        raise SmokeError(error_code)
+
+    monkeypatch.setattr(smoke_runner, "_command_prepare", fail_prepare)
+
+    assert smoke_runner.main(["prepare"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.splitlines() == [
+        f"smoke failed: {error_code}",
+        r"repair_command=.\smoke.ps1 prepare --repair-smoke-env",
+        "repair_requires_explicit_flag=true",
+        "repair_preserves_existing_credentials=true",
+        "仅运行上述固定修复命令，不要手工编辑 .env.smoke。",
+    ]
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        "smoke_pending_workflows_keys_missing",
+        "smoke_pending_workflows_obsolete_keys_present",
+        "smoke_pending_workflows_contract_pack_stale",
+    ],
+)
+def test_verify_environment_drift_stops_before_settings_registry_and_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_code: str,
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "synthetic.har",
+        scratch=tmp_path / "_scratch",
+    )
+
+    def fail_load(**_kwargs: object) -> dict[str, str]:
+        raise SmokeError(error_code)
+
+    monkeypatch.setattr(smoke_runner, "load_runtime_environment", fail_load)
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: pytest.fail(
+            "environment drift must stop before settings"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: pytest.fail(
+            "environment drift must stop before Registry"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: pytest.fail(
+            "environment drift must stop before credential input"
+        ),
+    )
+
+    with pytest.raises(SmokeError, match=f"^{error_code}$"):
+        smoke_runner._command_verify(
+            layout,
+            timestamp="20260811_120000",
+            har_directory=None,
+        )
+
+    assert not layout.scratch.exists()
 
 
 def test_rehearse_prints_full_value_free_actual_drift_nodes(
@@ -359,6 +590,11 @@ def test_rehearse_prints_full_value_free_actual_drift_nodes(
     )
     monkeypatch.setattr(
         smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
         "_run_rehearsal",
         lambda _layout, _environment: smoke_runner.RehearsalResult(
             node_count=len(actual["nodes"]),
@@ -381,6 +617,115 @@ def test_rehearse_prints_full_value_free_actual_drift_nodes(
         '"path":"$.messages[].wire_gomethod"}'
     ) in output
     assert "sensitive-value-not-rendered" not in output
+
+
+def test_rehearse_registry_preflight_failure_stops_before_full_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "system-messages.har",
+        scratch=tmp_path / "_scratch",
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "load_runtime_environment",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: False,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_rehearsal",
+        lambda *_args: pytest.fail(
+            "failed Registry preflight must stop replay full-chain"
+        ),
+    )
+
+    assert smoke_runner._command_rehearse(layout) == 1
+    assert "请停止操作" in capsys.readouterr().out
+
+
+def test_rehearsal_runs_both_replay_packs_through_full_chain_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "system-messages.har",
+        scratch=tmp_path / "_scratch",
+    )
+    fingerprint = build_structural_fingerprint({"messages": []})
+    observed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        smoke_runner,
+        "extract_message_center_contract",
+        lambda _path: SimpleNamespace(source_entry_index=0),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_unique_run_root",
+        lambda _path: tmp_path / "rehearsal-run",
+    )
+    monkeypatch.setattr(
+        smoke_runner.sanitizer,
+        "sanitize_har_to_contract_pack",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_load_json_object",
+        lambda _path: fingerprint,
+    )
+
+    def check_replay(
+        _repo_root: Path,
+        environment: dict[str, str],
+        *,
+        capability_id: str,
+    ) -> bool:
+        observed.append(
+            (capability_id, environment["OA_READ_CONTRACT_PACK_DIR"])
+        )
+        assert environment["OA_READ_ADAPTER_MODE"] == "replay"
+        assert environment["PHASE0_MOCK_MODE"] == "false"
+        return True
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_check_replay_composition",
+        check_replay,
+    )
+
+    result = smoke_runner._run_rehearsal(layout, {"BASE": "preserved"})
+
+    assert result.replay_composition_ok is True
+    assert observed == [
+        (
+            "oa.list_pending_workflows",
+            "tests/contract_packs/oa/ecology9-pending-workflows-v3",
+        ),
+        (
+            "oa.list_system_messages",
+            "tests/contract_packs/oa/ecology9-system-messages-v1",
+        ),
+    ]
 
 
 def test_extract_message_center_contract_from_unique_fake_har(
@@ -911,8 +1256,19 @@ def test_prepare_round_trip_rejection_redacts_dotenv_and_har_values(
     active_secret = "ACTIVE-DOTENV-SECRET-MARKER"
     har_value = "HAR-DERIVED-CONFIG-MARKER # rejected"
     base_env = tmp_path / ".env"
-    base_env.write_text(f"ACTIVE_SECRET={active_secret}\n", encoding="utf-8")
+    base_env.write_text(
+        f"ACTIVE_SECRET={active_secret}\n"
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        encoding="utf-8",
+    )
     smoke_env = tmp_path / ".env.smoke"
+    for profile in (
+        "ecology9-pending-workflows-v3",
+        "ecology9-system-messages-v1",
+    ):
+        (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
+            parents=True
+        )
     contract = MessageCenterContract(
         source_entry_index=0,
         matching_entry_count=1,
@@ -932,6 +1288,7 @@ def test_prepare_round_trip_rejection_redacts_dotenv_and_har_values(
             todo_contract=todo_contract,
             process_environment={},
             check_infra=False,
+            repair=True,
         )
 
     _assert_smoke_environment_traceback_is_redacted(
@@ -950,8 +1307,19 @@ def test_prepare_unexpected_failure_redacts_dotenv_and_har_values(
     active_secret = "ACTIVE-DOTENV-SECRET-MARKER"
     har_value = "HAR-DERIVED-CONFIG-MARKER"
     base_env = tmp_path / ".env"
-    base_env.write_text(f"ACTIVE_SECRET={active_secret}\n", encoding="utf-8")
+    base_env.write_text(
+        f"ACTIVE_SECRET={active_secret}\n"
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        encoding="utf-8",
+    )
     smoke_env = tmp_path / ".env.smoke"
+    for profile in (
+        "ecology9-pending-workflows-v3",
+        "ecology9-system-messages-v1",
+    ):
+        (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
+            parents=True
+        )
     contract = MessageCenterContract(
         source_entry_index=0,
         matching_entry_count=1,
@@ -962,10 +1330,14 @@ def test_prepare_unexpected_failure_redacts_dotenv_and_har_values(
     )
     todo_contract = replace(_synthetic_todo_contract(), actiontype=har_value)
 
-    def fail_append(_path: Path, _values: object) -> None:
+    def fail_rewrite(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError(har_value)
 
-    monkeypatch.setattr(smoke_environment, "_append_env_values", fail_append)
+    monkeypatch.setattr(
+        smoke_environment,
+        "_rewrite_env_values_atomically",
+        fail_rewrite,
+    )
 
     with pytest.raises(
         SmokeError,
@@ -979,6 +1351,7 @@ def test_prepare_unexpected_failure_redacts_dotenv_and_har_values(
             todo_contract=todo_contract,
             process_environment={},
             check_infra=False,
+            repair=True,
         )
 
     _assert_smoke_environment_traceback_is_redacted(
@@ -1017,18 +1390,22 @@ def test_prepare_does_not_replace_existing_blank_value(
         select_state="synthetic-select",
     )
 
-    result = prepare_environment(
-        repo_root=tmp_path,
-        base_env_path=base_env,
-        smoke_env_path=smoke_env,
-        contract=contract,
-        todo_contract=_synthetic_todo_contract(),
-        process_environment={},
-        check_infra=False,
-    )
+    original = smoke_env.read_bytes()
+    with pytest.raises(SmokeError, match="^smoke_environment_incomplete$"):
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=base_env,
+            smoke_env_path=smoke_env,
+            contract=contract,
+            todo_contract=_synthetic_todo_contract(),
+            process_environment={},
+            check_infra=False,
+            repair=True,
+        )
 
+    assert smoke_env.read_bytes() == original
     assert parse_env_file(smoke_env)["OA_BASE_URL"] == ""
-    assert "OA_BASE_URL" in result.missing_keys
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
 
 
 def test_prepare_treats_explicit_blank_filter_values_as_complete(
@@ -1065,6 +1442,7 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
         todo_contract=_synthetic_todo_contract(),
         process_environment={},
         check_infra=False,
+        repair=True,
     )
 
     assert result.missing_keys == ()
@@ -1079,6 +1457,309 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
     assert "OA_PENDING_WORKFLOWS_CATEGORY_ID" not in values
     assert "OA_PENDING_WORKFLOWS_BIZSTATE" not in values
     assert "OA_PENDING_WORKFLOWS_SELECT_STATE" not in values
+
+
+@pytest.mark.parametrize(
+    ("drift_kind", "expected_code", "entrypoint"),
+    [
+        pytest.param(
+            "missing",
+            "smoke_pending_workflows_keys_missing",
+            "load",
+            id="load-missing-nine-pending-protocol-keys",
+        ),
+        pytest.param(
+            "obsolete",
+            "smoke_pending_workflows_obsolete_keys_present",
+            "prepare",
+            id="prepare-three-obsolete-pending-keys",
+        ),
+        pytest.param(
+            "obsolete",
+            "smoke_pending_workflows_obsolete_keys_present",
+            "load",
+            id="load-three-obsolete-pending-keys",
+        ),
+        pytest.param(
+            "stale",
+            "smoke_pending_workflows_contract_pack_stale",
+            "prepare",
+            id="prepare-pending-pack-v2",
+        ),
+        pytest.param(
+            "stale",
+            "smoke_pending_workflows_contract_pack_stale",
+            "load",
+            id="load-pending-pack-v2",
+        ),
+    ],
+)
+def test_d5_environment_drift_is_value_free_fail_closed_and_non_mutating(
+    tmp_path: Path,
+    entrypoint: str,
+    drift_kind: str,
+    expected_code: str,
+) -> None:
+    base_env, smoke_env, contract, todo_contract = _d5_complete_environment(
+        tmp_path
+    )
+    credential_marker = "D5-CREDENTIAL-LOCAL-MARKER"
+    unknown_marker = "D5-UNKNOWN-LOCAL-MARKER"
+    values = parse_env_file(smoke_env)
+    values["ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64"] = credential_marker
+    values["D5_UNKNOWN_KEY"] = unknown_marker
+    if drift_kind == "missing":
+        for key in _D5_PENDING_PROTOCOL_KEYS:
+            values.pop(key)
+    elif drift_kind == "obsolete":
+        values.update(
+            {
+                key: f"obsolete-{index}"
+                for index, key in enumerate(
+                    _D5_OBSOLETE_PENDING_KEYS,
+                    start=1,
+                )
+            }
+        )
+    else:
+        values["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] = _D5_PENDING_PACK_V2
+    _write_d5_env_values(smoke_env, values)
+    original = smoke_env.read_bytes()
+    process_environment = (
+        {key: "D5-PROCESS-MASK-MARKER" for key in _D5_PENDING_PROTOCOL_KEYS}
+        if drift_kind == "missing"
+        else {}
+    )
+
+    with pytest.raises(SmokeError, match=f"^{expected_code}$") as exc_info:
+        if entrypoint == "prepare":
+            prepare_environment(
+                repo_root=tmp_path,
+                base_env_path=base_env,
+                smoke_env_path=smoke_env,
+                contract=contract,
+                todo_contract=todo_contract,
+                process_environment=process_environment,
+                check_infra=False,
+            )
+        else:
+            smoke_environment.load_runtime_environment(
+                base_env_path=base_env,
+                smoke_env_path=smoke_env,
+                process_environment=process_environment,
+            )
+
+    assert exc_info.value.code == expected_code
+    assert str(exc_info.value) == expected_code
+    _assert_smoke_environment_traceback_is_redacted(
+        exc_info.value,
+        credential_marker,
+        unknown_marker,
+        "D5-PROCESS-MASK-MARKER",
+        entrypoint=(
+            "prepare_environment"
+            if entrypoint == "prepare"
+            else "load_runtime_environment"
+        ),
+    )
+    assert smoke_env.read_bytes() == original
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
+def test_d5_default_prepare_only_adds_missing_pending_protocol_keys(
+    tmp_path: Path,
+) -> None:
+    base_env, smoke_env, contract, todo_contract = _d5_complete_environment(
+        tmp_path
+    )
+    credential_marker = "D5-CREDENTIAL-DEFAULT-PREPARE-MARKER"
+    unknown_marker = "D5-UNKNOWN-DEFAULT-PREPARE-MARKER"
+    values = parse_env_file(smoke_env)
+    values["ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64"] = credential_marker
+    values["D5_UNKNOWN_KEY"] = unknown_marker
+    for key in _D5_PENDING_PROTOCOL_KEYS:
+        values.pop(key)
+    _write_d5_env_values(smoke_env, values)
+
+    prepared = prepare_environment(
+        repo_root=tmp_path,
+        base_env_path=base_env,
+        smoke_env_path=smoke_env,
+        contract=contract,
+        todo_contract=todo_contract,
+        process_environment={},
+        check_infra=False,
+    )
+
+    repaired_values = parse_env_file(smoke_env)
+    assert prepared.added_keys == _D5_PENDING_PROTOCOL_KEYS
+    assert prepared.missing_keys == ()
+    assert repaired_values["ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64"] == (
+        credential_marker
+    )
+    assert repaired_values["D5_UNKNOWN_KEY"] == unknown_marker
+    assert all(key in repaired_values for key in _D5_PENDING_PROTOCOL_KEYS)
+
+
+def test_d5_explicit_environment_repair_is_exact_atomic_and_byte_idempotent(
+    tmp_path: Path,
+) -> None:
+    base_env, smoke_env, contract, todo_contract = _d5_complete_environment(
+        tmp_path
+    )
+    credential_marker = "D5-CREDENTIAL-PRESERVED-MARKER"
+    unknown_marker = "D5-UNKNOWN-PRESERVED-MARKER"
+    drifted = _d5_combined_drift_values(
+        smoke_env,
+        credential_marker=credential_marker,
+        unknown_marker=unknown_marker,
+    )
+    credential_markers = {
+        key: f"{credential_marker}-{index}"
+        for index, key in enumerate(_D5_CREDENTIAL_KEYS, start=1)
+    }
+    drifted.update(credential_markers)
+    for key in _D5_CREDENTIAL_KEYS:
+        drifted.pop(key)
+    drifted.pop("D5_UNKNOWN_KEY")
+    base_hash = hashlib.sha256(base_env.read_bytes()).hexdigest()
+    preserved_prefix = (
+        "# D5 preserved header\r\n"
+        + "".join(
+            f"{key}={value}\r\n" for key, value in credential_markers.items()
+        )
+        + f"D5_UNKNOWN_KEY={unknown_marker} # preserved comment\r\n"
+    ).encode("utf-8")
+    smoke_env.write_bytes(
+        preserved_prefix
+        + "".join(f"{key}={value}\r\n" for key, value in drifted.items()).encode(
+            "utf-8"
+        )
+    )
+
+    repaired = prepare_environment(
+        repo_root=tmp_path,
+        base_env_path=base_env,
+        smoke_env_path=smoke_env,
+        contract=contract,
+        todo_contract=todo_contract,
+        process_environment={},
+        check_infra=False,
+        repair=True,
+    )
+
+    first_repair = smoke_env.read_bytes()
+    repaired_values = parse_env_file(smoke_env)
+    assert repaired.added_keys == _D5_PENDING_PROTOCOL_KEYS
+    assert repaired.missing_keys == ()
+    assert first_repair.startswith(preserved_prefix)
+    assert all(
+        repaired_values[key] == value
+        for key, value in credential_markers.items()
+    )
+    assert repaired_values["D5_UNKNOWN_KEY"] == unknown_marker
+    assert repaired_values["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] == (
+        _D5_PENDING_PACK_V3
+    )
+    assert all(key in repaired_values for key in _D5_PENDING_PROTOCOL_KEYS)
+    assert all(key not in repaired_values for key in _D5_OBSOLETE_PENDING_KEYS)
+
+    repeated = prepare_environment(
+        repo_root=tmp_path,
+        base_env_path=base_env,
+        smoke_env_path=smoke_env,
+        contract=contract,
+        todo_contract=todo_contract,
+        process_environment={},
+        check_infra=False,
+        repair=True,
+    )
+
+    assert repeated.added_keys == ()
+    assert repeated.missing_keys == ()
+    assert smoke_env.read_bytes() == first_repair
+    assert hashlib.sha256(base_env.read_bytes()).hexdigest() == base_hash
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
+def test_d5_environment_repair_failure_rolls_back_without_sensitive_locals(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_env, smoke_env, contract, todo_contract = _d5_complete_environment(
+        tmp_path
+    )
+    credential_marker = "D5-CREDENTIAL-ROLLBACK-MARKER"
+    unknown_marker = "D5-UNKNOWN-ROLLBACK-MARKER"
+    _write_d5_env_values(
+        smoke_env,
+        _d5_combined_drift_values(
+            smoke_env,
+            credential_marker=credential_marker,
+            unknown_marker=unknown_marker,
+        ),
+    )
+    original = smoke_env.read_bytes()
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("D5-SYNTHETIC-REPLACE-FAILURE")
+
+    monkeypatch.setattr(smoke_environment.os, "replace", fail_replace)
+
+    with pytest.raises(SmokeError, match="^smoke_env_write_failed$") as exc_info:
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=base_env,
+            smoke_env_path=smoke_env,
+            contract=contract,
+            todo_contract=todo_contract,
+            process_environment={},
+            check_infra=False,
+            repair=True,
+        )
+
+    _assert_smoke_environment_traceback_is_redacted(
+        exc_info.value,
+        credential_marker,
+        unknown_marker,
+    )
+    assert smoke_env.read_bytes() == original
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
+
+
+def test_d5_repair_never_overwrites_non_v2_pending_pack_value(
+    tmp_path: Path,
+) -> None:
+    base_env, smoke_env, contract, todo_contract = _d5_complete_environment(
+        tmp_path
+    )
+    custom_pack_marker = "D5-CUSTOM-PENDING-PACK-MARKER"
+    values = parse_env_file(smoke_env)
+    values["OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR"] = custom_pack_marker
+    _write_d5_env_values(smoke_env, values)
+    original = smoke_env.read_bytes()
+
+    with pytest.raises(
+        SmokeError,
+        match="^smoke_pending_workflows_contract_pack_stale$",
+    ) as exc_info:
+        prepare_environment(
+            repo_root=tmp_path,
+            base_env_path=base_env,
+            smoke_env_path=smoke_env,
+            contract=contract,
+            todo_contract=todo_contract,
+            process_environment={},
+            check_infra=False,
+            repair=True,
+        )
+
+    _assert_smoke_environment_traceback_is_redacted(
+        exc_info.value,
+        custom_pack_marker,
+    )
+    assert smoke_env.read_bytes() == original
+    assert not list(tmp_path.glob(".env.smoke.*.tmp"))
 
 
 def test_prepare_rejects_mismatched_oa_har_origins(tmp_path: Path) -> None:
@@ -1347,7 +2028,12 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         "ETERNALAI_SESSION_BINDING_KEY_B64": "sensitive-key-value-004",
     }
 
-    report = _build_report(system, pending, capture_created=False)
+    report = _build_report(
+        system,
+        pending,
+        _successful_full_chain_outcome(),
+        capture_created=False,
+    )
     _assert_report_safe(report, sensitive_values)
 
     for value in sensitive_values.values():
@@ -1363,7 +2049,10 @@ def test_report_is_built_only_from_structural_metadata() -> None:
     assert "不要自行改文件，也不要切换运行模式" in report
     assert "传输失败细分：remote_disconnected" in report
     assert "HTTP 状态码：502" in report
-    assert "Provider 级；不覆盖 Runtime / Gateway / Policy / Evaluator / Trace" in report
+    assert "完整运行时链路：passed" in report
+    assert "全链结果与 Provider 协议证据分别判定" in report
+    assert "不比较两次读取的数据内容" in report
+    assert "verify 会额外执行一轮全链只读 OA 检查" in report
     assert "messageid" in report
     assert "title" in report
     assert "sessionkey" not in report.casefold()
@@ -1415,11 +2104,92 @@ def _verification_outcome(
     )
 
 
+def _successful_full_chain_outcome() -> FullChainOutcome:
+    return FullChainOutcome(
+        schema_version=FULL_CHAIN_SCHEMA_VERSION,
+        required_trace_event_count=len(REQUIRED_TRACE_EVENTS),
+        capabilities=tuple(
+            CapabilityFullChainOutcome(
+                capability_id=capability_id,
+                successful_envelope=True,
+                normalized_data=True,
+                selected_capability=True,
+                trace_events_complete=True,
+                observed_trace_event_count=len(REQUIRED_TRACE_EVENTS),
+            )
+            for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+        ),
+    )
+
+
+def _patch_successful_command_verify_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: tuple[LiveOutcome, LiveOutcome],
+) -> None:
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(
+            oa_base_url="https://synthetic.invalid"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_full_chain_subprocess",
+        lambda **_kwargs: _successful_full_chain_outcome(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_persisted_provider_checks_with_supported_loop",
+        lambda _settings, *, account: outcomes,
+    )
+
+
 def test_verify_success_rejects_normalized_pending_fingerprint_drift() -> None:
     system = _verification_outcome()
     pending = _verification_outcome(drift_matches=False)
 
-    assert smoke_runner._verify_success(system, pending) is False
+    assert (
+        smoke_runner._verify_success(
+            system,
+            pending,
+            _successful_full_chain_outcome(),
+        )
+        is False
+    )
+
+
+def test_verify_success_rejects_incomplete_full_chain_evidence() -> None:
+    full_chain = _successful_full_chain_outcome()
+    full_chain = full_chain.model_copy(
+        update={
+            "capabilities": (
+                full_chain.capabilities[0].model_copy(
+                    update={"trace_events_complete": False}
+                ),
+                full_chain.capabilities[1],
+            )
+        }
+    )
+
+    assert (
+        smoke_runner._verify_success(
+            _verification_outcome(),
+            _verification_outcome(),
+            full_chain,
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -1441,7 +2211,14 @@ def test_verify_success_rejects_each_pending_todo_protocol_failure(
         protocol=replace(pending.protocol, **{failed_field: False}),
     )
 
-    assert smoke_runner._verify_success(system, pending) is False
+    assert (
+        smoke_runner._verify_success(
+            system,
+            pending,
+            _successful_full_chain_outcome(),
+        )
+        is False
+    )
 
 
 def _synthetic_live_settings() -> SimpleNamespace:
@@ -1620,7 +2397,14 @@ def test_verify_success_rejects_non_normalized_or_classified_live_outcome(
     else:
         pending = failed
 
-    assert smoke_runner._verify_success(system, pending) is False
+    assert (
+        smoke_runner._verify_success(
+            system,
+            pending,
+            _successful_full_chain_outcome(),
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -1713,11 +2497,7 @@ def test_both_live_checks_continue_after_system_added(
         "_run_capability_registry_preflight",
         lambda _settings: True,
     )
-    monkeypatch.setattr(
-        smoke_runner,
-        "_run_live_checks_with_supported_loop",
-        lambda _settings: result,
-    )
+    _patch_successful_command_verify_chain(monkeypatch, result)
 
     return_code = smoke_runner._command_verify(
         layout,
@@ -1795,11 +2575,7 @@ def test_verify_none_for_both_capabilities_returns_success(
         "_run_capability_registry_preflight",
         lambda _settings: True,
     )
-    monkeypatch.setattr(
-        smoke_runner,
-        "_run_live_checks_with_supported_loop",
-        lambda _settings: outcomes,
-    )
+    _patch_successful_command_verify_chain(monkeypatch, outcomes)
 
     result = smoke_runner._command_verify(
         layout,
@@ -2867,8 +3643,17 @@ def test_verify_registry_preflight_failure_stops_before_live_checks(
     )
     monkeypatch.setattr(
         smoke_runner,
-        "_run_live_checks_with_supported_loop",
-        lambda _settings: pytest.fail("failed Registry preflight must stop verify"),
+        "_oa_endpoint_reachable",
+        lambda _base_url: pytest.fail(
+            "failed Registry preflight must stop verify"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_full_chain_subprocess",
+        lambda **_kwargs: pytest.fail(
+            "failed Registry preflight must stop full-chain verify"
+        ),
     )
 
     result = smoke_runner._command_verify(
@@ -2912,11 +3697,7 @@ def test_verify_pending_normalization_failure_returns_nonzero(
         "_run_capability_registry_preflight",
         lambda _settings: True,
     )
-    monkeypatch.setattr(
-        smoke_runner,
-        "_run_live_checks_with_supported_loop",
-        lambda _settings: (system, pending),
-    )
+    _patch_successful_command_verify_chain(monkeypatch, (system, pending))
 
     result = smoke_runner._command_verify(
         layout,
@@ -3019,11 +3800,7 @@ def test_verify_prints_deterministic_value_free_drift_nodes(
         "_run_capability_registry_preflight",
         lambda _settings: True,
     )
-    monkeypatch.setattr(
-        smoke_runner,
-        "_run_live_checks_with_supported_loop",
-        lambda _settings: (system, pending),
-    )
+    _patch_successful_command_verify_chain(monkeypatch, (system, pending))
 
     result = smoke_runner._command_verify(
         layout,
@@ -3268,6 +4045,7 @@ def test_backend_health_receives_boundary_503_and_classifies_vllm_without_leak(
     report = _build_report(
         _verification_outcome(),
         _verification_outcome(),
+        _successful_full_chain_outcome(),
         capture_created=False,
     )
 
