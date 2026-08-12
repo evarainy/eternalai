@@ -132,7 +132,9 @@ def _assert_optional_capture_traceback_is_redacted(
 def _message_center_entry(
     *,
     url: str = "https://synthetic.invalid/api/message-center",
+    bizstate_name: str = "bizstate",
     bizstate: str = "synthetic-biz",
+    select_state_name: str = "selectState",
     select_state: str = "synthetic-select",
     msgid: str = "0",
     mintime: str = "0",
@@ -142,8 +144,8 @@ def _message_center_entry(
         "pagesize": "20",
         "msgid": msgid,
         "mintime": mintime,
-        "bizstate": bizstate,
-        "selectState": select_state,
+        bizstate_name: bizstate,
+        select_state_name: select_state,
     }
     return {
         "request": {
@@ -806,6 +808,28 @@ def test_extract_message_center_contract_from_unique_fake_har(
     assert contract.base_url == "https://synthetic.invalid"
     assert contract.endpoint_path == "/api/message-center"
     assert repr(contract) == "MessageCenterContract(structural_only=True)"
+
+
+def test_extract_message_center_contract_decodes_params_names_and_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic.har"
+    _write_har(
+        path,
+        [
+            _message_center_entry(
+                bizstate_name="%62izstate",
+                bizstate="synthetic+state%5B%5D",
+                select_state_name="select%53tate",
+                select_state="synthetic+select%5B%5D",
+            )
+        ],
+    )
+
+    contract = extract_message_center_contract(path)
+
+    assert contract.bizstate == "synthetic state[]"
+    assert contract.select_state == "synthetic select[]"
 
 
 def test_extract_message_center_contract_stops_when_unrecognized(
