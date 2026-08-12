@@ -203,6 +203,7 @@ async def run_full_chain_check(
             session_tokens=components.session_tokens,
             session_binder=components.session_binder.bind,
             session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
+            session_cookie_secure=settings.session_cookie_secure,
             csrf_allowed_origins=settings.csrf_allowed_origins,
             health_checks=dict(components.health_checks),
             health_timeout_seconds=components.health_timeout_seconds,

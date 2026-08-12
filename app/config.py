@@ -134,6 +134,7 @@ class ProductionSettings:
     oa_timeout_seconds: float
     oa_credential_ttl_seconds: int
     session_cookie_ttl_seconds: int
+    session_cookie_secure: bool
     credential_encryption_key: bytes = field(repr=False)
     identity_hmac_key: bytes = field(repr=False)
     session_signing_key: bytes = field(repr=False)
@@ -188,6 +189,20 @@ class ProductionSettings:
             "PHASE0_MOCK_MODE",
             default=False,
         )
+        session_cookie_secure = _boolean(
+            source,
+            "SESSION_COOKIE_SECURE",
+            default=True,
+        )
+        csrf_allowed_origins = _csrf_allowed_origins(source)
+        if not session_cookie_secure and any(
+            origin.startswith("https://") for origin in csrf_allowed_origins
+        ):
+            raise RuntimeError(
+                "session_cookie_transport_invalid: "
+                "SESSION_COOKIE_SECURE=false requires every "
+                "CSRF_ALLOWED_ORIGINS entry to use http://"
+            )
         if (
             oa_read_adapter_mode == "mock"
             and environment_name != "testing"
@@ -215,6 +230,7 @@ class ProductionSettings:
                 source,
                 "SESSION_COOKIE_TTL_S",
             ),
+            session_cookie_secure=session_cookie_secure,
             credential_encryption_key=_base64_key(
                 source,
                 "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
@@ -284,7 +300,7 @@ class ProductionSettings:
                 maximum=_MAX_HEALTH_TIMEOUT_SECONDS,
                 minimum_inclusive=False,
             ),
-            csrf_allowed_origins=_csrf_allowed_origins(source),
+            csrf_allowed_origins=csrf_allowed_origins,
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
             oa_pending_workflows_contract_pack_dir=_oa_live_contract_pack_dir(
