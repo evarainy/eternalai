@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -36,10 +37,42 @@ else:
     )
 
 
+class _CountingDump:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        return self.value
+
+
+class _StatefulDump:
+    def __init__(self, first: Any, later: Any) -> None:
+        self.first = first
+        self.later = later
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        return self.first if self.call_count == 1 else self.later
+
+
 def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> None:
     runner = importlib.import_module("scripts.golden_task_evaluator")
     helper = getattr(runner, "judge_injection_companion_assertions", None)
     assert helper is not None, "injection companion assertion helper is missing"
+    marker = hashlib.sha256(b"injection-companion-later-dump").hexdigest()
+    envelope = _StatefulDump(
+        {
+            "status": "failed",
+            "message": "操作超时",
+            "error_code": "adapter_timeout",
+            "ui": {},
+            "data": None,
+        },
+        {"status": marker},
+    )
     trace = [
         {"event_type": "task_created"},
         {"event_type": "capability_selected"},
@@ -53,7 +86,7 @@ def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> 
     ]
 
     judgement = helper(
-        envelope={"status": "failed", "message": "操作超时", "ui": {}, "data": None},
+        envelope=envelope,
         trace_steps=trace,
         expected_error_code="adapter_timeout",
         adapter_assertion={"must_be_called": True, "must_not_be_called": False},
@@ -62,6 +95,8 @@ def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> 
 
     assert judgement.status == "passed"
     assert judgement.reasons == []
+    assert envelope.call_count == 1
+    assert marker not in str(judgement.reasons)
 
 
 def test_response_assertions_accept_dotted_keys_and_length() -> None:
@@ -189,6 +224,112 @@ def test_forbidden_credentials_ignore_fixture_placeholder_identifiers() -> None:
         "task_id": task_id,
         "binding_id": binding_id,
     }
+
+
+def test_ordinary_json_business_text_does_not_trigger_credential_detection() -> None:
+    opaque_value = hashlib.sha256(b"ordinary-json-opaque-value").hexdigest()
+    envelope = {
+        "status": "completed",
+        "message": json.dumps(
+            {
+                "message": "Please reset your password after the user session ends",
+                "password_policy": opaque_value,
+                "result": "ordinary business text",
+            },
+            sort_keys=True,
+        ),
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert "password" in envelope["message"]
+    assert "session" in envelope["message"]
+    assert opaque_value in envelope["message"]
+
+
+@pytest.mark.parametrize(
+    "ordinary_value",
+    (None, ""),
+)
+@pytest.mark.parametrize("serialized", (False, True))
+def test_value_free_credential_fields_do_not_false_positive(
+    ordinary_value: Any,
+    serialized: bool,
+) -> None:
+    credential_data: Any = {"password": ordinary_value}
+    if serialized:
+        credential_data = json.dumps(
+            credential_data,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None if serialized else credential_data,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert "password" in (envelope["message"] if serialized else envelope["data"])
+
+
+@pytest.mark.parametrize("serialized", (False, True))
+@pytest.mark.parametrize(
+    "container_value",
+    ({"ordinary": "business value"}, ["ordinary business value"]),
+)
+def test_sensitive_key_container_semantics_remain_out_of_scope(
+    container_value: Any,
+    serialized: bool,
+) -> None:
+    credential_data: Any = {"password": container_value}
+    if serialized:
+        credential_data = json.dumps(credential_data, separators=(",", ":"))
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None if serialized else credential_data,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+    observed = json.loads(envelope["message"]) if serialized else envelope["data"]
+    assert observed == {"password": container_value}
+
+
+@pytest.mark.parametrize(
+    "dumped_value",
+    (
+        None,
+        "",
+        b"",
+        bytearray(),
+        memoryview(b""),
+        {"ordinary": "business value"},
+        ["ordinary business value"],
+        ("ordinary business value",),
+    ),
+)
+def test_model_dump_empty_or_supported_container_preserves_existing_semantics(
+    dumped_value: Any,
+) -> None:
+    model = _CountingDump(dumped_value)
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": model},
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert model.call_count == 1
+    assert model.value is dumped_value
+    assert envelope["data"]["password"] is model
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:
