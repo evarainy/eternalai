@@ -6,8 +6,12 @@ import hashlib
 import importlib
 import json
 from collections.abc import Callable, Iterable, Mapping
+from datetime import date
+from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
+from uuid import UUID
 
 import pytest
 
@@ -37,6 +41,10 @@ else:
         assert_trace_sequence_contains,
         judge_assertions,
     )
+
+
+class _SyntheticCredentialEnum(Enum):
+    VALUE = "synthetic-enum-credential-canary"
 
 
 def test_missing_response_substring_raises_assertion_error() -> None:
@@ -301,6 +309,37 @@ def test_non_empty_bytes_credential_mapping_is_rejected_without_value_echo() -> 
     )
     assert "synthetic-non-empty-bytes-canary" not in str(exc_info.value)
     assert "synthetic-non-empty-bytes-canary" not in repr(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("credential_value", "credential_marker"),
+    (
+        (Decimal("482909.01"), "482909.01"),
+        (UUID("00000000-0000-4000-8000-000000000079"), "000000000079"),
+        (date(2031, 7, 9), "2031-07-09"),
+        (_SyntheticCredentialEnum.VALUE, "synthetic-enum-credential-canary"),
+    ),
+)
+def test_other_direct_scalar_credentials_are_rejected_without_value_echo(
+    credential_value: Any,
+    credential_marker: str,
+) -> None:
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": credential_value},
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert str(exc_info.value) == (
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    )
+    assert credential_marker not in str(exc_info.value)
+    assert credential_marker not in repr(exc_info.value)
 
 
 def test_serialized_json_duplicate_sensitive_key_is_scanned_item_by_item() -> None:
@@ -739,9 +778,20 @@ def test_adapter_assertion_inputs_are_credential_preflighted(
     assert credential_value not in repr(result.reasons)
 
 
-def test_numeric_adapter_argument_credentials_preflight_before_mismatch_echo() -> None:
-    expected_value = 482905
-    actual_value = 482906
+@pytest.mark.parametrize(
+    ("expected_value", "actual_value"),
+    (
+        (482905, 482906),
+        (
+            Decimal("482910.01"),
+            UUID("00000000-0000-4000-8000-000000000080"),
+        ),
+    ),
+)
+def test_direct_scalar_adapter_credentials_preflight_before_mismatch_echo(
+    expected_value: Any,
+    actual_value: Any,
+) -> None:
     result = judge_assertions(
         envelope={
             "status": "completed",

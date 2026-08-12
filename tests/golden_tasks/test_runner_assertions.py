@@ -243,6 +243,30 @@ def test_value_free_credential_fields_do_not_false_positive(
     assert "password" in (envelope["message"] if serialized else envelope["data"])
 
 
+@pytest.mark.parametrize("serialized", (False, True))
+@pytest.mark.parametrize(
+    "container_value",
+    ({"ordinary": "business value"}, ["ordinary business value"]),
+)
+def test_sensitive_key_container_semantics_remain_out_of_scope(
+    container_value: Any,
+    serialized: bool,
+) -> None:
+    credential_data: Any = {"password": container_value}
+    if serialized:
+        credential_data = json.dumps(credential_data, separators=(",", ":"))
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None if serialized else credential_data,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+    observed = json.loads(envelope["message"]) if serialized else envelope["data"]
+    assert observed == {"password": container_value}
+
+
 def test_adapter_assertion_accepts_required_call_count() -> None:
     adapter_calls = {
         "oa": 1,

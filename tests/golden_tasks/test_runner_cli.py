@@ -7,8 +7,12 @@ import hashlib
 import json
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
+
+import pytest
 
 from scripts import run_golden_tasks
 from scripts.golden_task_assertions import judge_assertions
@@ -144,12 +148,22 @@ def test_cli_failure_output_does_not_echo_credential_canary(
     assert credential_value not in captured.err
 
 
-def test_cli_numeric_adapter_mismatch_does_not_echo_credential_canaries(
+@pytest.mark.parametrize(
+    ("expected_value", "actual_value"),
+    (
+        (482907, 482908),
+        (
+            Decimal("482911.01"),
+            UUID("00000000-0000-4000-8000-000000000081"),
+        ),
+    ),
+)
+def test_cli_direct_scalar_adapter_mismatch_does_not_echo_credential_canaries(
     monkeypatch: Any,
     capsys: Any,
+    expected_value: Any,
+    actual_value: Any,
 ) -> None:
-    expected_value = 482907
-    actual_value = 482908
     judgement = judge_assertions(
         envelope={
             "status": "completed",

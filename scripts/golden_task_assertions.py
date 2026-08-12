@@ -1005,7 +1005,9 @@ def _is_non_empty_credential_scalar(value: Any) -> bool:
         return value != ""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return len(value) > 0
-    return isinstance(value, (bool, int, float, complex))
+    if isinstance(value, (_PreservedJsonObjectPairs, Iterable)):
+        return False
+    return not callable(getattr(value, "model_dump", None))
 
 
 def _assert_serialized_json_bounds(
