@@ -619,6 +619,69 @@ def test_rehearse_prints_full_value_free_actual_drift_nodes(
     assert "sensitive-value-not-rendered" not in output
 
 
+def test_rehearse_prints_every_capability_failure_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fingerprint = build_structural_fingerprint({"messages": []})
+    drift = compare_structural_fingerprints(fingerprint, fingerprint)
+    failures = (
+        ("oa.list_pending_workflows", "authentication_failed"),
+        ("oa.list_system_messages", "trace_incomplete"),
+    )
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "system-messages.har",
+        scratch=tmp_path / "_scratch",
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "load_runtime_environment",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_rehearsal",
+        lambda _layout, _environment: smoke_runner.RehearsalResult(
+            node_count=len(fingerprint["nodes"]),
+            added_count=0,
+            removed_count=0,
+            changed_count=0,
+            sha_matches=True,
+            replay_composition_ok=False,
+            drift=drift,
+            replay_composition_failures=failures,
+        ),
+    )
+
+    result = smoke_runner._command_rehearse(layout)
+
+    output = capsys.readouterr().out
+    assert result == 1
+    expected_lines = [
+        "replay_composition_failure_capability=oa.list_pending_workflows",
+        "replay_composition_failure_reason=authentication_failed",
+        "replay_composition_failure_capability=oa.list_system_messages",
+        "replay_composition_failure_reason=trace_incomplete",
+    ]
+    positions = [output.index(line) for line in expected_lines]
+    assert positions == sorted(positions)
+
+
 def test_rehearse_registry_preflight_failure_stops_before_full_chain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -699,13 +762,13 @@ def test_rehearsal_runs_both_replay_packs_through_full_chain_subprocess(
         environment: dict[str, str],
         *,
         capability_id: str,
-    ) -> bool:
+    ) -> str | None:
         observed.append(
             (capability_id, environment["OA_READ_CONTRACT_PACK_DIR"])
         )
         assert environment["OA_READ_ADAPTER_MODE"] == "replay"
         assert environment["PHASE0_MOCK_MODE"] == "false"
-        return True
+        return None
 
     monkeypatch.setattr(
         smoke_runner,
@@ -2104,7 +2167,9 @@ def _verification_outcome(
     )
 
 
-def _successful_full_chain_outcome() -> FullChainOutcome:
+def _successful_full_chain_outcome(
+    capability_ids: tuple[str, ...] = REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+) -> FullChainOutcome:
     return FullChainOutcome(
         schema_version=FULL_CHAIN_SCHEMA_VERSION,
         required_trace_event_count=len(REQUIRED_TRACE_EVENTS),
@@ -2117,7 +2182,7 @@ def _successful_full_chain_outcome() -> FullChainOutcome:
                 trace_events_complete=True,
                 observed_trace_event_count=len(REQUIRED_TRACE_EVENTS),
             )
-            for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+            for capability_id in capability_ids
         ),
     )
 
@@ -2146,7 +2211,9 @@ def _patch_successful_command_verify_chain(
     monkeypatch.setattr(
         smoke_runner,
         "_run_full_chain_subprocess",
-        lambda **_kwargs: _successful_full_chain_outcome(),
+        lambda **kwargs: _successful_full_chain_outcome(
+            kwargs["expected_capability_ids"]
+        ),
     )
     monkeypatch.setattr(
         smoke_runner,
@@ -3665,6 +3732,90 @@ def test_verify_registry_preflight_failure_stops_before_live_checks(
     assert result == 1
     assert "请停止操作" in capsys.readouterr().out
     assert not layout.scratch.exists()
+
+
+def test_verify_prints_every_full_chain_capability_failure_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "synthetic.har",
+        scratch=tmp_path / "_scratch",
+    )
+    failure_reasons = {
+        "oa.list_pending_workflows": "authentication_failed",
+        "oa.list_system_messages": "runtime_request_failed",
+    }
+    monkeypatch.setattr(
+        smoke_runner,
+        "load_runtime_environment",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(
+            oa_base_url="https://synthetic.invalid"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+
+    def fail_full_chain(**kwargs: object) -> FullChainOutcome:
+        capability_ids = kwargs["expected_capability_ids"]
+        assert isinstance(capability_ids, tuple)
+        capability_id = capability_ids[0]
+        assert isinstance(capability_id, str)
+        raise SmokeError(failure_reasons[capability_id])
+
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_full_chain_subprocess",
+        fail_full_chain,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_persisted_provider_checks_with_supported_loop",
+        lambda *_args, **_kwargs: pytest.fail(
+            "full-chain failure must stop before provider verification"
+        ),
+    )
+
+    result = smoke_runner._command_verify(
+        layout,
+        timestamp="20260812_120000",
+        har_directory=None,
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    expected_lines = [
+        "full_chain_failure_capability=oa.list_pending_workflows",
+        "full_chain_failure_reason=authentication_failed",
+        "full_chain_failure_capability=oa.list_system_messages",
+        "full_chain_failure_reason=runtime_request_failed",
+    ]
+    positions = [output.index(line) for line in expected_lines]
+    assert positions == sorted(positions)
+    assert "full_chain_verification=failed" in output
 
 
 def test_verify_pending_normalization_failure_returns_nonzero(

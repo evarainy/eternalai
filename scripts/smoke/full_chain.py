@@ -43,15 +43,13 @@ from scripts.smoke.capabilities import (
 from scripts.smoke.full_chain_contract import (
     FULL_CHAIN_SCHEMA_VERSION,
     CapabilityFullChainOutcome,
+    FullChainFailure,
+    FullChainFailureCode,
     FullChainOutcome,
 )
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
 _MAX_CREDENTIAL_INPUT_BYTES = 16_384
-_FAILURE_OUTPUT = (
-    '{"error_code":"full_chain_check_failed",'
-    f'"schema_version":"{FULL_CHAIN_SCHEMA_VERSION}"}}'
-)
 _DEFAULT_PROBES = tuple(
     zip(
         OA_CAPABILITY_CONTEXT_PROBES,
@@ -68,6 +66,12 @@ _REPLAY_COOKIES = {
     "loginidweaver": "replay-cookie-b",
     "loginuuids": "replay-cookie-c",
 }
+
+
+class _FullChainCheckError(RuntimeError):
+    def __init__(self, code: FullChainFailureCode) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 class _ReplayOAHttpSession:
@@ -183,52 +187,58 @@ async def run_full_chain_check(
             for message, capability_id in resolved_probes
         )
     ):
-        raise RuntimeError("full-chain probes are invalid")
-    if not settings.csrf_allowed_origins:
-        raise RuntimeError("full-chain CSRF origin is unavailable")
-
-    components = build_production_components(
-        settings,
-        llm_provider=llm_provider,
-        authentication=authentication,
-    )
-    application = create_app(
-        runtime=components.runtime,
-        admin_registry_service=components.admin_registry_service,
-        authentication=components.authentication,
-        session_tokens=components.session_tokens,
-        session_binder=components.session_binder.bind,
-        session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
-        csrf_allowed_origins=settings.csrf_allowed_origins,
-        health_checks=dict(components.health_checks),
-        health_timeout_seconds=components.health_timeout_seconds,
-    )
-    resolved_trace_query = trace_query or PostgreSQLTraceReader(
-        make_async_session_factory(database_url=settings.database_url)
-    )
-    origin = sorted(settings.csrf_allowed_origins)[0]
-    headers = {
-        "Origin": origin,
-        CSRF_HEADER_NAME: CSRF_HEADER_VALUE,
-    }
+        raise _FullChainCheckError("probe_argv_invalid")
+    try:
+        if not settings.csrf_allowed_origins:
+            raise ValueError
+        components = build_production_components(
+            settings,
+            llm_provider=llm_provider,
+            authentication=authentication,
+        )
+        application = create_app(
+            runtime=components.runtime,
+            admin_registry_service=components.admin_registry_service,
+            authentication=components.authentication,
+            session_tokens=components.session_tokens,
+            session_binder=components.session_binder.bind,
+            session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
+            csrf_allowed_origins=settings.csrf_allowed_origins,
+            health_checks=dict(components.health_checks),
+            health_timeout_seconds=components.health_timeout_seconds,
+        )
+        resolved_trace_query = trace_query or PostgreSQLTraceReader(
+            make_async_session_factory(database_url=settings.database_url)
+        )
+        origin = sorted(settings.csrf_allowed_origins)[0]
+        headers = {
+            "Origin": origin,
+            CSRF_HEADER_NAME: CSRF_HEADER_VALUE,
+        }
+        transport = httpx.ASGITransport(app=application)
+        client_context = httpx.AsyncClient(
+            transport=transport,
+            base_url=origin,
+        )
+    except Exception:
+        raise _FullChainCheckError("composition_build_failed") from None
     login_payload = {
         "loginid": credential.loginid.get_secret_value(),
         "userpassword": credential.userpassword.get_secret_value(),
     }
     outcomes: list[CapabilityFullChainOutcome] = []
     try:
-        transport = httpx.ASGITransport(app=application)
-        async with httpx.AsyncClient(
-            transport=transport,
-            base_url=origin,
-        ) as client:
-            login_response = await client.post(
-                "/api/v1/auth/login",
-                headers=headers,
-                json=login_payload,
-            )
+        async with client_context as client:
+            try:
+                login_response = await client.post(
+                    "/api/v1/auth/login",
+                    headers=headers,
+                    json=login_payload,
+                )
+            except Exception:
+                raise _FullChainCheckError("authentication_failed") from None
             if login_response.status_code != 200:
-                raise RuntimeError("full-chain authentication failed")
+                raise _FullChainCheckError("authentication_failed")
             for message, capability_id in resolved_probes:
                 outcomes.append(
                     await _run_capability_probe(
@@ -239,6 +249,10 @@ async def run_full_chain_check(
                         capability_id=capability_id,
                     )
                 )
+    except _FullChainCheckError:
+        raise
+    except Exception:
+        raise _FullChainCheckError("unknown_error") from None
     finally:
         login_payload.clear()
         headers.clear()
@@ -259,22 +273,25 @@ async def _run_capability_probe(
     message: str,
     capability_id: str,
 ) -> CapabilityFullChainOutcome:
-    response = await client.post(
-        "/api/v1/runtime/handle",
-        headers=headers,
-        json={
-            "channel": "cli",
-            "session_id": "oa-smoke-full-chain",
-            "message": message,
-            "client_capabilities": {},
-        },
-    )
+    try:
+        response = await client.post(
+            "/api/v1/runtime/handle",
+            headers=headers,
+            json={
+                "channel": "cli",
+                "session_id": "oa-smoke-full-chain",
+                "message": message,
+                "client_capabilities": {},
+            },
+        )
+    except Exception:
+        raise _FullChainCheckError("runtime_request_failed") from None
     if response.status_code != 200:
-        raise RuntimeError("full-chain Runtime request failed")
+        raise _FullChainCheckError("runtime_request_failed")
     try:
         envelope = ResponseEnvelope.model_validate(response.json(), strict=True)
     except (ValueError, ValidationError):
-        raise RuntimeError("full-chain envelope is invalid") from None
+        raise _FullChainCheckError("envelope_invalid") from None
 
     normalized_data = False
     try:
@@ -283,21 +300,24 @@ async def _run_capability_probe(
     except (KeyError, ValidationError):
         normalized_data = False
 
-    trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
-    event_types = frozenset(event.event_type for event in trace_events)
-    selected_capability_ids = {
-        event.capability_id
-        for event in trace_events
-        if event.event_type == "capability_selected"
-    }
-    return CapabilityFullChainOutcome(
-        capability_id=capability_id,
-        successful_envelope=envelope.status == "completed",
-        normalized_data=normalized_data,
-        selected_capability=selected_capability_ids == {capability_id},
-        trace_events_complete=REQUIRED_TRACE_EVENTS <= event_types,
-        observed_trace_event_count=len(event_types),
-    )
+    try:
+        trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
+        event_types = frozenset(event.event_type for event in trace_events)
+        selected_capability_ids = {
+            event.capability_id
+            for event in trace_events
+            if event.event_type == "capability_selected"
+        }
+        return CapabilityFullChainOutcome(
+            capability_id=capability_id,
+            successful_envelope=envelope.status == "completed",
+            normalized_data=normalized_data,
+            selected_capability=selected_capability_ids == {capability_id},
+            trace_events_complete=REQUIRED_TRACE_EVENTS <= event_types,
+            observed_trace_event_count=len(event_types),
+        )
+    except Exception:
+        raise _FullChainCheckError("trace_incomplete") from None
 
 
 def _build_replay_dependencies(
@@ -347,13 +367,13 @@ def _selected_probes(arguments: Sequence[str]) -> tuple[tuple[str, str], ...]:
     if not arguments:
         return _DEFAULT_PROBES
     if len(arguments) != 2 or arguments[0] != "--capability-id":
-        raise RuntimeError("full-chain arguments are invalid")
+        raise _FullChainCheckError("probe_argv_invalid")
     capability_id = arguments[1]
     selected = tuple(
         probe for probe in _DEFAULT_PROBES if probe[1] == capability_id
     )
     if len(selected) != 1:
-        raise RuntimeError("full-chain capability is invalid")
+        raise _FullChainCheckError("probe_argv_invalid")
     return selected
 
 
@@ -375,11 +395,19 @@ def _read_login_credential() -> LoginCredential:
             raise ValueError
         return credential
     except Exception:
-        raise RuntimeError("full-chain credential input is invalid") from None
+        raise _FullChainCheckError("authentication_failed") from None
     finally:
         for index in range(len(raw)):
             raw[index] = 0
         payload.clear()
+
+
+def _write_failure(error_code: FullChainFailureCode) -> None:
+    failure = FullChainFailure(
+        error_code=error_code,
+        schema_version=FULL_CHAIN_SCHEMA_VERSION,
+    )
+    sys.stdout.write(failure.model_dump_json())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -389,11 +417,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             tuple(sys.argv[1:]) if argv is None else tuple(argv)
         )
         credential = _read_login_credential()
-        settings = ProductionSettings.from_environment()
+        try:
+            settings = ProductionSettings.from_environment()
+        except Exception:
+            raise _FullChainCheckError("composition_build_failed") from None
         llm_provider: LLMProviderPort | None = None
         authentication: AuthenticationPort | None = None
         if settings.oa_read_adapter_mode == "replay":
-            llm_provider, authentication = _build_replay_dependencies(settings)
+            try:
+                llm_provider, authentication = _build_replay_dependencies(settings)
+            except Exception:
+                raise _FullChainCheckError("composition_build_failed") from None
         with asyncio.Runner(loop_factory=make_event_loop) as runner:
             outcome = runner.run(
                 run_full_chain_check(
@@ -407,15 +441,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_capability_ids = tuple(
             capability_id for _, capability_id in probes
         )
-        if not outcome.passed(
+        failure_code = outcome.failure_code(
             expected_capability_ids=expected_capability_ids
-        ):
-            sys.stdout.write(_FAILURE_OUTPUT)
+        )
+        if failure_code is not None:
+            _write_failure(failure_code)
             return 1
         sys.stdout.write(outcome.model_dump_json())
         return 0
+    except _FullChainCheckError as error:
+        _write_failure(error.code)
+        return 1
     except Exception:
-        sys.stdout.write(_FAILURE_OUTPUT)
+        _write_failure("unknown_error")
         return 1
     finally:
         credential = None

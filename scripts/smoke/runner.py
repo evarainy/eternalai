@@ -62,6 +62,7 @@ from app.infra.persistence.capability_registry.repository import (
 from app.knowledge import BasicKnowledge
 from app.ports.auth import AuthenticationError, LoginCredential, OASessionCredential
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.trace import REDACTED_TRACE_VALUE, redact_trace_attributes
 from scripts import sanitize_oa_contract_pack as sanitizer
 from scripts.smoke.capabilities import (
     OA_CAPABILITY_CONTEXT_PROBES,
@@ -74,7 +75,13 @@ from scripts.smoke.environment import (
     prepare_environment,
 )
 from scripts.smoke.errors import SmokeError
-from scripts.smoke.full_chain_contract import FullChainOutcome
+from scripts.smoke.full_chain_contract import (
+    FULL_CHAIN_FAILURE_CODES,
+    FULL_CHAIN_SCHEMA_VERSION,
+    CapabilityFullChainOutcome,
+    FullChainFailure,
+    FullChainOutcome,
+)
 from scripts.smoke.har import (
     extract_message_center_contract,
     extract_todo_list_contract,
@@ -87,6 +94,7 @@ from scripts.smoke.live import (
     TodoProtocolEvidence,
     compare_record_structures,
 )
+from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
 _SYSTEM_PROFILE = "ecology9-system-messages-v1"
 _PENDING_CAPTURE_PROFILE = "ecology9-pending-workflows-v3"
@@ -108,15 +116,34 @@ _LOCAL_OPENER = build_opener(ProxyHandler({}))
 _BACKEND_LOG_NAME = "smoke_backend.log"
 _FULL_CHAIN_SUBPROCESS_TIMEOUT_SECONDS = 300.0
 _MAX_FULL_CHAIN_OUTPUT_BYTES = 16_384
+_MAX_FULL_CHAIN_STDERR_LINES = 20
 _REPLAY_FULL_CHAIN_ACCOUNT = "replay-smoke-account"
 _REPLAY_FULL_CHAIN_PASSWORD = "replay-smoke-password"
-_FULL_CHAIN_SUBPROCESS_ERROR_CODES = frozenset(
+_FULL_CHAIN_SUBPROCESS_ERROR_CODES = FULL_CHAIN_FAILURE_CODES | frozenset(
     {
         "full_chain_output_invalid",
         "full_chain_subprocess_failed",
         "full_chain_subprocess_timeout",
-        "full_chain_verification_failed",
     }
+)
+_SENSITIVE_ENVIRONMENT_VALUE_NAMES = (
+    "OA_BASE_URL",
+    "OA_MESSAGE_CENTER_PATH",
+    "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
+    "OA_PENDING_WORKFLOWS_COUNTS_PATH",
+    "OA_PENDING_WORKFLOWS_DATAS_PATH",
+    "OA_PENDING_WORKFLOWS_ACTIONTYPE",
+    "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
+    "OA_PENDING_WORKFLOWS_METHOD",
+    "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
+    "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
+    "OA_PENDING_WORKFLOWS_SORT_PARAMS",
+    "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
+    "ETERNALAI_IDENTITY_HMAC_KEY_B64",
+    "ETERNALAI_SESSION_SIGNING_KEY_B64",
+    "ETERNALAI_SESSION_BINDING_KEY_B64",
+    "DATABASE_URL",
+    "REDIS_URL",
 )
 _PROCESS_STATE_VERSION = 3
 _CONFIGURATION_ERROR_MARKERS = (
@@ -250,6 +277,7 @@ class RehearsalResult:
     sha_matches: bool
     replay_composition_ok: bool
     drift: OAStructuralDriftReport
+    replay_composition_failures: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,6 +484,10 @@ def _command_rehearse(layout: Layout) -> int:
     _print_drift_nodes("fingerprint", result.drift)
     print(f"fingerprint_sha_matches={_bool(result.sha_matches)}")
     print(f"replay_composition={_passed(result.replay_composition_ok)}")
+    _print_capability_failures(
+        "replay_composition",
+        result.replay_composition_failures,
+    )
     if (
         result.added_count
         or result.removed_count
@@ -495,7 +527,7 @@ def _run_rehearsal(
     nodes = generated.get("nodes")
     node_count = len(nodes) if isinstance(nodes, list) else -1
 
-    replay_results: list[bool] = []
+    replay_failures: list[tuple[str, str]] = []
     for capability_id, profile in (
         ("oa.list_pending_workflows", _PENDING_CAPTURE_PROFILE),
         ("oa.list_system_messages", _SYSTEM_PROFILE),
@@ -510,14 +542,14 @@ def _run_rehearsal(
                 "PHASE0_MOCK_MODE": "false",
             }
         )
-        replay_results.append(
-            _check_replay_composition(
-                layout.repo_root,
-                replay_environment,
-                capability_id=capability_id,
-            )
+        failure_reason = _check_replay_composition(
+            layout.repo_root,
+            replay_environment,
+            capability_id=capability_id,
         )
-    replay_ok = all(replay_results)
+        if failure_reason is not None:
+            replay_failures.append((capability_id, failure_reason))
+    replay_ok = not replay_failures
     return RehearsalResult(
         node_count=node_count,
         added_count=len(report.added),
@@ -526,6 +558,7 @@ def _run_rehearsal(
         sha_matches=report.expected_sha256 == report.actual_sha256,
         replay_composition_ok=replay_ok,
         drift=report,
+        replay_composition_failures=tuple(replay_failures),
     )
 
 
@@ -534,7 +567,7 @@ def _check_replay_composition(
     environment: dict[str, str],
     *,
     capability_id: str,
-) -> bool:
+) -> str | None:
     try:
         outcome = _run_full_chain_subprocess(
             repo_root=repo_root,
@@ -543,9 +576,24 @@ def _check_replay_composition(
             password=_REPLAY_FULL_CHAIN_PASSWORD,
             expected_capability_ids=(capability_id,),
         )
-    except SmokeError:
-        return False
-    return outcome.passed(expected_capability_ids=(capability_id,)) is True
+    except SmokeError as error:
+        return _known_full_chain_failure_code(error.code)
+    return outcome.failure_code(expected_capability_ids=(capability_id,))
+
+
+def _print_capability_failures(
+    prefix: str,
+    failures: tuple[tuple[str, str], ...],
+) -> None:
+    for capability_id, reason in failures:
+        print(f"{prefix}_failure_capability={capability_id}")
+        print(f"{prefix}_failure_reason={reason}")
+
+
+def _known_full_chain_failure_code(code: str) -> str:
+    if code in _FULL_CHAIN_SUBPROCESS_ERROR_CODES:
+        return code
+    return "unknown_error"
 
 
 def _command_start(layout: Layout) -> int:
@@ -1503,6 +1551,49 @@ def _print_authentication_failure(
             print(f"{name}={safe_diagnostics[name]}")
 
 
+def _run_full_chain_capability_checks(
+    *,
+    repo_root: Path,
+    environment: dict[str, str],
+    account: str,
+    password: str,
+) -> tuple[FullChainOutcome, tuple[tuple[str, str], ...]]:
+    capability_outcomes: list[CapabilityFullChainOutcome] = []
+    failures: list[tuple[str, str]] = []
+    for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS:
+        try:
+            outcome = _run_full_chain_subprocess(
+                repo_root=repo_root,
+                environment=environment,
+                account=account,
+                password=password,
+                expected_capability_ids=(capability_id,),
+            )
+        except SmokeError as error:
+            failures.append(
+                (
+                    capability_id,
+                    _known_full_chain_failure_code(error.code),
+                )
+            )
+            continue
+        failure_reason = outcome.failure_code(
+            expected_capability_ids=(capability_id,)
+        )
+        if failure_reason is not None:
+            failures.append((capability_id, failure_reason))
+            continue
+        capability_outcomes.extend(outcome.capabilities)
+    return (
+        FullChainOutcome(
+            schema_version=FULL_CHAIN_SCHEMA_VERSION,
+            required_trace_event_count=len(REQUIRED_TRACE_EVENTS),
+            capabilities=tuple(capability_outcomes),
+        ),
+        tuple(failures),
+    )
+
+
 def _command_verify(
     layout: Layout,
     *,
@@ -1524,12 +1615,18 @@ def _command_verify(
         raise SmokeError("oa_unreachable")
     account, password = _prompt_credentials()
     try:
-        full_chain = _run_full_chain_subprocess(
+        full_chain, full_chain_failures = _run_full_chain_capability_checks(
             repo_root=layout.repo_root,
             environment=environment,
             account=account,
             password=password,
         )
+        if full_chain_failures:
+            print(f"full_chain_capabilities={len(full_chain.capabilities)}")
+            print("full_chain_verification=failed")
+            _print_capability_failures("full_chain", full_chain_failures)
+            _print_stop_instruction()
+            return 1
         system, pending = _run_persisted_provider_checks_with_supported_loop(
             settings,
             account=account,
@@ -1731,7 +1828,7 @@ def _run_full_chain_subprocess(
         REQUIRED_ACTIVE_OA_CAPABILITY_IDS
     ),
 ) -> FullChainOutcome:
-    failure_code = "full_chain_subprocess_failed"
+    failure_code = "unknown_error"
     try:
         return _invoke_full_chain_subprocess(
             repo_root=repo_root,
@@ -1744,7 +1841,7 @@ def _run_full_chain_subprocess(
         if error.code in _FULL_CHAIN_SUBPROCESS_ERROR_CODES:
             failure_code = error.code
     except Exception:
-        failure_code = "full_chain_subprocess_failed"
+        failure_code = "unknown_error"
     finally:
         del repo_root, environment, account, password, expected_capability_ids
     raise SmokeError(failure_code) from None
@@ -1767,7 +1864,7 @@ def _invoke_full_chain_subprocess(
         )
         or len(expected_capability_ids) not in {1, len(REQUIRED_ACTIVE_OA_CAPABILITY_IDS)}
     ):
-        raise SmokeError("full_chain_subprocess_failed")
+        raise SmokeError("probe_argv_invalid")
     command = [sys.executable, "-m", "scripts.smoke.full_chain"]
     if len(expected_capability_ids) == 1:
         command.extend(["--capability-id", expected_capability_ids[0]])
@@ -1778,6 +1875,9 @@ def _invoke_full_chain_subprocess(
             separators=(",", ":"),
         ).encode("utf-8")
     )
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    transport_failure_code: str | None = None
+    stderr_lines: tuple[str, ...] = ()
     try:
         try:
             completed = subprocess.run(
@@ -1790,34 +1890,112 @@ def _invoke_full_chain_subprocess(
                 check=False,
                 timeout=_FULL_CHAIN_SUBPROCESS_TIMEOUT_SECONDS,
             )
-        except subprocess.TimeoutExpired:
-            raise SmokeError("full_chain_subprocess_timeout") from None
+        except subprocess.TimeoutExpired as error:
+            stderr_lines = _sanitize_full_chain_stderr(
+                error.stderr,
+                environment=environment,
+                sensitive_values=(account, password),
+            )
+            transport_failure_code = "full_chain_subprocess_timeout"
         except OSError:
-            raise SmokeError("full_chain_subprocess_failed") from None
+            transport_failure_code = "full_chain_subprocess_failed"
+        else:
+            stderr_lines = _sanitize_full_chain_stderr(
+                completed.stderr,
+                environment=environment,
+                sensitive_values=(account, password),
+            )
     finally:
         for index in range(len(credential_input)):
             credential_input[index] = 0
         account = ""
         password = ""
-
-    if completed.returncode != 0:
-        raise SmokeError("full_chain_subprocess_failed")
-    output = completed.stdout
-    if (
-        not isinstance(output, bytes)
-        or not output
-        or len(output) > _MAX_FULL_CHAIN_OUTPUT_BYTES
-    ):
-        raise SmokeError("full_chain_output_invalid")
     try:
-        outcome = FullChainOutcome.model_validate_json(output, strict=True)
-    except (UnicodeError, ValueError, ValidationError):
-        raise SmokeError("full_chain_output_invalid") from None
-    if not outcome.passed(
-        expected_capability_ids=expected_capability_ids
-    ):
-        raise SmokeError("full_chain_verification_failed")
-    return outcome
+        if transport_failure_code is not None:
+            raise SmokeError(transport_failure_code)
+        if completed is None:
+            raise SmokeError("unknown_error")
+        output = completed.stdout
+        if (
+            not isinstance(output, bytes)
+            or not output
+            or len(output) > _MAX_FULL_CHAIN_OUTPUT_BYTES
+        ):
+            raise SmokeError("full_chain_output_invalid")
+        if completed.returncode != 0:
+            try:
+                failure = FullChainFailure.model_validate_json(output, strict=True)
+            except (UnicodeError, ValueError, ValidationError):
+                raise SmokeError("full_chain_output_invalid") from None
+            raise SmokeError(failure.error_code)
+        try:
+            outcome = FullChainOutcome.model_validate_json(output, strict=True)
+        except (UnicodeError, ValueError, ValidationError):
+            raise SmokeError("full_chain_output_invalid") from None
+        failure_code = outcome.failure_code(
+            expected_capability_ids=expected_capability_ids
+        )
+        if failure_code is not None:
+            raise SmokeError(failure_code)
+        return outcome
+    except Exception:
+        _print_full_chain_stderr(stderr_lines)
+        raise
+
+
+def _sanitize_full_chain_stderr(
+    stderr: bytes | str | None,
+    *,
+    environment: dict[str, str],
+    sensitive_values: tuple[str, ...],
+) -> tuple[str, ...]:
+    try:
+        if isinstance(stderr, bytes):
+            text = stderr.decode("utf-8", errors="replace")
+        elif isinstance(stderr, str):
+            text = stderr
+        else:
+            return ()
+        if not text:
+            return ()
+        redacted_environment = redact_trace_attributes(environment)
+        known_sensitive_values = {
+            value for value in sensitive_values if value
+        }
+        for name, value in environment.items():
+            if not value:
+                continue
+            if (
+                name in _SENSITIVE_ENVIRONMENT_VALUE_NAMES
+                or redacted_environment.get(name) == REDACTED_TRACE_VALUE
+            ):
+                known_sensitive_values.add(value)
+        sanitized_lines: list[str] = []
+        for raw_line in text.splitlines()[:_MAX_FULL_CHAIN_STDERR_LINES]:
+            line = raw_line
+            for sensitive_value in sorted(
+                known_sensitive_values,
+                key=len,
+                reverse=True,
+            ):
+                line = line.replace(sensitive_value, REDACTED_TRACE_VALUE)
+            sanitized = redact_trace_attributes(
+                {"stderr_line": line}
+            ).get("stderr_line", REDACTED_TRACE_VALUE)
+            sanitized_lines.append(
+                sanitized
+                if isinstance(sanitized, str)
+                else REDACTED_TRACE_VALUE
+            )
+        return tuple(sanitized_lines)
+    except Exception:
+        return (REDACTED_TRACE_VALUE,)
+
+
+def _print_full_chain_stderr(stderr_lines: tuple[str, ...]) -> None:
+    for index, line in enumerate(stderr_lines, start=1):
+        rendered = json.dumps(line, ensure_ascii=True, separators=(",", ":"))
+        print(f"full_chain_subprocess_stderr_{index:02d}={rendered}")
 
 
 def _run_persisted_provider_checks_with_supported_loop(
@@ -2427,26 +2605,7 @@ def _assert_report_safe(text: str, environment: dict[str, str]) -> None:
         text,
     ):
         raise SmokeError("report_contains_sensitive_assignment")
-    sensitive_names = (
-        "OA_BASE_URL",
-        "OA_MESSAGE_CENTER_PATH",
-        "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH",
-        "OA_PENDING_WORKFLOWS_COUNTS_PATH",
-        "OA_PENDING_WORKFLOWS_DATAS_PATH",
-        "OA_PENDING_WORKFLOWS_ACTIONTYPE",
-        "OA_PENDING_WORKFLOWS_HIDE_NO_DATA_TAB",
-        "OA_PENDING_WORKFLOWS_METHOD",
-        "OA_PENDING_WORKFLOWS_OFFICAL_TYPE",
-        "OA_PENDING_WORKFLOWS_VIEW_SCOPE",
-        "OA_PENDING_WORKFLOWS_SORT_PARAMS",
-        "ETERNALAI_CREDENTIAL_ENCRYPTION_KEY_B64",
-        "ETERNALAI_IDENTITY_HMAC_KEY_B64",
-        "ETERNALAI_SESSION_SIGNING_KEY_B64",
-        "ETERNALAI_SESSION_BINDING_KEY_B64",
-        "DATABASE_URL",
-        "REDIS_URL",
-    )
-    for name in sensitive_names:
+    for name in _SENSITIVE_ENVIRONMENT_VALUE_NAMES:
         value = environment.get(name, "")
         if len(value) >= 9 and value in text:
             raise SmokeError("report_contains_environment_value")
