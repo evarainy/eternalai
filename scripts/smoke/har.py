@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote_plus, urlsplit
 
 from scripts.smoke.errors import SmokeError
 
@@ -449,7 +449,7 @@ def _read_selected_form(
             name = item.get("name")
             value = item.get("value")
             if isinstance(name, str) and isinstance(value, str):
-                pairs.append((name, value))
+                pairs.append((name, unquote_plus(value)))
     elif isinstance(post_data.get("text"), str):
         try:
             pairs = parse_qsl(
