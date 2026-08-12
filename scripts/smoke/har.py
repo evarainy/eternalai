@@ -504,7 +504,7 @@ def _read_form(post_data: Any) -> dict[str, str] | None:
             name = item.get("name")
             value = item.get("value")
             if isinstance(name, str) and isinstance(value, str):
-                pairs.append((name, value))
+                pairs.append((unquote_plus(name), unquote_plus(value)))
     elif isinstance(post_data.get("text"), str):
         try:
             pairs = parse_qsl(
