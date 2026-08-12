@@ -182,6 +182,7 @@ def _todo_list_entries(
     *,
     session_key: str,
     actiontype: str = "synthetic-action",
+    sort_params: str = "synthetic-sort",
     authoritative_count: int = 1,
     records: list[object] | None = None,
 ) -> list[object]:
@@ -225,7 +226,7 @@ def _todo_list_entries(
             {
                 "current": "1",
                 "dataKey": session_key,
-                "sortParams": "synthetic-sort",
+                "sortParams": sort_params,
             },
             {"datas": records, "status": True},
         ),
@@ -874,6 +875,23 @@ def test_extract_todo_list_contract_keeps_only_configuration_and_structure(
     assert contract.authoritative_count_matches is True
     assert repr(contract) == "TodoListContract(structural_only=True)"
     assert query_credential not in repr(contract)
+
+
+def test_extract_todo_list_contract_decodes_params_form_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    _write_har(
+        path,
+        _todo_list_entries(
+            session_key="s" * 69,
+            sort_params="synthetic+sort%5B%5D",
+        ),
+    )
+
+    contract = extract_todo_list_contract(path)
+
+    assert contract.sort_params == "synthetic sort[]"
 
 
 def test_extract_todo_list_contract_accepts_identical_repeated_sequence(
