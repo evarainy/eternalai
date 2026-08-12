@@ -354,7 +354,8 @@ def _d5_complete_environment(
 ) -> tuple[Path, Path, MessageCenterContract, TodoListContract]:
     base_env = tmp_path / ".env"
     base_env.write_text(
-        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"
@@ -1149,7 +1150,8 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
     base_env = tmp_path / ".env"
     base_env.write_text(
         "DATABASE_URL=postgresql://synthetic.invalid/db\n"
-        "REDIS_URL=redis://synthetic.invalid:6379/0\n",
+        "REDIS_URL=redis://synthetic.invalid:6379/0\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     before_hash = hashlib.sha256(base_env.read_bytes()).hexdigest()
@@ -1207,13 +1209,53 @@ def test_prepare_is_idempotent_and_never_writes_base_env(
     assert hashlib.sha256(base_env.read_bytes()).hexdigest() == before_hash
 
 
-def test_prepare_completes_a_half_filled_file_then_is_idempotent(
+def test_prepare_reports_session_cookie_secure_without_auto_writing_it(
     tmp_path: Path,
 ) -> None:
     base_env = tmp_path / ".env"
     base_env.write_text(
         "DATABASE_URL=postgresql://synthetic.invalid/db\n"
         "REDIS_URL=redis://synthetic.invalid:6379/0\n",
+        encoding="utf-8",
+    )
+    smoke_env = tmp_path / ".env.smoke"
+    for profile in (
+        "ecology9-pending-workflows-v3",
+        "ecology9-system-messages-v1",
+    ):
+        (tmp_path / "tests" / "contract_packs" / "oa" / profile).mkdir(
+            parents=True
+        )
+
+    prepared = prepare_environment(
+        repo_root=tmp_path,
+        base_env_path=base_env,
+        smoke_env_path=smoke_env,
+        contract=MessageCenterContract(
+            source_entry_index=0,
+            matching_entry_count=1,
+            base_url="https://synthetic.invalid",
+            endpoint_path="/api/message-center",
+            bizstate="synthetic-biz",
+            select_state="synthetic-select",
+        ),
+        todo_contract=_synthetic_todo_contract(),
+        process_environment={},
+        check_infra=False,
+    )
+
+    assert prepared.missing_keys == ("SESSION_COOKIE_SECURE",)
+    assert "SESSION_COOKIE_SECURE" not in parse_env_file(smoke_env)
+
+
+def test_prepare_completes_a_half_filled_file_then_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    base_env = tmp_path / ".env"
+    base_env.write_text(
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n"
+        "REDIS_URL=redis://synthetic.invalid:6379/0\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"
@@ -1321,7 +1363,8 @@ def test_prepare_round_trip_rejection_redacts_dotenv_and_har_values(
     base_env = tmp_path / ".env"
     base_env.write_text(
         f"ACTIVE_SECRET={active_secret}\n"
-        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"
@@ -1372,7 +1415,8 @@ def test_prepare_unexpected_failure_redacts_dotenv_and_har_values(
     base_env = tmp_path / ".env"
     base_env.write_text(
         f"ACTIVE_SECRET={active_secret}\n"
-        "DATABASE_URL=postgresql://synthetic.invalid/db\n",
+        "DATABASE_URL=postgresql://synthetic.invalid/db\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"
@@ -1432,7 +1476,8 @@ def test_prepare_does_not_replace_existing_blank_value(
     base_env = tmp_path / ".env"
     base_env.write_text(
         "DATABASE_URL=postgresql://synthetic.invalid/db\n"
-        "REDIS_URL=redis://synthetic.invalid:6379/0\n",
+        "REDIS_URL=redis://synthetic.invalid:6379/0\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"
@@ -1477,7 +1522,8 @@ def test_prepare_treats_explicit_blank_filter_values_as_complete(
     base_env = tmp_path / ".env"
     base_env.write_text(
         "DATABASE_URL=postgresql://synthetic.invalid/db\n"
-        "REDIS_URL=redis://synthetic.invalid:6379/0\n",
+        "REDIS_URL=redis://synthetic.invalid:6379/0\n"
+        "SESSION_COOKIE_SECURE=true\n",
         encoding="utf-8",
     )
     smoke_env = tmp_path / ".env.smoke"

@@ -70,6 +70,7 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.llm_top_k == 20
     assert settings.llm_enable_thinking is False
     assert settings.health_timeout_seconds == 5
+    assert settings.session_cookie_secure is True
     assert settings.csrf_allowed_origins == frozenset(
         {"https://app.example.gov.cn", "http://127.0.0.1:5173"}
     )
@@ -93,6 +94,66 @@ def test_production_settings_apply_approved_llm_defaults() -> None:
     assert settings.oa_system_messages_select_state is None
     assert settings.oa_message_center_page_size == 20
     assert settings.phase0_mock_mode is True
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (" true ", True),
+        ("1", True),
+        (" FaLsE ", False),
+        ("0", False),
+    ],
+)
+def test_session_cookie_secure_uses_strict_boolean_configuration(
+    configured: str,
+    expected: bool,
+) -> None:
+    environment = _environment()
+    environment["CSRF_ALLOWED_ORIGINS"] = "http://127.0.0.1:5173"
+    environment["SESSION_COOKIE_SECURE"] = configured
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.session_cookie_secure is expected
+
+
+def test_session_cookie_secure_rejects_invalid_boolean() -> None:
+    environment = _environment()
+    environment["SESSION_COOKIE_SECURE"] = "sometimes"
+
+    with pytest.raises(
+        RuntimeError,
+        match="SESSION_COOKIE_SECURE must be a boolean",
+    ):
+        ProductionSettings.from_environment(environment)
+
+
+def test_insecure_session_cookie_rejects_any_https_origin() -> None:
+    environment = _environment()
+    environment["SESSION_COOKIE_SECURE"] = "false"
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "session_cookie_transport_invalid: "
+            "SESSION_COOKIE_SECURE=false requires every "
+            "CSRF_ALLOWED_ORIGINS entry to use http://"
+        ),
+    ):
+        ProductionSettings.from_environment(environment)
+
+
+def test_insecure_session_cookie_allows_only_http_origins() -> None:
+    environment = _environment()
+    environment["CSRF_ALLOWED_ORIGINS"] = (
+        "http://127.0.0.1:5173,http://localhost:5173"
+    )
+    environment["SESSION_COOKIE_SECURE"] = "false"
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.session_cookie_secure is False
 
 
 @pytest.mark.parametrize("configured_mode", [None, "mock"])

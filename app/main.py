@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 
 from fastapi import FastAPI
@@ -37,6 +38,7 @@ def create_app(
     session_tokens: SessionTokenPort | None = None,
     session_binder: Callable[[Principal, str], str] | None = None,
     session_cookie_ttl_seconds: int | None = None,
+    session_cookie_secure: bool = True,
     csrf_allowed_origins: frozenset[str] = _EMPTY_CSRF_ALLOWED_ORIGINS,
     health_checks: dict[str, HealthCheck] | None = None,
     health_timeout_seconds: float = 5.0,
@@ -61,6 +63,7 @@ def create_app(
             session_tokens,
             require_csrf=require_csrf,
             session_cookie_ttl_seconds=session_cookie_ttl_seconds,
+            session_cookie_secure=session_cookie_secure,
         ),
         prefix="/api/v1/auth",
     )
@@ -83,6 +86,11 @@ def create_production_app(
     resolved_settings = (
         ProductionSettings.from_environment() if settings is None else settings
     )
+    if not resolved_settings.session_cookie_secure:
+        logging.getLogger(__name__).warning(
+            "session_cookie_secure_disabled key=%s",
+            "SESSION_COOKIE_SECURE",
+        )
     components = build_production_components(resolved_settings)
     return create_app(
         runtime=components.runtime,
@@ -91,6 +99,7 @@ def create_production_app(
         session_tokens=components.session_tokens,
         session_binder=components.session_binder.bind,
         session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
+        session_cookie_secure=resolved_settings.session_cookie_secure,
         csrf_allowed_origins=resolved_settings.csrf_allowed_origins,
         health_checks=dict(components.health_checks),
         health_timeout_seconds=components.health_timeout_seconds,
