@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app.ports.trace import TraceQueryPort
 from scripts.smoke import full_chain as full_chain_module
@@ -17,6 +19,7 @@ from scripts.smoke.errors import SmokeError
 from scripts.smoke.full_chain_contract import (
     FULL_CHAIN_SCHEMA_VERSION,
     CapabilityFullChainOutcome,
+    FullChainFailure,
     FullChainOutcome,
 )
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
@@ -106,6 +109,7 @@ def test_full_chain_subprocess_accepts_only_strict_complete_output(
 def test_replay_full_chain_subprocess_scopes_one_allowlisted_capability(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     capability_id = "oa.list_system_messages"
     observed: dict[str, Any] = {}
@@ -119,7 +123,7 @@ def test_replay_full_chain_subprocess_scopes_one_allowlisted_capability(
             stdout=_successful_outcome((capability_id,))
             .model_dump_json()
             .encode("utf-8"),
-            stderr=b"",
+            stderr=b"success-path-diagnostic",
         )
 
     monkeypatch.setattr(smoke_runner.subprocess, "run", run)
@@ -133,6 +137,7 @@ def test_replay_full_chain_subprocess_scopes_one_allowlisted_capability(
     )
 
     assert outcome.passed(expected_capability_ids=(capability_id,)) is True
+    assert "full_chain_subprocess_stderr" not in capsys.readouterr().out
     assert observed["command"] == [
         smoke_runner.sys.executable,
         "-m",
@@ -140,6 +145,175 @@ def test_replay_full_chain_subprocess_scopes_one_allowlisted_capability(
         "--capability-id",
         capability_id,
     ]
+
+
+def test_full_chain_subprocess_preserves_specific_child_failure_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    error_code = "authentication_failed"
+
+    def run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                '{"error_code":"authentication_failed",'
+                f'"schema_version":"{FULL_CHAIN_SCHEMA_VERSION}"}}'
+            ).encode("utf-8"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(smoke_runner.subprocess, "run", run)
+
+    with pytest.raises(SmokeError) as captured:
+        smoke_runner._run_full_chain_subprocess(
+            repo_root=tmp_path,
+            environment={"PATH": "synthetic-path"},
+            account="synthetic-account",
+            password="synthetic-password",
+        )
+
+    assert captured.value.code == error_code
+
+
+def test_full_chain_failure_schema_rejects_unregistered_error_code() -> None:
+    with pytest.raises(ValidationError):
+        FullChainFailure.model_validate(
+            {
+                "error_code": "dynamic_failure_detail",
+                "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+            },
+            strict=True,
+        )
+
+
+def test_full_chain_subprocess_prints_bounded_sanitized_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    account = "stderr-account-canary"
+    password = "stderr-password-canary"
+    environment_secret = "stderr-environment-secret-canary"
+    untracked_bearer = "stderr-untracked-bearer-canary"
+    stderr_lines = [
+        f"account={account}",
+        f"password={password}",
+        f"environment={environment_secret}",
+        f"Authorization: Bearer {untracked_bearer}",
+        *(f"safe-line-{index:02d}" for index in range(5, 22)),
+    ]
+
+    def run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                '{"error_code":"authentication_failed",'
+                f'"schema_version":"{FULL_CHAIN_SCHEMA_VERSION}"}}'
+            ).encode("utf-8"),
+            stderr="\n".join(stderr_lines).encode("utf-8"),
+        )
+
+    monkeypatch.setattr(smoke_runner.subprocess, "run", run)
+
+    with pytest.raises(SmokeError) as captured:
+        smoke_runner._run_full_chain_subprocess(
+            repo_root=tmp_path,
+            environment={
+                "ETERNALAI_SESSION_SIGNING_KEY_B64": environment_secret,
+            },
+            account=account,
+            password=password,
+        )
+
+    output = capsys.readouterr().out
+    assert captured.value.code == "authentication_failed"
+    assert account not in output
+    assert password not in output
+    assert environment_secret not in output
+    assert untracked_bearer not in output
+    assert "[REDACTED]" in output
+    assert output.count("full_chain_subprocess_stderr_") == 20
+    assert "full_chain_subprocess_stderr_20=" in output
+    assert "safe-line-21" not in output
+
+
+def test_full_chain_main_classifies_invalid_probe_arguments(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = full_chain_module.main(["--unsupported"])
+
+    assert result == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "error_code": "probe_argv_invalid",
+        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+    }
+
+
+def test_full_chain_main_classifies_configuration_build_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sensitive_detail = "sensitive-configuration-detail"
+    monkeypatch.setattr(
+        full_chain_module,
+        "_read_login_credential",
+        lambda: SimpleNamespace(),
+    )
+
+    def fail_configuration() -> None:
+        raise RuntimeError(sensitive_detail)
+
+    monkeypatch.setattr(
+        full_chain_module.ProductionSettings,
+        "from_environment",
+        fail_configuration,
+    )
+
+    result = full_chain_module.main([])
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert json.loads(output) == {
+        "error_code": "composition_build_failed",
+        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+    }
+    assert sensitive_detail not in output
+
+
+def test_full_chain_main_maps_unclassified_exception_to_unknown_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        full_chain_module,
+        "_read_login_credential",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        full_chain_module.ProductionSettings,
+        "from_environment",
+        lambda: SimpleNamespace(oa_read_adapter_mode="live"),
+    )
+
+    async def fail_unclassified(*_args: Any, **_kwargs: Any) -> FullChainOutcome:
+        raise RuntimeError("sensitive-unclassified-detail")
+
+    monkeypatch.setattr(
+        full_chain_module,
+        "run_full_chain_check",
+        fail_unclassified,
+    )
+
+    result = full_chain_module.main([])
+
+    assert result == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "error_code": "unknown_error",
+        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+    }
 
 
 def test_replay_composition_uses_same_full_chain_boundary_and_fails_closed(
@@ -165,7 +339,7 @@ def test_replay_composition_uses_same_full_chain_boundary_and_fails_closed(
             {"OA_READ_ADAPTER_MODE": "replay"},
             capability_id=capability_id,
         )
-        is True
+        is None
     )
     assert observed["expected_capability_ids"] == (capability_id,)
     assert observed["account"] == smoke_runner._REPLAY_FULL_CHAIN_ACCOUNT
@@ -185,17 +359,17 @@ def test_replay_composition_uses_same_full_chain_boundary_and_fails_closed(
             {"OA_READ_ADAPTER_MODE": "replay"},
             capability_id=capability_id,
         )
-        is False
+        == "full_chain_subprocess_timeout"
     )
 
 
 @pytest.mark.parametrize(
     ("failure", "expected_code"),
     [
-        ("nonzero", "full_chain_subprocess_failed"),
+        ("nonzero", "full_chain_output_invalid"),
         ("invalid_output", "full_chain_output_invalid"),
         ("timeout", "full_chain_subprocess_timeout"),
-        ("false_boolean", "full_chain_verification_failed"),
+        ("false_boolean", "trace_incomplete"),
         ("none_boolean", "full_chain_output_invalid"),
     ],
 )
