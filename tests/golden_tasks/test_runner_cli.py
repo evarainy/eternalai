@@ -142,3 +142,61 @@ def test_cli_failure_output_does_not_echo_credential_canary(
     assert summary["results"][0]["status"] == "failed"
     assert credential_value not in captured.out
     assert credential_value not in captured.err
+
+
+def test_cli_numeric_adapter_mismatch_does_not_echo_credential_canaries(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    expected_value = 482907
+    actual_value = 482908
+    judgement = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": None,
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={
+            "must_be_called": False,
+            "must_not_be_called": False,
+            "exact_arguments": {
+                "oa.synthetic": [{"password": expected_value}],
+            },
+        },
+        adapter_calls={},
+        adapter_arguments={
+            "oa.synthetic": [{"password": actual_value}],
+        },
+    )
+    result = GoldenTaskResult(
+        golden_task_id="GT-SYNTHETIC-CLI-NUMERIC-CREDENTIAL",
+        category="negative",
+        status=judgement.status,
+        reasons=judgement.reasons,
+    )
+
+    monkeypatch.setattr(
+        run_golden_tasks,
+        "_load_runner",
+        lambda: (lambda: [result], build_summary),
+    )
+
+    exit_code = run_golden_tasks.main(["--gate"])
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert summary["failed"] == 1
+    assert summary["results"][0]["reasons"] == [
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.assertion_inputs"
+    ]
+    for credential_value in (expected_value, actual_value):
+        marker = str(credential_value)
+        assert marker not in captured.out
+        assert marker not in captured.err

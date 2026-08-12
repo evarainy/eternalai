@@ -219,23 +219,28 @@ def test_ordinary_json_business_text_does_not_trigger_credential_detection() -> 
     "ordinary_value",
     (None, ""),
 )
-def test_value_free_serialized_credential_fields_do_not_false_positive(
+@pytest.mark.parametrize("serialized", (False, True))
+def test_value_free_credential_fields_do_not_false_positive(
     ordinary_value: Any,
+    serialized: bool,
 ) -> None:
-    envelope = {
-        "status": "completed",
-        "message": json.dumps(
-            {"password": ordinary_value},
+    credential_data: Any = {"password": ordinary_value}
+    if serialized:
+        credential_data = json.dumps(
+            credential_data,
             separators=(",", ":"),
             sort_keys=True,
-        ),
+        )
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
         "ui": {"component_type": "none", "action": "none"},
-        "data": None,
+        "data": None if serialized else credential_data,
     }
 
     assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
 
-    assert "password" in envelope["message"]
+    assert "password" in (envelope["message"] if serialized else envelope["data"])
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:

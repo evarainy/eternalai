@@ -245,6 +245,87 @@ def test_serialized_json_credential_mapping_is_rejected(field_name: str) -> None
 
 
 @pytest.mark.parametrize(
+    ("field_name", "field_value", "expected_rule"),
+    (
+        ("password", 482901, "password_or_passwd"),
+        ("access_token", True, "token_or_api_key"),
+        ("dataKey", True, "oa_session_or_data_key"),
+        ("SESSION_KEY", 482902, "oa_session_or_data_key"),
+        ("DaTa_KeY", 482903, "oa_session_or_data_key"),
+    ),
+)
+@pytest.mark.parametrize("serialized", (False, True))
+def test_non_string_credential_mapping_is_rejected_without_value_echo(
+    field_name: str,
+    field_value: int | bool,
+    expected_rule: str,
+    serialized: bool,
+) -> None:
+    credential_data: Any = {field_name: field_value}
+    if serialized:
+        credential_data = json.dumps(credential_data, separators=(",", ":"))
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": credential_data,
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    reason = str(exc_info.value)
+    assert reason == (
+        "forbidden credential pattern detected: "
+        f"rule={expected_rule}; location=actual.envelope"
+    )
+    assert str(field_value) not in reason
+    assert str(field_value) not in repr(exc_info.value)
+
+
+def test_non_empty_bytes_credential_mapping_is_rejected_without_value_echo() -> None:
+    credential_value = b"synthetic-non-empty-bytes-canary"
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": credential_value},
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert str(exc_info.value) == (
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    )
+    assert "synthetic-non-empty-bytes-canary" not in str(exc_info.value)
+    assert "synthetic-non-empty-bytes-canary" not in repr(exc_info.value)
+
+
+def test_serialized_json_duplicate_sensitive_key_is_scanned_item_by_item() -> None:
+    credential_value = 482904
+    envelope = {
+        "status": "completed",
+        "message": (
+            f'{{"password":{credential_value},"password":null}}'
+        ),
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert str(exc_info.value) == (
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    )
+    assert str(credential_value) not in str(exc_info.value)
+    assert str(credential_value) not in repr(exc_info.value)
+
+
+@pytest.mark.parametrize(
     "field_name",
     ("password", "access_token", "sessionkey", "dataKey"),
 )
@@ -514,6 +595,64 @@ def test_serialized_json_bounds_run_before_legacy_pattern_scan(
     assert scanned_payload_lengths == []
 
 
+@pytest.mark.parametrize(
+    ("credential_surface", "expected_location"),
+    (
+        ("actual", "actual.envelope"),
+        ("expected", "fixture.expectations"),
+    ),
+)
+def test_serialized_json_declared_depth_boundary_is_64_containers(
+    credential_surface: str,
+    expected_location: str,
+) -> None:
+    payload_marker = _synthetic_credential_value(
+        f"serialized-depth-{credential_surface}"
+    )
+
+    def nested_json(depth: int) -> str:
+        return ('{"ordinary":' * depth) + json.dumps(payload_marker) + ("}" * depth)
+
+    def judge_payload(payload: str) -> Any:
+        envelope = {
+            "status": "completed",
+            "message": payload if credential_surface == "actual" else "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": None,
+        }
+        expectations = (
+            {"then_custom": {"ordinary": payload}}
+            if credential_surface == "expected"
+            else None
+        )
+        return judge_assertions(
+            envelope=envelope,
+            expected_response={"status": "completed"},
+            trace_steps=[],
+            expected_trace={"event_sequence": []},
+            forbidden_items=[],
+            adapter_assertion={
+                "must_be_called": False,
+                "must_not_be_called": False,
+            },
+            adapter_calls={},
+            credential_expectations=expectations,
+        )
+
+    boundary = judge_payload(nested_json(64))
+    over_boundary = judge_payload(nested_json(65))
+
+    assert boundary.status == "passed"
+    assert boundary.reasons == []
+    assert over_boundary.status == "failed"
+    assert over_boundary.reasons == [
+        "forbidden credential pattern detected: "
+        f"rule=scan_serialized_json_depth_limit; location={expected_location}"
+    ]
+    assert payload_marker not in str(over_boundary.reasons)
+    assert payload_marker not in repr(over_boundary.reasons)
+
+
 def test_fixture_credential_preflight_prevents_later_assertion_value_echo() -> None:
     credential_value = _synthetic_credential_value("preflight-before-value-echo")
     result = judge_assertions(
@@ -598,6 +737,58 @@ def test_adapter_assertion_inputs_are_credential_preflighted(
     assert "credential" in result.reasons[0]
     assert credential_value not in str(result.reasons)
     assert credential_value not in repr(result.reasons)
+
+
+def test_numeric_adapter_argument_credentials_preflight_before_mismatch_echo() -> None:
+    expected_value = 482905
+    actual_value = 482906
+    result = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": None,
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={
+            "must_be_called": False,
+            "must_not_be_called": False,
+            "exact_arguments": {
+                "oa.synthetic": [{"password": expected_value}],
+            },
+        },
+        adapter_calls={},
+        adapter_arguments={
+            "oa.synthetic": [{"password": actual_value}],
+        },
+    )
+
+    runner = importlib.import_module("scripts.golden_task_evaluator")
+    summary = runner.build_summary(
+        [
+            runner.GoldenTaskResult(
+                golden_task_id="GT-SYNTHETIC-NUMERIC-CREDENTIAL",
+                category="negative",
+                status=result.status,
+                reasons=result.reasons,
+            )
+        ]
+    )
+    serialized_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.assertion_inputs"
+    ]
+    for credential_value in (expected_value, actual_value):
+        marker = str(credential_value)
+        assert marker not in str(result.reasons)
+        assert marker not in repr(result.reasons)
+        assert marker not in serialized_summary
 
 
 def test_forbidden_sessionkey_field_name_in_envelope_data_raises() -> None:

@@ -17,6 +17,11 @@ class AssertionJudgement:
     reasons: list[str]
 
 
+@dataclass(frozen=True)
+class _PreservedJsonObjectPairs:
+    pairs: tuple[tuple[str, Any], ...]
+
+
 _TERMINAL_EVENT_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
     "no_capability_found": {
         "must_have": (
@@ -203,6 +208,18 @@ _RAW_COOKIE_HEADER_PATTERN = re.compile(r"(?i)\bcookie\s*:")
 _COOKIE_CREDENTIAL_NAME_PATTERN = re.compile(
     r"(?i)\b(sessionid|access_token|refresh_token)"
 )
+_CREDENTIAL_MAPPING_RULES = {
+    "sessionid": "sessionid",
+    "access_token": "token_or_api_key",
+    "refresh_token": "token_or_api_key",
+    "api_key": "token_or_api_key",
+    "password": "password_or_passwd",
+    "passwd": "password_or_passwd",
+    "sessionkey": "oa_session_or_data_key",
+    "datakey": "oa_session_or_data_key",
+    "session_key": "oa_session_or_data_key",
+    "data_key": "oa_session_or_data_key",
+}
 _CREDENTIAL_FAILURE_PREFIX = "forbidden credential pattern detected: "
 _INTERNAL_URL_PATTERN = re.compile(
     r"(?i)\bhttps?://(?:localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|"
@@ -813,9 +830,14 @@ def _assert_no_credential_values(
             if rule_name is not None:
                 _raise_credential_failure(rule_name, location)
             if serialized_mapping is not None:
-                stack.append((serialized_mapping, depth + 1, False, False))
-        elif isinstance(current, Mapping):
-            for key, item in current.items():
+                stack.append((serialized_mapping, 0, False, False))
+        elif isinstance(current, (Mapping, _PreservedJsonObjectPairs)):
+            items = (
+                current.items()
+                if isinstance(current, Mapping)
+                else current.pairs
+            )
+            for key, item in items:
                 if depth >= _MAX_CREDENTIAL_SCAN_DEPTH:
                     _raise_credential_failure("scan_depth_limit", location)
                 if nodes_seen + len(stack) >= _MAX_CREDENTIAL_SCAN_NODES:
@@ -829,6 +851,9 @@ def _assert_no_credential_values(
                     rule_name = _credential_text_rule(key)
                     if rule_name is not None:
                         _raise_credential_failure(rule_name, location)
+                    mapping_rule = _credential_mapping_rule(key, item)
+                    if mapping_rule is not None:
+                        _raise_credential_failure(mapping_rule, location)
                 item_chars_counted = False
                 item_allows_serialized_json = allow_serialized_json
                 serialized_mapping = None
@@ -856,7 +881,7 @@ def _assert_no_credential_values(
                         if rule_name is not None:
                             _raise_credential_failure(rule_name, location)
                 if serialized_mapping is not None:
-                    stack.append((serialized_mapping, depth + 1, False, False))
+                    stack.append((serialized_mapping, 0, False, False))
                 stack.append(
                     (
                         item,
@@ -960,8 +985,27 @@ def _bounded_serialized_json_mapping(
     return parsed
 
 
-def _preserve_json_object_pairs(pairs: list[tuple[str, Any]]) -> list[Any]:
-    return [{key: value} for key, value in pairs]
+def _preserve_json_object_pairs(
+    pairs: list[tuple[str, Any]],
+) -> _PreservedJsonObjectPairs:
+    return _PreservedJsonObjectPairs(tuple(pairs))
+
+
+def _credential_mapping_rule(key: str, value: Any) -> str | None:
+    rule_name = _CREDENTIAL_MAPPING_RULES.get(key.casefold())
+    if rule_name is None or not _is_non_empty_credential_scalar(value):
+        return None
+    return rule_name
+
+
+def _is_non_empty_credential_scalar(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return len(value) > 0
+    return isinstance(value, (bool, int, float, complex))
 
 
 def _assert_serialized_json_bounds(
