@@ -69,6 +69,7 @@ def make_router(
     *,
     require_csrf: CSRFDependency,
     session_cookie_ttl_seconds: int | None,
+    session_cookie_secure: bool,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -103,7 +104,7 @@ def make_router(
             value=token,
             max_age=session_cookie_ttl_seconds,
             httponly=True,
-            secure=True,
+            secure=session_cookie_secure,
             samesite="lax",
             path="/api/v1",
         )

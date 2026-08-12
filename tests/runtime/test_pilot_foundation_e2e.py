@@ -203,11 +203,53 @@ def test_replay_oa_provider_runs_through_complete_runtime_chain(
     assert outcome.capabilities[0].trace_events_complete is True
 
 
+def test_http_replay_full_chain_sends_session_cookie_and_recovers_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CSRF_ALLOWED_ORIGINS", "http://testserver")
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "false")
+    runtime_status_codes: list[int] = []
+    principal_observations: list[str] = []
+    original_post = httpx.AsyncClient.post
+
+    async def record_runtime_status(
+        client: httpx.AsyncClient,
+        url: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        response = await original_post(client, url, *args, **kwargs)
+        if url == "/api/v1/runtime/handle":
+            runtime_status_codes.append(response.status_code)
+        return response
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", record_runtime_status)
+    settings = ProductionSettings.from_environment()
+
+    outcome = asyncio.run(
+        _run_replay_full_chain(
+            capability_id="oa.list_pending_workflows",
+            probe="查询我的待办",
+            pack_name="ecology9-pending-workflows-v3",
+            principal_observations=principal_observations,
+        )
+    )
+
+    assert runtime_status_codes == [200]
+    assert principal_observations == [
+        identity_surrogate(_LOGIN_ID, key=settings.identity_hmac_key)
+    ]
+    assert outcome.passed(
+        expected_capability_ids=("oa.list_pending_workflows",)
+    ) is True
+
+
 async def _run_replay_full_chain(
     *,
     capability_id: str,
     probe: str,
     pack_name: str,
+    principal_observations: list[str] | None = None,
 ) -> FullChainOutcome:
     base_settings = ProductionSettings.from_environment()
     pack_dir = Path(__file__).parents[1] / "contract_packs" / "oa" / pack_name
@@ -235,13 +277,19 @@ async def _run_replay_full_chain(
     )
     await PostgreSQLCapabilityRegistry(session_factory).create(capability)
     try:
-        return await smoke_full_chain.run_full_chain_check(
+        outcome = await smoke_full_chain.run_full_chain_check(
             settings,
             LoginCredential(loginid=_LOGIN_ID, userpassword=_PASSWORD),
             probes=((probe, capability_id),),
             llm_provider=llm_provider,
             authentication=authentication,
         )
+        if principal_observations is not None:
+            tasks = await PostgreSQLTaskStore(session_factory).list_tasks(
+                ai_user_id=ai_user_id
+            )
+            principal_observations.extend(task.ai_user_id for task in tasks)
+        return outcome
     finally:
         await _cleanup(
             session_factory,

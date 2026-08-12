@@ -135,6 +135,36 @@ def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
     assert authentication.calls == 1
 
 
+def test_login_can_disable_only_secure_for_an_http_deployment() -> None:
+    origin = "http://testserver"
+    authentication = SuccessfulAuthentication(_principal("http-login"))
+    client = TestClient(
+        create_app(
+            authentication=authentication,
+            session_tokens=_token_port(),
+            session_binder=_binder().bind,
+            session_cookie_ttl_seconds=3600,
+            session_cookie_secure=False,
+            csrf_allowed_origins=frozenset({origin}),
+        ),
+        base_url=origin,
+    )
+
+    response = client.post(
+        "/api/v1/auth/login",
+        headers={"Origin": origin, "X-EternalAI-CSRF": "1"},
+        json={"loginid": "synthetic-login", "userpassword": "synthetic-secret"},
+    )
+
+    assert response.status_code == 200
+    set_cookie = response.headers["set-cookie"]
+    assert "eternalai_session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" not in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Path=/api/v1" in set_cookie
+
+
 def test_login_failure_is_generic_and_sets_no_cookie() -> None:
     application = create_app(
         authentication=FailedAuthentication(),

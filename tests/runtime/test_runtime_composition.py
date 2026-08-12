@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -41,7 +43,7 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceWriter,
 )
 from app.knowledge import BasicKnowledge
-from app.main import create_app
+from app.main import create_app, create_production_app
 from app.memory import SessionMemory
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
@@ -389,6 +391,49 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert components.session_cookie_ttl_seconds > 0
     assert components.health_timeout_seconds == settings.health_timeout_seconds
+
+
+def test_production_app_warns_when_session_cookie_secure_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = replace(
+        ProductionSettings.from_environment(),
+        session_cookie_secure=False,
+        csrf_allowed_origins=frozenset({"http://testserver"}),
+    )
+    components = SimpleNamespace(
+        runtime=None,
+        admin_registry_service=None,
+        authentication=None,
+        session_tokens=None,
+        session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
+        session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
+        health_checks={},
+        health_timeout_seconds=settings.health_timeout_seconds,
+    )
+    application = object()
+    monkeypatch.setattr(
+        "app.main.build_production_components",
+        lambda resolved: components if resolved is settings else None,
+    )
+    monkeypatch.setattr("app.main.create_app", lambda **_kwargs: application)
+
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        result = create_production_app(settings)
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if record.name == "app.main"
+        and record.getMessage().startswith("session_cookie_secure_disabled")
+    ]
+    assert result is application
+    assert len(warning_records) == 1
+    assert warning_records[0].getMessage() == (
+        "session_cookie_secure_disabled key=SESSION_COOKIE_SECURE"
+    )
+    assert warning_records[0].args == ("SESSION_COOKIE_SECURE",)
 
 
 @pytest.mark.parametrize(
