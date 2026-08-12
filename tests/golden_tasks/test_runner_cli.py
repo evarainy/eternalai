@@ -7,10 +7,8 @@ import hashlib
 import json
 import subprocess
 import sys
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 import pytest
 
@@ -25,6 +23,49 @@ SHARED_MODULES = (
     REPO_ROOT / "scripts" / "golden_task_fixture_support.py",
     REPO_ROOT / "scripts" / "golden_task_evaluator.py",
 )
+
+
+class _CanaryValue:
+    def __init__(self, marker: str) -> None:
+        self.marker = marker
+        self.str_calls = 0
+        self.repr_calls = 0
+
+    def __str__(self) -> str:
+        self.str_calls += 1
+        return self.marker
+
+    def __repr__(self) -> str:
+        self.repr_calls += 1
+        return self.marker
+
+
+class _CanaryAssertionError(_CanaryValue, AssertionError):
+    pass
+
+
+class _CanaryValueError(_CanaryValue, ValueError):
+    pass
+
+
+class _DynamicDump:
+    def __init__(
+        self,
+        *,
+        first: Any = None,
+        later: Any = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.first = first
+        self.later = later
+        self.error = error
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        if self.error is not None:
+            raise self.error
+        return self.first if self.call_count == 1 else self.later
 
 
 def test_shared_golden_modules_have_no_test_or_pytest_imports() -> None:
@@ -105,99 +146,71 @@ runpy.run_path(script_path, run_name="__main__")
     assert "Traceback" not in completed.stderr
 
 
-def test_cli_failure_output_does_not_echo_credential_canary(
+@pytest.mark.parametrize("mode", ("stateful", "assertion_error", "value_error"))
+def test_cli_dynamic_model_is_evaluated_once_without_canary_echo(
     monkeypatch: Any,
     capsys: Any,
+    mode: str,
 ) -> None:
-    credential_value = hashlib.sha256(b"cli-credential-canary").hexdigest()
-    judgement = judge_assertions(
-        envelope={
-            "status": "completed",
-            "message": "操作完成",
-            "ui": {"component_type": "none", "action": "none"},
-            "data": {"password": credential_value},
-        },
-        expected_response={"status": "completed"},
-        trace_steps=[],
-        expected_trace={"event_sequence": []},
-        forbidden_items=["trace_contains_token"],
-        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
-        adapter_calls={},
-    )
-    result = GoldenTaskResult(
-        golden_task_id="GT-SYNTHETIC-CLI-CREDENTIAL",
-        category="negative",
-        status=judgement.status,
-        reasons=judgement.reasons,
-    )
+    marker = hashlib.sha256(f"cli-dynamic-{mode}".encode()).hexdigest()
+    canary = _CanaryValue(marker)
+    safe_envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+    error: _CanaryValue | None = None
+    if mode == "stateful":
+        model = _DynamicDump(
+            first=safe_envelope,
+            later={**safe_envelope, "status": canary},
+        )
+        envelope: Any = model
+        expected_status = "synthetic-mismatch"
+        expected_reason = (
+            "response status expected 'synthetic-mismatch', got 'completed'"
+        )
+    else:
+        error = (
+            _CanaryAssertionError(marker)
+            if mode == "assertion_error"
+            else _CanaryValueError(marker)
+        )
+        model = _DynamicDump(error=error)
+        envelope = {**safe_envelope, "data": {"password": model}}
+        expected_status = "completed"
+        expected_reason = (
+            "forbidden credential pattern detected: "
+            "rule=model_dump_error; location=actual.envelope"
+        )
 
-    monkeypatch.setattr(
-        run_golden_tasks,
-        "_load_runner",
-        lambda: (lambda: [result], build_summary),
-    )
-
-    exit_code = run_golden_tasks.main(["--gate"])
-    captured = capsys.readouterr()
-    summary = json.loads(captured.out)
-
-    assert exit_code == 1
-    assert summary["failed"] == 1
-    assert summary["results"][0]["status"] == "failed"
-    assert credential_value not in captured.out
-    assert credential_value not in captured.err
-
-
-@pytest.mark.parametrize(
-    ("expected_value", "actual_value"),
-    (
-        (482907, 482908),
-        (
-            Decimal("482911.01"),
-            UUID("00000000-0000-4000-8000-000000000081"),
-        ),
-    ),
-)
-def test_cli_direct_scalar_adapter_mismatch_does_not_echo_credential_canaries(
-    monkeypatch: Any,
-    capsys: Any,
-    expected_value: Any,
-    actual_value: Any,
-) -> None:
-    judgement = judge_assertions(
-        envelope={
-            "status": "completed",
-            "message": "操作完成",
-            "ui": {"component_type": "none", "action": "none"},
-            "data": None,
-        },
-        expected_response={"status": "completed"},
-        trace_steps=[],
-        expected_trace={"event_sequence": []},
-        forbidden_items=[],
-        adapter_assertion={
-            "must_be_called": False,
-            "must_not_be_called": False,
-            "exact_arguments": {
-                "oa.synthetic": [{"password": expected_value}],
+    def evaluate() -> list[GoldenTaskResult]:
+        judgement = judge_assertions(
+            envelope=envelope,
+            expected_response={"status": expected_status},
+            trace_steps=[],
+            expected_trace={"event_sequence": []},
+            forbidden_items=[],
+            adapter_assertion={
+                "must_be_called": False,
+                "must_not_be_called": False,
             },
-        },
-        adapter_calls={},
-        adapter_arguments={
-            "oa.synthetic": [{"password": actual_value}],
-        },
-    )
-    result = GoldenTaskResult(
-        golden_task_id="GT-SYNTHETIC-CLI-NUMERIC-CREDENTIAL",
-        category="negative",
-        status=judgement.status,
-        reasons=judgement.reasons,
-    )
+            adapter_calls={},
+        )
+        return [
+            GoldenTaskResult(
+                golden_task_id="GT-SYNTHETIC-CLI-DYNAMIC",
+                category="negative",
+                status=judgement.status,
+                reasons=judgement.reasons,
+            )
+        ]
 
     monkeypatch.setattr(
         run_golden_tasks,
         "_load_runner",
-        lambda: (lambda: [result], build_summary),
+        lambda: (evaluate, build_summary),
     )
 
     exit_code = run_golden_tasks.main(["--gate"])
@@ -206,11 +219,13 @@ def test_cli_direct_scalar_adapter_mismatch_does_not_echo_credential_canaries(
 
     assert exit_code == 1
     assert summary["failed"] == 1
-    assert summary["results"][0]["reasons"] == [
-        "forbidden credential pattern detected: "
-        "rule=password_or_passwd; location=actual.assertion_inputs"
-    ]
-    for credential_value in (expected_value, actual_value):
-        marker = str(credential_value)
-        assert marker not in captured.out
-        assert marker not in captured.err
+    assert summary["results"][0]["reasons"] == [expected_reason]
+    assert model.call_count == 1
+    assert marker not in repr(summary)
+    assert marker not in captured.out
+    assert marker not in captured.err
+    assert canary.str_calls == 0
+    assert canary.repr_calls == 0
+    if error is not None:
+        assert error.str_calls == 0
+        assert error.repr_calls == 0

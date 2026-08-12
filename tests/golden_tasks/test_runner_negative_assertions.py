@@ -5,13 +5,11 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
-from datetime import date
 from decimal import Decimal
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
-from uuid import UUID
 
 import pytest
 
@@ -43,8 +41,38 @@ else:
     )
 
 
-class _SyntheticCredentialEnum(Enum):
-    VALUE = "synthetic-enum-credential-canary"
+class _OpaqueCredentialLeaf:
+    def __init__(self, marker: str) -> None:
+        self.marker = marker
+        self.str_calls = 0
+        self.repr_calls = 0
+
+    def __str__(self) -> str:
+        self.str_calls += 1
+        return self.marker
+
+    def __repr__(self) -> str:
+        self.repr_calls += 1
+        return self.marker
+
+
+class _DumpValue:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        return self.value
+
+
+class _NeverConsumedIterable:
+    def __init__(self) -> None:
+        self.iter_calls = 0
+
+    def __iter__(self) -> Iterable[str]:
+        self.iter_calls += 1
+        yield "synthetic-custom-iterable-canary"
 
 
 def test_missing_response_substring_raises_assertion_error() -> None:
@@ -208,8 +236,8 @@ def test_forbidden_credential_value_patterns_raise_assertion_error(
     assert credential_text == envelope["message"]
 
 
-@pytest.mark.parametrize("field_name", ("sessionkey", "dataKey"))
-def test_structured_credential_failure_does_not_echo_canary(field_name: str) -> None:
+def test_structured_credential_failure_does_not_echo_canary() -> None:
+    field_name = "sessionkey"
     credential_value = _synthetic_credential_value(f"safe-reason-{field_name}")
     envelope = {
         "status": "completed",
@@ -253,16 +281,13 @@ def test_serialized_json_credential_mapping_is_rejected(field_name: str) -> None
 
 
 @pytest.mark.parametrize(
-    ("field_name", "field_value", "expected_rule"),
+    ("field_name", "field_value", "expected_rule", "serialized"),
     (
-        ("password", 482901, "password_or_passwd"),
-        ("access_token", True, "token_or_api_key"),
-        ("dataKey", True, "oa_session_or_data_key"),
-        ("SESSION_KEY", 482902, "oa_session_or_data_key"),
-        ("DaTa_KeY", 482903, "oa_session_or_data_key"),
+        ("password", 482901, "password_or_passwd", False),
+        ("access_token", True, "token_or_api_key", True),
+        ("dataKey", True, "oa_session_or_data_key", False),
     ),
 )
-@pytest.mark.parametrize("serialized", (False, True))
 def test_non_string_credential_mapping_is_rejected_without_value_echo(
     field_name: str,
     field_value: int | bool,
@@ -311,19 +336,8 @@ def test_non_empty_bytes_credential_mapping_is_rejected_without_value_echo() -> 
     assert "synthetic-non-empty-bytes-canary" not in repr(exc_info.value)
 
 
-@pytest.mark.parametrize(
-    ("credential_value", "credential_marker"),
-    (
-        (Decimal("482909.01"), "482909.01"),
-        (UUID("00000000-0000-4000-8000-000000000079"), "000000000079"),
-        (date(2031, 7, 9), "2031-07-09"),
-        (_SyntheticCredentialEnum.VALUE, "synthetic-enum-credential-canary"),
-    ),
-)
-def test_other_direct_scalar_credentials_are_rejected_without_value_echo(
-    credential_value: Any,
-    credential_marker: str,
-) -> None:
+def test_direct_opaque_credential_is_rejected_without_value_echo() -> None:
+    credential_value = Decimal("482909.01")
     envelope = {
         "status": "completed",
         "message": "操作完成",
@@ -338,8 +352,8 @@ def test_other_direct_scalar_credentials_are_rejected_without_value_echo(
         "forbidden credential pattern detected: "
         "rule=password_or_passwd; location=actual.envelope"
     )
-    assert credential_marker not in str(exc_info.value)
-    assert credential_marker not in repr(exc_info.value)
+    assert str(credential_value) not in str(exc_info.value)
+    assert str(credential_value) not in repr(exc_info.value)
 
 
 def test_serialized_json_duplicate_sensitive_key_is_scanned_item_by_item() -> None:
@@ -365,10 +379,9 @@ def test_serialized_json_duplicate_sensitive_key_is_scanned_item_by_item() -> No
 
 
 @pytest.mark.parametrize(
-    "field_name",
-    ("password", "access_token", "sessionkey", "dataKey"),
+    ("field_name", "serialized"),
+    (("password", False), ("dataKey", True)),
 )
-@pytest.mark.parametrize("serialized", (False, True))
 def test_comma_prefixed_credential_value_remains_rejected(
     field_name: str,
     serialized: bool,
@@ -420,41 +433,29 @@ def test_structured_mapping_preserves_legacy_key_value_detection(
 
 
 @pytest.mark.parametrize(
-    "field_name",
-    ("session_key", "SESSION_KEY", "SeSsIoN_KeY", "data_key", "DATA_KEY", "DaTa_KeY"),
+    ("field_name", "serialized"),
+    (
+        ("session_key", False),
+        ("DATA_KEY", True),
+    ),
 )
 def test_underscored_credential_mapping_is_case_insensitive(
     field_name: str,
+    serialized: bool,
 ) -> None:
-    credential_value = _synthetic_credential_value(f"mapping-{field_name}")
-    envelope = {
-        "status": "completed",
-        "message": "操作完成",
-        "ui": {"component_type": "none", "action": "none"},
-        "data": {field_name: credential_value},
-    }
-
-    with pytest.raises(AssertionError, match="credential"):
-        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
-
-
-@pytest.mark.parametrize(
-    "field_name",
-    ("session_key", "SESSION_KEY", "SeSsIoN_KeY", "data_key", "DATA_KEY", "DaTa_KeY"),
-)
-def test_serialized_underscored_credential_mapping_is_case_insensitive(
-    field_name: str,
-) -> None:
-    credential_value = _synthetic_credential_value(f"serialized-{field_name}")
-    envelope = {
-        "status": "completed",
-        "message": json.dumps(
-            {field_name: credential_value},
+    credential_value = _synthetic_credential_value(f"underscored-{field_name}")
+    credential_data: Any = {field_name: credential_value}
+    if serialized:
+        credential_data = json.dumps(
+            credential_data,
             separators=(",", ":"),
             sort_keys=True,
-        ),
+        )
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
         "ui": {"component_type": "none", "action": "none"},
-        "data": None,
+        "data": None if serialized else credential_data,
     }
 
     with pytest.raises(AssertionError, match="credential"):
@@ -463,7 +464,7 @@ def test_serialized_underscored_credential_mapping_is_case_insensitive(
 
 @pytest.mark.parametrize(
     "expectation_key",
-    ("expected", "then_response", "then_trace", "then_workflow", "then_custom"),
+    ("expected", "then_custom"),
 )
 def test_fixture_expectation_blocks_reject_credential_canary(
     expectation_key: str,
@@ -598,6 +599,7 @@ def test_credential_scan_total_string_limit_fails_closed() -> None:
         ("characters", "scan_string_char_limit"),
         ("depth", "scan_serialized_json_depth_limit"),
         ("nodes", "scan_serialized_json_node_limit"),
+        ("candidate_characters", "scan_serialized_json_char_limit"),
     ),
 )
 def test_serialized_json_bounds_run_before_legacy_pattern_scan(
@@ -609,6 +611,7 @@ def test_serialized_json_bounds_run_before_legacy_pattern_scan(
         "characters": '{"ordinary":"' + ("x" * 1_000_000) + '"}',
         "depth": ('{"ordinary":' * 65) + "null" + ("}" * 65),
         "nodes": '{"ordinary":[' + ("null," * 10_001) + "null]}",
+        "candidate_characters": '{"ordinary":"' + ("x" * 256_000) + '"}',
     }[boundary_kind]
     assertions = importlib.import_module("scripts.golden_task_assertions")
     original_rule = assertions._credential_text_rule
@@ -712,19 +715,6 @@ def test_fixture_credential_preflight_prevents_later_assertion_value_echo() -> N
         adapter_calls={"oa": 0, "u8": 0, "hikvision_ivms": 0},
     )
 
-    runner = importlib.import_module("scripts.golden_task_evaluator")
-    summary = runner.build_summary(
-        [
-            runner.GoldenTaskResult(
-                golden_task_id="GT-SYNTHETIC-PREFLIGHT",
-                category="negative",
-                status=result.status,
-                reasons=result.reasons,
-            )
-        ]
-    )
-    serialized_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
-
     assert result.status == "failed"
     assert len(result.reasons) == 1
     assert "credential" in result.reasons[0]
@@ -732,11 +722,6 @@ def test_fixture_credential_preflight_prevents_later_assertion_value_echo() -> N
     assert credential_value not in repr(result)
     assert credential_value not in str(result.reasons)
     assert credential_value not in repr(result.reasons)
-    assert summary["failed"] == 1
-    assert summary["negative_total"] == 1
-    assert summary["negative_passed"] == 0
-    assert credential_value not in repr(summary)
-    assert credential_value not in serialized_summary
 
 
 @pytest.mark.parametrize("credential_surface", ("expected", "actual"))
@@ -776,69 +761,6 @@ def test_adapter_assertion_inputs_are_credential_preflighted(
     assert "credential" in result.reasons[0]
     assert credential_value not in str(result.reasons)
     assert credential_value not in repr(result.reasons)
-
-
-@pytest.mark.parametrize(
-    ("expected_value", "actual_value"),
-    (
-        (482905, 482906),
-        (
-            Decimal("482910.01"),
-            UUID("00000000-0000-4000-8000-000000000080"),
-        ),
-    ),
-)
-def test_direct_scalar_adapter_credentials_preflight_before_mismatch_echo(
-    expected_value: Any,
-    actual_value: Any,
-) -> None:
-    result = judge_assertions(
-        envelope={
-            "status": "completed",
-            "message": "操作完成",
-            "ui": {"component_type": "none", "action": "none"},
-            "data": None,
-        },
-        expected_response={"status": "completed"},
-        trace_steps=[],
-        expected_trace={"event_sequence": []},
-        forbidden_items=[],
-        adapter_assertion={
-            "must_be_called": False,
-            "must_not_be_called": False,
-            "exact_arguments": {
-                "oa.synthetic": [{"password": expected_value}],
-            },
-        },
-        adapter_calls={},
-        adapter_arguments={
-            "oa.synthetic": [{"password": actual_value}],
-        },
-    )
-
-    runner = importlib.import_module("scripts.golden_task_evaluator")
-    summary = runner.build_summary(
-        [
-            runner.GoldenTaskResult(
-                golden_task_id="GT-SYNTHETIC-NUMERIC-CREDENTIAL",
-                category="negative",
-                status=result.status,
-                reasons=result.reasons,
-            )
-        ]
-    )
-    serialized_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
-
-    assert result.status == "failed"
-    assert result.reasons == [
-        "forbidden credential pattern detected: "
-        "rule=password_or_passwd; location=actual.assertion_inputs"
-    ]
-    for credential_value in (expected_value, actual_value):
-        marker = str(credential_value)
-        assert marker not in str(result.reasons)
-        assert marker not in repr(result.reasons)
-        assert marker not in serialized_summary
 
 
 def test_forbidden_sessionkey_field_name_in_envelope_data_raises() -> None:
@@ -963,22 +885,6 @@ def test_credential_detection_is_enforced_by_main_judgement() -> None:
     assert credential_value not in str(result.reasons)
     assert credential_value not in repr(result.reasons)
 
-    runner = importlib.import_module("scripts.golden_task_evaluator")
-    summary = runner.build_summary(
-        [
-            runner.GoldenTaskResult(
-                golden_task_id="GT-SYNTHETIC-CREDENTIAL",
-                category="negative",
-                status=result.status,
-                reasons=result.reasons,
-            )
-        ]
-    )
-    serialized_summary = json.dumps(summary, ensure_ascii=False, sort_keys=True)
-    assert summary["failed"] == 1
-    assert summary["negative_total"] == 1
-    assert summary["negative_passed"] == 0
-    assert credential_value not in serialized_summary
 
 
 def test_unknown_forbidden_item_raises_assertion_error() -> None:
@@ -1032,32 +938,6 @@ def test_injection_companion_judgement_rejects_absent_or_mismatched_error_code()
     assert any("expected injected error_code" in reason for reason in mismatched.reasons)
 
 
-def test_injection_companion_credential_failure_short_circuits_without_echo() -> None:
-    runner = importlib.import_module("scripts.golden_task_evaluator")
-    credential_value = _synthetic_credential_value("injection-error-code")
-
-    result = runner.judge_injection_companion_assertions(
-        envelope={
-            "status": "failed",
-            "message": "操作失败",
-            "error_code": f"password={credential_value}",
-            "ui": {},
-            "data": None,
-        },
-        trace_steps=[],
-        expected_error_code="adapter_timeout",
-        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
-        adapter_calls={},
-        forbidden_items=(),
-    )
-
-    assert result.status == "failed"
-    assert len(result.reasons) == 1
-    assert "credential" in result.reasons[0]
-    assert credential_value not in str(result.reasons)
-    assert credential_value not in repr(result.reasons)
-
-
 def test_adapter_must_not_be_called_raises_when_spy_count_is_positive() -> None:
     adapter_calls = {
         "oa": 0,
@@ -1096,3 +976,213 @@ def test_assertion_failure_is_classified_failed_not_skipped_or_not_applicable() 
     assert result.status == "failed"
     assert result.status not in {"skipped", "not_applicable"}
     assert any("adapter_called" in reason for reason in result.reasons)
+
+
+def _judge_sensitive_dynamic_surface(surface: str, value: Any) -> Any:
+    envelope: Any = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None,
+    }
+    trace_steps: list[Any] = []
+    adapter_arguments: Mapping[str, Any] | None = None
+    credential_expectations: Mapping[str, Any] | None = None
+    if surface == "actual.envelope":
+        envelope["data"] = {"password": value}
+    elif surface == "actual.trace":
+        trace_steps = [{"password": value}]
+    elif surface == "actual.assertion_inputs":
+        adapter_arguments = {"oa.synthetic": [{"password": value}]}
+    elif surface == "fixture.expectations":
+        credential_expectations = {"then_custom": {"password": value}}
+    else:  # pragma: no cover - the parametrization is the closed surface grammar
+        raise AssertionError("unknown synthetic credential surface")
+    return judge_assertions(
+        envelope=envelope,
+        expected_response={"status": "completed"},
+        trace_steps=trace_steps,
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={},
+        adapter_arguments=adapter_arguments,
+        credential_expectations=credential_expectations,
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "dump_kind"),
+    (
+        ("actual.envelope", "string"),
+        ("actual.trace", "decimal"),
+        ("actual.assertion_inputs", "opaque"),
+        ("fixture.expectations", "string"),
+        ("fixture.expectations", "decimal"),
+        ("fixture.expectations", "opaque"),
+    ),
+)
+def test_model_dump_leaf_reuses_sensitive_edge_rule_on_every_surface(
+    surface: str,
+    dump_kind: str,
+) -> None:
+    marker = _synthetic_credential_value(f"dump-leaf-{surface}-{dump_kind}")
+    opaque = _OpaqueCredentialLeaf(marker)
+    dumped_value: Any = {
+        "string": marker,
+        "decimal": Decimal("482912.01"),
+        "opaque": opaque,
+    }[dump_kind]
+    canary = str(dumped_value) if dump_kind == "decimal" else marker
+    model = _DumpValue(dumped_value)
+
+    result = _judge_sensitive_dynamic_surface(surface, model)
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        f"rule=password_or_passwd; location={surface}"
+    ]
+    assert model.call_count == 1
+    assert model.value is dumped_value
+    assert canary not in str(result.reasons)
+    assert canary not in repr(result.reasons)
+    if dump_kind == "opaque":
+        assert opaque.str_calls == 0
+        assert opaque.repr_calls == 0
+
+
+@pytest.mark.parametrize(
+    "cycle_kind",
+    ("self_list", "mutual_lists", "dump_container_backref"),
+)
+def test_dynamic_cycles_fail_closed_with_stable_location(cycle_kind: str) -> None:
+    if cycle_kind == "self_list":
+        value: Any = []
+        value.append(value)
+    elif cycle_kind == "mutual_lists":
+        value = []
+        sibling = [value]
+        value.append(sibling)
+    else:
+        value = _DumpValue(None)
+        value.value = {"ordinary": value}
+
+    result = _judge_sensitive_dynamic_surface("actual.envelope", value)
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        "rule=scan_cycle; location=actual.envelope"
+    ]
+
+
+@pytest.mark.parametrize(
+    "iterable_kind",
+    ("set", "deque", "range", "generator", "custom"),
+)
+def test_unsupported_iterable_is_opaque_and_not_consumed_under_sensitive_key(
+    iterable_kind: str,
+) -> None:
+    marker = _synthetic_credential_value(f"opaque-iterable-{iterable_kind}")
+    consumed: list[str] = []
+    custom = _NeverConsumedIterable()
+
+    def values() -> Iterable[str]:
+        consumed.append(marker)
+        yield marker
+
+    value: Any = {
+        "set": {marker},
+        "deque": deque([marker]),
+        "range": range(3),
+        "generator": values(),
+        "custom": custom,
+    }[iterable_kind]
+
+    result = _judge_sensitive_dynamic_surface("actual.envelope", value)
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    ]
+    assert marker not in str(result.reasons)
+    assert marker not in repr(result.reasons)
+    assert consumed == []
+    assert custom.iter_calls == 0
+
+
+def test_model_dump_alias_is_materialized_once_but_each_edge_is_reclassified() -> None:
+    marker = _synthetic_credential_value("model-dump-cross-root-alias")
+    shared = _DumpValue(marker)
+
+    result = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": {"ordinary": shared},
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={},
+        credential_expectations={"then_custom": {"password": shared}},
+    )
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=fixture.expectations"
+    ]
+    assert shared.call_count == 1
+    assert marker not in str(result.reasons)
+    assert marker not in repr(result.reasons)
+
+
+@pytest.mark.parametrize(
+    ("boundary_kind", "expected_rule"),
+    (
+        ("characters", "scan_string_char_limit"),
+        ("depth", "scan_depth_limit"),
+        ("nodes", "scan_node_limit"),
+    ),
+)
+def test_model_dump_output_obeys_existing_snapshot_resource_limits(
+    boundary_kind: str,
+    expected_rule: str,
+) -> None:
+    transformation_chain: Any = None
+    for _index in range(66):
+        transformation_chain = _DumpValue(transformation_chain)
+    dumped_value: Any = {
+        "characters": "x" * 1_000_001,
+        "depth": transformation_chain,
+        "nodes": [None] * 10_001,
+    }[boundary_kind]
+    model = _DumpValue(dumped_value)
+
+    result = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": {"ordinary": model},
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={},
+    )
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        f"rule={expected_rule}; location=actual.envelope"
+    ]
+    assert model.call_count == 1

@@ -37,10 +37,42 @@ else:
     )
 
 
+class _CountingDump:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        return self.value
+
+
+class _StatefulDump:
+    def __init__(self, first: Any, later: Any) -> None:
+        self.first = first
+        self.later = later
+        self.call_count = 0
+
+    def model_dump(self) -> Any:
+        self.call_count += 1
+        return self.first if self.call_count == 1 else self.later
+
+
 def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> None:
     runner = importlib.import_module("scripts.golden_task_evaluator")
     helper = getattr(runner, "judge_injection_companion_assertions", None)
     assert helper is not None, "injection companion assertion helper is missing"
+    marker = hashlib.sha256(b"injection-companion-later-dump").hexdigest()
+    envelope = _StatefulDump(
+        {
+            "status": "failed",
+            "message": "操作超时",
+            "error_code": "adapter_timeout",
+            "ui": {},
+            "data": None,
+        },
+        {"status": marker},
+    )
     trace = [
         {"event_type": "task_created"},
         {"event_type": "capability_selected"},
@@ -54,7 +86,7 @@ def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> 
     ]
 
     judgement = helper(
-        envelope={"status": "failed", "message": "操作超时", "ui": {}, "data": None},
+        envelope=envelope,
         trace_steps=trace,
         expected_error_code="adapter_timeout",
         adapter_assertion={"must_be_called": True, "must_not_be_called": False},
@@ -63,6 +95,8 @@ def test_injection_companion_judgement_accepts_matching_timeout_error_code() -> 
 
     assert judgement.status == "passed"
     assert judgement.reasons == []
+    assert envelope.call_count == 1
+    assert marker not in str(judgement.reasons)
 
 
 def test_response_assertions_accept_dotted_keys_and_length() -> None:
@@ -265,6 +299,37 @@ def test_sensitive_key_container_semantics_remain_out_of_scope(
     assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
     observed = json.loads(envelope["message"]) if serialized else envelope["data"]
     assert observed == {"password": container_value}
+
+
+@pytest.mark.parametrize(
+    "dumped_value",
+    (
+        None,
+        "",
+        b"",
+        bytearray(),
+        memoryview(b""),
+        {"ordinary": "business value"},
+        ["ordinary business value"],
+        ("ordinary business value",),
+    ),
+)
+def test_model_dump_empty_or_supported_container_preserves_existing_semantics(
+    dumped_value: Any,
+) -> None:
+    model = _CountingDump(dumped_value)
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": model},
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert model.call_count == 1
+    assert model.value is dumped_value
+    assert envelope["data"]["password"] is model
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:

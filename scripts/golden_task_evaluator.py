@@ -52,10 +52,7 @@ from app.workflow.models import (
     WorkflowInputRef,
     WorkflowStep,
 )
-from scripts.golden_task_assertions import (
-    is_credential_failure_reason,
-    judge_assertions,
-)
+from scripts.golden_task_assertions import judge_assertions
 from scripts.golden_task_fixture_support import FIXTURES_DIR, apply_mock_state, load_fixture
 
 FROZEN_GT_IDS = (
@@ -477,7 +474,6 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
     reasons: list[str] = []
     primary_status: Literal["passed", "failed"] = "failed"
     injection_status: Literal["passed", "failed"] = "passed"
-    credential_failure = False
     clear_injection()
     try:
         observation = asyncio.run(_run_fixture(fixture))
@@ -510,15 +506,12 @@ def evaluate_golden_task(gt_id: str) -> GoldenTaskResult:
         )
         primary_status = judgement.status
         reasons.extend(judgement.reasons)
-        credential_failure = any(
-            is_credential_failure_reason(reason) for reason in judgement.reasons
-        )
     except AssertionError as exc:
         reasons.append(str(exc))
     finally:
         clear_injection()
 
-    if _injection_enabled(fixture) and not credential_failure:
+    if _injection_enabled(fixture):
         try:
             injection_judgement = asyncio.run(_run_injection_companion(fixture))
             injection_status = injection_judgement.status
@@ -578,18 +571,9 @@ def judge_injection_companion_assertions(
         },
         adapter_assertion=adapter_assertion,
         adapter_calls=adapter_calls,
+        expected_observed_error_code=expected_error_code,
     )
     reasons = list(judgement.reasons)
-    if any(is_credential_failure_reason(reason) for reason in reasons):
-        return RunnerAssertionJudgement(status="failed", reasons=reasons)
-    try:
-        _assert_expected_error_code_observed(
-            envelope,
-            trace_steps,
-            expected_error_code,
-        )
-    except AssertionError as exc:
-        reasons.append(str(exc))
     return RunnerAssertionJudgement(
         status="failed" if reasons else "passed",
         reasons=reasons,
@@ -949,10 +933,17 @@ def _expected_trace_for_matrix(fixture: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fixture_expectation_blocks(fixture: Mapping[str, Any]) -> dict[str, Any]:
+    direct_expectations = {
+        "then_forbidden",
+        "then_response",
+        "then_trace",
+        "then_workflow",
+    }
     expectation_blocks = {
         str(key): value
         for key, value in fixture.items()
-        if key == "expected" or str(key).startswith("then_")
+        if key == "expected"
+        or (str(key).startswith("then_") and key not in direct_expectations)
     }
     injection = fixture.get("mock_failure_injection")
     if isinstance(injection, Mapping) and "expected_error_code" in injection:
@@ -1019,39 +1010,6 @@ def _expected_injection_response_status(expected_error_code: str) -> str:
     if expected_error_code == "upstream_permission_denied":
         return "blocked"
     return "failed"
-
-
-def _assert_expected_error_code_observed(
-    envelope: Any,
-    trace_steps: Iterable[Any],
-    expected_error_code: str,
-) -> None:
-    observed = set(_iter_error_codes(envelope))
-    for step in trace_steps:
-        observed.update(_iter_error_codes(step))
-    if expected_error_code not in observed:
-        raise AssertionError(
-            f"expected injected error_code {expected_error_code!r} not observed; "
-            f"observed={sorted(observed)!r}"
-        )
-
-
-def _iter_error_codes(value: Any) -> Iterable[str]:
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        value = model_dump()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            if key == "error_code" and isinstance(item, str):
-                yield item
-            else:
-                yield from _iter_error_codes(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_error_codes(item)
-    elif isinstance(value, tuple):
-        for item in value:
-            yield from _iter_error_codes(item)
 
 
 def _build_capability_spec(raw: dict[str, Any]) -> CapabilitySpec:

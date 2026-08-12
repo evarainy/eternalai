@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 JudgementStatus = Literal["passed", "failed"]
 
@@ -20,6 +20,182 @@ class AssertionJudgement:
 @dataclass(frozen=True)
 class _PreservedJsonObjectPairs:
     pairs: tuple[tuple[str, Any], ...]
+
+
+class _CredentialSnapshotFailure(AssertionError):
+    """Value-free failure raised while constructing a credential snapshot."""
+
+
+@dataclass
+class _CredentialSnapshotContext:
+    memo: dict[int, tuple[Any, Any]]
+    active_ids: set[int]
+    nodes_seen: int = 0
+    total_chars_seen: int = 0
+
+    @classmethod
+    def create(cls) -> _CredentialSnapshotContext:
+        return cls(memo={}, active_ids=set())
+
+    def snapshot_root(
+        self,
+        value: Any,
+        *,
+        location: _CredentialLocation,
+    ) -> Any:
+        self.nodes_seen = 0
+        self.total_chars_seen = 0
+        return self.snapshot(value, location=location)
+
+    def snapshot(
+        self,
+        value: Any,
+        *,
+        location: _CredentialLocation,
+        depth: int = 0,
+    ) -> Any:
+        self.nodes_seen += 1
+        if self.nodes_seen > _MAX_CREDENTIAL_SCAN_NODES:
+            _raise_credential_failure("scan_node_limit", location)
+        if depth > _MAX_CREDENTIAL_SCAN_DEPTH:
+            _raise_credential_failure("scan_depth_limit", location)
+
+        value_type = type(value)
+        if value is None or value_type in (bool, int, float):
+            return value
+        if value_type is str:
+            self.total_chars_seen = _account_credential_scan_chars(
+                value,
+                self.total_chars_seen,
+                location,
+            )
+            return value
+
+        if value_type in (bytes, bytearray, memoryview):
+            try:
+                if len(value) == 0:
+                    return b""
+            except Exception:
+                _raise_credential_failure("snapshot_error", location)
+
+        value_id = id(value)
+        memoized = self.memo.get(value_id)
+        if memoized is not None and memoized[0] is value:
+            return memoized[1]
+        if value_id in self.active_ids:
+            _raise_credential_failure("scan_cycle", location)
+
+        self.active_ids.add(value_id)
+        try:
+            snapshot = self._snapshot_dynamic(
+                value,
+                location=location,
+                depth=depth,
+            )
+        finally:
+            self.active_ids.discard(value_id)
+        self.memo[value_id] = (value, snapshot)
+        return snapshot
+
+    def _snapshot_dynamic(
+        self,
+        value: Any,
+        *,
+        location: _CredentialLocation,
+        depth: int,
+    ) -> Any:
+        value_type = type(value)
+        if value_type in (bytes, bytearray, memoryview):
+            return object()
+
+        if value_type is dict:
+            return self._snapshot_mapping(value, location=location, depth=depth)
+        if value_type is list:
+            return [
+                self.snapshot(item, location=location, depth=depth + 1)
+                for item in list.__iter__(value)
+            ]
+        if value_type is tuple:
+            return [
+                self.snapshot(item, location=location, depth=depth + 1)
+                for item in tuple.__iter__(value)
+            ]
+        if value_type is _PreservedJsonObjectPairs:
+            return _PreservedJsonObjectPairs(
+                tuple(
+                    (
+                        self._snapshot_key(key, location=location),
+                        self.snapshot(item, location=location, depth=depth + 1),
+                    )
+                    for key, item in value.pairs
+                )
+            )
+
+        try:
+            model_dump = getattr(value, "model_dump", None)
+        except Exception:
+            _raise_credential_failure("model_dump_error", location)
+        if callable(model_dump):
+            try:
+                dumped = model_dump()
+            except Exception:
+                _raise_credential_failure("model_dump_error", location)
+            return self.snapshot(dumped, location=location, depth=depth + 1)
+
+        try:
+            mapping_like = isinstance(value, Mapping)
+        except Exception:
+            _raise_credential_failure("snapshot_error", location)
+        if mapping_like:
+            return self._snapshot_mapping(value, location=location, depth=depth)
+        if isinstance(value, list):
+            return [
+                self.snapshot(item, location=location, depth=depth + 1)
+                for item in list.__iter__(value)
+            ]
+        if isinstance(value, tuple):
+            return [
+                self.snapshot(item, location=location, depth=depth + 1)
+                for item in tuple.__iter__(value)
+            ]
+
+        return object()
+
+    def _snapshot_mapping(
+        self,
+        value: Mapping[Any, Any],
+        *,
+        location: _CredentialLocation,
+        depth: int,
+    ) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
+        try:
+            for key, item in value.items():
+                result[self._snapshot_key(key, location=location)] = self.snapshot(
+                    item,
+                    location=location,
+                    depth=depth + 1,
+                )
+        except _CredentialSnapshotFailure:
+            raise
+        except Exception:
+            _raise_credential_failure("snapshot_error", location)
+        return result
+
+    def _snapshot_key(
+        self,
+        key: Any,
+        *,
+        location: _CredentialLocation,
+    ) -> str:
+        if type(key) is not str:
+            _raise_credential_failure("snapshot_error", location)
+        self.total_chars_seen = _account_credential_scan_chars(
+            key,
+            self.total_chars_seen,
+            location,
+        )
+        return key
 
 
 _TERMINAL_EVENT_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
@@ -336,15 +512,60 @@ def assert_forbidden_absent(
     trace_steps: Iterable[Any],
     adapter_calls: Mapping[str, Any],
 ) -> None:
+    context = _CredentialSnapshotContext.create()
+    forbidden_snapshot = context.snapshot_root(
+        forbidden_items,
+        location="fixture.expectations",
+    )
+    if not isinstance(forbidden_snapshot, list):
+        _raise_credential_failure("snapshot_error", "fixture.expectations")
+    envelope_snapshot = context.snapshot_root(
+        envelope,
+        location="actual.envelope",
+    )
+    trace_snapshot = context.snapshot_root(
+        trace_steps,
+        location="actual.trace",
+    )
+    if not isinstance(trace_snapshot, list):
+        _raise_credential_failure("snapshot_error", "actual.trace")
+    adapter_calls_snapshot: Mapping[str, Any] = {}
+    if any(
+        item
+        in {
+            "mock_adapter_was_called",
+            "mock_oa_was_called",
+            "mock_u8_was_called",
+            "mock_ivms_was_called",
+        }
+        for item in forbidden_snapshot
+    ):
+        adapter_calls_snapshot = _snapshot_adapter_call_counts(
+            adapter_calls,
+            location="actual.assertion_inputs",
+        )
+    _assert_forbidden_absent_snapshot(
+        forbidden_snapshot,
+        envelope_snapshot,
+        trace_snapshot,
+        adapter_calls_snapshot,
+    )
+
+
+def _assert_forbidden_absent_snapshot(
+    forbidden_items: Iterable[str],
+    envelope: Any,
+    trace_steps: Iterable[Any],
+    adapter_calls: Mapping[str, Any],
+) -> None:
     forbidden_items = tuple(forbidden_items)
-    trace_items = list(trace_steps)
 
     if "trace_contains_token" in forbidden_items:
         _assert_no_credential_values(envelope, location="actual.envelope")
-        _assert_no_credential_values(trace_items, location="actual.trace")
+        _assert_no_credential_values(trace_steps, location="actual.trace")
 
     envelope_data = _to_plain(envelope)
-    trace_data = _to_plain(trace_items)
+    trace_data = _to_plain(trace_steps)
     all_strings = (
         list(_iter_string_values(envelope_data))
         + list(_iter_string_values(trace_data))
@@ -555,11 +776,10 @@ def judge_assertions(
     first_round_adapter_calls: Mapping[str, Any] | None = None,
     source_definition_version_after_first: str | None = None,
     credential_expectations: Mapping[str, Any] | None = None,
+    expected_observed_error_code: str | None = None,
 ) -> AssertionJudgement:
     reasons: list[str] = []
-    forbidden_items = tuple(forbidden_items)
-    workflow_events = tuple(workflow_events)
-    expected_credential_inputs = {
+    raw_expected_inputs = {
         "then_response": expected_response,
         "then_trace": expected_trace,
         "then_forbidden": forbidden_items,
@@ -567,74 +787,143 @@ def judge_assertions(
         "policy_assertion": policy_assertion,
         "then_workflow": workflow_assertion,
         "fixture_expectations": credential_expectations,
+        "expected_observed_error_code": expected_observed_error_code,
     }
-    actual_credential_inputs = {
-        "adapter_calls": adapter_calls,
-        "adapter_arguments": adapter_arguments,
-        "workflow_events": workflow_events,
-        "first_round_envelope": first_round_envelope,
-        "first_round_adapter_calls": first_round_adapter_calls,
-        "source_definition_version_after_first": (
-            source_definition_version_after_first
-        ),
-    }
+    context = _CredentialSnapshotContext.create()
+    try:
+        adapter_call_counts = _snapshot_adapter_call_counts(
+            adapter_calls,
+            location="actual.assertion_inputs",
+        )
+        first_round_adapter_call_counts = (
+            _snapshot_adapter_call_counts(
+                first_round_adapter_calls,
+                location="actual.assertion_inputs",
+            )
+            if first_round_adapter_calls is not None
+            else None
+        )
+        raw_actual_inputs = {
+            "adapter_calls": adapter_call_counts,
+            "adapter_arguments": adapter_arguments,
+            "policy_calls": policy_calls,
+            "workflow_events": workflow_events,
+            "first_round_envelope": first_round_envelope,
+            "first_round_adapter_calls": first_round_adapter_call_counts,
+            "source_definition_version_after_first": (
+                source_definition_version_after_first
+            ),
+        }
+        envelope_snapshot = context.snapshot_root(
+            envelope,
+            location="actual.envelope",
+        )
+        trace_snapshot = context.snapshot_root(
+            trace_steps,
+            location="actual.trace",
+        )
+        actual_inputs = context.snapshot_root(
+            raw_actual_inputs,
+            location="actual.assertion_inputs",
+        )
+        expected_inputs = context.snapshot_root(
+            raw_expected_inputs,
+            location="fixture.expectations",
+        )
+        if not isinstance(trace_snapshot, list):
+            _raise_credential_failure("snapshot_error", "actual.trace")
+        if not isinstance(actual_inputs["workflow_events"], list):
+            _raise_credential_failure("snapshot_error", "actual.assertion_inputs")
+        if not isinstance(expected_inputs["then_forbidden"], list):
+            _raise_credential_failure("snapshot_error", "fixture.expectations")
+    except _CredentialSnapshotFailure as exc:
+        return AssertionJudgement(status="failed", reasons=[str(exc)])
+
     _capture_failure(
         reasons,
         _assert_judgement_credentials_absent,
-        envelope,
-        trace_steps,
-        actual_credential_inputs,
-        expected_credential_inputs,
+        envelope_snapshot,
+        trace_snapshot,
+        actual_inputs,
+        expected_inputs,
     )
     if reasons:
         return AssertionJudgement(status="failed", reasons=reasons)
 
-    _capture_failure(reasons, assert_response_matches, envelope, expected_response)
+    snapshot_expected_response = expected_inputs["then_response"]
+    snapshot_expected_trace = expected_inputs["then_trace"]
+
+    _capture_failure(
+        reasons,
+        assert_response_matches,
+        envelope_snapshot,
+        snapshot_expected_response,
+    )
     _capture_failure(
         reasons,
         assert_trace_sequence_contains,
-        trace_steps,
-        _as_list(expected_trace.get("event_sequence")),
+        trace_snapshot,
+        _as_list(snapshot_expected_trace.get("event_sequence")),
     )
     _capture_failure(
         reasons,
         assert_trace_event_details,
-        trace_steps,
-        cast(Iterable[Mapping[str, Any]], _as_list(expected_trace.get("event_details"))),
+        trace_snapshot,
+        _as_list(snapshot_expected_trace.get("event_details")),
     )
-    terminal_state = _terminal_state(expected_response, expected_trace)
-    _capture_failure(reasons, assert_terminal_state_matrix, trace_steps, terminal_state)
+    terminal_state = _terminal_state(
+        snapshot_expected_response,
+        snapshot_expected_trace,
+    )
     _capture_failure(
         reasons,
-        assert_forbidden_absent,
-        tuple(item for item in forbidden_items if item != "trace_contains_token"),
-        envelope,
-        trace_steps,
-        adapter_calls,
+        assert_terminal_state_matrix,
+        trace_snapshot,
+        terminal_state,
+    )
+    _capture_failure(
+        reasons,
+        _assert_forbidden_absent_snapshot,
+        tuple(
+            item
+            for item in expected_inputs["then_forbidden"]
+            if item != "trace_contains_token"
+        ),
+        envelope_snapshot,
+        trace_snapshot,
+        actual_inputs["adapter_calls"],
     )
     _capture_failure(
         reasons,
         assert_adapter_calls,
-        adapter_assertion,
-        adapter_calls,
-        adapter_arguments,
+        expected_inputs["adapter_assertion"],
+        actual_inputs["adapter_calls"],
+        actual_inputs["adapter_arguments"],
     )
-    if policy_assertion is not None:
+    if expected_inputs["policy_assertion"] is not None:
         _capture_failure(
             reasons,
             assert_policy_calls,
-            policy_assertion,
-            policy_calls,
+            expected_inputs["policy_assertion"],
+            actual_inputs["policy_calls"],
         )
-    if workflow_assertion is not None:
+    if expected_inputs["then_workflow"] is not None:
         _capture_failure(
             reasons,
             assert_workflow_evidence,
-            workflow_events,
-            workflow_assertion,
-            first_round_envelope,
-            first_round_adapter_calls,
-            source_definition_version_after_first,
+            actual_inputs["workflow_events"],
+            expected_inputs["then_workflow"],
+            actual_inputs["first_round_envelope"],
+            actual_inputs["first_round_adapter_calls"],
+            actual_inputs["source_definition_version_after_first"],
+        )
+    if expected_inputs["expected_observed_error_code"] is not None:
+        _capture_failure(
+            reasons,
+            _assert_expected_error_code_observed,
+            envelope_snapshot,
+            trace_snapshot,
+            expected_inputs["expected_observed_error_code"],
         )
     return AssertionJudgement(
         status="failed" if reasons else "passed",
@@ -651,10 +940,6 @@ def _capture_failure(
         assertion(*args)
     except AssertionError as exc:
         reasons.append(str(exc))
-
-
-def is_credential_failure_reason(reason: str) -> bool:
-    return reason.startswith(_CREDENTIAL_FAILURE_PREFIX)
 
 
 def _terminal_state(
@@ -810,10 +1095,6 @@ def _assert_no_credential_values(
         if depth > _MAX_CREDENTIAL_SCAN_DEPTH:
             _raise_credential_failure("scan_depth_limit", location)
 
-        model_dump = getattr(current, "model_dump", None)
-        if callable(model_dump):
-            current = model_dump()
-
         if isinstance(current, str):
             if not chars_counted:
                 total_chars_seen = _account_credential_scan_chars(
@@ -917,6 +1198,30 @@ def _assert_judgement_credentials_absent(
     )
 
 
+def _assert_expected_error_code_observed(
+    envelope: Any,
+    trace_steps: Iterable[Any],
+    expected_error_code: str,
+) -> None:
+    observed = set(_iter_error_codes(envelope))
+    for step in trace_steps:
+        observed.update(_iter_error_codes(step))
+    if expected_error_code not in observed:
+        raise AssertionError("expected injected error_code not observed")
+
+
+def _iter_error_codes(value: Any) -> Iterable[str]:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if key == "error_code" and isinstance(item, str):
+                yield item
+            else:
+                yield from _iter_error_codes(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_error_codes(item)
+
+
 def _credential_text_rule(value: str) -> str | None:
     for rule_name, pattern in _NON_COOKIE_CREDENTIAL_PATTERNS[:2]:
         if pattern.search(value):
@@ -1005,9 +1310,9 @@ def _is_non_empty_credential_scalar(value: Any) -> bool:
         return value != ""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return len(value) > 0
-    if isinstance(value, (_PreservedJsonObjectPairs, Iterable)):
+    if isinstance(value, (_PreservedJsonObjectPairs, Mapping, list, tuple)):
         return False
-    return not callable(getattr(value, "model_dump", None))
+    return True
 
 
 def _assert_serialized_json_bounds(
@@ -1063,9 +1368,9 @@ def _raise_credential_failure(
     rule_name: str,
     location: _CredentialLocation,
 ) -> None:
-    raise AssertionError(
+    raise _CredentialSnapshotFailure(
         f"{_CREDENTIAL_FAILURE_PREFIX}rule={rule_name}; location={location}"
-    )
+    ) from None
 
 
 def _assert_no_internal_urls(values: Iterable[str]) -> None:
@@ -1076,6 +1381,42 @@ def _assert_no_internal_urls(values: Iterable[str]) -> None:
 
 def _contains_tokenish_value(values: Iterable[str], needle: str) -> bool:
     return any(needle in value for value in values)
+
+
+def _snapshot_adapter_call_counts(
+    adapter_calls: Mapping[str, Any],
+    *,
+    location: _CredentialLocation,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    total_chars_seen = 0
+    entries_seen = 0
+    try:
+        for key, value in adapter_calls.items():
+            entries_seen += 1
+            if entries_seen > _MAX_CREDENTIAL_SCAN_NODES:
+                _raise_credential_failure("scan_node_limit", location)
+            if type(key) is not str:
+                _raise_credential_failure("snapshot_error", location)
+            total_chars_seen = _account_credential_scan_chars(
+                key,
+                total_chars_seen,
+                location,
+            )
+            if type(value) is int:
+                counts[key] = value
+                continue
+            call_count = getattr(value, "call_count", None)
+            counts[key] = (
+                call_count
+                if type(call_count) is int
+                else 0
+            )
+    except _CredentialSnapshotFailure:
+        raise
+    except Exception:
+        _raise_credential_failure("snapshot_error", location)
+    return counts
 
 
 def _adapter_call_count(adapter_calls: Mapping[str, Any], adapter_name: str) -> int:
@@ -1131,6 +1472,5 @@ __all__ = (
     "assert_trace_event_details",
     "assert_trace_sequence_contains",
     "assert_workflow_evidence",
-    "is_credential_failure_reason",
     "judge_assertions",
 )
