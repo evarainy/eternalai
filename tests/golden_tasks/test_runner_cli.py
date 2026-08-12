@@ -54,7 +54,7 @@ class _DynamicDump:
         *,
         first: Any = None,
         later: Any = None,
-        error: Exception | None = None,
+        error: BaseException | None = None,
     ) -> None:
         self.first = first
         self.later = later
@@ -229,3 +229,59 @@ def test_cli_dynamic_model_is_evaluated_once_without_canary_echo(
     if error is not None:
         assert error.str_calls == 0
         assert error.repr_calls == 0
+
+
+def test_cli_isolates_model_dump_system_exit_without_canary_echo(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    marker = hashlib.sha256(b"cli-model-dump-system-exit").hexdigest()
+    model = _DynamicDump(error=SystemExit(marker))
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": model},
+    }
+
+    def evaluate() -> list[GoldenTaskResult]:
+        judgement = judge_assertions(
+            envelope=envelope,
+            expected_response={"status": "completed"},
+            trace_steps=[],
+            expected_trace={"event_sequence": []},
+            forbidden_items=[],
+            adapter_assertion={
+                "must_be_called": False,
+                "must_not_be_called": False,
+            },
+            adapter_calls={},
+        )
+        return [
+            GoldenTaskResult(
+                golden_task_id="GT-SYNTHETIC-CLI-SYSTEM-EXIT",
+                category="negative",
+                status=judgement.status,
+                reasons=judgement.reasons,
+            )
+        ]
+
+    monkeypatch.setattr(
+        run_golden_tasks,
+        "_load_runner",
+        lambda: (evaluate, build_summary),
+    )
+
+    exit_code = run_golden_tasks.main(["--gate"])
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert summary["results"][0]["reasons"] == [
+        "forbidden credential pattern detected: "
+        "rule=model_dump_error; location=actual.envelope"
+    ]
+    assert model.call_count == 1
+    assert marker not in repr(summary)
+    assert marker not in captured.out
+    assert marker not in captured.err

@@ -1143,6 +1143,54 @@ def test_model_dump_alias_is_materialized_once_but_each_edge_is_reclassified() -
     assert marker not in repr(result.reasons)
 
 
+def test_mapping_model_dump_projection_cannot_hide_sensitive_exact_key() -> None:
+    marker = _synthetic_credential_value("mapping-model-dump-hybrid")
+
+    class MappingDumpHybrid(Mapping[str, Any]):
+        def __init__(self) -> None:
+            self.dump_calls = 0
+            self.values = {"password": marker}
+
+        def __getitem__(self, key: str) -> Any:
+            return self.values[key]
+
+        def __iter__(self) -> Iterable[str]:
+            return iter(self.values)
+
+        def __len__(self) -> int:
+            return len(self.values)
+
+        def model_dump(self) -> dict[str, str]:
+            self.dump_calls += 1
+            return {"ordinary": "safe projection"}
+
+    hybrid = MappingDumpHybrid()
+
+    result = judge_assertions(
+        envelope={
+            "status": "completed",
+            "message": "操作完成",
+            "ui": {"component_type": "none", "action": "none"},
+            "data": hybrid,
+        },
+        expected_response={"status": "completed"},
+        trace_steps=[],
+        expected_trace={"event_sequence": []},
+        forbidden_items=[],
+        adapter_assertion={"must_be_called": False, "must_not_be_called": False},
+        adapter_calls={},
+    )
+
+    assert result.status == "failed"
+    assert result.reasons == [
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    ]
+    assert hybrid.dump_calls == 0
+    assert marker not in str(result.reasons)
+    assert marker not in repr(result.reasons)
+
+
 @pytest.mark.parametrize(
     ("boundary_kind", "expected_rule"),
     (

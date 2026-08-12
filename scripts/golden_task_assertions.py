@@ -132,22 +132,23 @@ class _CredentialSnapshotContext:
             )
 
         try:
-            model_dump = getattr(value, "model_dump", None)
-        except Exception:
-            _raise_credential_failure("model_dump_error", location)
-        if callable(model_dump):
-            try:
-                dumped = model_dump()
-            except Exception:
-                _raise_credential_failure("model_dump_error", location)
-            return self.snapshot(dumped, location=location, depth=depth + 1)
-
-        try:
             mapping_like = isinstance(value, Mapping)
         except Exception:
             _raise_credential_failure("snapshot_error", location)
         if mapping_like:
             return self._snapshot_mapping(value, location=location, depth=depth)
+
+        try:
+            model_dump = getattr(value, "model_dump", None)
+        except BaseException:
+            _raise_credential_failure("model_dump_error", location)
+        if callable(model_dump):
+            try:
+                dumped = model_dump()
+            except BaseException:
+                _raise_credential_failure("model_dump_error", location)
+            return self.snapshot(dumped, location=location, depth=depth + 1)
+
         if isinstance(value, list):
             return [
                 self.snapshot(item, location=location, depth=depth + 1)
@@ -169,17 +170,12 @@ class _CredentialSnapshotContext:
         depth: int,
     ) -> dict[Any, Any]:
         result: dict[Any, Any] = {}
-        try:
-            for key, item in value.items():
-                result[self._snapshot_key(key, location=location)] = self.snapshot(
-                    item,
-                    location=location,
-                    depth=depth + 1,
-                )
-        except _CredentialSnapshotFailure:
-            raise
-        except Exception:
-            _raise_credential_failure("snapshot_error", location)
+        for key, item in _iter_mapping_items(value, location=location):
+            result[self._snapshot_key(key, location=location)] = self.snapshot(
+                item,
+                location=location,
+                depth=depth + 1,
+            )
         return result
 
     def _snapshot_key(
@@ -1373,6 +1369,32 @@ def _raise_credential_failure(
     ) from None
 
 
+def _iter_mapping_items(
+    value: Mapping[Any, Any],
+    *,
+    location: _CredentialLocation,
+) -> Iterable[tuple[Any, Any]]:
+    try:
+        iterator = iter(value.items())
+    except BaseException:
+        _raise_credential_failure("snapshot_error", location)
+        return
+    while True:
+        try:
+            pair = next(iterator)
+        except StopIteration:
+            return
+        except BaseException:
+            _raise_credential_failure("snapshot_error", location)
+            return
+        try:
+            key, item = pair
+        except BaseException:
+            _raise_credential_failure("snapshot_error", location)
+            return
+        yield key, item
+
+
 def _assert_no_internal_urls(values: Iterable[str]) -> None:
     for value in values:
         if _INTERNAL_URL_PATTERN.search(value):
@@ -1391,31 +1413,25 @@ def _snapshot_adapter_call_counts(
     counts: dict[str, int] = {}
     total_chars_seen = 0
     entries_seen = 0
-    try:
-        for key, value in adapter_calls.items():
-            entries_seen += 1
-            if entries_seen > _MAX_CREDENTIAL_SCAN_NODES:
-                _raise_credential_failure("scan_node_limit", location)
-            if type(key) is not str:
-                _raise_credential_failure("snapshot_error", location)
-            total_chars_seen = _account_credential_scan_chars(
-                key,
-                total_chars_seen,
-                location,
-            )
-            if type(value) is int:
-                counts[key] = value
-                continue
+    for key, value in _iter_mapping_items(adapter_calls, location=location):
+        entries_seen += 1
+        if entries_seen > _MAX_CREDENTIAL_SCAN_NODES:
+            _raise_credential_failure("scan_node_limit", location)
+        if type(key) is not str:
+            _raise_credential_failure("snapshot_error", location)
+        total_chars_seen = _account_credential_scan_chars(
+            key,
+            total_chars_seen,
+            location,
+        )
+        if type(value) is int:
+            counts[key] = value
+            continue
+        try:
             call_count = getattr(value, "call_count", None)
-            counts[key] = (
-                call_count
-                if type(call_count) is int
-                else 0
-            )
-    except _CredentialSnapshotFailure:
-        raise
-    except Exception:
-        _raise_credential_failure("snapshot_error", location)
+        except BaseException:
+            _raise_credential_failure("snapshot_error", location)
+        counts[key] = call_count if type(call_count) is int else 0
     return counts
 
 
