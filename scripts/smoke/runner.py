@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeAlias
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
@@ -81,6 +81,7 @@ from scripts.smoke.full_chain_contract import (
     CapabilityFullChainOutcome,
     FullChainFailure,
     FullChainOutcome,
+    FullChainRuntimeErrorCode,
 )
 from scripts.smoke.har import (
     extract_message_center_contract,
@@ -250,6 +251,11 @@ _SMOKE_ENV_REPAIR_ERROR_CODES = frozenset(
         "smoke_pending_workflows_contract_pack_stale",
     }
 )
+FullChainCapabilityFailure: TypeAlias = tuple[
+    str,
+    str,
+    FullChainRuntimeErrorCode | None,
+]
 
 
 class _NoEchoParser(argparse.ArgumentParser):
@@ -277,7 +283,7 @@ class RehearsalResult:
     sha_matches: bool
     replay_composition_ok: bool
     drift: OAStructuralDriftReport
-    replay_composition_failures: tuple[tuple[str, str], ...] = ()
+    replay_composition_failures: tuple[FullChainCapabilityFailure, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +302,13 @@ class CapabilityRegistryPreflight:
     unexpected_active_count: int
     active_total_count: int
     visible_probe_count: int
+
+
+class _FullChainSubprocessFailure(SmokeError):
+    def __init__(self, failure: FullChainFailure) -> None:
+        super().__init__(failure.error_code)
+        self.failure = failure
+        self.runtime_error_code = failure.runtime_error_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -527,7 +540,7 @@ def _run_rehearsal(
     nodes = generated.get("nodes")
     node_count = len(nodes) if isinstance(nodes, list) else -1
 
-    replay_failures: list[tuple[str, str]] = []
+    replay_failures: list[FullChainCapabilityFailure] = []
     for capability_id, profile in (
         ("oa.list_pending_workflows", _PENDING_CAPTURE_PROFILE),
         ("oa.list_system_messages", _SYSTEM_PROFILE),
@@ -542,13 +555,13 @@ def _run_rehearsal(
                 "PHASE0_MOCK_MODE": "false",
             }
         )
-        failure_reason = _check_replay_composition(
+        failure = _check_replay_composition(
             layout.repo_root,
             replay_environment,
             capability_id=capability_id,
         )
-        if failure_reason is not None:
-            replay_failures.append((capability_id, failure_reason))
+        if failure is not None:
+            replay_failures.append((capability_id, *failure))
     replay_ok = not replay_failures
     return RehearsalResult(
         node_count=node_count,
@@ -567,7 +580,7 @@ def _check_replay_composition(
     environment: dict[str, str],
     *,
     capability_id: str,
-) -> str | None:
+) -> tuple[str, FullChainRuntimeErrorCode | None] | None:
     try:
         outcome = _run_full_chain_subprocess(
             repo_root=repo_root,
@@ -576,18 +589,32 @@ def _check_replay_composition(
             password=_REPLAY_FULL_CHAIN_PASSWORD,
             expected_capability_ids=(capability_id,),
         )
+    except _FullChainSubprocessFailure as error:
+        return error.code, error.runtime_error_code
     except SmokeError as error:
-        return _known_full_chain_failure_code(error.code)
-    return outcome.failure_code(expected_capability_ids=(capability_id,))
+        return _known_full_chain_failure_code(error.code), None
+    failure_code = outcome.failure_code(expected_capability_ids=(capability_id,))
+    if failure_code is None:
+        return None
+    return failure_code, (
+        "runtime_error_unavailable"
+        if failure_code == "runtime_execution_failed"
+        else None
+    )
 
 
 def _print_capability_failures(
     prefix: str,
-    failures: tuple[tuple[str, str], ...],
+    failures: tuple[FullChainCapabilityFailure, ...],
 ) -> None:
-    for capability_id, reason in failures:
+    for capability_id, reason, runtime_error_code in failures:
         print(f"{prefix}_failure_capability={capability_id}")
         print(f"{prefix}_failure_reason={reason}")
+        if runtime_error_code is not None:
+            print(
+                f"{prefix}_failure_runtime_error_code="
+                f"{runtime_error_code}"
+            )
 
 
 def _known_full_chain_failure_code(code: str) -> str:
@@ -1557,9 +1584,9 @@ def _run_full_chain_capability_checks(
     environment: dict[str, str],
     account: str,
     password: str,
-) -> tuple[FullChainOutcome, tuple[tuple[str, str], ...]]:
+) -> tuple[FullChainOutcome, tuple[FullChainCapabilityFailure, ...]]:
     capability_outcomes: list[CapabilityFullChainOutcome] = []
-    failures: list[tuple[str, str]] = []
+    failures: list[FullChainCapabilityFailure] = []
     for capability_id in REQUIRED_ACTIVE_OA_CAPABILITY_IDS:
         try:
             outcome = _run_full_chain_subprocess(
@@ -1569,11 +1596,21 @@ def _run_full_chain_capability_checks(
                 password=password,
                 expected_capability_ids=(capability_id,),
             )
+        except _FullChainSubprocessFailure as error:
+            failures.append(
+                (
+                    capability_id,
+                    error.code,
+                    error.runtime_error_code,
+                )
+            )
+            continue
         except SmokeError as error:
             failures.append(
                 (
                     capability_id,
                     _known_full_chain_failure_code(error.code),
+                    None,
                 )
             )
             continue
@@ -1581,7 +1618,17 @@ def _run_full_chain_capability_checks(
             expected_capability_ids=(capability_id,)
         )
         if failure_reason is not None:
-            failures.append((capability_id, failure_reason))
+            failures.append(
+                (
+                    capability_id,
+                    failure_reason,
+                    (
+                        "runtime_error_unavailable"
+                        if failure_reason == "runtime_execution_failed"
+                        else None
+                    ),
+                )
+            )
             continue
         capability_outcomes.extend(outcome.capabilities)
     return (
@@ -1614,55 +1661,101 @@ def _command_verify(
     if not reachable:
         raise SmokeError("oa_unreachable")
     account, password = _prompt_credentials()
+    provider_checks_attempted = False
+    provider_checks_completed = False
     try:
-        full_chain, full_chain_failures = _run_full_chain_capability_checks(
-            repo_root=layout.repo_root,
-            environment=environment,
-            account=account,
-            password=password,
-        )
-        if full_chain_failures:
-            print(f"full_chain_capabilities={len(full_chain.capabilities)}")
-            print("full_chain_verification=failed")
-            _print_capability_failures("full_chain", full_chain_failures)
-            _print_stop_instruction()
-            return 1
-        system, pending = _run_persisted_provider_checks_with_supported_loop(
-            settings,
-            account=account,
-        )
+        try:
+            full_chain, full_chain_failures = _run_full_chain_capability_checks(
+                repo_root=layout.repo_root,
+                environment=environment,
+                account=account,
+                password=password,
+            )
+        finally:
+            password = ""
+        system: LiveOutcome | None = None
+        pending: LiveOutcome | None = None
+        try:
+            provider_checks_attempted = True
+            system, pending = _run_persisted_provider_checks_with_supported_loop(
+                settings,
+                account=account,
+            )
+            provider_checks_completed = True
+        except Exception:
+            if not full_chain_failures:
+                raise
     finally:
         account = ""
         password = ""
     capture_created = False
+    capture_failed = False
     if har_directory is not None:
-        _build_optional_pending_capture(
-            layout,
-            har_directory,
-            resolved_timestamp,
-        )
-        capture_created = True
+        try:
+            _build_optional_pending_capture(
+                layout,
+                har_directory,
+                resolved_timestamp,
+            )
+            capture_created = True
+        except Exception:
+            if not full_chain_failures:
+                raise
+            capture_failed = True
     report_path = layout.scratch / f"smoke_result_{resolved_timestamp}.md"
-    report_text = _build_report(
-        system,
-        pending,
-        full_chain,
-        capture_created=capture_created,
-    )
+    if system is not None and pending is not None:
+        report_text = _build_report(
+            system,
+            pending,
+            full_chain,
+            capture_created=capture_created,
+            full_chain_failures=full_chain_failures,
+            provider_checks_attempted=provider_checks_attempted,
+            provider_checks_completed=provider_checks_completed,
+            capture_requested=har_directory is not None,
+            capture_failed=capture_failed,
+        )
+    else:
+        report_text = _build_degraded_report(
+            full_chain,
+            full_chain_failures=full_chain_failures,
+            provider_checks_attempted=provider_checks_attempted,
+            capture_requested=har_directory is not None,
+            capture_created=capture_created,
+            capture_failed=capture_failed,
+        )
     _assert_report_safe(report_text, environment)
     try:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report_text, encoding="utf-8", newline="\n")
     except OSError:
         raise SmokeError("report_write_failed") from None
-    print(f"system_messages_drift={_drift_state(system)}")
-    print(f"pending_workflows_drift={_drift_state(pending)}")
-    _print_drift_nodes("system_messages", system.drift)
-    _print_drift_nodes("pending_workflows", pending.drift)
-    if system.protocol.http_status_code is not None:
-        print(f"system_messages_http_status={system.protocol.http_status_code}")
-    if pending.protocol.http_status_code is not None:
-        print(f"pending_workflows_http_status={pending.protocol.http_status_code}")
+    if system is not None and pending is not None:
+        print(f"system_messages_drift={_drift_state(system)}")
+        print(f"pending_workflows_drift={_drift_state(pending)}")
+        _print_drift_nodes("system_messages", system.drift)
+        _print_drift_nodes("pending_workflows", pending.drift)
+        if system.protocol.http_status_code is not None:
+            print(f"system_messages_http_status={system.protocol.http_status_code}")
+        if pending.protocol.http_status_code is not None:
+            print(f"pending_workflows_http_status={pending.protocol.http_status_code}")
+    elif full_chain_failures:
+        print("provider_verification=failed")
+        print("provider_verification_reason=provider_checks_failed")
+    if full_chain_failures:
+        run_count = len(full_chain.capabilities) + len(full_chain_failures)
+        print(f"full_chain_capabilities_run={run_count}")
+        print(f"full_chain_capabilities_passed={len(full_chain.capabilities)}")
+        print(f"full_chain_capabilities_failed={len(full_chain_failures)}")
+        print("full_chain_verification=failed")
+        _print_capability_failures("full_chain", full_chain_failures)
+        print(f"report={report_path.name}")
+        if capture_created:
+            print(f"pending_capture={_PENDING_CAPTURE_PROFILE}")
+        elif capture_failed:
+            print("pending_capture=failed")
+        _print_stop_instruction()
+        return 1
     print(f"full_chain_capabilities={len(full_chain.capabilities)}")
     print(f"full_chain_verification={_passed(full_chain.passed())}")
     print(f"report={report_path.name}")
@@ -1829,6 +1922,7 @@ def _run_full_chain_subprocess(
     ),
 ) -> FullChainOutcome:
     failure_code = "unknown_error"
+    structured_failure: FullChainFailure | None = None
     try:
         return _invoke_full_chain_subprocess(
             repo_root=repo_root,
@@ -1837,6 +1931,8 @@ def _run_full_chain_subprocess(
             password=password,
             expected_capability_ids=expected_capability_ids,
         )
+    except _FullChainSubprocessFailure as error:
+        structured_failure = error.failure
     except SmokeError as error:
         if error.code in _FULL_CHAIN_SUBPROCESS_ERROR_CODES:
             failure_code = error.code
@@ -1844,6 +1940,8 @@ def _run_full_chain_subprocess(
         failure_code = "unknown_error"
     finally:
         del repo_root, environment, account, password, expected_capability_ids
+    if structured_failure is not None:
+        raise _FullChainSubprocessFailure(structured_failure) from None
     raise SmokeError(failure_code) from None
 
 
@@ -1927,7 +2025,7 @@ def _invoke_full_chain_subprocess(
                 failure = FullChainFailure.model_validate_json(output, strict=True)
             except (UnicodeError, ValueError, ValidationError):
                 raise SmokeError("full_chain_output_invalid") from None
-            raise SmokeError(failure.error_code)
+            raise _FullChainSubprocessFailure(failure)
         try:
             outcome = FullChainOutcome.model_validate_json(output, strict=True)
         except (UnicodeError, ValueError, ValidationError):
@@ -2328,6 +2426,11 @@ def _build_report(
     full_chain: FullChainOutcome,
     *,
     capture_created: bool,
+    full_chain_failures: tuple[FullChainCapabilityFailure, ...] = (),
+    provider_checks_attempted: bool = True,
+    provider_checks_completed: bool = True,
+    capture_requested: bool = False,
+    capture_failed: bool = False,
 ) -> str:
     structures_match, added, removed, changed = compare_record_structures(
         system.protocol,
@@ -2336,19 +2439,35 @@ def _build_report(
     safe_added = _safe_protocol_field_names(added)
     safe_removed = _safe_protocol_field_names(removed)
     safe_changed = _safe_protocol_field_names(changed)
-    full_chain_envelopes_complete = all(
+    full_chain_envelopes_complete = not full_chain_failures and all(
         item.successful_envelope is True for item in full_chain.capabilities
     )
-    full_chain_traces_complete = all(
+    full_chain_traces_complete = not full_chain_failures and all(
         item.trace_events_complete is True for item in full_chain.capabilities
     )
+    full_chain_run_count = len(full_chain.capabilities) + len(full_chain_failures)
+    if full_chain_failures:
+        capture_state = _capture_execution_state(
+            capture_requested,
+            capture_created,
+            capture_failed,
+        )
+    else:
+        capture_state = "已生成" if capture_created else "未请求"
     lines = [
         "# P2-SMOKE-E2E-CHAIN-001 全链与 Provider 协议报告",
         "",
         "## 结论",
         "",
-        f"- 完整运行时链路：{_passed(full_chain.passed())}",
-        f"- 全链自然语言请求数：{len(full_chain.capabilities)}",
+        (
+            "- 完整运行时链路："
+            f"{_passed(not full_chain_failures and full_chain.passed())}"
+        ),
+        (
+            f"- 全链自然语言请求数：{full_chain_run_count}"
+            if full_chain_failures
+            else f"- 全链自然语言请求数：{len(full_chain.capabilities)}"
+        ),
         (
             "- 全链响应信封全部完成："
             f"{_yes_no(full_chain_envelopes_complete)}"
@@ -2370,7 +2489,16 @@ def _build_report(
         ),
         (
             f"- 现场待办脱敏包（{_PENDING_CAPTURE_PROFILE}）："
-            f"{'已生成' if capture_created else '未请求'}"
+            f"{capture_state}"
+        ),
+        *_full_chain_failure_report_lines(
+            full_chain,
+            full_chain_failures=full_chain_failures,
+            provider_checks_attempted=provider_checks_attempted,
+            provider_checks_completed=provider_checks_completed,
+            capture_requested=capture_requested,
+            capture_created=capture_created,
+            capture_failed=capture_failed,
         ),
         "",
         "## 系统消息 Live 指纹",
@@ -2432,6 +2560,107 @@ def _build_report(
             "4. 任一命令失败就马上停止；保留屏幕上的错误和已经生成的报告，"
             "不要自行改文件，也不要切换运行模式。"
         ),
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _full_chain_failure_report_lines(
+    full_chain: FullChainOutcome,
+    *,
+    full_chain_failures: tuple[FullChainCapabilityFailure, ...],
+    provider_checks_attempted: bool,
+    provider_checks_completed: bool,
+    capture_requested: bool,
+    capture_created: bool,
+    capture_failed: bool,
+) -> list[str]:
+    if not full_chain_failures:
+        return []
+    lines = [
+        "",
+        "## 全链失败诊断",
+        "",
+        (
+            "- 全链运行数："
+            f"{len(full_chain.capabilities) + len(full_chain_failures)}"
+        ),
+        f"- 全链通过数：{len(full_chain.capabilities)}",
+        f"- 全链失败数：{len(full_chain_failures)}",
+        "- Provider 指纹比对："
+        f"{_provider_execution_state(provider_checks_attempted, provider_checks_completed)}",
+        (
+            "- 现场待办脱敏包："
+            f"{_capture_execution_state(capture_requested, capture_created, capture_failed)}"
+        ),
+    ]
+    for capability_id, reason, runtime_error_code in full_chain_failures:
+        lines.append(f"- 全链失败能力 {capability_id}：{reason}")
+        if runtime_error_code is not None:
+            lines.append(
+                f"full_chain_failure_runtime_error_code={runtime_error_code}"
+            )
+    return lines
+
+
+def _capture_execution_state(
+    requested: bool,
+    created: bool,
+    failed: bool,
+) -> str:
+    if created:
+        return "已生成"
+    if failed:
+        return "执行失败"
+    if requested:
+        return "已请求但未生成"
+    return "未请求"
+
+
+def _provider_execution_state(attempted: bool, completed: bool) -> str:
+    if completed:
+        return "已完成"
+    if attempted:
+        return "已执行但失败"
+    return "未执行"
+
+
+def _build_degraded_report(
+    full_chain: FullChainOutcome,
+    *,
+    full_chain_failures: tuple[FullChainCapabilityFailure, ...],
+    provider_checks_attempted: bool,
+    capture_requested: bool,
+    capture_created: bool,
+    capture_failed: bool,
+) -> str:
+    lines = [
+        "# P2-SMOKE-E2E-CHAIN-001 全链与 Provider 协议报告",
+        "",
+        "## 结论",
+        "",
+        "- 完整运行时链路：failed",
+        "- Provider 指纹比对："
+        f"{_provider_execution_state(provider_checks_attempted, False)}",
+        "provider_verification_reason=provider_checks_failed",
+        (
+            "- 现场待办脱敏包："
+            f"{_capture_execution_state(capture_requested, capture_created, capture_failed)}"
+        ),
+        *_full_chain_failure_report_lines(
+            full_chain,
+            full_chain_failures=full_chain_failures,
+            provider_checks_attempted=provider_checks_attempted,
+            provider_checks_completed=False,
+            capture_requested=capture_requested,
+            capture_created=capture_created,
+            capture_failed=capture_failed,
+        ),
+        "",
+        "## Provider 证据状态",
+        "",
+        "- 系统消息 Live 指纹：未取得结果，Provider 检查自身失败。",
+        "- 待办 Live 指纹：未取得结果，Provider 检查自身失败。",
+        "- 报告泄漏守卫：本报告写入前执行。",
     ]
     return "\n".join(lines) + "\n"
 
