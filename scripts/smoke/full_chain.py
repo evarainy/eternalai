@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import sys
 from collections.abc import Sequence
 from typing import Any, cast
@@ -41,15 +42,25 @@ from scripts.smoke.capabilities import (
     REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
 )
 from scripts.smoke.full_chain_contract import (
+    FULL_CHAIN_FAILURE_SCHEMA_VERSION,
+    FULL_CHAIN_RUNTIME_ERROR_CODES,
     FULL_CHAIN_SCHEMA_VERSION,
     CapabilityFullChainOutcome,
     FullChainFailure,
     FullChainFailureCode,
     FullChainOutcome,
+    FullChainRuntimeErrorCode,
 )
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
 _MAX_CREDENTIAL_INPUT_BYTES = 16_384
+_RUNTIME_ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_RUNTIME_ERROR_UNAVAILABLE: FullChainRuntimeErrorCode = (
+    "runtime_error_unavailable"
+)
+_KNOWN_RUNTIME_ERROR_CODES = FULL_CHAIN_RUNTIME_ERROR_CODES - {
+    _RUNTIME_ERROR_UNAVAILABLE
+}
 _DEFAULT_PROBES = tuple(
     zip(
         OA_CAPABILITY_CONTEXT_PROBES,
@@ -69,9 +80,19 @@ _REPLAY_COOKIES = {
 
 
 class _FullChainCheckError(RuntimeError):
-    def __init__(self, code: FullChainFailureCode) -> None:
+    def __init__(
+        self,
+        code: FullChainFailureCode,
+        *,
+        runtime_error_code: FullChainRuntimeErrorCode | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
+        self.runtime_error_code = (
+            runtime_error_code or _RUNTIME_ERROR_UNAVAILABLE
+            if code == "runtime_execution_failed"
+            else None
+        )
 
 
 class _ReplayOAHttpSession:
@@ -292,14 +313,27 @@ async def _run_capability_probe(
     try:
         envelope = ResponseEnvelope.model_validate(response.json(), strict=True)
     except (ValueError, ValidationError):
-        raise _FullChainCheckError("envelope_invalid") from None
+        raise _FullChainCheckError("envelope_parse_failed") from None
 
-    normalized_data = False
+    if envelope.status != "completed":
+        try:
+            trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
+            runtime_error_code = _runtime_error_code_from_terminal_trace(
+                trace_events,
+                envelope=envelope,
+                capability_id=capability_id,
+            )
+        except Exception:
+            runtime_error_code = _RUNTIME_ERROR_UNAVAILABLE
+        raise _FullChainCheckError(
+            "runtime_execution_failed",
+            runtime_error_code=runtime_error_code,
+        )
+
     try:
         _OUTPUT_MODELS[capability_id].model_validate(envelope.data, strict=True)
-        normalized_data = True
     except (KeyError, ValidationError):
-        normalized_data = False
+        raise _FullChainCheckError("capability_output_invalid") from None
 
     try:
         trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
@@ -311,14 +345,41 @@ async def _run_capability_probe(
         }
         return CapabilityFullChainOutcome(
             capability_id=capability_id,
-            successful_envelope=envelope.status == "completed",
-            normalized_data=normalized_data,
+            successful_envelope=True,
+            normalized_data=True,
             selected_capability=selected_capability_ids == {capability_id},
             trace_events_complete=REQUIRED_TRACE_EVENTS <= event_types,
             observed_trace_event_count=len(event_types),
         )
     except Exception:
         raise _FullChainCheckError("trace_incomplete") from None
+
+
+def _runtime_error_code_from_terminal_trace(
+    trace_events: list[Any],
+    *,
+    envelope: ResponseEnvelope,
+    capability_id: str,
+) -> FullChainRuntimeErrorCode:
+    terminal_events = [
+        event
+        for event in trace_events
+        if getattr(event, "event_type", None) == "task_failed"
+        and getattr(event, "status", None) == "failed"
+        and getattr(event, "task_id", None) == envelope.task_id
+        and getattr(event, "session_id", None) == envelope.session_id
+        and getattr(event, "capability_id", None) == capability_id
+    ]
+    if len(terminal_events) != 1:
+        return _RUNTIME_ERROR_UNAVAILABLE
+    candidate = getattr(terminal_events[0], "error_code", None)
+    if (
+        not isinstance(candidate, str)
+        or _RUNTIME_ERROR_CODE_PATTERN.fullmatch(candidate) is None
+        or candidate not in _KNOWN_RUNTIME_ERROR_CODES
+    ):
+        return _RUNTIME_ERROR_UNAVAILABLE
+    return cast(FullChainRuntimeErrorCode, candidate)
 
 
 def _build_replay_dependencies(
@@ -403,12 +464,17 @@ def _read_login_credential() -> LoginCredential:
         payload.clear()
 
 
-def _write_failure(error_code: FullChainFailureCode) -> None:
+def _write_failure(
+    error_code: FullChainFailureCode,
+    *,
+    runtime_error_code: FullChainRuntimeErrorCode | None = None,
+) -> None:
     failure = FullChainFailure(
         error_code=error_code,
-        schema_version=FULL_CHAIN_SCHEMA_VERSION,
+        runtime_error_code=runtime_error_code,
+        schema_version=FULL_CHAIN_FAILURE_SCHEMA_VERSION,
     )
-    sys.stdout.write(failure.model_dump_json())
+    sys.stdout.write(failure.model_dump_json(exclude_none=True))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -446,12 +512,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             expected_capability_ids=expected_capability_ids
         )
         if failure_code is not None:
-            _write_failure(failure_code)
+            _write_failure(
+                failure_code,
+                runtime_error_code=(
+                    _RUNTIME_ERROR_UNAVAILABLE
+                    if failure_code == "runtime_execution_failed"
+                    else None
+                ),
+            )
             return 1
         sys.stdout.write(outcome.model_dump_json())
         return 0
     except _FullChainCheckError as error:
-        _write_failure(error.code)
+        _write_failure(
+            error.code,
+            runtime_error_code=error.runtime_error_code,
+        )
         return 1
     except Exception:
         _write_failure("unknown_error")

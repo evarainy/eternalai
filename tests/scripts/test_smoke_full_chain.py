@@ -24,6 +24,8 @@ from scripts.smoke.full_chain_contract import (
 )
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
+_FULL_CHAIN_FAILURE_SCHEMA_VERSION = "p2.smoke.full-chain.v2"
+
 
 def _successful_outcome(
     capability_ids: tuple[str, ...] = REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
@@ -159,7 +161,7 @@ def test_full_chain_subprocess_preserves_specific_child_failure_code(
             1,
             stdout=(
                 '{"error_code":"authentication_failed",'
-                f'"schema_version":"{FULL_CHAIN_SCHEMA_VERSION}"}}'
+                f'"schema_version":"{_FULL_CHAIN_FAILURE_SCHEMA_VERSION}"}}'
             ).encode("utf-8"),
             stderr=b"",
         )
@@ -182,7 +184,7 @@ def test_full_chain_failure_schema_rejects_unregistered_error_code() -> None:
         FullChainFailure.model_validate(
             {
                 "error_code": "dynamic_failure_detail",
-                "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+                "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
             },
             strict=True,
         )
@@ -211,7 +213,7 @@ def test_full_chain_subprocess_prints_bounded_sanitized_stderr(
             1,
             stdout=(
                 '{"error_code":"authentication_failed",'
-                f'"schema_version":"{FULL_CHAIN_SCHEMA_VERSION}"}}'
+                f'"schema_version":"{_FULL_CHAIN_FAILURE_SCHEMA_VERSION}"}}'
             ).encode("utf-8"),
             stderr="\n".join(stderr_lines).encode("utf-8"),
         )
@@ -248,7 +250,7 @@ def test_full_chain_main_classifies_invalid_probe_arguments(
     assert result == 1
     assert json.loads(capsys.readouterr().out) == {
         "error_code": "probe_argv_invalid",
-        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+        "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
     }
 
 
@@ -278,7 +280,7 @@ def test_full_chain_main_classifies_configuration_build_failure(
     assert result == 1
     assert json.loads(output) == {
         "error_code": "composition_build_failed",
-        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+        "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
     }
     assert sensitive_detail not in output
 
@@ -312,7 +314,7 @@ def test_full_chain_main_maps_unclassified_exception_to_unknown_error(
     assert result == 1
     assert json.loads(capsys.readouterr().out) == {
         "error_code": "unknown_error",
-        "schema_version": FULL_CHAIN_SCHEMA_VERSION,
+        "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
     }
 
 
@@ -359,7 +361,7 @@ def test_replay_composition_uses_same_full_chain_boundary_and_fails_closed(
             {"OA_READ_ADAPTER_MODE": "replay"},
             capability_id=capability_id,
         )
-        == "full_chain_subprocess_timeout"
+        == ("full_chain_subprocess_timeout", None)
     )
 
 
@@ -487,3 +489,230 @@ def test_missing_required_trace_event_cannot_pass_full_chain_check() -> None:
         capabilities=(outcome,),
     )
     assert combined.passed(expected_capability_ids=(capability_id,)) is False
+
+
+def _synthetic_envelope(
+    *,
+    status: str,
+    data: dict[str, Any] | None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "phase0.sdui.v1",
+        "response_id": "response-synthetic",
+        "task_id": "task-synthetic",
+        "session_id": "session-synthetic",
+        "status": status,
+        "message": "synthetic message",
+        "fallback_text": "synthetic fallback",
+        "ui": {
+            "component_type": "none",
+            "action": "none",
+            "reason_code": reason_code,
+            "payload": {},
+        },
+        "data": data,
+        "trace_id": "trace-synthetic",
+        "trace_summary": None,
+    }
+
+
+def _synthetic_terminal_event(
+    error_code: object,
+    *,
+    capability_id: str = "oa.list_pending_workflows",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        event_type="task_failed",
+        status="failed",
+        task_id="task-synthetic",
+        session_id="session-synthetic",
+        capability_id=capability_id,
+        error_code=error_code,
+    )
+
+
+def _run_synthetic_probe_failure(
+    *,
+    response_payload: dict[str, Any] | None,
+    trace_events: list[Any],
+) -> Any:
+    capability_id = "oa.list_pending_workflows"
+
+    class FakeClient:
+        async def post(self, *_args: Any, **_kwargs: Any) -> httpx.Response:
+            if response_payload is None:
+                return httpx.Response(
+                    200,
+                    content=b"{not-json",
+                    headers={"content-type": "application/json"},
+                )
+            return httpx.Response(200, json=response_payload)
+
+    class FakeTraceQuery:
+        async def list_events_by_trace(self, _trace_id: str) -> list[Any]:
+            return trace_events
+
+    with pytest.raises(full_chain_module._FullChainCheckError) as captured:
+        asyncio.run(
+            full_chain_module._run_capability_probe(
+                client=cast(httpx.AsyncClient, FakeClient()),
+                headers={},
+                trace_query=cast(TraceQueryPort, FakeTraceQuery()),
+                message="synthetic request",
+                capability_id=capability_id,
+            )
+        )
+    return captured.value
+
+
+def _run_child_main_with_check_error(
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> int:
+    monkeypatch.setattr(
+        full_chain_module,
+        "_read_login_credential",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        full_chain_module.ProductionSettings,
+        "from_environment",
+        lambda: SimpleNamespace(oa_read_adapter_mode="live"),
+    )
+
+    async def fail_check(*_args: Any, **_kwargs: Any) -> FullChainOutcome:
+        raise error
+
+    monkeypatch.setattr(full_chain_module, "run_full_chain_check", fail_check)
+    return full_chain_module.main([])
+
+
+@pytest.mark.parametrize(
+    ("response_payload", "trace_events", "expected_code"),
+    [
+        (None, [], "envelope_parse_failed"),
+        (
+            _synthetic_envelope(status="failed", data={"invalid": True}),
+            [_synthetic_terminal_event("adapter_http_500")],
+            "runtime_execution_failed",
+        ),
+        (
+            _synthetic_envelope(status="completed", data={"invalid": True}),
+            [],
+            "capability_output_invalid",
+        ),
+    ],
+)
+def test_full_chain_failure_categories_are_exact_and_distinct(
+    response_payload: dict[str, Any] | None,
+    trace_events: list[Any],
+    expected_code: str,
+) -> None:
+    error = _run_synthetic_probe_failure(
+        response_payload=response_payload,
+        trace_events=trace_events,
+    )
+
+    assert error.code == expected_code
+
+
+def test_runtime_failure_code_comes_only_from_unique_terminal_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ui_reason_canary = "untrusted_ui_reason_canary"
+    error = _run_synthetic_probe_failure(
+        response_payload=_synthetic_envelope(
+            status="failed",
+            data={"invalid": True},
+            reason_code=ui_reason_canary,
+        ),
+        trace_events=[_synthetic_terminal_event("adapter_http_500")],
+    )
+
+    assert error.code == "runtime_execution_failed"
+    assert error.runtime_error_code == "adapter_http_500"
+    result = _run_child_main_with_check_error(monkeypatch, error)
+    captured_output = capsys.readouterr()
+    output = captured_output.out
+    assert result == 1
+    assert captured_output.err == ""
+    assert json.loads(output) == {
+        "error_code": "runtime_execution_failed",
+        "runtime_error_code": "adapter_http_500",
+        "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
+    }
+    assert output.count(ui_reason_canary) == 0
+
+
+@pytest.mark.parametrize(
+    "unsafe_code",
+    [
+        "bad code",
+        "错误码",
+        "a" * 65,
+        "ADAPTER_HTTP_500",
+        "shaped_unknown_canary",
+    ],
+)
+def test_unsafe_runtime_failure_code_falls_back_without_echo(
+    unsafe_code: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    error = _run_synthetic_probe_failure(
+        response_payload=_synthetic_envelope(
+            status="failed",
+            data={"invalid": True},
+        ),
+        trace_events=[_synthetic_terminal_event(unsafe_code)],
+    )
+
+    assert error.code == "runtime_execution_failed"
+    assert error.runtime_error_code == "runtime_error_unavailable"
+    result = _run_child_main_with_check_error(monkeypatch, error)
+    captured_output = capsys.readouterr()
+    output = captured_output.out
+    assert result == 1
+    assert captured_output.err == ""
+    assert json.loads(output) == {
+        "error_code": "runtime_execution_failed",
+        "runtime_error_code": "runtime_error_unavailable",
+        "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
+    }
+    assert output.count(unsafe_code) == 0
+
+
+def test_full_chain_subprocess_preserves_bounded_runtime_failure_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    account = "synthetic-runtime-account"
+    password = "synthetic-runtime-password"
+
+    def run(command: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout=(
+                '{"error_code":"runtime_execution_failed",'
+                '"runtime_error_code":"adapter_http_500",'
+                f'"schema_version":"{_FULL_CHAIN_FAILURE_SCHEMA_VERSION}"}}'
+            ).encode("utf-8"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(smoke_runner.subprocess, "run", run)
+
+    with pytest.raises(SmokeError) as captured:
+        smoke_runner._run_full_chain_subprocess(
+            repo_root=tmp_path,
+            environment={"PATH": "synthetic-path"},
+            account=account,
+            password=password,
+        )
+
+    assert captured.value.code == "runtime_execution_failed"
+    assert captured.value.runtime_error_code == "adapter_http_500"
+    _assert_safe_smoke_error(captured.value, account, password)

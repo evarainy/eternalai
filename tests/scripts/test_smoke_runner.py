@@ -36,6 +36,7 @@ from scripts.smoke.errors import SmokeError
 from scripts.smoke.full_chain_contract import (
     FULL_CHAIN_SCHEMA_VERSION,
     CapabilityFullChainOutcome,
+    FullChainFailure,
     FullChainOutcome,
 )
 from scripts.smoke.har import (
@@ -62,6 +63,8 @@ from scripts.smoke.runner import (
     _configuration_fingerprint,
 )
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
+
+_FULL_CHAIN_FAILURE_SCHEMA_VERSION = "p2.smoke.full-chain.v2"
 
 
 def _assert_smoke_har_traceback_is_redacted(
@@ -631,8 +634,8 @@ def test_rehearse_prints_every_capability_failure_reason(
     fingerprint = build_structural_fingerprint({"messages": []})
     drift = compare_structural_fingerprints(fingerprint, fingerprint)
     failures = (
-        ("oa.list_pending_workflows", "authentication_failed"),
-        ("oa.list_system_messages", "trace_incomplete"),
+        ("oa.list_pending_workflows", "authentication_failed", None),
+        ("oa.list_system_messages", "trace_incomplete", None),
     )
     layout = Layout(
         repo_root=tmp_path,
@@ -3822,7 +3825,7 @@ def test_verify_registry_preflight_failure_stops_before_live_checks(
     assert not layout.scratch.exists()
 
 
-def test_verify_prints_every_full_chain_capability_failure_reason(
+def test_verify_full_chain_failure_writes_safe_report_and_returns_one(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -3837,8 +3840,12 @@ def test_verify_prints_every_full_chain_capability_failure_reason(
     )
     failure_reasons = {
         "oa.list_pending_workflows": "authentication_failed",
-        "oa.list_system_messages": "runtime_request_failed",
+        "oa.list_system_messages": "runtime_execution_failed",
     }
+    provider_calls: list[str] = []
+    capture_calls: list[tuple[Path, Path, str]] = []
+    report_safety_calls: list[str] = []
+    outcomes = (_verification_outcome(), _verification_outcome())
     monkeypatch.setattr(
         smoke_runner,
         "load_runtime_environment",
@@ -3872,7 +3879,25 @@ def test_verify_prints_every_full_chain_capability_failure_reason(
         assert isinstance(capability_ids, tuple)
         capability_id = capability_ids[0]
         assert isinstance(capability_id, str)
-        raise SmokeError(failure_reasons[capability_id])
+        reason = failure_reasons[capability_id]
+        if reason == "runtime_execution_failed":
+            failure_type = getattr(
+                smoke_runner,
+                "_FullChainSubprocessFailure",
+                None,
+            )
+            if failure_type is not None:
+                raise failure_type(
+                    FullChainFailure.model_validate(
+                        {
+                            "error_code": reason,
+                            "runtime_error_code": "adapter_http_500",
+                            "schema_version": _FULL_CHAIN_FAILURE_SCHEMA_VERSION,
+                        },
+                        strict=True,
+                    )
+                )
+        raise SmokeError(reason)
 
     monkeypatch.setattr(
         smoke_runner,
@@ -3882,28 +3907,143 @@ def test_verify_prints_every_full_chain_capability_failure_reason(
     monkeypatch.setattr(
         smoke_runner,
         "_run_persisted_provider_checks_with_supported_loop",
-        lambda *_args, **_kwargs: pytest.fail(
-            "full-chain failure must stop before provider verification"
+        lambda _settings, *, account: (
+            provider_calls.append(account) or outcomes
         ),
     )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_build_optional_pending_capture",
+        lambda actual_layout, har_directory, timestamp: capture_calls.append(
+            (actual_layout.repo_root, har_directory, timestamp)
+        ),
+    )
+    original_assert_report_safe = smoke_runner._assert_report_safe
+
+    def assert_report_safe(text: str, environment: dict[str, str]) -> None:
+        report_safety_calls.append(text)
+        original_assert_report_safe(text, environment)
+
+    monkeypatch.setattr(smoke_runner, "_assert_report_safe", assert_report_safe)
+
+    har_directory = tmp_path / "synthetic-har"
 
     result = smoke_runner._command_verify(
         layout,
         timestamp="20260812_120000",
-        har_directory=None,
+        har_directory=har_directory,
     )
 
     output = capsys.readouterr().out
     assert result == 1
+    report_path = layout.scratch / "smoke_result_20260812_120000.md"
+    assert report_path.is_file() is True
+    assert provider_calls == ["synthetic-account"]
+    assert capture_calls == [
+        (layout.repo_root, har_directory, "20260812_120000")
+    ]
+    assert len(report_safety_calls) == 1
     expected_lines = [
         "full_chain_failure_capability=oa.list_pending_workflows",
         "full_chain_failure_reason=authentication_failed",
         "full_chain_failure_capability=oa.list_system_messages",
-        "full_chain_failure_reason=runtime_request_failed",
+        "full_chain_failure_reason=runtime_execution_failed",
+        "full_chain_failure_runtime_error_code=adapter_http_500",
     ]
-    positions = [output.index(line) for line in expected_lines]
+    output_lines = output.splitlines()
+    positions = [output_lines.index(line) for line in expected_lines]
     assert positions == sorted(positions)
-    assert "full_chain_verification=failed" in output
+    assert output_lines.count("full_chain_verification=failed") == 1
+    assert output_lines.count("report=smoke_result_20260812_120000.md") == 1
+    report_text = report_path.read_text(encoding="utf-8")
+    report_lines = report_text.splitlines()
+    assert report_lines.count("- 完整运行时链路：failed") == 1
+    assert report_lines.count("- Provider 指纹比对：已完成") == 1
+    assert report_lines.count("- 现场待办脱敏包：已生成") == 1
+    assert report_lines.count("- 全链响应信封全部完成：否") == 1
+    assert report_lines.count("- 每个全链请求的必需 Trace 事件齐全：否") == 1
+    assert (
+        report_lines.count(
+            "full_chain_failure_runtime_error_code=adapter_http_500"
+        )
+        == 1
+    )
+
+
+def test_verify_full_chain_failure_prints_exact_run_pass_fail_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path,
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "synthetic.har",
+        scratch=tmp_path / "_scratch",
+    )
+    outcomes = (_verification_outcome(), _verification_outcome())
+    monkeypatch.setattr(
+        smoke_runner,
+        "load_runtime_environment",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(
+            oa_base_url="https://synthetic.invalid"
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_capability_registry_preflight",
+        lambda _settings: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_oa_endpoint_reachable",
+        lambda _base_url: True,
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_prompt_credentials",
+        lambda: ("synthetic-account", "synthetic-password"),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_full_chain_capability_checks",
+        lambda **_kwargs: (
+            _successful_full_chain_outcome(
+                ("oa.list_pending_workflows",)
+            ),
+            (("oa.list_system_messages", "trace_incomplete", None),),
+        ),
+    )
+    monkeypatch.setattr(
+        smoke_runner,
+        "_run_persisted_provider_checks_with_supported_loop",
+        lambda _settings, *, account: outcomes,
+    )
+
+    result = smoke_runner._command_verify(
+        layout,
+        timestamp="20260812_120001",
+        har_directory=None,
+    )
+
+    assert result == 1
+    count_lines = tuple(
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("full_chain_capabilities_")
+    )
+    assert count_lines == (
+        "full_chain_capabilities_run=2",
+        "full_chain_capabilities_passed=1",
+        "full_chain_capabilities_failed=1",
+    )
 
 
 def test_verify_pending_normalization_failure_returns_nonzero(
