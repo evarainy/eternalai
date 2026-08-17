@@ -1,100 +1,87 @@
-# AGENTS.md - Phase 2 Compact Agent Boot Rules v1.3.5
+# AGENTS.md — Phase 2 项目规则 v2.4.0
 
-This is the always-loaded compact context for coding agents. Keep detail in the linked documents; do not turn this file into a full spec or import long specs.
+本文件是项目级规则与约束的唯一权威。`CLAUDE.md` 仅用 `@AGENTS.md` 导入本文件并保留 Claude Code 专属补充；项目级治理文件只允许这一项导入，禁止导入长规格文档。
 
-## Authority and current phase
-Authority, highest first: the current Goal (latest instruction plus Outcome/Constraints/Verification) > user redlines and applicable `AGENTS.md` > approved product/architecture/interface/batch/milestone documents > repository code, tests, CI, branch protection, and runtime evidence > derived plans, skills, history, and suggestions.
+## 权威与当前阶段
 
-Phase 1 is complete. Phase 2 has landed `P2-TRACE-PERSIST-001` (persistent TracePort + Admin audit query, merge `f8eb8533`), `P2-AUTH-001` (OA login authentication + trusted authentication seam replacing self-reported identity, merge `b9f7a3c7f551f45dd975803eeeee276207ae9f8a`), `P2-PILOT-FOUNDATION-001` (real production composition and closeout hardening, merge `51af461e561d814deef5f813245520a3dae73871`, PR #46, CI run 30422795582 success), `P2-DEVENV-PREFLIGHT-001` (`scripts/check_dev_environment.py`: diagnostic tool, not a gate; not wired into conftest, CI, or existing commands; merge `39c437a56bf3da27da457fb585c72fa375872c6d`, PR #48, CI run 30429764545 success), `P2-OA-READ-CONTRACT-001` (OA Replay adapter + versioned Contract Pack + offline sanitizer, merge `89cd16e33020806c8a7a28170f93689963de5235`), `P2-READ-ADAPTER-001` (OA Live HTTP, per-user session credential reads, IdentityMapping, Live fingerprint drift comparison, and runtime closure, merge `f9526a464dbf72ad3a39d8fcb8ec750c226f880f`), `P2-FE-API-CLIENTS-001` (froze Auth / Runtime / Admin-Trace OpenAPI and Orval clients, merge `e60b388edb478f66f70d36e9853f90b43fca7686`), `P2-EOL-FREEZE-001` (`web/.gitattributes` pins frozen artifact line endings to LF, fixing false drift failures caused by Windows checkout, merge `362710de8a1e397aba68d4a3aad7aff4b8739e20`), `P2-SANITIZE-LEAK-FIX-001` (the sanitizer no longer writes sensitive values into artifacts or error echoes; the detection rule set was not reduced, merge `01fc6c459e7a8df4ec410ab0273f1fa08e3cd057`), `P2-IDENTITY-CREDENTIAL-001` (added credential revocation and reset; new calls after revocation return `identity_revoked`, merge `f8208cd0532dc5fa2ae1b2c3e60dbd0e1dabf1b8`), `P2-ADMIN-CSRF-001` (every Cookie-authenticated unsafe method requires a valid `Origin` plus the fixed custom header; missing, duplicate, or invalid values return 403, with a dynamic route-enumeration guard preventing newly added routes from being left unwired, merge `daf90f263352a14cfeb9d500b30558e7fb6ec046`), `P2-RUNTIME-RESPONSE-CONTRACT-001` (declared the existing `ResponseEnvelope` in Runtime OpenAPI and regenerated the client; response bytes are unchanged, merge `83e6ec82729a045a6d3c77039dbb952fe9bb03ff`), `P2-PILOT-ENTRY-FE-001` (wired the login page, EternalAI Session Cookie, centralized fail-closed 401 reauthentication and protected routes, and stopped sending `X-EternalAI-Roles`, merge `d3a536e91001f6f008d4dbb1b8ec321988b70b66`), `P2-CHAT-ENTRY-FE-001` (protected `/chat` plain-text conversation entry consuming the Runtime Orval client and existing authenticated session; exact `/chat` login return allowlist; no SDUI renderer or structured Action, merge `092a9095cbe4b572a8987707d2ab098887bcd123`), `P2-BE-SMALL-DEBT-001` (safe OA adapter fallback observability plus OA read placeholders in `.env.example`, without changing external `adapter_error` or Trace behavior, merge `3a901c5bcde8b9b704d70d889c3f6fc165edaa6d`), `P2-FE-TEST-FLAKE-001` (disabled Vitest file-level concurrency to remove the 5-second Ant component-test flake, preserving 81 tests, and tightened the negative `App.test.tsx` title assertion; no production code change, merge `6c47f06f3cae5af43efdbeb79a0d2bfe68f5517b`), `P2-OA-SYSMSG-PACK-001` (added `oa.list_system_messages` and the parallel `ecology9-system-messages-v1` pack; removed the transport-header exemption in favor of a 9-character substring threshold plus exact full-token matching for shorter values, merge `b55104d193862a78b7529e657ceea4639ed6e152`, PR #65), and `P2-AUTH-USERID-TYPE-001` (normalized OA integer/string `userid` once in `_required_oa_user_id`, with guards proving the same principal and exactly one credential row plus one IdentityMapping, merge `a9bf8b8fc3fbf48448ca511768fe7271d8b8a221`, CI run 30797244405 success), `P2-OA-SYSMSG-LIVE-001` (enabled live system-message routing with capability-specific configuration, model validation, and fingerprint drift handling, merge `9da2fe5a1948800f90110d5adbd033553d01a808`), `P2-OA-MSGCENTER-PROTOCOL-001` (aligned the shared OA message-center transport with conservative cursor pagination and fail-closed truncation guards, merge `c44ed56f426fd01104cf94bbb946f2baaf065efc`), `P2-SMOKE-RUNNER-001` (added the credential-safe, fail-closed intranet smoke runner, merge `caaf801fcaa011573fc5c5fe1f1d8565a2cfc287`), and `P2-SMOKE-AUTH-DIAG-001` (published pending-workflows-v2 from the real sibling capture, kept v1 byte-stable, closed the Gateway binding-scope oracle, and restored weakened assertions, merge `1bf2ba6c895fec4b847f2369f13f22879920000b`). `P2-OA-LOGIN-PARITY-001` also completed as a read-only diagnostic with no branch or commit: it found no authentication bypass because both `msgcode` and `loginstatus` are checked fail-closed, and its integer-`userid` defect is now fixed. Current `phase0/main` baseline = `P2-SMOKE-E2E-CHAIN-001`; the formal decision/debt register is in `docs/phase2/PHASE2_PLAN.md` and includes `P2-CONFIRM-RESUME-001` (not triggered), the real-OA evidence gaps activated by `P2-OA-INTRANET-SMOKE-001`, required-check bypass hardening, repository cleanup, and four architecture decisions settled by Rainy on 2026-08-03: user-owned OA credentials plus logged per-write human confirmation; database access is not a target system and needs neither IdentityMapping nor a `db` enum/schema change, but every access must be traceable; Operations owns enterprise keys with no periodic rotation but runtime manual update required; Golden policy is the verbatim Decision 4 below. Derived work remains for an unscheduled enterprise-key runtime management surface and an unresolved Golden lifecycle-manifest lane. `P2-OA-INTRANET-SMOKE-001` is partially complete: the 2026-08-07 onsite inputs needed by the to-do adapter are available, while the real OA Live fingerprint comparison remains intranet debt. The next-lane pointer is intentionally blank pending GOV-SYNC Class B DAG adjudication.
+权威顺序：当前 Goal（最新指令及 Outcome/Constraints/Verification）> 用户红线和适用的 `AGENTS.md` > 已批准的产品/架构/接口/批次/里程碑文档 > 仓库代码、测试、CI、分支保护和运行证据 > 派生计划、skills、历史与建议。
 
-> Active-state note: the preceding paragraph is retained only as a historical landed-task index. Its projections for the current baseline, onsite debt, Decision 3, derived work, and next lane are all superseded; the following paragraph is the sole active answer.
+Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完成棒见 `git log --grep='phase2('`，正式登记与欠债见 `docs/phase2/PHASE2_PLAN.md`，架构决定见 `docs/phase2/DECISIONS.md`。
 
-Current Phase 2 delivery state (2026-08-13): `P2-REGISTRY-DOC-FIX-001`, `P2-SMOKE-FAILURE-CODE-001`, `P2-HAR-FORM-DECODE-001`, `P2-GOLDEN-CREDENTIAL-HARDENING-001`, `P2-HAR-READ-FORM-DECODE-001`, and `P2-SMOKE-VERIFY-DIAGNOSTICS-001` have landed; `P2-GOV-SYNC-011` synchronizes the resulting 2026-08-11 through 2026-08-13 governance facts. The real OA onsite `verify` used the minimum request headers and a fresh Cookie login state, compared Live fingerprints for both capabilities with no drift and HTTP 200, and passed the full chain 2/2; the real browser `/chat` response was also manually confirmed. `P2-OA-INTRANET-SMOKE-001` is therefore complete for the first OA Adapter, while the second target system remains unselected. The verified baseline is **2065 passed, 0 skipped, 0 failed** (78 warnings); Golden Gate is **27/27 passed, 0 skipped, 0 failed** (negative 16/16, positive 11/11); `tests/architecture/` is **33 passed**. Decision 3 now keeps enterprise keys under Operations-managed configuration files and cancels the runtime management page; the page-input SSRF allowlist requirement is removed with that surface, and the existing LLM address default is only configuration hygiene. Security switches must be judged from verifiable protocol facts or configuration values, never a free-form environment label; `ENV` carries only the existing testing/mock boundary and is not a production security-routing field. A read-only leak-surface audit found no real OA material in the public repository or Git history; `_scratch/oa/` remains raw sensitive material, and `sanitize_oa_contract_pack.py` is a Contract Pack generator plus dual leak guard, not a HAR cleaner, so HAR sharing remains prohibited until a dedicated export path exists. The next-lane pointer remains blank: onsite evidence removed the intranet prerequisite for `P2-LOW-RISK-WRITE-001`, but that lane still depends on `P2-GOLDEN-001`, and the SDUI record-list/renderer shape depends on an unresolved frontend choice. All open debts remain in the five-field ledger in `docs/phase2/PHASE2_PLAN.md`.
+每个 write lane 只承载一个明确 Goal、一个 Scope 和一个隔离 worktree/branch；新 scope 开新 lane。历史 V4 prompt/Task Record 保持原意，新工作以当前 Goal 和本文件为准。
 
-Decision 4 (verbatim): 负向、边界和安全拒绝用例的题面、预期、禁止项、分类及判卷契约冻结，修改需雨爷明确批准。所有既有正向题面同样不可原地改写，只能新增后继题并在题外生命周期清单中停止旧题运行。判卷契约或运行选择规则变更时，必须按同一版本包全量回放并明确披露影响。每修复一个真实缺陷，必须新增一条能在未修代码上失败、修复后通过、且走原缺陷路径的永久回归证据；缺陷属于 Golden Runtime 观察边界时才新增 Golden Task，否则放在最小且忠实的单元/集成/API/浏览器层。
+## 项目不变量
 
-Each write lane uses one explicit Goal, one Scope, and one isolated worktree/branch; a new scope opens a new lane. Historical V4 prompts and Task Records keep their original meaning, but new work follows the current Goal and this file.
+- 六边形依赖方向：`app/ports/` 是 Protocol 接口，`app/infra/` 是实现；`app/ports/` 不得依赖 `app/infra/`。
+- LLM 使用 vLLM raw JSON mode；默认 `http://34.74.11.38:8011/v1` + `glm-4.7`，URL、model 与采样参数均可由 env 覆盖；禁止引入 instructor / PydanticAI（见 `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1）。
+- `tests/` 镜像 `app/` 结构，并以 `tests/architecture/` 承载架构守卫；`experiments/` 仅放 Spike 实验代码，不进入生产。
 
-## Project at a glance
-- **EternalAI**: Government/enterprise AI Agent runtime — natural language driven, integrates OA, Yonyou U8, Hikvision iVMS
-- **Architecture**: Hexagonal (Ports/Adapters). `app/ports/` = Protocol interfaces, `app/infra/` = implementations; `app/ports/` must never depend on `app/infra/`
-- **Backend**: Python + uv + FastAPI + uvicorn 0.51.0 (real process entry point: `python -m app.server`) | **Frontend**: React 18 + Vite + Ant Design 5.x
-- **Data**: PostgreSQL 18 + pgvector, Redis + ARQ, MinIO (S3)
-- **LLM**: vLLM raw JSON mode; default `http://34.74.11.38:8011/v1` + `glm-4.7`, with URL / model / sampling parameters overridable by env; do not introduce instructor or PydanticAI (see `docs/phase0/PHASE1_TECHNICAL_BASELINE.md` §3.1)
-- **Observability**: OpenTelemetry + Langfuse
-- **Full tech stack decisions**: `docs/phase0/REPOSITORY_CONTEXT_MAP.md` Section 9
+## Git、Review 与授权
 
-## Key directories
-```
-app/ports/          Protocol interfaces (TaskStore, CapabilityRegistry, CapabilityGateway, JobQueue...)
-app/infra/          Interface implementations
-app/api/v1/         FastAPI routes
-app/db/             Database config/session/health check
-tests/              Mirrors app/ structure + tests/architecture/ (import boundary, weak test checker)
-docs/phase1/        Phase 1 plan, spec, task index, task template, task logs
-docs/phase1/tasks/  Phase 1 per-task prompt files
-docs/phase1/task_logs/  Phase 1 unified Task Records (YAML)
-web/                Frontend (React 18 + Vite + Ant Design 5.x)
-experiments/        Spike experiment code (never enters production)
-infra/docker/       Docker Compose templates
-```
+- **主分支**：`phase0/main`（不是 `main`）。
+- **任务分支**：`phase2/<task_id>`。
+- **Commit**：`phase2(<task_id>): <简要描述>`。
+- **Merge**：`merge phase2(<task_id>): <简要描述>`。
+- Q0-Q3 只控制 Review 强度，不制造人工停点。人工停点仅来自专项红线动作、扩域、新增或变更架构/框架/公共契约/API/协议/信任边界/核心不变量、重大未决选择、更严格的仓库规则或批次/里程碑验收；保持既有架构的内部 `app/ports/` 变更本身不是停点。
+- 不设独立 local-commit Gate。普通非强制任务分支 push/PR/merge、CI/CD 配置修改和 CI 运行，仅在 Goal 与仓库规则允许，且确定性验证、所需 Review、freshness、branch protection、required checks 均通过时执行。集成到 `phase0/main` 一律走 PR：push 任务分支 → 开 PR → 等 required checks 最终全绿 → 通过 PR 合并。即使没有显式 bypass 参数，也永不本地合完直推 `phase0/main`。
+- Phase 2 不建独立 per-task Task Record。每个 PR body 必须固定包含 `## Scope`、`## 验证结果（pytest / Golden 原始结果行 + CI run）`、`## 本棒新增欠债` 三段；PR body 是绑定 commit 与 CI run 的永久任务记录。
+- PR body 三段必须在合并前全部完成；`## 本棒新增欠债` 中每条欠债须在合并前具备 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence 五个字段。合并后补写不计为合规任务记录。required checks 全绿只是必要条件，不构成自行合并授权：配有监理窗口的棒必须先获 Monitor PASS；未配监理窗口的棒，只有启动提示词显式授权时才可自行合并。
+- 监理窗口分级：修改 `app/ports/` 契约、DB schema、凭证语义、Golden fixture / `FROZEN_GT_IDS` 或安全边界（认证、CSRF、脱敏、隔离）的棒必须配监理窗口；单一表面的小棒、纯文档棒、纯配置棒可跳过，改为合并后由主窗口派子智能体抽查。跳过监理仍须在启动提示词中显式写明合并授权。
+- 仓库 owner 待办：为 `phase0/main` 的 GitHub 分支保护打开 **Do not allow bypassing the above settings**。本项是已登记欠债；没有专项授权时 agent 不得修改该设置。
+- 删除文件/目录或改写历史、secrets/`.env`、DB schema/真实数据、全局/系统变更、公开发布/生产部署、rebase、reset-hard、force push，均需对应动作的专项授权；风险标签不构成授权。不得绕过 hooks 或 branch protection。
+- 每次 merge 到 `phase0/main` 后检查对应的 remote GitHub Actions CI 结果。
 
-## Git, Review, and authorization
-- **Main branch**: `phase0/main` (not `main`)
-- **Task branch**: `phase2/<task_id>`
-- **Commit**: `phase2(<task_id>): <short description>`
-- **Merge**: `merge phase2(<task_id>): <short description>`
-- Q0-Q3 controls Review strength, not human stops. Human stops come from reserved redline actions; scope expansion; new or changed architecture, framework, public contract/API/protocol, trust boundary, or core invariant; a material unresolved choice; stricter repository rules; or batch/milestone acceptance. An internal `app/ports/` change that preserves the architecture is not, by itself, a stop.
-- There is no separate local-commit Gate. Ordinary non-force task-branch push/PR/merge and CI/CD configuration or runs may proceed only when the Goal and repository policy allow them and deterministic validation, required Review, freshness, branch protection, and required checks pass. Integration into `phase0/main` must always use the PR path: push the task branch, open a PR, wait until required checks are final and green, then merge through the PR. Never locally merge and directly push `phase0/main`, even without an explicit bypass flag.
-- Phase 2 does not create a separate per-task Task Record. Every PR body must contain exactly these three governance sections: `## Scope`, `## 验证结果（pytest / Golden 原始结果行 + CI run）`, and `## 本棒新增欠债`; the PR body is the durable task record bound to the commit and CI run.
-- The three PR body sections must be complete before merge, and every debt in `## 本棒新增欠债` must already contain `reason`, `blocked_by_task_id`, `activation_task_id`, `expiry_condition`, and `evidence`. Post-merge edits do not count as a compliant task record. Green required checks are necessary but do not authorize self-merge: a lane with a monitor window requires Monitor PASS before merge, while a lane without one may self-merge only when its launch instructions explicitly grant that authority.
-- Monitor-window classification: a lane changing an `app/ports/` contract, DB schema, credential semantics, Golden fixtures / `FROZEN_GT_IDS`, or a security boundary (authentication, CSRF, sanitization, or isolation) must have a monitor window. A single-surface small lane, documentation-only lane, or configuration-only lane may omit it and instead receive a post-merge sub-agent spot check from the main window; omission still requires explicit self-merge authorization in the launch instructions.
-- Governance sync is routed by write-lane concurrency. Class A mechanical sync is exactly the test baseline numbers, the `task_id`, the next-lane pointer, and debts newly found by that lane; with exactly one active write lane, that implementation lane must complete Class A inside its own payload commit, with no extra commit, no amend, and no force push, while with two or more active write lanes, implementation lanes must not edit the three shared governance documents for Class A and a separate GOV-SYNC batch owns it. Governance documents never record commit SHAs or CI run ids: writing one changes the value being written, and both are redundant projections of `task_id`. Trace with `git log --grep=<task_id>` (the `phase2(<task_id>):` commit convention guarantees a hit), treat GitHub as the sole authority for CI results, and keep run evidence in the PR body's verification section. Class B cross-lane decisions, blueprint-overturning ADRs, Golden policy, DAG reordering, and cross-lane debt consolidation always belong to GOV-SYNC; an implementation lane may only propagate the already-decided next `task_id` and must never choose its own successor, leaving the pointer empty and registering it for adjudication when the successor is not unique. Before opening a write lane, its launch instructions must declare serial or parallel execution and whether the lane owns Class A sync. Until the state-section refactor lands in both `CLAUDE.md` and `AGENTS.md`, parallel lanes remain under this restriction.
-- Repository-owner follow-up: enable GitHub branch protection's **Do not allow bypassing the above settings** for `phase0/main`. This remains registered debt; agents must not change the setting without action-specific authorization.
-- Exact action-specific authorization is required for file/directory deletion or history rewrite, secrets or `.env`, DB schema or real data, global/system changes, public release or production deployment, rebase, reset-hard, and force push. A risk label is never authorization. Never bypass hooks or branch protection.
-- After every merge to `phase0/main`, check the corresponding remote GitHub Actions CI result.
+### A 类机械同步
 
-## Validation commands
-> **The full suite needs the fixed test database running**: Docker Desktop up, test DB healthy on
-> `127.0.0.1:15432`, and `DATABASE_URL` visible to the current process (user-level env var; a process
-> started before it was set will not inherit it — reopen the terminal/app). Without `DATABASE_URL` the
-> DB tests **fail rather than skip** — a silent skip reads as a pass. To genuinely run without a
-> database, pass `--ignore=` explicitly so the omission is visible in the command.
-> Baseline: **2065 passed, 0 skipped, 0 failed** (78 warnings); Golden Gate **27/27 passed, 0 skipped, 0 failed**; `tests/architecture/` **33 passed** (verified by `P2-GOV-SYNC-011`).
+- A 类仅包括测试基线数字、`task_id`、下一棒指针和本棒新发现的欠债。当前状态只写 `docs/phase2/STATUS.md`，欠债只写 `docs/phase2/PHASE2_PLAN.md`。
+- 同一时刻仅一个 write lane 时，由该实现棒在本棒 payload commit 内一次完成 A 类同步，不另开 commit、不 amend、不 force push；同时有两个及以上 write lane 时，实现棒不得修改共享状态与欠债文件，统一由独立 GOV-SYNC 批次棒处理。
+- 治理文档不记录 commit SHA 与 CI run id；以 `git log --grep=<task_id>` 追溯任务，CI 结果以 GitHub 为唯一权威，运行证据留在 PR body 的验证段。
 
-```bash
-uv run pytest
+### B 类归 GOV-SYNC
+
+- 跨棒裁决、推翻蓝图偏差的 ADR、Golden 策略、DAG 重排和跨棒欠债合并永远归 GOV-SYNC；实现棒只能机械传播已决 DAG 的下一个 `task_id`，不得自行挑选后继，不唯一时留空并登记待裁决。
+
+### 开棒前声明
+
+- 启动提示词必须声明串行或并行执行，以及本棒是否承担 A 类同步。
+
+## 验证命令
+
+> 全量测试需要 Docker Desktop 启动、测试库 healthy 于 `127.0.0.1:15432`，且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
+> 缺少 `DATABASE_URL` 时 DB 测试失败而不是跳过——静默跳过会被读成通过。
+> 确需省略时必须显式使用 `--ignore=`。当前三条结果只见 `docs/phase2/STATUS.md`。
+
+```powershell
+uv run python scripts/check_dev_environment.py --start-full-tests  # 后台全量测试；日志/状态写入 _scratch/
 uv run pytest tests/ports/test_capability_gateway_port.py
-uv run ruff check .
-uv run mypy app/
 uv run python scripts/check_dependencies.py
 uv run pytest tests/architecture/
 uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
-uv run python scripts/run_golden_tasks.py --gate  # required for every later implementation task
-git diff --cached --name-only
-git diff --cached --stat
-git diff --cached --check
+uv run python scripts/run_golden_tasks.py --gate  # 所有后续实现任务必跑
 git ls-files --others --exclude-standard
 ```
 
-## Read on demand / source pointers
-- Phase 1: `docs/phase1/TASK_PROMPT_TEMPLATE.md`, `docs/phase1/TASK_INDEX.md`, `docs/phase1/tasks/<task_id>.md`, `docs/phase1/task_logs/`, `docs/phase1/ROLE_POLICY.md`
-- Legacy record schema: `docs/dev/task_record_schema.yaml`
-- Cross-stage: `docs/phase0/CONTEXT_LOADING_STRATEGY.md`, `docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`, `docs/phase0/REPOSITORY_CONTEXT_MAP.md`, `docs/phase0/CODING_STYLE_BASELINE.md`, `docs/phase0/BOUNDARY_CHECKLIST.md`
-- Canonical long spec, only when needed: `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`
+## 不可协商规则
 
-## Non-negotiable hard rules
-1. Do not modify `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`.
-2. `app/ports/` contracts may change only when the design needs it: use the smallest contract, record the reason, and update every implementation and test in the same change. Never build a workaround for a contract that should be fixed.
-3. Never weaken tests to get green (`assert True`, empty `pass`, broad skip, or deleted assertions); fix the code or stop and report. A failure path must not report success or lose its error code. Never regress session/tenant/user isolation. `FROZEN_GT_IDS` and golden fixtures require explicit human approval.
-4. Never put plaintext password/token/cookie/sessionid/access_token/refresh_token in Trace, ResponseEnvelope, expected fixtures, logs, task records, or reports.
-5. Do not use `not_applicable` to hide a failed check; it requires reason, blocked_by_task_id, activation_task_id, expiry_condition, and evidence.
-6. A downstream descriptor's existence never releases its dependency gate. Golden negative/boundary paths must pass 100%, including GT-012 multi-binding scope clarification.
-7. Security switches must depend on protocol facts or configuration values that can be validated directly. Never make a free-form environment label such as `ENV` carry a security boundary; a typo must not turn the guard fail-open.
-8. Temporary instructions written for one execution lane must not be copied verbatim into durable delivery documentation. Preserve only the permanent contract validated by the current design, so a one-off prohibition cannot become an accidental standing rule.
+1. 禁止修改 `docs/blueprint/enterprise_agent_runtime_blueprint_v3_2_4_freeze_final.md`。
+2. `app/ports/` 契约只在设计确实需要时变更：采用最小契约，记录理由，并在同一改动中更新所有实现与测试；不得用 workaround 绕开本应修正的契约。
+3. 不得为换绿弱化测试（`assert True`、空 `pass`、宽泛 skip、删断言）；修代码，否则停手报告。失败路径不得报成功或丢 error code；不得回归 session/tenant/user 隔离。`FROZEN_GT_IDS` / golden fixtures 必须经人工显式批准。
+4. 明文 password/token/cookie/sessionid/access_token/refresh_token 不得进入 Trace、ResponseEnvelope、fixture expected、日志、Task Record 或报告。
+5. 不得用 `not_applicable` 隐藏失败；每项必须带 reason、blocked_by_task_id、activation_task_id、expiry_condition 和 evidence。
+6. 下游 descriptor 存在不释放依赖门。Golden negative/boundary paths 必须 100% 通过，包括 GT-012 多绑定 scope clarification。
+7. 安全开关只能依赖可真实校验的协议事实或配置值；不得让 `ENV` 等自由文本环境标签承担安全分流，避免拼写错误导致 fail-open。
+8. 面向单棒执行 agent 的临时作业约束不得原样写入长期交付文档；只保留经当前设计验证的永久合同，防止把一次性禁令误固化为现役规则。
 
-## Scratch/temp and artifact review rules
-- Goal snapshots, Candidate Manifests, Recovery Indexes, Review evidence, and summaries live outside the repo under `$CODEX_RUNS_ROOT`, falling back to `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`; repo-local `_scratch/` is only for manual temporary files.
-- Standing cleanup authorization applies only inside the current task worktree and only to `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, and `.ruff_cache/`. First run `git ls-files --others --exclude-standard`; if it is empty, delete nothing. Use exact resolved targets, not wildcard-scoped recursive deletion. Do not touch `.venv/`, source/artifact files, other worktrees, or Git history. Every other file/directory deletion remains a redline requiring action-specific authorization; never stage `_scratch/` contents.
-- Before closeout, `git ls-files --others --exclude-standard` must be clean or every intentional file explicitly explained.
-- Do not scan or clean inside `.venv/` unless the Scope explicitly includes it.
+## 按需读取（默认不读）
+
+- Phase 1：`docs/phase1/TASK_PROMPT_TEMPLATE.md`、`docs/phase1/TASK_INDEX.md`、`docs/phase1/tasks/<task_id>.md`、`docs/phase1/task_logs/`、`docs/phase1/ROLE_POLICY.md`。
+- 旧记录 schema：`docs/dev/task_record_schema.yaml`。
+- 跨阶段：`docs/phase0/CONTEXT_LOADING_STRATEGY.md`、`docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`、`docs/phase0/REPOSITORY_CONTEXT_MAP.md`、`docs/phase0/CODING_STYLE_BASELINE.md`、`docs/phase0/BOUNDARY_CHECKLIST.md`。
+- 规范长文（仅在需要时）：`docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md`。
+
+## Scratch/temp 与产物审查
+
+- Goal 快照、Candidate Manifest、Recovery Index、Review 证据和摘要放在仓库外的 `$CODEX_RUNS_ROOT`，未设置时回退到 `$CLAUDE_CODEX_SCRATCH_ROOT/v5-runs`；仓库内 `_scratch/` 仅放手工临时文件。
+- 常设清理授权只适用于当前任务 worktree 内的 `__pycache__/`、`*.pyc`、`.pytest_cache/`、`.mypy_cache/`、`.ruff_cache/`。动手前先跑 `git ls-files --others --exclude-standard`；为空就不删除。只对已解析的精确目标操作，不用通配范围递归删除；不碰 `.venv/`、源码/产物、其他 worktree 或 Git 历史。除此之外的文件/目录删除仍是红线，必须取得对应专项授权；不得暂存 `_scratch/` 内容。
+- 收口前 `git ls-files --others --exclude-standard` 必须为空；若有意保留，须逐项解释。
+- Scope 未明确包含时，不扫描或清理 `.venv/`。
