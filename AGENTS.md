@@ -26,10 +26,26 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 - 不设独立 local-commit Gate。普通非强制任务分支 push/PR/merge、CI/CD 配置修改和 CI 运行，仅在 Goal 与仓库规则允许，且确定性验证、所需 Review、freshness、branch protection、required checks 均通过时执行。集成到 `phase0/main` 一律走 PR：push 任务分支 → 开 PR → 等 required checks 最终全绿 → 通过 PR 合并。即使没有显式 bypass 参数，也永不本地合完直推 `phase0/main`。
 - Phase 2 不建独立 per-task Task Record。每个 PR body 必须固定包含 `## Scope`、`## 验证结果（pytest / Golden 原始结果行 + CI run）`、`## 本棒新增欠债` 三段；PR body 是绑定 commit 与 CI run 的永久任务记录。
 - PR body 三段必须在合并前全部完成；`## 本棒新增欠债` 中每条欠债须在合并前具备 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence 五个字段。合并后补写不计为合规任务记录。required checks 全绿只是必要条件，不构成自行合并授权：配有监理窗口的棒必须先获 Monitor PASS；未配监理窗口的棒，只有启动提示词显式授权时才可自行合并。
-- 监理窗口分级：修改 `app/ports/` 契约、DB schema、凭证语义、Golden fixture / `FROZEN_GT_IDS` 或安全边界（认证、CSRF、脱敏、隔离）的棒必须配监理窗口；单一表面的小棒、纯文档棒、纯配置棒可跳过，改为合并后由主窗口派子智能体抽查。跳过监理仍须在启动提示词中显式写明合并授权。
+- 本棒走多重的流程由下方「任务分档」决定：它规定要写几份提示词、要不要独占 worktree、要不要配监理窗口、要不要过 Opus 桥。
 - 仓库 owner 待办：为 `phase0/main` 的 GitHub 分支保护打开 **Do not allow bypassing the above settings**。本项是已登记欠债；没有专项授权时 agent 不得修改该设置。
 - 删除文件/目录或改写历史、secrets/`.env`、DB schema/真实数据、全局/系统变更、公开发布/生产部署、rebase、reset-hard、force push，均需对应动作的专项授权；风险标签不构成授权。不得绕过 hooks 或 branch protection。
 - 每次 merge 到 `phase0/main` 后检查对应的 remote GitHub Actions CI 结果。
+
+### 任务分档
+
+按**本棒实际触碰的面**定档，不按工作量或耗时估计定档；命中更高档的任一条件即整棒按更高档执行。
+
+| 档 | 触碰面 | 提示词 | worktree | 监理窗口 | Opus 桥 |
+|---|---|---|---|---|---|
+| **A** | 安全边界（认证 / CSRF / 脱敏 / 会话·租户·用户隔离）、`app/ports/` 契约、DB schema、凭证语义、Golden fixture 或 `FROZEN_GT_IDS` | 启动 + 监理两份 | 独占 | **必配** | **必过** |
+| **B** | 其余生产代码与运行配置 | 启动一份 | 独占 | 免 | 免 |
+| **C** | 仅文档、仅测试、仅 `_scratch/` | 免，口头交代即可 | 免，可在主工作树改 | 免 | 免 |
+
+- **三档都不豁免**：验证命令全绿、PR 合并路径、红线停点、PR body 三段、欠债五字段。
+- **三档都必须** Codex 自审 effort `xhigh`；B、C 档免掉的只是独立监理窗口与 Opus 桥。
+- **拿不准档位按高一档走。** 降档需雨爷明确同意，并在启动提示词或开棒交代里写明降到哪一档。
+- B、C 档没有 Monitor PASS 作为合并前置，因此**必须在开棒时显式写明合并授权**；未写明则合并仍是停点。
+- C 档合并后由主窗口派子智能体抽查。
 
 ### A 类机械同步
 
@@ -43,7 +59,8 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 
 ### 开棒前声明
 
-- 启动提示词必须声明串行或并行执行，以及本棒是否承担 A 类同步。
+- 开棒时必须声明三项：**档位**（A/B/C）、**串行或并行**、以及本棒是否承担 A 类同步。
+- **串行**（同一时刻只有一根 write lane）时跳过并行专用的开销：不做 A/B 类同步分流，`docs/phase2/STATUS.md` 由该棒在自己的 payload commit 内直接更新。并行相关规则仅在真正并行时生效。
 
 ## 验证命令
 
