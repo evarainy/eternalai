@@ -37,7 +37,7 @@ from app.ports.task_store import (
 )
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
-from app.runtime.models import CapabilityRef
+from app.runtime.models import CapabilityRef, ConfirmCardPayload
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult
 
@@ -282,6 +282,7 @@ class RuntimeImpl:
             exec_result,
             trace_id,
             capability_ref,
+            capability=selected_capability,
         )
         await self._trace_port.record_step(
             trace_id,
@@ -622,6 +623,8 @@ class RuntimeImpl:
         exec_result: ExecutionResult,
         trace_id: str,
         capability_ref: CapabilityRef,
+        *,
+        capability: CapabilitySpec | None = None,
     ) -> ResponseEnvelope:
         target_system = _target_system_for_capability(capability_ref.capability_id)
         if exec_result.status == "completed":
@@ -704,6 +707,11 @@ class RuntimeImpl:
             "请确认提交操作",
             "Please confirm.",
             trace_id,
+            payload=_confirm_card_payload(
+                capability_ref,
+                capability,
+                target_system,
+            ),
             target_system=target_system,
         )
 
@@ -881,6 +889,38 @@ def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
     if capability_id.startswith(("ivms.", "hikvision_ivms.")):
         return "hikvision_ivms"
     return None
+
+
+def _confirm_card_payload(
+    capability_ref: CapabilityRef,
+    capability: CapabilitySpec | None,
+    target_system: TargetSystem | None,
+) -> dict[str, Any]:
+    payload: ConfirmCardPayload = {
+        "capability_id": capability_ref.capability_id,
+        "operation_summary": _operation_summary(capability),
+        "target_system": target_system,
+        "field_names": _confirm_field_names(capability_ref, capability),
+    }
+    return dict(payload)
+
+
+def _confirm_field_names(
+    capability_ref: CapabilityRef,
+    capability: CapabilitySpec | None,
+) -> list[str]:
+    if capability is None:
+        return []
+    properties = capability.input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    return sorted(key for key in capability_ref.arguments if key in properties)
+
+
+def _operation_summary(capability: CapabilitySpec | None) -> str:
+    if capability is None:
+        return ""
+    return f"{capability.name}：{capability.short_description}"
 
 
 def _completeness_note(data: dict[str, Any], noun: str) -> str:

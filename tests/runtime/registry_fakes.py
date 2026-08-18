@@ -24,10 +24,15 @@ def active_capability(capability_id: str) -> CapabilitySpec:
 
 
 class StaticCapabilityRegistry:
-    def __init__(self, *capability_ids: str) -> None:
+    def __init__(self, *capabilities: str | CapabilitySpec) -> None:
+        specs = [
+            capability
+            if isinstance(capability, CapabilitySpec)
+            else active_capability(capability)
+            for capability in capabilities
+        ]
         self._capabilities = {
-            capability_id: active_capability(capability_id)
-            for capability_id in capability_ids
+            capability.capability_id: capability for capability in specs
         }
 
     async def get(self, capability_id: str) -> CapabilitySpec | None:

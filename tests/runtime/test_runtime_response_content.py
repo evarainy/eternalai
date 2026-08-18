@@ -17,11 +17,12 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 )
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
+from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import CapabilityRef, ConfirmCardPayload
 from app.runtime.runtime import RuntimeImpl
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
+from tests.runtime.registry_fakes import StaticCapabilityRegistry, active_capability
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SYSTEM_MESSAGE_CONTRACT_PACK = (
@@ -181,6 +182,8 @@ def _run_runtime(
     gateway_result: ExecutionResult,
     *,
     capability_id: str = "oa.get_workflow_status",
+    capability: CapabilitySpec | None = None,
+    arguments: dict[str, Any] | None = None,
     malformed: bool = False,
 ) -> ResponseEnvelope:
     async def exercise_runtime() -> ResponseEnvelope:
@@ -192,12 +195,15 @@ def _run_runtime(
             structured_output.register(
                 message,
                 CapabilityRef,
-                CapabilityRef(capability_id=capability_id),
+                CapabilityRef(
+                    capability_id=capability_id,
+                    arguments=arguments or {},
+                ),
             )
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry(capability_id),
+            capability_registry=StaticCapabilityRegistry(capability or capability_id),
             gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
@@ -214,6 +220,20 @@ def _run_runtime(
         )
 
     return asyncio.run(exercise_runtime())
+
+
+def _capability_with_fields(
+    capability_id: str,
+    *field_names: str,
+) -> CapabilitySpec:
+    return active_capability(capability_id).model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "properties": {field_name: {} for field_name in field_names},
+            }
+        }
+    )
 
 
 def test_completed_response_message_is_sourced_from_adapter_data() -> None:
@@ -404,7 +424,28 @@ def test_needs_binding_scope_has_matching_reason_and_clarify_action() -> None:
     assert envelope.ui.target_system == "u8"
 
 
-def test_confirm_required_card_carries_target_system() -> None:
+def test_confirm_card_payload_contract_has_exact_keys() -> None:
+    assert ConfirmCardPayload.__required_keys__ == frozenset(
+        {
+            "capability_id",
+            "operation_summary",
+            "target_system",
+            "field_names",
+        }
+    )
+
+
+def test_confirm_required_card_describes_operation_target_and_fields() -> None:
+    capability = _capability_with_fields(
+        "oa.submit_leave_request",
+        "workflow_id",
+        "remark",
+    ).model_copy(
+        update={
+            "name": "提交请假申请",
+            "short_description": "将请假申请提交到 OA",
+        }
+    )
     envelope = _run_runtime(
         ExecutionResult(
             status="waiting_user",
@@ -412,9 +453,110 @@ def test_confirm_required_card_carries_target_system() -> None:
             trace_id="tr-confirm",
         ),
         capability_id="oa.submit_leave_request",
+        capability=capability,
+        arguments={"workflow_id": "wf-001", "remark": "annual leave"},
     )
 
     assert envelope.status == "waiting_user"
+    assert envelope.message == "请确认提交操作"
+    assert envelope.fallback_text == "Please confirm."
     assert envelope.ui.component_type == "confirm_card"
     assert envelope.ui.action == "confirm"
     assert envelope.ui.target_system == "oa"
+    assert envelope.ui.payload == {
+        "capability_id": "oa.submit_leave_request",
+        "operation_summary": "提交请假申请：将请假申请提交到 OA",
+        "target_system": "oa",
+        "field_names": ["remark", "workflow_id"],
+    }
+    serialized = envelope.model_dump_json()
+    assert "wf-001" not in serialized
+    assert "annual leave" not in serialized
+
+
+def test_confirm_required_payload_omits_credential_keys_and_all_argument_values() -> None:
+    capability = _capability_with_fields(
+        "oa.submit_leave_request",
+        "password",
+        "sessionkey",
+        "cookie",
+        "access_token",
+        "details",
+    )
+    arguments = {
+        "password": "value-one",
+        "sessionkey": "value-two",
+        "cookie": "value-three",
+        "access_token": "value-four",
+        "details": {
+            "private_field": "value-five",
+            "items": ["value-six"],
+        },
+    }
+
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="waiting_user",
+            error_code="confirm_required",
+            trace_id="tr-confirm-sensitive",
+        ),
+        capability_id="oa.submit_leave_request",
+        capability=capability,
+        arguments=arguments,
+    )
+    serialized = envelope.model_dump_json()
+
+    assert envelope.ui.payload["field_names"] == [
+        "[REDACTED]",
+        "[REDACTED]",
+        "details",
+        "[REDACTED]",
+        "[REDACTED]",
+    ]
+    for forbidden in (
+        "password",
+        "sessionkey",
+        "cookie",
+        "access_token",
+        "value-one",
+        "value-two",
+        "value-three",
+        "value-four",
+        "private_field",
+        "value-five",
+        "items",
+        "value-six",
+    ):
+        assert forbidden not in serialized
+
+
+def test_confirm_required_payload_omits_marker_free_sensitive_canary() -> None:
+    opaque_canary = "z9Y8x7Q6w5V4"
+    nested_canary = "q1W2e3R4t5Y6"
+    capability = _capability_with_fields(
+        "oa.submit_leave_request",
+        "arg1",
+        "details",
+    )
+
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="waiting_user",
+            error_code="confirm_required",
+            trace_id="tr-confirm-canary",
+        ),
+        capability_id="oa.submit_leave_request",
+        capability=capability,
+        arguments={
+            "arg1": opaque_canary,
+            "details": {"opaque": nested_canary},
+            f"assignee={opaque_canary}": "ignored",
+        },
+    )
+    serialized = envelope.model_dump_json()
+
+    assert envelope.ui.payload["field_names"] == ["arg1", "details"]
+    assert opaque_canary not in serialized
+    assert nested_canary not in serialized
+    assert "assignee=" not in serialized
+    assert "ignored" not in serialized
