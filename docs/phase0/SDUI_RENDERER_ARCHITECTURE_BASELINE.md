@@ -20,8 +20,7 @@ The SDUI renderer must integrate with the frozen frontend baseline established b
 - React 18
 - Vite
 - TypeScript strict
-- Ant Design 5.x
-- ProComponents 2.x
+- Ant Design 6.x
 - React Router
 - TanStack Query
 - Zustand
@@ -30,7 +29,6 @@ The SDUI renderer must integrate with the frozen frontend baseline established b
 The following are excluded and must not be adopted without a separate approved task and dependency-policy update:
 
 - Ant Design X
-- Ant Design 6
 - React 19
 - Next.js
 - Tailwind
@@ -279,7 +277,7 @@ The following checks must pass before the SDUI Renderer implementation is consid
 5. **user_action acceptance**: Cards emit single structured actions; no direct adapter calls, credential operations, arbitrary API calls, or multi-step workflows.
 6. **Security acceptance**: No `dangerouslySetInnerHTML`; sensitive keys filtered from display; diagnostic mode is development-only.
 7. **State boundary acceptance**: Zustand for local UI only; TanStack Query for server data only; no duplication; no invented backend endpoints.
-8. **Baseline compliance**: Renderer integrates with React 18 / Vite / TypeScript strict / Ant Design 5.x / ProComponents 2.x / React Router / TanStack Query / Zustand / Orval. No excluded technologies adopted.
+8. **Baseline compliance**: Renderer integrates with React 18 / Vite / TypeScript strict / Ant Design 6.x / React Router / TanStack Query / Zustand / Orval. No excluded technologies adopted.
 9. **No implementation code**: `web/src/sdui/**` does not exist until a future task explicitly authorizes it.
 
 ## Deferred work

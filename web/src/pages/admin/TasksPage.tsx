@@ -144,7 +144,7 @@ export default function TasksPage() {
   const eventError = eventQuery.error ? errorText(eventQuery.error) : undefined;
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <div>
         <Title level={3} style={{ marginBottom: 0 }}>
           Task 证据查看
@@ -166,9 +166,9 @@ export default function TasksPage() {
         </Form.Item>
       </Form>
 
-      {filterError && <Alert type="info" showIcon message={filterError} />}
+      {filterError && <Alert type="info" showIcon title={filterError} />}
       {taskError && (
-        <Alert type="error" showIcon message="Task 请求失败" description={taskError} />
+        <Alert type="error" showIcon title="Task 请求失败" description={taskError} />
       )}
 
       <Table<AdminTaskView>
@@ -184,16 +184,16 @@ export default function TasksPage() {
         title={`Task 证据：${selectedTaskId ?? ''}`}
         open={selectedTaskId !== undefined}
         onClose={() => setSelectedTaskId(undefined)}
-        width={760}
+        size={760}
         destroyOnHidden
       >
         {eventError && (
-          <Alert type="error" showIcon message="Task 事件请求失败" description={eventError} />
+          <Alert type="error" showIcon title="Task 事件请求失败" description={eventError} />
         )}
         {eventQuery.isLoading ? (
           <Spin />
         ) : eventQuery.data?.items.length ? (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
             {eventQuery.data.items.map((event) => {
               const visibleEvidence = evidenceFields.filter(
                 (field) =>

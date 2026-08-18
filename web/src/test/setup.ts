@@ -15,5 +15,13 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 });
 
+class ResizeObserverMock {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
+vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+
 const getComputedStyle = window.getComputedStyle.bind(window);
 window.getComputedStyle = (element) => getComputedStyle(element);

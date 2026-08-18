@@ -125,7 +125,9 @@ describe('BindingsPage', () => {
       await screen.findByText('u8', { selector: '.ant-select-item-option-content' }),
     );
     await waitFor(() => {
-      expect(document.querySelector('.ant-select-selection-item')).toHaveTextContent('u8');
+      expect(
+        screen.getByLabelText('target_system').closest('.ant-select-content-has-value'),
+      ).toHaveTextContent('u8');
     });
     fireEvent.click(screen.getByRole('button', { name: /查\s*询/ }));
 

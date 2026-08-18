@@ -119,8 +119,7 @@ explicitly names a future dedicated allowlist file.
 | npm | react-dom | >=18,<19 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (React 18); peerDep >=18.0.0 confirmed |
 | npm | vite | >=5,<9 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Vite) |
 | npm | typescript | >=5,<7 | frontend-tooling | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TypeScript strict) |
-| npm | antd | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (Ant Design 5.x); peerDep >=5.0.0/^5.20.3 confirmed |
-| npm | @ant-design/pro-components | >=2,<3 | frontend-runtime | pending_internal_mirror_confirmation | P0-FE-SPIKE-001 frozen baseline (ProComponents 2.x) |
+| npm | antd | >=6,<7 | frontend-runtime | pending_internal_mirror_confirmation | P2-FE-ANTD6-001 verified baseline (Ant Design 6.x) |
 | npm | react-router-dom | >=6,<8 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (React Router) |
 | npm | @tanstack/react-query | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (TanStack Query) |
 | npm | zustand | >=5,<6 | frontend-runtime | pending_internal_mirror_confirmation | P0-INFRA-003C evidence-based range; P0-FE-SPIKE-001 frozen baseline (Zustand) |
@@ -152,4 +151,5 @@ the Dependency Allowlist table above.
 | package | exclusion_reason | evidence_source | carrying_task |
 |---|---|---|---|
 | @ant-design/x | Blocked: no approved enterprise npm mirror or offline cache configured. v2.x requires antd ^6.0.0+ (incompatible with frozen antd 5.x baseline). Only legacy v1.x (v1.6.1) is antd 5.x-compatible. | P0-FE-SPIKE-001_20260518_211335_blocked.yaml; public npmjs.org (non-authoritative reference) | P0-FE-SPIKE-001 |
+| @ant-design/pro-components | 移出基线，改为 antd 6 原生 Table + 项目自有薄查询层 | P2-FE-ANTD6-001 | P2-FE-ANTD6-001 |
 
