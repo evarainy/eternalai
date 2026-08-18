@@ -233,7 +233,7 @@ export default function RegistryPage() {
   const queryError = registryQuery.error ? errorText(registryQuery.error) : undefined;
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between' }}>
         <div>
           <Title level={3} style={{ marginBottom: 0 }}>
@@ -250,7 +250,7 @@ export default function RegistryPage() {
         <Alert
           type="error"
           showIcon
-          message="Registry 请求失败"
+          title="Registry 请求失败"
           description={actionError ?? queryError}
         />
       )}

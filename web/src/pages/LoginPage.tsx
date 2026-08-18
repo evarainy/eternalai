@@ -55,7 +55,7 @@ export default function LoginPage() {
       }}
     >
       <Card style={{ maxWidth: 440, width: '100%' }}>
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Space orientation="vertical" size="large" style={{ width: '100%' }}>
           <div>
             <Title level={2} style={{ marginBottom: 8 }}>
               登录 EternalAI
@@ -64,7 +64,7 @@ export default function LoginPage() {
               登录信息仅用于本次 OA 身份验证，提交后即从表单清除。
             </Paragraph>
           </div>
-          {errorMessage ? <Alert message={errorMessage} type="error" showIcon /> : null}
+          {errorMessage ? <Alert title={errorMessage} type="error" showIcon /> : null}
           <Form<LoginApiV1AuthLoginPostBody>
             autoComplete="off"
             form={form}

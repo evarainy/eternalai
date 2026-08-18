@@ -226,7 +226,7 @@ export default function BindingsPage() {
   const queryError = bindingQuery.error ? errorText(bindingQuery.error) : undefined;
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
       <div>
         <Title level={3} style={{ marginBottom: 0 }}>
           Binding 查看
@@ -257,12 +257,12 @@ export default function BindingsPage() {
         </Form.Item>
       </Form>
 
-      {filterError && <Alert type="info" showIcon message={filterError} />}
+      {filterError && <Alert type="info" showIcon title={filterError} />}
       {queryError && (
-        <Alert type="error" showIcon message="Binding 请求失败" description={queryError} />
+        <Alert type="error" showIcon title="Binding 请求失败" description={queryError} />
       )}
       {actionError && (
-        <Alert type="error" showIcon message="Binding 操作失败" description={actionError} />
+        <Alert type="error" showIcon title="Binding 操作失败" description={actionError} />
       )}
 
       {bindingQuery.data && (

@@ -349,7 +349,7 @@ export default function ChatPage() {
             用一条完整请求查询当前已接入的业务能力。系统会明确反馈办理结果、需要补充的范围或不可办理原因。
           </Paragraph>
         </div>
-        <Tag bordered={false} className={styles.sessionTag}>
+        <Tag variant="filled" className={styles.sessionTag}>
           当前页面会话
         </Tag>
       </header>
