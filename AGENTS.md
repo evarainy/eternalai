@@ -1,4 +1,4 @@
-# AGENTS.md — Phase 2 项目规则 v2.4.0
+# AGENTS.md — Phase 2 项目规则 v2.4.1
 
 本文件是项目级规则与约束的唯一权威。`CLAUDE.md` 仅用 `@AGENTS.md` 导入本文件并保留 Claude Code 专属补充；项目级治理文件只允许这一项导入，禁止导入长规格文档。
 
@@ -24,7 +24,7 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 - **Merge**：`merge phase2(<task_id>): <简要描述>`。
 - Q0-Q3 只控制 Review 强度，不制造人工停点。人工停点仅来自专项红线动作、扩域、新增或变更架构/框架/公共契约/API/协议/信任边界/核心不变量、重大未决选择、更严格的仓库规则或批次/里程碑验收；保持既有架构的内部 `app/ports/` 变更本身不是停点。
 - 不设独立 local-commit Gate。普通非强制任务分支 push/PR/merge、CI/CD 配置修改和 CI 运行，仅在 Goal 与仓库规则允许，且确定性验证、所需 Review、freshness、branch protection、required checks 均通过时执行。集成到 `phase0/main` 一律走 PR：push 任务分支 → 开 PR → 等 required checks 最终全绿 → 通过 PR 合并。即使没有显式 bypass 参数，也永不本地合完直推 `phase0/main`。
-- Phase 2 不建独立 per-task Task Record。每个 PR body 必须固定包含 `## Scope`、`## 验证结果（pytest / Golden 原始结果行 + CI run）`、`## 本棒新增欠债` 三段；PR body 是绑定 commit 与 CI run 的永久任务记录。
+- Phase 2 不建独立 per-task Task Record。每个 PR body 必须固定包含 `## Scope`、`## 验证结果（实际执行的最小充分验证原始结果 + CI run；pytest / Golden 仅在命中触发条件时列入）`、`## 本棒新增欠债` 三段；PR body 是绑定 commit 与 CI run 的永久任务记录。
 - PR body 三段必须在合并前全部完成；`## 本棒新增欠债` 中每条欠债须在合并前具备 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence 五个字段。合并后补写不计为合规任务记录。required checks 全绿只是必要条件，不构成自行合并授权：配有监理窗口的棒必须先获 Monitor PASS；未配监理窗口的棒，只有启动提示词显式授权时才可自行合并。
 - 本棒走多重的流程由下方「任务分档」决定：它规定要写几份提示词、要不要独占 worktree、要不要配监理窗口、要不要过 Opus 桥。
 - 仓库 owner 待办：为 `phase0/main` 的 GitHub 分支保护打开 **Do not allow bypassing the above settings**。本项是已登记欠债；没有专项授权时 agent 不得修改该设置。
@@ -41,7 +41,7 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 | **B** | 其余生产代码与运行配置 | 启动一份 | 独占 | 免 | 免 |
 | **C** | 仅文档、仅测试、仅 `_scratch/` | 免，口头交代即可 | 免，可在主工作树改 | 免 | 免 |
 
-- **三档都不豁免**：验证命令全绿、PR 合并路径、红线停点、PR body 三段、欠债五字段。
+- **三档都不豁免**：与本棒实际触碰面相匹配的确定性验证必须通过；同时遵守 PR 合并路径、红线停点、PR body 三段和欠债五字段。验证按下方「验证策略」选择，不按档位机械执行固定套餐。
 - **三档都必须** Codex 自审 effort `xhigh`；B、C 档免掉的只是独立监理窗口与 Opus 桥。
 - **拿不准档位按高一档走。** 降档需雨爷明确同意，并在启动提示词或开棒交代里写明降到哪一档。
 - B、C 档没有 Monitor PASS 作为合并前置，因此**必须在开棒时显式写明合并授权**；未写明则合并仍是停点。
@@ -62,21 +62,47 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 - 开棒时必须声明三项：**档位**（A/B/C）、**串行或并行**、以及本棒是否承担 A 类同步。
 - **串行**（同一时刻只有一根 write lane）时跳过并行专用的开销：不做 A/B 类同步分流，`docs/phase2/STATUS.md` 由该棒在自己的 payload commit 内直接更新。并行相关规则仅在真正并行时生效。
 
-## 验证命令
+## 验证策略
 
-> 全量测试需要 Docker Desktop 启动、测试库 healthy 于 `127.0.0.1:15432`，且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。
-> 缺少 `DATABASE_URL` 时 DB 测试失败而不是跳过——静默跳过会被读成通过。
-> 确需省略时必须显式使用 `--ignore=`。当前三条结果只见 `docs/phase2/STATUS.md`。
+验证目标是 **最小而充分**：用最小范围、最接近真实改动路径的检查证明本棒没有破坏相关合同。最小不等于只跑最容易通过的测试；必须覆盖改动的成功路径、失败路径和受影响边界，并在汇报与 PR body 中逐条列出实际命令、结果和未执行项理由。
 
-```powershell
-uv run python scripts/check_dev_environment.py --start-full-tests  # 后台全量测试；日志/状态写入 _scratch/
-uv run pytest tests/ports/test_capability_gateway_port.py
-uv run python scripts/check_dependencies.py
-uv run pytest tests/architecture/
-uv run python scripts/check_weak_tests.py tests/ports/<test_file>.py
-uv run python scripts/run_golden_tasks.py --gate  # 所有后续实现任务必跑
-git ls-files --others --exclude-standard
-```
+### C 档：文档、测试与 `_scratch/`
+
+- **纯说明性文档**：默认只做 `git diff --check`、受影响链接/路径/标题/术语/前后决定冲突检查，以及收口时的 `git ls-files --others --exclude-standard`；**不运行**全量 pytest、Golden、端口测试或与文档无关的程序门禁。
+- **可执行或机器消费文档**（OpenAPI、JSON Schema、fixture、allowlist、CI 配置、命令示例、生成源等）：除文档检查外，只运行对应解析器、生成器或最窄合同测试；是否升级到更高档按其实际触碰面判断。
+- **仅测试改动**：运行新增/修改测试及其直接覆盖的最小生产路径，并对改动的测试文件运行弱测试检查；默认不跑全量，除非命中下方全量触发条件。
+
+### B 档：普通生产代码与运行配置
+
+- 默认运行：改动文件对应的单元/组件测试、最近一层集成或合同测试，以及该语言和包实际需要的 lint / typecheck / build；只覆盖受影响模块和调用路径。
+- 改动依赖清单、lockfile 或 allowlist 时运行依赖检查；触及 import、registry 或六边形边界时运行架构测试；新增或修改测试时运行对应弱测试检查。
+- 只有改动可能影响 Golden 所覆盖的任务理解、Capability 选择、Policy、Workflow、ResponseEnvelope、终态判定或负向/边界行为时，才运行 Golden gate。
+- B 档默认**不跑全量测试**；定向验证不足以覆盖风险或命中下方触发条件时再升级。
+
+### 全量测试触发条件
+
+命中以下任一项时必须运行全量测试，并同时保留针对改动路径的定向验证；全量不能替代定向测试：
+
+1. 当前 Goal、用户、验收标准、required checks 或里程碑明确要求；
+2. A 档改动，或触及认证、授权、CSRF、脱敏、会话/租户/用户隔离、凭证、Gateway、Policy、Identity、Secret、Trace、Evidence、DB schema、`app/ports/` 公共契约、Golden fixture / `FROZEN_GT_IDS` 等核心信任边界；
+3. 跨多个生产层/包的大范围重构，修改共享基础设施、公共协议/API、依赖解析或测试基础设施，无法用一组可枚举的定向测试充分覆盖；
+4. 发布、批次或里程碑收口，仓库/分支保护要求全量回归。
+
+全量测试需要 Docker Desktop 启动、测试库 healthy 于 `127.0.0.1:15432`，且当前进程能看到 `DATABASE_URL`（用户级环境变量；进程若早于设置时启动则继承不到，重开终端/应用即可）。缺少 `DATABASE_URL` 时 DB 测试失败而不是跳过；确需省略必须显式使用 `--ignore=` 并披露原因。环境不具备或全量失败时停手报告，不得静默降级、跳过、重试掩盖或修改测试换绿。
+
+### 命令菜单（按触发条件选用，不是固定套餐）
+
+| 命令 | 触发条件 |
+|---|---|
+| `uv run python scripts/check_dev_environment.py --start-full-tests` | 仅命中「全量测试触发条件」；后台日志/状态写入 `_scratch/` |
+| `uv run pytest <changed-or-nearest-test-path>` | 编码棒默认；选择直接覆盖改动路径的最窄测试 |
+| `uv run pytest tests/ports/test_capability_gateway_port.py` | 触及 Capability Gateway port 或其实现/合同 |
+| `uv run python scripts/check_dependencies.py` | 触及依赖、manifest、lockfile、allowlist 或依赖策略 |
+| `uv run pytest tests/architecture/` | 触及 import、registry、六边形边界或架构守卫 |
+| `uv run python scripts/check_weak_tests.py <changed-test-file>` | 新增或修改对应测试文件 |
+| `uv run python scripts/run_golden_tasks.py --gate` | 触及 Golden 覆盖的运行时语义、负向/边界行为或命中明确要求 |
+| `git diff --check` | 所有写入棒收口前 |
+| `git ls-files --others --exclude-standard` | 所有写入棒收口前；有意保留时逐项解释 |
 
 ## 不可协商规则
 
