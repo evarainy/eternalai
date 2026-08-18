@@ -79,7 +79,7 @@ def test_current_result_lines_exist_only_in_status() -> None:
 def test_agents_validation_scripts_are_required_and_exist() -> None:
     agents = _read(AGENTS_PATH)
     validation_section = re.search(
-        r"^## (?:验证命令|Validation commands)\s*$\n(?P<body>.*?)(?=^## )",
+        r"^## (?:验证命令|验证策略|Validation commands)\s*$\n(?P<body>.*?)(?=^## )",
         agents,
         flags=re.MULTILINE | re.DOTALL,
     )
