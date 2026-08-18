@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import Any
 
 import pytest
@@ -98,6 +99,46 @@ def test_build_confirm_card_action_confirm() -> None:
     assert envelope.ui.component_type == "confirm_card"
     assert envelope.ui.action == "confirm"
     assert envelope.status == "waiting_user"
+
+
+def test_non_confirm_builder_paths_keep_exact_serialized_bytes() -> None:
+    builder = _builder()
+    args = _message_args()
+    envelopes = {
+        "message": builder.build_message(*args),
+        "binding_required": builder.build_binding_required(*args, target_system="oa"),
+        "operator_handback": builder.build_operator_handback(*args),
+        "no_capability_found": builder.build_no_capability_found(*args),
+        "policy_denied": builder.build_policy_denied(*args),
+        "operator_bind_required": builder.build_operator_handback_bind_required(
+            *args,
+            target_system="oa",
+        ),
+        "failed": builder.build_failed(*args),
+    }
+
+    assert {
+        name: sha256(builder.serialize(envelope).encode()).hexdigest()
+        for name, envelope in envelopes.items()
+    } == {
+        "message": "71a9d31a5c90bc66f6929251e24338e4528334bd25544b31e14228f365ee4942",
+        "binding_required": (
+            "f85b909c9e71cf4183d25ca7551ed3ca0cfc0633237061f41921b89aaf7e1935"
+        ),
+        "operator_handback": (
+            "fa1cfa049bdfa28dcb1f2af3eef2b71afcb36a147b9912263d66806525c2f834"
+        ),
+        "no_capability_found": (
+            "4cc0cf1c955c96814a13d68b2e4f0a26dc7f7304a29e90561d90d940e7d1f1c5"
+        ),
+        "policy_denied": (
+            "4a29ac65f9a90915626d157bdc4455a2c35d999439ef80ddffa6d430144a0f01"
+        ),
+        "operator_bind_required": (
+            "07458dea994c6decf62d0a81f2df90c352ac3ab886ee584ef1dab835c327273e"
+        ),
+        "failed": "f24db8b7c8a9e9073e6a9a194ae1c3869c3a710d5e2024fa54c6c022797acdb8",
+    }
 
 
 def test_build_binding_required_uses_binding_required_card() -> None:

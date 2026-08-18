@@ -20,6 +20,7 @@ _DEFAULT_FAILURE_MESSAGE = "Unable to build response envelope."
 _DEFAULT_FAILURE_FALLBACK = "Unable to produce a response. Please retry."
 _CREDENTIAL_MARKER = re.compile(
     r"(?i)(bearer|token|secret|password|passwd|cookie|session[_-]?id|sessionid|"
+    r"session[_-]?key|"
     r"access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)"
 )
 _DATALESS_STATUSES = {"blocked", "waiting_user", "no_capability_found"}
