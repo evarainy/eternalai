@@ -14,6 +14,26 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 - **进化只到候选**：P2 可有基础 Skill 候选池，但不自动生成、发布或扩大权限。（蓝图 §2.5 L110-L118、§10.3 L2207-L2253、§13 L2710）
 - **安全开关看可验证事实**：安全守卫只能依赖可直接校验的协议事实或配置值，不依赖 `ENV` 这类自由文本环境标签；当前 `ENV` 只承载 testing/mock 边界，不是生产安全分流字段。（`app/config.py::ProductionSettings.from_environment`；`app/composition.py`；`app/infra/observability/noop_trace_writer.py`）
 
+### P2 收口标准（2026-08-19 修订：必达 / 机会 / 排除三层）
+
+原 IN 范围 9 项曾全部列为必做，其中两项卡在第三方手里，等于把收口时间交给项目外的人决定。现分三层，**只有「必达」层决定 P2 何时收口**。
+
+**必达**（缺一不可，全部达成即收口）：
+
+| # | 内容 | 承接 |
+|---|---|---|
+| 1 | 一个真实系统（OA）只读纵切，经 Gateway / Policy / Evaluator / Trace 全链 | ✅ 已完成 |
+| 2 | Work Object + 最小工作台：用户看得到自己的 OA 待办、状态与数据截至时间，可标记处理痕迹 | `P2-WORK-OBJECT-001` |
+| 3 | 后台定时轮询：用户不打开页面，状态也在积累 | `P2-OA-CREDENTIAL-POLL-001` |
+| 4 | 一个获批低风险写入（OA 待办审批同意），经确认卡授权、受版本绑定保护 | `P2-LOW-RISK-WRITE-001` |
+| 5 | 覆盖以上路径的 Golden，含负向与边界 | `P2-GOLDEN-001` |
+
+**机会**（外部输入到位就做，不到位不阻塞收口）：`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`。
+
+**排除**（P2 明确不做）：IM 接入与 `WorkCandidate` 链路；卡片渲染器多密度渲染；装第三方执行内核（四步走第四步）；Memory 六层的后四层；Skill CI/CD 完整生命周期；原生客户端；**知识库**（个人/部门两级、权限、文档转 MD 入库）；**DB Gateway**。
+
+> 任何「顺便把 X 也做了」的提案，先对照排除清单。依据 `DECISIONS.md` 2026-08-19「P2 收口标准修订」。
+
 ## 2. 范围边界
 
 ### IN（P2 做）
@@ -52,9 +72,9 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|
 | 真实 LLM / 生产装配 | 内网 vLLM endpoint，以及 `max_model_len`、量化、timeout、`max_tokens`、`enable_thinking` 的实际值。 | ✅ 已到位 | `P1-PARAM-001.md` L3-L7、L24-L59 |
 | 可信试点入口 | 雨爷选择最小试点认证方案，或 infra 提供现有 IAM/SSO 可接入条件；禁止继续把 `X-EternalAI-Roles` 当证明。 | ✅ OA 登录、EternalAI Session Cookie、认证 Principal 与受保护入口已落地；企业 IAM/SSO 是否提前仍开放 | `app/api/v1/auth.py`；`app/api/v1/admin.py`；蓝图 §12.1.5 L2538-L2549 |
-| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | ◐ 首个 OA Adapter 的代码纵切、凭证绑定、待办事宜数据源原地替换及真实 Live/全链现场证据均已完成；**第二个系统仍待选** | 蓝图 §15 L2870-L2907；机器本地非仓库输入的存在性由 `P2-GOV-SYNC-009` PR body `## Scope` 永久记录；`tests/contract_packs/oa/ecology9-pending-workflows-v3/profile.json`；`scripts/smoke/full_chain.py`；`scripts/smoke/runner.py` |
+| 首个/第二个真实 Adapter 与绑定 | 目标系统优先级、现场版本/API、测试环境、网络、账号/应用凭证、身份模式和允许用例。 | ◐ 首个 OA Adapter 的代码纵切、凭证绑定、待办事宜数据源原地替换及真实 Live/全链现场证据均已完成；**第二个系统已定为海康监控**（2026-08-19），属机会项；具体只读用例、现场版本、API/SDK、测试环境、账号与凭证形态、允许设备与区域范围仍待到位。凭证形态与 OA 不同（部门级共享账号），须由 Policy Guard 承担设备/区域控制 | 蓝图 §15 L2870-L2907；机器本地非仓库输入的存在性由 `P2-GOV-SYNC-009` PR body `## Scope` 永久记录；`tests/contract_packs/oa/ecology9-pending-workflows-v3/profile.json`；`scripts/smoke/full_chain.py`；`scripts/smoke/runner.py` |
 | 正式 Secret 管理 | 企业运行密钥的责任边界与运维更新方式；用户 OA Session 继续使用既有加密存储、晚解密、撤销与重置。 | ✅ 决定三已修订：企业运行密钥由运维通过配置文件管理，纯内网不设定期轮换，不建设运行时管理页面；现有环境配置读取与重启后生效已满足 P2 | `app/config.py::ProductionSettings.from_environment`；`.env.example` 的四个 `ETERNALAI_*_KEY_B64` 占位；`app/infra/auth/postgresql.py`；蓝图 §7.4.3 L1540-L1549、§7.4.7 L1677 |
-| DB Gateway 真实纵切 | 业务负责人/DBA 批准的只读视图、字段/行级范围、测试数据与访问身份。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947 |
+| ~~DB Gateway 真实纵切~~ **已不适用** | ❌ 2026-08-19 `P2-DB-GATEWAY-001` 移出 P2：业务数据一律经接口获取、不直连数据库，前提不成立，故本行不再作为待解除的外部输入。 | 蓝图 §8.2 L1810-L1826、§8.7 L1926-L1947 |
 | Memory 与低风险写入验收 | 经批准的知识语料/用户数据边界；以及具体写操作、测试环境、owner、回滚/补偿能力。 | 蓝图 §10.1-§10.2 L2148-L2205、§5.9 L878-L918 |
 
 #### 欠债登记
@@ -173,7 +193,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | task_id | 一句话交付 | depends_on | 风险档 | BLOCKED |
 |---|---|---|---|---|
 | `P2-PILOT-FOUNDATION-001` | 真实 LLM + 可信试点身份 + 生产 composition 让一个既有低风险请求可启动、可审计。 | `P2-TRACE-PERSIST-001`（已完成） | Q3 | ✅ 已落地（merge `51af461e`） |
-| `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | 部分：OA 现场接口/凭证已到位；**仍缺正式 Secret 方案**（可先做绑定/凭证验证/注入，Secret 存储子块等方案定后落地） |
+| `P2-IDENTITY-CREDENTIAL-001` | OA 的绑定、正式 Secret、基础凭证验证与 Gateway 注入/阻断形成纵切。 | `P2-PILOT-FOUNDATION-001` | Q3 | ✅ **已实质完成（2026-08-19 状态文字更正）**：原写「仍缺正式 Secret 方案」已过期——BLOCKED 表「正式 Secret 管理」早标到位，`DECISIONS.md` 2026-08-03 / 08-12「决定三」已定企业密钥由运维经配置文件管理。后台密码绑定属新范围，由 `P2-OA-CREDENTIAL-POLL-001` 承载，不回挂本棒 |
 | `P2-OA-READ-CONTRACT-001` | `oa.list_pending_workflows` 的 Replay Provider 接缝、固定能力白名单、版本化 Contract Pack 与离线脱敏工具。 | `P2-PILOT-FOUNDATION-001` | Q3 | ✅ 已落地（merge `89cd16e3`；Replay/Contract 棒未连内网、未读凭证） |
 | `P2-READ-ADAPTER-001` | 在已冻结的 OA Replay/Contract 接缝上补 Live HTTP、凭证读取、最小 IdentityMapping、Live 指纹漂移比较并闭合 Gateway→Adapter→Evaluator→Trace→Response；真实 OA 现场 smoke 另记欠债。 | `P2-OA-READ-CONTRACT-001` | Q3 | ✅ 代码纵切已落地（merge `f9526a4`） |
 | `P2-FE-API-CLIENTS-001` | 固化 Auth / Runtime / Admin-Trace OpenAPI 与 Orval 客户端，并以真实重导出、再生成验证无漂移；不改页面、mutator 或后端行为。 | `P2-READ-ADAPTER-001` | Q2 | ✅ 已落地（merge `e60b388`） |
@@ -206,12 +226,13 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-DECISIONS-SYNC-001` | 落盘 2026-08-17 / 08-18 决定组共 26 条与项目规则 v2.4.1（验证策略按触碰面选择最小充分验证，取代固定验证命令套餐）；同步治理守卫测试的章节标题正则，三条断言与必需脚本集合不变。 | — | Q1 | ✅ 已落地 |
 | `P2-DECISIONS-SYNC-002` | 登记「`P2-PILOT-OPS-B-001` / `C-001` 并进工作台」与「候选正名」两条裁决，决定总数增至 28 条；纯文档，零代码改动。 | `P2-DECISIONS-SYNC-001` | Q1 | ✅ 已落地 |
 | `P2-SDUI-CONFIRM-PAYLOAD-001` | `confirm_card` 的 `ui.payload` 固定四键 `capability_id` / `operation_summary` / `target_system` / `field_names`；`field_names` 取 `arguments` 键名与 `input_schema.properties` 的交集，未知参数连键名都不输出；参数值零流入；凭证 marker 新增 `session[_-]?key`。 | `P2-FE-ANTD6-001` | Q3 | ✅ 已落地 |
-| `P2-DB-GATEWAY-001` | 一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。 | `P2-IDENTITY-CREDENTIAL-001` | Q3 | 是：DBA/业务批准视图 |
+| ~~`P2-DB-GATEWAY-001`~~ | ~~一个获批只读视图的注册查询能力完成 Policy、限行、脱敏、审计纵切。~~ **已移出 P2** | — | — | ❌ **2026-08-19 移除**：业务系统数据一律经接口获取、不直连数据库，权限由业务系统自身判定并以错误码拒绝，前提不成立。后续确有直连需求再另行立项。依据 `DECISIONS.md` 2026-08-19「DB Gateway 移出 P2」。2026-08-03「决定二：数据库访问边界」继续有效 |
 | `P2-PILOT-OPS-001` | ~~交付绑定管理/映射导入、审计看板和最小反馈统计的试点运营面。~~ **已拆解，不再作为任何后续任务的前置。** | — | — | ✅ 已拆解（2026-08-19）：`P2-PILOT-OPS-A-001` 保持已完成、不回退；B-001 / C-001 剩余范围由 `P2-WORK-OBJECT-001` 及其后继工作台节点承接；`P2-SKILL-CANDIDATE-001` 与 `P2-GOLDEN-001` 已改依赖具体交付面。历史记录保留不回改，依据 2026-08-19「`P2-PILOT-OPS-001` 拆解与工作台 DAG 重排」 |
-| `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：数据边界/语料 |
+| `P2-MEMORY-001` | User Profile 与增强 Semantic Memory 在用户/部门 scope 内可用且不串数据。来源限于用户自定义编辑、日常聊天与办理业务过程的记录；**身份证号、银行账号、家庭住址等敏感个人信息不得入库**；部门之间必须隔离。 | `P2-PILOT-FOUNDATION-001` | Q3 | 是：经批准的知识语料与用户数据边界（**机会项**，不阻塞 P2 收口）。知识库（个人/部门两级、权限、文档转 MD 入库）已裁定不进 P2 |
 | `P2-SKILL-CANDIDATE-001` | 基础 `SkillCandidate` 可登记、审查、拒绝，且不能自动发布或执行。 | `P2-READ-ADAPTER-001`（依 2026-08-19「`P2-PILOT-OPS-001` 拆解与工作台 DAG 重排」，改依赖具体交付面，不再依赖旧总包） | Q3 | 否；来源语义已由 2026-08-18「Skill 候选来源语义：只允许人工登记」拍板（仅人工登记） |
-| `P2-GOLDEN-001` | 冻结 P2 新 Golden，覆盖真实只读、绑定、DB、隔离、审计与反馈负向边界。 | `P2-READ-ADAPTER-001`、`P2-DB-GATEWAY-001`、`P2-MEMORY-001`、`P2-SKILL-CANDIDATE-001`（依 2026-08-19 重排移除 `P2-PILOT-OPS-001`） | Q3 | 否（需显式 fixture 人批） |
-| `P2-LOW-RISK-WRITE-001` | 一个获批低风险写操作完成幂等、预览、确认、补偿、评测与审计。 | `P2-GOLDEN-001`、**`P2-CONFIRM-BINDING-001`**（依 2026-08-19「版本绑定推广既有 Workflow 锁定模式，并前置低风险写入」）；若命中自触发条件再依赖 `P2-CONFIRM-RESUME-001` | Q3 | 现场前置已解除；仍需写用例/沙箱/授权，并需前端能够渲染既有 `confirm_card` |
+| `P2-GOLDEN-001` | 冻结 P2 新 Golden，**覆盖当时已实现的路径**（真实只读、Work Object 与工作台、后台轮询、低风险写入、隔离、审计与反馈的负向边界）。 | `P2-READ-ADAPTER-001`、`P2-WORK-OBJECT-001`、`P2-LOW-RISK-WRITE-001` 的已实现部分 | Q3 | 否；需显式 fixture 人批。**2026-08-19 依赖修正**：原 `depends_on` 含 `P2-DB-GATEWAY-001` 与 `P2-MEMORY-001` 两个机会项，等于让必达项等待机会项，已按「做完哪块就考哪块」改写 |
+| `P2-LOW-RISK-WRITE-001` | **OA 待办事项「审批同意」**完成幂等、预览、确认、评测与审计。测试用操作者本人名下真实待办（OA 无独立测试环境）；本人点确认即生效并自动流转，本系统不叠加额外审批层；**该操作不可自行撤销**，OA 侧只能由下一级节点退回，确认卡须明示这一点。确认卡展示姓名、流程标题、正文内容与附件列表名，默认折叠为姓名与标题。 | `P2-GOLDEN-001`、`P2-CONFIRM-BINDING-001`；若命中自触发条件再依赖 `P2-CONFIRM-RESUME-001` | Q3 | ✅ **BLOCKED 已解除（2026-08-19）**：具体动作、测试靶子、授权层级、回滚能力与展示范围均已裁定。HAR 素材已备，待 HAR 清洗脚本完成后可交付分析。「提交某个流程」为增量，不在首棒 |
+| `P2-HIKVISION-ADAPTER-001` | 第二个真实系统 Adapter：海康监控只读纵切。**机会项**，不阻塞 P2 收口。 | `P2-READ-ADAPTER-001` | Q3 | 是：具体只读用例、现场产品与版本、API/SDK 接入方式、测试环境与网络可达性、账号与凭证形态、允许的设备与区域范围。**凭证形态与 OA 不同**——海康是部门级共享账号，须由 Policy Guard 承担设备/区域范围控制，不得照搬 OA 的「用户自己的凭证天然限权」假设（蓝图 §15.3） |
 | `P2-PORT-SEAM-001` | 建 `WorkflowEnginePort` 与 `AgentOrchestrationPort` 两个接缝，第一个实现分别包住现有 `WorkflowEngine.execute/resume` 与 `RuntimeImpl` 已有的编排行为；端口签名不得出现任何候选框架类型。 | 无新前置（现有代码即为第一实现） | **A 档** | 否 |
 | `P2-CONFIRM-BINDING-001` | 新增 `HumanGatePort` 承载「谁对哪个不可变请求作了什么决定」，并建立 Task 版本绑定清单（优先存不可变 digest / build marker）；两者合同一起设计，确认、恢复、执行三处校验同一清单。 | 无硬前置 | **A 档** | 否 |
 | `P2-WORK-OBJECT-001` | Work Object 最小真实纵切：OA 待办**直通** Work Object（不经 `WorkCandidate`），小聚合承载来源引用、责任人、时限、当前状态与确认记录；`TaskRecord` 按 ID 引用、语义不变。首版列表不做服务端分页排序，数据量上限进验收条件。 | `P2-READ-ADAPTER-001` | **A 档** | ✅ **BLOCKED 已解除**（2026-08-19「Work Object 与 OA 的状态同步策略」裁定五项细则）。本棒只做建模 + 用户在线时的直通同步 + 列表展示；后台定时轮询与密码绑定归 `P2-OA-CREDENTIAL-POLL-001`，两棒不互为前置 |
