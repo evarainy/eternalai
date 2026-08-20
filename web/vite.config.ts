@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     test: {
-      // 4 核环境下文件级并发与 OpenAPI 生成子进程争抢调度，导致 Ant 组件测试 5s 超时；实测失败率 35% → 0%。
+      // 4 核环境下先禁用文件并发，再由 package test 脚本分进程串行 Ant 组件与 OpenAPI 生成，解决 CPU 争抢的两半。
       fileParallelism: false,
       globals: true,
       environment: 'jsdom',
