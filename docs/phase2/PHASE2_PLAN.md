@@ -28,7 +28,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 4 | 一个获批低风险写入（OA 待办审批同意），经确认卡授权、受版本绑定保护 | `P2-LOW-RISK-WRITE-001` |
 | 5 | 覆盖以上路径的 Golden，含负向与边界 | `P2-GOLDEN-001` |
 
-**机会**（外部输入到位就做，不到位不阻塞收口）：`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`。
+**机会**（外部输入到位或有余力就做，不到位不阻塞收口）：`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`、`P2-PORT-SEAM-001`（2026-08-20 补入——原三层划分遗漏该项）。
 
 **排除**（P2 明确不做）：IM 接入与 `WorkCandidate` 链路；卡片渲染器多密度渲染；装第三方执行内核（四步走第四步）；Memory 六层的后四层；Skill CI/CD 完整生命周期；原生客户端；**知识库**（个人/部门两级、权限、文档转 MD 入库）；**DB Gateway**。
 
