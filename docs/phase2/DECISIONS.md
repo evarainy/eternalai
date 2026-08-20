@@ -570,3 +570,53 @@ OWASP Transaction Authorization 的 What You See Is What You Sign 要求用户�
 **为什么归机会层**：该棒把 `WorkflowEngine.execute/resume` 与 `RuntimeImpl` 已有的编排行为各包一层接口，属纯内部重构，**不产出用户可见价值**；而它服务的目标——四步走第四步「装现成的第三方执行内核」——已在收口标准的排除层中。同时它确实是冻结蓝图早就欠下的账，且趁当前代码规模尚小包装成本最低，因此不排除，只是不作为收口条件。
 
 **影响面**：`PHASE2_PLAN.md` 收口标准的机会层由 3 项增至 4 项；该棒仍为 A 档，触碰 `app/ports/` 契约，需独占 worktree、监理窗口与 Opus 桥。
+## 2026-08-20 — 裁决：Opus 终审默认档位改为 `high`
+
+**决定**：Opus 桥终审的默认 effort 由 `xhigh` 改为 **`high`**。Codex 自审档位**保持 `xhigh` 不变**。merge 硬前置的其余三项不变：`review_model_verified=true`、`observed_model=claude-opus-5`、`verdict=PASS`，且 base/head SHA 绑定当前候选。
+
+**两条兜底，不得省略**：
+
+1. **`high` 输出明显敷衍时升回 `xhigh` 重跑**。可判定的判据：没有具体 findings、只有笼统结论、或未逐条对照启动提示词的 criteria。
+2. **`high` 也超时的，停手上报，不得再降级**。不存在「降到 medium」这条路；此时正确的处置是**拆小该棒**，而不是继续放松把关。
+
+**为什么**：Opus 终审的价值在于**独立视角**而非档位深度——Codex 自审是同一模型按同一套理解写、又按同一套理解审，盲区重合；Opus 的作用是换一个模型看，这一价值与 effort 档位关系不大。实证支持：`P2-WORK-OBJECT-001` 的 `high` 终审逐条核对了 criteria，挑出 API 层跨用户隔离缺一条断言、认证 fixture 弱于同类测试，并指出外键会在被引用表安装 RI 触发器这一红线边界情况，均附文件与位置，非敷衍。
+
+反向证据同样成立：`xhigh` 并非保险——历史上 Opus 曾 PASS 掉一个整类检测的豁免洞。破坏性改动最终由守卫测试兜底，不由评审档位兜底。因此提高档位的边际收益有限，而 `xhigh` 超时的代价是确定的：`P2-WORK-OBJECT-001` 的首次 `xhigh` 即以 `claude review timed out` 失败，19 文件 / 3076 行 diff 无法完成。
+
+**一个需要分清的根因**：该次超时的直接原因很可能是 **diff 规模**而非档位。因此兜底 2 指向拆棒——若 `high` 在更大的 diff 上同样超时，应对是缩小单棒范围，不是继续降档。
+
+**影响面**：`_scratch/P2_TASK_PROMPT_TEMPLATE.md` 的评审段与后续所有任务提示词的 `--effort` 参数；`P2-PORT-SEAM-001` 与 `P2-CONFIRM-BINDING-001` 的已备提示词需按本条更新；`P2-WORK-OBJECT-001` 的降档由本条追认为常规做法，其 PR body 中「仅限本棒」的表述以本条为准更新为默认档位。
+
+## 2026-08-20 — 批准：修复 Golden 凭证扫描的敏感父键继承漏检（D-36）
+
+**决定**：批准修复敏感父键向非空 Mapping / list / tuple 的继承漏检，由 `P2-GOLDEN-CREDENTIAL-CONTAINER-001` 承载。
+
+**问题**：敏感 exact key 指向受支持容器时，`_is_non_empty_credential_scalar` 返回 false，扫描随后只检查子项自身，**父键的敏感性没有向下传递**，因此嵌套在敏感键下的凭证会漏检。
+
+**为什么批准**：2026-08-03「决定四」规定判卷契约的修改须经显式批准，故需本条。该修复属**加强而非放宽**——它堵的是一条真实存在的漏检路径，不改变任何既有 pattern 的判定结果，也不降低任何断言强度；而「明文凭证不得进入 Trace / ResponseEnvelope / fixture / 日志」是不可协商红线，漏检意味着该红线存在缺口。
+
+**边界**：修复不得以放宽既有六条 pattern、引入长度或熵阈值、或减少扫描面为手段；须新增能在未修代码上失败、修复后通过、且走原漏检路径的永久回归证据。
+
+**影响面**：`scripts/golden_task_assertions.py` 的凭证扫描逻辑；`P2-GOLDEN-CREDENTIAL-CONTAINER-001` 解除批准阻塞、可排期；判卷契约变更须按 2026-08-03「决定四」全量回放并披露影响。
+
+## 2026-08-20 — 裁决：HAR 清洗脚本进仓库，被清洗的 HAR 素材不进
+
+**决定**：OA HAR 的清洗脚本**进仓库**，放 `scripts/`。**被清洗的 HAR 文件本身绝不进仓库**，素材继续留在 `_scratch/`。脚本由雨爷在另一台设备开发。
+
+**为什么脚本进仓库**：它是 `P2-LOW-RISK-WRITE-001` 的前置工具（HAR 素材须清洗后才能交付分析），不进仓库则无版本、无测试、下次重写；更重要的是**清洗规则本身是安全资产**——洗掉了什么、为什么这么洗，需要可 review、可回归测试。已知教训佐证：`_scratch/oa/` 下的 HAR 三层均未清洗（cookie、password、内网 IP、大量真实汉字），恰说明清洗需要一个可审查的实现，而非临时脚本。
+
+**不得复用既有脚本**：`scripts/sanitize_oa_contract_pack.py` **不是 HAR 清洗器**——它只从受支持 profile 的选定 OA JSON 响应白名单重建固定 Contract Pack，不输出 HAR，不识别通用业务人名/单位名/标题，也不处理环境层 host/IP/server 信息，`PHASE2_PLAN.md` 已明令其不得用于 HAR 分享。新脚本是独立实现，不得挂靠其上。
+
+**影响面**：`scripts/` 新增清洗脚本及其测试；`P2-LOW-RISK-WRITE-001` 的 HAR 分析前置；`.gitignore` 须确保 HAR 素材不被误提交。
+
+## 2026-08-20 — 并行 lane 的测试库约束
+
+**决定**：多条 write lane 并行时，**同一时刻最多一条 lane 可以新增 migration 并使用共享测试库**；其余 lane 必须使用各自独立的测试库。
+
+**为什么**：本轮实测的失败模式——`P2-WORK-OBJECT-001` 将 `20260819_120000` apply 到共享测试库（`127.0.0.1:15432`），但该 migration 尚未提交到任何分支；`P2-PORT-SEAM-001` 从 `phase0/main` 起、自身一行 migration 都不加，基线仍因库中存在其 base 不含的 revision 而失败（`BLOCKED_PARALLEL_DB_REVISION`）。**即使某条 lane 完全不碰 migration，共享库被另一条污染后同样会红**，且此时任何需要跑测试的新棒都被连带阻塞。
+
+原有的并行规则只覆盖了治理文档冲突，未覆盖测试库，因此该失败可重复发生。
+
+**处置顺序**：出现该冲突时，**首选等待加 migration 的 lane 合入 `phase0/main`**——合入后库与 base 自然对齐，无需授权、无需新建容器。仅当等待代价过高时，才为其余 lane 配置独立测试库，且需雨爷专项授权；授权范围限于**新建空库并对其执行 migration**，**严禁对共享库执行 reset / downgrade / stamp**，亦不得修改仓库内任何数据库配置文件。
+
+**影响面**：并行开棒前的判定项新增一条「本棒是否新增 migration」；A 档棒的启动提示词须写明测试库归属；`AGENTS.md` 的并行约束段落待下一次规则修订时吸收本条。
