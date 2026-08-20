@@ -1,0 +1,354 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "SetHandlingMarkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mark": {
+            "enum": [
+              "pending_sync_confirmation",
+              "handled_elsewhere"
+            ],
+            "title": "Mark",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mark"
+        ],
+        "title": "SetHandlingMarkRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkObjectListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkObjectView"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "limit_exceeded": {
+            "title": "Limit Exceeded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "limit_exceeded"
+        ],
+        "title": "WorkObjectListResponse",
+        "type": "object"
+      },
+      "WorkObjectView": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_display_name": {
+            "title": "Assignee Display Name",
+            "type": "string"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "handling_mark": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending_sync_confirmation",
+                  "handled_elsewhere"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Mark"
+          },
+          "handling_marked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Marked At"
+          },
+          "source_created_at": {
+            "title": "Source Created At",
+            "type": "string"
+          },
+          "source_fetched_at": {
+            "format": "date-time",
+            "title": "Source Fetched At",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_received_at": {
+            "title": "Source Received At",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "source_status": {
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "source_title": {
+            "title": "Source Title",
+            "type": "string"
+          },
+          "source_workflow_type_id": {
+            "title": "Source Workflow Type Id",
+            "type": "string"
+          },
+          "task_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Record Id"
+          },
+          "work_object_id": {
+            "title": "Work Object Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_object_id",
+          "source_system",
+          "source_kind",
+          "source_ref",
+          "assignee_display_name",
+          "due_at",
+          "source_title",
+          "source_status",
+          "source_received_at",
+          "source_created_at",
+          "source_workflow_type_id",
+          "source_fetched_at",
+          "handling_mark",
+          "handling_marked_at",
+          "task_record_id"
+        ],
+        "title": "WorkObjectView",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/work-objects": {
+      "get": {
+        "operationId": "list_work_objects_api_v1_work_objects_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Work Objects"
+      }
+    },
+    "/api/v1/work-objects/sync": {
+      "post": {
+        "operationId": "sync_work_objects_api_v1_work_objects_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sync Work Objects"
+      }
+    },
+    "/api/v1/work-objects/{work_object_id}": {
+      "get": {
+        "operationId": "get_work_object_api_v1_work_objects__work_object_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_object_id",
+            "required": true,
+            "schema": {
+              "title": "Work Object Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Work Object"
+      }
+    },
+    "/api/v1/work-objects/{work_object_id}/handling-mark": {
+      "patch": {
+        "operationId": "set_work_object_handling_mark_api_v1_work_objects__work_object_id__handling_mark_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "work_object_id",
+            "required": true,
+            "schema": {
+              "title": "Work Object Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHandlingMarkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Work Object Handling Mark"
+      }
+    }
+  }
+}

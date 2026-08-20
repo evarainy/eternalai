@@ -71,4 +71,18 @@ export default defineConfig({
       },
     },
   },
+  workObjects: {
+    input: './openapi/work-objects.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/work-objects/work-objects.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
 });

@@ -38,25 +38,65 @@ const PROJECTS = [
     project: 'auth',
     input: './openapi/auth.openapi.json',
     target: './src/generated/auth/auth.ts',
-    path: '/api/v1/auth/login',
-    method: 'post',
-    operationId: 'login_api_v1_auth_login_post',
+    operations: [
+      {
+        path: '/api/v1/auth/login',
+        method: 'post',
+        operationId: 'login_api_v1_auth_login_post',
+      },
+    ],
   },
   {
     project: 'runtime',
     input: './openapi/runtime.openapi.json',
     target: './src/generated/runtime/runtime.ts',
-    path: '/api/v1/runtime/handle',
-    method: 'post',
-    operationId: 'handle_api_v1_runtime_handle_post',
+    operations: [
+      {
+        path: '/api/v1/runtime/handle',
+        method: 'post',
+        operationId: 'handle_api_v1_runtime_handle_post',
+      },
+    ],
   },
   {
     project: 'adminTrace',
     input: './openapi/admin-trace.openapi.json',
     target: './src/generated/admin-trace/admin-trace.ts',
-    path: '/api/v1/admin/traces',
-    method: 'get',
-    operationId: 'list_traces_api_v1_admin_traces_get',
+    operations: [
+      {
+        path: '/api/v1/admin/traces',
+        method: 'get',
+        operationId: 'list_traces_api_v1_admin_traces_get',
+      },
+    ],
+  },
+  {
+    project: 'workObjects',
+    input: './openapi/work-objects.openapi.json',
+    target: './src/generated/work-objects/work-objects.ts',
+    operations: [
+      {
+        path: '/api/v1/work-objects',
+        method: 'get',
+        operationId: 'list_work_objects_api_v1_work_objects_get',
+      },
+      {
+        path: '/api/v1/work-objects/sync',
+        method: 'post',
+        operationId: 'sync_work_objects_api_v1_work_objects_sync_post',
+      },
+      {
+        path: '/api/v1/work-objects/{work_object_id}',
+        method: 'get',
+        operationId: 'get_work_object_api_v1_work_objects__work_object_id__get',
+      },
+      {
+        path: '/api/v1/work-objects/{work_object_id}/handling-mark',
+        method: 'patch',
+        operationId:
+          'set_work_object_handling_mark_api_v1_work_objects__work_object_id__handling_mark_patch',
+      },
+    ],
   },
 ] as const;
 
@@ -118,11 +158,16 @@ def component_refs(value: Any) -> set[tuple[str, str]]:
 
 def focused_document(
     full: dict[str, Any],
-    path: str,
-    method: str,
+    operations: list[dict[str, str]],
 ) -> dict[str, Any]:
-    path_item = {method: copy.deepcopy(full["paths"][path][method])}
-    pending = list(component_refs(path_item))
+    paths: dict[str, dict[str, Any]] = {}
+    for operation in operations:
+        path = operation["path"]
+        method = operation["method"]
+        paths.setdefault(path, {})[method] = copy.deepcopy(
+            full["paths"][path][method]
+        )
+    pending = list(component_refs(paths))
     required: set[tuple[str, str]] = set()
     while pending:
         section, name = pending.pop()
@@ -137,7 +182,7 @@ def focused_document(
         for key, value in full.items()
         if key not in {"paths", "components"}
     }
-    document["paths"] = {path: path_item}
+    document["paths"] = paths
     if required:
         components: dict[str, dict[str, Any]] = {}
         for section, name in sorted(required):
@@ -154,7 +199,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 full_schema = create_app().openapi()
 for target in targets:
     payload = json.dumps(
-        focused_document(full_schema, target["path"], target["method"]),
+        focused_document(full_schema, target["operations"]),
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
@@ -209,7 +254,7 @@ function readOpenApi(path: string): OpenApiDocument {
 
 describe('FastAPI-derived Orval clients', () => {
   it(
-    're-exports three FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    're-exports four FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -222,13 +267,12 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(5);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(5);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(6);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(6);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),
-          path: target.path,
-          method: target.method,
+          operations: target.operations,
         }));
 
         run(
@@ -254,15 +298,19 @@ describe('FastAPI-derived Orval clients', () => {
           expect(readFileSync(regeneratedSpec)).toEqual(readFileSync(trackedSpec));
 
           const document = readOpenApi(regeneratedSpec);
-          expect(Object.keys(document.paths)).toEqual([target.path]);
-          expect(document.paths[target.path]?.[target.method]?.operationId).toBe(
-            target.operationId,
+          expect(Object.keys(document.paths)).toEqual(
+            target.operations.map((operation) => operation.path),
           );
+          for (const operation of target.operations) {
+            expect(document.paths[operation.path]?.[operation.method]?.operationId).toBe(
+              operation.operationId,
+            );
+          }
         }
 
         const authDocument = readOpenApi(resolve(temporaryWeb, PROJECTS[0].input));
         const loginSchema =
-          authDocument.paths['/api/v1/auth/login']?.post?.requestBody?.content?.[
+          authDocument.paths[PROJECTS[0].operations[0].path]?.post?.requestBody?.content?.[
             'application/json'
           ]?.schema;
         expect(loginSchema?.properties?.loginid).toMatchObject({

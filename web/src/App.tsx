@@ -18,6 +18,7 @@ import { ApiError } from './api/mutator';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
+import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
 import BindingsPage from './pages/admin/BindingsPage';
 import RegistryPage from './pages/admin/RegistryPage';
@@ -95,6 +96,9 @@ function AppShell() {
                 <Link to="/chat" style={{ color: '#fff' }}>
                   自然语言办理
                 </Link>
+                <Link to="/work-objects" style={{ color: '#fff' }}>
+                  我的工作台
+                </Link>
                 <Link to="/admin/registry" style={{ color: '#fff' }}>
                   Registry 管理
                 </Link>
@@ -125,6 +129,7 @@ function AppShell() {
           <Route path="/login" element={<LoginRoute />} />
           <Route element={<ProtectedRoute />}>
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/work-objects" element={<WorkObjectsPage />} />
             <Route path="/admin/registry" element={<RegistryPage />} />
             <Route path="/admin/tasks" element={<TasksPage />} />
             <Route path="/admin/bindings" element={<BindingsPage />} />

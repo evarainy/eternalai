@@ -16,6 +16,7 @@ from app.admin.registry import (
     AdminRegistryServiceWithBindingMutations,
 )
 from app.api.v1.health import HealthCheck
+from app.api.v1.work_objects import WorkObjectService
 from app.config import ProductionSettings
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
@@ -55,6 +56,7 @@ from app.infra.persistence.task_store.postgresql import (
     PostgreSQLSessionStore,
     PostgreSQLTaskStore,
 )
+from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
@@ -78,6 +80,7 @@ class ProductionComponents:
 
     runtime: RuntimeImpl
     admin_registry_service: AdminRegistryService
+    work_object_service: WorkObjectService
     authentication: AuthenticationPort
     session_tokens: SessionTokenPort
     session_binder: PrincipalSessionBinder
@@ -471,6 +474,10 @@ def build_production_components(
         trace_port=resolved_trace_port,
         trace_query=trace_query,
     )
+    work_object_service = WorkObjectService(
+        store=PostgreSQLWorkObjectStore(session_factory),
+        gateway=gateway,
+    )
     resolved_health_checks: Mapping[str, HealthCheck]
     if health_checks is None:
         resolved_health_checks = {
@@ -494,6 +501,7 @@ def build_production_components(
     return ProductionComponents(
         runtime=runtime,
         admin_registry_service=admin_registry_service,
+        work_object_service=work_object_service,
         authentication=resolved_authentication,
         session_tokens=session_tokens,
         session_binder=session_binder,
