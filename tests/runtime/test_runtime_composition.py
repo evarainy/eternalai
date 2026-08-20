@@ -405,6 +405,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
     components = SimpleNamespace(
         runtime=None,
         admin_registry_service=None,
+        work_object_service=None,
         authentication=None,
         session_tokens=None,
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),

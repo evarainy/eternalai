@@ -18,6 +18,8 @@ from app.api.v1.csrf import (
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
 from app.api.v1.runtime import make_router as make_runtime_router
+from app.api.v1.work_objects import WorkObjectService
+from app.api.v1.work_objects import make_router as make_work_object_router
 from app.composition import build_production_components
 from app.config import ProductionSettings
 from app.ports.auth import (
@@ -33,6 +35,7 @@ _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 def create_app(
     runtime: RuntimePort | None = None,
     admin_registry_service: AdminRegistryService | None = None,
+    work_object_service: WorkObjectService | None = None,
     *,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
@@ -75,6 +78,10 @@ def create_app(
         make_admin_router(admin_registry_service, csrf_protected_principal),
         prefix="/api/v1/admin",
     )
+    application.include_router(
+        make_work_object_router(work_object_service, csrf_protected_principal),
+        prefix="/api/v1/work-objects",
+    )
     return application
 
 
@@ -95,6 +102,7 @@ def create_production_app(
     return create_app(
         runtime=components.runtime,
         admin_registry_service=components.admin_registry_service,
+        work_object_service=components.work_object_service,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_binder=components.session_binder.bind,
