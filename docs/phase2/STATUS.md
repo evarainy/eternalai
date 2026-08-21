@@ -2,7 +2,7 @@
 
 - 当前基线 task_id：`P2-GOV-SYNC-021`
 - pytest：`2124 passed, 84 warnings`（0 skipped，0 failed；`P2-CONFIRM-BINDING-001` 收口实跑）
-- 前端 `pnpm --dir web test`：`105 passed, 0 failed, 0 skipped`（Work Object 10/10、Bindings 12/12、OpenAPI 字节一致性 1/1）
+- 前端 `pnpm --dir web test`：`105 passed, 0 failed, 0 skipped`（Work Object 10/10、Bindings 12/12、OpenAPI 字节一致性 1/1；实跑于 `P2-WORK-OBJECT-001`，其后各棒未改前端，数值沿用）
 - Golden Gate：`27/27 passed, 0 skipped, 0 failed`（negative 16/16，positive 11/11）
 - `tests/architecture/`：`38 passed`
 - 下一棒（串行，单 lane）：`P2-OA-CREDENTIAL-POLL-001`（A 档，必达项 3）—— 用户 OA 密码绑定入口 + 加密存储 + 后台定时轮询，并一并完成凭证存储主键改造。**本棒新增 migration，使用共享测试库。**
