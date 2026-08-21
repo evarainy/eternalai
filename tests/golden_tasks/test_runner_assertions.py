@@ -280,9 +280,40 @@ def test_value_free_credential_fields_do_not_false_positive(
 @pytest.mark.parametrize("serialized", (False, True))
 @pytest.mark.parametrize(
     "container_value",
-    ({"ordinary": "business value"}, ["ordinary business value"]),
+    (
+        {"ordinary": "NOT_A_REAL_SECRET"},
+        ["NOT_A_REAL_SECRET"],
+        ("NOT_A_REAL_SECRET",),
+    ),
 )
-def test_sensitive_key_container_semantics_remain_out_of_scope(
+def test_sensitive_key_non_empty_container_fails_closed(
+    container_value: Any,
+    serialized: bool,
+) -> None:
+    credential_data: Any = {"password": container_value}
+    if serialized:
+        credential_data = json.dumps(credential_data, separators=(",", ":"))
+    envelope = {
+        "status": "completed",
+        "message": credential_data if serialized else "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None if serialized else credential_data,
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert str(exc_info.value) == (
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    )
+    assert "NOT_A_REAL_SECRET" not in str(exc_info.value)
+    assert "NOT_A_REAL_SECRET" not in repr(exc_info.value)
+
+
+@pytest.mark.parametrize("serialized", (False, True))
+@pytest.mark.parametrize("container_value", ({}, [], ()))
+def test_sensitive_key_empty_container_remains_value_free(
     container_value: Any,
     serialized: bool,
 ) -> None:
@@ -297,8 +328,30 @@ def test_sensitive_key_container_semantics_remain_out_of_scope(
     }
 
     assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
     observed = json.loads(envelope["message"]) if serialized else envelope["data"]
-    assert observed == {"password": container_value}
+    expected_container = (
+        json.loads(json.dumps(container_value)) if serialized else container_value
+    )
+    assert observed == {"password": expected_container}
+
+
+@pytest.mark.parametrize("serialized", (False, True))
+def test_non_sensitive_business_container_remains_allowed(serialized: bool) -> None:
+    business_data: Any = {"ordinary": {"result": ["business value"]}}
+    if serialized:
+        business_data = json.dumps(business_data, separators=(",", ":"))
+    envelope = {
+        "status": "completed",
+        "message": business_data if serialized else "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": None if serialized else business_data,
+    }
+
+    assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    observed = json.loads(envelope["message"]) if serialized else envelope["data"]
+    assert observed == {"ordinary": {"result": ["business value"]}}
 
 
 @pytest.mark.parametrize(
@@ -309,12 +362,12 @@ def test_sensitive_key_container_semantics_remain_out_of_scope(
         b"",
         bytearray(),
         memoryview(b""),
-        {"ordinary": "business value"},
-        ["ordinary business value"],
-        ("ordinary business value",),
+        {},
+        [],
+        (),
     ),
 )
-def test_model_dump_empty_or_supported_container_preserves_existing_semantics(
+def test_model_dump_empty_value_preserves_existing_semantics(
     dumped_value: Any,
 ) -> None:
     model = _CountingDump(dumped_value)
@@ -330,6 +383,38 @@ def test_model_dump_empty_or_supported_container_preserves_existing_semantics(
     assert model.call_count == 1
     assert model.value is dumped_value
     assert envelope["data"]["password"] is model
+
+
+@pytest.mark.parametrize(
+    "dumped_value",
+    (
+        {"ordinary": "NOT_A_REAL_SECRET"},
+        ["NOT_A_REAL_SECRET"],
+        ("NOT_A_REAL_SECRET",),
+    ),
+)
+def test_model_dump_non_empty_container_under_sensitive_key_fails_closed(
+    dumped_value: Any,
+) -> None:
+    model = _CountingDump(dumped_value)
+    envelope = {
+        "status": "completed",
+        "message": "操作完成",
+        "ui": {"component_type": "none", "action": "none"},
+        "data": {"password": model},
+    }
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_forbidden_absent(["trace_contains_token"], envelope, [], {})
+
+    assert str(exc_info.value) == (
+        "forbidden credential pattern detected: "
+        "rule=password_or_passwd; location=actual.envelope"
+    )
+    assert model.call_count == 1
+    assert model.value is dumped_value
+    assert "NOT_A_REAL_SECRET" not in str(exc_info.value)
+    assert "NOT_A_REAL_SECRET" not in repr(exc_info.value)
 
 
 def test_adapter_assertion_accepts_required_call_count() -> None:
