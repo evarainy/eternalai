@@ -26,7 +26,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 2 | Work Object + 最小工作台：用户看得到自己的 OA 待办、状态与数据截至时间，可标记处理痕迹 | `P2-WORK-OBJECT-001` |
 | 3 | 后台定时轮询：用户不打开页面，状态也在积累 | `P2-OA-CREDENTIAL-POLL-001` |
 | 4 | 一个获批低风险写入（OA 待办审批同意），经确认卡授权、受版本绑定保护 | `P2-LOW-RISK-WRITE-001` |
-| 5 | 覆盖以上路径的 Golden，含负向与边界 | `P2-GOLDEN-001` |
+| 5 | 覆盖以上路径的 Golden，含负向与边界 | `P2-GOLDEN-001` + `P2-GOLDEN-002`（2026-08-21 拆两棒，**两棒都完成才算达成**） |
 
 **机会**（外部输入到位或有余力就做，不到位不阻塞收口）：`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`、`P2-PORT-SEAM-001`（2026-08-20 补入——原三层划分遗漏该项）、`P2-OA-ORGANIZATION-DIRECTORY-001` 与 `P2-INTERNAL-WORK-OBJECT-001`（2026-08-20 任务派发方案归机会层；后者是部门级看板与统计的唯一现实数据源）。
 
