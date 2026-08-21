@@ -482,6 +482,7 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
         trace_port=NoopTraceWriter(),
     )
 
+    assert components.work_object_service._gateway is components.runtime._gateway
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert isinstance(components.health_checks["database"], partial)
     assert isinstance(components.health_checks["redis"], RedisHealthCheck)

@@ -16,9 +16,11 @@ from app.ports.capability_gateway import (
     RequestOrgContext,
 )
 from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.human_gate import HumanGatePort, VersionBindingMismatchError
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
+from app.version_binding import capability_version_bindings
 
 _SAFE_ERROR_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
 _SAFE_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
@@ -73,6 +75,8 @@ class CapabilityGateway:
         policy_guard: PolicyGuardPort | None = None,
         trace_port: TracePort | None = None,
         adapters: dict[str, AdapterPort] | None = None,
+        human_gate_port: HumanGatePort | None = None,
+        unbound_task_capability_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._adapter = adapter
         self._adapters = adapters
@@ -80,6 +84,8 @@ class CapabilityGateway:
         self._identity_mapping = identity_mapping
         self._policy_guard = policy_guard
         self._trace_port = trace_port
+        self._human_gate_port = human_gate_port
+        self._unbound_task_capability_ids = unbound_task_capability_ids
 
     def assert_production_wiring(self) -> None:
         """Fail closed when production assembly omitted a Gateway layer."""
@@ -90,6 +96,7 @@ class CapabilityGateway:
             or self._identity_mapping is None
             or self._policy_guard is None
             or self._trace_port is None
+            or self._human_gate_port is None
             or adapters is None
             or adapters.get("oa") is None
         ):
@@ -127,6 +134,30 @@ class CapabilityGateway:
                     error_code="capability_not_found",
                     trace_id=trace_id,
                 )
+            if self._human_gate_port is not None:
+                try:
+                    await self._human_gate_port.assert_task_bindings(
+                        task_id,
+                        capability_version_bindings(capability_spec),
+                        allow_unbound=(
+                            capability_id in self._unbound_task_capability_ids
+                        ),
+                    )
+                except (ValueError, VersionBindingMismatchError):
+                    if self._trace_port is not None:
+                        await self._trace_port.record_gateway_call(
+                            trace_id=trace_id,
+                            task_id=task_id,
+                            session_id=session_id,
+                            status="failed",
+                            capability_id=capability_id,
+                            error_code="internal_error",
+                        )
+                    return ExecutionResult(
+                        status="failed",
+                        error_code="internal_error",
+                        trace_id=trace_id,
+                    )
         # Argument validation is split in two on purpose. Everything that only
         # depends on what the caller sent -- additionalProperties, type, enum,
         # format -- is decided here, before identity: leaving it downstream let a

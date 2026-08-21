@@ -24,7 +24,7 @@ from app.ports.work_object import (
     WorkObjectStorePort,
 )
 
-_OA_PENDING_WORKFLOWS = "oa.list_pending_workflows"
+OA_PENDING_WORKFLOWS_CAPABILITY_ID = "oa.list_pending_workflows"
 _REAUTHENTICATION_ERRORS: frozenset[ErrorCode] = frozenset(
     {"identity_unbound", "identity_expired", "identity_revoked"}
 )
@@ -117,7 +117,7 @@ class WorkObjectService:
             task_id=f"work-object-sync:{operation_id}",
             session_id=f"work-object:{principal.ai_user_id}",
             ai_user_id=principal.ai_user_id,
-            capability_id=_OA_PENDING_WORKFLOWS,
+            capability_id=OA_PENDING_WORKFLOWS_CAPABILITY_ID,
             arguments={},
             request_context=RequestOrgContext(
                 request_id=operation_id,

@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.composition import build_runtime
+from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -17,11 +18,17 @@ from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
+from app.version_binding import workflow_confirmation_action_digest
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
 
 
-def _capability(capability_id: str, capability_type: str) -> CapabilitySpec:
+def _capability(
+    capability_id: str,
+    capability_type: str,
+    *,
+    policy_digest: str | None = None,
+) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
@@ -36,6 +43,7 @@ def _capability(capability_id: str, capability_type: str) -> CapabilitySpec:
         target_system="oa",
         execution_identity="user_delegated",
         binding_required=False,
+        policy_digest=policy_digest,
     )
 
 
@@ -159,6 +167,40 @@ class Gateway:
             status="completed",
             data=data,
             trace_id=request_context.request_id,
+        )
+
+
+class BlockingConfirmationGateway(Gateway):
+    def __init__(
+        self,
+        results: dict[str, ExecutionResult],
+        *,
+        blocked_capability_id: str,
+    ) -> None:
+        super().__init__(results)
+        self.blocked_capability_id = blocked_capability_id
+        self.confirmation_entered = asyncio.Event()
+        self.release_confirmation = asyncio.Event()
+
+    async def execute_capability(
+        self,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> ExecutionResult:
+        if capability_id == self.blocked_capability_id:
+            self.confirmation_entered.set()
+            await self.release_confirmation.wait()
+        return await super().execute_capability(
+            task_id,
+            session_id,
+            ai_user_id,
+            capability_id,
+            arguments,
+            request_context,
         )
 
 
@@ -635,6 +677,560 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
     assert trace.finalizations[-1]["status"] == "ok"
     assert "private-marker-123" not in repr(task_store.events)
     assert "private-marker-123" not in repr(trace.steps)
+
+
+def test_confirmation_prefixed_new_request_falls_through_to_intent_routing() -> None:
+    async def exercise() -> tuple[Any, Any, Gateway, TaskStore, Trace]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.leave-submit",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="submit",
+                    capability_id="oa.leave.preview",
+                    confirmed_capability_id="oa.leave.execute",
+                ),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.leave.preview", "query"),
+            _capability("oa.leave.execute", "action"),
+            _capability("oa.leave.status", "query"),
+        )
+        gateway = Gateway(
+            {
+                "oa.leave.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="leave-preview",
+                )
+            }
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "submit leave",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                capability_type="workflow",
+            ),
+        )
+        follow_up = "确认 一下我的请假单状态"
+        structured_output.register(
+            follow_up,
+            CapabilityRef,
+            CapabilityRef(
+                capability_id="oa.leave.status",
+                capability_type="query",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+        )
+
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-follow-up",
+            session_id="session-follow-up",
+            message="submit leave",
+            client_capabilities={},
+        )
+        completed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-follow-up",
+            session_id="session-follow-up",
+            message=follow_up,
+            client_capabilities={},
+        )
+        return waiting, completed, gateway, task_store, trace
+
+    waiting, completed, gateway, task_store, trace = asyncio.run(exercise())
+
+    assert waiting.status == "waiting_user"
+    assert completed.status == "completed"
+    assert completed.task_id != waiting.task_id
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.leave.preview",
+        "oa.leave.status",
+    ]
+    assert len(task_store.created) == 2
+    assert [step["event_type"] for step in trace.steps].count("task_created") == 2
+
+
+@pytest.mark.parametrize(
+    "drift_patch",
+    ({"version": "2.0.0"}, {"status": "disabled"}),
+    ids=("v1-to-v2", "emergency-disabled"),
+)
+def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
+    drift_patch: dict[str, str],
+) -> None:
+    async def exercise() -> tuple[Any, Any, Gateway, TaskStore, InMemoryHumanGate]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.version-locked-approval",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="approve",
+                    capability_id="oa.approve.preview",
+                    confirmed_capability_id="oa.approve.execute",
+                ),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.approve.preview", "query"),
+            _capability("oa.approve.execute", "action"),
+        )
+        gateway = Gateway(
+            {
+                "oa.approve.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="configured-confirm",
+                ),
+                "oa.approve.execute": ExecutionResult(
+                    status="completed",
+                    data={"must_not": "execute-v2"},
+                    trace_id="configured-v2",
+                ),
+            }
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        gate = InMemoryHumanGate()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "approve with locked version",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+            human_gate_port=gate,
+        )
+
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-version-lock",
+            session_id="session-version-lock",
+            message="approve with locked version",
+            client_capabilities={},
+        )
+        request = await gate.get_request(waiting.response_id)
+        assert request is not None
+        assert request.requested_for_ai_user_id == "user-version-lock"
+        assert request.requested_session_id == "session-version-lock"
+        assert request.expires_at > request.requested_at
+        assert request.action_digest == workflow_confirmation_action_digest(
+            workflow_id=definition.workflow_id,
+            workflow_version=definition.version,
+            step_id="approve",
+            step_index=0,
+            waiting_capability_id="oa.approve.preview",
+            confirmed_capability_id="oa.approve.execute",
+            arguments={},
+        )
+        registry.items["oa.approve.execute"] = registry.items[
+            "oa.approve.execute"
+        ].model_copy(update=drift_patch)
+        stale = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-version-lock",
+            session_id="session-version-lock",
+            message=f"确认 {waiting.task_id}",
+            client_capabilities={},
+        )
+        assert await gate.get_decision(waiting.response_id) is None
+        failed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-version-lock",
+            session_id="session-version-lock",
+            message=f"确认 {waiting.response_id}",
+            client_capabilities={},
+        )
+        assert await gate.get_decision(waiting.response_id) is None
+        return stale, failed, gateway, task_store, gate
+
+    stale, failed, gateway, task_store, _gate = asyncio.run(exercise())
+
+    assert stale.status == "waiting_user"
+    assert failed.status == "failed"
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.approve.preview"
+    ]
+    assert task_store.status_updates == [
+        ("waiting_user", "confirm_required"),
+        ("failed", "internal_error"),
+    ]
+
+
+def test_concurrent_duplicate_confirmation_executes_current_request_once() -> None:
+    async def exercise() -> tuple[
+        list[Any],
+        BlockingConfirmationGateway,
+        TaskStore,
+        Trace,
+        InMemoryHumanGate,
+        str,
+    ]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.concurrent-confirmation",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="approve",
+                    capability_id="oa.concurrent.preview",
+                    confirmed_capability_id="oa.concurrent.execute",
+                ),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.concurrent.preview", "query"),
+            _capability("oa.concurrent.execute", "action"),
+        )
+        gateway = BlockingConfirmationGateway(
+            {
+                "oa.concurrent.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="concurrent-preview",
+                ),
+                "oa.concurrent.execute": ExecutionResult(
+                    status="completed",
+                    data={"status": "approved"},
+                    trace_id="concurrent-execute",
+                ),
+            },
+            blocked_capability_id="oa.concurrent.execute",
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        gate = InMemoryHumanGate()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "approve concurrently",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+            human_gate_port=gate,
+        )
+
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-concurrent-confirmation",
+            session_id="session-concurrent-confirmation",
+            message="approve concurrently",
+            client_capabilities={},
+        )
+        confirmation = {
+            "channel": "mock",
+            "ai_user_id": "user-concurrent-confirmation",
+            "session_id": "session-concurrent-confirmation",
+            "message": f"确认 {waiting.response_id}",
+            "client_capabilities": {},
+        }
+        first = asyncio.create_task(runtime.handle_user_message(**confirmation))
+        await gateway.confirmation_entered.wait()
+        second = asyncio.create_task(runtime.handle_user_message(**confirmation))
+        await asyncio.sleep(0)
+        gateway.release_confirmation.set()
+        responses = list(await asyncio.gather(first, second))
+        return responses, gateway, task_store, trace, gate, waiting.response_id
+
+    responses, gateway, task_store, trace, gate, request_id = asyncio.run(exercise())
+
+    assert sorted(response.status for response in responses) == [
+        "completed",
+        "waiting_user",
+    ]
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.concurrent.preview",
+        "oa.concurrent.execute",
+    ]
+    assert task_store.status_updates == [
+        ("waiting_user", "confirm_required"),
+        ("completed", None),
+    ]
+    assert len(trace.finalizations) == 1
+    assert trace.finalizations[0]["status"] == "ok"
+    assert asyncio.run(gate.get_decision(request_id)) is not None
+
+
+def test_non_workflow_task_locks_prompt_tool_and_policy_bindings() -> None:
+    async def exercise() -> tuple[Any, InMemoryHumanGate]:
+        capability = _capability(
+            "oa.document.lookup",
+            "query",
+            policy_digest="document-lookup-policy-v1",
+        )
+        registry = Registry(capability)
+        task_store = TaskStore()
+        gate = InMemoryHumanGate()
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "lookup document",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=capability.capability_id,
+                arguments={"document_no": "DOC-1"},
+                capability_type="query",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=Gateway(),
+            trace_port=Trace(),
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            human_gate_port=gate,
+        )
+        completed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-direct-binding",
+            session_id="session-direct-binding",
+            message="lookup document",
+            client_capabilities={},
+        )
+        return completed, gate
+
+    completed, gate = asyncio.run(exercise())
+    manifest = asyncio.run(gate.get_task_binding(completed.task_id))
+
+    assert completed.status == "completed"
+    assert manifest is not None
+    assert {
+        (binding.resource_type, binding.resource_id)
+        for binding in manifest.bindings
+    } == {
+        ("prompt", "runtime.intent_router"),
+        ("tool", "oa.document.lookup"),
+        ("policy", "oa.document.lookup"),
+    }
+    assert manifest.unused_resource_types == ("workflow", "skill")
+
+
+def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
+    async def exercise() -> tuple[
+        Any,
+        Any,
+        Any,
+        Any,
+        InMemoryHumanGate,
+        Gateway,
+        Trace,
+    ]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.two-confirmations",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="first",
+                    capability_id="oa.first.preview",
+                    confirmed_capability_id="oa.first.execute",
+                ),
+                WorkflowStep(
+                    step_id="second",
+                    capability_id="oa.second.preview",
+                    confirmed_capability_id="oa.second.execute",
+                    input_mapping={
+                        "prior_result": WorkflowInputRef(
+                            source="step_output",
+                            step_id="first",
+                            key="first",
+                        )
+                    },
+                ),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.first.preview", "query"),
+            _capability("oa.first.execute", "action"),
+            _capability("oa.second.preview", "query"),
+            _capability("oa.second.execute", "action"),
+        )
+        gateway = Gateway(
+            {
+                "oa.first.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="first-preview",
+                ),
+                "oa.first.execute": ExecutionResult(
+                    status="completed",
+                    data={"first": "done"},
+                    trace_id="first-execute",
+                ),
+                "oa.second.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="second-preview",
+                ),
+                "oa.second.execute": ExecutionResult(
+                    status="completed",
+                    data={"second": "done"},
+                    trace_id="second-execute",
+                ),
+            }
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        gate = InMemoryHumanGate()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "run two confirmations",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                capability_type="workflow",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+            human_gate_port=gate,
+        )
+
+        first = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-two-gates",
+            session_id="session-two-gates",
+            message="run two confirmations",
+            client_capabilities={},
+        )
+        second = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-two-gates",
+            session_id="session-two-gates",
+            message="确认",
+            client_capabilities={},
+        )
+        stale = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-two-gates",
+            session_id="session-two-gates",
+            message=f"确认 {first.response_id}",
+            client_capabilities={},
+        )
+        assert await gate.get_decision(second.response_id) is None
+        completed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-two-gates",
+            session_id="session-two-gates",
+            message="确认",
+            client_capabilities={},
+        )
+        return first, second, stale, completed, gate, gateway, trace
+
+    first, second, stale, completed, gate, gateway, trace = asyncio.run(exercise())
+    first_request = asyncio.run(gate.get_request(first.response_id))
+    second_request = asyncio.run(gate.get_request(second.response_id))
+
+    assert first.status == second.status == "waiting_user"
+    assert stale.status == "waiting_user"
+    assert stale.task_id == first.task_id
+    assert completed.status == "completed"
+    assert first_request is not None
+    assert second_request is not None
+    assert first_request.request_id != second_request.request_id
+    assert first_request.action_digest != second_request.action_digest
+    assert second_request.action_digest == workflow_confirmation_action_digest(
+        workflow_id="oa.workflow.two-confirmations",
+        workflow_version="1.0.0",
+        step_id="second",
+        step_index=1,
+        waiting_capability_id="oa.second.preview",
+        confirmed_capability_id="oa.second.execute",
+        arguments={"prior_result": "done"},
+    )
+    assert first_request.request_digest != second_request.request_digest
+    assert asyncio.run(gate.get_decision(first.response_id)) is not None
+    assert asyncio.run(gate.get_decision(second.response_id)) is not None
+    assert any(
+        step["attributes"].get("confirmation_status") == "stale"
+        for step in trace.steps
+    )
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.first.preview",
+        "oa.first.execute",
+        "oa.second.preview",
+        "oa.second.execute",
+    ]
 
 
 @pytest.mark.parametrize(
