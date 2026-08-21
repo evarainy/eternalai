@@ -1306,8 +1306,10 @@ def _is_non_empty_credential_scalar(value: Any) -> bool:
         return value != ""
     if isinstance(value, (bytes, bytearray, memoryview)):
         return len(value) > 0
-    if isinstance(value, (_PreservedJsonObjectPairs, Mapping, list, tuple)):
-        return False
+    if isinstance(value, _PreservedJsonObjectPairs):
+        return bool(value.pairs)
+    if isinstance(value, (Mapping, list, tuple)):
+        return bool(value)
     return True
 
 
