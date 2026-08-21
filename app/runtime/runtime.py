@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from hmac import compare_digest
+from threading import Lock
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -24,6 +26,16 @@ from app.ports.capability_gateway import (
     RequestOrgContext,
 )
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.human_gate import (
+    HumanGateConflictError,
+    HumanGateDecisionRecord,
+    HumanGatePort,
+    HumanGateRequest,
+    TaskVersionBindingManifest,
+    VersionBinding,
+    VersionBindingMismatchError,
+    build_task_version_binding_manifest,
+)
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
 from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
@@ -38,6 +50,11 @@ from app.ports.task_store import (
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
+from app.version_binding import (
+    capability_version_bindings,
+    immutable_request_digest,
+    merge_version_bindings,
+)
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult
 
@@ -54,6 +71,10 @@ class _PendingWorkflow:
     trace_id: str
     response_id: str
     capability_id: str
+    gate_request_id: str | None = None
+    action_digest: str | None = None
+    request_digest: str | None = None
+    binding_manifest_digest: str | None = None
 
 
 class RuntimeImpl:
@@ -72,6 +93,7 @@ class RuntimeImpl:
         session_memory: SessionMemory | None = None,
         semantic_knowledge: BasicKnowledge | None = None,
         evaluator: TerminalEvaluator | None = None,
+        human_gate_port: HumanGatePort | None = None,
     ) -> None:
         self._task_store = task_store
         self._session_store = session_store
@@ -89,7 +111,11 @@ class RuntimeImpl:
         self._workflow_engine = workflow_engine
         self._session_memory = session_memory or SessionMemory()
         self._evaluator = evaluator or TerminalEvaluator()
+        self._human_gate_port = human_gate_port
+        self._intent_version_binding = self._intent_router.version_binding()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
+        self._pending_confirmation_claim_lock = Lock()
+        self._claimed_pending_confirmations: set[tuple[str, str, str]] = set()
 
     async def handle_user_message(
         self,
@@ -106,13 +132,44 @@ class RuntimeImpl:
         )
         pending_key = (session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
-        if pending is not None and _is_explicit_workflow_confirmation(message, pending):
-            return await self._resume_pending_workflow(
-                pending_key=pending_key,
-                pending=pending,
-                session_id=session_id,
-                memory_key=memory_key,
-            )
+        if pending is not None:
+            if _is_explicit_workflow_confirmation(message, pending):
+                claim_key: tuple[str, str, str] | None = None
+                with self._pending_confirmation_claim_lock:
+                    current_pending = self._pending_workflows.get(pending_key)
+                    if current_pending is not None and _is_explicit_workflow_confirmation(
+                        message,
+                        current_pending,
+                    ):
+                        request_id = (
+                            current_pending.gate_request_id
+                            or current_pending.response_id
+                        )
+                        candidate_claim = (*pending_key, request_id)
+                        if candidate_claim not in self._claimed_pending_confirmations:
+                            self._claimed_pending_confirmations.add(candidate_claim)
+                            claim_key = candidate_claim
+                            pending = current_pending
+                if claim_key is None:
+                    return self._build_stale_confirmation_response(
+                        pending=pending,
+                        session_id=session_id,
+                    )
+                try:
+                    return await self._resume_pending_workflow(
+                        pending_key=pending_key,
+                        pending=pending,
+                        session_id=session_id,
+                        memory_key=memory_key,
+                    )
+                finally:
+                    with self._pending_confirmation_claim_lock:
+                        self._claimed_pending_confirmations.discard(claim_key)
+            if _is_workflow_confirmation_message(message):
+                return self._build_stale_confirmation_response(
+                    pending=pending,
+                    session_id=session_id,
+                )
 
         task_id = str(uuid4())
         trace_id = str(uuid4())
@@ -230,6 +287,28 @@ class RuntimeImpl:
                 "selection_rule": selection.rule,
             },
         )
+        binding_manifest: TaskVersionBindingManifest | None = None
+        workflow_result: WorkflowRunResult | None = None
+        if self._human_gate_port is not None and (
+            selected_capability.type != "workflow" or self._workflow_engine is not None
+        ):
+            try:
+                binding_manifest = build_task_version_binding_manifest(
+                    task_id=task_id,
+                    bindings=await self._new_task_version_bindings(
+                        selected_capability
+                    ),
+                    locked_at=datetime.now(UTC),
+                )
+                await self._human_gate_port.bind_task(binding_manifest)
+            except (HumanGateConflictError, VersionBindingMismatchError, ValueError):
+                return await self._finish_version_binding_failure(
+                    response_id=response_id,
+                    task_id=task_id,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    capability_id=selected_capability.capability_id,
+                )
         request_context = RequestOrgContext(
             request_id=trace_id,
             channel=channel,
@@ -247,34 +326,105 @@ class RuntimeImpl:
                 "device_domain_id",
             ),
         )
-        if selected_capability.type == "workflow":
-            if self._workflow_engine is None:
+        try:
+            if binding_manifest is not None and self._human_gate_port is not None:
+                await self._human_gate_port.assert_task_bindings(
+                    task_id,
+                    binding_manifest.bindings,
+                    exact=True,
+                )
+            if selected_capability.type == "workflow":
+                if self._workflow_engine is None:
+                    exec_result = ExecutionResult(
+                        status="failed",
+                        error_code="internal_error",
+                        trace_id=trace_id,
+                    )
+                else:
+                    sid = session_id
+                    workflow_result = await self._workflow_engine.execute(
+                        workflow_id=selected_capability.capability_id,
+                        expected_version=selected_capability.version,
+                        task_id=task_id,
+                        session_id=sid,
+                        ai_user_id=ai_user_id,
+                        initial_input=capability_ref.arguments,
+                        request_context=request_context,
+                    )
+                    exec_result = _workflow_execution_result(workflow_result)
+            else:
+                exec_result = await self._gateway.execute_capability(
+                    task_id,
+                    session_id,
+                    ai_user_id,
+                    capability_ref.capability_id,
+                    capability_ref.arguments,
+                    request_context,
+                )
+        except VersionBindingMismatchError:
+            exec_result = ExecutionResult(
+                status="failed",
+                error_code="internal_error",
+                trace_id=trace_id,
+            )
+        gate_request_id: str | None = None
+        action_digest: str | None = None
+        request_digest: str | None = None
+        gate_manifest_digest: str | None = None
+        workflow_waiting = (
+            selected_capability.type == "workflow"
+            and exec_result.status == "waiting_user"
+        )
+        if workflow_waiting and self._human_gate_port is not None:
+            try:
+                if binding_manifest is None:
+                    raise VersionBindingMismatchError(
+                        "Waiting Workflow has no Task version binding"
+                    )
+                gate_request_id = response_id
+                gate_manifest_digest = binding_manifest.manifest_digest
+                if workflow_result is None or self._workflow_engine is None:
+                    raise VersionBindingMismatchError(
+                        "Waiting Workflow has no immutable action digest"
+                    )
+                action_digest = (
+                    self._workflow_engine.pending_confirmation_action_digest(task_id)
+                )
+                preview = _confirm_card_payload(
+                    capability_ref,
+                    selected_capability,
+                    _target_system_for_capability(selected_capability.capability_id),
+                )
+                request_digest = immutable_request_digest(
+                    task_id=task_id,
+                    action_digest=action_digest,
+                    preview=preview,
+                    binding_manifest_digest=gate_manifest_digest,
+                )
+                requested_at = datetime.now(UTC)
+                await self._human_gate_port.create_request(
+                    HumanGateRequest(
+                        request_id=gate_request_id,
+                        task_id=task_id,
+                        requested_for_ai_user_id=ai_user_id,
+                        requested_session_id=session_id,
+                        requested_tenant_id=memory_key.tenant_id,
+                        action_digest=action_digest,
+                        request_digest=request_digest,
+                        binding_manifest_digest=gate_manifest_digest,
+                        requested_at=requested_at,
+                        expires_at=requested_at + timedelta(minutes=10),
+                    )
+                )
+            except (HumanGateConflictError, VersionBindingMismatchError):
+                if self._workflow_engine is not None:
+                    self._workflow_engine.discard_checkpoint(task_id)
                 exec_result = ExecutionResult(
                     status="failed",
                     error_code="internal_error",
                     trace_id=trace_id,
                 )
-            else:
-                sid = session_id
-                workflow_result = await self._workflow_engine.execute(
-                    workflow_id=selected_capability.capability_id,
-                    expected_version=selected_capability.version,
-                    task_id=task_id,
-                    session_id=sid,
-                    ai_user_id=ai_user_id,
-                    initial_input=capability_ref.arguments,
-                    request_context=request_context,
-                )
-                exec_result = _workflow_execution_result(workflow_result)
-        else:
-            exec_result = await self._gateway.execute_capability(
-                task_id,
-                session_id,
-                ai_user_id,
-                capability_ref.capability_id,
-                capability_ref.arguments,
-                request_context,
-            )
+                workflow_waiting = False
         envelope = self._build_envelope(
             response_id,
             task_id,
@@ -309,15 +459,16 @@ class RuntimeImpl:
                 error_code=exec_result.error_code,
             )
 
-        workflow_waiting = (
-            selected_capability.type == "workflow" and exec_result.status == "waiting_user"
-        )
         if workflow_waiting:
             self._pending_workflows[pending_key] = _PendingWorkflow(
                 task_id=task_id,
                 trace_id=trace_id,
                 response_id=response_id,
                 capability_id=capability_ref.capability_id,
+                gate_request_id=gate_request_id,
+                action_digest=action_digest,
+                request_digest=request_digest,
+                binding_manifest_digest=gate_manifest_digest,
             )
         else:
             if exec_result.status != "waiting_user":
@@ -345,6 +496,23 @@ class RuntimeImpl:
             )
         return envelope
 
+    def _build_stale_confirmation_response(
+        self,
+        *,
+        pending: _PendingWorkflow,
+        session_id: str,
+    ) -> ResponseEnvelope:
+        return self._response_builder.build_message(
+            str(uuid4()),
+            pending.task_id,
+            session_id,
+            "确认请求已失效或与当前待确认动作不匹配，本次未执行。",
+            "The confirmation request is stale or does not match the "
+            "current pending action; nothing was executed.",
+            pending.trace_id,
+            status="waiting_user",
+        )
+
     async def _resume_pending_workflow(
         self,
         *,
@@ -356,12 +524,133 @@ class RuntimeImpl:
         if self._workflow_engine is None:
             raise RuntimeError("pending Workflow has no configured engine")
 
-        workflow_result = await self._workflow_engine.resume(
-            task_id=pending.task_id,
-            confirmed=True,
-        )
-        exec_result = _workflow_execution_result(workflow_result)
         response_id = str(uuid4())
+        try:
+            if self._human_gate_port is not None:
+                if (
+                    pending.gate_request_id is None
+                    or pending.action_digest is None
+                    or pending.request_digest is None
+                    or pending.binding_manifest_digest is None
+                ):
+                    raise VersionBindingMismatchError(
+                        "Pending Workflow has no immutable human gate request"
+                    )
+                resume_bindings = merge_version_bindings(
+                    (self._intent_version_binding,),
+                    await self._workflow_engine.resume_version_bindings(
+                        task_id=pending.task_id
+                    ),
+                )
+                await self._human_gate_port.assert_task_bindings(
+                    pending.task_id,
+                    resume_bindings,
+                    exact=True,
+                )
+                current_action_digest = (
+                    self._workflow_engine.pending_confirmation_action_digest(
+                        pending.task_id
+                    )
+                )
+                if not compare_digest(
+                    pending.action_digest,
+                    current_action_digest,
+                ):
+                    raise VersionBindingMismatchError(
+                        "Pending Workflow action changed after preview"
+                    )
+                await self._human_gate_port.record_decision(
+                    HumanGateDecisionRecord(
+                        request_id=pending.gate_request_id,
+                        task_id=pending.task_id,
+                        decided_by_ai_user_id=memory_key.ai_user_id,
+                        decided_session_id=session_id,
+                        decided_tenant_id=memory_key.tenant_id,
+                        decision="confirmed",
+                        request_digest=pending.request_digest,
+                        binding_manifest_digest=pending.binding_manifest_digest,
+                        decided_at=datetime.now(UTC),
+                    )
+                )
+            if self._human_gate_port is None:
+                workflow_result = await self._workflow_engine.resume(
+                    task_id=pending.task_id,
+                    confirmed=True,
+                )
+            else:
+                workflow_result = await self._workflow_engine.resume(
+                    task_id=pending.task_id,
+                    confirmed=True,
+                    expected_action_digest=pending.action_digest,
+                )
+        except (HumanGateConflictError, VersionBindingMismatchError):
+            self._pending_workflows.pop(pending_key, None)
+            self._workflow_engine.discard_checkpoint(pending.task_id)
+            return await self._finish_version_binding_failure(
+                response_id=response_id,
+                task_id=pending.task_id,
+                session_id=session_id,
+                trace_id=pending.trace_id,
+                capability_id=pending.capability_id,
+            )
+        exec_result = _workflow_execution_result(workflow_result)
+        next_gate_request_id = pending.gate_request_id
+        next_action_digest = pending.action_digest
+        next_request_digest = pending.request_digest
+        if exec_result.status == "waiting_user" and self._human_gate_port is not None:
+            try:
+                if (
+                    pending.binding_manifest_digest is None
+                ):
+                    raise VersionBindingMismatchError(
+                        "Resumed Workflow has no immutable human gate request"
+                    )
+                next_gate_request_id = response_id
+                next_action_digest = (
+                    self._workflow_engine.pending_confirmation_action_digest(
+                        pending.task_id
+                    )
+                )
+                next_capability_ref = CapabilityRef(
+                    capability_id=pending.capability_id,
+                    capability_type="workflow",
+                )
+                next_preview = _confirm_card_payload(
+                    next_capability_ref,
+                    None,
+                    _target_system_for_capability(pending.capability_id),
+                )
+                next_request_digest = immutable_request_digest(
+                    task_id=pending.task_id,
+                    action_digest=next_action_digest,
+                    preview=next_preview,
+                    binding_manifest_digest=pending.binding_manifest_digest,
+                )
+                requested_at = datetime.now(UTC)
+                await self._human_gate_port.create_request(
+                    HumanGateRequest(
+                        request_id=next_gate_request_id,
+                        task_id=pending.task_id,
+                        requested_for_ai_user_id=memory_key.ai_user_id,
+                        requested_session_id=session_id,
+                        requested_tenant_id=memory_key.tenant_id,
+                        action_digest=next_action_digest,
+                        request_digest=next_request_digest,
+                        binding_manifest_digest=pending.binding_manifest_digest,
+                        requested_at=requested_at,
+                        expires_at=requested_at + timedelta(minutes=10),
+                    )
+                )
+            except (HumanGateConflictError, VersionBindingMismatchError):
+                self._pending_workflows.pop(pending_key, None)
+                self._workflow_engine.discard_checkpoint(pending.task_id)
+                return await self._finish_version_binding_failure(
+                    response_id=response_id,
+                    task_id=pending.task_id,
+                    session_id=session_id,
+                    trace_id=pending.trace_id,
+                    capability_id=pending.capability_id,
+                )
         capability_ref = CapabilityRef(
             capability_id=pending.capability_id,
             capability_type="workflow",
@@ -405,6 +694,10 @@ class RuntimeImpl:
                 trace_id=pending.trace_id,
                 response_id=response_id,
                 capability_id=pending.capability_id,
+                gate_request_id=next_gate_request_id,
+                action_digest=next_action_digest,
+                request_digest=next_request_digest,
+                binding_manifest_digest=pending.binding_manifest_digest,
             )
         else:
             self._pending_workflows.pop(pending_key, None)
@@ -429,6 +722,80 @@ class RuntimeImpl:
                 memory_key,
                 capability_id=pending.capability_id,
             )
+        return envelope
+
+    async def _new_task_version_bindings(
+        self,
+        capability: CapabilitySpec,
+    ) -> tuple[VersionBinding, ...]:
+        if capability.type == "workflow":
+            if self._workflow_engine is None:
+                raise VersionBindingMismatchError(
+                    "Workflow version binding requires a configured engine"
+                )
+            resource_bindings = await self._workflow_engine.version_bindings(
+                workflow_id=capability.capability_id,
+                expected_version=capability.version,
+            )
+        else:
+            resource_bindings = capability_version_bindings(capability)
+        return merge_version_bindings(
+            (self._intent_version_binding,),
+            resource_bindings,
+        )
+
+    async def _finish_version_binding_failure(
+        self,
+        *,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        trace_id: str,
+        capability_id: str,
+    ) -> ResponseEnvelope:
+        error_code: ErrorCode = "internal_error"
+        await self._task_store.update_status(task_id, "failed", error_code)
+        envelope = self._response_builder.build_message(
+            response_id,
+            task_id,
+            session_id,
+            "任务绑定的执行版本已不可用，本次未执行。",
+            "The Task's locked execution version is unavailable; nothing was executed.",
+            trace_id,
+            status="failed",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            event_type="task_failed",
+            status="failed",
+            capability_id=capability_id,
+            error_code=error_code,
+        )
+        await self._record_terminal_evaluation(
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            business_status="failed",
+            error_code=error_code,
+            capability_id=capability_id,
+        )
+        await self._trace_port.finalize_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            status="failed",
+            capability_id=capability_id,
+            error_code=error_code,
+        )
         return envelope
 
     async def _select_capability(
@@ -766,9 +1133,13 @@ def _is_explicit_workflow_confirmation(
     pending: _PendingWorkflow,
 ) -> bool:
     normalized = " ".join(message.strip().casefold().split())
-    if normalized in {"确认", "confirm"}:
-        return True
-    identifiers = (pending.task_id.casefold(), pending.response_id.casefold())
+    identifiers: tuple[str, ...]
+    if pending.gate_request_id is not None:
+        identifiers = (pending.gate_request_id.casefold(),)
+    else:
+        if normalized in {"确认", "confirm"}:
+            return True
+        identifiers = (pending.task_id.casefold(), pending.response_id.casefold())
     return any(
         normalized
         in {
@@ -777,6 +1148,16 @@ def _is_explicit_workflow_confirmation(
             f"用户确认 {identifier}",
         }
         for identifier in identifiers
+    )
+
+
+def _is_workflow_confirmation_message(message: str) -> bool:
+    normalized = " ".join(message.strip().casefold().split())
+    if normalized in {"确认", "confirm"}:
+        return True
+    return any(
+        normalized.startswith(prefix) and len(normalized) > len(prefix)
+        for prefix in ("确认 ", "confirm ", "用户确认 ")
     )
 
 

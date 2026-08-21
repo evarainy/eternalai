@@ -41,6 +41,7 @@ from app.infra.auth.postgresql import (
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
+from app.infra.human_gate import PostgreSQLHumanGate
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
@@ -65,6 +66,7 @@ from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.structured_output import StructuredOutputPort
@@ -352,8 +354,12 @@ def build_runtime(
     session_memory: SessionMemory | None = None,
     semantic_knowledge: BasicKnowledge | None = None,
     evaluator: TerminalEvaluator | None = None,
+    human_gate_port: HumanGatePort | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
+    resolved_human_gate = human_gate_port
+    if workflow_engine is not None and resolved_human_gate is not None:
+        workflow_engine.configure_human_gate_port(resolved_human_gate)
     return RuntimeImpl(
         task_store=task_store,
         session_store=session_store,
@@ -368,6 +374,7 @@ def build_runtime(
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
         evaluator=evaluator or TerminalEvaluator(),
+        human_gate_port=resolved_human_gate,
     )
 
 
@@ -397,6 +404,7 @@ def build_production_components(
     task_store = PostgreSQLTaskStore(session_factory)
     session_store = PostgreSQLSessionStore(session_factory)
     capability_registry = PostgreSQLCapabilityRegistry(session_factory)
+    human_gate_port = PostgreSQLHumanGate(session_factory)
     credential_store = build_credential_store(
         session_factory=session_factory,
         encryption_key=settings.credential_encryption_key,
@@ -424,6 +432,7 @@ def build_production_components(
         policy_guard=policy_guard,
         trace_port=resolved_trace_port,
         adapters=resolved_adapters,
+        human_gate_port=human_gate_port,
     )
     gateway.assert_production_wiring()
     production_llm = OpenAICompatibleLLMProvider(
@@ -449,6 +458,7 @@ def build_production_components(
             else structured_output
         ),
         intent_model=settings.llm_model,
+        human_gate_port=human_gate_port,
     )
     resolved_authentication = (
         build_authentication_port(
@@ -474,9 +484,16 @@ def build_production_components(
         trace_port=resolved_trace_port,
         trace_query=trace_query,
     )
+    work_object_query_gateway = CapabilityGateway(
+        capability_registry=capability_registry,
+        identity_mapping=resolved_identity_mapping,
+        policy_guard=policy_guard,
+        trace_port=resolved_trace_port,
+        adapters=resolved_adapters,
+    )
     work_object_service = WorkObjectService(
         store=PostgreSQLWorkObjectStore(session_factory),
-        gateway=gateway,
+        gateway=work_object_query_gateway,
     )
     resolved_health_checks: Mapping[str, HealthCheck]
     if health_checks is None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -13,11 +14,14 @@ from app.execution_fabric.mock_adapters.hikvision_ivms.mock_hikvision_ivms_adapt
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.execution_fabric.mock_adapters.u8.mock_u8_adapter import MockU8Adapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.human_gate import build_task_version_binding_manifest
 from app.ports.identity_mapping import IdentityCheckResult
 from app.ports.policy_guard import PolicyDecision
+from app.version_binding import capability_version_bindings
 
 
 def _execute_gateway(
@@ -92,6 +96,7 @@ def _capability_spec(
     target_system: str | None = "oa",
     *,
     input_schema: dict[str, Any] | None = None,
+    policy_digest: str | None = None,
 ) -> CapabilitySpec:
     return CapabilitySpec(
         capability_id="oa.workflow_status.get",
@@ -108,6 +113,7 @@ def _capability_spec(
         target_system=target_system,
         execution_identity="user_delegated",
         binding_required=target_system is not None,
+        policy_digest=policy_digest,
     )
 
 
@@ -383,6 +389,98 @@ def _assert_step_events(trace: FakeTrace, events: list[str]) -> None:
         assert step["session_id"] == "session-001"
         attributes = step.get("attributes") or {}
         assert "arguments" not in attributes
+
+
+def test_version_binding_drift_stops_before_identity_policy_and_adapter() -> None:
+    bound_capability = _capability_spec()
+    drifted_capability = bound_capability.model_copy(update={"version": "0.2.0"})
+    gate = InMemoryHumanGate()
+    manifest = build_task_version_binding_manifest(
+        task_id="task-001",
+        bindings=capability_version_bindings(bound_capability),
+        locked_at=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+    asyncio.run(gate.bind_task(manifest))
+    identity = FakeIdentityMapping(_identity_result("active", binding_id="binding-1"))
+    policy = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=FakeRegistry(drifted_capability),
+        identity_mapping=identity,
+        policy_guard=policy,
+        trace_port=trace,
+        human_gate_port=gate,
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "failed"
+    assert result.error_code == "internal_error"
+    assert identity.call_count == 0
+    assert policy.call_count == 0
+    assert adapter.call_count == 0
+    assert [step["event_type"] for step in trace.steps] == ["gateway_pre_recorded"]
+    assert trace.steps[0]["error_code"] == "internal_error"
+
+
+def test_missing_task_binding_stops_before_identity_policy_and_adapter() -> None:
+    gate = InMemoryHumanGate()
+    identity = FakeIdentityMapping(_identity_result("active", binding_id="binding-1"))
+    policy = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=FakeRegistry(_capability_spec()),
+        identity_mapping=identity,
+        policy_guard=policy,
+        trace_port=trace,
+        human_gate_port=gate,
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "failed"
+    assert result.error_code == "internal_error"
+    assert identity.call_count == 0
+    assert policy.call_count == 0
+    assert adapter.call_count == 0
+    assert [step["event_type"] for step in trace.steps] == ["gateway_pre_recorded"]
+
+
+def test_declared_policy_marker_drift_stops_before_policy_and_adapter() -> None:
+    bound_capability = _capability_spec(policy_digest="policy-v1")
+    drifted_capability = bound_capability.model_copy(
+        update={"policy_digest": "policy-v2"}
+    )
+    gate = InMemoryHumanGate()
+    manifest = build_task_version_binding_manifest(
+        task_id="task-001",
+        bindings=capability_version_bindings(bound_capability),
+        locked_at=datetime(2026, 8, 21, tzinfo=UTC),
+    )
+    asyncio.run(gate.bind_task(manifest))
+    identity = FakeIdentityMapping(_identity_result("active", binding_id="binding-1"))
+    policy = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = SentinelAdapter()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=FakeRegistry(drifted_capability),
+        identity_mapping=identity,
+        policy_guard=policy,
+        trace_port=FakeTrace(),
+        human_gate_port=gate,
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "failed"
+    assert result.error_code == "internal_error"
+    assert identity.call_count == 0
+    assert policy.call_count == 0
+    assert adapter.call_count == 0
 
 
 def test_capability_registry_missing_short_circuits_without_adapter_and_records_trace() -> None:

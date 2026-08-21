@@ -12,9 +12,11 @@ from pydantic import ValidationError
 from app.knowledge import BasicKnowledge, sanitize_knowledge_text
 from app.memory import SessionMemorySummary
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.human_gate import VersionBinding
 from app.ports.llm_provider import LLMMessage, LLMProviderPort
 from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.runtime.models import CapabilityRef
+from app.version_binding import prompt_version_binding
 
 JSON_OBJECT_RESPONSE_FORMAT: dict[str, str] = {"type": "json_object"}
 MAX_KNOWLEDGE_ITEMS = 8
@@ -57,6 +59,7 @@ _SAFE_VALIDATION_PATH = re.compile(
 )
 _SAFE_VALIDATION_ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SAFE_VALIDATION_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
+_INTENT_PROMPT_BINDING_VERSION = "intent-router-v1"
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,22 @@ class IntentRouter:
         self._structured_output = structured_output
         self._model = normalized_model
         self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
+
+    def version_binding(self) -> VersionBinding:
+        """Return the value-free Prompt/model marker used for this Runtime."""
+
+        return prompt_version_binding(
+            resource_id="runtime.intent_router",
+            version=_INTENT_PROMPT_BINDING_VERSION,
+            model=self._model,
+            prompts=(
+                _INTENT_SYSTEM_PROMPT,
+                _MEMORY_SYSTEM_PROMPT,
+                _KNOWLEDGE_SYSTEM_PROMPT,
+                _CAPABILITY_CONTRACT_SYSTEM_PROMPT,
+            ),
+            response_schema=CapabilityRef.model_json_schema(),
+        )
 
     async def parse(
         self,
