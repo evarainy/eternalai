@@ -635,6 +635,32 @@ def test_step_output_reference_must_target_an_existing_strictly_earlier_step(
     assert adapter.calls == []
 
 
+def test_ungated_execute_preserves_invalid_input_mapping_error_identity() -> None:
+    definition = WorkflowDefinition(
+        workflow_id="workflow.invalid-runtime-input",
+        version="1.0.0",
+        steps=(
+            WorkflowStep(
+                step_id="lookup",
+                capability_id="oa.lookup",
+                input_mapping={
+                    "required_value": WorkflowInputRef(
+                        source="workflow_input",
+                        key="missing_value",
+                    )
+                },
+            ),
+        ),
+    )
+    registry = RecordingRegistry(_capability("oa.lookup"))
+    adapter = RoutingAdapter({"oa.lookup": {"must_not": "run"}})
+
+    with pytest.raises(ValueError, match="^invalid Workflow input mapping$"):
+        _run_engine(definition, registry, adapter)
+
+    assert adapter.calls == []
+
+
 class RecordingMinimalPolicyGuard(MinimalPolicyGuard):
     def __init__(self) -> None:
         self.calls: list[str] = []

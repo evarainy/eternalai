@@ -174,6 +174,11 @@ class WorkflowEngine:
                 step_outputs={},
             )
         except (ValueError, VersionBindingMismatchError) as exc:
+            if (
+                not isinstance(exc, VersionBindingMismatchError)
+                and self._human_gate_port is None
+            ):
+                raise
             await self._append_state(
                 task_id,
                 "workflow_failed",

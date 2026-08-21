@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from app.infra.human_gate.bindings import assert_bindings
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
@@ -13,7 +14,6 @@ from app.ports.human_gate import (
     TaskVersionBindingManifest,
     VersionBinding,
     VersionBindingMismatchError,
-    canonical_version_bindings,
 )
 
 
@@ -43,11 +43,14 @@ class InMemoryHumanGate:
         bindings: tuple[VersionBinding, ...],
         *,
         exact: bool = False,
+        allow_unbound: bool = False,
     ) -> None:
         manifest = self._manifests.get(task_id)
         if manifest is None:
+            if allow_unbound:
+                return
             raise VersionBindingMismatchError("Task version binding is unavailable")
-        _assert_bindings(manifest, bindings, exact=exact)
+        assert_bindings(manifest, bindings, exact=exact)
 
     async def get_task_binding(
         self,
@@ -95,30 +98,6 @@ class InMemoryHumanGate:
         request_id: str,
     ) -> HumanGateDecisionRecord | None:
         return self._decisions.get(request_id)
-
-
-def _assert_bindings(
-    manifest: TaskVersionBindingManifest,
-    bindings: tuple[VersionBinding, ...],
-    *,
-    exact: bool,
-) -> None:
-    try:
-        actual = canonical_version_bindings(bindings)
-    except ValueError as exc:
-        raise VersionBindingMismatchError("Resource binding tuple is invalid") from exc
-    expected_by_key = {
-        (binding.resource_type, binding.resource_id): binding
-        for binding in manifest.bindings
-    }
-    actual_by_key = {
-        (binding.resource_type, binding.resource_id): binding
-        for binding in actual
-    }
-    if exact and actual_by_key.keys() != expected_by_key.keys():
-        raise VersionBindingMismatchError("Task version binding tuple changed")
-    if any(expected_by_key.get(key) != value for key, value in actual_by_key.items()):
-        raise VersionBindingMismatchError("Task version binding tuple changed")
 
 
 def _decision_matches_request(

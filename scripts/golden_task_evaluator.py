@@ -21,6 +21,7 @@ from app.execution_fabric.mock_adapters.hikvision_ivms.mock_hikvision_ivms_adapt
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.execution_fabric.mock_adapters.u8.mock_u8_adapter import MockU8Adapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
@@ -664,6 +665,7 @@ async def _run_fixture(
     policy_guard = FakePolicyGuard(
         cast(dict[str, Any] | None, given.get("policy_fixture"))
     )
+    human_gate_port = InMemoryHumanGate()
     gateway = CapabilityGateway(
         capability_registry=capability_registry,
         identity_mapping=FakeIdentityMapping(
@@ -672,6 +674,7 @@ async def _run_fixture(
         policy_guard=policy_guard,
         trace_port=trace_port,
         adapters=adapters,
+        human_gate_port=human_gate_port,
     )
     definitions = _build_workflow_definitions(given.get("workflow_definitions", ()))
     workflow_engine = (
@@ -695,6 +698,7 @@ async def _run_fixture(
         structured_output=_structured_output_for_fixture(fixture),
         intent_model="golden-task-intent-model",
         workflow_engine=workflow_engine,
+        human_gate_port=human_gate_port,
     )
     try:
         _apply_fixture_adapter_injections(given)

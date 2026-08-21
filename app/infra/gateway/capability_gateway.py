@@ -76,6 +76,7 @@ class CapabilityGateway:
         trace_port: TracePort | None = None,
         adapters: dict[str, AdapterPort] | None = None,
         human_gate_port: HumanGatePort | None = None,
+        unbound_task_capability_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._adapter = adapter
         self._adapters = adapters
@@ -84,6 +85,7 @@ class CapabilityGateway:
         self._policy_guard = policy_guard
         self._trace_port = trace_port
         self._human_gate_port = human_gate_port
+        self._unbound_task_capability_ids = unbound_task_capability_ids
 
     def assert_production_wiring(self) -> None:
         """Fail closed when production assembly omitted a Gateway layer."""
@@ -137,6 +139,9 @@ class CapabilityGateway:
                     await self._human_gate_port.assert_task_bindings(
                         task_id,
                         capability_version_bindings(capability_spec),
+                        allow_unbound=(
+                            capability_id in self._unbound_task_capability_ids
+                        ),
                     )
                 except (ValueError, VersionBindingMismatchError):
                     if self._trace_port is not None:

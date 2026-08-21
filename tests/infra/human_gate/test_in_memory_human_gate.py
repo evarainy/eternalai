@@ -108,3 +108,17 @@ def test_human_gate_locks_manifest_actor_request_and_decision() -> None:
         assert await gate.record_decision(rejection) == rejection
 
     asyncio.run(exercise())
+
+
+def test_unbound_task_requires_an_explicit_allowance() -> None:
+    async def exercise() -> None:
+        gate = InMemoryHumanGate()
+        with pytest.raises(VersionBindingMismatchError):
+            await gate.assert_task_bindings("unbound-task", (_binding(),))
+        await gate.assert_task_bindings(
+            "unbound-task",
+            (_binding(),),
+            allow_unbound=True,
+        )
+
+    asyncio.run(exercise())

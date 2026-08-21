@@ -67,6 +67,13 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
                 locked_at=now,
             )
             peer_gate = PostgreSQLHumanGate(factory)
+            await gate.assert_task_bindings(
+                f"unbound-{task_id}",
+                (binding,),
+                allow_unbound=True,
+            )
+            with pytest.raises(VersionBindingMismatchError):
+                await gate.assert_task_bindings(f"unbound-{task_id}", (binding,))
             bound_results = await asyncio.gather(
                 gate.bind_task(manifest),
                 peer_gate.bind_task(manifest),

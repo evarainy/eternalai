@@ -16,7 +16,10 @@ from app.admin.registry import (
     AdminRegistryServiceWithBindingMutations,
 )
 from app.api.v1.health import HealthCheck
-from app.api.v1.work_objects import WorkObjectService
+from app.api.v1.work_objects import (
+    OA_PENDING_WORKFLOWS_CAPABILITY_ID,
+    WorkObjectService,
+)
 from app.config import ProductionSettings
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
@@ -433,6 +436,9 @@ def build_production_components(
         trace_port=resolved_trace_port,
         adapters=resolved_adapters,
         human_gate_port=human_gate_port,
+        unbound_task_capability_ids=frozenset(
+            {OA_PENDING_WORKFLOWS_CAPABILITY_ID}
+        ),
     )
     gateway.assert_production_wiring()
     production_llm = OpenAICompatibleLLMProvider(
@@ -484,16 +490,9 @@ def build_production_components(
         trace_port=resolved_trace_port,
         trace_query=trace_query,
     )
-    work_object_query_gateway = CapabilityGateway(
-        capability_registry=capability_registry,
-        identity_mapping=resolved_identity_mapping,
-        policy_guard=policy_guard,
-        trace_port=resolved_trace_port,
-        adapters=resolved_adapters,
-    )
     work_object_service = WorkObjectService(
         store=PostgreSQLWorkObjectStore(session_factory),
-        gateway=work_object_query_gateway,
+        gateway=gateway,
     )
     resolved_health_checks: Mapping[str, HealthCheck]
     if health_checks is None:

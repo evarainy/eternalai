@@ -133,7 +133,10 @@ class HumanGatePort(Protocol):
         bindings: tuple[VersionBinding, ...],
         *,
         exact: bool = False,
-    ) -> None: ...
+        allow_unbound: bool = False,
+    ) -> None:
+        """Compare bound resources, optionally permitting only a missing manifest."""
+        ...
 
     async def get_task_binding(
         self,

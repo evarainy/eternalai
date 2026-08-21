@@ -8,7 +8,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from threading import Lock
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.evaluator import (
     EvaluationConclusion,
@@ -151,7 +151,7 @@ class RuntimeImpl:
                             claim_key = candidate_claim
                             pending = current_pending
                 if claim_key is None:
-                    return self._build_stale_confirmation_response(
+                    return await self._build_stale_confirmation_response(
                         pending=pending,
                         session_id=session_id,
                     )
@@ -165,8 +165,8 @@ class RuntimeImpl:
                 finally:
                     with self._pending_confirmation_claim_lock:
                         self._claimed_pending_confirmations.discard(claim_key)
-            if _is_workflow_confirmation_message(message):
-                return self._build_stale_confirmation_response(
+            if _is_stale_workflow_confirmation_message(message):
+                return await self._build_stale_confirmation_response(
                     pending=pending,
                     session_id=session_id,
                 )
@@ -327,12 +327,6 @@ class RuntimeImpl:
             ),
         )
         try:
-            if binding_manifest is not None and self._human_gate_port is not None:
-                await self._human_gate_port.assert_task_bindings(
-                    task_id,
-                    binding_manifest.bindings,
-                    exact=True,
-                )
             if selected_capability.type == "workflow":
                 if self._workflow_engine is None:
                     exec_result = ExecutionResult(
@@ -496,13 +490,13 @@ class RuntimeImpl:
             )
         return envelope
 
-    def _build_stale_confirmation_response(
+    async def _build_stale_confirmation_response(
         self,
         *,
         pending: _PendingWorkflow,
         session_id: str,
     ) -> ResponseEnvelope:
-        return self._response_builder.build_message(
+        envelope = self._response_builder.build_message(
             str(uuid4()),
             pending.task_id,
             session_id,
@@ -512,6 +506,15 @@ class RuntimeImpl:
             pending.trace_id,
             status="waiting_user",
         )
+        await self._trace_port.record_step(
+            pending.trace_id,
+            pending.task_id,
+            session_id,
+            event_type="response_envelope_created",
+            status="ok",
+            attributes={"confirmation_status": "stale"},
+        )
+        return envelope
 
     async def _resume_pending_workflow(
         self,
@@ -1133,12 +1136,12 @@ def _is_explicit_workflow_confirmation(
     pending: _PendingWorkflow,
 ) -> bool:
     normalized = " ".join(message.strip().casefold().split())
+    if normalized in {"确认", "confirm"}:
+        return True
     identifiers: tuple[str, ...]
     if pending.gate_request_id is not None:
         identifiers = (pending.gate_request_id.casefold(),)
     else:
-        if normalized in {"确认", "confirm"}:
-            return True
         identifiers = (pending.task_id.casefold(), pending.response_id.casefold())
     return any(
         normalized
@@ -1151,14 +1154,18 @@ def _is_explicit_workflow_confirmation(
     )
 
 
-def _is_workflow_confirmation_message(message: str) -> bool:
+def _is_stale_workflow_confirmation_message(message: str) -> bool:
     normalized = " ".join(message.strip().casefold().split())
-    if normalized in {"确认", "confirm"}:
+    for prefix in ("确认 ", "confirm ", "用户确认 "):
+        if not normalized.startswith(prefix):
+            continue
+        identifier = normalized.removeprefix(prefix)
+        try:
+            UUID(identifier)
+        except ValueError:
+            return False
         return True
-    return any(
-        normalized.startswith(prefix) and len(normalized) > len(prefix)
-        for prefix in ("确认 ", "confirm ", "用户确认 ")
-    )
+    return False
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:

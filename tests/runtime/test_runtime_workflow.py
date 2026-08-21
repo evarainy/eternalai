@@ -679,6 +679,102 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
     assert "private-marker-123" not in repr(trace.steps)
 
 
+def test_confirmation_prefixed_new_request_falls_through_to_intent_routing() -> None:
+    async def exercise() -> tuple[Any, Any, Gateway, TaskStore, Trace]:
+        definition = WorkflowDefinition(
+            workflow_id="oa.workflow.leave-submit",
+            version="1.0.0",
+            steps=(
+                WorkflowStep(
+                    step_id="submit",
+                    capability_id="oa.leave.preview",
+                    confirmed_capability_id="oa.leave.execute",
+                ),
+            ),
+        )
+        registry = Registry(
+            _capability(definition.workflow_id, "workflow"),
+            _capability("oa.leave.preview", "query"),
+            _capability("oa.leave.execute", "action"),
+            _capability("oa.leave.status", "query"),
+        )
+        gateway = Gateway(
+            {
+                "oa.leave.preview": ExecutionResult(
+                    status="waiting_user",
+                    error_code="confirm_required",
+                    trace_id="leave-preview",
+                )
+            }
+        )
+        task_store = TaskStore()
+        trace = Trace()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=registry,
+            gateway=gateway,
+            task_store=task_store,
+            trace_port=trace,
+        )
+        structured_output = MockStructuredOutputProvider()
+        structured_output.register(
+            "submit leave",
+            CapabilityRef,
+            CapabilityRef(
+                capability_id=definition.workflow_id,
+                capability_type="workflow",
+            ),
+        )
+        follow_up = "确认 一下我的请假单状态"
+        structured_output.register(
+            follow_up,
+            CapabilityRef,
+            CapabilityRef(
+                capability_id="oa.leave.status",
+                capability_type="query",
+            ),
+        )
+        runtime = build_runtime(
+            task_store=task_store,
+            session_store=SessionStore(),
+            capability_registry=registry,
+            gateway=gateway,
+            trace_port=trace,
+            llm_provider=MockLLMProvider(),
+            structured_output=structured_output,
+            intent_model="test-intent-model",
+            workflow_engine=engine,
+        )
+
+        waiting = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-follow-up",
+            session_id="session-follow-up",
+            message="submit leave",
+            client_capabilities={},
+        )
+        completed = await runtime.handle_user_message(
+            channel="mock",
+            ai_user_id="user-follow-up",
+            session_id="session-follow-up",
+            message=follow_up,
+            client_capabilities={},
+        )
+        return waiting, completed, gateway, task_store, trace
+
+    waiting, completed, gateway, task_store, trace = asyncio.run(exercise())
+
+    assert waiting.status == "waiting_user"
+    assert completed.status == "completed"
+    assert completed.task_id != waiting.task_id
+    assert [capability_id for capability_id, _ in gateway.calls] == [
+        "oa.leave.preview",
+        "oa.leave.status",
+    ]
+    assert len(task_store.created) == 2
+    assert [step["event_type"] for step in trace.steps].count("task_created") == 2
+
+
 @pytest.mark.parametrize(
     "drift_patch",
     ({"version": "2.0.0"}, {"status": "disabled"}),
@@ -975,7 +1071,15 @@ def test_non_workflow_task_locks_prompt_tool_and_policy_bindings() -> None:
 
 
 def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
-    async def exercise() -> tuple[Any, Any, Any, Any, InMemoryHumanGate, Gateway]:
+    async def exercise() -> tuple[
+        Any,
+        Any,
+        Any,
+        Any,
+        InMemoryHumanGate,
+        Gateway,
+        Trace,
+    ]:
         definition = WorkflowDefinition(
             workflow_id="oa.workflow.two-confirmations",
             version="1.0.0",
@@ -1073,7 +1177,7 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
             channel="mock",
             ai_user_id="user-two-gates",
             session_id="session-two-gates",
-            message=f"确认 {first.response_id}",
+            message="确认",
             client_capabilities={},
         )
         stale = await runtime.handle_user_message(
@@ -1088,12 +1192,12 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
             channel="mock",
             ai_user_id="user-two-gates",
             session_id="session-two-gates",
-            message=f"确认 {second.response_id}",
+            message="确认",
             client_capabilities={},
         )
-        return first, second, stale, completed, gate, gateway
+        return first, second, stale, completed, gate, gateway, trace
 
-    first, second, stale, completed, gate, gateway = asyncio.run(exercise())
+    first, second, stale, completed, gate, gateway, trace = asyncio.run(exercise())
     first_request = asyncio.run(gate.get_request(first.response_id))
     second_request = asyncio.run(gate.get_request(second.response_id))
 
@@ -1117,6 +1221,10 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
     assert first_request.request_digest != second_request.request_digest
     assert asyncio.run(gate.get_decision(first.response_id)) is not None
     assert asyncio.run(gate.get_decision(second.response_id)) is not None
+    assert any(
+        step["attributes"].get("confirmation_status") == "stale"
+        for step in trace.steps
+    )
     assert [capability_id for capability_id, _ in gateway.calls] == [
         "oa.first.preview",
         "oa.first.execute",

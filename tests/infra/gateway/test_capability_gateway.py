@@ -450,6 +450,30 @@ def test_missing_task_binding_stops_before_identity_policy_and_adapter() -> None
     assert [step["event_type"] for step in trace.steps] == ["gateway_pre_recorded"]
 
 
+def test_declared_unbound_query_uses_the_asserted_gateway_layers() -> None:
+    gate = InMemoryHumanGate()
+    identity = FakeIdentityMapping(_identity_result("active", binding_id="binding-1"))
+    policy = FakePolicyGuard(PolicyDecision(decision="allow"))
+    adapter = FakeAdapter()
+    trace = FakeTrace()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=FakeRegistry(_capability_spec()),
+        identity_mapping=identity,
+        policy_guard=policy,
+        trace_port=trace,
+        human_gate_port=gate,
+        unbound_task_capability_ids=frozenset({"oa.workflow_status.get"}),
+    )
+
+    result = _execute_gateway_with_ports(gateway)
+
+    assert result.status == "completed"
+    assert identity.call_count == 1
+    assert policy.call_count == 1
+    assert adapter.call_count == 1
+
+
 def test_declared_policy_marker_drift_stops_before_policy_and_adapter() -> None:
     bound_capability = _capability_spec(policy_digest="policy-v1")
     drifted_capability = bound_capability.model_copy(

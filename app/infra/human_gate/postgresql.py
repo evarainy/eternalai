@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.infra.human_gate.in_memory import _assert_bindings
+from app.infra.human_gate.bindings import assert_bindings
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
@@ -17,6 +17,7 @@ from app.ports.human_gate import (
     HumanGateRequest,
     TaskVersionBindingManifest,
     VersionBinding,
+    VersionBindingMismatchError,
 )
 
 
@@ -75,13 +76,14 @@ class PostgreSQLHumanGate:
         bindings: tuple[VersionBinding, ...],
         *,
         exact: bool = False,
+        allow_unbound: bool = False,
     ) -> None:
         manifest = await self._get_manifest(task_id)
         if manifest is None:
-            from app.ports.human_gate import VersionBindingMismatchError
-
+            if allow_unbound:
+                return
             raise VersionBindingMismatchError("Task version binding is unavailable")
-        _assert_bindings(manifest, bindings, exact=exact)
+        assert_bindings(manifest, bindings, exact=exact)
 
     async def get_task_binding(
         self,
