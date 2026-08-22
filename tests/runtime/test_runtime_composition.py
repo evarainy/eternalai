@@ -403,21 +403,6 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     assert components.health_timeout_seconds == settings.health_timeout_seconds
 
 
-def test_production_composition_rejects_missing_credential_polling_job_queue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "app.composition.InMemoryJobQueue",
-        lambda *_args, **_kwargs: None,
-    )
-
-    with pytest.raises(
-        RuntimeError,
-        match="Production credential polling requires JobQueuePort",
-    ):
-        build_production_components(ProductionSettings.from_environment())
-
-
 def test_production_app_warns_when_session_cookie_secure_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

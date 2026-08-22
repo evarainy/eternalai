@@ -53,6 +53,8 @@ class PostgreSQLCredentialStore:
         ai_user_id: str,
         target_system: str,
         credential: OASessionCredential,
+        *,
+        reactivate_revoked_session: bool = True,
     ) -> None:
         if not ai_user_id:
             raise ValueError("ai_user_id must not be blank")
@@ -89,7 +91,9 @@ class PostgreSQLCredentialStore:
                     " nonce = EXCLUDED.nonce,"
                     " encrypted_payload = EXCLUDED.encrypted_payload,"
                     " expires_at = EXCLUDED.expires_at,"
-                    " revoked_at = NULL,"
+                    " revoked_at = CASE"
+                    " WHEN :reactivate_revoked_session THEN NULL"
+                    " ELSE oa_session_credentials.revoked_at END,"
                     " updated_at = EXCLUDED.updated_at"
                 ),
                 {
@@ -99,6 +103,7 @@ class PostgreSQLCredentialStore:
                     "nonce": nonce,
                     "encrypted_payload": encrypted_payload,
                     "expires_at": credential.expires_at,
+                    "reactivate_revoked_session": reactivate_revoked_session,
                     "updated_at": datetime.now(UTC),
                 },
             )
@@ -188,7 +193,7 @@ class PostgreSQLCredentialStore:
                     " password_nonce = :password_nonce,"
                     " encrypted_password_payload = :encrypted_password_payload,"
                     " poll_status = 'active', poll_failure_count = 0,"
-                    " revoked_at = NULL, updated_at = :updated_at"
+                    " updated_at = :updated_at"
                 ),
                 {
                     "ai_user_id": ai_user_id,
@@ -250,7 +255,7 @@ class PostgreSQLCredentialStore:
                     "UPDATE oa_session_credentials SET"
                     " password_cipher_version = NULL, password_nonce = NULL,"
                     " encrypted_password_payload = NULL, poll_status = 'unbound',"
-                    " poll_failure_count = 0, revoked_at = :revoked_at,"
+                    " poll_failure_count = 0,"
                     " updated_at = :updated_at"
                     " WHERE ai_user_id = :ai_user_id"
                     " AND target_system = :target_system"
@@ -258,7 +263,6 @@ class PostgreSQLCredentialStore:
                 {
                     "ai_user_id": ai_user_id,
                     "target_system": target_system,
-                    "revoked_at": now,
                     "updated_at": now,
                 },
             )

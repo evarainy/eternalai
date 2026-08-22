@@ -1,7 +1,7 @@
 # Phase 2 当前状态
 
 - 当前基线 task_id：`P2-OA-CREDENTIAL-POLL-001`
-- pytest：`2183 passed, 84 warnings`（0 skipped，0 failed；包含 Alembic upgrade→downgrade→upgrade 可逆性循环）
+- pytest：`2189 passed, 84 warnings`（0 skipped，0 failed；包含 Alembic upgrade→downgrade→upgrade 可逆性循环）
 - 前端 `pnpm --dir web test`：`108 passed, 0 failed, 0 skipped`（Work Object 13/13、OpenAPI 字节一致性 1/1；本棒收口实跑）
 - Golden Gate：`27/27 passed, 0 skipped, 0 failed`（negative 16/16，positive 11/11；本棒 credential binding/polling 路径零直接覆盖，仅作既有路径回归证据）
 - `tests/architecture/`：`42 passed`

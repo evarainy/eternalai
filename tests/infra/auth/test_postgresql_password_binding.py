@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Coroutine
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from pydantic import SecretStr
 from sqlalchemy import text
 
 from app.credential_polling import CredentialPollingPolicy, CredentialPollingService
+from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.auth.postgresql import PostgreSQLCredentialStore
-from app.ports.auth import Principal, PrincipalOrgContext
+from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+from app.ports.auth import (
+    CredentialStoreError,
+    LoginCredential,
+    OASessionCredential,
+    Principal,
+    PrincipalOrgContext,
+)
 from app.ports.credential_binding import (
     CredentialAcquisitionError,
     CredentialPollCandidate,
@@ -22,11 +32,15 @@ from app.ports.credential_binding import (
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-
 def _require_db() -> str:
     if not DATABASE_URL:
         raise AssertionError("DATABASE_URL must be set by the test runner environment")
     return DATABASE_URL
+
+
+def _run(coroutine: Coroutine[Any, Any, None]) -> None:
+    with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+        runner.run(coroutine)
 
 
 def _password() -> PasswordBindingCredential:
@@ -34,6 +48,18 @@ def _password() -> PasswordBindingCredential:
         login_id=SecretStr("synthetic-login-" + uuid4().hex),
         password=SecretStr("synthetic-password-" + uuid4().hex),
     )
+
+
+def _session_credential() -> OASessionCredential:
+    return OASessionCredential(
+        oa_user_id=SecretStr("synthetic-oa-user-" + uuid4().hex),
+        cookies={"synthetic_name": SecretStr("synthetic-cookie-" + uuid4().hex)},
+        expires_at=datetime.now(UTC) + timedelta(hours=2),
+    )
+
+
+def _ai_user_id() -> str:
+    return f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
 
 
 class UserScopedCredentialStore(PostgreSQLCredentialStore):
@@ -47,6 +73,128 @@ class UserScopedCredentialStore(PostgreSQLCredentialStore):
             for candidate in await super().list_poll_candidates()
             if candidate.ai_user_id == self._test_ai_user_id
         ]
+
+
+def test_unbind_password_preserves_active_oa_session() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    async def exercise() -> None:
+        engine = make_async_engine(_require_db())
+        factory = make_async_session_factory(engine)
+        ai_user_id = _ai_user_id()
+        store = PostgreSQLCredentialStore(
+            session_factory=factory,
+            encryption_key=bytes(range(32)),
+        )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
+        session_credential = _session_credential()
+        try:
+            await store.store(ai_user_id, "oa", session_credential)
+            await store.bind_password(ai_user_id, "oa", _password())
+
+            view = await store.unbind_password(ai_user_id, "oa")
+            binding = await mapping.get_mapping(ai_user_id, "oa")
+            loaded = await store.load(ai_user_id, "oa")
+
+            assert view.bound is False
+            assert view.poll_status == "unbound"
+            assert binding is not None
+            assert binding.bind_status == "active"
+            assert loaded is not None
+            assert loaded.oa_user_id == session_credential.oa_user_id
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    _run(exercise())
+
+
+def test_bind_password_does_not_clear_administrator_revocation() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    async def exercise() -> None:
+        engine = make_async_engine(_require_db())
+        factory = make_async_session_factory(engine)
+        ai_user_id = _ai_user_id()
+        store = PostgreSQLCredentialStore(
+            session_factory=factory,
+            encryption_key=bytes(range(32)),
+        )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
+        try:
+            await store.store(ai_user_id, "oa", _session_credential())
+            revoked = await mapping.revoke_mapping(f"oa-session-v1:{ai_user_id}")
+            assert revoked is not None
+            assert revoked.mapping.bind_status == "revoked"
+
+            await store.bind_password(ai_user_id, "oa", _password())
+
+            binding = await mapping.get_mapping(ai_user_id, "oa")
+            assert binding is not None
+            assert binding.bind_status == "revoked"
+            with pytest.raises(CredentialStoreError):
+                await store.load(ai_user_id, "oa")
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    _run(exercise())
+
+
+def test_unbind_without_password_is_a_session_preserving_no_op() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    async def exercise() -> None:
+        engine = make_async_engine(_require_db())
+        factory = make_async_session_factory(engine)
+        ai_user_id = _ai_user_id()
+        store = PostgreSQLCredentialStore(
+            session_factory=factory,
+            encryption_key=bytes(range(32)),
+        )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
+        session_credential = _session_credential()
+        try:
+            await store.store(ai_user_id, "oa", session_credential)
+
+            view = await store.unbind_password(ai_user_id, "oa")
+            binding = await mapping.get_mapping(ai_user_id, "oa")
+            loaded = await store.load(ai_user_id, "oa")
+
+            assert view.bound is False
+            assert binding is not None
+            assert binding.bind_status == "active"
+            assert loaded is not None
+            assert loaded.oa_user_id == session_credential.oa_user_id
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    _run(exercise())
 
 
 def test_password_only_row_is_encrypted_and_supports_independent_systems() -> None:
@@ -126,7 +274,7 @@ def test_password_only_row_is_encrypted_and_supports_independent_systems() -> No
                 await session.commit()
             await engine.dispose()
 
-    asyncio.run(exercise())
+    _run(exercise())
 
 
 class RejectingAcquirer:
@@ -200,7 +348,7 @@ def test_password_rejection_persists_invalid_with_zero_failure_count() -> None:
                 await session.commit()
             await engine.dispose()
 
-    asyncio.run(exercise())
+    _run(exercise())
 
 
 class CaptchaAcquirer:
@@ -253,7 +401,7 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
                 await session.commit()
             await engine.dispose()
 
-    asyncio.run(exercise())
+    _run(exercise())
 
 
 class BlockingAcquirer:
@@ -371,7 +519,154 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
                 await session.commit()
             await engine.dispose()
 
-    asyncio.run(exercise())
+    _run(exercise())
+
+
+class CaptchaNotRequiredSession:
+    async def get_json(
+        self,
+        path: str,
+        params: dict[str, str],
+    ) -> dict[str, Any]:
+        del path, params
+        raise AssertionError("captcha preflight must use post_form")
+
+    async def post_form(
+        self,
+        path: str,
+        fields: dict[str, str],
+    ) -> dict[str, Any]:
+        assert path == "/api/hrm/login/getLoginForm"
+        assert fields == {}
+        return {"loginSetting": {"hasValidateCode": False}}
+
+    def cookies(self) -> dict[str, str]:
+        return {}
+
+
+class RevocationRaceAuthentication:
+    def __init__(
+        self,
+        *,
+        store: PostgreSQLCredentialStore,
+        ai_user_id: str,
+    ) -> None:
+        self._store = store
+        self._ai_user_id = ai_user_id
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+        self.reactivation_flags: list[bool] = []
+        self.store_completed = False
+
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal:
+        del credential
+        self.calls += 1
+        self.reactivation_flags.append(reactivate_revoked_session)
+        self.started.set()
+        await self.release.wait()
+        await self._store.store(
+            self._ai_user_id,
+            "oa",
+            _session_credential(),
+            reactivate_revoked_session=reactivate_revoked_session,
+        )
+        self.store_completed = True
+        return Principal(
+            ai_user_id=self._ai_user_id,
+            display_name="Synthetic User",
+            roles=(),
+            org_ctx=PrincipalOrgContext(),
+        )
+
+
+def test_revocation_committed_during_poll_is_not_reactivated() -> None:
+    from app.db.session import make_async_engine, make_async_session_factory
+
+    async def exercise() -> None:
+        engine = make_async_engine(_require_db())
+        factory = make_async_session_factory(engine)
+        ai_user_id = _ai_user_id()
+        store = UserScopedCredentialStore(
+            ai_user_id=ai_user_id,
+            session_factory=factory,
+            encryption_key=bytes(range(32)),
+        )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
+        authentication = RevocationRaceAuthentication(
+            store=store,
+            ai_user_id=ai_user_id,
+        )
+        now = datetime.now(UTC)
+        polling_task: asyncio.Task[int] | None = None
+        try:
+            await store.store(ai_user_id, "oa", _session_credential())
+            await store.bind_password(ai_user_id, "oa", _password())
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "UPDATE oa_session_credentials"
+                        " SET updated_at = :updated_at"
+                        " WHERE ai_user_id = :ai_user_id AND target_system = 'oa'"
+                    ),
+                    {
+                        "ai_user_id": ai_user_id,
+                        "updated_at": now - timedelta(minutes=11),
+                    },
+                )
+                await session.commit()
+            service = CredentialPollingService(
+                binding_store=store,
+                acquirer=OAPasswordCredentialAcquirer(
+                    session_factory=CaptchaNotRequiredSession,
+                    authentication=authentication,
+                    binding_store=store,
+                ),
+                work_objects=SuccessfulWorkObjects(),
+                policy=_policy(),
+                clock=lambda: now,
+            )
+
+            polling_task = asyncio.create_task(service.run_due())
+            await authentication.started.wait()
+            revoked = await mapping.revoke_mapping(f"oa-session-v1:{ai_user_id}")
+            assert revoked is not None
+            assert revoked.mapping.bind_status == "revoked"
+            authentication.release.set()
+
+            assert await polling_task == 1
+            assert authentication.calls == 1
+            assert authentication.reactivation_flags == [False]
+            assert authentication.store_completed is True
+            binding = await mapping.get_mapping(ai_user_id, "oa")
+            assert binding is not None
+            assert binding.bind_status == "revoked"
+            assert await store.refresh_poll_candidate(ai_user_id, "oa") is None
+            assert not any(
+                candidate.ai_user_id == ai_user_id
+                for candidate in await store.list_poll_candidates()
+            )
+        finally:
+            authentication.release.set()
+            if polling_task is not None and not polling_task.done():
+                await polling_task
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials"
+                        " WHERE ai_user_id = :ai_user_id"
+                    ),
+                    {"ai_user_id": ai_user_id},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    _run(exercise())
 
 
 def _policy() -> CredentialPollingPolicy:

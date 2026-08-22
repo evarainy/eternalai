@@ -555,8 +555,6 @@ def build_production_components(
         handlers={CREDENTIAL_POLLING_TASK_TYPE: run_credential_polling_job},
         max_terminal_records=1,
     )
-    if credential_polling_job_queue is None:
-        raise RuntimeError("Production credential polling requires JobQueuePort")
 
     credential_polling_scheduler = CredentialPollingScheduler(
         job_queue=credential_polling_job_queue,

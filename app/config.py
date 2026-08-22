@@ -479,7 +479,7 @@ class ProductionSettings:
             )
         try:
             ZoneInfo(settings.credential_poll_timezone)
-        except ZoneInfoNotFoundError:
+        except (ValueError, ZoneInfoNotFoundError):
             raise RuntimeError("CREDENTIAL_POLL_TIMEZONE is invalid") from None
         return settings
 

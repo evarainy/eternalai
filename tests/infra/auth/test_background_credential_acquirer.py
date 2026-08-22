@@ -98,9 +98,15 @@ class FakeAuthentication:
         self.failure = failure
         self.calls = 0
 
-    async def authenticate(self, credential: LoginCredential) -> Principal:
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal:
         assert credential.loginid.get_secret_value() == "LOGIN-CANARY"
         assert credential.userpassword.get_secret_value() == "PASSWORD-CANARY"
+        assert reactivate_revoked_session is False
         self.calls += 1
         if self.failure is not None:
             raise self.failure
@@ -126,7 +132,7 @@ def _acquirer(
     )
 
 
-@pytest.mark.parametrize("captcha_value", [True, "1", "true", " TRUE "])
+@pytest.mark.parametrize("captcha_value", [True, 1, "1", "true", " TRUE "])
 def test_captcha_preflight_stops_before_password_or_authentication(
     captcha_value: object,
 ) -> None:

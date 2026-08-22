@@ -276,19 +276,33 @@ class OACredentialVerifier:
         self._credential_ttl_seconds = credential_ttl_seconds
         self._clock = clock
 
-    async def authenticate(self, credential: LoginCredential) -> Principal:
-        return await self._authenticate_once(credential, persist_session=True)
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal:
+        return await self._authenticate_once(
+            credential,
+            persist_session=True,
+            reactivate_revoked_session=reactivate_revoked_session,
+        )
 
     async def verify_for_binding(self, credential: LoginCredential) -> Principal:
         """Verify identity without persisting a Session for a mismatched account."""
 
-        return await self._authenticate_once(credential, persist_session=False)
+        return await self._authenticate_once(
+            credential,
+            persist_session=False,
+            reactivate_revoked_session=False,
+        )
 
     async def _authenticate_once(
         self,
         credential: LoginCredential,
         *,
         persist_session: bool,
+        reactivate_revoked_session: bool,
     ) -> Principal:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
         failure_kind: OAAuthenticationFailureKind = "local_failure"
@@ -388,6 +402,7 @@ class OACredentialVerifier:
                         expires_at=now
                         + timedelta(seconds=self._credential_ttl_seconds),
                     ),
+                    reactivate_revoked_session=reactivate_revoked_session,
                 )
             failure_stage = "local_principal_build_failed"
             return Principal(

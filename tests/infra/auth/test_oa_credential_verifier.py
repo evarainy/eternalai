@@ -68,15 +68,19 @@ def _require_test_db() -> str:
 class RecordingCredentialStore:
     def __init__(self) -> None:
         self.records: list[tuple[str, OASessionCredential]] = []
+        self.reactivation_flags: list[bool] = []
 
     async def store(
         self,
         ai_user_id: str,
         target_system: str,
         credential: OASessionCredential,
+        *,
+        reactivate_revoked_session: bool = True,
     ) -> None:
         assert target_system == "oa"
         self.records.append((ai_user_id, credential))
+        self.reactivation_flags.append(reactivate_revoked_session)
 
     async def load(
         self,
@@ -354,6 +358,7 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     assert principal.display_name == "Synthetic User"
     assert credential.loginid.get_secret_value() not in repr(principal)
     assert len(store.records) == 1
+    assert store.reactivation_flags == [True]
     stored_user_id, stored_credential = store.records[0]
     assert stored_user_id == principal.ai_user_id
     assert stored_credential.oa_user_id.get_secret_value() == "123"
@@ -367,6 +372,20 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     ) + timedelta(hours=2)
     assert openers[0].check_login_calls == 1
     assert openers[0].requested_user_ids == ["123"]
+
+
+def test_background_authentication_preserves_revocation_in_store_handoff() -> None:
+    verifier, store, _, credential = _fixture(login_succeeds=True)
+
+    asyncio.run(
+        verifier.authenticate(
+            credential,
+            reactivate_revoked_session=False,
+        )
+    )
+
+    assert len(store.records) == 1
+    assert store.reactivation_flags == [False]
 
 
 def test_binding_verification_does_not_persist_a_session_before_identity_match() -> None:

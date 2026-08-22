@@ -48,7 +48,8 @@ class OAPasswordCredentialAcquirer:
                 LoginCredential(
                     loginid=binding.login_id,
                     userpassword=binding.password,
-                )
+                ),
+                reactivate_revoked_session=False,
             )
         except OAAuthenticationError as error:
             raise CredentialAcquisitionError(error.failure_kind) from None
@@ -71,7 +72,12 @@ class OAPasswordCredentialAcquirer:
                 raise TypeError
             value: Any = login_setting.get("hasValidateCode")
             normalized = value.strip().lower() if isinstance(value, str) else value
-            if normalized is True or normalized == "1" or normalized == "true":
+            if (
+                normalized is True
+                or normalized == 1
+                or normalized == "1"
+                or normalized == "true"
+            ):
                 raise CredentialAcquisitionError("captcha_required")
             if normalized is not False and normalized not in {"0", 0, "false"}:
                 raise TypeError

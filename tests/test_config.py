@@ -574,6 +574,10 @@ def test_credential_polling_configuration_is_loaded_with_safe_bounds() -> None:
             {"CREDENTIAL_POLL_TIMEZONE": "Not/A-Timezone"},
             "CREDENTIAL_POLL_TIMEZONE is invalid",
         ),
+        (
+            {"CREDENTIAL_POLL_TIMEZONE": "../x"},
+            "CREDENTIAL_POLL_TIMEZONE is invalid",
+        ),
     ],
 )
 def test_credential_polling_configuration_fails_closed(

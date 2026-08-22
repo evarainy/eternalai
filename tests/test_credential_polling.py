@@ -214,9 +214,15 @@ class CanaryAuthentication:
         self._canary = canary
         self.calls = 0
 
-    async def authenticate(self, credential: LoginCredential) -> Principal:
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal:
         assert credential.loginid.get_secret_value() == "synthetic-login"
         assert credential.userpassword.get_secret_value() == self._canary
+        assert reactivate_revoked_session is False
         self.calls += 1
         return PRINCIPAL
 
