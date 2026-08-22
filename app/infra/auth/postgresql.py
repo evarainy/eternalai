@@ -192,6 +192,9 @@ class PostgreSQLCredentialStore:
                     " password_cipher_version = :password_cipher_version,"
                     " password_nonce = :password_nonce,"
                     " encrypted_password_payload = :encrypted_password_payload,"
+                    " revoked_at = CASE"
+                    " WHEN oa_session_credentials.poll_status = 'invalid' THEN NULL"
+                    " ELSE oa_session_credentials.revoked_at END,"
                     " poll_status = 'active', poll_failure_count = 0,"
                     " updated_at = :updated_at"
                 ),
@@ -391,7 +394,7 @@ class PostgreSQLCredentialStore:
             ai_user_id,
             target_system,
             status="active",
-            terminal=False,
+            revoke_session=False,
             increment_non_authentication_failure=False,
         )
 
@@ -406,7 +409,7 @@ class PostgreSQLCredentialStore:
             ai_user_id,
             target_system,
             status="retrying",
-            terminal=False,
+            revoke_session=False,
             increment_non_authentication_failure=True,
         )
 
@@ -421,7 +424,7 @@ class PostgreSQLCredentialStore:
             ai_user_id,
             target_system,
             status="retrying",
-            terminal=False,
+            revoke_session=False,
             increment_non_authentication_failure=False,
             preserve_failure_count=True,
         )
@@ -432,13 +435,13 @@ class PostgreSQLCredentialStore:
         target_system: CredentialTargetSystem,
         failure: CredentialTerminalFailure,
     ) -> None:
-        """Stop after one denial; keep the non-authentication failure count at zero."""
+        """Stop polling; only an explicit authentication denial revokes the Session."""
 
         await self._update_poll_state(
             ai_user_id,
             target_system,
             status=failure,
-            terminal=True,
+            revoke_session=failure == "invalid",
             increment_non_authentication_failure=False,
         )
 
@@ -448,7 +451,7 @@ class PostgreSQLCredentialStore:
         target_system: CredentialTargetSystem,
         *,
         status: str,
-        terminal: bool,
+        revoke_session: bool,
         increment_non_authentication_failure: bool,
         preserve_failure_count: bool = False,
     ) -> None:
@@ -460,7 +463,7 @@ class PostgreSQLCredentialStore:
             failure_expression = "poll_failure_count"
         else:
             failure_expression = "0"
-        revoked_expression = ":updated_at" if terminal else "revoked_at"
+        revoked_expression = ":updated_at" if revoke_session else "revoked_at"
         async with self._session_factory() as session:
             await session.execute(
                 text(

@@ -289,7 +289,7 @@ class SuccessfulWorkObjects:
         return object()
 
 
-def test_password_rejection_persists_invalid_with_zero_failure_count() -> None:
+def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> None:
     from app.db.session import make_async_engine, make_async_session_factory
 
     async def exercise() -> None:
@@ -336,6 +336,33 @@ def test_password_rejection_persists_invalid_with_zero_failure_count() -> None:
                     )
                 ).scalar_one()
             assert revoked_at is not None
+
+            rebound = await store.bind_password(ai_user_id, "oa", _password())
+            current = await store.get_password_binding(ai_user_id, "oa")
+            refreshed = await store.refresh_poll_candidate(ai_user_id, "oa")
+            assert rebound.bound is True
+            assert rebound.poll_status == "active"
+            assert current.bound is True
+            assert current.poll_status == "active"
+            assert refreshed is not None
+            assert refreshed.ai_user_id == ai_user_id
+            assert refreshed.target_system == "oa"
+            assert any(
+                candidate.ai_user_id == ai_user_id
+                and candidate.target_system == "oa"
+                for candidate in await store.list_poll_candidates()
+            )
+            async with factory() as session:
+                reactivated_at = (
+                    await session.execute(
+                        text(
+                            "SELECT revoked_at FROM oa_session_credentials"
+                            " WHERE ai_user_id = :ai_user_id AND target_system = 'oa'"
+                        ),
+                        {"ai_user_id": ai_user_id},
+                    )
+                ).scalar_one()
+            assert reactivated_at is None
         finally:
             async with factory() as session:
                 await session.execute(
@@ -363,14 +390,17 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
     async def exercise() -> None:
         engine = make_async_engine(_require_db())
         factory = make_async_session_factory(engine)
-        ai_user_id = f"usr_v1_{uuid4().hex}"
+        ai_user_id = _ai_user_id()
         store = UserScopedCredentialStore(
             ai_user_id=ai_user_id,
             session_factory=factory,
             encryption_key=bytes(range(32)),
         )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
+        session_credential = _session_credential()
         now = datetime.now(UTC) + timedelta(minutes=11)
         try:
+            await store.store(ai_user_id, "oa", session_credential)
             await store.bind_password(ai_user_id, "oa", _password())
             service = CredentialPollingService(
                 binding_store=store,
@@ -384,6 +414,12 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
             assert view.poll_status == "captcha_required"
             assert view.poll_failure_count == 0
             assert await store.refresh_poll_candidate(ai_user_id, "oa") is None
+            binding = await mapping.get_mapping(ai_user_id, "oa")
+            loaded = await store.load(ai_user_id, "oa")
+            assert binding is not None
+            assert binding.bind_status == "active"
+            assert loaded is not None
+            assert loaded.oa_user_id == session_credential.oa_user_id
 
             await store.mark_non_authentication_failure(ai_user_id, "oa")
             unchanged = await store.get_password_binding(ai_user_id, "oa")
