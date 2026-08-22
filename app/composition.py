@@ -6,6 +6,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -15,12 +16,19 @@ from app.admin.registry import (
     AdminRegistryService,
     AdminRegistryServiceWithBindingMutations,
 )
+from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.health import HealthCheck
 from app.api.v1.work_objects import (
     OA_PENDING_WORKFLOWS_CAPABILITY_ID,
     WorkObjectService,
 )
 from app.config import ProductionSettings
+from app.credential_polling import (
+    CREDENTIAL_POLLING_TASK_TYPE,
+    CredentialPollingPolicy,
+    CredentialPollingScheduler,
+    CredentialPollingService,
+)
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
@@ -31,6 +39,7 @@ from app.infra.adapters.oa.provider import (
     ReplayOAReadProvider,
     report_oa_structural_drift,
 )
+from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.oa import (
     OACredentialVerifier,
@@ -46,6 +55,7 @@ from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
 from app.infra.human_gate import PostgreSQLHumanGate
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+from app.infra.job_queue.in_memory import InMemoryJobQueue
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
@@ -69,8 +79,10 @@ from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.credential_binding import CredentialBindingVerifierPort
 from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
+from app.ports.job_queue import JobQueuePort
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
@@ -86,6 +98,9 @@ class ProductionComponents:
     runtime: RuntimeImpl
     admin_registry_service: AdminRegistryService
     work_object_service: WorkObjectService
+    credential_binding_service: CredentialBindingService
+    credential_polling_job_queue: JobQueuePort
+    credential_polling_scheduler: CredentialPollingScheduler
     authentication: AuthenticationPort
     session_tokens: SessionTokenPort
     session_binder: PrincipalSessionBinder
@@ -387,6 +402,7 @@ def build_production_components(
     llm_provider: LLMProviderPort | None = None,
     structured_output: StructuredOutputPort | None = None,
     authentication: AuthenticationPort | None = None,
+    credential_binding_verifier: CredentialBindingVerifierPort | None = None,
     identity_mapping: IdentityMappingPort | None = None,
     adapters: Mapping[str, AdapterPort] | None = None,
     trace_port: TracePort | None = None,
@@ -478,6 +494,14 @@ def build_production_components(
         if authentication is None
         else authentication
     )
+    resolved_binding_verifier = credential_binding_verifier
+    if resolved_binding_verifier is None:
+        if not isinstance(resolved_authentication, OACredentialVerifier):
+            raise RuntimeError(
+                "A custom authentication port requires a non-persisting "
+                "credential binding verifier"
+            )
+        resolved_binding_verifier = resolved_authentication
     session_tokens = build_session_token_port(
         signing_key=settings.session_signing_key,
         ttl_seconds=settings.session_cookie_ttl_seconds,
@@ -493,6 +517,50 @@ def build_production_components(
     work_object_service = WorkObjectService(
         store=PostgreSQLWorkObjectStore(session_factory),
         gateway=gateway,
+    )
+    credential_binding_service = CredentialBindingService(
+        store=credential_store,
+        verifier=resolved_binding_verifier,
+    )
+    session_factory_for_background = make_urllib_session_factory(
+        base_url=settings.oa_base_url,
+        timeout_seconds=settings.oa_timeout_seconds,
+    )
+    credential_polling_policy = CredentialPollingPolicy(
+        interval_seconds=settings.credential_poll_interval_seconds,
+        maximum_backoff_seconds=settings.credential_poll_maximum_backoff_seconds,
+        work_start_hour=settings.credential_poll_work_start_hour,
+        work_end_hour=settings.credential_poll_work_end_hour,
+        timezone_name=settings.credential_poll_timezone,
+        global_concurrency=settings.credential_poll_global_concurrency,
+        scheduler_tick_seconds=settings.credential_poll_scheduler_tick_seconds,
+    )
+    credential_polling_service = CredentialPollingService(
+        binding_store=credential_store,
+        acquirer=OAPasswordCredentialAcquirer(
+            session_factory=session_factory_for_background,
+            authentication=resolved_authentication,
+            binding_store=credential_store,
+        ),
+        work_objects=work_object_service,
+        policy=credential_polling_policy,
+    )
+
+    async def run_credential_polling_job(payload: dict[str, Any]) -> int:
+        if payload:
+            raise ValueError("credential polling job payload must be empty")
+        return await credential_polling_service.run_due()
+
+    credential_polling_job_queue: JobQueuePort = InMemoryJobQueue(
+        handlers={CREDENTIAL_POLLING_TASK_TYPE: run_credential_polling_job},
+        max_terminal_records=1,
+    )
+    if credential_polling_job_queue is None:
+        raise RuntimeError("Production credential polling requires JobQueuePort")
+
+    credential_polling_scheduler = CredentialPollingScheduler(
+        job_queue=credential_polling_job_queue,
+        tick_seconds=credential_polling_policy.scheduler_tick_seconds,
     )
     resolved_health_checks: Mapping[str, HealthCheck]
     if health_checks is None:
@@ -518,6 +586,9 @@ def build_production_components(
         runtime=runtime,
         admin_registry_service=admin_registry_service,
         work_object_service=work_object_service,
+        credential_binding_service=credential_binding_service,
+        credential_polling_job_queue=credential_polling_job_queue,
+        credential_polling_scheduler=credential_polling_scheduler,
         authentication=resolved_authentication,
         session_tokens=session_tokens,
         session_binder=session_binder,

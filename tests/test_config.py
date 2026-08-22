@@ -522,3 +522,66 @@ def test_live_explicit_pending_pack_takes_priority_over_legacy_alias(
     assert settings.oa_read_contract_pack_dir == legacy_pack
     assert settings.oa_pending_workflows_contract_pack_dir == pending_pack
     assert settings.oa_system_messages_contract_pack_dir == system_pack
+
+
+def test_credential_polling_configuration_is_loaded_with_safe_bounds() -> None:
+    environment = _environment()
+    environment.update(
+        {
+            "CREDENTIAL_POLL_INTERVAL_S": "1200",
+            "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S": "7200",
+            "CREDENTIAL_POLL_WORK_START_HOUR": "7",
+            "CREDENTIAL_POLL_WORK_END_HOUR": "20",
+            "CREDENTIAL_POLL_TIMEZONE": "Asia/Shanghai",
+            "CREDENTIAL_POLL_GLOBAL_CONCURRENCY": "3",
+            "CREDENTIAL_POLL_SCHEDULER_TICK_S": "30",
+        }
+    )
+
+    settings = ProductionSettings.from_environment(environment)
+
+    assert settings.credential_poll_interval_seconds == 1200
+    assert settings.credential_poll_maximum_backoff_seconds == 7200
+    assert settings.credential_poll_work_start_hour == 7
+    assert settings.credential_poll_work_end_hour == 20
+    assert settings.credential_poll_timezone == "Asia/Shanghai"
+    assert settings.credential_poll_global_concurrency == 3
+    assert settings.credential_poll_scheduler_tick_seconds == 30
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        (
+            {"CREDENTIAL_POLL_INTERVAL_S": "599"},
+            "CREDENTIAL_POLL_INTERVAL_S must be at least 600",
+        ),
+        (
+            {
+                "CREDENTIAL_POLL_INTERVAL_S": "1200",
+                "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S": "600",
+            },
+            "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S must be at least",
+        ),
+        (
+            {
+                "CREDENTIAL_POLL_WORK_START_HOUR": "18",
+                "CREDENTIAL_POLL_WORK_END_HOUR": "18",
+            },
+            "CREDENTIAL_POLL_WORK_START_HOUR must be earlier",
+        ),
+        (
+            {"CREDENTIAL_POLL_TIMEZONE": "Not/A-Timezone"},
+            "CREDENTIAL_POLL_TIMEZONE is invalid",
+        ),
+    ],
+)
+def test_credential_polling_configuration_fails_closed(
+    overrides: dict[str, str],
+    expected_error: str,
+) -> None:
+    environment = _environment()
+    environment.update(overrides)
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        ProductionSettings.from_environment(environment)

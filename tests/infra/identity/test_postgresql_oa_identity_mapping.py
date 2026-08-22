@@ -485,9 +485,13 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             super().__init__(**kwargs)
             self.load_calls = 0
 
-        async def load(self, stored_ai_user_id: str) -> OASessionCredential | None:
+        async def load(
+            self,
+            stored_ai_user_id: str,
+            target_system: str,
+        ) -> OASessionCredential | None:
             self.load_calls += 1
-            return await super().load(stored_ai_user_id)
+            return await super().load(stored_ai_user_id, target_system)
 
     class CountingSecretProvider(CredentialStoreSecretProvider):
         def __init__(self, **kwargs: Any) -> None:
@@ -536,6 +540,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             )
             await credential_store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr("synthetic-" + uuid4().hex),
                     cookies={
@@ -810,6 +815,7 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
             )
             await credential_store.store(
                 user_b_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr("synthetic-" + uuid4().hex),
                     cookies={

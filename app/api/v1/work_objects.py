@@ -13,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
 from app.ports.capability_gateway import CapabilityGatewayPort, ErrorCode
+from app.ports.credential_binding import (
+    BackgroundWorkObjectSyncError,
+    CredentialCountedFailureCode,
+)
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     WORK_OBJECT_LIST_FETCH_LIMIT,
@@ -112,6 +116,14 @@ class WorkObjectService:
         )
 
     async def sync_for_principal(self, principal: Principal) -> WorkObjectListResponse:
+        return await self._sync_for_principal(principal, background=False)
+
+    async def _sync_for_principal(
+        self,
+        principal: Principal,
+        *,
+        background: bool,
+    ) -> WorkObjectListResponse:
         operation_id = self._id_factory()
         result = await self._gateway.execute_capability(
             task_id=f"work-object-sync:{operation_id}",
@@ -129,6 +141,8 @@ class WorkObjectService:
             ),
         )
         if result.status != "completed" or result.data is None:
+            if background:
+                _raise_background_sync_failure(result.error_code)
             _raise_sync_failure(result.error_code)
         try:
             payload = OAPendingWorkSnapshotCollection.model_validate(
@@ -151,6 +165,11 @@ class WorkObjectService:
                 strict=True,
             )
         except (AttributeError, TypeError, ValidationError):
+            if background:
+                raise BackgroundWorkObjectSyncError(
+                    authentication_denied=False,
+                    failure_code="invalid_response",
+                ) from None
             _raise_invalid_sync_payload()
         fetched_at = self._clock()
         await self._store.upsert_oa_pending_workflows(
@@ -163,6 +182,11 @@ class WorkObjectService:
             fetched_at=fetched_at,
         )
         return await self.list_for_principal(principal)
+
+    async def sync_for_background(self, principal: Principal) -> WorkObjectListResponse:
+        """Run the same Gateway path with retry-safe failure classification."""
+
+        return await self._sync_for_principal(principal, background=True)
 
     async def set_handling_mark_for_principal(
         self,
@@ -280,6 +304,25 @@ def _raise_sync_failure(error_code: ErrorCode | None) -> NoReturn:
             "code": "work_object_sync_failed",
             "message": "Work Object synchronization failed; stored data is unchanged.",
         },
+    )
+
+
+def _raise_background_sync_failure(error_code: ErrorCode | None) -> NoReturn:
+    if error_code in _REAUTHENTICATION_ERRORS:
+        raise BackgroundWorkObjectSyncError(authentication_denied=True)
+    countable_errors: dict[ErrorCode, CredentialCountedFailureCode] = {
+        "adapter_timeout": "timeout",
+        "adapter_http_500": "upstream_5xx",
+        "adapter_payload_invalid": "invalid_response",
+        "adapter_missing_required_field": "invalid_response",
+        "adapter_empty_response": "invalid_response",
+    }
+    failure_code = (
+        countable_errors.get(error_code) if error_code is not None else None
+    )
+    raise BackgroundWorkObjectSyncError(
+        authentication_denied=False,
+        failure_code=failure_code,
     )
 
 

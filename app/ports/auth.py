@@ -78,10 +78,15 @@ class CredentialStorePort(Protocol):
     async def store(
         self,
         ai_user_id: str,
+        target_system: str,
         credential: OASessionCredential,
     ) -> None: ...
 
-    async def load(self, ai_user_id: str) -> OASessionCredential | None: ...
+    async def load(
+        self,
+        ai_user_id: str,
+        target_system: str,
+    ) -> OASessionCredential | None: ...
 
 
 __all__ = (

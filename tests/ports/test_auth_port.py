@@ -48,8 +48,9 @@ def test_credential_store_load_contract_returns_typed_optional_credential() -> N
     signature = inspect.signature(CredentialStorePort.load)
     hints = get_type_hints(CredentialStorePort.load)
 
-    assert list(signature.parameters) == ["self", "ai_user_id"]
+    assert list(signature.parameters) == ["self", "ai_user_id", "target_system"]
     assert hints["ai_user_id"] is str
+    assert hints["target_system"] is str
     assert hints["return"] == OASessionCredential | None
     assert inspect.iscoroutinefunction(CredentialStorePort.load)
 

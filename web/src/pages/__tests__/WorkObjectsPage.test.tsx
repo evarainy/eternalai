@@ -3,6 +3,7 @@ import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
+import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type {
   WorkObjectListResponse,
   WorkObjectView,
@@ -11,10 +12,20 @@ import { useAuthStore } from '../../stores/authStore';
 import WorkObjectsPage from '../WorkObjectsPage';
 
 const apiMocks = vi.hoisted(() => ({
+  bindPassword: vi.fn(),
   getWorkObject: vi.fn(),
+  getBinding: vi.fn(),
   listWorkObjects: vi.fn(),
   setHandlingMark: vi.fn(),
   syncWorkObjects: vi.fn(),
+  unbindPassword: vi.fn(),
+}));
+
+vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
+  bindPasswordApiV1CredentialBindingsTargetSystemPut: apiMocks.bindPassword,
+  getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
+  unbindPasswordApiV1CredentialBindingsTargetSystemDelete:
+    apiMocks.unbindPassword,
 }));
 
 vi.mock('../../generated/work-objects/work-objects', () => ({
@@ -49,6 +60,14 @@ const OTHER_USER_WORK_OBJECT: WorkObjectView = {
   source_ref: 'OA-WF-OTHER',
   source_title: '其他用户的待办',
   work_object_id: 'work-object-other',
+};
+
+const UNBOUND_CREDENTIAL: CredentialBindingView = {
+  bound: false,
+  poll_failure_count: 0,
+  poll_status: 'unbound',
+  target_system: 'oa',
+  updated_at: null,
 };
 
 function listResponse(
@@ -91,6 +110,14 @@ describe('WorkObjectsPage', () => {
     apiMocks.listWorkObjects.mockResolvedValue(listResponse());
     apiMocks.syncWorkObjects.mockResolvedValue(listResponse());
     apiMocks.getWorkObject.mockResolvedValue(WORK_OBJECT);
+    apiMocks.getBinding.mockResolvedValue(UNBOUND_CREDENTIAL);
+    apiMocks.bindPassword.mockResolvedValue({
+      ...UNBOUND_CREDENTIAL,
+      bound: true,
+      poll_status: 'active',
+      updated_at: '2026-08-21T03:00:00Z',
+    });
+    apiMocks.unbindPassword.mockResolvedValue(UNBOUND_CREDENTIAL);
     apiMocks.setHandlingMark.mockResolvedValue({
       ...WORK_OBJECT,
       handling_mark: 'handled_elsewhere',
@@ -119,6 +146,63 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByText(/本页面没有服务端分页/)).toBeInTheDocument();
     expect(container.querySelector('.ant-pagination')).not.toBeInTheDocument();
     expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears plaintext fields immediately while an OA binding request is pending', async () => {
+    let resolveBinding!: (binding: CredentialBindingView) => void;
+    const pendingBinding = new Promise<CredentialBindingView>((resolve) => {
+      resolveBinding = resolve;
+    });
+    apiMocks.bindPassword.mockReset().mockReturnValueOnce(pendingBinding);
+    renderPage();
+
+    expect(await screen.findByText('尚未绑定')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '绑定 OA 密码' }));
+    const loginId = screen.getByLabelText('OA 登录标识');
+    const password = screen.getByLabelText('OA 密码');
+    fireEvent.change(loginId, { target: { value: 'LOGIN-ID-CANARY' } });
+    fireEvent.change(password, { target: { value: 'PASSWORD-CANARY' } });
+    fireEvent.click(screen.getByRole('button', { name: '验证并保存' }));
+
+    await waitFor(() => {
+      expect(apiMocks.bindPassword).toHaveBeenCalledWith('oa', {
+        login_id: 'LOGIN-ID-CANARY',
+        password: 'PASSWORD-CANARY',
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText('OA 登录标识')).toHaveValue('');
+      expect(screen.getByLabelText('OA 密码')).toHaveValue('');
+    });
+    expect(screen.queryByText('PASSWORD-CANARY')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveBinding({
+        ...UNBOUND_CREDENTIAL,
+        bound: true,
+        poll_status: 'active',
+        updated_at: '2026-08-21T03:00:00Z',
+      });
+      await pendingBinding;
+    });
+    expect(await screen.findByText('后台轮询已启用')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['invalid', '密码已失效，需重新绑定'],
+    ['captcha_required', 'OA 要求验证码，轮询已停止'],
+  ] as const)('shows the terminal %s state as a rebind warning', async (status, label) => {
+    apiMocks.getBinding.mockResolvedValueOnce({
+      ...UNBOUND_CREDENTIAL,
+      bound: true,
+      poll_status: status,
+      updated_at: '2026-08-21T03:00:00Z',
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新绑定' })).toBeInTheDocument();
   });
 
   it('routes an expired OA identity to the existing reauthentication state', async () => {

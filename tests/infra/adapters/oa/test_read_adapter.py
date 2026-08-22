@@ -1993,7 +1993,9 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
         async def load(
             self,
             loaded_ai_user_id: str,
+            target_system: str,
         ) -> OASessionCredential | None:
+            assert target_system == "oa"
             assert loaded_ai_user_id == trusted_ai_user_id
             return credential
 

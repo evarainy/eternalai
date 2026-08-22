@@ -98,6 +98,31 @@ const PROJECTS = [
       },
     ],
   },
+  {
+    project: 'credentialBindings',
+    input: './openapi/credential-bindings.openapi.json',
+    target: './src/generated/credential-bindings/credential-bindings.ts',
+    operations: [
+      {
+        path: '/api/v1/credential-bindings/{target_system}',
+        method: 'get',
+        operationId:
+          'get_binding_api_v1_credential_bindings__target_system__get',
+      },
+      {
+        path: '/api/v1/credential-bindings/{target_system}',
+        method: 'put',
+        operationId:
+          'bind_password_api_v1_credential_bindings__target_system__put',
+      },
+      {
+        path: '/api/v1/credential-bindings/{target_system}',
+        method: 'delete',
+        operationId:
+          'unbind_password_api_v1_credential_bindings__target_system__delete',
+      },
+    ],
+  },
 ] as const;
 
 const ADMIN_PROJECT = {
@@ -254,7 +279,7 @@ function readOpenApi(path: string): OpenApiDocument {
 
 describe('FastAPI-derived Orval clients', () => {
   it(
-    're-exports four FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    're-exports five FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -267,8 +292,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(6);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(6);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(7);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(7);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),
@@ -299,7 +324,7 @@ describe('FastAPI-derived Orval clients', () => {
 
           const document = readOpenApi(regeneratedSpec);
           expect(Object.keys(document.paths)).toEqual(
-            target.operations.map((operation) => operation.path),
+            [...new Set(target.operations.map((operation) => operation.path))],
           );
           for (const operation of target.operations) {
             expect(document.paths[operation.path]?.[operation.method]?.operationId).toBe(
@@ -318,6 +343,21 @@ describe('FastAPI-derived Orval clients', () => {
           writeOnly: true,
         });
         expect(loginSchema?.properties?.userpassword).toMatchObject({
+          format: 'password',
+          writeOnly: true,
+        });
+
+        const bindingDocument = readOpenApi(
+          resolve(temporaryWeb, PROJECTS[4].input),
+        );
+        const bindingSchema =
+          bindingDocument.paths[PROJECTS[4].operations[1].path]?.put?.requestBody
+            ?.content?.['application/json']?.schema;
+        expect(bindingSchema?.properties?.login_id).toMatchObject({
+          format: 'password',
+          writeOnly: true,
+        });
+        expect(bindingSchema?.properties?.password).toMatchObject({
           format: 'password',
           writeOnly: true,
         });

@@ -115,3 +115,23 @@ class TestInMemoryJobQueueDuplicateTaskId:
         await q.enqueue("square", {"n": 1}, task_id="fixed-id")
         with pytest.raises(ValueError, match="fixed-id"):
             await q.enqueue("square", {"n": 2}, task_id="fixed-id")
+
+
+class TestInMemoryJobQueueRetention:
+    @pytest.mark.anyio
+    async def test_bounded_terminal_records_evict_oldest_job(self) -> None:
+        q = InMemoryJobQueue(
+            handlers={"square": _async_square},
+            max_terminal_records=1,
+        )
+
+        first = await q.enqueue("square", {"n": 1})
+        second = await q.enqueue("square", {"n": 2})
+
+        assert await q.get_status(first) == "not_found"
+        assert await q.get_status(second) == "complete"
+        assert await q.get_result(second) == 4
+
+    def test_terminal_record_limit_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="max_terminal_records"):
+            InMemoryJobQueue(handlers={}, max_terminal_records=0)

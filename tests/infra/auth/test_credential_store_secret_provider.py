@@ -32,11 +32,17 @@ class RecordingCredentialStore:
     async def store(
         self,
         ai_user_id: str,
+        target_system: str,
         credential: OASessionCredential,
     ) -> None:
         raise AssertionError("read provider must not write credentials")
 
-    async def load(self, ai_user_id: str) -> OASessionCredential | None:
+    async def load(
+        self,
+        ai_user_id: str,
+        target_system: str,
+    ) -> OASessionCredential | None:
+        assert target_system == "oa"
         self.loaded_ai_user_ids.append(ai_user_id)
         return self.credential
 
@@ -51,11 +57,17 @@ class ExplodingCredentialStore:
     async def store(
         self,
         ai_user_id: str,
+        target_system: str,
         credential: OASessionCredential,
     ) -> None:
         raise AssertionError
 
-    async def load(self, ai_user_id: str) -> OASessionCredential | None:
+    async def load(
+        self,
+        ai_user_id: str,
+        target_system: str,
+    ) -> OASessionCredential | None:
+        del ai_user_id, target_system
         raise RuntimeError(self._sensitive_marker)
 
 

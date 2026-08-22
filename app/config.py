@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, TypeAlias, cast
 from urllib.parse import quote, unquote, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db.config import get_database_url
 
@@ -26,6 +27,13 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
+_DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS = 600
+_DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS = 3600
+_DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR = 8
+_DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR = 18
+_DEFAULT_CREDENTIAL_POLL_TIMEZONE = "Asia/Shanghai"
+_DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY = 4
+_DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS = 60
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 OAReadAdapterMode: TypeAlias = Literal["mock", "replay", "live"]
 
@@ -167,6 +175,19 @@ class ProductionSettings:
     oa_system_messages_bizstate: str | None = None
     oa_system_messages_select_state: str | None = None
     oa_message_center_page_size: int = 20
+    credential_poll_interval_seconds: int = _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS
+    credential_poll_maximum_backoff_seconds: int = (
+        _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS
+    )
+    credential_poll_work_start_hour: int = _DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR
+    credential_poll_work_end_hour: int = _DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR
+    credential_poll_timezone: str = _DEFAULT_CREDENTIAL_POLL_TIMEZONE
+    credential_poll_global_concurrency: int = (
+        _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY
+    )
+    credential_poll_scheduler_tick_seconds: int = (
+        _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS
+    )
     phase0_mock_mode: bool = False
 
     @classmethod
@@ -212,7 +233,7 @@ class ProductionSettings:
                 "OA_READ_ADAPTER_MODE=mock requires ENV=testing "
                 "or PHASE0_MOCK_MODE=true"
             )
-        return cls(
+        settings = cls(
             environment_name=environment_name,
             database_url=get_database_url(source),
             redis_url=_redis_url(source),
@@ -393,8 +414,74 @@ class ProductionSettings:
                 20,
                 maximum=1_000,
             ),
+            credential_poll_interval_seconds=_bounded_positive_int(
+                source,
+                "CREDENTIAL_POLL_INTERVAL_S",
+                _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS,
+                minimum=600,
+                maximum=86_400,
+            ),
+            credential_poll_maximum_backoff_seconds=_bounded_positive_int(
+                source,
+                "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S",
+                _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS,
+                minimum=600,
+                maximum=604_800,
+            ),
+            credential_poll_work_start_hour=_integer_in_range(
+                source,
+                "CREDENTIAL_POLL_WORK_START_HOUR",
+                _DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR,
+                minimum=0,
+                maximum=23,
+            ),
+            credential_poll_work_end_hour=_integer_in_range(
+                source,
+                "CREDENTIAL_POLL_WORK_END_HOUR",
+                _DEFAULT_CREDENTIAL_POLL_WORK_END_HOUR,
+                minimum=1,
+                maximum=24,
+            ),
+            credential_poll_timezone=_required(
+                source,
+                "CREDENTIAL_POLL_TIMEZONE",
+                default=_DEFAULT_CREDENTIAL_POLL_TIMEZONE,
+            ),
+            credential_poll_global_concurrency=_bounded_positive_int(
+                source,
+                "CREDENTIAL_POLL_GLOBAL_CONCURRENCY",
+                _DEFAULT_CREDENTIAL_POLL_GLOBAL_CONCURRENCY,
+                maximum=32,
+            ),
+            credential_poll_scheduler_tick_seconds=_bounded_positive_int(
+                source,
+                "CREDENTIAL_POLL_SCHEDULER_TICK_S",
+                _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS,
+                maximum=600,
+            ),
             phase0_mock_mode=phase0_mock_mode,
         )
+        if (
+            settings.credential_poll_maximum_backoff_seconds
+            < settings.credential_poll_interval_seconds
+        ):
+            raise RuntimeError(
+                "CREDENTIAL_POLL_MAXIMUM_BACKOFF_S must be at least "
+                "CREDENTIAL_POLL_INTERVAL_S"
+            )
+        if (
+            settings.credential_poll_work_start_hour
+            >= settings.credential_poll_work_end_hour
+        ):
+            raise RuntimeError(
+                "CREDENTIAL_POLL_WORK_START_HOUR must be earlier than "
+                "CREDENTIAL_POLL_WORK_END_HOUR"
+            )
+        try:
+            ZoneInfo(settings.credential_poll_timezone)
+        except ZoneInfoNotFoundError:
+            raise RuntimeError("CREDENTIAL_POLL_TIMEZONE is invalid") from None
+        return settings
 
 
 def _required(
@@ -611,11 +698,31 @@ def _bounded_positive_int(
     name: str,
     default: int,
     *,
+    minimum: int = 1,
     maximum: int,
 ) -> int:
     value = _positive_int(source, name, default)
+    if value < minimum:
+        raise RuntimeError(f"{name} must be at least {minimum}")
     if value > maximum:
         raise RuntimeError(f"{name} must be at most {maximum}")
+    return value
+
+
+def _integer_in_range(
+    source: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = source.get(name, str(default)).strip()
+    if not raw.isascii() or not raw.isdigit():
+        raise RuntimeError(f"{name} must be an integer")
+    value = int(raw)
+    if value < minimum or value > maximum:
+        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
     return value
 
 

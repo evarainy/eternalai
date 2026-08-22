@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ApiError } from '../api/mutator';
+import OACredentialBindingCard from '../components/OACredentialBindingCard';
 import {
   getWorkObjectApiV1WorkObjectsWorkObjectIdGet as getWorkObject,
   listWorkObjectsApiV1WorkObjectsGet as listWorkObjects,
@@ -391,6 +392,8 @@ export default function WorkObjectsPage() {
           </Space>
         </Flex>
       </Card>
+
+      <OACredentialBindingCard />
 
       {listQuery.error ? (
         <Alert
