@@ -158,6 +158,7 @@ class PostgreSQLOAIdentityMapping:
                         "SELECT ai_user_id, expires_at, revoked_at"
                         " FROM oa_session_credentials"
                         " WHERE ai_user_id = :ai_user_id"
+                        " AND target_system = 'oa'"
                         " FOR UPDATE"
                     ),
                     {"ai_user_id": ai_user_id},
@@ -176,6 +177,7 @@ class PostgreSQLOAIdentityMapping:
                                 "UPDATE oa_session_credentials"
                                 " SET revoked_at = :revoked_at"
                                 " WHERE ai_user_id = :ai_user_id"
+                                " AND target_system = 'oa'"
                                 " AND revoked_at IS NULL"
                                 " RETURNING ai_user_id"
                             ),
@@ -218,6 +220,7 @@ class PostgreSQLOAIdentityMapping:
                         "SELECT ai_user_id, expires_at, revoked_at"
                         " FROM oa_session_credentials"
                         " WHERE ai_user_id = :ai_user_id"
+                        " AND target_system = 'oa'"
                     ),
                     {"ai_user_id": ai_user_id},
                 )

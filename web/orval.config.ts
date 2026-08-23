@@ -85,4 +85,18 @@ export default defineConfig({
       },
     },
   },
+  credentialBindings: {
+    input: './openapi/credential-bindings.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/credential-bindings/credential-bindings.ts',
+      mock: false,
+      override: {
+        mutator: {
+          path: './src/api/mutator.ts',
+          name: 'customInstance',
+        },
+      },
+    },
+  },
 });

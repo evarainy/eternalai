@@ -66,7 +66,7 @@ class CredentialStoreSecretProvider:
         credential: OASessionCredential | None = None
         load_failed = False
         try:
-            credential = await self._credential_store.load(ai_user_id)
+            credential = await self._credential_store.load(ai_user_id, "oa")
         except Exception:
             load_failed = True
 

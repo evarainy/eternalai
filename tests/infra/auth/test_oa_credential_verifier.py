@@ -6,9 +6,12 @@ import hashlib
 import hmac
 import json
 import os
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from email.message import Message
 from http.cookiejar import Cookie, CookieJar
-from typing import Any, cast
+from typing import Any, AsyncIterator, cast
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import OpenerDirector, Request
 from uuid import uuid4
@@ -20,6 +23,8 @@ from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
+from app.credential_polling import CredentialPollingPolicy, CredentialPollingService
+from app.infra.auth.background import OAPasswordCredentialAcquirer
 from app.infra.auth.crypto import identity_surrogate
 from app.infra.auth.oa import (
     OAAuthenticationError,
@@ -32,6 +37,13 @@ from app.ports.auth import (
     CredentialStorePort,
     LoginCredential,
     OASessionCredential,
+    Principal,
+)
+from app.ports.credential_binding import (
+    CredentialPollCandidate,
+    CredentialTargetSystem,
+    CredentialTerminalFailure,
+    PasswordBindingCredential,
 )
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -56,16 +68,26 @@ def _require_test_db() -> str:
 class RecordingCredentialStore:
     def __init__(self) -> None:
         self.records: list[tuple[str, OASessionCredential]] = []
+        self.reactivation_flags: list[bool] = []
 
     async def store(
         self,
         ai_user_id: str,
+        target_system: str,
         credential: OASessionCredential,
+        *,
+        reactivate_revoked_session: bool = True,
     ) -> None:
+        assert target_system == "oa"
         self.records.append((ai_user_id, credential))
+        self.reactivation_flags.append(reactivate_revoked_session)
 
-    async def load(self, ai_user_id: str) -> OASessionCredential | None:
-        del ai_user_id
+    async def load(
+        self,
+        ai_user_id: str,
+        target_system: str,
+    ) -> OASessionCredential | None:
+        del ai_user_id, target_system
         raise AssertionError("authentication write path must not load credentials")
 
 
@@ -104,6 +126,7 @@ class HARFixtureOpener:
         oa_user_id: object,
         cookie_values: dict[str, str],
         login_succeeds: bool,
+        login_http_status: int | None,
         rsa_flag: object | None,
     ) -> None:
         self._cookie_jar = cookie_jar
@@ -114,6 +137,7 @@ class HARFixtureOpener:
         self._oa_user_id = oa_user_id
         self._cookie_values = cookie_values
         self._login_succeeds = login_succeeds
+        self._login_http_status = login_http_status
         self._rsa_flag = rsa_flag
         self.check_login_calls = 0
         self.requested_paths: list[str] = []
@@ -139,9 +163,17 @@ class HARFixtureOpener:
             return FakeResponse(payload)
         if path == "/api/hrm/login/checkLogin":
             self.check_login_calls += 1
+            if self._login_http_status is not None:
+                raise HTTPError(
+                    request.full_url,
+                    self._login_http_status,
+                    "synthetic-authentication-denial",
+                    Message(),
+                    None,
+                )
             assert request.data is not None
             fields = parse_qs(
-                request.data.decode("utf-8"),
+                bytes(request.data).decode("utf-8"),
                 keep_blank_values=True,
                 strict_parsing=True,
             )
@@ -251,6 +283,7 @@ def _cookie(name: str, value: str) -> Cookie:
 def _fixture(
     *,
     login_succeeds: bool,
+    login_http_status: int | None = None,
     rsa_code: object = "synthetic-rsa-code",
     rsa_flag: object | None = "FLAG-V1",
     credential_store: CredentialStorePort | None = None,
@@ -287,6 +320,7 @@ def _fixture(
             oa_user_id=oa_user_id,
             cookie_values=cookie_values,
             login_succeeds=login_succeeds,
+            login_http_status=login_http_status,
             rsa_flag=rsa_flag,
         )
         openers.append(opener)
@@ -324,6 +358,7 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     assert principal.display_name == "Synthetic User"
     assert credential.loginid.get_secret_value() not in repr(principal)
     assert len(store.records) == 1
+    assert store.reactivation_flags == [True]
     stored_user_id, stored_credential = store.records[0]
     assert stored_user_id == principal.ai_user_id
     assert stored_credential.oa_user_id.get_secret_value() == "123"
@@ -335,6 +370,31 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     assert stored_credential.expires_at == datetime(
         2026, 7, 24, tzinfo=UTC
     ) + timedelta(hours=2)
+    assert openers[0].check_login_calls == 1
+    assert openers[0].requested_user_ids == ["123"]
+
+
+def test_background_authentication_preserves_revocation_in_store_handoff() -> None:
+    verifier, store, _, credential = _fixture(login_succeeds=True)
+
+    asyncio.run(
+        verifier.authenticate(
+            credential,
+            reactivate_revoked_session=False,
+        )
+    )
+
+    assert len(store.records) == 1
+    assert store.reactivation_flags == [False]
+
+
+def test_binding_verification_does_not_persist_a_session_before_identity_match() -> None:
+    verifier, store, openers, credential = _fixture(login_succeeds=True)
+
+    principal = asyncio.run(verifier.verify_for_binding(credential))
+
+    assert principal.ai_user_id.startswith("usr_v1_")
+    assert store.records == []
     assert openers[0].check_login_calls == 1
     assert openers[0].requested_user_ids == ["123"]
 
@@ -419,7 +479,7 @@ def test_integer_and_string_userid_share_one_principal_credential_and_mapping() 
             assert integer_openers[0].requested_user_ids == ["123"]
             assert string_openers[0].requested_user_ids == ["123"]
 
-            stored_credential = await store.load(expected_ai_user_id)
+            stored_credential = await store.load(expected_ai_user_id, "oa")
             assert stored_credential is not None
             assert stored_credential.oa_user_id.get_secret_value() == "123"
 
@@ -486,6 +546,157 @@ def test_oa_rejection_is_fixed_stage_fail_closed_and_never_retries(
     assert openers[0].check_login_calls == 1
 
 
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_oa_http_authentication_denial_is_terminal_after_one_request(
+    status_code: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    verifier, store, openers, credential = _fixture(
+        login_succeeds=True,
+        login_http_status=status_code,
+    )
+    candidate = CredentialPollCandidate(
+        ai_user_id=identity_surrogate(
+            credential.loginid.get_secret_value(),
+            key=bytes(range(32)),
+        ),
+        target_system="oa",
+        poll_failure_count=0,
+        updated_at=datetime(2026, 8, 21, 1, 0, tzinfo=UTC),
+    )
+
+    class _NoCaptchaSession:
+        async def get_json(
+            self,
+            path: str,
+            params: dict[str, str],
+        ) -> dict[str, Any]:
+            del path, params
+            raise AssertionError("captcha preflight must use post_form")
+
+        async def post_form(
+            self,
+            path: str,
+            fields: dict[str, str],
+        ) -> dict[str, Any]:
+            assert path == "/api/hrm/login/getLoginForm"
+            assert fields == {}
+            return {"loginSetting": {"hasValidateCode": False}}
+
+        def cookies(self) -> dict[str, str]:
+            return {}
+
+    class _PasswordReader:
+        async def load_password_for_poll(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> PasswordBindingCredential:
+            assert (ai_user_id, target_system) == (
+                candidate.ai_user_id,
+                candidate.target_system,
+            )
+            return PasswordBindingCredential(
+                login_id=credential.loginid,
+                password=credential.userpassword,
+            )
+
+    class _PollingStore:
+        def __init__(self) -> None:
+            self.terminal: list[CredentialTerminalFailure] = []
+            self.counted_failures = 0
+
+        async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+            return [candidate]
+
+        async def refresh_poll_candidate(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> CredentialPollCandidate | None:
+            assert (ai_user_id, target_system) == (
+                candidate.ai_user_id,
+                candidate.target_system,
+            )
+            return candidate
+
+        @asynccontextmanager
+        async def poll_lock(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> AsyncIterator[bool]:
+            del ai_user_id, target_system
+            yield True
+
+        async def mark_terminal_authentication_failure(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+            failure: CredentialTerminalFailure,
+        ) -> None:
+            del ai_user_id, target_system
+            self.terminal.append(failure)
+
+        async def mark_non_authentication_failure(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> None:
+            del ai_user_id, target_system
+            self.counted_failures += 1
+
+        async def mark_non_counted_failure(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> None:
+            raise AssertionError((ai_user_id, target_system))
+
+        async def mark_poll_succeeded(
+            self,
+            ai_user_id: str,
+            target_system: CredentialTargetSystem,
+        ) -> None:
+            raise AssertionError((ai_user_id, target_system))
+
+    class _WorkObjects:
+        async def sync_for_background(self, principal: Principal) -> object:
+            raise AssertionError(principal)
+
+    polling_store = _PollingStore()
+    acquirer = OAPasswordCredentialAcquirer(
+        session_factory=_NoCaptchaSession,
+        authentication=verifier,
+        binding_store=_PasswordReader(),
+    )
+    polling = CredentialPollingService(
+        binding_store=polling_store,
+        acquirer=acquirer,
+        work_objects=_WorkObjects(),
+        policy=CredentialPollingPolicy(
+            interval_seconds=600,
+            maximum_backoff_seconds=3600,
+            work_start_hour=0,
+            work_end_hour=24,
+            timezone_name="UTC",
+            global_concurrency=1,
+            scheduler_tick_seconds=60,
+        ),
+        clock=lambda: datetime(2026, 8, 21, 2, 0, tzinfo=UTC),
+    )
+
+    with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
+        assert asyncio.run(polling.run_due()) == 1
+
+    assert polling_store.terminal == ["invalid"]
+    assert polling_store.counted_failures == 0
+    assert openers[0].check_login_calls == 1
+    assert store.records == []
+    assert credential.loginid.get_secret_value() not in caplog.text
+    assert credential.userpassword.get_secret_value() not in caplog.text
+
+
 def test_oa_rsa_transport_failure_reports_only_fixed_stage(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -542,6 +753,7 @@ def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
             )
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(f"synthetic-{uuid4().hex}"),
                     cookies={

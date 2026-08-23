@@ -16,6 +16,7 @@ from app.db.config import normalize_database_url
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REVOCATION_PARENT_REVISION = "20260724_090000"
+REVOCATION_REVISION = "20260731_090000"
 ORIGINAL_CREDENTIAL_COLUMNS = frozenset(
     {
         "ai_user_id",
@@ -158,7 +159,7 @@ def test_revocation_migration_preserves_schema_and_sentinel_row() -> None:
         assert set(before_row) == ORIGINAL_CREDENTIAL_COLUMNS
         before_row_signature = _safe_credential_row_signature(before_row)
 
-        command.upgrade(config, "head")
+        command.upgrade(config, REVOCATION_REVISION)
         upgraded_columns = _credential_columns()
         assert set(upgraded_columns) == ORIGINAL_CREDENTIAL_COLUMNS | {"revoked_at"}
         for column_name in ORIGINAL_CREDENTIAL_COLUMNS:
@@ -200,7 +201,7 @@ def test_revocation_migration_preserves_schema_and_sentinel_row() -> None:
         assert set(downgraded_row) == ORIGINAL_CREDENTIAL_COLUMNS
         assert _safe_credential_row_signature(downgraded_row) == before_row_signature
 
-        command.upgrade(config, "head")
+        command.upgrade(config, REVOCATION_REVISION)
         reupgraded_row = _credential_row(engine, ai_user_id)
         assert set(reupgraded_row) == ORIGINAL_CREDENTIAL_COLUMNS | {"revoked_at"}
         assert reupgraded_row["revoked_at"] is None

@@ -65,7 +65,12 @@ class CredentialStoreError(RuntimeError):
 
 
 class AuthenticationPort(Protocol):
-    async def authenticate(self, credential: LoginCredential) -> Principal: ...
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal: ...
 
 
 class SessionTokenPort(Protocol):
@@ -78,10 +83,17 @@ class CredentialStorePort(Protocol):
     async def store(
         self,
         ai_user_id: str,
+        target_system: str,
         credential: OASessionCredential,
+        *,
+        reactivate_revoked_session: bool = True,
     ) -> None: ...
 
-    async def load(self, ai_user_id: str) -> OASessionCredential | None: ...
+    async def load(
+        self,
+        ai_user_id: str,
+        target_system: str,
+    ) -> OASessionCredential | None: ...
 
 
 __all__ = (

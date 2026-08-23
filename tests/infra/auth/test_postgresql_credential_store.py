@@ -63,6 +63,7 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
             )
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(oa_user_id),
                     cookies={"loginuuids": SecretStr(cookie_value)},
@@ -166,6 +167,7 @@ def test_oa_credential_round_trips_through_authenticated_load() -> None:
             )
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(oa_user_id),
                     cookies={"synthetic_name": SecretStr(cookie_value)},
@@ -173,7 +175,7 @@ def test_oa_credential_round_trips_through_authenticated_load() -> None:
                 ),
             )
 
-            loaded = await store.load(ai_user_id)
+            loaded = await store.load(ai_user_id, "oa")
 
             assert loaded is not None
             assert hashlib.sha256(
@@ -220,6 +222,7 @@ def test_successful_credential_upsert_clears_revocation() -> None:
             )
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(f"synthetic-{uuid4().hex}"),
                     cookies={"synthetic_name": SecretStr(f"synthetic-{uuid4().hex}")},
@@ -243,6 +246,7 @@ def test_successful_credential_upsert_clears_revocation() -> None:
 
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(f"synthetic-{uuid4().hex}"),
                     cookies={"synthetic_name": SecretStr(f"synthetic-{uuid4().hex}")},
@@ -305,6 +309,7 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
             )
             await store.store(
                 ai_user_id,
+                "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(oa_user_id),
                     cookies={"synthetic_name": SecretStr(cookie_value)},
@@ -329,7 +334,7 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
             setattr(store, "_cipher", decrypt_guard)
 
             with pytest.raises(CredentialStoreError) as exc_info:
-                await store.load(ai_user_id)
+                await store.load(ai_user_id, "oa")
 
             assert decrypt_guard.call_count == 0
             rendered = repr(exc_info.value) + str(exc_info.value)
@@ -409,7 +414,7 @@ def test_revocation_check_precedes_decryption_without_a_session_exit_gap() -> No
         )
         setattr(store, "_cipher", OrderingCipher())
 
-        loaded = await store.load(ai_user_id)
+        loaded = await store.load(ai_user_id, "oa")
 
         assert loaded is not None
         assert loaded.oa_user_id.get_secret_value() == oa_user_id
@@ -432,7 +437,7 @@ def test_oa_credential_load_returns_none_for_missing_row() -> None:
                 session_factory=factory,
                 encryption_key=bytes(range(32)),
             )
-            assert await store.load(ai_user_id) is None
+            assert await store.load(ai_user_id, "oa") is None
         finally:
             await engine.dispose()
 
@@ -545,7 +550,7 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
                 encryption_key=key,
             )
             with pytest.raises(CredentialStoreError) as exc_info:
-                await store.load(ai_user_id)
+                await store.load(ai_user_id, "oa")
 
             rendered = repr(exc_info.value) + str(exc_info.value)
             assert oa_user_id not in rendered

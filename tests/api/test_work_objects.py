@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,6 +11,8 @@ from app.api.v1.work_objects import WorkObjectService
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.credential_binding import BackgroundWorkObjectSyncError
+from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     OAPendingWorkSnapshot,
     WorkObjectHandlingMark,
@@ -129,8 +132,25 @@ class RecordingGateway:
         self.result = result or _success_result()
         self.calls: list[dict[str, Any]] = []
 
-    async def execute_capability(self, **kwargs: Any) -> ExecutionResult:
-        self.calls.append(kwargs)
+    async def execute_capability(
+        self,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> ExecutionResult:
+        self.calls.append(
+            {
+                "task_id": task_id,
+                "session_id": session_id,
+                "ai_user_id": ai_user_id,
+                "capability_id": capability_id,
+                "arguments": arguments,
+                "request_context": request_context,
+            }
+        )
         return self.result
 
 
@@ -241,6 +261,63 @@ def test_online_sync_uses_trusted_principal_and_is_idempotent() -> None:
     assert call["arguments"] == {}
     assert call["request_context"].tenant_id == "tenant-1"
     assert call["request_context"].department_id == "dept-1"
+
+
+@pytest.mark.parametrize(
+    ("result", "authentication_denied", "failure_code"),
+    [
+        (
+            ExecutionResult(
+                status="binding_required",
+                error_code="identity_expired",
+                trace_id="trace-expired",
+            ),
+            True,
+            None,
+        ),
+        (
+            ExecutionResult(
+                status="timeout",
+                error_code="adapter_timeout",
+                trace_id="trace-timeout",
+            ),
+            False,
+            "timeout",
+        ),
+        (
+            ExecutionResult(
+                status="failed",
+                error_code="adapter_error",
+                trace_id="trace-unknown-adapter-error",
+            ),
+            False,
+            None,
+        ),
+    ],
+)
+def test_background_sync_exposes_only_authentication_denial_classification(
+    result: ExecutionResult,
+    authentication_denied: bool,
+    failure_code: str | None,
+) -> None:
+    service = WorkObjectService(
+        store=MemoryWorkObjectStore(),
+        gateway=RecordingGateway(result),
+        clock=lambda: NOW,
+        id_factory=lambda: "operation-background",
+    )
+    principal = Principal(
+        ai_user_id="user-a",
+        display_name="Display user-a",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="tenant-1", department_id="dept-1"),
+    )
+
+    with pytest.raises(BackgroundWorkObjectSyncError) as captured:
+        asyncio.run(service.sync_for_background(principal))
+
+    assert captured.value.authentication_denied is authentication_denied
+    assert captured.value.failure_code == failure_code
 
 
 def test_handling_mark_does_not_change_oa_snapshot_or_remove_item() -> None:

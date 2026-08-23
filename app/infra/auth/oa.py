@@ -6,10 +6,12 @@ import asyncio
 import base64
 import json
 import logging
+import socket
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.cookiejar import CookieJar
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import (
     HTTPCookieProcessor,
@@ -83,6 +85,34 @@ OAAuthenticationFailureStage: TypeAlias = Literal[
     "local_credential_store_failed",
     "local_principal_build_failed",
 ]
+OAAuthenticationFailureKind: TypeAlias = Literal[
+    "credentials_rejected",
+    "network_unreachable",
+    "timeout",
+    "upstream_5xx",
+    "invalid_response",
+    "local_failure",
+]
+
+
+class OANetworkUnavailableError(RuntimeError):
+    """OA could not be reached without carrying endpoint details."""
+
+
+class OATimeoutError(RuntimeError):
+    """OA request exceeded its configured timeout."""
+
+
+class OAUpstreamServerError(RuntimeError):
+    """OA returned a 5xx response."""
+
+
+class OAInvalidResponseError(RuntimeError):
+    """OA returned a malformed or contract-incompatible response."""
+
+
+class OAAuthenticationDeniedError(RuntimeError):
+    """OA returned an explicit HTTP authentication denial."""
 
 
 class OAAuthenticationError(AuthenticationError):
@@ -92,10 +122,12 @@ class OAAuthenticationError(AuthenticationError):
         self,
         stage: OAAuthenticationFailureStage,
         *,
+        failure_kind: OAAuthenticationFailureKind = "local_failure",
         diagnostics: dict[str, str] | None = None,
     ) -> None:
         super().__init__("authentication failed")
         self.stage = stage
+        self.failure_kind = failure_kind
         self.diagnostics = _safe_authentication_diagnostics(diagnostics or {})
 
 
@@ -189,14 +221,34 @@ class UrllibOASession:
         }
 
     def _open_json(self, request: Request) -> dict[str, Any]:
-        with self._opener.open(request, timeout=self._timeout_seconds) as response:
-            status_code = int(response.getcode())
-            if status_code < 200 or status_code >= 300:
-                raise ValueError("OA response status is not successful")
-            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+        try:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
+                status_code = int(response.getcode())
+                if 500 <= status_code <= 599:
+                    raise OAUpstreamServerError
+                if status_code in {401, 403}:
+                    raise OAAuthenticationDeniedError
+                if status_code < 200 or status_code >= 300:
+                    raise RuntimeError("OA response status is not successful")
+                raw = response.read(_MAX_RESPONSE_BYTES + 1)
+        except HTTPError as error:
+            if 500 <= error.code <= 599:
+                raise OAUpstreamServerError from None
+            if error.code in {401, 403}:
+                raise OAAuthenticationDeniedError from None
+            raise RuntimeError("OA response status is not successful") from None
+        except (TimeoutError, socket.timeout):
+            raise OATimeoutError from None
+        except URLError as error:
+            if isinstance(error.reason, (TimeoutError, socket.timeout)):
+                raise OATimeoutError from None
+            raise OANetworkUnavailableError from None
         if len(raw) > _MAX_RESPONSE_BYTES:
-            raise ValueError("OA response exceeds the size limit")
-        return ensure_json_object(json.loads(raw.decode("utf-8")))
+            raise OAInvalidResponseError
+        try:
+            return ensure_json_object(json.loads(raw.decode("utf-8")))
+        except Exception:
+            raise OAInvalidResponseError from None
 
 
 class OACredentialVerifier:
@@ -224,14 +276,36 @@ class OACredentialVerifier:
         self._credential_ttl_seconds = credential_ttl_seconds
         self._clock = clock
 
-    async def authenticate(self, credential: LoginCredential) -> Principal:
-        return await self._authenticate_once(credential)
+    async def authenticate(
+        self,
+        credential: LoginCredential,
+        *,
+        reactivate_revoked_session: bool = True,
+    ) -> Principal:
+        return await self._authenticate_once(
+            credential,
+            persist_session=True,
+            reactivate_revoked_session=reactivate_revoked_session,
+        )
+
+    async def verify_for_binding(self, credential: LoginCredential) -> Principal:
+        """Verify identity without persisting a Session for a mismatched account."""
+
+        return await self._authenticate_once(
+            credential,
+            persist_session=False,
+            reactivate_revoked_session=False,
+        )
 
     async def _authenticate_once(
         self,
         credential: LoginCredential,
+        *,
+        persist_session: bool,
+        reactivate_revoked_session: bool,
     ) -> Principal:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
+        failure_kind: OAAuthenticationFailureKind = "local_failure"
         failure_diagnostics: dict[str, str] = {}
         try:
             session = self._session_factory()
@@ -284,9 +358,7 @@ class OACredentialVerifier:
                     "": "",
                 },
             )
-            if str(login_result.get("msgcode", "")) != "0" or not _is_true(
-                login_result.get("loginstatus")
-            ):
+            if not _login_succeeded(login_result):
                 failure_stage = "oa_credentials_rejected"
                 raise ValueError("OA rejected the credential")
             failure_stage = "oa_identity_response_invalid"
@@ -316,18 +388,22 @@ class OACredentialVerifier:
             ai_user_id = identity_surrogate(loginid, key=self._identity_hmac_key)
             failure_stage = "local_role_lookup_failed"
             roles = tuple(sorted(set(await self._role_reader.list_roles(ai_user_id))))
-            failure_stage = "local_credential_store_failed"
-            await self._credential_store.store(
-                ai_user_id,
-                OASessionCredential(
-                    oa_user_id=SecretStr(oa_user_id),
-                    cookies={
-                        name: SecretStr(value)
-                        for name, value in sorted(cookies.items())
-                    },
-                    expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
-                ),
-            )
+            if persist_session:
+                failure_stage = "local_credential_store_failed"
+                await self._credential_store.store(
+                    ai_user_id,
+                    "oa",
+                    OASessionCredential(
+                        oa_user_id=SecretStr(oa_user_id),
+                        cookies={
+                            name: SecretStr(value)
+                            for name, value in sorted(cookies.items())
+                        },
+                        expires_at=now
+                        + timedelta(seconds=self._credential_ttl_seconds),
+                    ),
+                    reactivate_revoked_session=reactivate_revoked_session,
+                )
             failure_stage = "local_principal_build_failed"
             return Principal(
                 ai_user_id=ai_user_id,
@@ -335,7 +411,8 @@ class OACredentialVerifier:
                 roles=roles,
                 org_ctx=PrincipalOrgContext(),
             )
-        except Exception:
+        except Exception as error:
+            failure_kind = _authentication_failure_kind(failure_stage, error)
             logging.getLogger(__name__).warning(
                 "%s%s",
                 _AUTH_FAILURE_LOG_PREFIX,
@@ -351,6 +428,7 @@ class OACredentialVerifier:
                     )
         raise OAAuthenticationError(
             failure_stage,
+            failure_kind=failure_kind,
             diagnostics=(
                 failure_diagnostics
                 if failure_stage in _RSA_RESPONSE_FAILURE_STAGES
@@ -498,6 +576,42 @@ def _is_true(value: Any) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
+def _login_succeeded(payload: dict[str, Any]) -> bool:
+    msgcode = payload.get("msgcode")
+    loginstatus = payload.get("loginstatus")
+    if isinstance(msgcode, bool) or not isinstance(msgcode, (str, int)):
+        raise OAInvalidResponseError
+    if not isinstance(loginstatus, (str, bool)):
+        raise OAInvalidResponseError
+    return str(msgcode) == "0" and _is_true(loginstatus)
+
+
+def _authentication_failure_kind(
+    stage: OAAuthenticationFailureStage,
+    error: Exception,
+) -> OAAuthenticationFailureKind:
+    if stage == "oa_credentials_rejected":
+        return "credentials_rejected"
+    if isinstance(error, OAAuthenticationDeniedError):
+        return "credentials_rejected"
+    if isinstance(error, OANetworkUnavailableError):
+        return "network_unreachable"
+    if isinstance(error, OATimeoutError):
+        return "timeout"
+    if isinstance(error, OAUpstreamServerError):
+        return "upstream_5xx"
+    if isinstance(error, OAInvalidResponseError) or stage in {
+        "oa_rsa_public_key_missing_or_invalid",
+        "oa_rsa_code_type_invalid",
+        "oa_rsa_flag_type_invalid",
+        "oa_identity_response_invalid",
+        "oa_required_cookies_missing",
+        "oa_user_info_response_invalid",
+    }:
+        return "invalid_response"
+    return "local_failure"
+
+
 def _timestamp_millis(value: datetime) -> str:
     return str(int(value.timestamp() * 1000))
 
@@ -513,8 +627,13 @@ if TYPE_CHECKING:
 __all__ = (
     "OAAuthenticationError",
     "OAAuthenticationFailureStage",
+    "OAAuthenticationDeniedError",
     "OAHttpSession",
     "OACredentialVerifier",
+    "OAInvalidResponseError",
+    "OANetworkUnavailableError",
+    "OATimeoutError",
+    "OAUpstreamServerError",
     "PrincipalRoleReader",
     "UrllibOASession",
     "make_urllib_session_factory",

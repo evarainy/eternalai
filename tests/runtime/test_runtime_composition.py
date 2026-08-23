@@ -22,6 +22,7 @@ from app.composition import (
     build_trace_query,
 )
 from app.config import ProductionSettings
+from app.credential_polling import CREDENTIAL_POLLING_TASK_TYPE
 from app.evaluator import TerminalEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.oa.adapter import OAReadAdapter
@@ -34,6 +35,7 @@ from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.oa import OACredentialVerifier
 from app.infra.health import RedisHealthCheck
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+from app.infra.job_queue.in_memory import InMemoryJobQueue
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
@@ -388,6 +390,14 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     assert gateway._adapters is not None
     assert isinstance(gateway._adapters["oa"], MockOAAdapter)
     assert isinstance(components.runtime._trace_port, PostgreSQLTraceWriter)
+    assert isinstance(components.credential_polling_job_queue, InMemoryJobQueue)
+    assert set(components.credential_polling_job_queue._handlers) == {
+        CREDENTIAL_POLLING_TASK_TYPE
+    }
+    assert (
+        components.credential_polling_scheduler._job_queue
+        is components.credential_polling_job_queue
+    )
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert components.session_cookie_ttl_seconds > 0
     assert components.health_timeout_seconds == settings.health_timeout_seconds
@@ -406,6 +416,8 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         runtime=None,
         admin_registry_service=None,
         work_object_service=None,
+        credential_binding_service=None,
+        credential_polling_scheduler=None,
         authentication=None,
         session_tokens=None,
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
