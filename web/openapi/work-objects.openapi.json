@@ -14,6 +14,257 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InternalWorkObjectView": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_display_name": {
+            "title": "Assignee Display Name",
+            "type": "string"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "handling_mark": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending_sync_confirmation",
+                  "handled_elsewhere"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Mark"
+          },
+          "handling_marked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Marked At"
+          },
+          "source_created_at": {
+            "title": "Source Created At",
+            "type": "null"
+          },
+          "source_fetched_at": {
+            "title": "Source Fetched At",
+            "type": "null"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_received_at": {
+            "title": "Source Received At",
+            "type": "null"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "null"
+          },
+          "source_status": {
+            "title": "Source Status",
+            "type": "null"
+          },
+          "source_system": {
+            "title": "Source System",
+            "type": "string"
+          },
+          "source_title": {
+            "title": "Source Title",
+            "type": "null"
+          },
+          "source_workflow_type_id": {
+            "title": "Source Workflow Type Id",
+            "type": "null"
+          },
+          "state_authority": {
+            "const": "internal",
+            "title": "State Authority",
+            "type": "string"
+          },
+          "task_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Record Id"
+          },
+          "work_object_id": {
+            "title": "Work Object Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_object_id",
+          "assignee_display_name",
+          "due_at",
+          "handling_mark",
+          "handling_marked_at",
+          "task_record_id",
+          "state_authority",
+          "source_system",
+          "source_kind",
+          "source_ref",
+          "source_title",
+          "source_status",
+          "source_received_at",
+          "source_created_at",
+          "source_workflow_type_id",
+          "source_fetched_at"
+        ],
+        "title": "InternalWorkObjectView",
+        "type": "object"
+      },
+      "OAWorkObjectView": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee_display_name": {
+            "title": "Assignee Display Name",
+            "type": "string"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "handling_mark": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending_sync_confirmation",
+                  "handled_elsewhere"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Mark"
+          },
+          "handling_marked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Marked At"
+          },
+          "source_created_at": {
+            "title": "Source Created At",
+            "type": "string"
+          },
+          "source_fetched_at": {
+            "format": "date-time",
+            "title": "Source Fetched At",
+            "type": "string"
+          },
+          "source_kind": {
+            "const": "pending_workflow",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_received_at": {
+            "title": "Source Received At",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "source_status": {
+            "title": "Source Status",
+            "type": "string"
+          },
+          "source_system": {
+            "const": "oa",
+            "title": "Source System",
+            "type": "string"
+          },
+          "source_title": {
+            "title": "Source Title",
+            "type": "string"
+          },
+          "source_workflow_type_id": {
+            "title": "Source Workflow Type Id",
+            "type": "string"
+          },
+          "state_authority": {
+            "const": "external_snapshot",
+            "title": "State Authority",
+            "type": "string"
+          },
+          "task_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Record Id"
+          },
+          "work_object_id": {
+            "title": "Work Object Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_object_id",
+          "assignee_display_name",
+          "due_at",
+          "handling_mark",
+          "handling_marked_at",
+          "task_record_id",
+          "state_authority",
+          "source_system",
+          "source_kind",
+          "source_ref",
+          "source_title",
+          "source_status",
+          "source_received_at",
+          "source_created_at",
+          "source_workflow_type_id",
+          "source_fetched_at"
+        ],
+        "title": "OAWorkObjectView",
+        "type": "object"
+      },
       "SetHandlingMarkRequest": {
         "additionalProperties": false,
         "properties": {
@@ -77,7 +328,21 @@
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/WorkObjectView"
+              "discriminator": {
+                "mapping": {
+                  "external_snapshot": "#/components/schemas/OAWorkObjectView",
+                  "internal": "#/components/schemas/InternalWorkObjectView"
+                },
+                "propertyName": "state_authority"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/OAWorkObjectView"
+                },
+                {
+                  "$ref": "#/components/schemas/InternalWorkObjectView"
+                }
+              ]
             },
             "title": "Items",
             "type": "array"
@@ -97,125 +362,6 @@
           "limit_exceeded"
         ],
         "title": "WorkObjectListResponse",
-        "type": "object"
-      },
-      "WorkObjectView": {
-        "additionalProperties": false,
-        "properties": {
-          "assignee_display_name": {
-            "title": "Assignee Display Name",
-            "type": "string"
-          },
-          "due_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Due At"
-          },
-          "handling_mark": {
-            "anyOf": [
-              {
-                "enum": [
-                  "pending_sync_confirmation",
-                  "handled_elsewhere"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Handling Mark"
-          },
-          "handling_marked_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Handling Marked At"
-          },
-          "source_created_at": {
-            "title": "Source Created At",
-            "type": "string"
-          },
-          "source_fetched_at": {
-            "format": "date-time",
-            "title": "Source Fetched At",
-            "type": "string"
-          },
-          "source_kind": {
-            "title": "Source Kind",
-            "type": "string"
-          },
-          "source_received_at": {
-            "title": "Source Received At",
-            "type": "string"
-          },
-          "source_ref": {
-            "title": "Source Ref",
-            "type": "string"
-          },
-          "source_status": {
-            "title": "Source Status",
-            "type": "string"
-          },
-          "source_system": {
-            "title": "Source System",
-            "type": "string"
-          },
-          "source_title": {
-            "title": "Source Title",
-            "type": "string"
-          },
-          "source_workflow_type_id": {
-            "title": "Source Workflow Type Id",
-            "type": "string"
-          },
-          "task_record_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Task Record Id"
-          },
-          "work_object_id": {
-            "title": "Work Object Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "work_object_id",
-          "source_system",
-          "source_kind",
-          "source_ref",
-          "assignee_display_name",
-          "due_at",
-          "source_title",
-          "source_status",
-          "source_received_at",
-          "source_created_at",
-          "source_workflow_type_id",
-          "source_fetched_at",
-          "handling_mark",
-          "handling_marked_at",
-          "task_record_id"
-        ],
-        "title": "WorkObjectView",
         "type": "object"
       }
     }
@@ -281,7 +427,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkObjectView"
+                  "discriminator": {
+                    "mapping": {
+                      "external_snapshot": "#/components/schemas/OAWorkObjectView",
+                      "internal": "#/components/schemas/InternalWorkObjectView"
+                    },
+                    "propertyName": "state_authority"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OAWorkObjectView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InternalWorkObjectView"
+                    }
+                  ],
+                  "title": "Response Get Work Object Api V1 Work Objects  Work Object Id  Get"
                 }
               }
             },
@@ -330,7 +491,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkObjectView"
+                  "discriminator": {
+                    "mapping": {
+                      "external_snapshot": "#/components/schemas/OAWorkObjectView",
+                      "internal": "#/components/schemas/InternalWorkObjectView"
+                    },
+                    "propertyName": "state_authority"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OAWorkObjectView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InternalWorkObjectView"
+                    }
+                  ],
+                  "title": "Response Set Work Object Handling Mark Api V1 Work Objects  Work Object Id  Handling Mark Patch"
                 }
               }
             },

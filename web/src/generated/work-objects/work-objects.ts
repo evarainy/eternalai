@@ -5,9 +5,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200,
   SetHandlingMarkRequest,
-  WorkObjectListResponse,
-  WorkObjectView
+  SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200,
+  WorkObjectListResponse
 } from './work-objects.schemas';
 
 import { customInstance } from '../../api/mutator';
@@ -44,7 +45,7 @@ export const syncWorkObjectsApiV1WorkObjectsSyncPost = (
 export const getWorkObjectApiV1WorkObjectsWorkObjectIdGet = (
     workObjectId: string,
  ) => {
-      return customInstance<WorkObjectView>(
+      return customInstance<GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200>(
       {url: `/api/v1/work-objects/${workObjectId}`, method: 'GET'
     },
       );
@@ -57,7 +58,7 @@ export const setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPa
     workObjectId: string,
     setHandlingMarkRequest: SetHandlingMarkRequest,
  ) => {
-      return customInstance<WorkObjectView>(
+      return customInstance<SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200>(
       {url: `/api/v1/work-objects/${workObjectId}/handling-mark`, method: 'PATCH',
       headers: {'Content-Type': 'application/json', },
       data: setHandlingMarkRequest

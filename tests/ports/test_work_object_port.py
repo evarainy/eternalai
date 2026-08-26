@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.ports.task_store import TaskRecord
 from app.ports.work_object import (
+    InternalWorkObjectRecord,
     OAPendingWorkSnapshotCollection,
+    OAWorkObjectRecord,
     WorkObjectRecord,
 )
 
@@ -16,6 +18,7 @@ def _record(**updates: object) -> WorkObjectRecord:
     now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     values: dict[str, object] = {
         "work_object_id": "work-1",
+        "state_authority": "external_snapshot",
         "source_system": "oa",
         "source_kind": "pending_workflow",
         "source_ref": "oa-todo-1",
@@ -36,7 +39,7 @@ def _record(**updates: object) -> WorkObjectRecord:
         "updated_at": now,
     }
     values.update(updates)
-    return WorkObjectRecord.model_validate(values, strict=True)
+    return TypeAdapter(WorkObjectRecord).validate_python(values, strict=True)
 
 
 def test_task_record_contract_remains_the_frozen_execution_record_shape() -> None:
@@ -49,8 +52,40 @@ def test_task_record_contract_remains_the_frozen_execution_record_shape() -> Non
         "capability_id",
         "error_code",
     }
-    assert "task_record_id" in WorkObjectRecord.model_fields
-    assert WorkObjectRecord.model_fields["task_record_id"].annotation == str | None
+    for record_model in (OAWorkObjectRecord, InternalWorkObjectRecord):
+        assert "task_record_id" in record_model.model_fields
+        assert record_model.model_fields["task_record_id"].annotation == str | None
+
+
+def test_work_object_record_uses_state_authority_as_its_discriminator() -> None:
+    internal = _record(
+        state_authority="internal",
+        source_system="eternalai",
+        source_kind="internal_task",
+        source_ref=None,
+        source_title=None,
+        source_status=None,
+        source_received_at=None,
+        source_created_at=None,
+        source_workflow_type_id=None,
+        source_fetched_at=None,
+    )
+
+    assert internal.state_authority == "internal"
+    assert internal.source_ref is None
+    with pytest.raises(ValidationError):
+        _record(
+            state_authority="internal",
+            source_system="eternalai",
+            source_kind="internal_task",
+            source_ref=None,
+            source_title="must-be-null",
+            source_status=None,
+            source_received_at=None,
+            source_created_at=None,
+            source_workflow_type_id=None,
+            source_fetched_at=None,
+        )
 
 
 def test_oa_snapshot_collection_requires_complete_matching_unique_results() -> None:

@@ -8,6 +8,60 @@ export interface HTTPValidationError {
   detail?: ValidationError[];
 }
 
+export type InternalWorkObjectViewDueAt = string | null;
+
+export type InternalWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
+
+export type InternalWorkObjectViewHandlingMarkedAt = string | null;
+
+export type InternalWorkObjectViewTaskRecordId = string | null;
+
+export interface InternalWorkObjectView {
+  assignee_display_name: string;
+  due_at: InternalWorkObjectViewDueAt;
+  handling_mark: InternalWorkObjectViewHandlingMark;
+  handling_marked_at: InternalWorkObjectViewHandlingMarkedAt;
+  source_created_at: null;
+  source_fetched_at: null;
+  source_kind: string;
+  source_received_at: null;
+  source_ref: null;
+  source_status: null;
+  source_system: string;
+  source_title: null;
+  source_workflow_type_id: null;
+  state_authority: 'internal';
+  task_record_id: InternalWorkObjectViewTaskRecordId;
+  work_object_id: string;
+}
+
+export type OAWorkObjectViewDueAt = string | null;
+
+export type OAWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
+
+export type OAWorkObjectViewHandlingMarkedAt = string | null;
+
+export type OAWorkObjectViewTaskRecordId = string | null;
+
+export interface OAWorkObjectView {
+  assignee_display_name: string;
+  due_at: OAWorkObjectViewDueAt;
+  handling_mark: OAWorkObjectViewHandlingMark;
+  handling_marked_at: OAWorkObjectViewHandlingMarkedAt;
+  source_created_at: string;
+  source_fetched_at: string;
+  source_kind: 'pending_workflow';
+  source_received_at: string;
+  source_ref: string;
+  source_status: string;
+  source_system: 'oa';
+  source_title: string;
+  source_workflow_type_id: string;
+  state_authority: 'external_snapshot';
+  task_record_id: OAWorkObjectViewTaskRecordId;
+  work_object_id: string;
+}
+
 export type SetHandlingMarkRequestMark = typeof SetHandlingMarkRequestMark[keyof typeof SetHandlingMarkRequestMark];
 
 
@@ -33,34 +87,14 @@ export interface ValidationError {
   type: string;
 }
 
+export type WorkObjectListResponseItemsItem = OAWorkObjectView | InternalWorkObjectView;
+
 export interface WorkObjectListResponse {
-  items: WorkObjectView[];
+  items: WorkObjectListResponseItemsItem[];
   limit: number;
   limit_exceeded: boolean;
 }
 
-export type WorkObjectViewDueAt = string | null;
+export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView | InternalWorkObjectView;
 
-export type WorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
-
-export type WorkObjectViewHandlingMarkedAt = string | null;
-
-export type WorkObjectViewTaskRecordId = string | null;
-
-export interface WorkObjectView {
-  assignee_display_name: string;
-  due_at: WorkObjectViewDueAt;
-  handling_mark: WorkObjectViewHandlingMark;
-  handling_marked_at: WorkObjectViewHandlingMarkedAt;
-  source_created_at: string;
-  source_fetched_at: string;
-  source_kind: string;
-  source_received_at: string;
-  source_ref: string;
-  source_status: string;
-  source_system: string;
-  source_title: string;
-  source_workflow_type_id: string;
-  task_record_id: WorkObjectViewTaskRecordId;
-  work_object_id: string;
-}
+export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200 = OAWorkObjectView | InternalWorkObjectView;
