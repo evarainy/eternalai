@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import NoReturn
+from typing import Annotated, Literal, NoReturn, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
@@ -35,37 +35,48 @@ _REAUTHENTICATION_ERRORS: frozenset[ErrorCode] = frozenset(
 _BINDING_SCOPE_ERRORS: frozenset[ErrorCode] = frozenset({"needs_binding_scope"})
 
 
-class WorkObjectView(BaseModel):
+class _WorkObjectViewBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     work_object_id: str
-    source_system: str
-    source_kind: str
-    source_ref: str
     assignee_display_name: str
     due_at: datetime | None
+    handling_mark: WorkObjectHandlingMark | None
+    handling_marked_at: datetime | None
+    task_record_id: str | None
+
+
+class OAWorkObjectView(_WorkObjectViewBase):
+    state_authority: Literal["external_snapshot"]
+    source_system: Literal["oa"]
+    source_kind: Literal["pending_workflow"]
+    source_ref: str
     source_title: str
     source_status: str
     source_received_at: str
     source_created_at: str
     source_workflow_type_id: str
     source_fetched_at: datetime
-    handling_mark: WorkObjectHandlingMark | None
-    handling_marked_at: datetime | None
-    task_record_id: str | None
 
-    @classmethod
-    def from_record(cls, record: WorkObjectRecord) -> WorkObjectView:
-        return cls.model_validate(
-            record.model_dump(
-                exclude={
-                    "assignee_ai_user_id",
-                    "handling_marked_by_ai_user_id",
-                    "created_at",
-                    "updated_at",
-                }
-            )
-        )
+
+class InternalWorkObjectView(_WorkObjectViewBase):
+    state_authority: Literal["internal"]
+    source_system: str
+    source_kind: str
+    source_ref: None
+    source_title: None
+    source_status: None
+    source_received_at: None
+    source_created_at: None
+    source_workflow_type_id: None
+    source_fetched_at: None
+
+
+WorkObjectView: TypeAlias = Annotated[
+    OAWorkObjectView | InternalWorkObjectView,
+    Field(discriminator="state_authority"),
+]
+_WORK_OBJECT_VIEW_ADAPTER: TypeAdapter[WorkObjectView] = TypeAdapter(WorkObjectView)
 
 
 class WorkObjectListResponse(BaseModel):
@@ -239,7 +250,7 @@ def make_router(
         record = await configured().get_for_principal(work_object_id, principal)
         if record is None:
             _raise_not_found()
-        return WorkObjectView.from_record(record)
+        return _view_from_record(record)
 
     @router.patch("/{work_object_id}/handling-mark", response_model=WorkObjectView)
     async def set_work_object_handling_mark(
@@ -254,7 +265,7 @@ def make_router(
         )
         if record is None:
             _raise_not_found()
-        return WorkObjectView.from_record(record)
+        return _view_from_record(record)
 
     return router
 
@@ -263,11 +274,25 @@ def _list_response(records: list[WorkObjectRecord]) -> WorkObjectListResponse:
     limit_exceeded = len(records) > WORK_OBJECT_LIST_LIMIT
     return WorkObjectListResponse(
         items=[
-            WorkObjectView.from_record(record)
+            _view_from_record(record)
             for record in records[:WORK_OBJECT_LIST_LIMIT]
         ],
         limit=WORK_OBJECT_LIST_LIMIT,
         limit_exceeded=limit_exceeded,
+    )
+
+
+def _view_from_record(record: WorkObjectRecord) -> WorkObjectView:
+    return _WORK_OBJECT_VIEW_ADAPTER.validate_python(
+        record.model_dump(
+            exclude={
+                "assignee_ai_user_id",
+                "handling_marked_by_ai_user_id",
+                "created_at",
+                "updated_at",
+            }
+        ),
+        strict=True,
     )
 
 
@@ -347,6 +372,8 @@ def _raise_not_found() -> NoReturn:
 
 
 __all__ = (
+    "InternalWorkObjectView",
+    "OAWorkObjectView",
     "SetHandlingMarkRequest",
     "WorkObjectListResponse",
     "WorkObjectService",

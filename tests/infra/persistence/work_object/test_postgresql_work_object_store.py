@@ -91,8 +91,11 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
                 snapshots=[_snapshot(title="Refreshed", status="OA_STILL_PENDING")],
                 fetched_at=second_fetch,
             )
-            refreshed = (await store.list_for_assignee(user_a))[0]
+            refreshed_records = await store.list_for_assignee(user_a)
+            assert len(refreshed_records) == 1
+            refreshed = refreshed_records[0]
             assert refreshed.work_object_id == user_a_records[0].work_object_id
+            assert refreshed.state_authority == "external_snapshot"
             assert refreshed.source_title == "Refreshed"
             assert refreshed.source_status == "OA_STILL_PENDING"
             assert refreshed.source_fetched_at == second_fetch

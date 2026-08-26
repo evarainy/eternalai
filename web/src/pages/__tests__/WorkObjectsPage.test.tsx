@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type {
+  InternalWorkObjectView,
+  OAWorkObjectView,
   WorkObjectListResponse,
-  WorkObjectView,
 } from '../../generated/work-objects/work-objects.schemas';
 import { useAuthStore } from '../../stores/authStore';
 import WorkObjectsPage from '../WorkObjectsPage';
@@ -36,7 +37,7 @@ vi.mock('../../generated/work-objects/work-objects', () => ({
   syncWorkObjectsApiV1WorkObjectsSyncPost: apiMocks.syncWorkObjects,
 }));
 
-const WORK_OBJECT: WorkObjectView = {
+const WORK_OBJECT: OAWorkObjectView = {
   assignee_display_name: '雨爷',
   due_at: '2026-08-20T08:00:00Z',
   handling_mark: null,
@@ -50,16 +51,36 @@ const WORK_OBJECT: WorkObjectView = {
   source_system: 'oa',
   source_title: '核对本月采购流程',
   source_workflow_type_id: 'purchase-review',
+  state_authority: 'external_snapshot',
   task_record_id: null,
   work_object_id: 'work-object-1',
 };
 
-const OTHER_USER_WORK_OBJECT: WorkObjectView = {
+const OTHER_USER_WORK_OBJECT: OAWorkObjectView = {
   ...WORK_OBJECT,
   assignee_display_name: '其他用户',
   source_ref: 'OA-WF-OTHER',
   source_title: '其他用户的待办',
   work_object_id: 'work-object-other',
+};
+
+const INTERNAL_WORK_OBJECT: InternalWorkObjectView = {
+  assignee_display_name: '内部任务责任人',
+  due_at: null,
+  handling_mark: null,
+  handling_marked_at: null,
+  source_created_at: null,
+  source_fetched_at: null,
+  source_kind: 'manual_dispatch',
+  source_received_at: null,
+  source_ref: null,
+  source_status: null,
+  source_system: 'eternalai',
+  source_title: null,
+  source_workflow_type_id: null,
+  state_authority: 'internal',
+  task_record_id: null,
+  work_object_id: 'internal-work-object-1',
 };
 
 const UNBOUND_CREDENTIAL: CredentialBindingView = {
@@ -123,6 +144,20 @@ describe('WorkObjectsPage', () => {
       handling_mark: 'handled_elsewhere',
       handling_marked_at: '2026-08-19T03:10:00Z',
     });
+  });
+
+  it('skips internal work objects until their business display is implemented', async () => {
+    const mixedResponse = listResponse({
+      items: [WORK_OBJECT, INTERNAL_WORK_OBJECT],
+    });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(mixedResponse);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(mixedResponse);
+
+    renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(screen.getByText('当前显示 1 项')).toBeInTheDocument();
+    expect(screen.queryByText('内部任务责任人')).not.toBeInTheDocument();
   });
 
   it('keeps the saved OA snapshot visible when sync fails and warns about bounded results', async () => {
@@ -294,7 +329,7 @@ describe('WorkObjectsPage', () => {
     const pendingSync = new Promise<WorkObjectListResponse>((resolve) => {
       resolveSync = resolve;
     });
-    const refreshedSource: WorkObjectView = {
+    const refreshedSource: OAWorkObjectView = {
       ...WORK_OBJECT,
       source_fetched_at: '2026-08-19T03:05:00Z',
       source_status: 'OA_UPDATED',
@@ -323,19 +358,19 @@ describe('WorkObjectsPage', () => {
 
   it('keeps a newer OA snapshot when an older mark response arrives last', async () => {
     let resolveSync!: (response: WorkObjectListResponse) => void;
-    let resolveMark!: (response: WorkObjectView) => void;
+    let resolveMark!: (response: OAWorkObjectView) => void;
     const pendingSync = new Promise<WorkObjectListResponse>((resolve) => {
       resolveSync = resolve;
     });
-    const pendingMark = new Promise<WorkObjectView>((resolve) => {
+    const pendingMark = new Promise<OAWorkObjectView>((resolve) => {
       resolveMark = resolve;
     });
-    const refreshedSource: WorkObjectView = {
+    const refreshedSource: OAWorkObjectView = {
       ...WORK_OBJECT,
       source_fetched_at: '2026-08-19T03:05:00Z',
       source_status: 'OA_UPDATED',
     };
-    const markedOldSource: WorkObjectView = {
+    const markedOldSource: OAWorkObjectView = {
       ...WORK_OBJECT,
       handling_mark: 'handled_elsewhere',
       handling_marked_at: '2026-08-19T03:10:00Z',
@@ -365,14 +400,14 @@ describe('WorkObjectsPage', () => {
 
   it('ignores an older detail query that arrives after sync updates its cache', async () => {
     let resolveSync!: (response: WorkObjectListResponse) => void;
-    let resolveDetail!: (response: WorkObjectView) => void;
+    let resolveDetail!: (response: OAWorkObjectView) => void;
     const pendingSync = new Promise<WorkObjectListResponse>((resolve) => {
       resolveSync = resolve;
     });
-    const pendingDetail = new Promise<WorkObjectView>((resolve) => {
+    const pendingDetail = new Promise<OAWorkObjectView>((resolve) => {
       resolveDetail = resolve;
     });
-    const refreshedSource: WorkObjectView = {
+    const refreshedSource: OAWorkObjectView = {
       ...WORK_OBJECT,
       source_fetched_at: '2026-08-19T03:05:00Z',
       source_status: 'OA_UPDATED',
@@ -400,11 +435,11 @@ describe('WorkObjectsPage', () => {
 
   it('keeps a pending detail usable when an overflowing sync batch excludes it', async () => {
     let resolveSync!: (response: WorkObjectListResponse) => void;
-    let resolveDetail!: (response: WorkObjectView) => void;
+    let resolveDetail!: (response: OAWorkObjectView) => void;
     const pendingSync = new Promise<WorkObjectListResponse>((resolve) => {
       resolveSync = resolve;
     });
-    const pendingDetail = new Promise<WorkObjectView>((resolve) => {
+    const pendingDetail = new Promise<OAWorkObjectView>((resolve) => {
       resolveDetail = resolve;
     });
     apiMocks.syncWorkObjects.mockReset().mockReturnValueOnce(pendingSync);

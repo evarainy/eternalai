@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 WORK_OBJECT_LIST_LIMIT = 200
 WORK_OBJECT_LIST_FETCH_LIMIT = WORK_OBJECT_LIST_LIMIT + 1
@@ -65,24 +65,15 @@ class OAPendingWorkSnapshotCollection(BaseModel):
         return self
 
 
-class WorkObjectRecord(BaseModel):
-    """Small Work Object aggregate; source state remains an OA snapshot."""
+class _WorkObjectRecordBase(BaseModel):
+    """Fields shared by both Work Object state-authority arms."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     work_object_id: str
-    source_system: Literal["oa"]
-    source_kind: Literal["pending_workflow"]
-    source_ref: str
     assignee_ai_user_id: str
     assignee_display_name: str
     due_at: datetime | None
-    source_title: str
-    source_status: str
-    source_received_at: str
-    source_created_at: str
-    source_workflow_type_id: str
-    source_fetched_at: datetime
     handling_mark: WorkObjectHandlingMark | None
     handling_marked_by_ai_user_id: str | None
     handling_marked_at: datetime | None
@@ -91,7 +82,7 @@ class WorkObjectRecord(BaseModel):
     updated_at: datetime
 
     @model_validator(mode="after")
-    def _validate_handling_record(self) -> WorkObjectRecord:
+    def _validate_handling_record(self) -> _WorkObjectRecordBase:
         metadata = (
             self.handling_marked_by_ai_user_id,
             self.handling_marked_at,
@@ -101,6 +92,42 @@ class WorkObjectRecord(BaseModel):
         if self.handling_mark is not None and any(value is None for value in metadata):
             raise ValueError("handling mark requires actor and timestamp")
         return self
+
+
+class OAWorkObjectRecord(_WorkObjectRecordBase):
+    """Work Object whose business state remains authoritative in OA."""
+
+    state_authority: Literal["external_snapshot"]
+    source_system: Literal["oa"]
+    source_kind: Literal["pending_workflow"]
+    source_ref: str
+    source_title: str
+    source_status: str
+    source_received_at: str
+    source_created_at: str
+    source_workflow_type_id: str
+    source_fetched_at: datetime
+
+
+class InternalWorkObjectRecord(_WorkObjectRecordBase):
+    """Minimal internal-authority arm; business fields arrive in a later lane."""
+
+    state_authority: Literal["internal"]
+    source_system: str
+    source_kind: str
+    source_ref: None
+    source_title: None
+    source_status: None
+    source_received_at: None
+    source_created_at: None
+    source_workflow_type_id: None
+    source_fetched_at: None
+
+
+WorkObjectRecord: TypeAlias = Annotated[
+    OAWorkObjectRecord | InternalWorkObjectRecord,
+    Field(discriminator="state_authority"),
+]
 
 
 class WorkObjectStorePort(Protocol):
@@ -137,8 +164,10 @@ class WorkObjectStorePort(Protocol):
 
 
 __all__ = (
+    "InternalWorkObjectRecord",
     "OAPendingWorkSnapshot",
     "OAPendingWorkSnapshotCollection",
+    "OAWorkObjectRecord",
     "WORK_OBJECT_LIST_FETCH_LIMIT",
     "WORK_OBJECT_LIST_LIMIT",
     "WorkObjectHandlingMark",

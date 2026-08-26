@@ -14,7 +14,9 @@ from app.ports.capability_gateway import ExecutionResult
 from app.ports.credential_binding import BackgroundWorkObjectSyncError
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
+    InternalWorkObjectRecord,
     OAPendingWorkSnapshot,
+    OAWorkObjectRecord,
     WorkObjectHandlingMark,
     WorkObjectRecord,
 )
@@ -49,12 +51,13 @@ class MemoryWorkObjectStore:
         for snapshot in snapshots:
             key = (assignee_ai_user_id, snapshot.source_ref)
             current = self.records.get(key)
-            self.records[key] = WorkObjectRecord(
+            self.records[key] = OAWorkObjectRecord(
                 work_object_id=(
                     current.work_object_id
                     if current is not None
                     else f"work-{assignee_ai_user_id}-{snapshot.source_ref}"
                 ),
+                state_authority="external_snapshot",
                 source_system="oa",
                 source_kind="pending_workflow",
                 source_ref=snapshot.source_ref,
@@ -182,8 +185,9 @@ def _record(
     source_ref: str = "oa-todo-1",
     index: int = 1,
 ) -> WorkObjectRecord:
-    return WorkObjectRecord(
+    return OAWorkObjectRecord(
         work_object_id=f"work-{owner}-{index}",
+        state_authority="external_snapshot",
         source_system="oa",
         source_kind="pending_workflow",
         source_ref=source_ref,
@@ -251,6 +255,7 @@ def test_online_sync_uses_trusted_principal_and_is_idempotent() -> None:
     assert len(store.records) == 1
     assert store.upsert_calls == 2
     assert first.json()["items"][0]["source_status"] == "OA_PENDING"
+    assert first.json()["items"][0]["state_authority"] == "external_snapshot"
     assert first.json()["items"][0]["source_fetched_at"] == NOW.isoformat().replace(
         "+00:00", "Z"
     )
@@ -261,6 +266,56 @@ def test_online_sync_uses_trusted_principal_and_is_idempotent() -> None:
     assert call["arguments"] == {}
     assert call["request_context"].tenant_id == "tenant-1"
     assert call["request_context"].department_id == "dept-1"
+
+
+def test_api_serializes_the_internal_arm_without_oa_snapshot_fields() -> None:
+    internal = InternalWorkObjectRecord(
+        work_object_id="work-internal-1",
+        state_authority="internal",
+        source_system="eternalai",
+        source_kind="internal_task",
+        source_ref=None,
+        assignee_ai_user_id="user-a",
+        assignee_display_name="Display user-a",
+        due_at=None,
+        source_title=None,
+        source_status=None,
+        source_received_at=None,
+        source_created_at=None,
+        source_workflow_type_id=None,
+        source_fetched_at=None,
+        handling_mark=None,
+        handling_marked_by_ai_user_id=None,
+        handling_marked_at=None,
+        task_record_id=None,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    client = _client(MemoryWorkObjectStore([internal]), RecordingGateway())
+
+    response = client.get("/api/v1/work-objects")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [
+        {
+            "work_object_id": "work-internal-1",
+            "state_authority": "internal",
+            "source_system": "eternalai",
+            "source_kind": "internal_task",
+            "source_ref": None,
+            "assignee_display_name": "Display user-a",
+            "due_at": None,
+            "source_title": None,
+            "source_status": None,
+            "source_received_at": None,
+            "source_created_at": None,
+            "source_workflow_type_id": None,
+            "source_fetched_at": None,
+            "handling_mark": None,
+            "handling_marked_at": None,
+            "task_record_id": None,
+        }
+    ]
 
 
 @pytest.mark.parametrize(

@@ -24,9 +24,10 @@ import {
   syncWorkObjectsApiV1WorkObjectsSyncPost as syncWorkObjects,
 } from '../generated/work-objects/work-objects';
 import type {
+  OAWorkObjectView,
   SetHandlingMarkRequestMark,
   WorkObjectListResponse,
-  WorkObjectView,
+  WorkObjectListResponseItemsItem,
 } from '../generated/work-objects/work-objects.schemas';
 import { useAuthStore } from '../stores/authStore';
 
@@ -53,10 +54,19 @@ function timestampValue(value: string | null): number {
 }
 
 function mergeWorkObjectView(
-  current: WorkObjectView | undefined,
-  incoming: WorkObjectView,
-): WorkObjectView {
-  if (current === undefined) {
+  current: WorkObjectListResponseItemsItem | undefined,
+  incoming: WorkObjectListResponseItemsItem,
+): WorkObjectListResponseItemsItem {
+  if (
+    current === undefined ||
+    current.state_authority !== incoming.state_authority
+  ) {
+    return incoming;
+  }
+  if (incoming.state_authority === 'internal') {
+    return incoming;
+  }
+  if (current.state_authority === 'internal') {
     return incoming;
   }
   const sourceOwner =
@@ -103,7 +113,7 @@ function errorText(error: unknown): string {
   return 'unknown_error: 请求失败';
 }
 
-function handlingMarkTag(mark: WorkObjectView['handling_mark']) {
+function handlingMarkTag(mark: OAWorkObjectView['handling_mark']) {
   if (mark === 'pending_sync_confirmation') {
     return <Tag color="gold">{handlingMarkLabels[mark]}</Tag>;
   }
@@ -174,7 +184,7 @@ export default function WorkObjectsPage() {
           item.work_object_id,
         );
         if (queryClient.getQueryState(detailKey) !== undefined) {
-          queryClient.setQueryData<WorkObjectView>(
+          queryClient.setQueryData<WorkObjectListResponseItemsItem>(
             detailKey,
             (current) => mergeWorkObjectView(current, item),
           );
@@ -199,7 +209,12 @@ export default function WorkObjectsPage() {
       authGeneration,
       selectedWorkObjectId ?? '',
     ),
-    queryFn: () => getWorkObject(selectedWorkObjectId as string),
+    queryFn: () => {
+      if (selectedWorkObjectId === undefined) {
+        throw new Error('work_object_id_required');
+      }
+      return getWorkObject(selectedWorkObjectId);
+    },
     enabled: selectedWorkObjectId !== undefined,
   });
 
@@ -257,7 +272,7 @@ export default function WorkObjectsPage() {
           variables.authGeneration,
           updated.work_object_id,
         ),
-        (current: WorkObjectView | undefined) =>
+        (current: WorkObjectListResponseItemsItem | undefined) =>
           mergeWorkObjectView(current, updated),
       );
       void message.success('处理痕迹已记录；OA 状态未被修改');
@@ -271,14 +286,18 @@ export default function WorkObjectsPage() {
   });
 
   const items = listQuery.data?.items ?? [];
-  const newestFetchedAt = items.reduce<string | undefined>((newest, item) => {
+  const oaItems = items.filter(
+    (item): item is OAWorkObjectView =>
+      item.state_authority === 'external_snapshot',
+  );
+  const newestFetchedAt = oaItems.reduce<string | undefined>((newest, item) => {
     if (!newest || new Date(item.source_fetched_at) > new Date(newest)) {
       return item.source_fetched_at;
     }
     return newest;
   }, undefined);
 
-  const columns: ColumnsType<WorkObjectView> = [
+  const columns: ColumnsType<OAWorkObjectView> = [
     {
       title: '来源',
       key: 'source',
@@ -334,7 +353,7 @@ export default function WorkObjectsPage() {
       dataIndex: 'handling_mark',
       key: 'handling_mark',
       width: 180,
-      render: (value: WorkObjectView['handling_mark']) => handlingMarkTag(value),
+      render: (value: OAWorkObjectView['handling_mark']) => handlingMarkTag(value),
     },
     {
       title: '操作',
@@ -377,7 +396,7 @@ export default function WorkObjectsPage() {
             </Paragraph>
           </div>
           <Space orientation="vertical" align="end">
-            <Text style={{ color: '#fff' }}>当前显示 {items.length} 项</Text>
+            <Text style={{ color: '#fff' }}>当前显示 {oaItems.length} 项</Text>
             <Text style={{ color: '#ffe0a3' }}>
               最新数据截至：{newestFetchedAt ? formatTimestamp(newestFetchedAt) : '暂无数据'}
             </Text>
@@ -444,10 +463,10 @@ export default function WorkObjectsPage() {
         />
       ) : null}
 
-      <Table<WorkObjectView>
+      <Table<OAWorkObjectView>
         rowKey="work_object_id"
         columns={columns}
-        dataSource={items}
+        dataSource={oaItems}
         loading={listQuery.isLoading}
         pagination={false}
         scroll={{ x: 1450 }}
@@ -469,6 +488,13 @@ export default function WorkObjectsPage() {
           />
         ) : detailQuery.isLoading ? (
           <Spin />
+        ) : detailQuery.data?.state_authority === 'internal' ? (
+          <Alert
+            showIcon
+            type="info"
+            title="内部任务暂未在此页面展示"
+            description="本页面当前只展示 OA 快照；内部任务将在后续功能中提供业务展示。"
+          />
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
             <Alert

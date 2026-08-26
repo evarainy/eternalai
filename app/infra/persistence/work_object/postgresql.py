@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from pydantic import TypeAdapter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -18,13 +19,14 @@ from app.ports.work_object import (
 )
 
 _WORK_OBJECT_COLUMNS = (
-    "work_object_id, source_system, source_kind, source_ref, "
+    "work_object_id, state_authority, source_system, source_kind, source_ref, "
     "assignee_ai_user_id, assignee_display_name, due_at, source_title, "
     "source_status, source_received_at, source_created_at, "
     "source_workflow_type_id, source_fetched_at, handling_mark, "
     "handling_marked_by_ai_user_id, handling_marked_at, task_record_id, "
     "created_at, updated_at"
 )
+_WORK_OBJECT_RECORD_ADAPTER: TypeAdapter[WorkObjectRecord] = TypeAdapter(WorkObjectRecord)
 
 
 class PostgreSQLWorkObjectStore:
@@ -48,13 +50,15 @@ class PostgreSQLWorkObjectStore:
                         "INSERT INTO work_objects ("
                         + _WORK_OBJECT_COLUMNS
                         + ") VALUES ("
-                        ":work_object_id, 'oa', 'pending_workflow', :source_ref, "
+                        ":work_object_id, 'external_snapshot', 'oa', "
+                        "'pending_workflow', :source_ref, "
                         ":assignee_ai_user_id, :assignee_display_name, NULL, "
                         ":source_title, :source_status, :source_received_at, "
                         ":source_created_at, :source_workflow_type_id, "
                         ":source_fetched_at, NULL, NULL, NULL, NULL, "
                         ":created_at, :updated_at) "
                         "ON CONFLICT (assignee_ai_user_id, source_system, source_ref) "
+                        "WHERE state_authority = 'external_snapshot' "
                         "DO UPDATE SET "
                         "assignee_display_name = EXCLUDED.assignee_display_name, "
                         "source_title = EXCLUDED.source_title, "
@@ -149,6 +153,7 @@ class PostgreSQLWorkObjectStore:
                         "handling_marked_at = :marked_at, updated_at = :marked_at "
                         "WHERE work_object_id = :work_object_id "
                         "AND assignee_ai_user_id = :assignee_ai_user_id "
+                        "AND state_authority = 'external_snapshot' "
                         "RETURNING "
                         + _WORK_OBJECT_COLUMNS
                     ),
@@ -166,26 +171,9 @@ class PostgreSQLWorkObjectStore:
 
 
 def _record_from_row(row: Any) -> WorkObjectRecord:
-    return WorkObjectRecord(
-        work_object_id=row.work_object_id,
-        source_system=row.source_system,
-        source_kind=row.source_kind,
-        source_ref=row.source_ref,
-        assignee_ai_user_id=row.assignee_ai_user_id,
-        assignee_display_name=row.assignee_display_name,
-        due_at=row.due_at,
-        source_title=row.source_title,
-        source_status=row.source_status,
-        source_received_at=row.source_received_at,
-        source_created_at=row.source_created_at,
-        source_workflow_type_id=row.source_workflow_type_id,
-        source_fetched_at=row.source_fetched_at,
-        handling_mark=row.handling_mark,
-        handling_marked_by_ai_user_id=row.handling_marked_by_ai_user_id,
-        handling_marked_at=row.handling_marked_at,
-        task_record_id=row.task_record_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
+    return _WORK_OBJECT_RECORD_ADAPTER.validate_python(
+        dict(row._mapping),
+        strict=True,
     )
 
 
