@@ -29,6 +29,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 from app.ports.adapter import AdapterPort, AdapterResult, MockErrorMode
 from app.ports.capability_gateway import RequestChannel, RequestOrgContext
 from app.ports.capability_registry import (
+    CapabilityAutomationLevel,
     CapabilityExecutionIdentity,
     CapabilityRiskLevel,
     CapabilitySpec,
@@ -45,6 +46,7 @@ from app.ports.identity_mapping import (
 from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
+from app.ports.work_object_handling import WorkObjectHandlingSelector
 from app.runtime.models import CapabilityRef
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import (
@@ -82,6 +84,11 @@ FROZEN_GT_IDS = (
     "GT-024",
     "GT-025",
     "GT-026",
+    "GT-029",
+    "GT-030",
+    "GT-031",
+    "GT-032",
+    "GT-033",
 )
 GT_IDS = tuple(path.stem for path in sorted(FIXTURES_DIR.glob("GT-*.json")))
 GoldenTaskStatus = Literal["passed", "failed", "skipped", "not_applicable"]
@@ -1046,6 +1053,18 @@ def _build_capability_spec(raw: dict[str, Any]) -> CapabilitySpec:
         ),
         binding_required=bool(raw.get("binding_required", False)),
         policy_digest=cast(str | None, raw.get("policy_digest")),
+        automation_level=cast(
+            CapabilityAutomationLevel,
+            raw.get("automation_level", "manual"),
+        ),
+        displayable_argument_fields=cast(
+            list[str],
+            raw.get("displayable_argument_fields", []),
+        ),
+        handles_work_objects=cast(
+            list[WorkObjectHandlingSelector],
+            raw.get("handles_work_objects", []),
+        ),
     )
 
 
