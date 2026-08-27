@@ -38,6 +38,9 @@ const capabilities: AdminCapabilityView[] = [
     target_system: 'oa',
     execution_identity: 'user_delegated',
     binding_required: true,
+    automation_level: 'manual',
+    displayable_argument_fields: [],
+    handles_work_objects: [],
   },
   {
     capability_id: 'cap.action',
@@ -54,6 +57,9 @@ const capabilities: AdminCapabilityView[] = [
     target_system: 'u8',
     execution_identity: 'admin_approved_proxy',
     binding_required: false,
+    automation_level: 'manual',
+    displayable_argument_fields: [],
+    handles_work_objects: [],
   },
 ];
 

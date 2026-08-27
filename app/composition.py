@@ -517,6 +517,7 @@ def build_production_components(
     work_object_service = WorkObjectService(
         store=PostgreSQLWorkObjectStore(session_factory),
         gateway=gateway,
+        capability_registry=capability_registry,
     )
     credential_binding_service = CredentialBindingService(
         store=credential_store,

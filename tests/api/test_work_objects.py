@@ -2,15 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.work_objects import WorkObjectService
+from app.api.v1.work_objects import (
+    OAWorkObjectView,
+    WorkObjectService,
+    _resolve_handling_capability,
+    _view_from_record,
+)
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.capability_registry import (
+    CapabilityAutomationLevel,
+    CapabilityRegistryPort,
+    CapabilitySpec,
+    CapabilityStatus,
+)
 from app.ports.credential_binding import BackgroundWorkObjectSyncError
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
@@ -27,6 +38,7 @@ from tests.auth_fakes import (
     auth_cookies,
     make_session_binder,
 )
+from tests.runtime.registry_fakes import StaticCapabilityRegistry, active_capability
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
 
@@ -209,11 +221,38 @@ def _record(
     )
 
 
+def _handling_capability(
+    capability_id: str,
+    *,
+    automation_level: CapabilityAutomationLevel,
+    source_system: str = "oa",
+    source_kind: str = "pending_workflow",
+    source_workflow_type_id: str | None = "workflow-1",
+    status: CapabilityStatus = "active",
+) -> CapabilitySpec:
+    base = active_capability(capability_id)
+    return CapabilitySpec.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "automation_level": automation_level,
+            "status": status,
+            "handles_work_objects": [
+                {
+                    "source_system": source_system,
+                    "source_kind": source_kind,
+                    "source_workflow_type_id": source_workflow_type_id,
+                }
+            ],
+        }
+    )
+
+
 def _client(
     store: MemoryWorkObjectStore,
     gateway: RecordingGateway,
     *,
     user_id: str = "user-a",
+    capabilities: tuple[CapabilitySpec, ...] = (),
 ) -> TestClient:
     tokens = StaticSessionTokens(roles=("user",))
     tokens.principal = Principal(
@@ -225,6 +264,10 @@ def _client(
     service = WorkObjectService(
         store=store,
         gateway=gateway,
+        capability_registry=cast(
+            CapabilityRegistryPort,
+            StaticCapabilityRegistry(*capabilities),
+        ),
         clock=lambda: NOW,
         id_factory=lambda: "operation-1",
     )
@@ -255,6 +298,8 @@ def test_online_sync_uses_trusted_principal_and_is_idempotent() -> None:
     assert len(store.records) == 1
     assert store.upsert_calls == 2
     assert first.json()["items"][0]["source_status"] == "OA_PENDING"
+    assert first.json()["items"][0]["handling_action"] == "go_source_system"
+    assert first.json()["items"][0]["handling_capability_id"] is None
     assert first.json()["items"][0]["state_authority"] == "external_snapshot"
     assert first.json()["items"][0]["source_fetched_at"] == NOW.isoformat().replace(
         "+00:00", "Z"
@@ -314,6 +359,8 @@ def test_api_serializes_the_internal_arm_without_oa_snapshot_fields() -> None:
             "handling_mark": None,
             "handling_marked_at": None,
             "task_record_id": None,
+            "handling_action": "view_only",
+            "handling_capability_id": None,
         }
     ]
 
@@ -358,6 +405,10 @@ def test_background_sync_exposes_only_authentication_denial_classification(
     service = WorkObjectService(
         store=MemoryWorkObjectStore(),
         gateway=RecordingGateway(result),
+        capability_registry=cast(
+            CapabilityRegistryPort,
+            StaticCapabilityRegistry(),
+        ),
         clock=lambda: NOW,
         id_factory=lambda: "operation-background",
     )
@@ -437,6 +488,7 @@ def test_sync_failure_writes_nothing_and_stored_data_remains_readable() -> None:
     }
     assert store.upsert_calls == 0
     assert stored.status_code == 200
+    assert original.source_fetched_at is not None
     assert stored.json()["items"][0]["source_fetched_at"] == (
         original.source_fetched_at.isoformat().replace("+00:00", "Z")
     )
@@ -565,6 +617,171 @@ def test_list_returns_one_bounded_batch_with_explicit_overflow() -> None:
     assert response.json()["limit"] == 200
     assert response.json()["limit_exceeded"] is True
     assert len(response.json()["items"]) == 200
+
+
+@pytest.mark.parametrize(
+    ("automation_level", "expected_action"),
+    [("full", "ai_draft"), ("assisted", "self_serve")],
+)
+def test_unique_capability_mapping_projects_capability_action(
+    automation_level: CapabilityAutomationLevel,
+    expected_action: str,
+) -> None:
+    capability = _handling_capability(
+        f"oa.handle.{automation_level}",
+        automation_level=automation_level,
+    )
+    client = _client(
+        MemoryWorkObjectStore([_record()]),
+        RecordingGateway(),
+        capabilities=(capability,),
+    )
+
+    payload = client.get("/api/v1/work-objects").json()["items"][0]
+
+    assert payload["handling_action"] == expected_action
+    assert payload["handling_capability_id"] == capability.capability_id
+
+
+def test_handled_elsewhere_overrides_a_full_capability_mapping() -> None:
+    capability = _handling_capability(
+        "oa.handle.full",
+        automation_level="full",
+    )
+    record = _record().model_copy(
+        update={
+            "handling_mark": "handled_elsewhere",
+            "handling_marked_by_ai_user_id": "user-a",
+            "handling_marked_at": NOW,
+        }
+    )
+    client = _client(
+        MemoryWorkObjectStore([record]),
+        RecordingGateway(),
+        capabilities=(capability,),
+    )
+
+    payload = client.get("/api/v1/work-objects").json()["items"][0]
+
+    assert payload["handling_action"] == "view_only"
+    assert payload["handling_capability_id"] is None
+
+
+def test_resolver_is_exact_active_and_fail_closed_on_ambiguity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    record = _record()
+    first = _handling_capability("oa.handle.first", automation_level="full")
+    second = _handling_capability("oa.handle.second", automation_level="assisted")
+    inactive = _handling_capability(
+        "oa.handle.disabled",
+        automation_level="full",
+        status="disabled",
+    )
+    concrete = _handling_capability(
+        "oa.handle.other-workflow",
+        automation_level="full",
+        source_workflow_type_id="workflow-other",
+    )
+
+    assert _resolve_handling_capability(record=record, capabilities=[]) is None
+    assert _resolve_handling_capability(
+        record=record,
+        capabilities=[first, inactive, concrete],
+    ) is first
+
+    with caplog.at_level("WARNING"):
+        ambiguous = _resolve_handling_capability(
+            record=record,
+            capabilities=[first, second],
+        )
+    assert ambiguous is None
+    assert "oa.handle.first" in caplog.text
+    assert "oa.handle.second" in caplog.text
+    assert record.source_ref is not None
+    assert record.source_ref not in caplog.text
+
+
+def test_none_workflow_type_matches_only_none_selector() -> None:
+    record = InternalWorkObjectRecord(
+        work_object_id="work-internal-none",
+        state_authority="internal",
+        source_system="eternalai",
+        source_kind="internal_task",
+        source_ref=None,
+        assignee_ai_user_id="user-a",
+        assignee_display_name="Display user-a",
+        due_at=None,
+        source_title=None,
+        source_status=None,
+        source_received_at=None,
+        source_created_at=None,
+        source_workflow_type_id=None,
+        source_fetched_at=None,
+        handling_mark=None,
+        handling_marked_by_ai_user_id=None,
+        handling_marked_at=None,
+        task_record_id=None,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    none_selector = _handling_capability(
+        "internal.none",
+        automation_level="full",
+        source_system="eternalai",
+        source_kind="internal_task",
+        source_workflow_type_id=None,
+    )
+    concrete_selector = _handling_capability(
+        "internal.concrete",
+        automation_level="full",
+        source_system="eternalai",
+        source_kind="internal_task",
+        source_workflow_type_id="specific",
+    )
+
+    assert _resolve_handling_capability(
+        record=record,
+        capabilities=[none_selector, concrete_selector],
+    ) is none_selector
+
+
+@pytest.mark.parametrize("handling_action", ["go_source_system", "view_only"])
+def test_view_model_rejects_capability_id_for_non_capability_action(
+    handling_action: str,
+) -> None:
+    view = _view_from_record(_record(), [])
+
+    with pytest.raises(
+        ValueError,
+        match="handling_capability_id must be null",
+    ):
+        OAWorkObjectView.model_validate(
+            {
+                **view.model_dump(mode="python"),
+                "handling_action": handling_action,
+                "handling_capability_id": "oa.unexpected",
+            }
+        )
+
+
+@pytest.mark.parametrize("handling_action", ["ai_draft", "self_serve"])
+def test_view_model_requires_capability_id_for_capability_action(
+    handling_action: str,
+) -> None:
+    view = _view_from_record(_record(), [])
+
+    with pytest.raises(
+        ValueError,
+        match="handling_capability_id is required",
+    ):
+        OAWorkObjectView.model_validate(
+            {
+                **view.model_dump(mode="python"),
+                "handling_action": handling_action,
+                "handling_capability_id": None,
+            }
+        )
 
 
 def test_work_object_routes_require_valid_authentication() -> None:

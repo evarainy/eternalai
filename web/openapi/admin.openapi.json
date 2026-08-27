@@ -880,6 +880,31 @@
         "type": "string",
         "enum": ["user_delegated", "system_scope", "admin_approved_proxy"]
       },
+      "CapabilityAutomationLevel": {
+        "type": "string",
+        "enum": ["full", "assisted", "manual"]
+      },
+      "WorkObjectHandlingSelector": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_system",
+          "source_kind",
+          "source_workflow_type_id"
+        ],
+        "properties": {
+          "source_system": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "source_workflow_type_id": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "AdminCapabilityCreate": {
         "type": "object",
         "additionalProperties": false,
@@ -969,6 +994,28 @@
             "type": "string",
             "nullable": true,
             "default": null
+          },
+          "automation_level": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapabilityAutomationLevel"
+              }
+            ],
+            "default": "manual"
+          },
+          "displayable_argument_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "handles_work_objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkObjectHandlingSelector"
+            },
+            "default": []
           }
         }
       },
@@ -989,7 +1036,10 @@
           "short_description",
           "target_system",
           "execution_identity",
-          "binding_required"
+          "binding_required",
+          "automation_level",
+          "displayable_argument_fields",
+          "handles_work_objects"
         ],
         "properties": {
           "capability_id": {
@@ -1036,6 +1086,21 @@
           },
           "binding_required": {
             "type": "boolean"
+          },
+          "automation_level": {
+            "$ref": "#/components/schemas/CapabilityAutomationLevel"
+          },
+          "displayable_argument_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "handles_work_objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkObjectHandlingSelector"
+            }
           }
         }
       },

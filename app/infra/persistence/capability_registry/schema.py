@@ -42,6 +42,24 @@ capabilities = sa.Table(
     sa.Column("execution_identity", sa.Text(), nullable=False),
     sa.Column("binding_required", sa.Boolean(), nullable=False),
     sa.Column("policy_digest", sa.Text(), nullable=True),
+    sa.Column(
+        "automation_level",
+        sa.Text(),
+        nullable=False,
+        server_default=sa.text("'manual'"),
+    ),
+    sa.Column(
+        "displayable_argument_fields",
+        JSONB(astext_type=sa.Text()),
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    ),
+    sa.Column(
+        "handles_work_objects",
+        JSONB(astext_type=sa.Text()),
+        nullable=False,
+        server_default=sa.text("'[]'::jsonb"),
+    ),
     sa.CheckConstraint(
         "type IN ('query','action','workflow','mock')",
         name="ck_capabilities_type",
@@ -61,5 +79,17 @@ capabilities = sa.Table(
     sa.CheckConstraint(
         "execution_identity IN ('user_delegated','system_scope','admin_approved_proxy')",
         name="ck_capabilities_execution_identity",
+    ),
+    sa.CheckConstraint(
+        "automation_level IN ('full','assisted','manual')",
+        name="ck_capabilities_automation_level",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(displayable_argument_fields) = 'array'",
+        name="ck_capabilities_displayable_argument_fields_is_array",
+    ),
+    sa.CheckConstraint(
+        "jsonb_typeof(handles_work_objects) = 'array'",
+        name="ck_capabilities_handles_work_objects_is_array",
     ),
 )

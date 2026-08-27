@@ -33,6 +33,27 @@
             ],
             "title": "Due At"
           },
+          "handling_action": {
+            "enum": [
+              "ai_draft",
+              "self_serve",
+              "go_source_system",
+              "view_only"
+            ],
+            "title": "Handling Action",
+            "type": "string"
+          },
+          "handling_capability_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Capability Id"
+          },
           "handling_mark": {
             "anyOf": [
               {
@@ -124,6 +145,8 @@
           "handling_mark",
           "handling_marked_at",
           "task_record_id",
+          "handling_action",
+          "handling_capability_id",
           "state_authority",
           "source_system",
           "source_kind",
@@ -156,6 +179,27 @@
               }
             ],
             "title": "Due At"
+          },
+          "handling_action": {
+            "enum": [
+              "ai_draft",
+              "self_serve",
+              "go_source_system",
+              "view_only"
+            ],
+            "title": "Handling Action",
+            "type": "string"
+          },
+          "handling_capability_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handling Capability Id"
           },
           "handling_mark": {
             "anyOf": [
@@ -251,6 +295,8 @@
           "handling_mark",
           "handling_marked_at",
           "task_record_id",
+          "handling_action",
+          "handling_capability_id",
           "state_authority",
           "source_system",
           "source_kind",

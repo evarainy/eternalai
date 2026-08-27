@@ -1289,6 +1289,10 @@ def _confirm_card_payload(
         "operation_summary": _operation_summary(capability),
         "target_system": target_system,
         "field_names": _confirm_field_names(capability_ref, capability),
+        "displayed_argument_values": _displayed_argument_values(
+            capability_ref,
+            capability,
+        ),
     }
     return dict(payload)
 
@@ -1303,6 +1307,29 @@ def _confirm_field_names(
     if not isinstance(properties, dict):
         return []
     return sorted(key for key in capability_ref.arguments if key in properties)
+
+
+def _displayed_argument_values(
+    capability_ref: CapabilityRef,
+    capability: CapabilitySpec | None,
+) -> dict[str, str]:
+    if capability is None:
+        return {}
+    properties = capability.input_schema.get("properties")
+    if not isinstance(properties, dict):
+        return {}
+
+    displayed: dict[str, str] = {}
+    for field_name in capability.displayable_argument_fields:
+        if field_name not in properties or field_name not in capability_ref.arguments:
+            continue
+        value = capability_ref.arguments[field_name]
+        if value is None or not isinstance(value, (str, int, float, bool)):
+            continue
+        rendered = str(value)
+        if len(rendered) <= 200:
+            displayed[field_name] = rendered
+    return displayed
 
 
 def _operation_summary(capability: CapabilitySpec | None) -> str:

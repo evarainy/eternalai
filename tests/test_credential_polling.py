@@ -6,7 +6,7 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -24,6 +24,7 @@ from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.auth import LoginCredential, Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.credential_binding import (
     BackgroundWorkObjectSyncError,
     CredentialAcquisitionError,
@@ -41,6 +42,7 @@ from app.ports.work_object import (
     WorkObjectHandlingMark,
     WorkObjectRecord,
 )
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 NOW = datetime(2026, 8, 21, 2, 0, tzinfo=UTC)
 CANDIDATE = CredentialPollCandidate(
@@ -490,6 +492,10 @@ def test_password_canary_stops_before_trace_and_response_envelope_boundary(
     work_objects = WorkObjectService(
         store=CanaryWorkObjectStore(),
         gateway=gateway,
+        capability_registry=cast(
+            CapabilityRegistryPort,
+            StaticCapabilityRegistry(),
+        ),
         clock=lambda: NOW,
         id_factory=lambda: "credential-poll-canary",
     )

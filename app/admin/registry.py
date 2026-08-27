@@ -20,6 +20,7 @@ from app.admin.evidence import (
     AdminTracePersistedView,
 )
 from app.ports.capability_registry import (
+    CapabilityAutomationLevel,
     CapabilityExecutionIdentity,
     CapabilityIntentTags,
     CapabilityName,
@@ -49,6 +50,7 @@ from app.ports.trace import (
     TracePort,
     TraceQueryPort,
 )
+from app.ports.work_object_handling import WorkObjectHandlingSelector
 
 
 class AdminCapabilityCreate(BaseModel):
@@ -72,6 +74,11 @@ class AdminCapabilityCreate(BaseModel):
     execution_identity: CapabilityExecutionIdentity
     binding_required: bool
     policy_digest: str | None = None
+    automation_level: CapabilityAutomationLevel = "manual"
+    displayable_argument_fields: list[str] = Field(default_factory=list)
+    handles_work_objects: list[WorkObjectHandlingSelector] = Field(
+        default_factory=list
+    )
 
     def to_draft_spec(self) -> CapabilitySpec:
         return CapabilitySpec(
@@ -99,6 +106,9 @@ class AdminCapabilityView(BaseModel):
     target_system: CapabilityTargetSystem | None
     execution_identity: CapabilityExecutionIdentity
     binding_required: bool
+    automation_level: CapabilityAutomationLevel
+    displayable_argument_fields: list[str]
+    handles_work_objects: list[WorkObjectHandlingSelector]
 
     @classmethod
     def from_spec(cls, capability: CapabilitySpec) -> AdminCapabilityView:
@@ -119,6 +129,9 @@ class AdminCapabilityView(BaseModel):
                     "target_system",
                     "execution_identity",
                     "binding_required",
+                    "automation_level",
+                    "displayable_argument_fields",
+                    "handles_work_objects",
                 }
             )
         )

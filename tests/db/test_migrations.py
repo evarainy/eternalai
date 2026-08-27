@@ -35,6 +35,13 @@ ORIGINAL_CREDENTIAL_COLUMNS = frozenset(
     }
 )
 WORK_OBJECT_MODEL_REVISION = "20260827_120000"
+CAPABILITY_AUTOMATION_REVISION = "20260827_180000"
+CAPABILITY_AUTOMATION_MIGRATION_PATH = (
+    REPO_ROOT
+    / "alembic"
+    / "versions"
+    / "20260827_180000_capability_automation_level.py"
+)
 WORK_OBJECT_MODEL_MIGRATION_PATH = (
     REPO_ROOT
     / "alembic"
@@ -137,6 +144,43 @@ INSERT INTO work_objects (
 )
 """
 
+_PARENT_CAPABILITY_TABLE_SQL = """
+CREATE TEMPORARY TABLE capabilities (
+    capability_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    intent_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    input_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    output_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    input_schema_digest TEXT NOT NULL,
+    output_schema_digest TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    short_description TEXT NOT NULL,
+    target_system TEXT NULL,
+    execution_identity TEXT NOT NULL,
+    binding_required BOOLEAN NOT NULL,
+    policy_digest TEXT NULL
+)
+"""
+
+_INSERT_PARENT_CAPABILITY_SQL = """
+INSERT INTO capabilities (
+    capability_id, name, type, intent_tags, input_schema, output_schema,
+    input_schema_digest, output_schema_digest, risk_level, owner, version,
+    status, short_description, target_system, execution_identity,
+    binding_required, policy_digest
+) VALUES (
+    'oa.test.capability', 'Test capability', 'query', '["test"]'::jsonb,
+    '{"type":"object","properties":{"value":{"type":"string"}}}'::jsonb,
+    '{"type":"object"}'::jsonb, 'sha256:input', 'sha256:output',
+    'low', 'test-owner', '1.0.0', 'active', 'Test description', 'oa',
+    'user_delegated', true, 'sha256:policy'
+)
+"""
+
 
 def _database_url_from_environment() -> str:
     value = os.environ.get("DATABASE_URL")
@@ -228,6 +272,32 @@ def _load_work_object_model_migration() -> ModuleType:
     return module
 
 
+def _load_capability_automation_migration() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "capability_automation_migration",
+        CAPABILITY_AUTOMATION_MIGRATION_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("Capability automation migration must be importable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_capability_automation_upgrade(connection: Connection) -> None:
+    migration = _load_capability_automation_migration()
+    assert migration.revision == CAPABILITY_AUTOMATION_REVISION
+    assert migration.down_revision == WORK_OBJECT_MODEL_REVISION
+    migration.op = Operations(MigrationContext.configure(connection))
+    migration.upgrade()
+
+
+def _run_capability_automation_downgrade(connection: Connection) -> None:
+    migration = _load_capability_automation_migration()
+    migration.op = Operations(MigrationContext.configure(connection))
+    migration.downgrade()
+
+
 def _run_work_object_model_upgrade(connection: Connection) -> None:
     migration = _load_work_object_model_migration()
     assert migration.revision == WORK_OBJECT_MODEL_REVISION
@@ -248,6 +318,17 @@ def work_object_migration_connection() -> Iterator[Connection]:
     try:
         with engine.begin() as connection:
             connection.execute(text(_PARENT_WORK_OBJECT_TABLE_SQL))
+            yield connection
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def capability_migration_connection() -> Iterator[Connection]:
+    engine = create_engine(normalize_database_url(_database_url_from_environment()))
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(_PARENT_CAPABILITY_TABLE_SQL))
             yield connection
     finally:
         engine.dispose()
@@ -518,6 +599,138 @@ def test_work_object_model_upgrade_preserves_existing_oa_snapshot_values(
     ).one()
     assert tuple(after[:7]) == tuple(before)
     assert after.state_authority == "external_snapshot"
+
+
+def test_capability_automation_upgrade_preserves_existing_row_with_defaults(
+    capability_migration_connection: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+    capability_migration_connection.execute(text(_INSERT_PARENT_CAPABILITY_SQL))
+    before = dict(
+        capability_migration_connection.execute(
+            text("SELECT * FROM capabilities WHERE capability_id = 'oa.test.capability'")
+        )
+        .mappings()
+        .one()
+    )
+
+    _run_capability_automation_upgrade(capability_migration_connection)
+
+    after = dict(
+        capability_migration_connection.execute(
+            text("SELECT * FROM capabilities WHERE capability_id = 'oa.test.capability'")
+        )
+        .mappings()
+        .one()
+    )
+    assert {key: after[key] for key in before} == before
+    assert after["automation_level"] == "manual"
+    assert after["displayable_argument_fields"] == []
+    assert after["handles_work_objects"] == []
+
+    _run_capability_automation_downgrade(capability_migration_connection)
+    downgraded = dict(
+        capability_migration_connection.execute(
+            text("SELECT * FROM capabilities WHERE capability_id = 'oa.test.capability'")
+        )
+        .mappings()
+        .one()
+    )
+    assert downgraded == before
+
+
+def test_capability_automation_check_rejects_invalid_database_value(
+    capability_migration_connection: Connection,
+) -> None:
+    _run_capability_automation_upgrade(capability_migration_connection)
+    savepoint = capability_migration_connection.begin_nested()
+    try:
+        with pytest.raises(IntegrityError, match="ck_capabilities_automation_level"):
+            capability_migration_connection.execute(
+                text(_INSERT_PARENT_CAPABILITY_SQL)
+            )
+            capability_migration_connection.execute(
+                text(
+                    "UPDATE capabilities SET automation_level = 'automatic' "
+                    "WHERE capability_id = 'oa.test.capability'"
+                )
+            )
+    finally:
+        savepoint.rollback()
+
+
+def test_capability_automation_downgrade_rejects_declarations_without_guard(
+    capability_migration_connection: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALLOW_DESTRUCTIVE_DOWNGRADE", raising=False)
+    capability_migration_connection.execute(text(_INSERT_PARENT_CAPABILITY_SQL))
+    _run_capability_automation_upgrade(capability_migration_connection)
+    capability_migration_connection.execute(
+        text(
+            "UPDATE capabilities SET automation_level = 'assisted', "
+            "displayable_argument_fields = '[\"value\"]'::jsonb, "
+            "handles_work_objects = "
+            "'[{\"source_system\":\"oa\",\"source_kind\":\"pending_workflow\","
+            "\"source_workflow_type_id\":\"workflow-1\"}]'::jsonb "
+            "WHERE capability_id = 'oa.test.capability'"
+        )
+    )
+    before_count = capability_migration_connection.execute(
+        text("SELECT count(*) FROM capabilities")
+    ).scalar_one()
+
+    with pytest.raises(RuntimeError, match="ALLOW_DESTRUCTIVE_DOWNGRADE=1"):
+        _run_capability_automation_downgrade(capability_migration_connection)
+
+    row = capability_migration_connection.execute(
+        text(
+            "SELECT automation_level, displayable_argument_fields, "
+            "handles_work_objects FROM capabilities "
+            "WHERE capability_id = 'oa.test.capability'"
+        )
+    ).one()
+    assert row.automation_level == "assisted"
+    assert row.displayable_argument_fields == ["value"]
+    assert len(row.handles_work_objects) == 1
+    assert capability_migration_connection.execute(
+        text("SELECT count(*) FROM capabilities")
+    ).scalar_one() == before_count
+
+
+def test_capability_automation_downgrade_allows_declarations_with_guard(
+    capability_migration_connection: Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALLOW_DESTRUCTIVE_DOWNGRADE", "1")
+    capability_migration_connection.execute(text(_INSERT_PARENT_CAPABILITY_SQL))
+    _run_capability_automation_upgrade(capability_migration_connection)
+    capability_migration_connection.execute(
+        text(
+            "UPDATE capabilities SET automation_level = 'full' "
+            "WHERE capability_id = 'oa.test.capability'"
+        )
+    )
+
+    _run_capability_automation_downgrade(capability_migration_connection)
+
+    remaining_columns = {
+        str(name)
+        for name in capability_migration_connection.execute(
+            text(
+                "SELECT attname FROM pg_attribute "
+                "WHERE attrelid = 'capabilities'::regclass "
+                "AND attnum > 0 AND NOT attisdropped"
+            )
+        ).scalars()
+    }
+    assert "automation_level" not in remaining_columns
+    assert capability_migration_connection.execute(
+        text("SELECT count(*) FROM capabilities")
+    ).scalar_one() == 1
+    migration_source = CAPABILITY_AUTOMATION_MIGRATION_PATH.read_text(encoding="utf-8")
+    assert 'os.environ.get("ALLOW_DESTRUCTIVE_DOWNGRADE") == "1"' in migration_source
 
 
 def test_alembic_upgrade_downgrade_upgrade_cycle() -> None:

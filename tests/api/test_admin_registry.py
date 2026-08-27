@@ -236,6 +236,9 @@ def test_registry_list_and_get_return_credential_safe_metadata() -> None:
         assert "policy_digest" not in item
         assert "password" not in str(item)
         assert "cookie" not in str(item)
+        assert item["automation_level"] == "manual"
+        assert item["displayable_argument_fields"] == []
+        assert item["handles_work_objects"] == []
     assert [event.attributes["action"] for event in trace.events] == ["list", "get"]
 
 
@@ -244,12 +247,20 @@ def test_create_is_draft_then_enable_and_disable_are_independent_actions() -> No
     trace = RecordingTrace()
     client = _client(registry, trace)
 
+    create_body = _create_body()
+    create_body.pop("automation_level")
+    create_body.pop("displayable_argument_fields")
+    create_body.pop("handles_work_objects")
+
     created = client.post(
         "/api/v1/admin/registry",
         headers=TEST_CSRF_HEADERS,
-        json=_create_body(),
+        json=create_body,
         cookies=ADMIN_COOKIES,
     )
+    assert created.json()["automation_level"] == "manual"
+    assert created.json()["displayable_argument_fields"] == []
+    assert created.json()["handles_work_objects"] == []
     enabled = client.post(
         "/api/v1/admin/registry/oa.leave.apply/enable",
         headers=TEST_CSRF_HEADERS,

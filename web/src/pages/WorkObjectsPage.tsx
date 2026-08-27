@@ -83,6 +83,8 @@ function mergeWorkObjectView(
     ...sourceOwner,
     handling_mark: handlingOwner.handling_mark,
     handling_marked_at: handlingOwner.handling_marked_at,
+    handling_action: handlingOwner.handling_action,
+    handling_capability_id: handlingOwner.handling_capability_id,
     task_record_id: incoming.task_record_id ?? current.task_record_id,
   };
 }
@@ -90,6 +92,20 @@ function mergeWorkObjectView(
 const handlingMarkLabels: Record<SetHandlingMarkRequestMark, string> = {
   pending_sync_confirmation: '待同步完成情况',
   handled_elsewhere: '已在别处处理',
+};
+
+const handlingActionLabels: Record<OAWorkObjectView['handling_action'], string> = {
+  ai_draft: '让 AI 先写',
+  self_serve: '我自己办',
+  go_source_system: '去 OA 办',
+  view_only: '先看看',
+};
+
+const handlingActionDescriptions: Record<OAWorkObjectView['handling_action'], string> = {
+  ai_draft: '先核对事项信息；AI 起草功能将在后续接入。',
+  self_serve: '请先核对事项信息；实际办理操作将在后续接入。',
+  go_source_system: '这条事项的状态权威在 OA，请在 OA 中办理。',
+  view_only: '当前只提供事项详情查看。',
 };
 
 function formatTimestamp(value: string): string {
@@ -356,13 +372,16 @@ export default function WorkObjectsPage() {
       render: (value: OAWorkObjectView['handling_mark']) => handlingMarkTag(value),
     },
     {
-      title: '操作',
-      key: 'actions',
+      title: '办理',
+      key: 'handling_action',
       fixed: 'right',
-      width: 110,
+      width: 140,
       render: (_, item) => (
-        <Button size="small" onClick={() => setSelectedWorkObjectId(item.work_object_id)}>
-          查看详情
+        <Button
+          style={{ minHeight: 44, minWidth: 104 }}
+          onClick={() => setSelectedWorkObjectId(item.work_object_id)}
+        >
+          {handlingActionLabels[item.handling_action]}
         </Button>
       ),
     },
@@ -502,6 +521,12 @@ export default function WorkObjectsPage() {
               type="info"
               title={`OA 状态数据截至 ${formatTimestamp(detailQuery.data.source_fetched_at)}`}
               description="处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。"
+            />
+            <Alert
+              showIcon
+              type="info"
+              title={handlingActionLabels[detailQuery.data.handling_action]}
+              description={handlingActionDescriptions[detailQuery.data.handling_action]}
             />
             <Descriptions bordered column={1} size="small">
               <Descriptions.Item label="Work Object ID">

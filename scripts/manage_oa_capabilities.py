@@ -38,10 +38,35 @@ from scripts.smoke.capabilities import (
     expected_oa_capabilities,
 )
 
-# These full-row fingerprints are the audit boundary for the one authorized cleanup.
-# Evidence: the nine rows share the PostgreSQL transaction version of the two
-# canonical inserts; the separately listed disabled row has an older version.
-# Fingerprints cover every CapabilitySpec field with only ``status`` normalized.
+# P2-CAPABILITY-AUTOMATION-LEVEL-001 之前 CapabilitySpec 的完整字段集。
+# 上面四组指纹常量是对当时生产行的观测记录，只能用当时的字段集比对。
+_LEGACY_FINGERPRINT_FIELDS: frozenset[str] = frozenset(
+    {
+        "capability_id",
+        "name",
+        "type",
+        "intent_tags",
+        "input_schema",
+        "output_schema",
+        "input_schema_digest",
+        "output_schema_digest",
+        "risk_level",
+        "owner",
+        "version",
+        "status",
+        "short_description",
+        "target_system",
+        "execution_identity",
+        "binding_required",
+        "policy_digest",
+    }
+)
+
+# These historical fingerprints are the audit boundary for the one authorized
+# cleanup. Evidence: the nine rows share the PostgreSQL transaction version of
+# the two canonical inserts; the separately listed disabled row has an older
+# version. They cover every CapabilitySpec field that existed when observed,
+# with only ``status`` normalized where the corresponding family requires it.
 _AUTHORIZED_LEGACY_FINGERPRINTS = frozenset(
     {
         "06cf128fd35c2db5a8c1c157add6a190d097bfcf3bb708aa63218b5149b42238",
@@ -822,24 +847,25 @@ def _plan_registry_management(
     authorized_legacy = tuple(
         item
         for item in noncanonical_oa
-        if _capability_fingerprint(item) in authorized_legacy_fingerprints
+        if _legacy_capability_fingerprint(item) in authorized_legacy_fingerprints
     )
     known_disabled = tuple(
         item
         for item in noncanonical_oa
-        if _capability_fingerprint(item) in known_disabled_fingerprints
+        if _legacy_capability_fingerprint(item) in known_disabled_fingerprints
     )
     known_unchanged = tuple(
         item
         for item in noncanonical_oa
-        if _exact_capability_fingerprint(item) in known_unchanged_fingerprints
+        if _legacy_exact_capability_fingerprint(item)
+        in known_unchanged_fingerprints
     )
     unknown_oa = tuple(
         item
         for item in noncanonical_oa
-        if _capability_fingerprint(item)
+        if _legacy_capability_fingerprint(item)
         not in authorized_legacy_fingerprints | known_disabled_fingerprints
-        and _exact_capability_fingerprint(item)
+        and _legacy_exact_capability_fingerprint(item)
         not in known_unchanged_fingerprints
     )
     legacy_active = tuple(
@@ -852,7 +878,7 @@ def _plan_registry_management(
     pending_predecessor = by_id.get("oa.list_pending_workflows")
     pending_predecessor_valid = (
         pending_predecessor is not None
-        and _exact_capability_fingerprint(pending_predecessor)
+        and _legacy_exact_capability_fingerprint(pending_predecessor)
         in pending_predecessor_fingerprints
     )
 
@@ -936,14 +962,25 @@ def _plan_registry_management(
     )
 
 
-def _capability_fingerprint(capability: CapabilitySpec) -> str:
-    payload = capability.model_dump(mode="json")
+def _legacy_capability_fingerprint(capability: CapabilitySpec) -> str:
+    payload = _legacy_fingerprint_payload(capability)
     payload["status"] = "<managed-status>"
     return _fingerprint_payload(payload)
 
 
+def _legacy_exact_capability_fingerprint(capability: CapabilitySpec) -> str:
+    return _fingerprint_payload(_legacy_fingerprint_payload(capability))
+
+
 def _exact_capability_fingerprint(capability: CapabilitySpec) -> str:
     return _fingerprint_payload(capability.model_dump(mode="json"))
+
+
+def _legacy_fingerprint_payload(
+    capability: CapabilitySpec,
+) -> dict[str, object]:
+    payload = capability.model_dump(mode="json")
+    return {field: payload[field] for field in _LEGACY_FINGERPRINT_FIELDS}
 
 
 def _fingerprint_payload(payload: dict[str, object]) -> str:
@@ -964,7 +1001,8 @@ def _authorized_active_legacy_ids(
         for item in catalog
         if item.target_system == "oa"
         and item.status == "active"
-        and _capability_fingerprint(item) in _AUTHORIZED_LEGACY_FINGERPRINTS
+        and _legacy_capability_fingerprint(item)
+        in _AUTHORIZED_LEGACY_FINGERPRINTS
     )
 
 
