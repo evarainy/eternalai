@@ -1073,3 +1073,15 @@ GOV.UK 自述 **「one thing per page」不是普遍法则**，用户研究可�
 - **`msw` 未获依赖治理层批准**：`ARCHITECTURE.md` 的「已定未装」只是架构选择层；`docs/dev/dependency_policy.md` 的 npm allowlist 中无 `msw`，亦无承载安装的 `task_id`。**不得据「架构已定」直接安装。** 且现有前端组件测试用 `vi.mock` 直接替换 Orval 生成客户端（`web/src/pages/__tests__/WorkObjectsPage.test.tsx`），contract-first 前端开发**不需要** `msw`。
 - **前端 contract-first 的真实前置是后端传输层合同**：仓库正式 OpenAPI 由 `create_app().openapi()` 从 FastAPI 路由/DTO 导出，并由 `apiClientsOpenapi.test.ts` 要求导出物与跟踪 spec、Orval 生成物字节一致。因此前端可先于持久化实现开发，但**不能手写一份与 FastAPI 无对应关系的私有合同**作为正式交付。
 - **完成边界**：前端可在不改 DB / migration 的情况下先做组件测试，但端到端仍需后端传输与实现路径；**不得据「前端组件已完成」宣称整棒完成**。
+
+## 2026-08-27 — 裁决：工作台首版 AI Dock 不使用 `@ant-design/x`
+
+**决定**：`P2-FE-WORKBENCH-001` 的首版 AI Dock 不使用 `@ant-design/x`。
+
+首版 Dock 只需要容器、消息列表、输入框与三态开合，antd 6 原生组件已足够。`@ant-design/x` 的价值在富交互对话面（Bubble / Sender / Prompts / Attachments），那属于 B 稿目标态的「AI 共事空间」，不是工作台第一棒的范围。
+
+因此 `@ant-design/x` 的引入推迟到「AI 共事界面外壳」那一棒，其依赖治理（排除理由更新或移入允许表）随该棒处理，不构成 `P2-FE-WORKBENCH-001` 的前置。
+
+**边界**：不得因本条就在首版 Dock 里手写一套等价的富交互组件——首版就是简单的，复杂交互等「AI 共事界面外壳」那一棒。本条细化 2026-08-18「前端技术栈与多 Surface 渲染的衔接」及 2026-08-27「前端信息架构与终态导航」的分棒边界，不推翻 `@ant-design/x` 作为目标态 AI 共事界面对话壳的既有定位。
+
+**影响面**：`P2-FE-WORKBENCH-001` 可仅用现役 antd 6 基线完成首版 Dock；`docs/dev/dependency_policy.md`、`web/package.json` 与 lockfile 本次不改，留到「AI 共事界面外壳」棒随依赖引入一并治理。
