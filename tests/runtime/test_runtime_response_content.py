@@ -431,6 +431,7 @@ def test_confirm_card_payload_contract_has_exact_keys() -> None:
             "operation_summary",
             "target_system",
             "field_names",
+            "displayed_argument_values",
         }
     )
 
@@ -468,6 +469,7 @@ def test_confirm_required_card_describes_operation_target_and_fields() -> None:
         "operation_summary": "提交请假申请：将请假申请提交到 OA",
         "target_system": "oa",
         "field_names": ["remark", "workflow_id"],
+        "displayed_argument_values": {},
     }
     serialized = envelope.model_dump_json()
     assert "wf-001" not in serialized
@@ -528,6 +530,69 @@ def test_confirm_required_payload_omits_credential_keys_and_all_argument_values(
         "value-six",
     ):
         assert forbidden not in serialized
+
+
+def test_confirm_required_payload_projects_only_explicit_safe_scalar_values() -> None:
+    base = _capability_with_fields(
+        "oa.submit_leave_request",
+        "summary",
+        "days",
+        "ratio",
+        "urgent",
+        "details",
+        "items",
+        "optional",
+        "long_text",
+        "missing",
+    )
+    capability = CapabilitySpec.model_validate(
+        {
+            **base.model_dump(mode="python"),
+            "displayable_argument_fields": [
+                "summary",
+                "days",
+                "ratio",
+                "urgent",
+                "details",
+                "items",
+                "optional",
+                "long_text",
+                "missing",
+            ],
+        }
+    )
+    long_value = "x" * 201
+
+    envelope = _run_runtime(
+        ExecutionResult(
+            status="waiting_user",
+            error_code="confirm_required",
+            trace_id="tr-confirm-allowlist",
+        ),
+        capability_id=capability.capability_id,
+        capability=capability,
+        arguments={
+            "summary": "annual leave",
+            "days": 3,
+            "ratio": 1.25,
+            "urgent": True,
+            "details": {"private": "hidden"},
+            "items": ["hidden"],
+            "optional": None,
+            "long_text": long_value,
+            "unknown_argument": "hidden",
+        },
+    )
+
+    assert envelope.ui.payload["displayed_argument_values"] == {
+        "summary": "annual leave",
+        "days": "3",
+        "ratio": "1.25",
+        "urgent": "True",
+    }
+    assert "missing" not in envelope.ui.payload["displayed_argument_values"]
+    assert "unknown_argument" not in envelope.ui.payload["field_names"]
+    assert long_value not in envelope.model_dump_json()
 
 
 def test_confirm_required_payload_omits_marker_free_sensitive_canary() -> None:

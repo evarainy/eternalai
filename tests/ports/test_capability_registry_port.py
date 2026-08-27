@@ -10,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.work_object_handling import WorkObjectHandlingSelector
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPABILITY_REGISTRY_SOURCE = REPO_ROOT / "app" / "ports" / "capability_registry.py"
@@ -32,6 +33,9 @@ EXPECTED_CAPABILITY_SPEC_FIELDS = {
     "execution_identity",
     "binding_required",
     "policy_digest",
+    "automation_level",
+    "displayable_argument_fields",
+    "handles_work_objects",
 }
 
 
@@ -90,6 +94,9 @@ def test_capability_spec_accepts_full_spec_8_6_2_shape() -> None:
     assert spec.execution_identity == "user_delegated"
     assert spec.binding_required is True
     assert spec.policy_digest == "policy-digest-v1"
+    assert spec.automation_level == "manual"
+    assert spec.displayable_argument_fields == []
+    assert spec.handles_work_objects == []
 
 
 def test_capability_spec_optional_target_system_and_policy_digest_default_to_none() -> None:
@@ -129,6 +136,41 @@ def test_capability_spec_output_schema_default_is_isolated_between_instances() -
     assert second.output_schema == {}
 
 
+def test_capability_spec_new_fail_closed_defaults_are_isolated_between_instances() -> None:
+    first = CapabilitySpec(type="query", **minimal_capability_data())
+    second = CapabilitySpec(type="query", **minimal_capability_data())
+
+    first.displayable_argument_fields.append("employee_id")
+    first.handles_work_objects.append(
+        WorkObjectHandlingSelector(
+            source_system="oa",
+            source_kind="pending_workflow",
+            source_workflow_type_id="workflow-1",
+        )
+    )
+
+    assert first.automation_level == "manual"
+    assert second.automation_level == "manual"
+    assert second.displayable_argument_fields == []
+    assert second.handles_work_objects == []
+
+
+def test_capability_spec_rejects_unknown_displayable_argument_field() -> None:
+    data = full_capability_data()
+    data["displayable_argument_fields"] = ["employee_typo"]
+
+    with pytest.raises(ValidationError, match="input_schema.properties"):
+        CapabilitySpec(**data)
+
+
+def test_capability_spec_rejects_duplicate_displayable_argument_fields() -> None:
+    data = full_capability_data()
+    data["displayable_argument_fields"] = ["employee_id", "employee_id"]
+
+    with pytest.raises(ValidationError, match="must not contain duplicates"):
+        CapabilitySpec(**data)
+
+
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     [
@@ -137,6 +179,7 @@ def test_capability_spec_output_schema_default_is_isolated_between_instances() -
         ("status", "archived"),
         ("target_system", "erp"),
         ("execution_identity", "service_account"),
+        ("automation_level", "automatic"),
     ],
 )
 def test_capability_spec_rejects_values_outside_common_contract(

@@ -16,6 +16,7 @@ class ConfirmCardPayload(TypedDict):
     operation_summary: str
     target_system: CapabilityTargetSystem | None
     field_names: list[str]
+    displayed_argument_values: dict[str, str]
 
 
 class CapabilityRef(BaseModel):

@@ -6,9 +6,18 @@ import re
 import unicodedata
 from typing import Annotated, Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, BeforeValidator, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    Field,
+    StringConstraints,
+    model_validator,
+)
+
+from app.ports.work_object_handling import WorkObjectHandlingSelector
 
 CapabilityType: TypeAlias = Literal["query", "action", "workflow", "mock"]
+CapabilityAutomationLevel: TypeAlias = Literal["full", "assisted", "manual"]
 CapabilityRiskLevel: TypeAlias = Literal["low", "medium", "high"]
 CapabilityStatus: TypeAlias = Literal["draft", "active", "disabled", "deprecated"]
 CapabilityTargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms"]
@@ -122,6 +131,32 @@ class CapabilitySpec(BaseModel):
     execution_identity: CapabilityExecutionIdentity
     binding_required: bool
     policy_digest: str | None = None
+    automation_level: CapabilityAutomationLevel = "manual"
+    displayable_argument_fields: list[str] = Field(default_factory=list)
+    handles_work_objects: list[WorkObjectHandlingSelector] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_displayable_argument_fields(self) -> CapabilitySpec:
+        if len(self.displayable_argument_fields) != len(
+            set(self.displayable_argument_fields)
+        ):
+            raise ValueError("displayable_argument_fields must not contain duplicates")
+
+        properties = self.input_schema.get("properties")
+        property_names = set(properties) if isinstance(properties, dict) else set()
+        unknown_fields = [
+            field_name
+            for field_name in self.displayable_argument_fields
+            if field_name not in property_names
+        ]
+        if unknown_fields:
+            raise ValueError(
+                "displayable_argument_fields must be declared in "
+                f"input_schema.properties: {unknown_fields!r}"
+            )
+        return self
 
 
 class CapabilityRegistryPort(Protocol):

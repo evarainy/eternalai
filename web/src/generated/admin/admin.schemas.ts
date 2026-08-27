@@ -277,6 +277,23 @@ export const CapabilityExecutionIdentity = {
   admin_approved_proxy: 'admin_approved_proxy',
 } as const;
 
+export type CapabilityAutomationLevel = typeof CapabilityAutomationLevel[keyof typeof CapabilityAutomationLevel];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const CapabilityAutomationLevel = {
+  full: 'full',
+  assisted: 'assisted',
+  manual: 'manual',
+} as const;
+
+export interface WorkObjectHandlingSelector {
+  source_system: string;
+  source_kind: string;
+  /** @nullable */
+  source_workflow_type_id: string | null;
+}
+
 export type AdminCapabilityCreateInputSchema = { [key: string]: unknown };
 
 export type AdminCapabilityCreateOutputSchema = { [key: string]: unknown };
@@ -312,6 +329,9 @@ export interface AdminCapabilityCreate {
   binding_required: boolean;
   /** @nullable */
   policy_digest?: string | null;
+  automation_level?: CapabilityAutomationLevel;
+  displayable_argument_fields?: string[];
+  handles_work_objects?: WorkObjectHandlingSelector[];
 }
 
 export interface AdminCapabilityView {
@@ -329,6 +349,9 @@ export interface AdminCapabilityView {
   target_system: CapabilityTargetSystem;
   execution_identity: CapabilityExecutionIdentity;
   binding_required: boolean;
+  automation_level: CapabilityAutomationLevel;
+  displayable_argument_fields: string[];
+  handles_work_objects: WorkObjectHandlingSelector[];
 }
 
 export interface AdminCapabilityListResponse {

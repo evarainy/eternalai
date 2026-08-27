@@ -204,6 +204,9 @@ def test_create_is_draft_and_enable_is_a_separate_action() -> None:
     created, enabled = asyncio.run(exercise())
 
     assert created.status == "draft"
+    assert created.automation_level == "manual"
+    assert created.displayable_argument_fields == []
+    assert created.handles_work_objects == []
     assert enabled.status == "active"
     assert registry.calls == [
         ("create", "oa.leave.apply"),

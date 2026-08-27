@@ -178,7 +178,9 @@ def _canonical_predecessor_catalog() -> tuple[CapabilitySpec, CapabilitySpec]:
 
 
 def _fingerprints(catalog: tuple[CapabilitySpec, ...]) -> frozenset[str]:
-    return frozenset(manager._capability_fingerprint(item) for item in catalog)
+    return frozenset(
+        manager._legacy_capability_fingerprint(item) for item in catalog
+    )
 
 
 def _install_authorized_sets(
@@ -202,7 +204,7 @@ def _install_authorized_sets(
         manager,
         "_KNOWN_PREEXISTING_UNCHANGED_FINGERPRINTS",
         frozenset(
-            manager._exact_capability_fingerprint(item)
+            manager._legacy_exact_capability_fingerprint(item)
             for item in known_unchanged
         ),
     )
@@ -210,7 +212,7 @@ def _install_authorized_sets(
         manager,
         "_PENDING_CANONICAL_PREDECESSOR_FINGERPRINTS",
         frozenset(
-            manager._exact_capability_fingerprint(item)
+            manager._legacy_exact_capability_fingerprint(item)
             for item in pending_predecessor
         ),
     )
@@ -255,8 +257,60 @@ def test_pending_canonical_spec_keeps_id_and_publishes_todo_business_schema() ->
     }
     assert system_messages.capability_id == "oa.list_system_messages"
     assert system_messages.version == "1.0.0"
-    assert manager._exact_capability_fingerprint(system_messages) == (
+    assert manager._legacy_exact_capability_fingerprint(system_messages) == (
         "f4ab443e6dbf6e487e0ac63af5ca7f2ad160d6ae3721bd189a4cb52e43837902"
+    )
+    assert manager._exact_capability_fingerprint(system_messages) == (
+        "2b93948edb3ebd423726f13e7cb6fdd62970447cd37c63f0ad4b927099be792b"
+    )
+
+
+def test_legacy_fingerprint_field_set_and_capability_fields_are_explicit() -> None:
+    legacy_fields = {
+        "capability_id",
+        "name",
+        "type",
+        "intent_tags",
+        "input_schema",
+        "output_schema",
+        "input_schema_digest",
+        "output_schema_digest",
+        "risk_level",
+        "owner",
+        "version",
+        "status",
+        "short_description",
+        "target_system",
+        "execution_identity",
+        "binding_required",
+        "policy_digest",
+    }
+    expected_capability_fields = {
+        "capability_id",
+        "name",
+        "type",
+        "intent_tags",
+        "input_schema",
+        "output_schema",
+        "input_schema_digest",
+        "output_schema_digest",
+        "risk_level",
+        "owner",
+        "version",
+        "status",
+        "short_description",
+        "target_system",
+        "execution_identity",
+        "binding_required",
+        "policy_digest",
+        "automation_level",
+        "displayable_argument_fields",
+        "handles_work_objects",
+    }
+
+    assert manager._LEGACY_FINGERPRINT_FIELDS == legacy_fields
+    assert set(CapabilitySpec.model_fields) == expected_capability_fields, (
+        "CapabilitySpec 新增了字段，请先决定它是否进入审计边界指纹，再更新本测试"
     )
 
 
@@ -277,7 +331,7 @@ def test_production_legacy_fingerprint_sets_are_exact_and_disjoint() -> None:
 def test_plan_accepts_only_exact_pending_canonical_predecessor_update() -> None:
     predecessor, system_messages = _canonical_predecessor_catalog()
     predecessor_fingerprints = frozenset(
-        {manager._exact_capability_fingerprint(predecessor)}
+        {manager._legacy_exact_capability_fingerprint(predecessor)}
     )
 
     ready = manager._plan_registry_management(
@@ -354,11 +408,11 @@ def test_canonical_update_allows_only_exact_preexisting_managed_residue() -> Non
         authorized_legacy_fingerprints=_fingerprints(legacy),
         known_disabled_fingerprints=_fingerprints(known_disabled),
         known_unchanged_fingerprints=frozenset(
-            manager._exact_capability_fingerprint(item)
+            manager._legacy_exact_capability_fingerprint(item)
             for item in known_unchanged
         ),
         pending_predecessor_fingerprints=frozenset(
-            {manager._exact_capability_fingerprint(predecessor)}
+            {manager._legacy_exact_capability_fingerprint(predecessor)}
         ),
     )
 
@@ -399,6 +453,35 @@ def test_plan_accepts_only_exact_legacy_precondition() -> None:
     assert too_few.state == "precondition_failed"
     assert too_many.state == "precondition_failed"
     assert too_many.unknown_oa_count == 1
+
+
+def test_post_migration_defaults_preserve_authorized_legacy_recognition() -> None:
+    original = _legacy_catalog(count=1)[0]
+    migrated = CapabilitySpec.model_validate(
+        {
+            **original.model_dump(mode="python"),
+            "automation_level": "manual",
+            "displayable_argument_fields": [],
+            "handles_work_objects": [],
+        }
+    )
+    authorized = manager._legacy_capability_fingerprint(original)
+    old_full_row_payload = migrated.model_dump(mode="json")
+    old_full_row_payload["status"] = "<managed-status>"
+
+    assert manager._fingerprint_payload(old_full_row_payload) != authorized
+    result = manager._plan_registry_management(
+        (migrated,),
+        authorized_legacy_fingerprints=frozenset({authorized}),
+        known_disabled_fingerprints=frozenset(),
+        known_unchanged_fingerprints=frozenset(),
+        pending_predecessor_fingerprints=frozenset(),
+    )
+
+    assert result.state == "ready_legacy"
+    assert result.legacy_active_count == 1
+    assert result.unknown_oa_count == 0
+    assert result.disable_count == 1
 
 
 def test_plan_is_idempotent_after_exact_canonical_state() -> None:
@@ -526,7 +609,7 @@ def test_known_unchanged_row_requires_its_exact_status_and_fields() -> None:
     legacy = _legacy_catalog()
     known_unchanged = _known_unchanged_catalog()
     exact = frozenset(
-        manager._exact_capability_fingerprint(item)
+        manager._legacy_exact_capability_fingerprint(item)
         for item in known_unchanged
     )
 
@@ -800,6 +883,44 @@ def test_apply_updates_only_pending_canonical_row_in_place(
     assert tuple(
         CapabilitySpec.model_validate(row) for row in engine.connection.rows
     ) == expected_oa_capabilities()
+
+
+def test_full_automation_predecessor_is_only_downgraded_to_canonical_manual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    predecessor, system_messages = _canonical_predecessor_catalog()
+    elevated_predecessor = predecessor.model_copy(
+        update={"automation_level": "full"}
+    )
+    engine = _FakeEngine((elevated_predecessor, system_messages))
+    _install_authorized_sets(
+        monkeypatch,
+        (),
+        pending_predecessor=(predecessor,),
+    )
+    monkeypatch.setattr(manager, "make_async_engine", lambda _url: engine)
+
+    assert (
+        manager._legacy_exact_capability_fingerprint(elevated_predecessor)
+        == manager._legacy_exact_capability_fingerprint(predecessor)
+    )
+    assert (
+        manager._exact_capability_fingerprint(elevated_predecessor)
+        != manager._exact_capability_fingerprint(predecessor)
+    )
+
+    result = asyncio.run(
+        manager._manage_registry("synthetic-database-url", apply=True)
+    )
+    rows = tuple(
+        CapabilitySpec.model_validate(row) for row in engine.connection.rows
+    )
+
+    assert result.state == "applied"
+    assert result.deployment_path == "canonical_update"
+    assert result.update_count == 1
+    assert rows == expected_oa_capabilities()
+    assert rows[0].automation_level == "manual"
 
 
 def test_empty_registry_apply_then_reapply_is_idempotent(

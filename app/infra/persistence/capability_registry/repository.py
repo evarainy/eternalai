@@ -16,6 +16,7 @@ from app.infra.persistence.capability_registry.errors import (
 )
 from app.infra.persistence.capability_registry.schema import capabilities
 from app.ports.capability_registry import (
+    CapabilityAutomationLevel,
     CapabilityExecutionIdentity,
     CapabilityRegistryPort,
     CapabilityRiskLevel,
@@ -24,6 +25,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.work_object_handling import WorkObjectHandlingSelector
 
 
 class CapabilitySpecPatch(BaseModel):
@@ -46,6 +48,9 @@ class CapabilitySpecPatch(BaseModel):
     execution_identity: CapabilityExecutionIdentity | None = None
     binding_required: bool | None = None
     policy_digest: str | None = None
+    automation_level: CapabilityAutomationLevel | None = None
+    displayable_argument_fields: list[str] | None = None
+    handles_work_objects: list[WorkObjectHandlingSelector] | None = None
 
 
 class PostgreSQLCapabilityRegistry:

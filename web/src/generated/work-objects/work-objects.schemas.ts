@@ -10,6 +10,19 @@ export interface HTTPValidationError {
 
 export type InternalWorkObjectViewDueAt = string | null;
 
+export type InternalWorkObjectViewHandlingAction = typeof InternalWorkObjectViewHandlingAction[keyof typeof InternalWorkObjectViewHandlingAction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const InternalWorkObjectViewHandlingAction = {
+  ai_draft: 'ai_draft',
+  self_serve: 'self_serve',
+  go_source_system: 'go_source_system',
+  view_only: 'view_only',
+} as const;
+
+export type InternalWorkObjectViewHandlingCapabilityId = string | null;
+
 export type InternalWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
 
 export type InternalWorkObjectViewHandlingMarkedAt = string | null;
@@ -19,6 +32,8 @@ export type InternalWorkObjectViewTaskRecordId = string | null;
 export interface InternalWorkObjectView {
   assignee_display_name: string;
   due_at: InternalWorkObjectViewDueAt;
+  handling_action: InternalWorkObjectViewHandlingAction;
+  handling_capability_id: InternalWorkObjectViewHandlingCapabilityId;
   handling_mark: InternalWorkObjectViewHandlingMark;
   handling_marked_at: InternalWorkObjectViewHandlingMarkedAt;
   source_created_at: null;
@@ -37,6 +52,19 @@ export interface InternalWorkObjectView {
 
 export type OAWorkObjectViewDueAt = string | null;
 
+export type OAWorkObjectViewHandlingAction = typeof OAWorkObjectViewHandlingAction[keyof typeof OAWorkObjectViewHandlingAction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const OAWorkObjectViewHandlingAction = {
+  ai_draft: 'ai_draft',
+  self_serve: 'self_serve',
+  go_source_system: 'go_source_system',
+  view_only: 'view_only',
+} as const;
+
+export type OAWorkObjectViewHandlingCapabilityId = string | null;
+
 export type OAWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
 
 export type OAWorkObjectViewHandlingMarkedAt = string | null;
@@ -46,6 +74,8 @@ export type OAWorkObjectViewTaskRecordId = string | null;
 export interface OAWorkObjectView {
   assignee_display_name: string;
   due_at: OAWorkObjectViewDueAt;
+  handling_action: OAWorkObjectViewHandlingAction;
+  handling_capability_id: OAWorkObjectViewHandlingCapabilityId;
   handling_mark: OAWorkObjectViewHandlingMark;
   handling_marked_at: OAWorkObjectViewHandlingMarkedAt;
   source_created_at: string;

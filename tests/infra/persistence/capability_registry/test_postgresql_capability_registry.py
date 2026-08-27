@@ -16,6 +16,9 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import delete
+
+from app.infra.persistence.capability_registry.schema import capabilities
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -310,6 +313,40 @@ def test_update_invalid_literal_rejected() -> None:
             with pytest.raises(ValidationError):
                 await registry.update(capability.capability_id, {"status": "archived"})
         finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_update_revalidates_displayable_fields_against_merged_input_schema() -> None:
+    _require_db()
+    from app.ports.capability_registry import CapabilitySpec
+
+    capability = CapabilitySpec.model_validate(
+        {
+            **_capability_data(),
+            "displayable_argument_fields": ["value"],
+        }
+    )
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            registry = _registry(_make_factory(engine))
+            await registry.create(capability)
+            with pytest.raises(ValidationError, match="input_schema.properties"):
+                await registry.update(
+                    capability.capability_id,
+                    {"input_schema": {"type": "object", "properties": {}}},
+                )
+            assert await registry.get(capability.capability_id) == capability
+        finally:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    delete(capabilities).where(
+                        capabilities.c.capability_id == capability.capability_id
+                    )
+                )
             await engine.dispose()
 
     asyncio.run(_run())

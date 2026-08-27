@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
@@ -42,6 +42,8 @@ const WORK_OBJECT: OAWorkObjectView = {
   due_at: '2026-08-20T08:00:00Z',
   handling_mark: null,
   handling_marked_at: null,
+  handling_action: 'go_source_system',
+  handling_capability_id: null,
   source_created_at: '2026-08-18 09:00:00',
   source_fetched_at: '2026-08-19T03:00:00Z',
   source_kind: 'pending_workflow',
@@ -69,6 +71,8 @@ const INTERNAL_WORK_OBJECT: InternalWorkObjectView = {
   due_at: null,
   handling_mark: null,
   handling_marked_at: null,
+  handling_action: 'view_only',
+  handling_capability_id: null,
   source_created_at: null,
   source_fetched_at: null,
   source_kind: 'manual_dispatch',
@@ -158,6 +162,54 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(screen.getByText('当前显示 1 项')).toBeInTheDocument();
     expect(screen.queryByText('内部任务责任人')).not.toBeInTheDocument();
+  });
+
+  it('renders exactly one backend-projected handling action per row', async () => {
+    const items: OAWorkObjectView[] = [
+      {
+        ...WORK_OBJECT,
+        handling_action: 'ai_draft',
+        handling_capability_id: 'oa.handle.full',
+        source_ref: 'OA-AI',
+        source_title: 'AI 起草事项',
+        work_object_id: 'work-ai',
+      },
+      {
+        ...WORK_OBJECT,
+        handling_action: 'self_serve',
+        handling_capability_id: 'oa.handle.assisted',
+        source_ref: 'OA-SELF',
+        source_title: '自行办理事项',
+        work_object_id: 'work-self',
+      },
+      {
+        ...WORK_OBJECT,
+        source_ref: 'OA-SOURCE',
+        source_title: '回源办理事项',
+        work_object_id: 'work-source',
+      },
+      {
+        ...WORK_OBJECT,
+        handling_action: 'view_only',
+        source_ref: 'OA-VIEW',
+        source_title: '只读事项',
+        work_object_id: 'work-view',
+      },
+    ];
+    const response = listResponse({ items });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+
+    renderPage();
+
+    expect(await screen.findByRole('button', { name: '让 AI 先写' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '我自己办' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '去 OA 办' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '先看看' })).toBeInTheDocument();
+    const dataRows = screen.getAllByRole('row').slice(1);
+    for (const row of dataRows) {
+      expect(within(row).getAllByRole('button')).toHaveLength(1);
+    }
   });
 
   it('keeps the saved OA snapshot visible when sync fails and warns about bounded results', async () => {
@@ -338,7 +390,7 @@ describe('WorkObjectsPage', () => {
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await screen.findByText(/OA 状态数据截至/);
     fireEvent.click(
       screen.getByRole('button', { name: '标记为已在别处处理' }),
@@ -380,7 +432,7 @@ describe('WorkObjectsPage', () => {
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await screen.findByText(/OA 状态数据截至/);
     fireEvent.click(
       screen.getByRole('button', { name: '标记为已在别处处理' }),
@@ -418,7 +470,7 @@ describe('WorkObjectsPage', () => {
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await waitFor(() => expect(apiMocks.getWorkObject).toHaveBeenCalledTimes(1));
 
     resolveSync(listResponse({ items: [refreshedSource] }));
@@ -447,7 +499,7 @@ describe('WorkObjectsPage', () => {
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await waitFor(() => expect(apiMocks.getWorkObject).toHaveBeenCalledTimes(1));
 
     resolveSync(
@@ -475,7 +527,7 @@ describe('WorkObjectsPage', () => {
       .mockReturnValueOnce(pendingList);
     const page = renderPage();
     await screen.findByText('核对本月采购流程');
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await screen.findByText(/OA 状态数据截至/);
     void page.queryClient.refetchQueries({
       queryKey: ['work-objects', useAuthStore.getState().generation],
@@ -498,9 +550,12 @@ describe('WorkObjectsPage', () => {
     renderPage();
     await screen.findByText('核对本月采购流程');
 
-    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
 
     expect(await screen.findByText(/OA 状态数据截至/)).toBeInTheDocument();
+    expect(
+      screen.getByText('这条事项的状态权威在 OA，请在 OA 中办理。'),
+    ).toBeInTheDocument();
     expect(screen.getByText('处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。')).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole('button', { name: '标记为已在别处处理' }),

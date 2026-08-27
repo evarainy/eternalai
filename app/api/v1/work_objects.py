@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Literal, NoReturn, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal
 from app.ports.capability_gateway import CapabilityGatewayPort, ErrorCode
+from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.credential_binding import (
     BackgroundWorkObjectSyncError,
     CredentialCountedFailureCode,
@@ -27,6 +36,12 @@ from app.ports.work_object import (
     WorkObjectRecord,
     WorkObjectStorePort,
 )
+from app.ports.work_object_handling import (
+    WorkObjectHandlingAction,
+    project_handling_action,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 OA_PENDING_WORKFLOWS_CAPABILITY_ID = "oa.list_pending_workflows"
 _REAUTHENTICATION_ERRORS: frozenset[ErrorCode] = frozenset(
@@ -44,6 +59,22 @@ class _WorkObjectViewBase(BaseModel):
     handling_mark: WorkObjectHandlingMark | None
     handling_marked_at: datetime | None
     task_record_id: str | None
+    handling_action: WorkObjectHandlingAction
+    handling_capability_id: str | None
+
+    @model_validator(mode="after")
+    def validate_handling_capability_id(self) -> _WorkObjectViewBase:
+        capability_actions = {"ai_draft", "self_serve"}
+        if self.handling_action in capability_actions:
+            if self.handling_capability_id is None:
+                raise ValueError(
+                    "handling_capability_id is required for capability handling actions"
+                )
+        elif self.handling_capability_id is not None:
+            raise ValueError(
+                "handling_capability_id must be null for non-capability actions"
+            )
+        return self
 
 
 class OAWorkObjectView(_WorkObjectViewBase):
@@ -101,11 +132,13 @@ class WorkObjectService:
         *,
         store: WorkObjectStorePort,
         gateway: CapabilityGatewayPort,
+        capability_registry: CapabilityRegistryPort,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._gateway = gateway
+        self._capability_registry = capability_registry
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -114,17 +147,22 @@ class WorkObjectService:
             principal.ai_user_id,
             limit=WORK_OBJECT_LIST_FETCH_LIMIT,
         )
-        return _list_response(records)
+        capabilities = await self._capability_registry.list(status="active")
+        return _list_response(records, capabilities)
 
     async def get_for_principal(
         self,
         work_object_id: str,
         principal: Principal,
-    ) -> WorkObjectRecord | None:
-        return await self._store.get_for_assignee(
+    ) -> WorkObjectView | None:
+        record = await self._store.get_for_assignee(
             work_object_id,
             principal.ai_user_id,
         )
+        if record is None:
+            return None
+        capabilities = await self._capability_registry.list(status="active")
+        return _view_from_record(record, capabilities)
 
     async def sync_for_principal(self, principal: Principal) -> WorkObjectListResponse:
         return await self._sync_for_principal(principal, background=False)
@@ -204,13 +242,17 @@ class WorkObjectService:
         work_object_id: str,
         principal: Principal,
         mark: WorkObjectHandlingMark,
-    ) -> WorkObjectRecord | None:
-        return await self._store.set_handling_mark_for_assignee(
+    ) -> WorkObjectView | None:
+        record = await self._store.set_handling_mark_for_assignee(
             work_object_id,
             principal.ai_user_id,
             mark,
             marked_at=self._clock(),
         )
+        if record is None:
+            return None
+        capabilities = await self._capability_registry.list(status="active")
+        return _view_from_record(record, capabilities)
 
 
 def make_router(
@@ -247,10 +289,10 @@ def make_router(
         work_object_id: str,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectView:
-        record = await configured().get_for_principal(work_object_id, principal)
-        if record is None:
+        view = await configured().get_for_principal(work_object_id, principal)
+        if view is None:
             _raise_not_found()
-        return _view_from_record(record)
+        return view
 
     @router.patch("/{work_object_id}/handling-mark", response_model=WorkObjectView)
     async def set_work_object_handling_mark(
@@ -258,23 +300,26 @@ def make_router(
         body: SetHandlingMarkRequest,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectView:
-        record = await configured().set_handling_mark_for_principal(
+        view = await configured().set_handling_mark_for_principal(
             work_object_id,
             principal,
             body.mark,
         )
-        if record is None:
+        if view is None:
             _raise_not_found()
-        return _view_from_record(record)
+        return view
 
     return router
 
 
-def _list_response(records: list[WorkObjectRecord]) -> WorkObjectListResponse:
+def _list_response(
+    records: list[WorkObjectRecord],
+    capabilities: list[CapabilitySpec],
+) -> WorkObjectListResponse:
     limit_exceeded = len(records) > WORK_OBJECT_LIST_LIMIT
     return WorkObjectListResponse(
         items=[
-            _view_from_record(record)
+            _view_from_record(record, capabilities)
             for record in records[:WORK_OBJECT_LIST_LIMIT]
         ],
         limit=WORK_OBJECT_LIST_LIMIT,
@@ -282,18 +327,69 @@ def _list_response(records: list[WorkObjectRecord]) -> WorkObjectListResponse:
     )
 
 
-def _view_from_record(record: WorkObjectRecord) -> WorkObjectView:
+def _view_from_record(
+    record: WorkObjectRecord,
+    capabilities: list[CapabilitySpec],
+) -> WorkObjectView:
+    handling_capability = _resolve_handling_capability(
+        record=record,
+        capabilities=capabilities,
+    )
+    handling_action = project_handling_action(
+        state_authority=record.state_authority,
+        source_system=record.source_system,
+        handling_mark=record.handling_mark,
+        capability=handling_capability,
+    )
+    handling_capability_id = (
+        handling_capability.capability_id
+        if handling_capability is not None
+        and handling_action in {"ai_draft", "self_serve"}
+        else None
+    )
+    view_payload = record.model_dump(
+        exclude={
+            "assignee_ai_user_id",
+            "handling_marked_by_ai_user_id",
+            "created_at",
+            "updated_at",
+        }
+    )
+    view_payload.update(
+        handling_action=handling_action,
+        handling_capability_id=handling_capability_id,
+    )
     return _WORK_OBJECT_VIEW_ADAPTER.validate_python(
-        record.model_dump(
-            exclude={
-                "assignee_ai_user_id",
-                "handling_marked_by_ai_user_id",
-                "created_at",
-                "updated_at",
-            }
-        ),
+        view_payload,
         strict=True,
     )
+
+
+def _resolve_handling_capability(
+    *,
+    record: WorkObjectRecord,
+    capabilities: list[CapabilitySpec],
+) -> CapabilitySpec | None:
+    matches = [
+        capability
+        for capability in capabilities
+        if capability.status == "active"
+        and any(
+            selector.source_system == record.source_system
+            and selector.source_kind == record.source_kind
+            and selector.source_workflow_type_id
+            == record.source_workflow_type_id
+            for selector in capability.handles_work_objects
+        )
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) >= 2:
+        _LOGGER.warning(
+            "Ambiguous Work Object handling mapping; capability_ids=%s",
+            sorted(capability.capability_id for capability in matches),
+        )
+    return None
 
 
 def _raise_sync_failure(error_code: ErrorCode | None) -> NoReturn:
