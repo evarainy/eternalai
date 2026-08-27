@@ -719,7 +719,7 @@ OWASP Transaction Authorization 的 What You See Is What You Sign 要求用户�
 
 ## 2026-08-21 — 裁决：Golden 拆两棒，解开与低风险写入的 DAG 循环
 
-**决定**：`P2-GOLDEN-001` 拆为两棒。`P2-GOLDEN-001` 只冻**当时已实现**的路径（真实只读、Work Object 与工作台、确认绑定与版本锁定、隔离、审计与反馈的负向边界），不等写入；`P2-LOW-RISK-WRITE-001` 落地后另开 `P2-GOLDEN-002` **增量**冻写入路径。必达项 5 需两棒都完成才算达成。
+**决定**：`P2-GOLDEN-001` 拆为两棒。`P2-GOLDEN-001` 只冻**当时已实现**的路径（真实只读、Work Object 与工作台、确认绑定与版本锁定、隔离、审计与反馈的负向边界），不等写入。**⚠ 2026-08-28 起本括号内的枚举已被收窄**：「Work Object 与工作台」「隔离」「审计与反馈」三项不进 Golden，归 API 与单元层，见同日「必达项 5 的完成判据口径」；本句其余部分继续有效，**不得据此括号枚举设计新的 Golden 题面**。`P2-LOW-RISK-WRITE-001` 落地后另开 `P2-GOLDEN-002` **增量**冻写入路径。必达项 5 需两棒都完成才算达成。
 
 **问题**：`P2-LOW-RISK-WRITE-001` 的 `depends_on` 含 `P2-GOLDEN-001`，而 `P2-GOLDEN-001` 的 `depends_on` 含「`P2-LOW-RISK-WRITE-001` 的已实现部分」——两者互为前置，必达项 4 与 5 同时死锁，任一都无法起步。该循环自 2026-08-19 依赖修正时引入，此前未被发现。
 
@@ -1191,3 +1191,43 @@ Local Worker 信任合同与浏览器扩展信任边界均尚未裁定，分别�
 **硬边界**：任务交办软件可以通过 Work Object Command Port 创建 Work Object，但不能建立第二套任务事实库，不能直接写 EternalAI 数据库，也不能绕过 Identity / Organization Scope / Policy / Idempotency / Trace / Evidence。
 
 **顺序调整**：插槽只能依赖稳定合同。先冻结软件清单合同、Host Context 合同、Work Object 发布命令与回执、页面向 AI Dock 注册上下文合同，再让核心线与软件线并行：核心线实现 Work Object 双权威模型、部门授权范围与发布 Port；软件线用合同桩开发任务交办前后端、页面与业务规则，最后只做接入与合同测试。现有 `MODEL → SCOPE → DISPATCH → ATTACHMENT` 串行链若需拆成「核心发布合同」与「任务交办软件」两线，属于后续 GOV-SYNC 的 DAG 裁决，不由实现棒自行调整。
+
+## 2026-08-28 — 裁决：必达项 5 的完成判据口径（Golden 只覆盖 Runtime 观察边界）
+
+**决定**：必达项 5「覆盖以上路径的 Golden，含负向与边界」中的「以上路径」，**只指 Golden Runtime 观察边界内的路径**。工作台（Work Object REST）、会话/租户/用户隔离与审计读取面的覆盖归 API 与单元层，**不进 Golden，也不构成必达项 5 的缺口**。
+
+**为什么这样定**：2026-08-03 决定四末句已给出分层规则的逐字表述——
+
+> 缺陷属于 Golden Runtime 观察边界时才新增 Golden Task，否则放在最小且忠实的单元/集成/API/浏览器层。
+
+`P2-GOLDEN-001` 开棒前的核查确认：`WorkObjectService` 由 `app/composition.py::build_production_components` 装配，**不在 `build_runtime` 参数表**，入口是 `Principal` 鉴权的 REST；Golden runner 只驱动 `build_runtime` 加一条 chat turn，`when` 仅支持 `channel` / `message` / `arguments` / `confirmation_message`。三项原列 Scope 因此在 Golden 上不可达，而它们的覆盖**已经存在且更忠实**：办理投影见 `tests/api/test_work_objects.py::test_unique_capability_mapping_projects_capability_action`、`::test_handled_elsewhere_overrides_a_full_capability_mapping`、`::test_resolver_is_exact_active_and_fail_closed_on_ambiguity`、`::test_none_workflow_type_matches_only_none_selector` 与 `tests/ports/test_work_object_handling.py::test_projection_follows_the_five_branch_order`；归属隔离见 `::test_cross_user_detail_and_mark_are_both_not_found`；鉴权见 `::test_work_object_routes_require_valid_authentication`。这些用例走真实 HTTP 与真实鉴权依赖，比在 Golden 里用 fake store 加 fixture 自造 `Principal` 更强——后者的隔离断言是自证。
+
+蓝图 §9.3.2 把 Governance Evaluation 分六类（单元测试 / Golden Task / Agent Trace 评测 / Skill 发布评测 / 安全攻击评测 / 回归测试）。办理投影属单元与回归，越权隔离属安全攻击评测与 API 负向，都不是 Golden。**「对象属于核心业务」不等于「该测试构成核心业务场景闭环」。**
+
+**明确否决的做法**：为让 Golden 覆盖工作台而新增第二判卷面（fixture 加 `when.surface` 判别式、`then_work_object` 断言段、schema 按面分支）。该提案经评估后撤回：它与决定四的分层规则相悖，产出的四道题与既有 API 测试逐条重复，且其形状更弱。**后续任何棒不得以「必达项 5 覆盖不足」为由重开此提案**；确需重开，须先出示 API / 单元层保护不足的真实缺陷证据。
+
+**与 2026-08-21「Golden 拆两棒」的关系**：该裁决的「决定」段把 `P2-GOLDEN-001` 的覆盖面写为「真实只读、Work Object 与工作台、确认绑定与版本锁定、隔离、审计与反馈的负向边界」。本条**收窄该枚举**：其中「Work Object 与工作台」「隔离」「审计与反馈」三项不进 Golden，理由见上。2026-08-21 裁决的其余部分**全部继续有效**——拆两棒本身、`P2-GOLDEN-002` 只冻写入且不得原地改写 `P2-GOLDEN-001` 已冻题面、两棒的 fixture 与 `FROZEN_GT_IDS` 各自须经雨爷显式批准、必达项 5 需两棒都完成。本条不重开 DAG 循环，也不改变任何 `depends_on`。
+
+**边界**：本条只裁定**覆盖归属**，不降低任何要求。`AGENTS.md` 不可协商规则 6（Golden negative/boundary paths 必须 100% 通过，含 GT-012 多绑定 scope clarification）继续适用；工作台、隔离与审计在 API / 单元层的覆盖同样不得弱化，出现缺口仍须补齐，只是补在那一层。反馈闭环生产面尚未实现，属待建不属待冻，另见 `PHASE2_PLAN.md` 欠债表。
+
+**影响面**：`PHASE2_PLAN.md` 必达项 5 行与对应欠债结项；`docs/phase2/STATUS.md` 必达项进度口径；`P2-GOLDEN-002` 的 Scope 仍按原裁定只冻低风险写入路径。
+
+---
+
+## 2026-08-28 — 裁决：`P2-GOLDEN-001` 之后的唯一后继为 `P2-SDUI-RENDERER-001`
+
+**决定**：串行下一棒唯一确定为 **`P2-SDUI-RENDERER-001`**（A 档）。
+
+**为什么唯一**：P2 必达五项中只剩 ④低风险写入（未开始）与 ⑤Golden（`P2-GOLDEN-002` 未开始）。二者的关键路径是同一条：
+
+```
+P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002
+```
+
+`P2-SDUI-RENDERER-001` 的前置 `P2-CAPABILITY-AUTOMATION-LEVEL-001` 已于 2026-08-27 落地，前置已满足。其余已解锁节点——`P2-PAGE-CONTEXT-CONTRACT-001`、`P2-PORT-SEAM-001`、`P2-FE-WORKBENCH-001`——均属机会层，不在必达路径上，**不与本裁决竞争**；`P2-OA-ORGANIZATION-DIRECTORY-001` 起的四棒链仍因组织目录 HAR 未采集而阻塞；`P2-WO-SEARCH-001` 因 `P2-PAGE-CONTEXT-CONTRACT-001` 未完成而阻塞。
+
+`P2-GOLDEN-001` 收口时登记「后继指针不唯一」并留空，是实现棒遵守「不得自行挑选后继」的正确动作；不唯一是**实现棒视角**的不唯一（多个机会节点同时可跑），裁决视角下必达路径唯一。
+
+**边界**：本条只裁定**串行下一棒**。机会层节点在另开 write lane 时仍可承接，但届时须先判定并行与共享测试库的冲突，并按 `AGENTS.md`「A 类机械同步」改由独立 GOV-SYNC 棒承担状态同步。本条不解除任何机会层节点的既有阻塞。
+
+**影响面**：`docs/phase2/STATUS.md` 下一棒指针；`PHASE2_PLAN.md` 对应欠债结项与 DAG 行。

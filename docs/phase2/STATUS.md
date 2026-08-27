@@ -1,14 +1,14 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-GOLDEN-001`
+- 当前基线 task_id：`P2-GOV-SYNC-029`
 - pytest：`2262 passed, 84 warnings`（0 skipped，0 failed；后台全量 run `20260827T143721Z-14868`，未使用 `--ignore`）
 - 前端 `pnpm --dir web test`：`110 passed, 0 failed, 0 skipped`（本棒不改前端且未单跑，沿用上一棒实测数字）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；GT-029～GT-033 通过完整 Runtime 与真实 envelope builder 冻结 `confirm_card` 参数值 allowlist，GT-012 多绑定 scope clarification 继续通过）
 - `tests/architecture/`：`42 passed`（本棒不触及架构边界且未单跑；沿用上一棒定向数字，本棒全量回归覆盖该目录）
-- 下一棒：留空，待 GOV-SYNC 裁决。`P2-LOW-RISK-WRITE-001` 仍需 `P2-SDUI-RENDERER-001`，同时存在多个已解锁机会节点，本棒不自行挑选后继。
+- 下一棒（串行，单 lane）：`P2-SDUI-RENDERER-001`（A 档）—— 2026-08-28 裁决唯一后继。必达项 ④⑤ 的关键路径同为 `SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002`；`P2-PAGE-CONTEXT-CONTRACT-001`、`P2-PORT-SEAM-001`、`P2-FE-WORKBENCH-001` 属机会层，不与之竞争。
 - `P2-GOLDEN-001` 已于 2026-08-27 完成本棒获批增量：新增并冻结 GT-029～GT-033，既有 fixture 未改、既有冻结条目未删；参数值 allowlist 从既有单元覆盖进入 Golden 冻结 regime。
 - P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
-- Golden 已拆两棒（2026-08-21 裁决，解 DAG 循环）：`P2-GOLDEN-001` 已完成 `confirm_card` 参数值 allowlist 的 Runtime 观察边界冻结；低风险写入的可操作确认面另依赖 `P2-CAPABILITY-AUTOMATION-LEVEL-001` → `P2-SDUI-RENDERER-001`，写入落地后由 `P2-GOLDEN-002` 增量冻写入路径。必达项 5 需两棒都完成，其完成判据口径待 GOV-SYNC 落盘。
+- Golden 已拆两棒（2026-08-21 裁决，解 DAG 循环）：`P2-GOLDEN-001` 已完成 `confirm_card` 参数值 allowlist 的 Runtime 观察边界冻结；低风险写入的可操作确认面另依赖 `P2-CAPABILITY-AUTOMATION-LEVEL-001` → `P2-SDUI-RENDERER-001`，写入落地后由 `P2-GOLDEN-002` 增量冻写入路径。必达项 5 需两棒都完成；其完成判据口径已于 2026-08-28 裁定——Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层且已有覆盖，不构成必达项 5 缺口。
 - 机会层：`P2-INTERNAL-WO-MODEL-001` **已完成**；`P2-OA-ORGANIZATION-DIRECTORY-001` → `P2-INTERNAL-WO-SCOPE-001` → `P2-INTERNAL-WO-DISPATCH-001` → `P2-INTERNAL-WO-ATTACHMENT-001`（均 A 档，**组织目录 HAR 尚未采集，此链阻塞中**）；`P2-CAPABILITY-AUTOMATION-LEVEL-001` **已完成**，`P2-SDUI-RENDERER-001`（A 档，记录列表、受限 `envelope.data` 与既有 `confirm_card` 可操作确认面）已随本棒解锁 → `P2-LOW-RISK-WRITE-001`；`P2-FE-WORKBENCH-001`（B 档，自动化程度前置已满足；首版 Dock 只用 antd 6 原生组件，不被 `@ant-design/x` 阻塞）；`P2-PAGE-CONTEXT-CONTRACT-001`（A 档，无前置，须先于 DISPATCH 与搜索上下文注册）；`P2-WO-SEARCH-001`（A 档，依赖 MODEL-001 与页面上下文合同）；`P2-PORT-SEAM-001`、`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`。
 - 前端信息架构与终态导航**已于 2026-08-27 同日修订收口**（`DECISIONS.md` 同日「前端信息架构与终态导航」）：四项一级平铺（工作事项 / 任务交办 / 软件中心 / 消息）+ `ChatPage` 落地页 `/`。「会话」不再是一级项；`我问过的` 是工作事项内的 P3 筛选，P2 只有 `今日` / `全部`。会话持久化、`最近问过的` 与 `/ai/sessions/:id` 均归 P3；P2 Dock 为 AppShell 单例并以非持久化 Zustand 保住普通路由切换中的当前会话。前端棒以该条为导航、命名、布局与安全边界来源；低数字素养用户硬约束见同日另一条。
 - 首页目标态（P3）：落地页 `/` 对标主流 AI 对话产品，支持历史会话切换、续接与对话附件；不改变 P2 单输入框边界。
