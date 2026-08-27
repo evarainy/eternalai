@@ -1,0 +1,105 @@
+{
+  "golden_task_id": "GT-031",
+  "title": "确认卡不展示白名单内的非标量参数值",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_synthetic_confirm_031",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "oa",
+        "binding_id": "bind_oa_synthetic_031",
+        "status": "active",
+        "binding_scope": "default"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.submit_leave_request",
+        "target_system": "oa",
+        "type": "action",
+        "risk_level": "high",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "automation_level": "assisted",
+        "displayable_argument_fields": [
+          "attachments"
+        ],
+        "handles_work_objects": [
+          {
+            "source_system": "oa",
+            "source_kind": "leave_request",
+            "source_workflow_type_id": null
+          }
+        ],
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "employee_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "attachments": {
+              "type": "array"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
+    "mock_oa_state": {},
+    "policy_fixture": {
+      "decision": "confirm",
+      "reason_code": "high_risk_action_requires_confirm"
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "提交带合成附件列表的请假申请",
+    "arguments": {
+      "attachments": [
+        "SYN-ATTACHMENT-031.pdf"
+      ]
+    }
+  },
+  "then_response": {
+    "status": "waiting_user",
+    "envelope": {
+      "message_contains": [
+        "确认",
+        "提交"
+      ],
+      "ui.component_type": "confirm_card",
+      "ui.action": "confirm",
+      "ui.target_system": "oa",
+      "ui.payload.displayed_argument_values": {}
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "confirm_required",
+      "response_envelope_created"
+    ]
+  },
+  "then_forbidden": [
+    "mock_oa_was_called",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "confirm_required"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}
