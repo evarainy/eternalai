@@ -25,7 +25,10 @@
         "binding_required": true,
         "automation_level": "assisted",
         "displayable_argument_fields": [
-          "employee_id"
+          "employee_id",
+          "days",
+          "ratio",
+          "urgent"
         ],
         "handles_work_objects": [
           {
@@ -39,6 +42,15 @@
           "properties": {
             "employee_id": {
               "type": "string"
+            },
+            "days": {
+              "type": "integer"
+            },
+            "ratio": {
+              "type": "number"
+            },
+            "urgent": {
+              "type": "boolean"
             },
             "reason": {
               "type": "string"
@@ -61,7 +73,10 @@
     "channel": "web",
     "message": "提交合成员工的请假申请并展示允许字段",
     "arguments": {
-      "employee_id": "SYN-EMP-029"
+      "employee_id": "SYN-EMP-029",
+      "days": 3,
+      "ratio": 1.25,
+      "urgent": true
     }
   },
   "then_response": {
@@ -75,7 +90,10 @@
       "ui.action": "confirm",
       "ui.target_system": "oa",
       "ui.payload.displayed_argument_values": {
-        "employee_id": "SYN-EMP-029"
+        "employee_id": "SYN-EMP-029",
+        "days": "3",
+        "ratio": "1.25",
+        "urgent": "True"
       }
     }
   },
