@@ -9,8 +9,10 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.auth import make_require_principal
 from app.api.v1.runtime import make_router
+from app.contracts.sdui.models import UserAction
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
+from app.ports.auth import Principal
 from app.ports.response_envelope import ResponseEnvelope
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
@@ -48,6 +50,27 @@ class FakeRuntime:
             status="completed",
         )
 
+    async def handle_user_action(
+        self,
+        channel: str,
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel, action
+        self.calls += 1
+        self.ai_user_ids.append(principal.ai_user_id)
+        self.session_ids.append(session_id)
+        return ResponseEnvelopeBuilder().build_message(
+            response_id="response-action",
+            task_id="task-action",
+            session_id=session_id,
+            message="accepted",
+            fallback_text="accepted",
+            trace_id="trace-action",
+            data={"action_outcome": "accepted", "result": None},
+        )
+
 
 def _client(runtime: FakeRuntime | None = None) -> TestClient:
     session_tokens = StaticSessionTokens()
@@ -74,6 +97,18 @@ def _valid_body() -> dict[str, Any]:
     }
 
 
+def _valid_action_body() -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "session_id": "session-1",
+        "action": {
+            "action_type": "confirm",
+            "response_id": "response-1",
+            "confirmed": True,
+        },
+    }
+
+
 def test_runtime_handle_endpoint_returns_response_envelope_json_with_injected_runtime() -> None:
     runtime = FakeRuntime()
     response = _client(runtime).post("/api/v1/runtime/handle", json=_valid_body())
@@ -87,6 +122,31 @@ def test_runtime_handle_endpoint_returns_response_envelope_json_with_injected_ru
     assert body["trace_id"] == "trace-1"
     assert runtime.ai_user_ids == ["usr_v1_synthetic"]
     assert runtime.session_ids == [body["session_id"]]
+
+
+def test_runtime_action_endpoint_dispatches_only_structured_user_action() -> None:
+    runtime = FakeRuntime()
+    response = _client(runtime).post(
+        "/api/v1/runtime/action",
+        json=_valid_action_body(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == {"action_outcome": "accepted", "result": None}
+    assert runtime.ai_user_ids == ["usr_v1_synthetic"]
+    assert runtime.session_ids == [body["session_id"]]
+
+
+def test_runtime_action_endpoint_rejects_free_text_and_extra_fields() -> None:
+    runtime = FakeRuntime()
+    body = _valid_action_body()
+    body["message"] = "confirm response-1"
+
+    response = _client(runtime).post("/api/v1/runtime/action", json=body)
+
+    assert response.status_code == 422
+    assert runtime.calls == 0
 
 
 def test_runtime_handle_endpoint_rejects_extra_fields() -> None:

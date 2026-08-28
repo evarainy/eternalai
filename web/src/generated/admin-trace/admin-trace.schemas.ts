@@ -39,6 +39,7 @@ export const AdminTracePersistedViewEventType = {
   task_failed: 'task_failed',
   evaluation_recorded: 'evaluation_recorded',
   admin_action: 'admin_action',
+  user_action: 'user_action',
 } as const;
 
 export type AdminTracePersistedViewStatus = typeof AdminTracePersistedViewStatus[keyof typeof AdminTracePersistedViewStatus];

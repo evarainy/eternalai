@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from app.contracts.sdui.models import UserAction
 from app.main import create_app
 from app.ports.auth import Principal
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
@@ -96,6 +97,22 @@ class BaselineRuntime:
             data={"count": 2, "rows": [{"name": "甲"}, {"name": "乙"}]},
             trace_id="trace-rich",
             trace_summary="summary",
+        )
+
+    async def handle_user_action(
+        self,
+        channel: str,
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel, principal, action
+        return await self.handle_user_message(
+            "api",
+            "user-action",
+            session_id,
+            "null-optionals",
+            {},
         )
 
 

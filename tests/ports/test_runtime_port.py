@@ -7,9 +7,10 @@ import inspect
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
-from app.contracts.sdui.models import UIComponent
+from app.contracts.sdui.models import UIComponent, UserAction
+from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.response_envelope import ResponseEnvelope
-from app.ports.runtime import RuntimePort
+from app.ports.runtime import RuntimePort, UserActionOutcome
 
 RUNTIME_SOURCE = Path("app/ports/runtime.py")
 
@@ -39,10 +40,22 @@ class _MockRuntime:
         response_payload[_session_id_field()] = session_id
         return ResponseEnvelope.model_validate(response_payload)
 
+    async def handle_user_action(
+        self,
+        channel: str,
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel, principal, action
+        return await self.handle_user_message("api", "user", session_id, "action", {})
 
-def test_runtime_port_protocol_defines_only_handle_user_message() -> None:
-    assert "handle_user_message" in RuntimePort.__protocol_attrs__
-    assert len(RuntimePort.__protocol_attrs__) == 1
+
+def test_runtime_port_protocol_defines_message_and_structured_action_methods() -> None:
+    assert RuntimePort.__protocol_attrs__ == {
+        "handle_user_message",
+        "handle_user_action",
+    }
 
 
 def test_handle_user_message_signature_matches_spec_8_6_8() -> None:
@@ -57,6 +70,36 @@ def test_handle_user_message_signature_matches_spec_8_6_8() -> None:
         "client_capabilities",
     ]
     assert inspect.iscoroutinefunction(RuntimePort.handle_user_message)
+
+
+def test_handle_user_action_signature_matches_governed_contract() -> None:
+    signature = inspect.signature(RuntimePort.handle_user_action)
+
+    assert list(signature.parameters) == [
+        "self",
+        "channel",
+        "principal",
+        "session_id",
+        "action",
+    ]
+    hints = get_type_hints(RuntimePort.handle_user_action)
+    assert hints["principal"] is Principal
+    assert hints["action"] is UserAction
+    assert hints["return"] is ResponseEnvelope
+
+
+def test_user_action_outcome_literal_values_are_closed() -> None:
+    assert get_args(UserActionOutcome) == (
+        "accepted",
+        "action_gate_unavailable",
+        "no_pending_action",
+        "action_binding_incomplete",
+        "action_reference_mismatch",
+        "action_pending_changed",
+        "action_already_claimed",
+        "action_stale",
+        "action_version_conflict",
+    )
 
 
 def test_return_annotation_uses_response_envelope_reexport() -> None:
@@ -94,6 +137,29 @@ def test_concrete_runtime_mock_accepts_each_channel_and_returns_real_response_en
             )
 
             assert isinstance(result, ResponseEnvelope)
+
+    asyncio.run(exercise_runtime())
+
+
+def test_concrete_runtime_mock_accepts_structured_user_action() -> None:
+    async def exercise_runtime() -> None:
+        result = await _MockRuntime().handle_user_action(
+            "web",
+            Principal(
+                ai_user_id="user-action",
+                display_name="Action User",
+                roles=("user",),
+                org_ctx=PrincipalOrgContext(),
+            ),
+            "session-action",
+            UserAction(
+                action_type="confirm",
+                response_id="response-action",
+                confirmed=True,
+            ),
+        )
+
+        assert isinstance(result, ResponseEnvelope)
 
     asyncio.run(exercise_runtime())
 

@@ -52,6 +52,11 @@ const PROJECTS = [
     target: './src/generated/runtime/runtime.ts',
     operations: [
       {
+        path: '/api/v1/runtime/action',
+        method: 'post',
+        operationId: 'handle_action_api_v1_runtime_action_post',
+      },
+      {
         path: '/api/v1/runtime/handle',
         method: 'post',
         operationId: 'handle_api_v1_runtime_handle_post',
