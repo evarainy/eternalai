@@ -1216,7 +1216,7 @@ Local Worker 信任合同与浏览器扩展信任边界均尚未裁定，分别�
 
 ## 2026-08-28 — 裁决：`P2-GOLDEN-001` 之后的唯一后继为 `P2-SDUI-RENDERER-001`
 
-**决定**：串行下一棒唯一确定为 **`P2-SDUI-RENDERER-001`**（A 档）。
+**决定**：串行下一棒唯一确定为 **`P2-SDUI-RENDERER-001`**（A 档）。 **⚠ 2026-08-28 同日更新**：本裁决的链首已由同日「插入 `P2-USER-ACTION-SEAM-001`」改为 `P2-USER-ACTION-SEAM-001`，串行链为 `USER-ACTION-SEAM-001 → SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002`。本条其余部分（必达路径唯一、机会层不竞争、机会层阻塞不解除）继续有效。
 
 **为什么唯一**：P2 必达五项中只剩 ④低风险写入（未开始）与 ⑤Golden（`P2-GOLDEN-002` 未开始）。二者的关键路径是同一条：
 
@@ -1231,3 +1231,53 @@ P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002
 **边界**：本条只裁定**串行下一棒**。机会层节点在另开 write lane 时仍可承接，但届时须先判定并行与共享测试库的冲突，并按 `AGENTS.md`「A 类机械同步」改由独立 GOV-SYNC 棒承担状态同步。本条不解除任何机会层节点的既有阻塞。
 
 **影响面**：`docs/phase2/STATUS.md` 下一棒指针；`PHASE2_PLAN.md` 对应欠债结项与 DAG 行。
+
+## 2026-08-28 — 裁决：参数值 allowlist 与「不设字段白名单」分层共存，互不推翻
+
+**问题**：2026-08-19「确认卡展示真实业务内容，不设字段白名单」逐字写「不设可展示字段白名单」；而 2026-08-27 给 `P2-CAPABILITY-AUTOMATION-LEVEL-001` 的 Scope 第 4 条是「`confirm_card` 参数值可展示 allowlist，默认空集，须显式声明才展示」，已实现并合并（`CapabilitySpec.displayable_argument_fields`、DB 列、`app/runtime/runtime.py::_displayed_argument_values`、GT-029～GT-033 五道已冻 Golden 题）。两条字面矛盾，且 2026-08-19 那条从未被废止。
+
+**决定**：两条各管一半载荷，**共存，互不推翻**。
+
+| 载荷 | 内容 | 来源 | 白名单 | 依据 |
+|---|---|---|---|---|
+| `ui.payload.displayed_argument_values` | 用户**正在提交**的参数值 | 用户输入 / LLM 抽取的 `CapabilityRef.arguments` | **有**，默认空集，须显式声明 | 2026-08-27 Scope 第 4 条 |
+| 业务对象预览（键尚未定义） | **被操作对象**的上下文：姓名、流程标题、正文内容、附件列表名 | 服务端按权威绑定从 OA / Work Object 补取 | **无** | 2026-08-19 本条 |
+
+**判据不是「这四项天然不是参数」，而是「值来自谁、有没有权威绑定」**：由服务端按已绑定对象补取的展示内容不设白名单；由用户或 LLM 传入、会成为执行命令一部分的参数值必须走 allowlist。即便 OA 下游 HTTP 请求要求重复提交标题或正文，那也只是 Adapter 内部 wire payload，不等于应让前端或 LLM 把这些字段作为权威命令参数传入。
+
+**为什么两条都不放松安全边界**：allowlist 防的是**参数值中混入不透明凭证**（`P2-SDUI-CONFIRM-PAYLOAD-001` 的原始动机）；2026-08-19 免除白名单的理由是业务内容「本来就是该用户登录 OA 后能看到的自己名下待办正文」，对他不构成新信息。两者防的风险不同，因此不构成同一决定的两个版本。凭证 marker 扫描对两侧一律继续生效（`AGENTS.md` 不可协商规则 4）。
+
+**不回滚任何已合并内容**：`displayable_argument_fields`、其 DB 列与 migration、`_displayed_argument_values`、GT-029～GT-033 全部保留；不修改任何已冻结题面（2026-08-27 人批只批新增、不批改删）。
+
+**影响面**：`PHASE2_PLAN.md` 的 `P2-LOW-RISK-WRITE-001` 与 `P2-SDUI-RENDERER-001` 行；业务对象预览键的具体形状由下一条裁决指定承担棒。
+
+---
+
+## 2026-08-28 — 裁决：插入 `P2-USER-ACTION-SEAM-001`，结构化 `UserAction` 先于 Renderer
+
+**决定**：在 `P2-SDUI-RENDERER-001` 之前插入新棒 **`P2-USER-ACTION-SEAM-001`**（A 档）。串行顺序改为：
+
+```
+P2-USER-ACTION-SEAM-001 → P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002
+```
+
+**问题**：冻结蓝图的 SDUI 安全边界段逐字规定「前端不得直接执行业务动作；按钮点击只产生结构化 user_action；所有 user_action 必须回到 Runtime / Capability Gateway；所有用户点击、确认、拒绝、取消必须进入 Trace」。`UserAction` 在 `app/contracts/sdui/models.py` 有定义、经 `app/ports/response_envelope.py` 重导出、有形状合同测试，但**全仓没有生产使用点**：`app/api/v1/runtime.py::HandleRequest` 只有 `channel` / `session_id` / `message` / `client_capabilities`，`web/` 与生成 TS 中也没有 action 请求类型。GT-007 fixture 里的 `given.user_action` 是未被消费的元数据。
+
+因此 `P2-SDUI-RENDERER-001` 章程中的「可操作确认面」在当前接线下无法合规实现：让按钮合成自由文本「确认 <id>」再走 `/api/v1/runtime/handle`，违反「按钮点击只产生结构化 user_action」。**用户手工输入该文本不违反**（那是自由文本消息，属兼容入口）；**按钮伪造该文本则违反**。
+
+**为什么拆棒而不是扩 Renderer**：接线是后端纵切（API 判别式请求合同、Runtime 结构化 dispatch、fail-closed 分支、OpenAPI/Orval 重生成），Renderer 是前端呈现。压进一棒则任一面回炉即整棒回炉，且无法分离证明「按钮真的走了结构化路径」与「展示看起来对了」。拆棒后 SEAM 棒的交付物就是那条结构化路径本身。
+
+**为什么不缩成只读展示棒**：`P2-SDUI-RENDERER-001` 是 `P2-LOW-RISK-WRITE-001` 的最后一项前置。缩范围后该前置解除不了，等于原地打转。**前置能力当前不可达（无 `_confirm` 后缀的生产能力），是要补前置的证据，不是删前置交付的证据。**
+
+**`P2-USER-ACTION-SEAM-001` 的硬要求**：
+
+1. 按钮提交结构化 `UserAction`，不生成也不解析自由文本；
+2. 服务端按认证 Principal、session 与 `response_id` 查服务端 pending，**不信任卡片回传的可执行参数**，只执行服务端保存的 Capability 请求；
+3. 校验不可变 action / request / binding manifest digest，并做**一次性原子 claim**；
+4. missing / stale / mismatch / 重复点击**一律 fail-closed 返回明确失败，绝不跌回 Planner 或意图路由**；
+5. 仍经 Runtime、Capability Gateway、Policy、Evaluator、Trace；所有点击、确认、拒绝、取消进入 Trace；
+6. 既有自由文本确认入口保持可用，不得回归。
+
+**业务对象预览键后置**：2026-08-19「不设字段白名单」的影响面把「扩展 `ui.payload` 承载业务内容与折叠态」派给「`P2-LOW-RISK-WRITE-001` 或其前置棒」。本条把承担棒**唯一收窄为 `P2-LOW-RISK-WRITE-001`**：只有到该棒才有真实的姓名 / 正文 / 附件数据来源，提前定契约属凭空设计。`P2-USER-ACTION-SEAM-001` 与 `P2-SDUI-RENDERER-001` 均**不新增** `ConfirmCardPayload` 键，`tests/runtime/test_runtime_response_content.py::test_confirm_card_payload_contract_has_exact_keys` 锁定的五键在这两棒内不变。
+
+**影响面**：`PHASE2_PLAN.md` 新增 `P2-USER-ACTION-SEAM-001` DAG 行、`P2-SDUI-RENDERER-001` 的 `depends_on`、`P2-LOW-RISK-WRITE-001` 的交付内容；`docs/phase2/STATUS.md` 下一棒指针；2026-08-28「唯一后继」裁决的链首由 Renderer 改为 SEAM，该裁决其余部分继续有效。
