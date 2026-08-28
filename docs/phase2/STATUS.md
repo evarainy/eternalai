@@ -1,6 +1,6 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-GOV-SYNC-032`
+- 当前基线 task_id：`P2-GOV-SYNC-033`
 - pytest：`2262 passed, 84 warnings`（0 skipped，0 failed；后台全量 run `20260827T143721Z-14868`，未使用 `--ignore`）
 - 前端 `pnpm --dir web test`：`110 passed, 0 failed, 0 skipped`（本棒不改前端且未单跑，沿用上一棒实测数字）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；GT-029～GT-033 通过完整 Runtime 与真实 envelope builder 冻结 `confirm_card` 参数值 allowlist，GT-012 多绑定 scope clarification 继续通过）
