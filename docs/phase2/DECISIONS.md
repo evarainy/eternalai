@@ -1290,7 +1290,7 @@ P2-USER-ACTION-SEAM-001 → P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P
 
 **决定**：`handle_user_action` 接收完整 `Principal`，但**沿用现有 tenant 语义**；**不**把 `handle_user_message` 一并改为接收 `Principal`。
 
-**关键事实（推翻了开棒前的初始判断）**：`app/infra/auth/oa.py` 构造用户身份时写的是 `PrincipalOrgContext()`——**空构造，全仓仅此一处**——取的是 `app/ports/auth.py::PrincipalOrgContext.tenant_id` 的默认值 `"default"`。**认证层同样没有真实租户来源**，没有任何代码从 OA、配置或部门表推导出过别的租户值。
+**关键事实（推翻了开棒前的初始判断）**：`app/infra/auth/oa.py` 构造用户身份时写的是 `PrincipalOrgContext()`——**空构造，且是 `app/` 生产代码内唯一的构造点**——取的是 `app/ports/auth.py::PrincipalOrgContext.tenant_id` 的默认值 `"default"`。**认证层同样没有真实租户来源**，没有任何生产代码从 OA、配置或部门表推导出过别的租户值。（**2026-08-28 更正**：初稿写「全仓仅此一处」不准确——测试中另有 11 处构造，其中 `tests/api/test_work_objects.py` 两处显式传 `tenant_id="tenant-1"`。这一更正**加强**而非削弱本裁决：管道确实能承载真实租户值，**只是生产链从未填充**，故「统一改造」依然只会搬运常量。）
 
 因此「统一改造」的真实效果是把同一个写死的 `"default"` 从 `app/runtime/runtime.py::RuntimeImpl.handle_user_message` 搬到认证层的字段默认值，绕一圈再送回来：**行为零变化，隔离能力零提升**。其副作用反而危险——代码从此**看起来**已接通租户，后继棒可能据此认为隔离已具备而不再设防。**一个诚实的硬编码加一条登记在案的欠债，比一条看着通了其实没通的管道安全。**
 
@@ -1325,7 +1325,7 @@ data = {"action_outcome": <闭合枚举值>, "result": <能力结果或 null>}
 
 闭合枚举 `UserActionOutcome` 须覆盖全部拒绝分支，**包含 stale 与版本绑定冲突**（这两条路径当前走 `RuntimeImpl._finish_version_binding_failure` 返回 `status="failed", data=None`，客户端分不出来），并配一条与 `ErrorCode` 同款的闭合守卫测试。
 
-**不扩** `app/ports/capability_gateway.py::ErrorCode`：它是 Gateway 执行失败的语义，与动作受理无关，且有 `test_error_code_literal_is_closed` 守卫。前端无权读管理面 Trace，也不应解析双语文案，故拒绝分类必须机器可判别。
+**不扩** `app/ports/capability_gateway.py::ErrorCode`：它是 Gateway 执行失败的语义，与动作受理无关，且有 `tests/ports/test_capability_gateway_port.py::test_error_code_literal_values_match_spec_8_6_3` 守卫（**2026-08-28 更正**：初稿写的 `test_error_code_literal_is_closed` 是不存在的符号名）。前端无权读管理面 Trace，也不应解析双语文案，故拒绝分类必须机器可判别。
 
 ### 四、本棒只承接 `confirm`
 
