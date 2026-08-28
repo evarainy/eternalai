@@ -674,6 +674,37 @@ def test_exception_after_claim_cannot_replay_adapter_execution() -> None:
     assert len(harness.llm.calls) == llm_calls
 
 
+def test_publish_refuses_to_overwrite_a_newer_generation_without_any_claim() -> None:
+    """发布站点识别位 CAS：expected 已过期即不得覆盖胜出 pending，且不依赖 claim 守卫。
+
+    与 test_claim_and_pending_writer_each_win_without_overwriting_the_winner 互补——
+    那条杀的是 claim 守卫，本条杀的是 `is not expected` 识别位；
+    claim 集合在此保持为空，因此只有识别位能阻止覆盖。
+    """
+
+    async def exercise() -> tuple[Harness, _PendingWorkflow, _PendingWorkflow, bool]:
+        harness = await _build_harness()
+        key = ("session-action", harness.principal.ai_user_id)
+        stale = harness.runtime._pending_workflows[key]
+        winner = _winner(stale, "identity-cas")
+        harness.runtime._pending_workflows[key] = winner
+        loser = _winner(stale, "loser")
+        published = harness.runtime._publish_pending_workflow(
+            key,
+            expected=stale,
+            replacement=loser,
+        )
+        return harness, winner, loser, published
+
+    harness, winner, loser, published = asyncio.run(exercise())
+    key = ("session-action", harness.principal.ai_user_id)
+
+    assert harness.runtime._claimed_pending_confirmations == set()
+    assert published is False
+    assert harness.runtime._pending_workflows[key] is winner
+    assert harness.runtime._pending_workflows[key] is not loser
+
+
 def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> None:
     async def exercise() -> tuple[
         Harness,
