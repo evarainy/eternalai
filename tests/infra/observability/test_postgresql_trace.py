@@ -46,7 +46,7 @@ def _make_factory(engine: Any) -> Any:
     return make_async_session_factory(engine)
 
 
-def test_all_20_trace_event_types_persist_and_read_back() -> None:
+def test_all_21_trace_event_types_persist_and_read_back() -> None:
     _require_db()
     trace_id = f"all-types-{uuid4().hex}"
     event_types = list(get_args(TraceEventType))
