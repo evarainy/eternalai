@@ -1281,3 +1281,58 @@ P2-USER-ACTION-SEAM-001 → P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P
 **业务对象预览键后置**：2026-08-19「不设字段白名单」的影响面把「扩展 `ui.payload` 承载业务内容与折叠态」派给「`P2-LOW-RISK-WRITE-001` 或其前置棒」。本条把承担棒**唯一收窄为 `P2-LOW-RISK-WRITE-001`**：只有到该棒才有真实的姓名 / 正文 / 附件数据来源，提前定契约属凭空设计。`P2-USER-ACTION-SEAM-001` 与 `P2-SDUI-RENDERER-001` 均**不新增** `ConfirmCardPayload` 键，`tests/runtime/test_runtime_response_content.py::test_confirm_card_payload_contract_has_exact_keys` 锁定的五键在这两棒内不变。
 
 **影响面**：`PHASE2_PLAN.md` 新增 `P2-USER-ACTION-SEAM-001` DAG 行、`P2-SDUI-RENDERER-001` 的 `depends_on`、`P2-LOW-RISK-WRITE-001` 的交付内容；`docs/phase2/STATUS.md` 下一棒指针；2026-08-28「唯一后继」裁决的链首由 Renderer 改为 SEAM，该裁决其余部分继续有效。
+
+## 2026-08-28 — 裁决：`P2-USER-ACTION-SEAM-001` 的四项合同边界
+
+结构化 `UserAction` 接线棒开棒前，四项公共合同 / 信任边界经雨爷拍板如下。第一项另经 Opus 5 与 codex `gpt-5.6-sol`（max）两方独立复核，三方结论一致。
+
+### 一、租户维度：本棒沿用现有 `default` 语义，不统一改造主体合同
+
+**决定**：`handle_user_action` 接收完整 `Principal`，但**沿用现有 tenant 语义**；**不**把 `handle_user_message` 一并改为接收 `Principal`。
+
+**关键事实（推翻了开棒前的初始判断）**：`app/infra/auth/oa.py` 构造用户身份时写的是 `PrincipalOrgContext()`——**空构造，全仓仅此一处**——取的是 `app/ports/auth.py::PrincipalOrgContext.tenant_id` 的默认值 `"default"`。**认证层同样没有真实租户来源**，没有任何代码从 OA、配置或部门表推导出过别的租户值。
+
+因此「统一改造」的真实效果是把同一个写死的 `"default"` 从 `app/runtime/runtime.py::RuntimeImpl.handle_user_message` 搬到认证层的字段默认值，绕一圈再送回来：**行为零变化，隔离能力零提升**。其副作用反而危险——代码从此**看起来**已接通租户，后继棒可能据此认为隔离已具备而不再设防。**一个诚实的硬编码加一条登记在案的欠债，比一条看着通了其实没通的管道安全。**
+
+**另一条硬阻塞**：`RuntimePort.handle_user_message` 的签名逐字写在已批准规范 `docs/blueprint/phase0_architecture_freeze_and_mvp_spec_v1_0_11.md` §8.6.8，并由 `tests/ports/test_runtime_port.py::test_handle_user_message_signature_matches_spec_8_6_8` 逐项断言。**新增方法是「加」（老签名不动、老测试照过），改老方法是「改」（直接偏离已批准规范）**，后者按 `AGENTS.md` 属 GOV-SYNC 裁决事项，不得由实现棒自行决定。
+
+**范围收窄两处既往表述**：
+
+1. 「今天隔离能力本来就是零」**说过头**。用户、会话、request digest 与 binding manifest 四层隔离均已存在；为零的**只是租户 / 组织这一维**。
+2. 「今天实际上只有一个租户」是运营前提，仓库无法独立证明；本裁决把它作为前提使用，不作为已验证事实。
+
+**B 的必备条件**：新路径**不得**因为「反正是 `default`」就把租户维度从授权引用中省掉。2026-08-18「卡片动作的授权边界」要的是**绑定结构**而非真值——照常写入并严格比对 `decided_tenant_id`（复用现有 HumanGate 记录即自动满足）；**省掉该维度才是违规**。
+
+**欠债定性升级**：租户未启用**不是普通待办**，而是**启用第二个租户之前的硬前置**。若第二租户先上线而欠债未还，相同 `ai_user_id` 与 session 组合可能共用 pending 键——轻则互相顶掉待确认，重则旧的裸确认文本命中另一租户的 pending。欠债登记在**病根**（认证适配器无组织身份来源）而非症状（运行时那行硬编码），承担棒 `P2-TENANT-IDENTITY-001`。
+
+### 二、Trace 合同：新增最小 `user_action` 事件
+
+**决定**：批准为 `app/ports/trace.py::TraceEventType` 新增**一个**取值 `user_action`，用 attributes 的 phase（`inbound` / `outcome`）区分入站与结果。
+
+**为什么必须新增**：冻结蓝图 §3.4.5 逐字要求「所有用户点击、确认、拒绝、取消必须进入 Trace」，而现有 20 值闭合枚举**没有任何取值能表达用户点击**。借用 `admin_action` 是语义污染（那是管理面动作）；用 `response_envelope_created` 表达入站更不对（入站必须先于任何判定与响应）。
+
+**边界**：只加一个取值，不加第二个；同一改动内更新 `tests/ports/test_trace_port.py` 的逐值守卫期望；phase 与 outcome 走 attributes，不再扩枚举。
+
+### 三、Action 响应合同：`data` 两层命名空间
+
+**决定**：结构化动作的响应在 `ResponseEnvelope.data` 下使用两层形状：
+
+```
+data = {"action_outcome": <闭合枚举值>, "result": <能力结果或 null>}
+```
+
+**禁止与能力结果平铺**——否则成功分支的能力数据与 outcome 会互相覆盖。
+
+闭合枚举 `UserActionOutcome` 须覆盖全部拒绝分支，**包含 stale 与版本绑定冲突**（这两条路径当前走 `RuntimeImpl._finish_version_binding_failure` 返回 `status="failed", data=None`，客户端分不出来），并配一条与 `ErrorCode` 同款的闭合守卫测试。
+
+**不扩** `app/ports/capability_gateway.py::ErrorCode`：它是 Gateway 执行失败的语义，与动作受理无关，且有 `test_error_code_literal_is_closed` 守卫。前端无权读管理面 Trace，也不应解析双语文案，故拒绝分类必须机器可判别。
+
+### 四、本棒只承接 `confirm`
+
+**决定**：`P2-USER-ACTION-SEAM-001` 正式**只承接当前可达的 `confirm`**，不扩 `UserAction` 形状。
+
+`app/contracts/sdui/models.py::UserAction` 的 `action_type` 是 `Literal["confirm"]`、`confirmed` 是 `Literal[True]`，并有形状合同测试锁定——**reject / cancel 目前结构上无法构造**。蓝图虽逐字要求这两个动作也进 Trace，但在合同扩展前它们不可能发生。
+
+**这是显式裁决，不是方案作者自行后置。** 受控动作合同的扩展由 `P2-USER-ACTION-REJECT-001` 承担。
+
+**影响面**：`PHASE2_PLAN.md` 的 `P2-USER-ACTION-SEAM-001` DAG 行与欠债表；新增四个承担棒的 DAG 行；`app/ports/trace.py`、`app/ports/runtime.py` 的契约变更授权范围以本条为准。
