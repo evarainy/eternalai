@@ -681,6 +681,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         Any,
         _PendingWorkflow,
         _PendingWorkflow,
+        _PendingWorkflow,
         int,
         int,
     ]:
@@ -722,6 +723,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
             action_loses,
             after_claim_wins,
             writer_winner,
+            original,
             gateway_calls,
             llm_calls,
         )
@@ -732,12 +734,13 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         action_loses,
         after_claim_wins,
         writer_winner,
+        original,
         gateway_calls,
         llm_calls,
     ) = asyncio.run(exercise())
 
     assert writer_loses.status == "failed"
-    assert after_claim_wins is not writer_winner
+    assert after_claim_wins is original
     assert _outcome(action_loses) == "action_pending_changed"
     key = ("session-action", harness.principal.ai_user_id)
     assert harness.runtime._pending_workflows[key] is writer_winner
