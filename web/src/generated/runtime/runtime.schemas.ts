@@ -4,6 +4,23 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+export type ActionRequestChannel = typeof ActionRequestChannel[keyof typeof ActionRequestChannel];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ActionRequestChannel = {
+  web: 'web',
+  cli: 'cli',
+  api: 'api',
+  mock: 'mock',
+} as const;
+
+export interface ActionRequest {
+  action: UserAction;
+  channel: ActionRequestChannel;
+  session_id: string;
+}
+
 export interface HTTPValidationError {
   detail?: ValidationError[];
 }
@@ -85,6 +102,12 @@ export interface UIComponent {
   payload?: UIComponentPayload;
   reason_code?: UIComponentReasonCode;
   target_system?: UIComponentTargetSystem;
+}
+
+export interface UserAction {
+  action_type: 'confirm';
+  confirmed: true;
+  response_id: string;
 }
 
 export type ValidationErrorCtx = { [key: string]: unknown };

@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from app.contracts.sdui.models import UserAction
 from app.evaluator import (
     EvaluationConclusion,
     TerminalBusinessStatus,
@@ -18,6 +19,7 @@ from app.evaluator import (
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory, SessionMemoryKey
+from app.ports.auth import Principal
 from app.ports.capability_gateway import (
     CapabilityGatewayPort,
     ErrorCode,
@@ -38,6 +40,7 @@ from app.ports.human_gate import (
 )
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
+from app.ports.runtime import UserActionOutcome
 from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.ports.task_store import (
     SessionRecord,
@@ -75,6 +78,14 @@ class _PendingWorkflow:
     action_digest: str | None = None
     request_digest: str | None = None
     binding_manifest_digest: str | None = None
+
+
+class _ActionAlreadyClaimedError(RuntimeError):
+    pass
+
+
+class _ActionStaleError(RuntimeError):
+    pass
 
 
 class RuntimeImpl:
@@ -130,7 +141,7 @@ class RuntimeImpl:
             session_id=session_id,
             ai_user_id=ai_user_id,
         )
-        pending_key = (session_id, ai_user_id)
+        pending_key = _pending_workflow_key(session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
         if pending is not None:
             if _is_explicit_workflow_confirmation(message, pending):
@@ -141,11 +152,10 @@ class RuntimeImpl:
                         message,
                         current_pending,
                     ):
-                        request_id = (
-                            current_pending.gate_request_id
-                            or current_pending.response_id
+                        candidate_claim = _pending_confirmation_claim_key(
+                            pending_key,
+                            current_pending,
                         )
-                        candidate_claim = (*pending_key, request_id)
                         if candidate_claim not in self._claimed_pending_confirmations:
                             self._claimed_pending_confirmations.add(candidate_claim)
                             claim_key = candidate_claim
@@ -161,6 +171,18 @@ class RuntimeImpl:
                         pending=pending,
                         session_id=session_id,
                         memory_key=memory_key,
+                    )
+                except (
+                    _ActionAlreadyClaimedError,
+                    _ActionStaleError,
+                    VersionBindingMismatchError,
+                ):
+                    return await self._finish_version_binding_failure(
+                        response_id=str(uuid4()),
+                        task_id=pending.task_id,
+                        session_id=session_id,
+                        trace_id=pending.trace_id,
+                        capability_id=pending.capability_id,
                     )
                 finally:
                     with self._pending_confirmation_claim_lock:
@@ -419,6 +441,31 @@ class RuntimeImpl:
                     trace_id=trace_id,
                 )
                 workflow_waiting = False
+        if workflow_waiting:
+            replacement = _PendingWorkflow(
+                task_id=task_id,
+                trace_id=trace_id,
+                response_id=response_id,
+                capability_id=capability_ref.capability_id,
+                gate_request_id=gate_request_id,
+                action_digest=action_digest,
+                request_digest=request_digest,
+                binding_manifest_digest=gate_manifest_digest,
+            )
+            if not self._publish_pending_workflow(
+                pending_key,
+                expected=pending,
+                replacement=replacement,
+            ):
+                if self._workflow_engine is not None:
+                    self._workflow_engine.discard_checkpoint(task_id)
+                exec_result = ExecutionResult(
+                    status="failed",
+                    error_code="internal_error",
+                    trace_id=trace_id,
+                )
+                workflow_waiting = False
+
         envelope = self._build_envelope(
             response_id,
             task_id,
@@ -453,18 +500,7 @@ class RuntimeImpl:
                 error_code=exec_result.error_code,
             )
 
-        if workflow_waiting:
-            self._pending_workflows[pending_key] = _PendingWorkflow(
-                task_id=task_id,
-                trace_id=trace_id,
-                response_id=response_id,
-                capability_id=capability_ref.capability_id,
-                gate_request_id=gate_request_id,
-                action_digest=action_digest,
-                request_digest=request_digest,
-                binding_manifest_digest=gate_manifest_digest,
-            )
-        else:
+        if not workflow_waiting:
             if exec_result.status != "waiting_user":
                 await self._record_terminal_evaluation(
                     trace_id=trace_id,
@@ -489,6 +525,199 @@ class RuntimeImpl:
                 capability_id=capability_ref.capability_id,
             )
         return envelope
+
+    async def handle_user_action(
+        self,
+        channel: Literal["web", "cli", "api", "mock"],
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel
+        action_trace_id = str(uuid4())
+        action_task_id = str(uuid4())
+        await self._trace_port.record_step(
+            action_trace_id,
+            action_task_id,
+            session_id,
+            event_type="user_action",
+            status="ok",
+            attributes={"phase": "inbound"},
+        )
+
+        pending_key = _pending_workflow_key(session_id, principal.ai_user_id)
+        if self._human_gate_port is None:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_gate_unavailable",
+            )
+
+        pending = self._pending_workflows.get(pending_key)
+        if pending is None:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="no_pending_action",
+            )
+        if (
+            pending.action_digest is None
+            or pending.request_digest is None
+            or pending.binding_manifest_digest is None
+        ):
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_binding_incomplete",
+            )
+        if action.response_id != (pending.gate_request_id or pending.response_id):
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_reference_mismatch",
+            )
+
+        claim_key = _pending_confirmation_claim_key(pending_key, pending)
+        outcome: UserActionOutcome | None = None
+        with self._pending_confirmation_claim_lock:
+            if self._pending_workflows.get(pending_key) is not pending:
+                outcome = "action_pending_changed"
+            elif claim_key in self._claimed_pending_confirmations:
+                outcome = "action_already_claimed"
+            else:
+                self._claimed_pending_confirmations.add(claim_key)
+        if outcome is not None:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome=outcome,
+            )
+
+        memory_key = SessionMemoryKey(
+            tenant_id=principal.org_ctx.tenant_id,
+            session_id=session_id,
+            ai_user_id=principal.ai_user_id,
+        )
+        try:
+            envelope = await self._resume_pending_workflow(
+                pending_key=pending_key,
+                pending=pending,
+                session_id=session_id,
+                memory_key=memory_key,
+            )
+        except _ActionAlreadyClaimedError:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_already_claimed",
+            )
+        except _ActionStaleError:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_stale",
+            )
+        except VersionBindingMismatchError:
+            return await self._finish_user_action_attempt(
+                action_trace_id=action_trace_id,
+                action_task_id=action_task_id,
+                session_id=session_id,
+                outcome="action_version_conflict",
+            )
+        return await self._finish_user_action_attempt(
+            action_trace_id=action_trace_id,
+            action_task_id=action_task_id,
+            session_id=session_id,
+            outcome="accepted",
+            envelope=envelope,
+        )
+
+    async def _finish_user_action_attempt(
+        self,
+        *,
+        action_trace_id: str,
+        action_task_id: str,
+        session_id: str,
+        outcome: UserActionOutcome,
+        envelope: ResponseEnvelope | None = None,
+    ) -> ResponseEnvelope:
+        if envelope is None:
+            envelope = self._response_builder.build_failed(
+                str(uuid4()),
+                action_task_id,
+                session_id,
+                "结构化操作未被受理，本次未执行。",
+                "The structured action was not accepted; nothing was executed.",
+                action_trace_id,
+                data={"action_outcome": outcome, "result": None},
+            )
+        else:
+            safe_message = envelope.message
+            safe_fallback = envelope.fallback_text
+            if envelope.status == "completed":
+                safe_message = "操作已完成。"
+                safe_fallback = "Operation completed."
+            envelope = envelope.model_copy(
+                update={
+                    "message": safe_message,
+                    "fallback_text": safe_fallback,
+                    "data": {
+                        "action_outcome": outcome,
+                        "result": envelope.data,
+                    }
+                }
+            )
+        await self._trace_port.record_step(
+            action_trace_id,
+            action_task_id,
+            session_id,
+            event_type="user_action",
+            status="ok" if outcome == "accepted" else "blocked",
+            attributes={"phase": "outcome", "action_outcome": outcome},
+        )
+        return envelope
+
+    def _publish_pending_workflow(
+        self,
+        pending_key: tuple[str, str],
+        *,
+        expected: _PendingWorkflow | None,
+        replacement: _PendingWorkflow,
+    ) -> bool:
+        with self._pending_confirmation_claim_lock:
+            if self._pending_workflows.get(pending_key) is not expected:
+                return False
+            if (
+                expected is not None
+                and _pending_confirmation_claim_key(pending_key, expected)
+                in self._claimed_pending_confirmations
+            ):
+                return False
+            self._pending_workflows[pending_key] = replacement
+            return True
+
+    def _compare_and_swap_pending_workflow(
+        self,
+        pending_key: tuple[str, str],
+        *,
+        expected: _PendingWorkflow,
+        replacement: _PendingWorkflow | None,
+    ) -> bool:
+        with self._pending_confirmation_claim_lock:
+            if self._pending_workflows.get(pending_key) is not expected:
+                return False
+            if replacement is None:
+                self._pending_workflows.pop(pending_key, None)
+            else:
+                self._pending_workflows[pending_key] = replacement
+            return True
 
     async def _build_stale_confirmation_response(
         self,
@@ -562,19 +791,27 @@ class RuntimeImpl:
                     raise VersionBindingMismatchError(
                         "Pending Workflow action changed after preview"
                     )
-                await self._human_gate_port.record_decision(
-                    HumanGateDecisionRecord(
-                        request_id=pending.gate_request_id,
-                        task_id=pending.task_id,
-                        decided_by_ai_user_id=memory_key.ai_user_id,
-                        decided_session_id=session_id,
-                        decided_tenant_id=memory_key.tenant_id,
-                        decision="confirmed",
-                        request_digest=pending.request_digest,
-                        binding_manifest_digest=pending.binding_manifest_digest,
-                        decided_at=datetime.now(UTC),
+                try:
+                    await self._human_gate_port.record_decision(
+                        HumanGateDecisionRecord(
+                            request_id=pending.gate_request_id,
+                            task_id=pending.task_id,
+                            decided_by_ai_user_id=memory_key.ai_user_id,
+                            decided_session_id=session_id,
+                            decided_tenant_id=memory_key.tenant_id,
+                            decision="confirmed",
+                            request_digest=pending.request_digest,
+                            binding_manifest_digest=pending.binding_manifest_digest,
+                            decided_at=datetime.now(UTC),
+                        )
                     )
-                )
+                except HumanGateConflictError:
+                    existing_decision = await self._human_gate_port.get_decision(
+                        pending.gate_request_id
+                    )
+                    if existing_decision is None:
+                        raise _ActionStaleError from None
+                    raise _ActionAlreadyClaimedError from None
             if self._human_gate_port is None:
                 workflow_result = await self._workflow_engine.resume(
                     task_id=pending.task_id,
@@ -586,16 +823,18 @@ class RuntimeImpl:
                     confirmed=True,
                     expected_action_digest=pending.action_digest,
                 )
-        except (HumanGateConflictError, VersionBindingMismatchError):
-            self._pending_workflows.pop(pending_key, None)
-            self._workflow_engine.discard_checkpoint(pending.task_id)
-            return await self._finish_version_binding_failure(
-                response_id=response_id,
-                task_id=pending.task_id,
-                session_id=session_id,
-                trace_id=pending.trace_id,
-                capability_id=pending.capability_id,
+        except (
+            _ActionAlreadyClaimedError,
+            _ActionStaleError,
+            VersionBindingMismatchError,
+        ):
+            self._compare_and_swap_pending_workflow(
+                pending_key,
+                expected=pending,
+                replacement=None,
             )
+            self._workflow_engine.discard_checkpoint(pending.task_id)
+            raise
         exec_result = _workflow_execution_result(workflow_result)
         next_gate_request_id = pending.gate_request_id
         next_action_digest = pending.action_digest
@@ -645,7 +884,11 @@ class RuntimeImpl:
                     )
                 )
             except (HumanGateConflictError, VersionBindingMismatchError):
-                self._pending_workflows.pop(pending_key, None)
+                self._compare_and_swap_pending_workflow(
+                    pending_key,
+                    expected=pending,
+                    replacement=None,
+                )
                 self._workflow_engine.discard_checkpoint(pending.task_id)
                 return await self._finish_version_binding_failure(
                     response_id=response_id,
@@ -692,7 +935,7 @@ class RuntimeImpl:
             )
 
         if exec_result.status == "waiting_user":
-            self._pending_workflows[pending_key] = _PendingWorkflow(
+            next_pending = _PendingWorkflow(
                 task_id=pending.task_id,
                 trace_id=pending.trace_id,
                 response_id=response_id,
@@ -702,8 +945,17 @@ class RuntimeImpl:
                 request_digest=next_request_digest,
                 binding_manifest_digest=pending.binding_manifest_digest,
             )
+            self._compare_and_swap_pending_workflow(
+                pending_key,
+                expected=pending,
+                replacement=next_pending,
+            )
         else:
-            self._pending_workflows.pop(pending_key, None)
+            self._compare_and_swap_pending_workflow(
+                pending_key,
+                expected=pending,
+                replacement=None,
+            )
             await self._record_terminal_evaluation(
                 trace_id=pending.trace_id,
                 task_id=pending.task_id,
@@ -1166,6 +1418,17 @@ def _is_stale_workflow_confirmation_message(message: str) -> bool:
             return False
         return True
     return False
+
+
+def _pending_workflow_key(session_id: str, ai_user_id: str) -> tuple[str, str]:
+    return session_id, ai_user_id
+
+
+def _pending_confirmation_claim_key(
+    pending_key: tuple[str, str],
+    pending: _PendingWorkflow,
+) -> tuple[str, str, str]:
+    return (*pending_key, pending.gate_request_id or pending.response_id)
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:

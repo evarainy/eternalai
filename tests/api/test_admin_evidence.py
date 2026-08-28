@@ -226,6 +226,12 @@ class RuntimeSentinel:
         await self.workflow.run()
         raise AssertionError("Admin route reached the Runtime execution chain")
 
+    async def handle_user_action(self, **_: Any) -> Any:
+        self.calls += 1
+        await self.gateway.execute_capability()
+        await self.workflow.run()
+        raise AssertionError("Admin route reached the Runtime action chain")
+
 
 ADMIN_COOKIES = auth_cookies()
 ROLE_DENIED_DETAIL = {

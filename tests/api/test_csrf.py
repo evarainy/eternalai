@@ -22,6 +22,7 @@ from app.admin.registry import (
     AdminRegistryServiceWithBindingMutations,
     AdminRequestContext,
 )
+from app.contracts.sdui.models import UserAction
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
 from app.ports.auth import LoginCredential, Principal
@@ -71,6 +72,24 @@ class RecordingRuntime:
             fallback_text="ok",
             trace_id="trace-csrf",
             status="completed",
+        )
+
+    async def handle_user_action(
+        self,
+        channel: str,
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel, principal, action
+        self.calls += 1
+        return ResponseEnvelopeBuilder().build_message(
+            "response-csrf-action",
+            "task-csrf-action",
+            session_id,
+            "ok",
+            "ok",
+            "trace-csrf-action",
         )
 
 

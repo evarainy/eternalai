@@ -1,6 +1,35 @@
 {
   "components": {
     "schemas": {
+      "ActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/UserAction"
+          },
+          "channel": {
+            "enum": [
+              "web",
+              "cli",
+              "api",
+              "mock"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "session_id",
+          "action"
+        ],
+        "title": "ActionRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -201,6 +230,32 @@
         "title": "UIComponent",
         "type": "object"
       },
+      "UserAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action_type": {
+            "const": "confirm",
+            "title": "Action Type",
+            "type": "string"
+          },
+          "confirmed": {
+            "const": true,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "response_id": {
+            "title": "Response Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_type",
+          "response_id",
+          "confirmed"
+        ],
+        "title": "UserAction",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -249,6 +304,44 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/runtime/action": {
+      "post": {
+        "operationId": "handle_action_api_v1_runtime_action_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseEnvelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Handle Action"
+      }
+    },
     "/api/v1/runtime/handle": {
       "post": {
         "operationId": "handle_api_v1_runtime_handle_post",

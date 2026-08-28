@@ -5,6 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  ActionRequest,
   HandleRequest,
   ResponseEnvelope
 } from './runtime.schemas';
@@ -14,6 +15,20 @@ import { customInstance } from '../../api/mutator';
 
 
   /**
+ * @summary Handle Action
+ */
+export const handleActionApiV1RuntimeActionPost = (
+    actionRequest: ActionRequest,
+ ) => {
+      return customInstance<ResponseEnvelope>(
+      {url: `/api/v1/runtime/action`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: actionRequest
+    },
+      );
+    }
+
+/**
  * @summary Handle
  */
 export const handleApiV1RuntimeHandlePost = (
@@ -27,4 +42,5 @@ export const handleApiV1RuntimeHandlePost = (
       );
     }
 
+export type HandleActionApiV1RuntimeActionPostResult = NonNullable<Awaited<ReturnType<typeof handleActionApiV1RuntimeActionPost>>>
 export type HandleApiV1RuntimeHandlePostResult = NonNullable<Awaited<ReturnType<typeof handleApiV1RuntimeHandlePost>>>

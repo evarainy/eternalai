@@ -46,7 +46,7 @@ def _make_factory(engine: Any) -> Any:
     return make_async_session_factory(engine)
 
 
-def test_all_20_trace_event_types_persist_and_read_back() -> None:
+def test_all_21_trace_event_types_persist_and_read_back() -> None:
     _require_db()
     trace_id = f"all-types-{uuid4().hex}"
     event_types = list(get_args(TraceEventType))
@@ -71,8 +71,8 @@ def test_all_20_trace_event_types_persist_and_read_back() -> None:
 
             persisted = await reader.list_events_by_trace(trace_id)
 
-            assert len(event_types) == 20
-            assert len(persisted) == 20
+            assert len(event_types) == 21
+            assert len(persisted) == 21
             assert {event.event_type for event in persisted} == set(event_types)
             assert all(event.created_at.utcoffset() is not None for event in persisted)
         finally:

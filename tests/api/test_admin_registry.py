@@ -141,6 +141,11 @@ class RuntimeSentinel:
         await self.gateway.execute_capability()
         raise AssertionError("Admin route reached the Runtime execution chain")
 
+    async def handle_user_action(self, **_: Any) -> Any:
+        self.calls += 1
+        await self.gateway.execute_capability()
+        raise AssertionError("Admin route reached the Runtime action chain")
+
 
 def _capability(
     capability_id: str = "oa.leave.apply",

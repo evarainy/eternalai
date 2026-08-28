@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from app.api.v1.auth import _parse_login_credential
+from app.contracts.sdui.models import UserAction
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
@@ -61,6 +62,24 @@ class RecordingRuntime:
             fallback_text="ok",
             trace_id="trace-auth",
             status="completed",
+        )
+
+    async def handle_user_action(
+        self,
+        channel: str,
+        principal: Principal,
+        session_id: str,
+        action: UserAction,
+    ) -> ResponseEnvelope:
+        del channel, action
+        self.calls.append((principal.ai_user_id, session_id))
+        return ResponseEnvelopeBuilder().build_message(
+            "response-auth-action",
+            "task-auth-action",
+            session_id,
+            "ok",
+            "ok",
+            "trace-auth-action",
         )
 
 
