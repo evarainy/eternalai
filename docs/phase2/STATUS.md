@@ -1,11 +1,11 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-GOV-SYNC-029`
+- 当前基线 task_id：`P2-GOV-SYNC-030`
 - pytest：`2262 passed, 84 warnings`（0 skipped，0 failed；后台全量 run `20260827T143721Z-14868`，未使用 `--ignore`）
 - 前端 `pnpm --dir web test`：`110 passed, 0 failed, 0 skipped`（本棒不改前端且未单跑，沿用上一棒实测数字）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；GT-029～GT-033 通过完整 Runtime 与真实 envelope builder 冻结 `confirm_card` 参数值 allowlist，GT-012 多绑定 scope clarification 继续通过）
 - `tests/architecture/`：`42 passed`（本棒不触及架构边界且未单跑；沿用上一棒定向数字，本棒全量回归覆盖该目录）
-- 下一棒（串行，单 lane）：`P2-SDUI-RENDERER-001`（A 档）—— 2026-08-28 裁决唯一后继。必达项 ④⑤ 的关键路径同为 `SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002`；`P2-PAGE-CONTEXT-CONTRACT-001`、`P2-PORT-SEAM-001`、`P2-FE-WORKBENCH-001` 属机会层，不与之竞争。
+- 下一棒（串行，单 lane）：`P2-USER-ACTION-SEAM-001`（A 档）—— 2026-08-28 裁决插棒。串行链为 `USER-ACTION-SEAM-001 → SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002`。插棒原因：冻结蓝图 SDUI 安全边界要求「按钮点击只产生结构化 user_action」，而 `UserAction` 全仓无生产接线，Renderer 的「可操作确认面」在当前接线下无法合规实现。
 - `P2-GOLDEN-001` 已于 2026-08-27 完成本棒获批增量：新增并冻结 GT-029～GT-033，既有 fixture 未改、既有冻结条目未删；参数值 allowlist 从既有单元覆盖进入 Golden 冻结 regime。
 - P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
 - Golden 已拆两棒（2026-08-21 裁决，解 DAG 循环）：`P2-GOLDEN-001` 已完成 `confirm_card` 参数值 allowlist 的 Runtime 观察边界冻结；低风险写入的可操作确认面另依赖 `P2-CAPABILITY-AUTOMATION-LEVEL-001` → `P2-SDUI-RENDERER-001`，写入落地后由 `P2-GOLDEN-002` 增量冻写入路径。必达项 5 需两棒都完成；其完成判据口径已于 2026-08-28 裁定——Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层且已有覆盖，不构成必达项 5 缺口。
