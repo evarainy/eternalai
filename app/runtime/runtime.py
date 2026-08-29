@@ -53,6 +53,10 @@ from app.ports.task_store import (
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
+from app.runtime.response_projection import (
+    ProjectionContractSnapshot,
+    project_response_data,
+)
 from app.version_binding import (
     capability_version_bindings,
     immutable_request_digest,
@@ -74,6 +78,7 @@ class _PendingWorkflow:
     trace_id: str
     response_id: str
     capability_id: str
+    projection_snapshot: ProjectionContractSnapshot
     gate_request_id: str | None = None
     action_digest: str | None = None
     request_digest: str | None = None
@@ -278,7 +283,10 @@ class RuntimeImpl:
                 trace_id,
                 reason="no_unique_active_candidate",
             )
-        selected_capability = selection.capability
+        selected_capability = selection.capability.model_copy(deep=True)
+        projection_snapshot = ProjectionContractSnapshot.from_capability(
+            selected_capability
+        )
         capability_ref = capability_ref.model_copy(
             update={"capability_id": selected_capability.capability_id}
         )
@@ -322,6 +330,11 @@ class RuntimeImpl:
                     ),
                     locked_at=datetime.now(UTC),
                 )
+                _assert_manifest_projection_source(
+                    binding_manifest,
+                    selected_capability,
+                    projection_snapshot,
+                )
                 await self._human_gate_port.bind_task(binding_manifest)
             except (HumanGateConflictError, VersionBindingMismatchError, ValueError):
                 return await self._finish_version_binding_failure(
@@ -361,6 +374,7 @@ class RuntimeImpl:
                     workflow_result = await self._workflow_engine.execute(
                         workflow_id=selected_capability.capability_id,
                         expected_version=selected_capability.version,
+                        workflow_capability=selected_capability,
                         task_id=task_id,
                         session_id=sid,
                         ai_user_id=ai_user_id,
@@ -447,6 +461,7 @@ class RuntimeImpl:
                 trace_id=trace_id,
                 response_id=response_id,
                 capability_id=capability_ref.capability_id,
+                projection_snapshot=projection_snapshot,
                 gate_request_id=gate_request_id,
                 action_digest=action_digest,
                 request_digest=request_digest,
@@ -474,6 +489,7 @@ class RuntimeImpl:
             trace_id,
             capability_ref,
             capability=selected_capability,
+            projection_snapshot=projection_snapshot,
         )
         await self._trace_port.record_step(
             trace_id,
@@ -659,15 +675,8 @@ class RuntimeImpl:
                 data={"action_outcome": outcome, "result": None},
             )
         else:
-            safe_message = envelope.message
-            safe_fallback = envelope.fallback_text
-            if envelope.status == "completed":
-                safe_message = "操作已完成。"
-                safe_fallback = "Operation completed."
             envelope = envelope.model_copy(
                 update={
-                    "message": safe_message,
-                    "fallback_text": safe_fallback,
                     "data": {
                         "action_outcome": outcome,
                         "result": envelope.data,
@@ -908,6 +917,7 @@ class RuntimeImpl:
             exec_result,
             pending.trace_id,
             capability_ref,
+            projection_snapshot=pending.projection_snapshot,
         )
         await self._trace_port.record_step(
             pending.trace_id,
@@ -940,6 +950,7 @@ class RuntimeImpl:
                 trace_id=pending.trace_id,
                 response_id=response_id,
                 capability_id=pending.capability_id,
+                projection_snapshot=pending.projection_snapshot,
                 gate_request_id=next_gate_request_id,
                 action_digest=next_action_digest,
                 request_digest=next_request_digest,
@@ -989,8 +1000,7 @@ class RuntimeImpl:
                     "Workflow version binding requires a configured engine"
                 )
             resource_bindings = await self._workflow_engine.version_bindings(
-                workflow_id=capability.capability_id,
-                expected_version=capability.version,
+                workflow_capability=capability,
             )
         else:
             resource_bindings = capability_version_bindings(capability)
@@ -1247,12 +1257,19 @@ class RuntimeImpl:
         capability_ref: CapabilityRef,
         *,
         capability: CapabilitySpec | None = None,
+        projection_snapshot: ProjectionContractSnapshot | None = None,
     ) -> ResponseEnvelope:
         target_system = _target_system_for_capability(capability_ref.capability_id)
         if exec_result.status == "completed":
+            data = project_response_data(
+                exec_result.data,
+                projection_snapshot.load_output_schema()
+                if projection_snapshot is not None
+                else None,
+            )
             message = _format_capability_response(
                 capability_ref.capability_id,
-                exec_result.data,
+                data,
             )
             return self._response_builder.build_message(
                 response_id,
@@ -1262,7 +1279,7 @@ class RuntimeImpl:
                 "Operation completed.",
                 trace_id,
                 status="completed",
-                data=exec_result.data,
+                data=data,
             )
         if exec_result.status == "denied":
             return self._response_builder.build_policy_denied(
@@ -1335,6 +1352,28 @@ class RuntimeImpl:
                 target_system,
             ),
             target_system=target_system,
+        )
+
+
+def _assert_manifest_projection_source(
+    manifest: TaskVersionBindingManifest,
+    capability: CapabilitySpec,
+    snapshot: ProjectionContractSnapshot,
+) -> None:
+    if not snapshot.matches(capability):
+        raise VersionBindingMismatchError(
+            "Projection contract differs from the selected capability snapshot"
+        )
+    resource_type = "workflow" if capability.type == "workflow" else "tool"
+    matching = tuple(
+        binding
+        for binding in manifest.bindings
+        if binding.resource_type == resource_type
+        and binding.resource_id == capability.capability_id
+    )
+    if len(matching) != 1 or matching[0].version != capability.version:
+        raise VersionBindingMismatchError(
+            "Projection contract differs from the Task version binding"
         )
 
 
@@ -1682,8 +1721,7 @@ def _format_capability_response(
             data.get("submit_status"),
         )
 
-    generic = _joined_scalar_values(data, tuple(data.keys()))
-    return generic if generic else "操作完成"
+    return "操作完成"
 
 
 def _join_message_parts(*parts: Any) -> str:

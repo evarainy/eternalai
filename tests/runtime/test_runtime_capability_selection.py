@@ -29,6 +29,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.registry_fakes import schema_digest
 
 
 class RecordingTaskStore:
@@ -254,6 +255,10 @@ def _capability(
     capability_type: CapabilityType = "query",
     input_schema: dict[str, Any] | None = None,
 ) -> CapabilitySpec:
+    output_schema = {
+        "type": "object",
+        "properties": {"selected": {"type": "string"}},
+    }
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
@@ -261,7 +266,8 @@ def _capability(
         intent_tags=intent_tags or [],
         input_schema=input_schema or {},
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner="runtime-selection-test",
         version="1.0.0",

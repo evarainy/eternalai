@@ -16,6 +16,7 @@ from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 from app.ports.response_envelope import ResponseEnvelope
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.registry_fakes import schema_digest
 from tests.runtime.test_runtime_capability_selection import (
     ExistingSessionStore,
     RecordingGateway,
@@ -34,13 +35,18 @@ def _capability(
     name: str | None = None,
     intent_tags: list[str] | None = None,
 ) -> CapabilitySpec:
+    output_schema = {
+        "type": "object",
+        "properties": {"selected": {"type": "string"}},
+    }
     return CapabilitySpec(
         capability_id=capability_id,
         name=name or capability_id,
         type="query",
         intent_tags=intent_tags or [],
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner=owner,
         version="1.0.0",

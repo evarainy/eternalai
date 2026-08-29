@@ -46,6 +46,7 @@ from scripts.smoke.trace_contract import (
     REQUIRED_TRACE_EVENTS as _REQUIRED_TRACE_EVENTS,
 )
 from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
+from tests.runtime.registry_fakes import schema_digest
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -380,6 +381,27 @@ async def _run_pilot_request() -> PilotObservation:
     )
     registry = PostgreSQLCapabilityRegistry(session_factory)
     await _cleanup(session_factory, ai_user_id)
+    output_schema = {
+        "type": "object",
+        "properties": {
+            "workflows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "message_id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "source_name": {"type": "string"},
+                        "occurred_at": {"type": "string"},
+                        "business_state": {"type": "string"},
+                        "link": {"type": "string"},
+                        "mobile_link": {"type": "string"},
+                    },
+                },
+            }
+        },
+    }
     await registry.create(
         CapabilitySpec(
             capability_id=_CAPABILITY_ID,
@@ -387,9 +409,9 @@ async def _run_pilot_request() -> PilotObservation:
             type="query",
             intent_tags=["pending-workflows"],
             input_schema={},
-            output_schema={},
+            output_schema=output_schema,
             input_schema_digest="fixture-input",
-            output_schema_digest="fixture-output",
+            output_schema_digest=schema_digest(output_schema),
             risk_level="low",
             owner="pilot-fixture",
             version="1.0.0",

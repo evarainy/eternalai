@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from app.runtime.response_projection import canonical_schema_digest
+
 if TYPE_CHECKING:
     load_fixture: Callable[[str], dict[str, Any]]
 else:
@@ -44,6 +46,18 @@ GT_IDS = [
     "GT-032",
     "GT-033",
 ]
+
+CHANGED_OUTPUT_SCHEMA_GT_IDS = (
+    "GT-001",
+    "GT-003",
+    "GT-004",
+    "GT-005",
+    "GT-007",
+    "GT-020",
+    "GT-024",
+    "GT-025",
+    "GT-027",
+)
 REQUIRED_TOP_LEVEL = [
     "golden_task_id",
     "title",
@@ -373,6 +387,16 @@ def test_appended_pending_goldens_register_the_full_todo_output_schema(
     )
     assert capability["output_schema_digest"] == (
         "87d879295d5ea7c9dd73efa55068e4e4a8c8c682a49607ff06acd739a8bfe320"
+    )
+
+
+@pytest.mark.parametrize("gt_id", CHANGED_OUTPUT_SCHEMA_GT_IDS)
+def test_changed_output_schema_digest_is_canonical(gt_id: str) -> None:
+    fixture = load_fixture(gt_id)
+    capability = fixture["given"]["registered_capabilities"][0]
+
+    assert capability["output_schema_digest"] == canonical_schema_digest(
+        capability["output_schema"]
     )
 
 

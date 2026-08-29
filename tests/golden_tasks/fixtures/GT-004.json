@@ -43,6 +43,9 @@
             "vendor_id": {
               "type": "string"
             },
+            "vendor_name": {
+              "type": "string"
+            },
             "balance": {
               "type": "number"
             },
@@ -52,7 +55,7 @@
           }
         },
         "input_schema_digest": "digest_u8_vendor_balance_input",
-        "output_schema_digest": "digest_u8_vendor_balance_output"
+        "output_schema_digest": "6a237f9d834349aafd7e9b1710829b3a1ed1eb7b4221192204add5adbc9bc527"
       }
     ],
     "mock_u8_state": {

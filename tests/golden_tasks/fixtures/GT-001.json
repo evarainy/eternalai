@@ -35,12 +35,20 @@
           ],
           "properties": {
             "workflows": {
-              "type": "array"
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                }
+              }
             }
           }
         },
         "input_schema_digest": "digest_oa_list_pending_input",
-        "output_schema_digest": "digest_oa_list_pending_output"
+        "output_schema_digest": "d0d8250db9e5b57f97051692bfe43669a34be015bb1683095804705de0be2307"
       }
     ],
     "mock_oa_state": {

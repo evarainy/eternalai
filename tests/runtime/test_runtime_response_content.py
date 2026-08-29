@@ -9,6 +9,10 @@ from typing import Any, cast
 import pytest
 
 from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.contracts import (
+    OAPendingWorkflowCollection,
+    OASystemMessageCollection,
+)
 from app.infra.adapters.oa.provider import ReplayOAReadProvider
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
@@ -178,6 +182,36 @@ class SpyGateway:
         return self.result
 
 
+def _output_schema_for(capability_id: str) -> dict[str, Any]:
+    if capability_id == "oa.list_pending_workflows":
+        return OAPendingWorkflowCollection.model_json_schema()
+    if capability_id == "oa.list_system_messages":
+        return OASystemMessageCollection.model_json_schema()
+    if capability_id == "oa.get_workflow_status":
+        return {
+            "type": "object",
+            "properties": {
+                "workflow_id": {"type": "string"},
+                "current_step": {"type": "string"},
+                "approver": {"type": "string"},
+            },
+        }
+    if capability_id == "u8.get_document_status":
+        return {
+            "type": "object",
+            "properties": {
+                "document_no": {"type": "string"},
+                "document_status": {"type": "string"},
+                "amount": {"type": "number"},
+                "currency": {"type": "string"},
+            },
+        }
+    return {
+        "type": "object",
+        "properties": {"result": {"type": "string"}},
+    }
+
+
 def _run_runtime(
     gateway_result: ExecutionResult,
     *,
@@ -203,7 +237,13 @@ def _run_runtime(
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry(capability or capability_id),
+            capability_registry=StaticCapabilityRegistry(
+                capability
+                or active_capability(
+                    capability_id,
+                    output_schema=_output_schema_for(capability_id),
+                )
+            ),
             gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
@@ -300,7 +340,12 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
             CapabilityRef,
             CapabilityRef(capability_id=capability_id),
         )
-        registry = StaticCapabilityRegistry(capability_id)
+        registry = StaticCapabilityRegistry(
+            active_capability(
+                capability_id,
+                output_schema=OASystemMessageCollection.model_json_schema(),
+            )
+        )
         gateway = CapabilityGateway(
             adapter=OAReadAdapter(
                 ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)

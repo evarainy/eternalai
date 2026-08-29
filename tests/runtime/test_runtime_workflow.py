@@ -21,6 +21,7 @@ from app.runtime.models import CapabilityRef
 from app.version_binding import workflow_confirmation_action_digest
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
+from tests.runtime.registry_fakes import schema_digest
 
 
 def _capability(
@@ -28,13 +29,19 @@ def _capability(
     capability_type: str,
     *,
     policy_digest: str | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> CapabilitySpec:
+    output_schema = output_schema or {
+        "type": "object",
+        "properties": {"status": {"type": "string"}},
+    }
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
         type=capability_type,
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner="runtime-workflow-test",
         version="1.0.0",
@@ -50,8 +57,10 @@ def _capability(
 class Registry:
     def __init__(self, *capabilities: CapabilitySpec) -> None:
         self.items = {item.capability_id: item for item in capabilities}
+        self.get_calls: list[str] = []
 
     async def get(self, capability_id: str) -> CapabilitySpec | None:
+        self.get_calls.append(capability_id)
         return self.items.get(capability_id)
 
     async def list(

@@ -1435,3 +1435,44 @@ Opus 桥的 meta 绑定 `base_sha` / `head_sha`，改代码即绑定失效并逼
 
 **影响面**：`PHASE2_PLAN.md` 欠债表新增六行、四条空 `activation_task_id` 填实、
 新增三条 DAG 行；`docs/phase2/STATUS.md` 机会层清单。
+
+## 2026-08-30 — 裁决：`CapabilitySpec.output_schema` 是规范化输出暨 `ResponseEnvelope` 外露合同
+
+**决定**：本项目不新增与 `output_schema` 平行的 display allowlist。
+`CapabilitySpec.output_schema` 同时约束能力在可信执行边界后的规范化业务输出，以及该结果允许进入
+`ResponseEnvelope.data` 和安全自然语言 formatter 的最大外露形状。它不是上游原始响应 schema，
+也不是内部执行结果、Trace、错误详情或 adapter 私有字段的全集。具名 formatter 可以只使用该合同的
+子集；未声明字段不得进入 `data`、`message`、`fallback_text` 或完整 envelope。JSON Schema 默认的
+`additionalProperties: true` 不构成外露授权；只有具名 `properties`，以及明确给出子 schema 的
+`additionalProperties`，才构成结构授权。
+
+**凭证边界**：任何递归 `properties` 名命中统一的 `_CREDENTIAL_MARKER`，该外露合同即无效，
+projector 对根结果 fail-closed 为 `data=None`；仓库守卫同时覆盖生产 canonical schema、Golden
+注册能力与标记为有效的测试 fake。schema-valued `additionalProperties` 接收的动态键仍须在运行时逐键
+执行同一 marker 校验，命中键不得外露。`ResponseEnvelopeBuilder._sanitize_value` 的键名和内容匹配
+继续作为独立的纵深防御，不得因 projector 存在而删除或绕过。
+
+**已知边界**：静态合同不能判断“一个已批准、marker-free 的业务字段，其运行时值实际上是任意形态的
+凭证”。能力作者和 adapter 必须先把上游结果规范化，禁止把 password、token、cookie、session id、
+access token、refresh token 或其他凭证放入任何获准字段；值层 marker 清洗只是一道补充防线，
+不是把凭证放入业务字段的授权。本裁决不授权 raw payload、内部错误、Trace、Cookie 或凭证进入响应。
+
+**校验边界**：projector 是外露塑形，不是完整 JSON Schema 返回校验；它不执行 `required`、`const`、
+`enum`、`format` 等业务有效性约束，也不负责把返回合同违规转换成执行失败、错误码和 Trace。
+`PHASE2_PLAN.md` 中“Registry `output_schema` 未参与返回侧校验”欠债保持未结项，本棒只更新其 evidence。
+
+**渲染边界**：获准进入 `ResponseEnvelope` 不等于获准渲染成 DOM、`href`、导航或 Action。
+`link` / `mobile_link` 的 URL 安全与导航合同仍由 `P2-SDUI-RENDERER-002` 单独裁决；本棒不得提前赋予
+导航语义。
+
+**后续演进**：若将来出现“规范化输出中必须存在、但不得进入 `ResponseEnvelope`”的真实字段，
+必须先以新的 ADR 明确推翻本条单合同不变量，再设计类型化展示模型及其同步机制；在此之前不得私设
+第二份字段清单。
+
+## 2026-08-30 — 覆盖 2026-08-29 两入口 completed 文案差异
+
+`P2-ENVELOPE-MESSAGE-REDACTION-001` 完成投影前置与字段溯源修复后，结构化 `/action` 与自由文本
+`/handle` 的 completed 响应统一复用 `_build_envelope` 产生的安全 message 与 fallback_text；
+`/action` 不再覆写为通用完成文案。两入口只保留结构差异：`/handle.data` 是投影后的业务结果，
+`/action.data` 是 `{action_outcome, result}`。本条只覆盖 2026-08-29 关于“completed 文案保持差异”的
+临时决定，其余 Action 绑定、身份隔离、幂等、两层 data 和失败语义继续有效。

@@ -22,7 +22,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
+from tests.runtime.registry_fakes import StaticCapabilityRegistry, schema_digest
 
 
 class SpyTaskStore:
@@ -167,12 +167,20 @@ class SpyTracePort:
 
 class FakeRegistry:
     async def get(self, capability_id: str) -> CapabilitySpec:
+        output_schema = {
+            "type": "object",
+            "properties": {
+                "document_no": {"type": "string"},
+                "document_status": {"type": "string"},
+            },
+        }
         return CapabilitySpec(
             capability_id=capability_id,
             name="Mock capability",
             type="query",
             input_schema_digest="input-digest",
-            output_schema_digest="output-digest",
+            output_schema=output_schema,
+            output_schema_digest=schema_digest(output_schema),
             risk_level="low",
             owner="phase0",
             version="0.1.0",

@@ -28,7 +28,22 @@
         "type": "action",
         "risk_level": "high",
         "execution_identity": "user_delegated",
-        "binding_required": true
+        "binding_required": true,
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "draft_id": {
+              "type": "string"
+            },
+            "workflow_id": {
+              "type": "string"
+            },
+            "submit_status": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema_digest": "cfe1248e9e6dfcb3dbfa03513ce9840918bef6f72b8314419f54f5f596277afe"
       }
     ],
     "mock_oa_state": {

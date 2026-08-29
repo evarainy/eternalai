@@ -23,7 +23,16 @@
         "risk_level": "low",
         "execution_identity": "user_delegated",
         "binding_required": false,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "workflow_id": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema_digest": "f36723eb42146e6819e2b4332306fb5f723dc8514a98f457b67b069e1c072c81"
       },
       {
         "capability_id": "oa.b4.human_gate",

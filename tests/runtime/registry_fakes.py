@@ -2,16 +2,42 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Mapping
+from typing import Any
+
 from app.ports.capability_registry import CapabilitySpec
 
+VALID_RUNTIME_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {"result": {"type": "string"}},
+}
 
-def active_capability(capability_id: str) -> CapabilitySpec:
+
+def schema_digest(schema: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def active_capability(
+    capability_id: str,
+    *,
+    output_schema: dict[str, Any] | None = None,
+) -> CapabilitySpec:
+    output_schema = output_schema or VALID_RUNTIME_OUTPUT_SCHEMA
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
         type="query",
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner="runtime-test",
         version="1.0.0",

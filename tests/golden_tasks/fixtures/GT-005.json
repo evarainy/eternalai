@@ -60,13 +60,16 @@
             "online": {
               "type": "boolean"
             },
+            "last_seen_at": {
+              "type": "string"
+            },
             "video_frame_included": {
               "type": "boolean"
             }
           }
         },
         "input_schema_digest": "digest_ivms_online_input",
-        "output_schema_digest": "digest_ivms_online_output"
+        "output_schema_digest": "3b8dc028bee07e5d7705758cdfc417745698ec661faeff96e6411cee0bc2fb36"
       }
     ],
     "mock_ivms_state": {
