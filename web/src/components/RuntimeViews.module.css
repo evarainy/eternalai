@@ -1,0 +1,154 @@
+.panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--chat-color-border);
+}
+
+.panelHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.incomplete {
+  flex: none;
+  color: var(--chat-color-warning);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.reviewSummary {
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.facts,
+.argumentList,
+.recordFacts {
+  display: grid;
+  grid-template-columns: minmax(108px, 0.4fr) minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.facts dt,
+.argumentList dt,
+.recordFacts dt {
+  color: var(--chat-color-text-secondary);
+  font-weight: 650;
+}
+
+.facts dd,
+.argumentList dd,
+.recordFacts dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.arguments {
+  margin-top: 14px;
+  padding: 12px;
+  background: var(--chat-color-bg-soft);
+  border-radius: 12px;
+}
+
+.argumentsTitle {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 13px;
+}
+
+.fieldNameOnly {
+  grid-column: 1 / -1;
+  padding-block: 2px;
+}
+
+.actionRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.minimumActionTarget {
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 20px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.recordList {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record {
+  padding: 14px;
+  background: var(--chat-color-bg-soft);
+  border: 1px solid var(--chat-color-border);
+  border-radius: 12px;
+}
+
+.recordTitle {
+  margin: 0 0 10px;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.content {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-top: 1px solid var(--chat-color-border);
+  line-height: 1.7;
+}
+
+.contentDetails {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--chat-color-border);
+}
+
+.contentDetails summary {
+  color: var(--chat-color-primary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.contentDetails .content {
+  border-top: 0;
+}
+
+@media (max-width: 560px) {
+  .facts,
+  .argumentList,
+  .recordFacts {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .facts dd,
+  .argumentList dd,
+  .recordFacts dd {
+    margin-bottom: 8px;
+  }
+
+  .actionRow :global(.ant-btn) {
+    width: 100%;
+  }
+}

@@ -189,7 +189,7 @@
 }
 
 .guidance,
-.confirmationNotice {
+.outcomeNotice {
   display: block;
   margin-top: 12px;
   padding-top: 12px;
@@ -197,8 +197,8 @@
   line-height: 1.6;
 }
 
-.confirmationNotice {
-  color: var(--chat-color-warning);
+.outcomeNotice {
+  color: var(--chat-color-text);
 }
 
 .pendingNotice {
