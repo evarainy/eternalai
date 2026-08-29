@@ -1,11 +1,11 @@
 # Phase 2 当前状态
 
 - 当前基线 task_id：`P2-ENVELOPE-MESSAGE-REDACTION-001`
-- pytest：`2360 passed, 84 warnings`（0 skipped，0 failed；本棒后台全量，未使用 `--ignore=`）
-- 后端定向 pytest：`371 passed, 0 failed`（本棒实测：`tests/runtime/`、`tests/api/`）
+- pytest：`2366 passed, 84 warnings`（0 skipped，0 failed；本棒全量，未使用 `--ignore=`）
+- 后端定向 pytest：`373 passed, 0 failed`（本棒实测：`tests/runtime/`、`tests/api/`）
 - 前端 `pnpm --dir web test`：`135 passed, 0 failed, 0 skipped`（14 个测试文件，沿用 `P2-SDUI-RENDERER-001` 实测；本棒不改前端且未单跑）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；本棒实测）
-- `tests/architecture/`：`44 passed`（本棒实测，含递归凭证属性与治理 SSOT 守卫）
+- `tests/architecture/`：`47 passed`（本棒实测，含递归凭证属性、Runtime fake inventory 与治理 SSOT 守卫）
 - 下一棒（串行，单 lane）：**`P2-LOW-RISK-WRITE-001`（A 档）**。串行链为 `LOW-RISK-WRITE-001 → GOLDEN-002`（2026-08-30 已决 DAG 的机械传播）。
 - `P2-ENVELOPE-MESSAGE-REDACTION-001` 已于 2026-08-30 完成：`CapabilitySpec.output_schema` 作为单一 `ResponseEnvelope` 外露合同，Runtime 在统一 formatter 之前 fail-closed 投影；task-local capability、binding manifest 与 immutable projection snapshot 同源；通用 formatter 不再拼接任意返回值，结构化 `/action` 与自由文本 `/handle` 的 completed 文案统一复用安全 formatter，只保留 data 包装层差异。
 - `P2-SDUI-RENDERER-001` 已于 2026-08-29 完成：`ChatPage` 保留结构化载荷，`confirm_card` 可操作确认面走结构化 `/api/v1/runtime/action`，记录列表以两个已获批合同白名单渲染，`action_outcome` 9 值编译期闭合并有后端防漂移测试；`app/` 改动量为 0。解除欠债三条（`action_outcome` OpenAPI 具名类型、`/action` 端点级负向测试、两入口文案不一致）。

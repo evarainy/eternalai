@@ -115,9 +115,7 @@ def test_scalar_nested_object_and_object_array_are_projected_without_unknowns() 
     data = {
         "safe": "SYNTHETIC_SAFE",
         "nested": {"count": 2, "unknown": "SYNTHETIC_NESTED_UNKNOWN"},
-        "items": [
-            {"name": "SYNTHETIC_ITEM", "unknown": "SYNTHETIC_ITEM_UNKNOWN"}
-        ],
+        "items": [{"name": "SYNTHETIC_ITEM", "unknown": "SYNTHETIC_ITEM_UNKNOWN"}],
         "unknown": "SYNTHETIC_ROOT_UNKNOWN",
     }
 
@@ -196,20 +194,51 @@ def test_invalid_reference_fails_closed(schema: dict[str, Any]) -> None:
     assert project_response_data({"safe": "SYNTHETIC_SAFE"}, schema) is None
 
 
-def test_nullable_null_branch_with_unknown_keyword_is_dropped() -> None:
+@pytest.mark.parametrize(
+    ("value", "branches"),
+    (
+        (
+            "SYNTHETIC_VISIBLE",
+            [
+                {"type": "string"},
+                {"type": "null", "unknown_structure": True},
+            ],
+        ),
+        (
+            None,
+            [
+                {"type": "string", "unknown_structure": True},
+                {"type": "null"},
+            ],
+        ),
+    ),
+)
+def test_nullable_rejects_malformed_selected_or_unselected_branch(
+    value: Any,
+    branches: list[dict[str, Any]],
+) -> None:
     schema = {
         "type": "object",
-        "properties": {
-            "value": {
-                "anyOf": [
-                    {"type": "string"},
-                    {"type": "null", "unknown_structure": True},
-                ]
-            }
-        },
+        "properties": {"value": {"anyOf": branches}},
     }
 
-    assert project_response_data({"value": None}, schema) == {}
+    assert project_response_data({"value": value}, schema) is None
+
+
+def test_null_named_property_schema_never_falls_through_to_additional_schema() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"declared_value": None},
+        "additionalProperties": {"type": "string"},
+    }
+
+    assert (
+        project_response_data(
+            {"declared_value": "SYNTHETIC_MALFORMED_SCHEMA_CANARY"},
+            schema,
+        )
+        is None
+    )
 
 
 def test_dynamic_additional_properties_requires_schema_and_drops_marker_keys() -> None:

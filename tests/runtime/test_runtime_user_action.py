@@ -30,6 +30,7 @@ from app.runtime.runtime import RuntimeImpl, _PendingWorkflow
 from app.version_binding import workflow_version_binding
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowStep
+from tests.runtime.registry_fakes import runtime_output_schema
 from tests.runtime.test_runtime_workflow import (
     BlockingConfirmationGateway,
     Gateway,
@@ -272,14 +273,7 @@ async def _build_harness(
         _capability(
             definition.workflow_id,
             "workflow",
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "safe": {"type": "string"},
-                    "safe_note": {"type": "string"},
-                    "second": {"type": "string"},
-                },
-            },
+            output_schema=runtime_output_schema("test_runtime_user_action.structured"),
         ),
         _capability(_PREVIEW_ID, "query"),
         _capability(_EXECUTE_ID, "action"),
@@ -399,9 +393,7 @@ def _assert_envelope_omits(envelope: Any, marker: str) -> None:
 
 
 def _pending(harness: Harness) -> _PendingWorkflow:
-    return harness.runtime._pending_workflows[
-        ("session-action", harness.principal.ai_user_id)
-    ]
+    return harness.runtime._pending_workflows[("session-action", harness.principal.ai_user_id)]
 
 
 def _winner(pending: _PendingWorkflow, suffix: str) -> _PendingWorkflow:
@@ -424,10 +416,7 @@ def _replace_top_capability(harness: Harness, mode: str) -> None:
         )
         return
     if mode == "schema_drift":
-        output_schema = {
-            "type": "object",
-            "properties": {"drifted": {"type": "string"}},
-        }
+        output_schema = runtime_output_schema("test_runtime_user_action.drift")
         harness.registry.items[_WORKFLOW_ID] = current.model_copy(
             update={
                 "output_schema": output_schema,
@@ -475,9 +464,7 @@ def test_no_pending_and_cross_identity_are_indistinguishable_and_use_fresh_trace
         exclude={"response_id", "task_id", "session_id", "trace_id"}
     )
     assert comparable(wrong_user) == comparable(wrong_session) == comparable(own_missing)
-    action_events = [
-        event for event in harness.trace.steps if event["event_type"] == "user_action"
-    ]
+    action_events = [event for event in harness.trace.steps if event["event_type"] == "user_action"]
     inbound = [event for event in action_events if event["attributes"] == {"phase": "inbound"}]
     assert len(inbound) == 3
     assert len({event["trace_id"] for event in inbound}) == 3
@@ -608,9 +595,7 @@ def test_new_task_binding_and_projection_share_one_selected_workflow_snapshot() 
     assert pending.projection_snapshot.matches(selected)
     assert manifest is not None
     workflow_bindings = [
-        binding
-        for binding in manifest.bindings
-        if binding.resource_type == "workflow"
+        binding for binding in manifest.bindings if binding.resource_type == "workflow"
     ]
     assert len(workflow_bindings) == 1
     assert workflow_bindings[0].resource_id == pending.projection_snapshot.capability_id
@@ -687,11 +672,7 @@ def test_completed_action_preserves_the_text_resume_message_and_fallback() -> No
 
     assert text_response.status == action_response.status == "completed"
     assert text_response.message == action_response.message == "操作完成"
-    assert (
-        text_response.fallback_text
-        == action_response.fallback_text
-        == "Operation completed."
-    )
+    assert text_response.fallback_text == action_response.fallback_text == "Operation completed."
     assert text_response.data == {"safe": "accepted"}
     assert action_response.data == {
         "action_outcome": "accepted",
@@ -746,9 +727,7 @@ def test_mutating_source_schema_cannot_change_saved_snapshot_manifest_or_no_gate
         ungated = await _build_harness(with_gate=False)
         ungated_pending = _pending(ungated)
         original_json = ungated_pending.projection_snapshot.output_schema_json
-        ungated.registry.items[_WORKFLOW_ID].output_schema["properties"]["safe"][
-            "type"
-        ] = "integer"
+        ungated.registry.items[_WORKFLOW_ID].output_schema["properties"]["safe"]["type"] = "integer"
         response = await ungated.runtime.handle_user_message(
             channel="mock",
             ai_user_id=ungated.principal.ai_user_id,
@@ -894,7 +873,6 @@ def test_accepted_result_redacts_marker_value_in_declared_safe_key() -> None:
                 data={
                     "safe": "ok",
                     "safe_note": "SYNTHETIC_token_canary",
-                    "password": "SYNTHETIC_private_canary",
                 },
                 trace_id="completed",
             )
@@ -909,7 +887,6 @@ def test_accepted_result_redacts_marker_value_in_declared_safe_key() -> None:
         "safe_note": "[REDACTED]",
     }
     _assert_envelope_omits(response, "SYNTHETIC_token_canary")
-    _assert_envelope_omits(response, "SYNTHETIC_private_canary")
 
 
 def test_exception_after_claim_cannot_replay_adapter_execution() -> None:
@@ -1119,9 +1096,7 @@ def test_second_structured_confirmation_uses_fresh_claim_and_succeeds() -> None:
     assert second.status == "completed"
     assert harness.engine.resume_calls == 2
     assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
-    assert [call[0] for call in harness.gateway.calls].count(
-        "oa.structured.second.execute"
-    ) == 1
+    assert [call[0] for call in harness.gateway.calls].count("oa.structured.second.execute") == 1
 
 
 def test_user_action_trace_records_inbound_before_outcome() -> None:
@@ -1131,9 +1106,7 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
         return harness, response
 
     harness, response = asyncio.run(exercise())
-    action_events = [
-        event for event in harness.trace.steps if event["event_type"] == "user_action"
-    ]
+    action_events = [event for event in harness.trace.steps if event["event_type"] == "user_action"]
 
     assert _outcome(response) == "accepted"
     assert [event["attributes"] for event in action_events] == [

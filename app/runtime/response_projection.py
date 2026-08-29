@@ -59,9 +59,7 @@ _SUPPORTED_STRUCTURE_KEYWORDS = frozenset(
     }
 )
 _ALLOWED_KEYWORDS = (
-    _ANNOTATION_KEYWORDS
-    | _IGNORED_VALIDATION_KEYWORDS
-    | _SUPPORTED_STRUCTURE_KEYWORDS
+    _ANNOTATION_KEYWORDS | _IGNORED_VALIDATION_KEYWORDS | _SUPPORTED_STRUCTURE_KEYWORDS
 )
 
 
@@ -120,6 +118,8 @@ def project_response_data(
     root_schema = dict(schema)
     if schema_has_credential_property(root_schema):
         return None
+    if not _schema_is_supported(root_schema, root_schema, ()):
+        return None
     projected = _project(data, root_schema, root_schema, ())
     return projected if isinstance(projected, dict) else None
 
@@ -148,9 +148,7 @@ def _schema_has_credential_property(
         children = schema.get(keyword)
         if isinstance(children, Mapping):
             for child in children.values():
-                if isinstance(child, Mapping) and _schema_has_credential_property(
-                    child, seen=seen
-                ):
+                if isinstance(child, Mapping) and _schema_has_credential_property(child, seen=seen):
                     return True
 
     for keyword in ("items", "additionalProperties"):
@@ -161,11 +159,118 @@ def _schema_has_credential_property(
     branches = schema.get("anyOf")
     if isinstance(branches, list):
         for branch in branches:
-            if isinstance(branch, Mapping) and _schema_has_credential_property(
-                branch, seen=seen
-            ):
+            if isinstance(branch, Mapping) and _schema_has_credential_property(branch, seen=seen):
                 return True
     return False
+
+
+def _schema_is_supported(
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    ref_stack: tuple[str, ...],
+) -> bool:
+    """Validate the entire schema subset before any value-dependent projection."""
+
+    if not schema or any(key not in _ALLOWED_KEYWORDS for key in schema):
+        return False
+
+    definitions = schema.get("$defs")
+    if definitions is not None and not isinstance(definitions, Mapping):
+        return False
+
+    reference = schema.get("$ref")
+    if reference is not None:
+        if not isinstance(reference, str):
+            return False
+        siblings = set(schema) - {"$ref"}
+        if any(key not in _ANNOTATION_KEYWORDS for key in siblings):
+            return False
+        prefix = "#/$defs/"
+        name = reference.removeprefix(prefix)
+        if not reference.startswith(prefix) or not name or "/" in name or reference in ref_stack:
+            return False
+        root_definitions = root_schema.get("$defs")
+        if not isinstance(root_definitions, Mapping):
+            return False
+        target = root_definitions.get(name)
+        return bool(
+            isinstance(target, Mapping)
+            and target
+            and _schema_is_supported(
+                target,
+                root_schema,
+                (*ref_stack, reference),
+            )
+        )
+
+    any_of = schema.get("anyOf")
+    if any_of is not None:
+        structure_siblings = (set(schema) & _SUPPORTED_STRUCTURE_KEYWORDS) - {
+            "anyOf",
+            "$defs",
+        }
+        if structure_siblings or not isinstance(any_of, list) or len(any_of) != 2:
+            return False
+        null_branches = [
+            branch
+            for branch in any_of
+            if isinstance(branch, Mapping) and branch.get("type") == "null"
+        ]
+        non_null_branches = [branch for branch in any_of if branch not in null_branches]
+        return bool(
+            len(null_branches) == 1
+            and len(non_null_branches) == 1
+            and all(
+                isinstance(branch, Mapping)
+                and branch
+                and _schema_is_supported(branch, root_schema, ref_stack)
+                for branch in (*null_branches, *non_null_branches)
+            )
+        )
+
+    structure_keys = set(schema) & _SUPPORTED_STRUCTURE_KEYWORDS
+    structure_keys.discard("$defs")
+    if (
+        structure_keys != {"type"}
+        and not (
+            schema.get("type") == "object"
+            and structure_keys <= {"type", "properties", "additionalProperties"}
+        )
+        and not (schema.get("type") == "array" and structure_keys <= {"type", "items"})
+    ):
+        return False
+
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        raw_properties = schema.get("properties", {})
+        if not isinstance(raw_properties, Mapping):
+            return False
+        additional = schema.get("additionalProperties")
+        if additional not in (None, True, False) and not isinstance(additional, Mapping):
+            return False
+        additional_schema = additional if isinstance(additional, Mapping) and additional else None
+        if not raw_properties and additional_schema is None:
+            return False
+        if any(
+            not isinstance(raw_key, str)
+            or not isinstance(subschema, Mapping)
+            or not subschema
+            or not _schema_is_supported(subschema, root_schema, ref_stack)
+            for raw_key, subschema in raw_properties.items()
+        ):
+            return False
+        return bool(
+            additional_schema is None
+            or _schema_is_supported(additional_schema, root_schema, ref_stack)
+        )
+    if schema_type == "array":
+        items = schema.get("items")
+        return bool(
+            isinstance(items, Mapping)
+            and items
+            and _schema_is_supported(items, root_schema, ref_stack)
+        )
+    return schema_type in {"string", "boolean", "null", "integer", "number"}
 
 
 def _project(
@@ -188,11 +293,13 @@ def _project(
     structure_keys = set(schema) & _SUPPORTED_STRUCTURE_KEYWORDS
     if "$defs" in structure_keys:
         structure_keys.remove("$defs")
-    if structure_keys != {"type"} and not (
-        schema.get("type") == "object"
-        and structure_keys <= {"type", "properties", "additionalProperties"}
-    ) and not (
-        schema.get("type") == "array" and structure_keys <= {"type", "items"}
+    if (
+        structure_keys != {"type"}
+        and not (
+            schema.get("type") == "object"
+            and structure_keys <= {"type", "properties", "additionalProperties"}
+        )
+        and not (schema.get("type") == "array" and structure_keys <= {"type", "items"})
     ):
         return _DROP
 
@@ -210,11 +317,7 @@ def _project(
     if schema_type == "integer":
         return value if isinstance(value, int) and not isinstance(value, bool) else _DROP
     if schema_type == "number":
-        return (
-            value
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-            else _DROP
-        )
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else _DROP
     return _DROP
 
 

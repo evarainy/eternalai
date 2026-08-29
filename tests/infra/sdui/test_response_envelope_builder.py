@@ -122,18 +122,10 @@ def test_non_confirm_builder_paths_keep_exact_serialized_bytes() -> None:
         for name, envelope in envelopes.items()
     } == {
         "message": "71a9d31a5c90bc66f6929251e24338e4528334bd25544b31e14228f365ee4942",
-        "binding_required": (
-            "f85b909c9e71cf4183d25ca7551ed3ca0cfc0633237061f41921b89aaf7e1935"
-        ),
-        "operator_handback": (
-            "fa1cfa049bdfa28dcb1f2af3eef2b71afcb36a147b9912263d66806525c2f834"
-        ),
-        "no_capability_found": (
-            "4cc0cf1c955c96814a13d68b2e4f0a26dc7f7304a29e90561d90d940e7d1f1c5"
-        ),
-        "policy_denied": (
-            "4a29ac65f9a90915626d157bdc4455a2c35d999439ef80ddffa6d430144a0f01"
-        ),
+        "binding_required": ("f85b909c9e71cf4183d25ca7551ed3ca0cfc0633237061f41921b89aaf7e1935"),
+        "operator_handback": ("fa1cfa049bdfa28dcb1f2af3eef2b71afcb36a147b9912263d66806525c2f834"),
+        "no_capability_found": ("4cc0cf1c955c96814a13d68b2e4f0a26dc7f7304a29e90561d90d940e7d1f1c5"),
+        "policy_denied": ("4a29ac65f9a90915626d157bdc4455a2c35d999439ef80ddffa6d430144a0f01"),
         "operator_bind_required": (
             "07458dea994c6decf62d0a81f2df90c352ac3ab886ee584ef1dab835c327273e"
         ),
@@ -220,6 +212,21 @@ def test_sanitizer_credential_under_innocuous_key() -> None:
 
     assert payload["data"] == {"result": "[REDACTED]"}
     assert RAW_MARKER not in _builder().serialize(envelope)
+
+
+def test_build_message_redacts_credential_semantic_mapping_key_and_value() -> None:
+    credential_key = "SYNTHETIC_password_key_canary"
+    credential_value = "SYNTHETIC_builder_value_canary"
+
+    envelope = _builder().build_message(
+        *_message_args(),
+        data={credential_key: credential_value},
+    )
+    serialized = envelope.model_dump_json()
+
+    assert envelope.data == {"[REDACTED]": "[REDACTED]"}
+    assert credential_key not in serialized
+    assert credential_value not in serialized
 
 
 def test_invalid_input_returns_failed_envelope() -> None:
