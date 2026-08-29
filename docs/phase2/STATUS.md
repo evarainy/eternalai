@@ -1,10 +1,10 @@
 # Phase 2 当前状态
 
 - 当前基线 task_id：`P2-SDUI-RENDERER-001`
-- pytest 全量：本棒由主窗口在无沙箱环境执行，见 PR body
+- pytest：`2296 passed, 84 warnings`（0 skipped，0 failed；本棒实测，后台全量 run `20260829T103102Z-14072`，未使用 `--ignore=`）
 - 后端定向 pytest：`44 passed, 0 failed`（本棒实测：`tests/api/test_csrf.py`、`tests/api/test_auth.py`、`tests/contracts/test_user_action_outcome_sync.py`）
 - 前端 `pnpm --dir web test`：`135 passed, 0 failed, 0 skipped`（14 个测试文件，本棒实测，含组件、单元与 OpenAPI 字节一致性）
-- Golden Gate：`app/` 改动量为 0，运行时语义未变，未执行
+- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；本棒实测）
 - `tests/architecture/`：`42 passed`（本棒实测）
 - 下一棒（串行，单 lane）：（留空，待 GOV-SYNC 裁决）。`P2-ENVELOPE-MESSAGE-REDACTION-001` 必须排在 `P2-LOW-RISK-WRITE-001` 之前，但具体 DAG 重排不由本实现棒自裁。
 - `P2-USER-ACTION-SEAM-001` 已于 2026-08-28 完成：`/api/v1/runtime/action`、`RuntimePort.handle_user_action`、9 值 outcome、单一 `user_action` Trace、P0–P7、一次性 claim 与五站点对象身份 CAS 已接通；旧自由文本入口和既有合同保持不变。
