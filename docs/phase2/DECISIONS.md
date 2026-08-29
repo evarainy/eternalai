@@ -1336,3 +1336,13 @@ data = {"action_outcome": <闭合枚举值>, "result": <能力结果或 null>}
 **这是显式裁决，不是方案作者自行后置。** 受控动作合同的扩展由 `P2-USER-ACTION-REJECT-001` 承担。
 
 **影响面**：`PHASE2_PLAN.md` 的 `P2-USER-ACTION-SEAM-001` DAG 行与欠债表；新增四个承担棒的 DAG 行；`app/ports/trace.py`、`app/ports/runtime.py` 的契约变更授权范围以本条为准。
+
+## 2026-08-29 — 裁决：结构化按钮入口与自由文本入口保持不同展示
+
+**决定**：结构化按钮入口与自由文本入口在同一能力终态下**应当**产出不同展示。按钮入口使用通用完成文案，由 Renderer 从**已脱敏的两层 `data.result`** 结构化渲染业务内容；手打入口沿用 `RuntimeImpl._format_capability_response` 的自然语言投影。
+
+**理由**：保住字段来源脱敏边界。`RuntimeImpl._format_capability_response` 的通用分支 `_joined_scalar_values(data, tuple(data.keys()))` 只拼值不带键，丢失字段来源，使 `_sanitize_mapping` 按键名打码的保护在字符串里失效。把该投影扩到按钮入口等于新增泄漏面。
+
+**重新评估条件**：`P2-ENVELOPE-MESSAGE-REDACTION-001` 修复通用分支后重新评估本差异。
+
+**影响面**：`docs/phase2/PHASE2_PLAN.md` 欠债 205 行；`P2-SDUI-RENDERER-001` 的展示分工；新增 `P2-ENVELOPE-MESSAGE-REDACTION-001` DAG 行。

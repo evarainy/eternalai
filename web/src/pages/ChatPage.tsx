@@ -5,69 +5,32 @@ import type { CSSProperties, FormEvent, KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, Input, Tag, Typography, theme } from 'antd';
 import { ApiError } from '../api/mutator';
-import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
-import type { ResponseEnvelopeStatus } from '../generated/runtime/runtime.schemas';
+import { ConfirmCard } from '../components/ConfirmCard';
+import { RecordsList } from '../components/RecordsList';
+import {
+  incompatibleResponse,
+  projectResponse,
+  projectTextResponse,
+  type PresentationKind,
+  type ProjectedResponse,
+  type TargetSystem,
+} from '../contracts/runtimeProjection';
+import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
+import {
+  handleActionApiV1RuntimeActionPost,
+  handleApiV1RuntimeHandlePost,
+} from '../generated/runtime/runtime';
 import styles from './ChatPage.module.css';
 
 const { Paragraph, Text, Title } = Typography;
 const { TextArea } = Input;
-
-const SUPPORTED_SCHEMA_VERSION = 'phase0.sdui.v1';
-const SAFE_INCOMPATIBLE_TEXT = '当前响应无法安全显示，请稍后重试。';
-
-const responseStatuses = new Set<ResponseEnvelopeStatus>([
-  'completed',
-  'blocked',
-  'waiting_user',
-  'failed',
-  'no_capability_found',
-]);
-const responseActions = new Set([
-  'confirm',
-  'bind_required',
-  'clarify_scope',
-  'none',
-  null,
-]);
-const targetSystems = new Set(['oa', 'u8', 'hikvision_ivms']);
-
-type TargetSystem = 'oa' | 'u8' | 'hikvision_ivms';
-type PresentationKind =
-  | 'completed'
-  | 'clarification'
-  | 'confirmation'
-  | 'binding'
-  | 'denied'
-  | 'unavailable'
-  | 'failed'
-  | 'incompatible'
-  | 'csrf'
-  | 'session'
-  | 'validation'
-  | 'service'
-  | 'network'
-  | 'request_error';
 
 type TranscriptEntry =
   | {
       role: 'user';
       text: string;
     }
-  | {
-      role: 'assistant';
-      text: string;
-      status?: ResponseEnvelopeStatus;
-      presentationKind: PresentationKind;
-      targetSystem?: TargetSystem;
-    };
-
-interface ProjectedResponse {
-  role: 'assistant';
-  text: string;
-  status?: ResponseEnvelopeStatus;
-  presentationKind: PresentationKind;
-  targetSystem?: TargetSystem;
-}
+  | ProjectedResponse;
 
 interface ChatCssVariables extends CSSProperties {
   '--chat-color-bg': string;
@@ -85,86 +48,6 @@ interface ChatCssVariables extends CSSProperties {
   '--chat-shadow': string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function incompatibleResponse(): ProjectedResponse {
-  return {
-    role: 'assistant',
-    text: SAFE_INCOMPATIBLE_TEXT,
-    presentationKind: 'incompatible',
-  };
-}
-
-function projectResponse(value: unknown): ProjectedResponse {
-  if (!isRecord(value) || value.schema_version !== SUPPORTED_SCHEMA_VERSION) {
-    return incompatibleResponse();
-  }
-  if (
-    typeof value.status !== 'string' ||
-    !responseStatuses.has(value.status as ResponseEnvelopeStatus) ||
-    typeof value.message !== 'string' ||
-    typeof value.fallback_text !== 'string' ||
-    !isRecord(value.ui)
-  ) {
-    return incompatibleResponse();
-  }
-
-  const status = value.status as ResponseEnvelopeStatus;
-  const action = value.ui.action;
-  const targetSystem = value.ui.target_system;
-  if (
-    !responseActions.has(action as string | null) ||
-    !(
-      targetSystem === undefined ||
-      targetSystem === null ||
-      (typeof targetSystem === 'string' && targetSystems.has(targetSystem))
-    )
-  ) {
-    return incompatibleResponse();
-  }
-
-  const text = value.message.trim() || value.fallback_text.trim();
-  if (!text) {
-    return incompatibleResponse();
-  }
-
-  if (status === 'completed' && (action === 'none' || action === null)) {
-    return { role: 'assistant', text, status, presentationKind: 'completed' };
-  }
-  if (status === 'blocked' && action === 'clarify_scope') {
-    return { role: 'assistant', text, status, presentationKind: 'clarification' };
-  }
-  if (status === 'waiting_user' && action === 'confirm') {
-    return { role: 'assistant', text, status, presentationKind: 'confirmation' };
-  }
-  if (status === 'blocked' && action === 'bind_required') {
-    return {
-      role: 'assistant',
-      text,
-      status,
-      presentationKind: 'binding',
-      ...(typeof targetSystem === 'string'
-        ? { targetSystem: targetSystem as TargetSystem }
-        : {}),
-    };
-  }
-  if (status === 'blocked' && (action === 'none' || action === null)) {
-    return { role: 'assistant', text, status, presentationKind: 'denied' };
-  }
-  if (
-    status === 'no_capability_found' &&
-    (action === 'none' || action === null)
-  ) {
-    return { role: 'assistant', text, status, presentationKind: 'unavailable' };
-  }
-  if (status === 'failed' && (action === 'none' || action === null)) {
-    return { role: 'assistant', text, status, presentationKind: 'failed' };
-  }
-  return incompatibleResponse();
-}
-
 function projectRequestError(error: unknown): ProjectedResponse | null {
   if (error instanceof SyntaxError) {
     return incompatibleResponse();
@@ -174,44 +57,35 @@ function projectRequestError(error: unknown): ProjectedResponse | null {
       return null;
     }
     if (error.status === 403 && error.code === 'csrf_validation_failed') {
-      return {
-        role: 'assistant',
-        text: '当前请求来源未通过安全校验，请联系管理员检查部署配置。',
-        presentationKind: 'csrf',
-      };
+      return projectTextResponse(
+        '当前请求来源未通过安全校验，请联系管理员检查部署配置。',
+        'csrf',
+      );
     }
     if (error.status === 404) {
-      return {
-        role: 'assistant',
-        text: '当前会话不可用，请刷新页面后重试。',
-        presentationKind: 'session',
-      };
+      return projectTextResponse(
+        '当前会话不可用，请刷新页面后重试。',
+        'session',
+      );
     }
     if (error.status === 422) {
-      return {
-        role: 'assistant',
-        text: '请求格式未通过校验，请重新输入后再试。',
-        presentationKind: 'validation',
-      };
+      return projectTextResponse(
+        '请求格式未通过校验，请重新输入后再试。',
+        'validation',
+      );
     }
     if (error.status === 503) {
-      return {
-        role: 'assistant',
-        text: '办理服务暂时不可用，请稍后再试。',
-        presentationKind: 'service',
-      };
+      return projectTextResponse(
+        '办理服务暂时不可用，请稍后再试。',
+        'service',
+      );
     }
-    return {
-      role: 'assistant',
-      text: '请求未能完成，请稍后再试。',
-      presentationKind: 'request_error',
-    };
+    return projectTextResponse(
+      '请求未能完成，请稍后再试。',
+      'request_error',
+    );
   }
-  return {
-    role: 'assistant',
-    text: '网络连接异常，请稍后再试。',
-    presentationKind: 'network',
-  };
+  return projectTextResponse('网络连接异常，请稍后再试。', 'network');
 }
 
 const presentationLabels: Record<PresentationKind, string> = {
@@ -237,18 +111,17 @@ const targetSystemLabels: Record<TargetSystem, string> = {
   hikvision_ivms: '海康 iVMS',
 };
 
-function AssistantDetails({ entry }: { entry: Extract<TranscriptEntry, { role: 'assistant' }> }) {
+function AssistantDetails({
+  entry,
+  onConfirm,
+}: {
+  entry: ProjectedResponse;
+  onConfirm: (responseId: string) => Promise<void>;
+}) {
   if (entry.presentationKind === 'clarification') {
     return (
       <Text className={styles.guidance}>
         请将原请求与明确范围一起完整重述为一条新请求。
-      </Text>
-    );
-  }
-  if (entry.presentationKind === 'confirmation') {
-    return (
-      <Text strong className={styles.confirmationNotice}>
-        当前入口暂不能继续确认。
       </Text>
     );
   }
@@ -259,7 +132,23 @@ function AssistantDetails({ entry }: { entry: Extract<TranscriptEntry, { role: '
       </Text>
     );
   }
-  return null;
+  return (
+    <>
+      {entry.actionOutcome === null ? null : (
+        <Text strong className={styles.outcomeNotice}>
+          {userActionOutcomeMessages[entry.actionOutcome]}
+        </Text>
+      )}
+      {entry.confirm === null ? null : (
+        <ConfirmCard
+          confirm={entry.confirm}
+          responseId={entry.responseId}
+          onConfirm={onConfirm}
+        />
+      )}
+      {entry.records === null ? null : <RecordsList records={entry.records} />}
+    </>
+  );
 }
 
 export default function ChatPage() {
@@ -303,6 +192,28 @@ export default function ChatPage() {
     setTranscript((current) => [...current, { role: 'user', text: message }]);
     setDraft('');
     mutation.mutate(message);
+  };
+
+  const submitConfirmation = async (responseId: string) => {
+    try {
+      const projectedResponse = projectResponse(
+        await handleActionApiV1RuntimeActionPost({
+          channel: 'web',
+          session_id: sessionId,
+          action: {
+            action_type: 'confirm',
+            response_id: responseId,
+            confirmed: true,
+          },
+        }),
+      );
+      setTranscript((current) => [...current, projectedResponse]);
+    } catch (error) {
+      const projectedError = projectRequestError(error);
+      if (projectedError !== null) {
+        setTranscript((current) => [...current, projectedError]);
+      }
+    }
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -396,7 +307,10 @@ export default function ChatPage() {
                     </div>
                     <p className={styles.messageText}>{entry.text}</p>
                     {entry.role === 'assistant' ? (
-                      <AssistantDetails entry={entry} />
+                      <AssistantDetails
+                        entry={entry}
+                        onConfirm={submitConfirmation}
+                      />
                     ) : null}
                   </article>
                 </li>

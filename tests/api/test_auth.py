@@ -19,9 +19,15 @@ from app.ports.auth import (
     LoginCredential,
     Principal,
     PrincipalOrgContext,
+    SessionBindingError,
 )
 from app.ports.response_envelope import ResponseEnvelope
-from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
+from tests.auth_fakes import (
+    TEST_CSRF_ALLOWED_ORIGINS,
+    TEST_CSRF_HEADERS,
+    StaticSessionTokens,
+    auth_cookies,
+)
 
 
 class SuccessfulAuthentication:
@@ -116,6 +122,18 @@ def _capture_http_exception_contexts(
 
     application.add_exception_handler(HTTPException, capture)
     return contexts
+
+
+def _action_body(session_id: str = "action-client-session") -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "session_id": session_id,
+        "action": {
+            "action_type": "confirm",
+            "response_id": "response-auth-action",
+            "confirmed": True,
+        },
+    }
 
 
 def test_login_sets_only_a_secure_http_only_session_cookie() -> None:
@@ -303,6 +321,71 @@ def test_missing_token_wins_over_invalid_runtime_body_and_role_header() -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "authentication_required"
+
+
+def test_runtime_action_requires_authentication_before_body_validation() -> None:
+    response = TestClient(
+        create_app(csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS)
+    ).post(
+        "/api/v1/runtime/action",
+        headers={"X-EternalAI-Roles": "admin"},
+        json={"unexpected": "body"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "authentication_required"
+
+
+def test_runtime_action_hides_session_binding_errors_before_runtime() -> None:
+    runtime = RecordingRuntime()
+    session_tokens = StaticSessionTokens()
+
+    def reject_session(_principal: Principal, _session_id: str) -> str:
+        raise SessionBindingError("synthetic binding detail")
+
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            session_tokens=session_tokens,
+            session_binder=reject_session,
+            session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+
+    response = client.post(
+        "/api/v1/runtime/action",
+        headers=TEST_CSRF_HEADERS,
+        json=_action_body(),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_not_found"
+    assert runtime.calls == []
+
+
+def test_runtime_action_fails_closed_without_runtime_provider() -> None:
+    client = TestClient(
+        create_app(
+            session_tokens=StaticSessionTokens(),
+            session_binder=_binder().bind,
+            session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+
+    response = client.post(
+        "/api/v1/runtime/action",
+        headers=TEST_CSRF_HEADERS,
+        json=_action_body(),
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "runtime_unavailable"
 
 
 def test_cross_principal_bound_session_is_hidden_before_runtime() -> None:

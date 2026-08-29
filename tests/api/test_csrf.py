@@ -188,6 +188,18 @@ def _runtime_body() -> dict[str, Any]:
     }
 
 
+def _runtime_action_body() -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "session_id": "csrf-client-session",
+        "action": {
+            "action_type": "confirm",
+            "response_id": "response-csrf-action",
+            "confirmed": True,
+        },
+    }
+
+
 def _registry_body() -> dict[str, Any]:
     return {
         "capability_id": "oa.synthetic.query",
@@ -485,6 +497,11 @@ _COOKIE_AUTHENTICATED_WRITES = (
         "/api/v1/runtime/handle",
         _runtime_body(),
         id="runtime-handle",
+    ),
+    pytest.param(
+        "/api/v1/runtime/action",
+        _runtime_action_body(),
+        id="runtime-action",
     ),
 )
 

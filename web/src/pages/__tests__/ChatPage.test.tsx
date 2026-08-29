@@ -4,10 +4,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
+import { projectResponse } from '../../contracts/runtimeProjection';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
 
 const runtimeMock = vi.hoisted(() => ({
+  action: vi.fn(),
   handle: vi.fn(),
 }));
 
@@ -16,6 +18,12 @@ vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
     await importOriginal<typeof import('../../generated/runtime/runtime')>();
   return {
     ...actual,
+    handleActionApiV1RuntimeActionPost: (
+      ...args: Parameters<typeof actual.handleActionApiV1RuntimeActionPost>
+    ) => {
+      runtimeMock.action(...args);
+      return actual.handleActionApiV1RuntimeActionPost(...args);
+    },
     handleApiV1RuntimeHandlePost: (
       ...args: Parameters<typeof actual.handleApiV1RuntimeHandlePost>
     ) => {
@@ -63,6 +71,77 @@ function envelope(overrides: Record<string, unknown> = {}) {
   return { ...base, ...overrides };
 }
 
+function confirmPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    capability_id: 'oa.approval.confirm',
+    operation_summary: '提交 OA 审批同意操作',
+    target_system: 'oa',
+    field_names: ['decision', 'comment'],
+    displayed_argument_values: { decision: '同意' },
+    ...overrides,
+  };
+}
+
+function confirmEnvelope(overrides: Record<string, unknown> = {}) {
+  return envelope({
+    status: 'waiting_user',
+    response_id: 'response-confirm-1',
+    message: '请复核后提交操作',
+    ui: {
+      component_type: 'confirm_card',
+      action: 'confirm',
+      target_system: 'oa',
+      payload: confirmPayload(),
+    },
+    ...overrides,
+  });
+}
+
+function pendingWorkflow(overrides: Record<string, unknown> = {}) {
+  return {
+    todo_id: 'todo-001',
+    title: '采购申请审批',
+    status: 'pending',
+    received_at: '2026-08-29T08:00:00Z',
+    created_at: '2026-08-29T07:30:00Z',
+    workflow_type_id: 'purchase-approval',
+    ...overrides,
+  };
+}
+
+function pendingWorkflowsData(overrides: Record<string, unknown> = {}) {
+  return {
+    workflows: [pendingWorkflow()],
+    returned_count: 1,
+    authoritative_count: 1,
+    is_complete: true,
+    ...overrides,
+  };
+}
+
+function systemMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    message_id: 'message-001',
+    title: '流程提醒',
+    content: '采购流程已到达审批节点。',
+    source_name: 'OA 消息中心',
+    occurred_at: '2026-08-29T08:30:00Z',
+    business_state: 'unread',
+    link: null,
+    mobile_link: null,
+    ...overrides,
+  };
+}
+
+function systemMessagesData(overrides: Record<string, unknown> = {}) {
+  return {
+    messages: [systemMessage()],
+    returned_count: 1,
+    is_complete: true,
+    ...overrides,
+  };
+}
+
 function makeClient() {
   return new QueryClient({
     defaultOptions: {
@@ -104,6 +183,7 @@ function storageText(storage: Storage): string {
 describe('ChatPage request boundary', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     localStorage.clear();
     sessionStorage.clear();
@@ -197,6 +277,7 @@ describe('ChatPage request boundary', () => {
 describe('ChatPage response projection', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
@@ -285,20 +366,43 @@ describe('ChatPage response projection', () => {
     });
   });
 
-  it('shows confirmation as non-interactive and never auto-sends', async () => {
+  it.each([
+    [
+      'a non-string displayed argument value',
+      'confirm_card',
+      confirmPayload({ displayed_argument_values: { decision: 1 } }),
+    ],
+    [
+      'a non-string field name',
+      'confirm_card',
+      confirmPayload({ field_names: ['decision', 2] }),
+    ],
+    [
+      'an empty capability id',
+      'confirm_card',
+      confirmPayload({ capability_id: '   ' }),
+    ],
+    [
+      'a missing capability id',
+      'confirm_card',
+      confirmPayload({ capability_id: undefined }),
+    ],
+    [
+      'a non-confirm component type',
+      'operator_handback_card',
+      confirmPayload(),
+    ],
+  ])('fails closed for confirmation payload with %s', async (_label, componentType, payload) => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         response(
-          envelope({
-            status: 'waiting_user',
-            response_id: 'RAW_RESPONSE_ID',
-            message: '请确认提交操作',
+          confirmEnvelope({
             ui: {
-              component_type: 'confirm_card',
+              component_type: componentType,
               action: 'confirm',
               target_system: 'oa',
-              payload: { preview: 'RAW_PREVIEW' },
+              payload,
             },
           }),
         ),
@@ -308,10 +412,362 @@ describe('ChatPage response projection', () => {
 
     sendMessage('提交请假流程');
 
-    expect(await screen.findByText('当前入口暂不能继续确认。')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /确认|继续执行/ })).not.toBeInTheDocument();
-    expect(screen.queryByText(/RAW_RESPONSE_ID|RAW_PREVIEW/)).not.toBeInTheDocument();
+    expect(await screen.findByText('请复核后提交操作')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('region', { name: '操作提交前复核' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '确认提交这项操作' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows a field name without looking up or inventing its missing value', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          confirmEnvelope({
+            data: { private_note: 'RAW_HIDDEN_ARGUMENT_VALUE' },
+            ui: {
+              component_type: 'confirm_card',
+              action: 'confirm',
+              target_system: 'oa',
+              payload: confirmPayload({
+                field_names: ['decision', 'private_note'],
+                displayed_argument_values: { decision: '同意' },
+              }),
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('复核参数展示');
+
+    expect(await screen.findByText('private_note')).toBeInTheDocument();
+    expect(screen.getByText('decision')).toBeInTheDocument();
+    expect(screen.getByText('同意')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('RAW_HIDDEN_ARGUMENT_VALUE');
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['non-string', 42],
+  ])('keeps confirmation text but hides the button for a %s response id', async (_label, responseId) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(confirmEnvelope({ response_id: responseId })),
+      ),
+    );
+    renderChat();
+
+    sendMessage('缺少响应引用');
+
+    expect(await screen.findByText('请复核后提交操作')).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: '操作提交前复核' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '确认提交这项操作' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('rejects the entire pending-workflow list when a record lacks todo_id', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            message: '待办查询完成',
+            data: pendingWorkflowsData({
+              workflows: [pendingWorkflow({ todo_id: undefined })],
+            }),
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询待办');
+
+    expect(await screen.findByText('待办查询完成')).toBeInTheDocument();
+    expect(screen.queryByText('待办记录')).not.toBeInTheDocument();
+    expect(screen.queryByText('采购申请审批')).not.toBeInTheDocument();
+  });
+
+  it('rejects the entire system-message list when link is not string or null', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            message: '消息查询完成',
+            data: systemMessagesData({
+              messages: [systemMessage({ link: 7 })],
+            }),
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询消息');
+
+    expect(await screen.findByText('消息查询完成')).toBeInTheDocument();
+    expect(screen.queryByText('系统消息')).not.toBeInTheDocument();
+    expect(screen.queryByText('流程提醒')).not.toBeInTheDocument();
+  });
+
+  it('leaves an unknown data shape as text-only output', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(envelope({ message: '通用完成文本', data: { foo: 1 } })),
+      ),
+    );
+    renderChat();
+
+    sendMessage('未知数据');
+
+    expect(await screen.findByText('通用完成文本')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /待办记录|系统消息/ })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('foo');
+  });
+
+  it('marks pending workflows incomplete from runtime completeness and count mismatches', async () => {
+    const first = renderChat();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            data: pendingWorkflowsData({ authoritative_count: 2 }),
+          }),
+        ),
+      ),
+    );
+
+    sendMessage('数量不一致');
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    first.unmount();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({ data: pendingWorkflowsData({ is_complete: false }) }),
+        ),
+      ),
+    );
+    renderChat();
+    sendMessage('运行时声明不完整');
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+  });
+
+  it('marks system messages incomplete when is_complete is false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({ data: systemMessagesData({ is_complete: false }) }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询不完整消息');
+
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+  });
+
+  it('renders long message content as folded plain text and never exposes OA links', async () => {
+    const content = `<script>alert(1)</script>${' 正文'.repeat(50)}`;
+    const link = '/desktop/messages/001';
+    const mobileLink = '/mobile/messages/001';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            data: systemMessagesData({
+              messages: [systemMessage({ content, link, mobile_link: mobileLink })],
+            }),
+          }),
+        ),
+      ),
+    );
+    const { container } = renderChat();
+
+    sendMessage('安全展示消息正文');
+
+    expect(await screen.findByText('展开完整正文')).toBeInTheDocument();
+    expect(screen.getByText(content)).toBeInTheDocument();
+    expect(container.querySelector('details')).not.toHaveAttribute('open');
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('a')).toBeNull();
+    expect(document.body.textContent).not.toContain(link);
+    expect(document.body.textContent).not.toContain(mobileLink);
+  });
+
+  it('fails closed for an action outcome outside the nine-value contract', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            message: 'RAW_FUTURE_OUTCOME',
+            data: {
+              action_outcome: 'future_outcome',
+              result: pendingWorkflowsData(),
+            },
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('未知动作结果');
+
+    expect(
+      await screen.findByText('当前响应无法安全显示，请稍后重试。'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_FUTURE_OUTCOME|采购申请审批/);
+  });
+
+  const actionOutcomeCases = [
+    ['accepted', '操作已受理，已进入本次执行流程。'],
+    ['action_gate_unavailable', '确认通道暂不可用，本次操作未执行。'],
+    ['no_pending_action', '未找到可继续的待确认操作，本次操作未执行。'],
+    ['action_binding_incomplete', '操作绑定信息不完整，本次操作未执行。'],
+    ['action_reference_mismatch', '确认引用与当前待办不匹配，本次操作未执行。'],
+    ['action_pending_changed', '待确认内容已发生变化，本次操作未执行。'],
+    ['action_already_claimed', '这项操作已经处理过，未重复执行；本次未执行新的操作。'],
+    ['action_stale', '确认已过期，本次操作未执行。'],
+    ['action_version_conflict', '操作版本已变化，本次操作未执行。'],
+  ] as const;
+
+  it.each(actionOutcomeCases)(
+    'renders the distinct closed message for action outcome %s',
+    async (actionOutcome, expected) => {
+      const accepted = actionOutcome === 'accepted';
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          response(
+            envelope({
+              status: accepted ? 'completed' : 'failed',
+              message: accepted
+                ? '操作已完成。'
+                : '结构化操作未被受理，本次未执行。',
+              data: { action_outcome: actionOutcome, result: null },
+            }),
+          ),
+        ),
+      );
+      renderChat();
+
+      sendMessage('动作结果文案');
+
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+      expect(new Set(actionOutcomeCases.map(([, message]) => message)).size).toBe(9);
+      if (!accepted) {
+        expect(expected).toContain('未执行');
+      }
+      if (actionOutcome === 'action_already_claimed') {
+        expect(expected).toContain('已经处理过，未重复执行');
+      }
+    },
+  );
+
+  it('submits one structured action, keeps its pending state independent, and appends the result', async () => {
+    let resolveAction!: (value: Response) => void;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(confirmEnvelope()))
+      .mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          resolveAction = resolve;
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    sendMessage('提交审批同意');
+    const confirmButton = await screen.findByRole('button', {
+      name: '确认提交这项操作',
+    });
+    expect(confirmButton.className).toContain('minimumActionTarget');
+    expect(screen.getByText('oa.approval.confirm')).toBeInTheDocument();
+    expect(screen.getByText('提交 OA 审批同意操作')).toBeInTheDocument();
+    expect(screen.getByText('oa')).toBeInTheDocument();
+    expect(screen.getByText('decision')).toBeInTheDocument();
+    expect(screen.getByText('同意')).toBeInTheDocument();
+    expect(screen.getByText('comment')).toBeInTheDocument();
+
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => expect(runtimeMock.action).toHaveBeenCalledTimes(1));
+    expect(runtimeMock.action).toHaveBeenCalledWith({
+      channel: 'web',
+      session_id: SESSION_A,
+      action: {
+        action_type: 'confirm',
+        response_id: 'response-confirm-1',
+        confirmed: true,
+      },
+    });
+    expect(confirmButton).toBeDisabled();
+    expect(screen.getByLabelText('办理请求')).toBeEnabled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/runtime/action');
+    expect(fetchMock.mock.calls.slice(1).some(([path]) => path === '/api/v1/runtime/handle')).toBe(false);
     expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      resolveAction(
+        response(
+          envelope({
+            response_id: 'response-action-result',
+            message: '操作已完成。',
+            data: {
+              action_outcome: 'accepted',
+              result: pendingWorkflowsData(),
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(
+      await screen.findByText('操作已受理，已进入本次执行流程。'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('采购申请审批')).toBeInTheDocument();
+    await waitFor(() => expect(confirmButton).toBeEnabled());
+  });
+
+  it('keeps action result business keys nested and projects only data.result', () => {
+    const projected = projectResponse(
+      envelope({
+        data: {
+          action_outcome: 'accepted',
+          result: systemMessagesData(),
+          workflows: [pendingWorkflow({ title: 'RAW_FLATTENED_WORKFLOW' })],
+          returned_count: 1,
+          authoritative_count: 1,
+          is_complete: true,
+        },
+      }),
+    );
+
+    expect(projected.actionOutcome).toBe('accepted');
+    expect(projected.records?.kind).toBe('system_messages');
+    expect(projected).not.toHaveProperty('result');
+    expect(projected).not.toHaveProperty('workflows');
+    expect(JSON.stringify(projected)).not.toContain('RAW_FLATTENED_WORKFLOW');
   });
 
   it('keeps policy denial distinct from failure, missing capability, and binding', async () => {
@@ -426,13 +882,12 @@ describe('ChatPage response projection', () => {
     expect(document.body.textContent).not.toContain('RAW_NON_JSON_RESPONSE');
   });
 
-  it('does not retain or expose raw envelope fields and sensitive markers', async () => {
+  it('retains only approved projections and does not expose other raw envelope fields', async () => {
     const sensitiveMarkers = [
       'RAW_DATA_SECRET',
       'RAW_PAYLOAD_SECRET',
       'RAW_TRACE_SUMMARY',
       'RAW_REASON_CODE',
-      'RAW_RESPONSE_ID',
       'RAW_TASK_ID',
       'RAW_SERVER_SESSION',
       'RAW_TRACE_ID',
@@ -485,6 +940,7 @@ describe('ChatPage response projection', () => {
       ...consoleSpies.flatMap((spy) => spy.mock.calls.flat().map(String)),
     ].join('|');
     sensitiveMarkers.forEach((marker) => expect(observableState).not.toContain(marker));
+    expect(document.body.textContent).not.toContain('RAW_RESPONSE_ID');
     expect(observableState).not.toContain(SESSION_A);
   });
 });
@@ -492,6 +948,7 @@ describe('ChatPage response projection', () => {
 describe('ChatPage HTTP failures', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    runtimeMock.action.mockClear();
     runtimeMock.handle.mockClear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
