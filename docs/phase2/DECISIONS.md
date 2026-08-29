@@ -1232,6 +1232,8 @@ P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002
 
 **影响面**：`docs/phase2/STATUS.md` 下一棒指针；`PHASE2_PLAN.md` 对应欠债结项与 DAG 行。
 
+> **⚠ 2026-08-30 supersede**：本条正文中的串行链 `… → SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002` 已被同日「串行下一棒唯一为 `P2-ENVELOPE-MESSAGE-REDACTION-001`」取代——`LOW-RISK-WRITE-001` 之前新增一棒。**本条其余部分（必达路径唯一、机会层不竞争、机会层阻塞不解除、只裁串行下一棒）继续有效。** 现役 DAG 以 `STATUS.md` 与 `PHASE2_PLAN.md` 为准，不要把本条的链当当前状态读。
+
 ## 2026-08-28 — 裁决：参数值 allowlist 与「不设字段白名单」分层共存，互不推翻
 
 **问题**：2026-08-19「确认卡展示真实业务内容，不设字段白名单」逐字写「不设可展示字段白名单」；而 2026-08-27 给 `P2-CAPABILITY-AUTOMATION-LEVEL-001` 的 Scope 第 4 条是「`confirm_card` 参数值可展示 allowlist，默认空集，须显式声明才展示」，已实现并合并（`CapabilitySpec.displayable_argument_fields`、DB 列、`app/runtime/runtime.py::_displayed_argument_values`、GT-029～GT-033 五道已冻 Golden 题）。两条字面矛盾，且 2026-08-19 那条从未被废止。
@@ -1281,6 +1283,8 @@ P2-USER-ACTION-SEAM-001 → P2-SDUI-RENDERER-001 → P2-LOW-RISK-WRITE-001 → P
 **业务对象预览键后置**：2026-08-19「不设字段白名单」的影响面把「扩展 `ui.payload` 承载业务内容与折叠态」派给「`P2-LOW-RISK-WRITE-001` 或其前置棒」。本条把承担棒**唯一收窄为 `P2-LOW-RISK-WRITE-001`**：只有到该棒才有真实的姓名 / 正文 / 附件数据来源，提前定契约属凭空设计。`P2-USER-ACTION-SEAM-001` 与 `P2-SDUI-RENDERER-001` 均**不新增** `ConfirmCardPayload` 键，`tests/runtime/test_runtime_response_content.py::test_confirm_card_payload_contract_has_exact_keys` 锁定的五键在这两棒内不变。
 
 **影响面**：`PHASE2_PLAN.md` 新增 `P2-USER-ACTION-SEAM-001` DAG 行、`P2-SDUI-RENDERER-001` 的 `depends_on`、`P2-LOW-RISK-WRITE-001` 的交付内容；`docs/phase2/STATUS.md` 下一棒指针；2026-08-28「唯一后继」裁决的链首由 Renderer 改为 SEAM，该裁决其余部分继续有效。
+
+> **⚠ 2026-08-30 supersede**：本条正文中的串行链 `USER-ACTION-SEAM-001 → SDUI-RENDERER-001 → LOW-RISK-WRITE-001 → GOLDEN-002` 已被同日「串行下一棒唯一为 `P2-ENVELOPE-MESSAGE-REDACTION-001`」取代。**本条其余部分（拆棒理由、SEAM 六项硬要求、业务对象预览键唯一归 `P2-LOW-RISK-WRITE-001`）继续有效。** 现役 DAG 以 `STATUS.md` 与 `PHASE2_PLAN.md` 为准。
 
 ## 2026-08-28 — 裁决：`P2-USER-ACTION-SEAM-001` 的四项合同边界
 
@@ -1346,3 +1350,88 @@ data = {"action_outcome": <闭合枚举值>, "result": <能力结果或 null>}
 **重新评估条件**：`P2-ENVELOPE-MESSAGE-REDACTION-001` 修复通用分支后重新评估本差异。
 
 **影响面**：`docs/phase2/PHASE2_PLAN.md` 欠债 205 行；`P2-SDUI-RENDERER-001` 的展示分工；新增 `P2-ENVELOPE-MESSAGE-REDACTION-001` DAG 行。
+
+
+## 2026-08-30 — 裁决：串行下一棒唯一为 `P2-ENVELOPE-MESSAGE-REDACTION-001`
+
+**决定**：串行链唯一确定为
+
+```
+P2-ENVELOPE-MESSAGE-REDACTION-001 → P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002
+```
+
+下一棒是 `P2-ENVELOPE-MESSAGE-REDACTION-001`（A 档）。`P2-SDUI-RENDERER-001` 收口时按
+「实现棒不得自行挑选后继」留空并登记的「后继指针不唯一」欠债，据本条结项。
+
+**为什么脱敏棒必须在前**（三条各自独立成立）：
+
+1. **今天就已违规，不依赖任何后继棒存在。**
+   `RuntimeImpl._format_capability_response` 的通用分支
+   `_joined_scalar_values(data, tuple(data.keys()))` 只拼值不带键，字段来源在进入
+   `ResponseEnvelopeBuilder._sanitize_value` 之前就已丢失，使 `_sanitize_mapping`
+   的按键名整条打码失效。`{"password": "hunter2"}` 经该分支产出无 marker 的
+   `"hunter2"`，原样进入 `ResponseEnvelope.message`，命中不可协商规则 4。
+2. **`P2-LOW-RISK-WRITE-001` 的能力默认就走该分支。**
+   `_format_capability_response` 只有 7 个具名 `capability_id` 分支，而 Capability Registry
+   是 DB 驱动的（`app/infra/persistence/capability_registry`），能力 id 是数据不是代码。
+   OA 审批同意能力不在具名集合内，其执行结果默认经通用分支投影。先落地写入，
+   等于让**第一个真实写入**的结果穿过一条已知有洞的投影。
+3. **它是 2026-08-29 裁决的解除条件。**
+   同日「结构化按钮入口与自由文本入口保持不同展示」把「重新评估条件」逐字写为
+   「`P2-ENVELOPE-MESSAGE-REDACTION-001` 修复通用分支后」。该棒不落地，
+   两入口文案差异就永远停在「有理由的临时态」。
+
+**为什么不并入 `P2-LOW-RISK-WRITE-001`**：脱敏棒改的是 Golden 覆盖的 Runtime 展示语义，
+必须自带 Golden gate，且可能触及 expected fixture（仍须雨爷显式批准）；低风险写入是新增业务纵切。
+压进一棒则任一面回炉即整棒回炉，且无法分离证明「旧泄漏面已封」与「新写入路径正确」。
+
+**为什么不并行**：当前为串行单 lane，两棒共享同一测试库与 Golden 冻结面。
+
+**`P2-ENVELOPE-MESSAGE-REDACTION-001` 的硬要求**：
+
+1. 通用分支保留字段来源，或在自然语言投影前完成与 `_sanitize_mapping` 等价强度的脱敏；
+2. marker-free 敏感值不得进入 `message` / `fallback_text` / `envelope.data`；
+3. 自带 Golden gate；改 expected fixture 或 `FROZEN_GT_IDS` 仍是人批停点；
+4. **同棒重新评估** 2026-08-29 的两入口文案差异，给出「统一」或「维持差异」的结论并记录理由。
+
+**影响面**：`docs/phase2/STATUS.md` 的基线 `task_id` 与下一棒指针；`PHASE2_PLAN.md` 的
+「后继指针不唯一」欠债结项、`P2-ENVELOPE-MESSAGE-REDACTION-001` 与 `P2-LOW-RISK-WRITE-001`
+的 DAG 行；2026-08-28 两条含旧串行链的裁决各加一条 supersede 指向。
+
+## 2026-08-30 — 裁决：`P2-SDUI-RENDERER-001` 遗留欠债的承担棒分配
+
+**背景**：`P2-SDUI-RENDERER-001` 合并时有三条欠债的 `activation_task_id` 留空写「待 GOV-SYNC 裁」，
+另有一条写「待 GOV-SYNC 分配测试基础设施 task_id」；Monitor 与 Opus 桥另提出六条非阻断发现，
+按「Opus PASS 即终局，不改代码」只落在 PR body。本条把它们全部分配到承担棒并并入 `PHASE2_PLAN.md`。
+
+**决定**：新增三个 task_id。**分配编号不等于排期**——三者均属机会层，不进必达串行链。
+
+| 新 task_id | 档 | 承接内容 |
+|---|---|---|
+| `P2-SDUI-RENDERER-002` | **A** | OA 系统消息 `link` / `mobile_link` 的导航合同；`payload.target_system` 未按闭合集校验；记录集计数不一致时的展示策略裁定；`ConfirmCard` 的 `<dl>` 结构收敛 |
+| `P2-SDUI-SCHEMA-001` | **A** | `UserActionOutcome` 与 `ConfirmCardPayload` 五键进入 OpenAPI 具名跨语言合同；防漂移测试的集合比较收紧 |
+| `P2-TEST-INFRA-WEAKCHECK-001` | **B** | `scripts/check_weak_tests.py` 支持 TS/TSX，或指定等价的前端弱测试门禁 |
+
+**为什么 `P2-SDUI-RENDERER-002` 是 A 档**：它承接的四项里，`link` / `mobile_link` 要把外部系统
+提供的值放进 `href`，属于把外部数据变成导航指令，命中信任边界；按「命中更高档的任一条件即整棒按
+更高档执行」，同棒的另外三项一并按 A 档走。**该棒必须同时给出**：同源前缀白名单、
+覆盖 `//host`、`/\host`、`javascript:` 与路径穿越的反证测试，否则不得渲染任何链接。
+
+**为什么把 OpenAPI 两条合并为一棒**：`UserActionOutcome`（藏在开放 `data` 里）与
+`ConfirmCardPayload` 五键（藏在 `additionalProperties` 的 `payload` 里）是同一个问题的两个实例——
+公共 SDUI 形状用开放 object 表达，跨语言消费者无法从 schema 生成闭合类型。分两棒会两次触碰同一份
+`web/openapi/runtime.openapi.json` 与同一套生成物，且第二棒必然要重做第一棒的兼容性判断。
+
+**不改代码的边界**：以上六条非阻断发现在 `P2-SDUI-RENDERER-001` 内**不予修复**。
+Opus 桥的 meta 绑定 `base_sha` / `head_sha`，改代码即绑定失效并逼出下一轮评审；
+按「Opus PASS 即终局」，非阻断发现一律记欠债、不回炉。
+
+**一条评审流程观测（不构成代码动作）**：Opus 评审正文判据 10 描述了「唯一一处删除断言：
+把 `RAW_RESPONSE_ID` 移出 `sensitiveMarkers`」并为其辩护。主窗口核实
+`git diff 1dd064b..ffec1ba -- web/src/pages/__tests__/ChatPage.test.tsx` 的删除行数为 **0**，
+`RAW_RESPONSE_ID` 仍在 `sensitiveMarkers` 且断言未动——**该改动不存在**。方向是安全的
+（实际比评审认定的更严），不影响 PASS 与七项硬前置。记录在案的意义是：
+**桥的 verdict 与模型身份可机械校验，正文的具体断言不可，仍须主窗口抽查。**
+
+**影响面**：`PHASE2_PLAN.md` 欠债表新增六行、四条空 `activation_task_id` 填实、
+新增三条 DAG 行；`docs/phase2/STATUS.md` 机会层清单。
