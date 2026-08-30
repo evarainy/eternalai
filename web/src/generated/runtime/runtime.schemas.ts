@@ -21,6 +21,73 @@ export interface ActionRequest {
   session_id: string;
 }
 
+export type ActionResponseDataResult = ProjectedActionResult | null;
+
+export interface ActionResponseData {
+  action_outcome: UserActionOutcome;
+  result: ActionResponseDataResult;
+}
+
+export type ActionResponseEnvelopeStatus = typeof ActionResponseEnvelopeStatus[keyof typeof ActionResponseEnvelopeStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ActionResponseEnvelopeStatus = {
+  completed: 'completed',
+  blocked: 'blocked',
+  waiting_user: 'waiting_user',
+  failed: 'failed',
+  no_capability_found: 'no_capability_found',
+} as const;
+
+export type ActionResponseEnvelopeTraceSummary = string | null;
+
+export type ActionResponseEnvelopeUi = ConfirmCard | UIComponent;
+
+/**
+ * ResponseEnvelope specialization for structured user actions.
+ */
+export interface ActionResponseEnvelope {
+  data: ActionResponseData;
+  fallback_text: string;
+  message: string;
+  response_id: string;
+  schema_version?: string;
+  session_id: string;
+  status: ActionResponseEnvelopeStatus;
+  task_id: string;
+  trace_id: string;
+  trace_summary?: ActionResponseEnvelopeTraceSummary;
+  ui: ActionResponseEnvelopeUi;
+}
+
+export type ConfirmCardReasonCode = string | null;
+
+export type ConfirmCardTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+
+export interface ConfirmCard {
+  action: 'confirm';
+  component_type?: 'confirm_card';
+  payload: ConfirmCardPayload;
+  reason_code?: ConfirmCardReasonCode;
+  target_system?: ConfirmCardTargetSystem;
+}
+
+export type ConfirmCardPayloadDisplayedArgumentValues = {[key: string]: string};
+
+export type ConfirmCardPayloadTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+
+/**
+ * Runtime-owned payload contract for operation confirmation cards.
+ */
+export interface ConfirmCardPayload {
+  capability_id: string;
+  displayed_argument_values: ConfirmCardPayloadDisplayedArgumentValues;
+  field_names: string[];
+  operation_summary: string;
+  target_system: ConfirmCardPayloadTargetSystem;
+}
+
 export interface HTTPValidationError {
   detail?: ValidationError[];
 }
@@ -45,6 +112,11 @@ export interface HandleRequest {
   session_id: string;
 }
 
+/**
+ * Dynamic business result after app.runtime.response_projection.project_response_data applies CapabilitySpec.output_schema; this OpenAPI shape is not an exposure allowlist.
+ */
+export interface ProjectedActionResult {[key: string]: unknown}
+
 export type ResponseEnvelopeDataAnyOf = { [key: string]: unknown };
 
 export type ResponseEnvelopeData = ResponseEnvelopeDataAnyOf | null;
@@ -63,6 +135,8 @@ export const ResponseEnvelopeStatus = {
 
 export type ResponseEnvelopeTraceSummary = string | null;
 
+export type ResponseEnvelopeUi = ConfirmCard | UIComponent;
+
 export interface ResponseEnvelope {
   data?: ResponseEnvelopeData;
   fallback_text: string;
@@ -74,7 +148,7 @@ export interface ResponseEnvelope {
   task_id: string;
   trace_id: string;
   trace_summary?: ResponseEnvelopeTraceSummary;
-  ui: UIComponent;
+  ui: ResponseEnvelopeUi;
 }
 
 export type UIComponentAction = 'confirm' | 'bind_required' | 'clarify_scope' | 'none' | null;
@@ -85,7 +159,6 @@ export type UIComponentComponentType = typeof UIComponentComponentType[keyof typ
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const UIComponentComponentType = {
   none: 'none',
-  confirm_card: 'confirm_card',
   operator_handback_card: 'operator_handback_card',
   binding_required_card: 'binding_required_card',
 } as const;
@@ -109,6 +182,22 @@ export interface UserAction {
   confirmed: true;
   response_id: string;
 }
+
+export type UserActionOutcome = typeof UserActionOutcome[keyof typeof UserActionOutcome];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const UserActionOutcome = {
+  accepted: 'accepted',
+  action_gate_unavailable: 'action_gate_unavailable',
+  no_pending_action: 'no_pending_action',
+  action_binding_incomplete: 'action_binding_incomplete',
+  action_reference_mismatch: 'action_reference_mismatch',
+  action_pending_changed: 'action_pending_changed',
+  action_already_claimed: 'action_already_claimed',
+  action_stale: 'action_stale',
+  action_version_conflict: 'action_version_conflict',
+} as const;
 
 export type ValidationErrorCtx = { [key: string]: unknown };
 

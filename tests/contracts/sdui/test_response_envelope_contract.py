@@ -21,12 +21,14 @@ from app.contracts.sdui.models import (
     UserAction,
 )
 from app.ports import response_envelope as response_envelope_port
+from app.ports.capability_registry import CapabilityTargetSystem
 from app.ports.response_envelope import (
     ResponseEnvelope as PortResponseEnvelope,
 )
 from app.ports.response_envelope import (
     UIComponent as PortUIComponent,
 )
+from app.runtime.models import ConfirmCardPayload
 
 
 def _literal_values(annotation: object) -> tuple[object, ...]:
@@ -78,6 +80,7 @@ def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
         "none",
     )
     assert _literal_values(TargetSystem) == ("oa", "u8", "hikvision_ivms")
+    assert TargetSystem is CapabilityTargetSystem
     assert _literal_values(ResponseEnvelopeStatus) == (
         "completed",
         "blocked",
@@ -101,7 +104,6 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
     hints = get_type_hints(UIComponent, include_extras=True)
     assert _literal_values(hints["component_type"]) == (
         "none",
-        "confirm_card",
         "operator_handback_card",
         "binding_required_card",
     )
@@ -131,6 +133,13 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
     first_component.payload["isolated"] = True
     assert second_component.payload == {}
 
+    for component_type in (
+        "none",
+        "operator_handback_card",
+        "binding_required_card",
+    ):
+        assert UIComponent(component_type=component_type).component_type == component_type
+
     with pytest.raises(ValidationError) as missing_component_type:
         UIComponent()
     assert _missing_required_error_locations(missing_component_type.value) == {
@@ -140,6 +149,10 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
     with pytest.raises(ValidationError) as invalid_component:
         UIComponent(component_type="dynamic_widget")
     assert invalid_component.value.errors()[0]["type"] == "literal_error"
+
+    with pytest.raises(ValidationError) as confirm_component:
+        UIComponent(component_type="confirm_card")
+    assert confirm_component.value.errors()[0]["type"] == "literal_error"
 
     with pytest.raises(ValidationError) as invalid_action:
         UIComponent(component_type="none", action="cancel")
@@ -185,7 +198,9 @@ def test_response_envelope_fields_types_defaults_and_required_shape_are_exact() 
     )
     assert hints["message"] is str
     assert hints["fallback_text"] is str
-    assert hints["ui"] is UIComponent
+    ui_union, ui_discriminator = get_args(hints["ui"])
+    assert set(get_args(ui_union)) == {ConfirmCard, UIComponent}
+    assert ui_discriminator.discriminator == "component_type"
     data_annotation, none_annotation = _optional_type_args(hints["data"])
     assert none_annotation is NoneType
     assert _dict_args(data_annotation) == (str, Any)
@@ -285,10 +300,12 @@ def test_response_envelope_json_schema_is_producible_for_static_schema_contract(
     }
     assert "$defs" in schema
     assert "UIComponent" in schema["$defs"]
+    assert "ConfirmCard" in schema["$defs"]
+    assert "ConfirmCardPayload" in schema["$defs"]
 
 
 def test_confirm_card_is_one_shot_confirm_only_and_rejects_state_fields() -> None:
-    assert issubclass(ConfirmCard, UIComponent)
+    assert not issubclass(ConfirmCard, UIComponent)
     assert ConfirmCard.model_config["extra"] == "forbid"
 
     hints = get_type_hints(ConfirmCard, include_extras=True)
@@ -297,22 +314,30 @@ def test_confirm_card_is_one_shot_confirm_only_and_rejects_state_fields() -> Non
     assert ConfirmCard.model_fields["component_type"].default == "confirm_card"
     assert ConfirmCard.model_fields["action"].is_required()
 
-    card = ConfirmCard(action="confirm")
+    payload = ConfirmCardPayload(
+        capability_id="oa.synthetic.approve",
+        operation_summary="提交审批",
+        target_system="oa",
+        field_names=["decision"],
+        displayed_argument_values={"decision": "同意"},
+    )
+    card = ConfirmCard(action="confirm", payload=payload)
     assert card.component_type == "confirm_card"
     assert card.action == "confirm"
 
     with pytest.raises(ValidationError) as missing_action:
-        ConfirmCard()
+        ConfirmCard(payload=payload)
     assert _missing_required_error_locations(missing_action.value) == {("action",)}
 
     for invalid_action in ("bind_required", "clarify_scope", "none"):
         with pytest.raises(ValidationError) as invalid_card:
-            ConfirmCard(action=invalid_action)
+            ConfirmCard(action=invalid_action, payload=payload)
         assert invalid_card.value.errors()[0]["type"] == "literal_error"
 
     with pytest.raises(ValidationError) as state_fields:
         ConfirmCard(
             action="confirm",
+            payload=payload,
             state_id="state-001",
             step="review",
             next_action="continue",

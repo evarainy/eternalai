@@ -6,6 +6,7 @@
  */
 import type {
   ActionRequest,
+  ActionResponseEnvelope,
   HandleRequest,
   ResponseEnvelope
 } from './runtime.schemas';
@@ -20,7 +21,7 @@ import { customInstance } from '../../api/mutator';
 export const handleActionApiV1RuntimeActionPost = (
     actionRequest: ActionRequest,
  ) => {
-      return customInstance<ResponseEnvelope>(
+      return customInstance<ActionResponseEnvelope>(
       {url: `/api/v1/runtime/action`, method: 'POST',
       headers: {'Content-Type': 'application/json', },
       data: actionRequest
