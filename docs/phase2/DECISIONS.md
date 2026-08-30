@@ -1476,3 +1476,29 @@ access token、refresh token 或其他凭证放入任何获准字段；值层 ma
 `/action` 不再覆写为通用完成文案。两入口只保留结构差异：`/handle.data` 是投影后的业务结果，
 `/action.data` 是 `{action_outcome, result}`。本条只覆盖 2026-08-29 关于“completed 文案保持差异”的
 临时决定，其余 Action 绑定、身份隔离、幂等、两层 data 和失败语义继续有效。
+
+## 2026-08-30 — P4 采用静态合同枚举与测试期 Runtime 咽喉观测的混合守卫
+
+**决定**：P4 继续静态枚举并校验三类明确合同：生产
+`OAPendingWorkflowCollection` / `OASystemMessageCollection` canonical schema、全部 Golden
+`given.registered_capabilities[*].output_schema`，以及 `VALID_RUNTIME_OUTPUT_SCHEMAS` 全集。
+任意 Python 构造实际进入 Runtime 的使用面不再由 AST / dataflow 猜测；pytest 在测试环境完成设置后，
+只在测试进程内包装 `RuntimeImpl._build_envelope`，同时观测传入的 `capability.output_schema` 与
+`projection_snapshot.load_output_schema()`。两类观测直接复用生产
+`schema_has_credential_property`，只保留 nodeid、surface、canonical digest 与固定 reason code，
+不保留 schema 原文、值或异常文本。
+
+**权威门槛**：只有收集并实际观测到 architecture integration sentinel 的 session，才可产生
+authoritative P4 dynamic PASS。P4 offender 只指递归已声明 property 名命中统一 credential marker；
+空 schema 不属于 offender。observer 以 `_build_envelope` 收到的 `ExecutionResult.status` 为唯一分类事实：
+`status == "completed"` 时 projector 实际消费合同，该路径空 schema 记为 `empty_projected` 并失败；
+其余状态未消费输出合同，空 schema 记为 `empty_nonprojected`，只统计、只报告。零观测、marker、
+`empty_projected`、不可读 schema 或状态、wrapper 丢失、sentinel 只收集未观测以及 xdist worker payload
+缺失均 fail-closed；未收集 sentinel 的定向 session 仍只能报告 not-authoritative，不得伪装成 P4 PASS。
+xdist worker 只上送 JSON-safe 摘要，由 controller 合并裁决；当前未引入 xdist，因此只验证汇总协议，
+不声称并行实跑通过。
+
+**不变边界**：生产 projector 对 marker property 根合同继续 fail-closed 为 `data=None`，本裁决不修改
+生产代码、外露合同或凭证边界。独立 pytest session 之间不持久化、不累加、不互借结果；当前单一全量
+pytest session 是权威门禁。未来若 CI 拆成独立 shard，拆分变更必须保留一个不分片的 Runtime + P4
+sentinel required check，或增加只汇总安全摘要的最终 required check；局部 shard 绿不得称为 P4 PASS。
