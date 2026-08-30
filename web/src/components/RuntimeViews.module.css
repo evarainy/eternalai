@@ -14,14 +14,14 @@
 
 .panelTitle {
   margin: 0;
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
 }
 
 .incomplete {
   flex: none;
   color: var(--chat-color-warning);
-  font-size: 12px;
+  font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
 }
 
@@ -29,7 +29,7 @@
   margin: 0 0 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.65;
+  line-height: var(--workbench-line-height);
 }
 
 .facts,
@@ -66,7 +66,7 @@
 .argumentsTitle {
   display: block;
   margin-bottom: 9px;
-  font-size: 13px;
+  font-size: var(--workbench-font-auxiliary);
 }
 
 .fieldNameOnly {
@@ -105,7 +105,7 @@
 
 .recordTitle {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: var(--workbench-font-body);
   overflow-wrap: anywhere;
 }
 
@@ -115,7 +115,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   border-top: 1px solid var(--chat-color-border);
-  line-height: 1.7;
+  line-height: var(--workbench-line-height);
 }
 
 .contentDetails {

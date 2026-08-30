@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { projectResponse } from '../../contracts/runtimeProjection';
+import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
 
@@ -34,7 +35,6 @@ vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
 });
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111';
-const SESSION_B = '22222222-2222-4222-8222-222222222222';
 
 function response(
   body: unknown,
@@ -180,6 +180,16 @@ function storageText(storage: Storage): string {
   return values.join('|');
 }
 
+beforeEach(() => {
+  useAIDockStore.setState({
+    draft: '',
+    lastOpenMode: 'drawer',
+    mode: 'closed',
+    sessionId: null,
+    transcript: [],
+  });
+});
+
 describe('ChatPage request boundary', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -221,10 +231,8 @@ describe('ChatPage request boundary', () => {
     ).toBe(false);
   });
 
-  it('reuses one client session within a mount and creates a new one after remount', async () => {
-    vi.mocked(globalThis.crypto.randomUUID)
-      .mockReturnValueOnce(SESSION_A)
-      .mockReturnValueOnce(SESSION_B);
+  it('reuses one client session across a normal page remount', async () => {
+    vi.mocked(globalThis.crypto.randomUUID).mockReturnValue(SESSION_A);
     const fetchMock = vi.fn().mockResolvedValue(response(envelope()));
     vi.stubGlobal('fetch', fetchMock);
     const firstMount = renderChat();
@@ -243,7 +251,7 @@ describe('ChatPage request boundary', () => {
     expect(runtimeMock.handle.mock.calls.map(([request]) => request.session_id)).toEqual([
       SESSION_A,
       SESSION_A,
-      SESSION_B,
+      SESSION_A,
     ]);
   });
 

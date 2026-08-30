@@ -1,0 +1,15 @@
+.emptyState {
+  display: grid;
+  max-width: 40em;
+  gap: 6px;
+  margin: 12px auto;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+  text-align: left;
+}
+
+.emptyState strong {
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-body);
+}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -8,9 +8,9 @@ import {
   Descriptions,
   Drawer,
   Flex,
+  Radio,
   Space,
   Spin,
-  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -29,7 +29,10 @@ import type {
   WorkObjectListResponse,
   WorkObjectListResponseItemsItem,
 } from '../generated/work-objects/work-objects.schemas';
+import { QueryTable } from '../shared/ui/QueryTable';
+import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
+import styles from './WorkObjectsPage.module.css';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -119,6 +122,50 @@ function formatTimestamp(value: string): string {
   }).format(timestamp);
 }
 
+function isTodayWorkObject(item: OAWorkObjectView, now: Date): boolean {
+  if (item.handling_mark === 'pending_sync_confirmation') {
+    return true;
+  }
+  if (item.due_at === null) {
+    return false;
+  }
+  const dueAt = new Date(item.due_at);
+  if (Number.isNaN(dueAt.getTime())) {
+    return false;
+  }
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  return dueAt <= endOfToday;
+}
+
+function dueTimestamp(value: string | null): number {
+  if (value === null) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+function dueStatus(value: string | null) {
+  if (value === null) {
+    return { className: styles.neutralStatus, icon: '○', label: '未提供截止时间' };
+  }
+  const dueAt = new Date(value);
+  if (Number.isNaN(dueAt.getTime())) {
+    return { className: styles.neutralStatus, icon: '○', label: '截止时间格式异常' };
+  }
+  const now = new Date();
+  const endOfToday = new Date(now);
+  endOfToday.setHours(23, 59, 59, 999);
+  if (dueAt < now) {
+    return { className: styles.errorStatus, icon: '!', label: '已逾期' };
+  }
+  if (dueAt <= endOfToday) {
+    return { className: styles.warningStatus, icon: '!', label: '今日截止' };
+  }
+  return { className: styles.neutralStatus, icon: '○', label: '尚未到期' };
+}
+
 function errorText(error: unknown): string {
   if (error instanceof ApiError) {
     return `${error.code}: ${error.message}`;
@@ -131,20 +178,22 @@ function errorText(error: unknown): string {
 
 function handlingMarkTag(mark: OAWorkObjectView['handling_mark']) {
   if (mark === 'pending_sync_confirmation') {
-    return <Tag color="gold">{handlingMarkLabels[mark]}</Tag>;
+    return <Tag color="gold"><span aria-hidden="true">!</span> {handlingMarkLabels[mark]}</Tag>;
   }
   if (mark === 'handled_elsewhere') {
-    return <Tag color="blue">{handlingMarkLabels[mark]}</Tag>;
+    return <Tag color="green"><span aria-hidden="true">✓</span> {handlingMarkLabels[mark]}</Tag>;
   }
-  return <Tag>未标记</Tag>;
+  return <Tag><span aria-hidden="true">○</span> 未标记</Tag>;
 }
 
 export default function WorkObjectsPage() {
   const [selectedWorkObjectId, setSelectedWorkObjectId] = useState<string>();
+  const [view, setView] = useState<'today' | 'all'>('today');
   const autoSyncGeneration = useRef<number>();
   const queryClient = useQueryClient();
   const authGeneration = useAuthStore((state) => state.generation);
   const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
+  const dockMode = useAIDockStore((state) => state.mode);
   const { message } = AntApp.useApp();
   const listQueryKey = workObjectsQueryKey(authGeneration);
 
@@ -301,10 +350,14 @@ export default function WorkObjectsPage() {
     },
   });
 
-  const items = listQuery.data?.items ?? [];
-  const oaItems = items.filter(
-    (item): item is OAWorkObjectView =>
-      item.state_authority === 'external_snapshot',
+  const items = listQuery.data?.items;
+  const oaItems = useMemo(
+    () =>
+      (items ?? []).filter(
+        (item): item is OAWorkObjectView =>
+          item.state_authority === 'external_snapshot',
+      ),
+    [items],
   );
   const newestFetchedAt = oaItems.reduce<string | undefined>((newest, item) => {
     if (!newest || new Date(item.source_fetched_at) > new Date(newest)) {
@@ -313,79 +366,90 @@ export default function WorkObjectsPage() {
     return newest;
   }, undefined);
 
-  const columns: ColumnsType<OAWorkObjectView> = [
-    {
-      title: '来源',
-      key: 'source',
-      width: 180,
-      render: (_, item) => (
-        <Space orientation="vertical" size={0}>
-          <Tag color="cyan">OA 待办</Tag>
-          <Text type="secondary">{item.source_ref}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '事项',
-      dataIndex: 'source_title',
-      key: 'source_title',
-      width: 260,
-      render: (value: string) => <Text strong>{value}</Text>,
-    },
-    {
-      title: '责任人',
-      dataIndex: 'assignee_display_name',
-      key: 'assignee_display_name',
-      width: 150,
-    },
-    {
-      title: '时限',
-      dataIndex: 'due_at',
-      key: 'due_at',
-      width: 170,
-      render: (value: string | null) =>
-        value ? formatTimestamp(value) : <Text type="secondary">OA 未提供</Text>,
-    },
-    {
-      title: 'OA 状态',
-      dataIndex: 'source_status',
-      key: 'source_status',
-      width: 140,
-      render: (value: string) => <Tag color="green">{value}</Tag>,
-    },
-    {
-      title: '数据截至时间',
-      dataIndex: 'source_fetched_at',
-      key: 'source_fetched_at',
-      width: 220,
-      render: (value: string) => (
-        <Text strong style={{ color: '#7a4a00' }}>
-          截至 {formatTimestamp(value)}
-        </Text>
-      ),
-    },
-    {
-      title: '我的处理痕迹',
-      dataIndex: 'handling_mark',
-      key: 'handling_mark',
-      width: 180,
-      render: (value: OAWorkObjectView['handling_mark']) => handlingMarkTag(value),
-    },
-    {
-      title: '办理',
-      key: 'handling_action',
-      fixed: 'right',
-      width: 140,
-      render: (_, item) => (
-        <Button
-          style={{ minHeight: 44, minWidth: 104 }}
-          onClick={() => setSelectedWorkObjectId(item.work_object_id)}
-        >
-          {handlingActionLabels[item.handling_action]}
-        </Button>
-      ),
-    },
-  ];
+  const visibleItems = useMemo(
+    () =>
+      view === 'today'
+        ? oaItems.filter((item) => isTodayWorkObject(item, new Date()))
+        : oaItems,
+    [oaItems, view],
+  );
+  const assigneeFilters = useMemo(
+    () =>
+      [...new Set(oaItems.map((item) => item.assignee_display_name))]
+        .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+        .map((assignee) => ({ text: assignee, value: assignee })),
+    [oaItems],
+  );
+
+  const columns = useMemo<ColumnsType<OAWorkObjectView>>(
+    () => [
+      {
+        title: '标题',
+        dataIndex: 'source_title',
+        key: 'source_title',
+        width: '42%',
+        render: (value: string, item) => (
+          <div className={styles.workItemTitle}>
+            <Text strong>{value}</Text>
+            <div className={styles.sourceLine}>
+              <span><span aria-hidden="true">▣</span> OA</span>
+              <span>{item.source_ref}</span>
+              <span>当前步骤：{item.source_status}</span>
+              <span>数据截至：{formatTimestamp(item.source_fetched_at)}</span>
+            </div>
+            {item.handling_mark === null ? null : handlingMarkTag(item.handling_mark)}
+          </div>
+        ),
+      },
+      {
+        title: '责任人或责任部门',
+        dataIndex: 'assignee_display_name',
+        key: 'assignee_display_name',
+        width: '18%',
+        filters: assigneeFilters,
+        filterIcon: () => <span className={styles.filterLabel}>筛选</span>,
+        onFilter: (value, item) => item.assignee_display_name === value,
+        sorter: (left, right) =>
+          left.assignee_display_name.localeCompare(
+            right.assignee_display_name,
+            'zh-CN',
+          ),
+      },
+      {
+        title: '截止时间',
+        dataIndex: 'due_at',
+        key: 'due_at',
+        width: '20%',
+        sorter: (left, right) => dueTimestamp(left.due_at) - dueTimestamp(right.due_at),
+        render: (value: string | null) => {
+          const status = dueStatus(value);
+          return (
+            <div className={styles.dueCell}>
+              <span className={status.className}>
+                <span aria-hidden="true">{status.icon}</span> {status.label}
+              </span>
+              <span>{value ? formatTimestamp(value) : 'OA 未提供'}</span>
+            </div>
+          );
+        },
+      },
+      {
+        title: '下一动作',
+        key: 'handling_action',
+        width: '20%',
+        render: (_, item) => (
+          <Button
+            className={styles.actionButton}
+            onClick={() => setSelectedWorkObjectId(item.work_object_id)}
+            type="primary"
+          >
+            {handlingActionLabels[item.handling_action]}
+          </Button>
+        ),
+      },
+    ],
+    [assigneeFilters],
+  );
 
   const syncError = syncMutation.error;
   const requiresReauthentication =
@@ -394,38 +458,38 @@ export default function WorkObjectsPage() {
     syncError instanceof ApiError && syncError.code === 'oa_binding_scope_required';
 
   return (
-    <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-      <Card
-        styles={{ body: { padding: 28 } }}
-        style={{
-          border: 0,
-          background:
-            'linear-gradient(120deg, rgba(9, 47, 45, 0.98), rgba(25, 91, 79, 0.94))',
-          boxShadow: '0 18px 48px rgba(9, 47, 45, 0.18)',
-        }}
-      >
-        <Flex align="flex-end" justify="space-between" gap={24} wrap>
+    <Space
+      className={styles.page}
+      data-density={dockMode === 'pinned' ? 'compact' : 'comfortable'}
+      orientation="vertical"
+      size="large"
+    >
+      <Card className={styles.hero} styles={{ body: { padding: 28 } }}>
+        <Flex align="center" justify="space-between" gap={24} wrap>
           <div>
-            <Text style={{ color: '#9fe3d1', letterSpacing: 2 }}>MY WORK OBJECTS</Text>
-            <Title level={2} style={{ color: '#fff', margin: '8px 0 4px' }}>
-              我的工作台
+            <Text className={styles.heroEyebrow}>今天先做什么，一眼就能看清</Text>
+            <Title level={1} className={styles.heroTitle}>
+              工作事项
             </Title>
-            <Paragraph style={{ color: 'rgba(255,255,255,0.78)', marginBottom: 0 }}>
-              OA 是业务状态权威；这里保存上次看到的 OA 快照和你的处理痕迹。
+            <Paragraph className={styles.heroCopy}>
+              这里显示已保存的 OA 事项。每一行都告诉你责任人、截止时间和下一步。
             </Paragraph>
           </div>
-          <Space orientation="vertical" align="end">
-            <Text style={{ color: '#fff' }}>当前显示 {oaItems.length} 项</Text>
-            <Text style={{ color: '#ffe0a3' }}>
-              最新数据截至：{newestFetchedAt ? formatTimestamp(newestFetchedAt) : '暂无数据'}
+          <Space orientation="vertical" align="end" className={styles.heroStatus}>
+            <Text>
+              <span aria-hidden="true">●</span>{' '}
+              <span>当前显示 {visibleItems.length} 项</span>
+            </Text>
+            <Text>
+              <span aria-hidden="true">◷</span> 最新数据截至：
+              {newestFetchedAt ? formatTimestamp(newestFetchedAt) : '尚未取得 OA 数据'}
             </Text>
             <Button
               type="primary"
-              ghost
               loading={syncMutation.isPending}
               onClick={() => syncMutation.mutate(authGeneration)}
             >
-              手动刷新 OA
+              刷新 OA 事项
             </Button>
           </Space>
         </Flex>
@@ -437,7 +501,7 @@ export default function WorkObjectsPage() {
         <Alert
           showIcon
           type="error"
-          title="无法读取已保存的 Work Object"
+          title="无法读取已保存的工作事项"
           description={errorText(listQuery.error)}
         />
       ) : null}
@@ -478,23 +542,57 @@ export default function WorkObjectsPage() {
           showIcon
           type="warning"
           title={`事项超过首版展示上限 ${listQuery.data.limit} 条`}
-          description="当前只显示一个有界批次；本页面没有服务端分页，也不会用本地分页伪装完整数据。"
+          description="当前只取得一个有界批次；下方分页只整理已取得的事项，不代表 OA 中的全部事项。"
         />
       ) : null}
 
-      <Table<OAWorkObjectView>
+      <section className={styles.listSection} aria-labelledby="work-view-label">
+        <div className={styles.viewBar}>
+          <div>
+            <span className={styles.viewLabel} id="work-view-label">查看范围</span>
+            <p className={styles.viewHint}>“今日”包括今天截止、已经逾期和等待你确认的事项。</p>
+          </div>
+          <Radio.Group
+            aria-labelledby="work-view-label"
+            buttonStyle="solid"
+            optionType="button"
+            value={view}
+            onChange={(event) => setView(event.target.value as 'today' | 'all')}
+          >
+            <Radio.Button value="today">今日</Radio.Button>
+            <Radio.Button value="all">全部</Radio.Button>
+          </Radio.Group>
+        </div>
+      <QueryTable<OAWorkObjectView>
         rowKey="work_object_id"
         columns={columns}
-        dataSource={oaItems}
+        dataSource={visibleItems}
+        emptyReason={
+          view === 'today'
+            ? '今日为空，因为没有今天截止、已经逾期或等待确认的事项。'
+            : '全部为空，因为目前还没有取得可显示的 OA 事项。'
+        }
+        emptyNextStep={
+          view === 'today'
+            ? '下一步：可切换到“全部”查看以后要办的事项，或刷新 OA 事项。'
+            : '下一步：先检查 OA 账号绑定状态，再选择“刷新 OA 事项”。'
+        }
         loading={listQuery.isLoading}
-        pagination={false}
-        scroll={{ x: 1450 }}
+        queryResetKey={view}
+        tableLayout="fixed"
       />
+      </section>
 
       <Drawer
-        title="Work Object 详情"
+        title="工作事项详情"
         open={selectedWorkObjectId !== undefined}
         onClose={() => setSelectedWorkObjectId(undefined)}
+        closable={false}
+        extra={(
+          <Button onClick={() => setSelectedWorkObjectId(undefined)}>
+            关闭详情
+          </Button>
+        )}
         size={720}
         destroyOnHidden
       >
@@ -511,8 +609,8 @@ export default function WorkObjectsPage() {
           <Alert
             showIcon
             type="info"
-            title="内部任务暂未在此页面展示"
-            description="本页面当前只展示 OA 快照；内部任务将在后续功能中提供业务展示。"
+            title="内部事项暂未在此页面展示"
+            description="当前页面只展示字段完整的 OA 事项；内部事项将在后续交办功能中提供业务展示。"
           />
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
@@ -529,7 +627,7 @@ export default function WorkObjectsPage() {
               description={handlingActionDescriptions[detailQuery.data.handling_action]}
             />
             <Descriptions bordered column={1} size="small">
-              <Descriptions.Item label="Work Object ID">
+              <Descriptions.Item label="事项编号">
                 {detailQuery.data.work_object_id}
               </Descriptions.Item>
               <Descriptions.Item label="来源">
@@ -561,7 +659,7 @@ export default function WorkObjectsPage() {
               <Descriptions.Item label="OA 流程类型">
                 {detailQuery.data.source_workflow_type_id}
               </Descriptions.Item>
-              <Descriptions.Item label="Task Record 引用">
+              <Descriptions.Item label="办理记录编号">
                 {detailQuery.data.task_record_id ?? '无'}
               </Descriptions.Item>
               <Descriptions.Item label="我的处理痕迹">

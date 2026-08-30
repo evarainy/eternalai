@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { getReturnPath } from '../loginNavigation';
 
-const DEFAULT_RETURN_PATH = '/admin/registry';
+const DEFAULT_RETURN_PATH = '/';
 
 describe('getReturnPath', () => {
   it.each([
     ['/admin/tasks', '/admin/tasks'],
     ['/chat', '/chat'],
+    ['/work-objects', '/work-objects'],
+    ['/', '/'],
   ])('allows the named protected path %s', (from, expected) => {
     expect(getReturnPath({ from })).toBe(expected);
   });

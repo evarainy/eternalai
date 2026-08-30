@@ -1,4 +1,5 @@
-const DEFAULT_RETURN_PATH = '/admin/registry';
+const DEFAULT_RETURN_PATH = '/';
+const NAMED_PROTECTED_PATHS = new Set(['/', '/chat', '/work-objects']);
 
 export function getReturnPath(state: unknown): string {
   if (
@@ -6,7 +7,7 @@ export function getReturnPath(state: unknown): string {
     state !== null &&
     'from' in state &&
     typeof state.from === 'string' &&
-    (state.from === '/chat' || state.from.startsWith('/admin/'))
+    (NAMED_PROTECTED_PATHS.has(state.from) || state.from.startsWith('/admin/'))
   ) {
     return state.from;
   }
