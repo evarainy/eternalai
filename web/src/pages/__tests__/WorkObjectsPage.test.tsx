@@ -9,6 +9,7 @@ import type {
   OAWorkObjectView,
   WorkObjectListResponse,
 } from '../../generated/work-objects/work-objects.schemas';
+import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import WorkObjectsPage from '../WorkObjectsPage';
 
@@ -131,6 +132,13 @@ function renderPage(queryClient = makeClient()) {
 describe('WorkObjectsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAIDockStore.setState({
+      draft: '',
+      lastOpenMode: 'drawer',
+      mode: 'closed',
+      sessionId: null,
+      transcript: [],
+    });
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     apiMocks.listWorkObjects.mockResolvedValue(listResponse());
     apiMocks.syncWorkObjects.mockResolvedValue(listResponse());
@@ -212,6 +220,92 @@ describe('WorkObjectsPage', () => {
     }
   });
 
+  it('defines Today as due today, overdue, or waiting for confirmation and can switch to All', async () => {
+    const futureItem: OAWorkObjectView = {
+      ...WORK_OBJECT,
+      due_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      source_ref: 'OA-FUTURE',
+      source_title: '下周再办的事项',
+      work_object_id: 'work-future',
+    };
+    const pendingConfirmation: OAWorkObjectView = {
+      ...futureItem,
+      handling_mark: 'pending_sync_confirmation',
+      source_ref: 'OA-CONFIRM',
+      source_title: '等待确认的事项',
+      work_object_id: 'work-confirm',
+    };
+    const response = listResponse({
+      items: [WORK_OBJECT, futureItem, pendingConfirmation],
+    });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+
+    renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(screen.getByText('等待确认的事项')).toBeInTheDocument();
+    expect(screen.queryByText('下周再办的事项')).not.toBeInTheDocument();
+    expect(screen.getByText('当前显示 2 项')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: '全部' }));
+
+    expect(screen.getByText('下周再办的事项')).toBeInTheDocument();
+    expect(screen.getByText('当前显示 3 项')).toBeInTheDocument();
+    await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
+  });
+
+  it('keeps source and state text visible and pairs status color with an icon and words', async () => {
+    renderPage();
+
+    expect(await screen.findByText(/OA-WF-001/)).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤：待办/)).toBeInTheDocument();
+    expect(screen.getAllByText(/数据截至：/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('筛选')).toBeInTheDocument();
+    const overdueStatus = screen.getByText(/已逾期/);
+    expect(overdueStatus.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('switches to compact rows when Dock is pinned without enabling horizontal table scrolling', async () => {
+    useAIDockStore.setState({ mode: 'pinned', lastOpenMode: 'pinned' });
+    const { container } = renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(container.querySelector('[data-density="compact"]')).not.toBeNull();
+    expect(container.querySelector('.ant-table-body')).toBeNull();
+    expect(screen.getByRole('columnheader', { name: /标题/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('columnheader', { name: /责任人或责任部门/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /截止时间/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /下一动作/ })).toBeInTheDocument();
+  });
+
+  it('explains why Today is empty and gives a concrete next step', async () => {
+    const futureItem: OAWorkObjectView = {
+      ...WORK_OBJECT,
+      due_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      source_ref: 'OA-FUTURE',
+      source_title: '以后再办的事项',
+      work_object_id: 'work-future',
+    };
+    const response = listResponse({ items: [futureItem] });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        '今日为空，因为没有今天截止、已经逾期或等待确认的事项。',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('下一步：可切换到“全部”查看以后要办的事项，或刷新 OA 事项。'),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
+  });
+
   it('keeps the saved OA snapshot visible when sync fails and warns about bounded results', async () => {
     apiMocks.listWorkObjects.mockResolvedValueOnce(
       listResponse({ limit_exceeded: true }),
@@ -228,10 +322,10 @@ describe('WorkObjectsPage', () => {
       screen.getByText('仍在显示上次成功拉取的数据；请以每项的数据截至时间为准。'),
     ).toBeInTheDocument();
     expect(screen.getByText(/oa_sync_failed: OA 暂时不可用/)).toBeInTheDocument();
-    expect(screen.getByText('待办')).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤：待办/)).toBeInTheDocument();
     expect(screen.getByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
-    expect(screen.getByText(/本页面没有服务端分页/)).toBeInTheDocument();
-    expect(container.querySelector('.ant-pagination')).not.toBeInTheDocument();
+    expect(screen.getByText(/下方分页只整理已取得的事项/)).toBeInTheDocument();
+    expect(container.querySelector('.ant-pagination')).toBeInTheDocument();
     expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1);
   });
 
@@ -403,7 +497,8 @@ describe('WorkObjectsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText('OA_UPDATED').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
       expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
     });
   });
@@ -440,13 +535,15 @@ describe('WorkObjectsPage', () => {
     await waitFor(() => expect(apiMocks.setHandlingMark).toHaveBeenCalledTimes(1));
 
     resolveSync(listResponse({ items: [refreshedSource] }));
-    await waitFor(() =>
-      expect(screen.getAllByText('OA_UPDATED').length).toBeGreaterThanOrEqual(2),
-    );
+    await waitFor(() => {
+      expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
+    });
     resolveMark(markedOldSource);
 
     expect(await screen.findByText('处理痕迹已记录；OA 状态未被修改')).toBeInTheDocument();
-    expect(screen.getAllByText('OA_UPDATED').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
   });
 
@@ -475,14 +572,16 @@ describe('WorkObjectsPage', () => {
 
     resolveSync(listResponse({ items: [refreshedSource] }));
     expect(await screen.findByText('task-new')).toBeInTheDocument();
-    expect(screen.getAllByText('OA_UPDATED').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     await act(async () => {
       resolveDetail(WORK_OBJECT);
       await pendingDetail;
     });
 
     expect(screen.getByText('task-new')).toBeInTheDocument();
-    expect(screen.getAllByText('OA_UPDATED').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
   });
 
   it('keeps a pending detail usable when an overflowing sync batch excludes it', async () => {

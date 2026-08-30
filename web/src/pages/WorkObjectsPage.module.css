@@ -1,0 +1,159 @@
+.page {
+  display: flex !important;
+  width: 100%;
+}
+
+.page > :global(.ant-space-item) {
+  min-width: 0;
+}
+
+.hero {
+  overflow: hidden;
+  color: #fff;
+  background:
+    linear-gradient(120deg, rgb(14 65 53 / 98%), rgb(28 94 75 / 96%)),
+    repeating-linear-gradient(135deg, transparent 0 18px, rgb(255 255 255 / 5%) 18px 19px);
+  border: 0;
+  box-shadow: 0 16px 40px rgb(9 47 45 / 16%);
+}
+
+.heroEyebrow,
+.heroStatus :global(.ant-typography) {
+  color: #d3eee2;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 650;
+}
+
+.heroTitle {
+  margin: 6px 0 8px !important;
+  color: #fff !important;
+  font-family: var(--workbench-font-heading);
+  font-size: clamp(34px, 4vw, 46px) !important;
+  letter-spacing: 0.02em;
+}
+
+.heroCopy {
+  max-width: 40em;
+  margin: 0 !important;
+  color: #f3fbf7;
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+.heroStatus {
+  min-width: 280px;
+}
+
+.heroStatus :global(.ant-btn-primary) {
+  color: #173f73;
+  background: #dbeafe;
+}
+
+.listSection {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--workbench-surface);
+  border: 1px solid var(--workbench-border);
+  border-radius: 10px;
+}
+
+.viewBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 18px 20px;
+  background: #eeece3;
+  border-bottom: 1px solid var(--workbench-border);
+}
+
+.viewLabel {
+  display: block;
+  font-weight: 750;
+}
+
+.viewHint {
+  margin: 4px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.workItemTitle,
+.dueCell {
+  display: grid;
+  gap: 7px;
+}
+
+.sourceLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.sourceLine > span:not(:last-child)::after {
+  margin-left: 8px;
+  content: '·';
+}
+
+.errorStatus,
+.warningStatus,
+.neutralStatus {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 700;
+}
+
+.errorStatus {
+  color: #8f2119;
+  background: #fde7e4;
+}
+
+.warningStatus {
+  color: #6b4b00;
+  background: #fff1ba;
+}
+
+.neutralStatus {
+  color: #4d5861;
+  background: #edf0f2;
+}
+
+.actionButton {
+  width: 100%;
+  min-width: var(--workbench-target-size);
+  white-space: normal;
+}
+
+.filterLabel {
+  display: inline-flex;
+  min-width: var(--workbench-target-size);
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  justify-content: center;
+  color: var(--workbench-primary);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 700;
+}
+
+.page[data-density='compact'] :global(.ant-table-cell) {
+  padding: 10px 8px !important;
+}
+
+.page[data-density='compact'] .sourceLine {
+  gap: 1px 6px;
+}
+
+.page :global(.ant-table-wrapper),
+.page :global(.ant-spin-nested-loading),
+.page :global(.ant-spin-container) {
+  min-width: 0;
+}
+
+.page :global(.ant-table-cell) {
+  overflow-wrap: anywhere;
+}

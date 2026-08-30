@@ -1,36 +1,28 @@
 /// <reference types="vite/client" />
 
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import type { CSSProperties, FormEvent, KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, Input, Tag, Typography, theme } from 'antd';
-import { ApiError } from '../api/mutator';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
 import {
-  incompatibleResponse,
   projectResponse,
-  projectTextResponse,
   type PresentationKind,
   type ProjectedResponse,
   type TargetSystem,
 } from '../contracts/runtimeProjection';
+import { projectRequestError } from '../contracts/runtimeRequestError';
 import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
 import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
+import { useAIDockStore } from '../stores/aiDockStore';
 import styles from './ChatPage.module.css';
 
 const { Paragraph, Text, Title } = Typography;
 const { TextArea } = Input;
-
-type TranscriptEntry =
-  | {
-      role: 'user';
-      text: string;
-    }
-  | ProjectedResponse;
 
 interface ChatCssVariables extends CSSProperties {
   '--chat-color-bg': string;
@@ -46,46 +38,6 @@ interface ChatCssVariables extends CSSProperties {
   '--chat-color-text': string;
   '--chat-color-text-secondary': string;
   '--chat-shadow': string;
-}
-
-function projectRequestError(error: unknown): ProjectedResponse | null {
-  if (error instanceof SyntaxError) {
-    return incompatibleResponse();
-  }
-  if (error instanceof ApiError) {
-    if (error.status === 401) {
-      return null;
-    }
-    if (error.status === 403 && error.code === 'csrf_validation_failed') {
-      return projectTextResponse(
-        '当前请求来源未通过安全校验，请联系管理员检查部署配置。',
-        'csrf',
-      );
-    }
-    if (error.status === 404) {
-      return projectTextResponse(
-        '当前会话不可用，请刷新页面后重试。',
-        'session',
-      );
-    }
-    if (error.status === 422) {
-      return projectTextResponse(
-        '请求格式未通过校验，请重新输入后再试。',
-        'validation',
-      );
-    }
-    if (error.status === 503) {
-      return projectTextResponse(
-        '办理服务暂时不可用，请稍后再试。',
-        'service',
-      );
-    }
-    return projectTextResponse(
-      '请求未能完成，请稍后再试。',
-      'request_error',
-    );
-  }
-  return projectTextResponse('网络连接异常，请稍后再试。', 'network');
 }
 
 const presentationLabels: Record<PresentationKind, string> = {
@@ -153,14 +105,16 @@ function AssistantDetails({
 
 export default function ChatPage() {
   const { token } = theme.useToken();
-  const [sessionId] = useState(() => crypto.randomUUID());
-  const [draft, setDraft] = useState('');
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const draft = useAIDockStore((state) => state.draft);
+  const transcript = useAIDockStore((state) => state.transcript);
+  const appendTranscript = useAIDockStore((state) => state.appendTranscript);
+  const setDraft = useAIDockStore((state) => state.setDraft);
   const requestInFlight = useRef(false);
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
       try {
+        const sessionId = useAIDockStore.getState().ensureSession();
         return projectResponse(await handleApiV1RuntimeHandlePost({
           channel: 'web',
           session_id: sessionId,
@@ -176,7 +130,7 @@ export default function ChatPage() {
       }
     },
     onSuccess: (projectedResponse) => {
-      setTranscript((current) => [...current, projectedResponse]);
+      appendTranscript(projectedResponse);
     },
     onSettled: () => {
       requestInFlight.current = false;
@@ -189,13 +143,14 @@ export default function ChatPage() {
       return;
     }
     requestInFlight.current = true;
-    setTranscript((current) => [...current, { role: 'user', text: message }]);
+    appendTranscript({ role: 'user', text: message });
     setDraft('');
     mutation.mutate(message);
   };
 
   const submitConfirmation = async (responseId: string) => {
     try {
+      const sessionId = useAIDockStore.getState().ensureSession();
       const projectedResponse = projectResponse(
         await handleActionApiV1RuntimeActionPost({
           channel: 'web',
@@ -207,11 +162,11 @@ export default function ChatPage() {
           },
         }),
       );
-      setTranscript((current) => [...current, projectedResponse]);
+      appendTranscript(projectedResponse);
     } catch (error) {
       const projectedError = projectRequestError(error);
       if (projectedError !== null) {
-        setTranscript((current) => [...current, projectedError]);
+        appendTranscript(projectedError);
       }
     }
   };
@@ -249,19 +204,19 @@ export default function ChatPage() {
   };
 
   return (
-    <main className={styles.page} style={cssVariables}>
+    <div className={styles.page} style={cssVariables}>
       <header className={styles.pageHeader}>
         <div>
-          <Text className={styles.eyebrow}>ETERNALAI · RUNTIME</Text>
+          <Text className={styles.eyebrow}>开始新工作</Text>
           <Title level={1} className={styles.title}>
-            自然语言办理入口
+            把要办的事说清楚
           </Title>
           <Paragraph className={styles.subtitle}>
-            用一条完整请求查询当前已接入的业务能力。系统会明确反馈办理结果、需要补充的范围或不可办理原因。
+            写清对象、时间和想得到的结果。系统会告诉你已经完成、还需补什么，或为什么暂时不能办理。
           </Paragraph>
         </div>
         <Tag variant="filled" className={styles.sessionTag}>
-          当前页面会话
+          <span aria-hidden="true">●</span> 本次临时对话
         </Tag>
       </header>
 
@@ -361,6 +316,6 @@ export default function ChatPage() {
           </div>
         </form>
       </section>
-    </main>
+    </div>
   );
 }

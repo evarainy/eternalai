@@ -1,0 +1,138 @@
+.shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 224px minmax(0, 1fr);
+  background: var(--workbench-bg);
+}
+
+.shell[data-dock-offset='true'] {
+  grid-template-columns: 224px minmax(0, 1fr) minmax(340px, 390px);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 100vh;
+  flex-direction: column;
+  padding: 18px 14px;
+  color: #f7fbf8;
+  background: #163b31;
+  border-right: 1px solid #0c2d25;
+}
+
+.brand {
+  display: grid;
+  min-height: 64px;
+  align-content: center;
+  padding: 0 12px;
+  color: #fff;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-family: var(--workbench-font-heading);
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.brand small {
+  margin-top: 3px;
+  color: #c7ddd4;
+  font-family: var(--workbench-font-body-family);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 500;
+}
+
+.nav {
+  display: grid;
+  gap: 8px;
+  margin-top: 30px;
+}
+
+.navLink,
+.adminSummary {
+  display: flex;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: #f7fbf8;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.navLink[aria-current='page'] {
+  color: #173f73;
+  background: #dbeafe;
+}
+
+.navIcon {
+  width: 24px;
+  flex: none;
+  text-align: center;
+}
+
+.adminGroup {
+  margin-top: 8px;
+}
+
+.adminSummary {
+  cursor: pointer;
+}
+
+.adminLinks {
+  display: grid;
+  gap: 4px;
+  padding: 8px 0 0 18px;
+}
+
+.sidebarNote {
+  margin: auto 8px 0;
+  color: #c7ddd4;
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.stage {
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 28px;
+  background: var(--workbench-surface);
+  border-bottom: 1px solid var(--workbench-border);
+}
+
+.location {
+  display: grid;
+  gap: 2px;
+}
+
+.locationLabel {
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.location strong {
+  font-size: 21px;
+}
+
+.topbarActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.content {
+  min-width: 0;
+  padding: 28px;
+}
