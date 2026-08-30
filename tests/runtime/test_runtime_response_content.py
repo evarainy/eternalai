@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.contracts import (
@@ -22,10 +23,11 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.response_envelope import ResponseEnvelope
+from app.ports.response_envelope import ConfirmCard, ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
-from app.runtime.runtime import RuntimeImpl
+from app.runtime.runtime import RuntimeImpl, _confirm_card_payload
+from app.version_binding import immutable_request_digest
 from tests.runtime.registry_fakes import (
     StaticCapabilityRegistry,
     active_capability,
@@ -448,14 +450,87 @@ def test_needs_binding_scope_has_matching_reason_and_clarify_action() -> None:
 
 
 def test_confirm_card_payload_contract_has_exact_keys() -> None:
-    assert ConfirmCardPayload.__required_keys__ == frozenset(
-        {
-            "capability_id",
-            "operation_summary",
-            "target_system",
-            "field_names",
-            "displayed_argument_values",
-        }
+    expected_keys = [
+        "capability_id",
+        "operation_summary",
+        "target_system",
+        "field_names",
+        "displayed_argument_values",
+    ]
+    valid_payload: dict[str, Any] = {
+        "capability_id": "oa.synthetic.approve",
+        "operation_summary": "提交审批",
+        "target_system": "oa",
+        "field_names": ["decision"],
+        "displayed_argument_values": {"decision": "同意"},
+    }
+
+    assert list(ConfirmCardPayload.model_fields) == expected_keys
+    assert all(
+        ConfirmCardPayload.model_fields[key].is_required() for key in expected_keys
+    )
+    schema = ConfirmCardPayload.model_json_schema()
+    assert schema["required"] == expected_keys
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["displayed_argument_values"][
+        "additionalProperties"
+    ] == {"type": "string"}
+
+    for target_system in ("oa", "u8", "hikvision_ivms"):
+        assert (
+            ConfirmCardPayload(
+                **{**valid_payload, "target_system": target_system}
+            ).target_system
+            == target_system
+        )
+
+    for missing_key in expected_keys:
+        with pytest.raises(ValidationError):
+            ConfirmCardPayload.model_validate(
+                {key: value for key, value in valid_payload.items() if key != missing_key}
+            )
+
+    invalid_payloads = (
+        {**valid_payload, "unexpected": "blocked"},
+        {**valid_payload, "target_system": "sap"},
+        {**valid_payload, "field_names": ["decision", 1]},
+        {**valid_payload, "displayed_argument_values": {"decision": 1}},
+    )
+    for invalid_payload in invalid_payloads:
+        with pytest.raises(ValidationError):
+            ConfirmCardPayload.model_validate(invalid_payload)
+
+
+def test_confirm_payload_wire_and_request_digest_are_compatible() -> None:
+    expected_preview = {
+        "capability_id": "oa.synthetic.approve",
+        "operation_summary": "",
+        "target_system": None,
+        "field_names": [],
+        "displayed_argument_values": {},
+    }
+    actual_preview = _confirm_card_payload(
+        CapabilityRef(capability_id="oa.synthetic.approve"),
+        None,
+        None,
+    )
+
+    assert actual_preview == expected_preview
+    assert list(actual_preview) == list(expected_preview)
+    actual_digest = immutable_request_digest(
+        task_id="task-sdui-schema",
+        action_digest="a" * 64,
+        preview=actual_preview,
+        binding_manifest_digest="b" * 64,
+    )
+    assert actual_digest == (
+        "71cc6da1ed8c890727d2920ee761823ad57d77e63f66338ed0a1df16ea251234"
+    )
+    assert actual_digest == immutable_request_digest(
+        task_id="task-sdui-schema",
+        action_digest="a" * 64,
+        preview=expected_preview,
+        binding_manifest_digest="b" * 64,
     )
 
 
@@ -487,7 +562,8 @@ def test_confirm_required_card_describes_operation_target_and_fields() -> None:
     assert envelope.ui.component_type == "confirm_card"
     assert envelope.ui.action == "confirm"
     assert envelope.ui.target_system == "oa"
-    assert envelope.ui.payload == {
+    assert isinstance(envelope.ui, ConfirmCard)
+    assert envelope.ui.payload.model_dump() == {
         "capability_id": "oa.submit_leave_request",
         "operation_summary": "提交请假申请：将请假申请提交到 OA",
         "target_system": "oa",
@@ -531,7 +607,8 @@ def test_confirm_required_payload_omits_credential_keys_and_all_argument_values(
     )
     serialized = envelope.model_dump_json()
 
-    assert envelope.ui.payload["field_names"] == [
+    assert isinstance(envelope.ui, ConfirmCard)
+    assert envelope.ui.payload.field_names == [
         "[REDACTED]",
         "[REDACTED]",
         "details",
@@ -607,14 +684,15 @@ def test_confirm_required_payload_projects_only_explicit_safe_scalar_values() ->
         },
     )
 
-    assert envelope.ui.payload["displayed_argument_values"] == {
+    assert isinstance(envelope.ui, ConfirmCard)
+    assert envelope.ui.payload.displayed_argument_values == {
         "summary": "annual leave",
         "days": "3",
         "ratio": "1.25",
         "urgent": "True",
     }
-    assert "missing" not in envelope.ui.payload["displayed_argument_values"]
-    assert "unknown_argument" not in envelope.ui.payload["field_names"]
+    assert "missing" not in envelope.ui.payload.displayed_argument_values
+    assert "unknown_argument" not in envelope.ui.payload.field_names
     assert long_value not in envelope.model_dump_json()
 
 
@@ -643,7 +721,8 @@ def test_confirm_required_payload_omits_marker_free_sensitive_canary() -> None:
     )
     serialized = envelope.model_dump_json()
 
-    assert envelope.ui.payload["field_names"] == ["arg1", "details"]
+    assert isinstance(envelope.ui, ConfirmCard)
+    assert envelope.ui.payload.field_names == ["arg1", "details"]
     assert opaque_canary not in serialized
     assert nested_canary not in serialized
     assert "assignee=" not in serialized

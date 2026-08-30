@@ -30,6 +30,228 @@
         "title": "ActionRequest",
         "type": "object"
       },
+      "ActionResponseData": {
+        "additionalProperties": false,
+        "properties": {
+          "action_outcome": {
+            "$ref": "#/components/schemas/UserActionOutcome"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectedActionResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "action_outcome",
+          "result"
+        ],
+        "title": "ActionResponseData",
+        "type": "object"
+      },
+      "ActionResponseEnvelope": {
+        "additionalProperties": false,
+        "description": "ResponseEnvelope specialization for structured user actions.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ActionResponseData"
+          },
+          "fallback_text": {
+            "title": "Fallback Text",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "response_id": {
+            "title": "Response Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "phase0.sdui.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "blocked",
+              "waiting_user",
+              "failed",
+              "no_capability_found"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "trace_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Summary"
+          },
+          "ui": {
+            "discriminator": {
+              "mapping": {
+                "binding_required_card": "#/components/schemas/UIComponent",
+                "confirm_card": "#/components/schemas/ConfirmCard",
+                "none": "#/components/schemas/UIComponent",
+                "operator_handback_card": "#/components/schemas/UIComponent"
+              },
+              "propertyName": "component_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmCard"
+              },
+              {
+                "$ref": "#/components/schemas/UIComponent"
+              }
+            ],
+            "title": "Ui"
+          }
+        },
+        "required": [
+          "response_id",
+          "task_id",
+          "session_id",
+          "status",
+          "message",
+          "fallback_text",
+          "ui",
+          "data",
+          "trace_id"
+        ],
+        "title": "ActionResponseEnvelope",
+        "type": "object"
+      },
+      "ConfirmCard": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "confirm",
+            "title": "Action",
+            "type": "string"
+          },
+          "component_type": {
+            "const": "confirm_card",
+            "default": "confirm_card",
+            "title": "Component Type",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ConfirmCardPayload"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "target_system": {
+            "anyOf": [
+              {
+                "enum": [
+                  "oa",
+                  "u8",
+                  "hikvision_ivms"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target System"
+          }
+        },
+        "required": [
+          "action",
+          "payload"
+        ],
+        "title": "ConfirmCard",
+        "type": "object"
+      },
+      "ConfirmCardPayload": {
+        "additionalProperties": false,
+        "description": "Runtime-owned payload contract for operation confirmation cards.",
+        "properties": {
+          "capability_id": {
+            "title": "Capability Id",
+            "type": "string"
+          },
+          "displayed_argument_values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Displayed Argument Values",
+            "type": "object"
+          },
+          "field_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Field Names",
+            "type": "array"
+          },
+          "operation_summary": {
+            "title": "Operation Summary",
+            "type": "string"
+          },
+          "target_system": {
+            "anyOf": [
+              {
+                "enum": [
+                  "oa",
+                  "u8",
+                  "hikvision_ivms"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target System"
+          }
+        },
+        "required": [
+          "capability_id",
+          "operation_summary",
+          "target_system",
+          "field_names",
+          "displayed_argument_values"
+        ],
+        "title": "ConfirmCardPayload",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -76,6 +298,12 @@
           "message"
         ],
         "title": "HandleRequest",
+        "type": "object"
+      },
+      "ProjectedActionResult": {
+        "additionalProperties": {},
+        "description": "Dynamic business result after app.runtime.response_projection.project_response_data applies CapabilitySpec.output_schema; this OpenAPI shape is not an exposure allowlist.",
+        "title": "ProjectedActionResult",
         "type": "object"
       },
       "ResponseEnvelope": {
@@ -145,7 +373,24 @@
             "title": "Trace Summary"
           },
           "ui": {
-            "$ref": "#/components/schemas/UIComponent"
+            "discriminator": {
+              "mapping": {
+                "binding_required_card": "#/components/schemas/UIComponent",
+                "confirm_card": "#/components/schemas/ConfirmCard",
+                "none": "#/components/schemas/UIComponent",
+                "operator_handback_card": "#/components/schemas/UIComponent"
+              },
+              "propertyName": "component_type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfirmCard"
+              },
+              {
+                "$ref": "#/components/schemas/UIComponent"
+              }
+            ],
+            "title": "Ui"
           }
         },
         "required": [
@@ -184,7 +429,6 @@
           "component_type": {
             "enum": [
               "none",
-              "confirm_card",
               "operator_handback_card",
               "binding_required_card"
             ],
@@ -256,6 +500,20 @@
         "title": "UserAction",
         "type": "object"
       },
+      "UserActionOutcome": {
+        "enum": [
+          "accepted",
+          "action_gate_unavailable",
+          "no_pending_action",
+          "action_binding_incomplete",
+          "action_reference_mismatch",
+          "action_pending_changed",
+          "action_already_claimed",
+          "action_stale",
+          "action_version_conflict"
+        ],
+        "type": "string"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -322,7 +580,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResponseEnvelope"
+                  "$ref": "#/components/schemas/ActionResponseEnvelope"
                 }
               }
             },

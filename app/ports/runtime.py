@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol, TypeAlias
+from typing import Any, Literal, Protocol
 
 from app.contracts.sdui.models import UserAction
 from app.ports.auth import Principal
 from app.ports.response_envelope import ResponseEnvelope
 
-UserActionOutcome: TypeAlias = Literal[
+type UserActionOutcome = Literal[
     "accepted",
     "action_gate_unavailable",
     "no_pending_action",

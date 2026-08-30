@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs
 
 from app.api.v1.auth import PrincipalDependency
 from app.contracts.sdui.models import UserAction
 from app.ports.auth import Principal, SessionBindingError
 from app.ports.response_envelope import ResponseEnvelope
-from app.ports.runtime import RuntimePort
+from app.ports.runtime import RuntimePort, UserActionOutcome
 
 
 class HandleRequest(BaseModel):
@@ -30,6 +30,37 @@ class ActionRequest(BaseModel):
     channel: Literal["web", "cli", "api", "mock"]
     session_id: str
     action: UserAction
+
+
+class ProjectedActionResult(RootModel[dict[str, Any]]):
+    """Runtime result after CapabilitySpec.output_schema projection."""
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "additionalProperties": {},
+            "description": (
+                "Dynamic business result after app.runtime.response_projection."
+                "project_response_data applies CapabilitySpec.output_schema; this "
+                "OpenAPI shape is not an exposure allowlist."
+            ),
+        }
+    )
+
+
+class ActionResponseData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_outcome: UserActionOutcome
+    result: ProjectedActionResult | None
+
+
+class ActionResponseEnvelope(ResponseEnvelope):
+    """ResponseEnvelope specialization for structured user actions."""
+
+    data: Annotated[
+        Any,
+        ValidateAs(ActionResponseData, lambda value: value),
+    ]
 
 
 def _bind_runtime_request(
@@ -96,22 +127,23 @@ def make_router(
         )
         return envelope
 
-    @router.post("/action", response_model=ResponseEnvelope)
+    @router.post("/action", response_model=ActionResponseEnvelope)
     async def handle_action(
         body: ActionRequest,
         principal: Principal = Depends(require_principal),
-    ) -> ResponseEnvelope:
+    ) -> ActionResponseEnvelope:
         bound_runtime, session_id = _bind_runtime_request(
             runtime=runtime,
             principal=principal,
             requested_session_id=body.session_id,
             session_binder=session_binder,
         )
-        return await bound_runtime.handle_user_action(
+        envelope = await bound_runtime.handle_user_action(
             channel=body.channel,
             principal=principal,
             session_id=session_id,
             action=body.action,
         )
+        return ActionResponseEnvelope.model_validate(envelope.model_dump())
 
     return router

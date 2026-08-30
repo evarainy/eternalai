@@ -995,6 +995,28 @@ def test_accepted_result_drops_undeclared_credential_key_without_placeholder() -
     _assert_envelope_omits(response, "SYNTHETIC_private_canary")
 
 
+def test_accepted_result_drops_marker_free_undeclared_business_key() -> None:
+    async def exercise() -> Any:
+        harness = await _build_harness(
+            confirmed_result=ExecutionResult(
+                status="completed",
+                data={
+                    "safe": "ok",
+                    "internal_note": "SYNTHETIC_OPAQUE_UNDECLARED_42",
+                },
+                trace_id="completed",
+            )
+        )
+        return await _dispatch(harness)
+
+    response = asyncio.run(exercise())
+
+    assert _outcome(response) == "accepted"
+    assert response.data["result"] == {"safe": "ok"}
+    assert "internal_note" not in response.model_dump_json()
+    _assert_envelope_omits(response, "SYNTHETIC_OPAQUE_UNDECLARED_42")
+
+
 def test_accepted_result_redacts_marker_value_in_declared_safe_key() -> None:
     async def exercise() -> Any:
         harness = await _build_harness(

@@ -1604,17 +1604,17 @@ def _confirm_card_payload(
     capability: CapabilitySpec | None,
     target_system: TargetSystem | None,
 ) -> dict[str, Any]:
-    payload: ConfirmCardPayload = {
-        "capability_id": capability_ref.capability_id,
-        "operation_summary": _operation_summary(capability),
-        "target_system": target_system,
-        "field_names": _confirm_field_names(capability_ref, capability),
-        "displayed_argument_values": _displayed_argument_values(
+    payload = ConfirmCardPayload(
+        capability_id=capability_ref.capability_id,
+        operation_summary=_operation_summary(capability),
+        target_system=target_system,
+        field_names=_confirm_field_names(capability_ref, capability),
+        displayed_argument_values=_displayed_argument_values(
             capability_ref,
             capability,
         ),
-    }
-    return dict(payload)
+    )
+    return payload.model_dump()
 
 
 def _confirm_field_names(

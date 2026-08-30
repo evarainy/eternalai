@@ -21,6 +21,16 @@ def _builder() -> ResponseEnvelopeBuilder:
     return ResponseEnvelopeBuilder()
 
 
+def _confirm_payload() -> dict[str, Any]:
+    return {
+        "capability_id": "oa.synthetic.approve",
+        "operation_summary": "提交审批",
+        "target_system": "oa",
+        "field_names": ["decision"],
+        "displayed_argument_values": {"decision": "同意"},
+    }
+
+
 def _message_args(
     message: str = "Message ready.",
     fallback_text: str = "Message ready.",
@@ -94,7 +104,10 @@ def test_build_message_json_contains_all_required_fields() -> None:
 
 
 def test_build_confirm_card_action_confirm() -> None:
-    envelope = _builder().build_confirm_card(*_message_args())
+    envelope = _builder().build_confirm_card(
+        *_message_args(),
+        payload=_confirm_payload(),
+    )
 
     assert envelope.ui.component_type == "confirm_card"
     assert envelope.ui.action == "confirm"
@@ -244,7 +257,7 @@ def test_fallback_text_non_empty_all_paths() -> None:
     builder = _builder()
     envelopes = (
         builder.build_message(*_message_args()),
-        builder.build_confirm_card(*_message_args()),
+        builder.build_confirm_card(*_message_args(), payload=_confirm_payload()),
         builder.build_binding_required(*_message_args(), target_system="oa"),
         builder.build_operator_handback(*_message_args()),
         builder.build_failed(*_message_args(message="Failed.", fallback_text="Failed.")),
@@ -283,7 +296,7 @@ def test_all_ui_component_types() -> None:
     builder = _builder()
     envelopes = (
         builder.build_message(*_message_args()),
-        builder.build_confirm_card(*_message_args()),
+        builder.build_confirm_card(*_message_args(), payload=_confirm_payload()),
         builder.build_operator_handback(*_message_args()),
         builder.build_binding_required(*_message_args(), target_system="oa"),
     )
