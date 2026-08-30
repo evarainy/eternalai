@@ -16,7 +16,9 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ApiError } from '../api/mutator';
+import { usePageContextRegistration } from '../app/usePageContextRegistration';
 import OACredentialBindingCard from '../components/OACredentialBindingCard';
+import type { PageContextDeclaration } from '../contracts/pageContext';
 import {
   getWorkObjectApiV1WorkObjectsWorkObjectIdGet as getWorkObject,
   listWorkObjectsApiV1WorkObjectsGet as listWorkObjects,
@@ -373,6 +375,51 @@ export default function WorkObjectsPage() {
         : oaItems,
     [oaItems, view],
   );
+  const contextWorkObject =
+    selectedWorkObjectId !== undefined &&
+    detailQuery.data?.state_authority === 'external_snapshot'
+      ? detailQuery.data
+      : undefined;
+  const pageContextDeclaration = useMemo<PageContextDeclaration>(() => {
+    return {
+      surface_id: 'work-objects',
+      organization_scope: null,
+      work_object_refs:
+        contextWorkObject === undefined
+          ? []
+          : [{ work_object_id: contextWorkObject.work_object_id }],
+      source_refs:
+        contextWorkObject === undefined
+          ? []
+          : [
+              {
+                source_system: contextWorkObject.source_system,
+                source_ref: contextWorkObject.source_ref,
+              },
+            ],
+      filters: [
+        {
+          field: 'view',
+          operator: 'equals',
+          value: view,
+          source: 'visible_control',
+        },
+      ],
+      selected_metric: null,
+      allowed_capabilities:
+        contextWorkObject?.handling_capability_id === null ||
+        contextWorkObject?.handling_capability_id === undefined
+          ? []
+          : [contextWorkObject.handling_capability_id],
+      freshness: newestFetchedAt
+        ? { state: 'reported', observed_at: newestFetchedAt }
+        : { state: 'unknown', observed_at: null },
+      visibility: 'principal',
+    };
+  }, [contextWorkObject, newestFetchedAt, view]);
+
+  usePageContextRegistration(pageContextDeclaration);
+
   const assigneeFilters = useMemo(
     () =>
       [...new Set(oaItems.map((item) => item.assignee_display_name))]
