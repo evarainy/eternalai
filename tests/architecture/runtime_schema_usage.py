@@ -18,6 +18,16 @@ from tests.runtime.registry_fakes import VALID_RUNTIME_OUTPUT_SCHEMAS
 
 _RUNTIME_OUTPUT_SCHEMA_TARGET = "tests.runtime.registry_fakes:runtime_output_schema"
 _ACTIVE_CAPABILITY_TARGET = "tests.runtime.registry_fakes:active_capability"
+_SUPPORTED_CAPABILITY_CONSTRUCTION_APIS = frozenset(
+    {
+        "model_construct",
+        "model_validate",
+    }
+)
+_SUPPORTED_CAPABILITY_COPY_APIS = frozenset({"model_copy"})
+_SUPPORTED_CAPABILITY_APIS = (
+    _SUPPORTED_CAPABILITY_CONSTRUCTION_APIS | _SUPPORTED_CAPABILITY_COPY_APIS
+)
 _UNRESOLVED = object()
 
 
@@ -156,6 +166,12 @@ class _RuntimeSchemaProgram:
                     )
                 if not isinstance(node, ast.Call):
                     continue
+                unsupported_api = self._unsupported_capability_api(module, node)
+                if unsupported_api is not None:
+                    unresolved.append(
+                        f"{self._location(module, node)}:unsupported-capability-api:"
+                        f"{unsupported_api}"
+                    )
                 expressions = self._schema_expressions(module, node)
                 for expression in expressions:
                     values = self._eval_ref(
@@ -555,7 +571,7 @@ class _RuntimeSchemaProgram:
                     continue
 
                 expressions = self._schema_expressions(module, node)
-                if self._is_capability_model_validate(module, node):
+                if self._is_capability_api(module, node, "model_validate"):
                     payload = node.args[0] if node.args else self._keyword(node, "obj")
                     if payload is not None:
                         expressions.append(payload)
@@ -877,10 +893,15 @@ class _RuntimeSchemaProgram:
         call: ast.Call,
     ) -> list[ast.AST]:
         mappings_to_resolve: list[ast.AST] = []
-        if self._is_capability_model_validate(module, call):
+        capability_api = self._capability_api(module, call)
+        if capability_api == "model_validate":
             mapping = call.args[0] if call.args else self._keyword(call, "obj")
             if mapping is not None and not isinstance(mapping, ast.Dict):
                 mappings_to_resolve.append(mapping)
+        elif capability_api == "model_construct":
+            mappings_to_resolve.extend(
+                keyword.value for keyword in call.keywords if keyword.arg is None
+            )
         elif isinstance(call.func, ast.Attribute) and call.func.attr == "model_copy":
             mapping = self._keyword(call, "update")
             if mapping is not None and not isinstance(mapping, ast.Dict):
@@ -892,12 +913,23 @@ class _RuntimeSchemaProgram:
             )
         return mappings_to_resolve
 
-    def _is_capability_model_validate(self, module: _Module, call: ast.Call) -> bool:
-        if not isinstance(call.func, ast.Attribute) or call.func.attr != "model_validate":
-            return False
+    def _capability_api(self, module: _Module, call: ast.Call) -> str | None:
+        if not isinstance(call.func, ast.Attribute):
+            return None
         owner = call.func.value
         owner_target = self._call_target(module, owner)
-        return owner_target == "CapabilitySpec" or owner_target.endswith(":CapabilitySpec")
+        if owner_target == "CapabilitySpec" or owner_target.endswith(":CapabilitySpec"):
+            return call.func.attr
+        return None
+
+    def _is_capability_api(self, module: _Module, call: ast.Call, api: str) -> bool:
+        return self._capability_api(module, call) == api
+
+    def _unsupported_capability_api(self, module: _Module, call: ast.Call) -> str | None:
+        capability_api = self._capability_api(module, call)
+        if capability_api is None or capability_api in _SUPPORTED_CAPABILITY_APIS:
+            return None
+        return capability_api
 
     def _schema_expressions(self, module: _Module, call: ast.Call) -> list[ast.AST]:
         target = self._call_target(module, call.func)
@@ -920,7 +952,8 @@ class _RuntimeSchemaProgram:
         if target.endswith(":CapabilitySpec") or target == "CapabilitySpec":
             expression = self._keyword(call, "output_schema")
             return [] if expression is None else [expression]
-        if self._is_capability_model_validate(module, call):
+        capability_api = self._capability_api(module, call)
+        if capability_api == "model_validate":
             payload = call.args[0] if call.args else self._keyword(call, "obj")
             if not isinstance(payload, ast.Dict):
                 return []
@@ -929,6 +962,9 @@ class _RuntimeSchemaProgram:
                 for key, value in zip(payload.keys, payload.values, strict=True)
                 if isinstance(key, ast.Constant) and key.value == "output_schema"
             ]
+        if capability_api == "model_construct":
+            expression = self._keyword(call, "output_schema")
+            return [] if expression is None else [expression]
         if isinstance(call.func, ast.Attribute) and call.func.attr == "model_copy":
             update = self._keyword(call, "update")
             if isinstance(update, ast.Dict):

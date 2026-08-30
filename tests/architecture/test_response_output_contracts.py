@@ -186,6 +186,62 @@ capability.model_copy(update=update)
     assert not any(schema_has_credential_property(item.schema) for item in inventory.usages)
 
 
+def test_runtime_schema_inventory_detects_model_construct_output_schema() -> None:
+    inventory = collect_runtime_schema_inventory_from_sources(
+        {
+            "test_model_construct.py": """
+from app.ports.capability_registry import CapabilitySpec
+
+schema_alias = {
+    "type": "object",
+    "properties": {"synthetic_password_property": {"type": "string"}},
+}
+payload = {
+    "capability_id": "synthetic.model-construct",
+    "output_schema": schema_alias,
+}
+
+CapabilitySpec.model_construct(**payload)
+"""
+        }
+    )
+
+    assert inventory.unresolved == ()
+    assert len(inventory.usages) == 1
+    assert schema_has_credential_property(inventory.usages[0].schema)
+
+    unresolved_inventory = collect_runtime_schema_inventory_from_sources(
+        {
+            "test_unresolved_model_construct.py": """
+from app.ports.capability_registry import CapabilitySpec
+
+CapabilitySpec.model_construct(**load_external_payload())
+"""
+        }
+    )
+
+    assert unresolved_inventory.usages == ()
+    assert unresolved_inventory.unresolved
+    assert any("load_external_payload" in item for item in unresolved_inventory.unresolved)
+
+
+def test_runtime_schema_inventory_fails_closed_on_unknown_capability_api() -> None:
+    inventory = collect_runtime_schema_inventory_from_sources(
+        {
+            "test_unknown_capability_api.py": """
+from app.ports.capability_registry import CapabilitySpec
+
+safe_schema = {"type": "object", "properties": {"safe": {"type": "string"}}}
+CapabilitySpec.synthetic_future_constructor(output_schema=safe_schema)
+"""
+        }
+    )
+
+    assert inventory.usages == ()
+    assert len(inventory.unresolved) == 1
+    assert "unsupported-capability-api:synthetic_future_constructor" in (inventory.unresolved[0])
+
+
 def test_runtime_schema_inventory_detects_helper_returned_capability_updates() -> None:
     inventory = collect_runtime_schema_inventory_from_sources(
         {
