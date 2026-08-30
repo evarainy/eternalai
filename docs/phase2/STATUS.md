@@ -1,23 +1,13 @@
 # Phase 2 当前状态
 
 - 当前基线 task_id：`P2-ENVELOPE-MESSAGE-REDACTION-001`
-- pytest：`2386 passed, 84 warnings`（0 skipped，0 failed；本棒全量，未使用 `--ignore=`）
-- 后端定向 pytest：`376 passed, 0 failed`（本棒实测：`tests/runtime/`、`tests/api/`）
-- 前端 `pnpm --dir web test`：`135 passed, 0 failed, 0 skipped`（14 个测试文件，沿用 `P2-SDUI-RENDERER-001` 实测；本棒不改前端且未单跑）
-- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；本棒实测）
-- `tests/architecture/`：`64 passed`（本棒实测，含递归凭证属性、Runtime 咽喉 observer、静态合同枚举与治理 SSOT 守卫）
-- 下一棒（串行，单 lane）：**`P2-LOW-RISK-WRITE-001`（A 档）**。串行链为 `LOW-RISK-WRITE-001 → GOLDEN-002`（2026-08-30 已决 DAG 的机械传播）。
-- `P2-ENVELOPE-MESSAGE-REDACTION-001` 已于 2026-08-30 完成：`CapabilitySpec.output_schema` 作为单一 `ResponseEnvelope` 外露合同，Runtime 在统一 formatter 之前 fail-closed 投影；task-local capability、binding manifest 与 immutable projection snapshot 同源；通用 formatter 不再拼接任意返回值，结构化 `/action` 与自由文本 `/handle` 的 completed 文案统一复用安全 formatter，只保留 data 包装层差异。
-- `P2-SDUI-RENDERER-001` 已于 2026-08-29 完成：`ChatPage` 保留结构化载荷，`confirm_card` 可操作确认面走结构化 `/api/v1/runtime/action`，记录列表以两个已获批合同白名单渲染，`action_outcome` 9 值编译期闭合并有后端防漂移测试；`app/` 改动量为 0。解除欠债三条（`action_outcome` OpenAPI 具名类型、`/action` 端点级负向测试、两入口文案不一致）。
-- `P2-USER-ACTION-SEAM-001` 已于 2026-08-28 完成：`/api/v1/runtime/action`、`RuntimePort.handle_user_action`、9 值 outcome、单一 `user_action` Trace、P0–P7、一次性 claim 与五站点对象身份 CAS 已接通；旧自由文本入口和既有合同保持不变。
-- `P2-GOLDEN-001` 已于 2026-08-27 完成本棒获批增量：新增并冻结 GT-029～GT-033，既有 fixture 未改、既有冻结条目未删；参数值 allowlist 从既有单元覆盖进入 Golden 冻结 regime。
+- pytest：`2386 passed, 84 warnings`（0 skipped，0 failed；当前实现基线全量，未使用 `--ignore=`）
+- 当前实现基线后端定向 pytest：`376 passed, 0 failed`（`tests/runtime/`、`tests/api/`）
+- 最近可比前端基线（非本棒）`pnpm --dir web test`：`135 passed, 0 failed, 0 skipped`（14 个测试文件，沿用 `P2-SDUI-RENDERER-001` 实测；本棒不改前端且未单跑）
+- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；当前实现基线实测）
+- `tests/architecture/`：`64 passed`（`P2-GOV-SYNC-037` 实测；含治理 SSOT 守卫）
+- 必达主链指针：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。`P2-LOW-RISK-WRITE-001` 当前 **BLOCKED** 于 OA 审批提交协议结构，输入到位前不开棒；这是 P2 收口的唯一真实卡点。
+- 当前实现基线摘要：`CapabilitySpec.output_schema` 是单一 `ResponseEnvelope` 外露合同；Runtime 在 formatter 前 fail-closed 投影，task-local capability、binding manifest 与 immutable projection snapshot 同源，两入口 completed 文案共用安全 formatter。
 - P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
-- Golden 已拆两棒（2026-08-21 裁决，解 DAG 循环）：`P2-GOLDEN-001` 已完成 `confirm_card` 参数值 allowlist 的 Runtime 观察边界冻结；低风险写入的可操作确认面支链中 `P2-CAPABILITY-AUTOMATION-LEVEL-001`、`P2-USER-ACTION-SEAM-001`、`P2-SDUI-RENDERER-001` 与 `P2-ENVELOPE-MESSAGE-REDACTION-001` 均已完成。当前由 `P2-LOW-RISK-WRITE-001` 承接真实写入，落地后由 `P2-GOLDEN-002` 增量冻结写入路径。必达项 5 需两棒都完成；其完成判据口径已于 2026-08-28 裁定——Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层且已有覆盖，不构成必达项 5 缺口。
-- 机会层：`P2-INTERNAL-WO-MODEL-001` **已完成**；`P2-OA-ORGANIZATION-DIRECTORY-001` → `P2-INTERNAL-WO-SCOPE-001` → `P2-INTERNAL-WO-DISPATCH-001` → `P2-INTERNAL-WO-ATTACHMENT-001`（均 A 档；**2026-08-30 `P2-GOV-SYNC-036` 起前置解除**——接口结构已固化于 `docs/adr/phase2/ADR-P2-OA-DIRECTORY-001-readonly-directory-contract.md`，采集件不再是前置，此链可开）；`P2-CAPABILITY-AUTOMATION-LEVEL-001`、`P2-USER-ACTION-SEAM-001`、`P2-SDUI-RENDERER-001` 与 `P2-ENVELOPE-MESSAGE-REDACTION-001` **已完成**；Renderer 收尾三棒 `P2-SDUI-RENDERER-002`（A 档，导航合同 + 三项收敛）、`P2-SDUI-SCHEMA-001`（A 档，两处开放 SDUI 形状进 OpenAPI）、`P2-TEST-INFRA-WEAKCHECK-001`（B 档，TS/TSX 弱测试门禁）**均属机会层，分配编号不等于排期**；`P2-FE-WORKBENCH-001`（B 档，自动化程度前置已满足；首版 Dock 只用 antd 6 原生组件，不被 `@ant-design/x` 阻塞）；`P2-PAGE-CONTEXT-CONTRACT-001`（A 档，无前置，须先于 DISPATCH 与搜索上下文注册）；`P2-WO-SEARCH-001`（A 档，依赖 MODEL-001 与页面上下文合同）；`P2-PORT-SEAM-001`、`P2-SKILL-CANDIDATE-001`、`P2-MEMORY-001`、`P2-HIKVISION-ADAPTER-001`。
-- 前端信息架构与终态导航**已于 2026-08-27 同日修订收口**（`DECISIONS.md` 同日「前端信息架构与终态导航」）：四项一级平铺（工作事项 / 任务交办 / 软件中心 / 消息）+ `ChatPage` 落地页 `/`。「会话」不再是一级项；`我问过的` 是工作事项内的 P3 筛选，P2 只有 `今日` / `全部`。会话持久化、`最近问过的` 与 `/ai/sessions/:id` 均归 P3；P2 Dock 为 AppShell 单例并以非持久化 Zustand 保住普通路由切换中的当前会话。前端棒以该条为导航、命名、布局与安全边界来源；低数字素养用户硬约束见同日另一条。
-- 首页目标态（P3）：落地页 `/` 对标主流 AI 对话产品，支持历史会话切换、续接与对话附件；不改变 P2 单输入框边界。
-- 附件边界：统一复用与授权主体无关的存储层，下载授权主体参数化；`P2-INTERNAL-WO-ATTACHMENT-001` 首版仍只交付 Work Object 附件。
-- 外部系统接入 §10 全组已落盘：OA iframe 实测排除、录制走网络请求、任务交办沿用插槽边界；浏览器扩展保留为待议欠债。
-- 遗留 worktree 待清理：`git worktree list` 中多数 Phase 1 / 已合并 Phase 2 任务的 worktree 未移除，其中 `.worktrees/P2-PORT-SEAM-001` 是撞库空转留下的空壳。清理需专项授权，尚未执行。
-- 外部输入阻塞：**无**。原「组织目录 HAR 尚未采集」已于 2026-08-30 `P2-GOV-SYNC-036` 解除——四个只读端点的路径、参数名与响应字段结构已固化于 `docs/adr/phase2/ADR-P2-OA-DIRECTORY-001-readonly-directory-contract.md`，`P2-OA-ORGANIZATION-DIRECTORY-001` → `SCOPE` → `DISPATCH` 后端 → `ATTACHMENT` 四棒前置全部满足。采集件本体永不进仓库。
-- 待外部输入：**OA 审批提交动作的协议结构未知**，是 `P2-LOW-RISK-WRITE-001`（必达项 4）的唯一前置；该棒未落地则 `P2-GOLDEN-002`（必达项 5 的后半）无题可冻。**这是 P2 收口的唯一真实卡点。**
+- 剩余必达链只含 `P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`；Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md`。
+- 机会层任务、依赖与 BLOCKED 条件只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 task_id 不等于排期。
