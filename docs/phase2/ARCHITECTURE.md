@@ -237,7 +237,7 @@ task_id │ session_id │ ai_user_id │ status │ trace_id │ capability_id 
 | 表面 | 密度 | 渲染实现 |
 |---|---|---|
 | IM | 紧凑卡片 | 待定；RJSF 在紧凑密度下**是否适用尚未验证** |
-| 工作台 | 摘要卡片 | antd 6 原生 `Table` + 项目自有薄查询层（**该薄查询层目前不存在**） |
+| 工作台 | 摘要卡片 | antd 6 原生 `Table` + 项目自有薄查询层（见 `web/src/shared/ui/QueryTable.tsx`、`web/src/shared/query/useTableQuery.ts`；现役消费者数量与剩余条件见 `docs/phase2/PHASE2_PLAN.md`） |
 | 事项工作室 | 完整详情 | antd 6 + RJSF 结构化表单 |
 
 复用的是**语义协议、状态、动作合同和 Ant Design 6 组件实现**，不是强迫所有界面显示完全相同的布局。**渲染实现按密度分别提供**，不得默认三档都用同一渲染路径。
