@@ -257,7 +257,7 @@ class ResponseEnvelopeBuilder:
         fallback_text: str,
         trace_id: str,
         status: ResponseEnvelopeStatus,
-        ui_model: type[UIComponent],
+        ui_model: type[UIComponent] | type[ConfirmCard],
         ui_fields: dict[str, Any],
         data: dict[str, Any] | None,
         trace_summary: str | None,

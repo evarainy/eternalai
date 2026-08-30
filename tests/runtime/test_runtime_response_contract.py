@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from app.contracts.sdui.models import UserAction
+from app.contracts.sdui.models import ConfirmCard, UserAction
 from app.main import create_app
 from app.ports.auth import Principal
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
@@ -39,10 +39,13 @@ _LEGACY_RESPONSE_BYTES: dict[BaselineCase, bytes] = {
         b'"status":"waiting_user","message":"\xe8\xaf\xb7\xe7\xa1\xae\xe8\xae\xa4",'
         b'"fallback_text":"please confirm","ui":{"component_type":"confirm_card",'
         b'"action":"confirm","target_system":"oa",'
-        b'"reason_code":"needs_confirmation","payload":{"nested":{"items":'
-        b'[1,true,null]},"when":"2026-08-02T01:02:03Z","amount":"12.50",'
-        b'"marker":"ready"}},"data":{"count":2,"rows":[{"name":"\xe7\x94\xb2"},'
-        b'{"name":"\xe4\xb9\x99"}]},"trace_id":"trace-rich",'
+        b'"reason_code":"needs_confirmation","payload":{"capability_id":'
+        b'"oa.synthetic.approve","operation_summary":"approve",'
+        b'"target_system":"oa","field_names":["decision"],'
+        b'"displayed_argument_values":{"decision":"approved"}}},'
+        b'"data":{"count":2,"rows":[{"name":"\xe7\x94\xb2"},{"name":"\xe4\xb9\x99"}],'
+        b'"nested":{"items":[1,true,null]},"when":"2026-08-02T01:02:03Z",'
+        b'"amount":"12.50","marker":"ready"},"trace_id":"trace-rich",'
         b'"trace_summary":"summary"}'
     ),
 }
@@ -82,19 +85,26 @@ class BaselineRuntime:
             status="waiting_user",
             message="请确认",
             fallback_text="please confirm",
-            ui=UIComponent(
-                component_type="confirm_card",
+            ui=ConfirmCard(
                 action="confirm",
                 target_system="oa",
                 reason_code="needs_confirmation",
                 payload={
-                    "nested": {"items": [1, True, None]},
-                    "when": datetime(2026, 8, 2, 1, 2, 3, tzinfo=timezone.utc),
-                    "amount": Decimal("12.50"),
-                    "marker": PayloadMarker.READY,
+                    "capability_id": "oa.synthetic.approve",
+                    "operation_summary": "approve",
+                    "target_system": "oa",
+                    "field_names": ["decision"],
+                    "displayed_argument_values": {"decision": "approved"},
                 },
             ),
-            data={"count": 2, "rows": [{"name": "甲"}, {"name": "乙"}]},
+            data={
+                "count": 2,
+                "rows": [{"name": "甲"}, {"name": "乙"}],
+                "nested": {"items": [1, True, None]},
+                "when": datetime(2026, 8, 2, 1, 2, 3, tzinfo=timezone.utc),
+                "amount": Decimal("12.50"),
+                "marker": PayloadMarker.READY,
+            },
             trace_id="trace-rich",
             trace_summary="summary",
         )

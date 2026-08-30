@@ -22,6 +22,13 @@ const responseActions = new Set([
   null,
 ]);
 const targetSystems = new Set(['oa', 'u8', 'hikvision_ivms']);
+const confirmPayloadKeys = new Set([
+  'capability_id',
+  'operation_summary',
+  'target_system',
+  'field_names',
+  'displayed_argument_values',
+]);
 
 export type TargetSystem = 'oa' | 'u8' | 'hikvision_ivms';
 export type PresentationKind =
@@ -121,8 +128,11 @@ export function projectConfirmCard(value: unknown): ConfirmCardView | null {
     return null;
   }
   const payload = value.payload;
+  const payloadKeys = isRecord(payload) ? Object.keys(payload) : [];
   if (
     !isRecord(payload) ||
+    payloadKeys.length !== confirmPayloadKeys.size ||
+    !payloadKeys.every((key) => confirmPayloadKeys.has(key)) ||
     typeof payload.capability_id !== 'string' ||
     !payload.capability_id.trim() ||
     typeof payload.operation_summary !== 'string' ||

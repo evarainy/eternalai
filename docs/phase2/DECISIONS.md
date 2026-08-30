@@ -1653,3 +1653,64 @@ OpenAPI / Orval 单向派生，避免三份字面量分别漂移。具名 exact 
 `P2-SDUI-SCHEMA-001 → P2-SDUI-RENDERER-002`；`P2-FE-WORKBENCH-001` 与 SDUI 链遵守上述文件围栏。
 早先裁决中“当时待裁”的文字保留为历史事实，不回写历史正文。逐条可判定判据与反证方法由承接棒启动提示词
 承载，不作为长期治理合同重复固化。
+
+## 2026-08-30 — 裁决：Admin 审计读取面的对象级授权模型
+
+**决定**：Admin 管理配置权与审计证据读取权拆分。`admin` 单独不能读取
+`app/admin/registry.py::AdminRegistryService.list_tasks`、
+`app/admin/registry.py::AdminRegistryService.list_task_events`、
+`app/admin/registry.py::AdminRegistryService.list_bindings`、
+`app/admin/registry.py::AdminRegistryService.list_traces`；另设独立只读审计角色。该角色只获得证据读取能力，
+不得获得 Registry、Binding 或执行类变更能力。同一人员可同时持有两类角色，但角色组合不扩大对象范围。
+可信同租户内允许跨用户读取；跨租户对象查询统一不可见，集合查询返回安全空集合。
+
+Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取他人备忘」中的 owner-only 口径。
+个人备忘的内容用途本身即为私人，管理职责不产生读取正文或附件的必要性；冻结蓝图 §9.2 把 Trace 定义为审计与
+调试用的操作摘要，排查失败链、复核受控执行或形成合规证据客观上可能需要查看另一用户的执行链。
+但“存在合法跨用户用途”不等于“所有管理员天然有权读取”：管理配置权与大范围证据读取权是两类独立风险，
+必须由不同角色与对象范围分别约束。
+
+`app/api/v1/admin.py::_request_context` 必须把认证后的
+`app/ports/auth.py::Principal.org_ctx` 原样传入 `app/admin/registry.py::AdminRequestContext`；
+可信主体租户进入 `app/ports/policy_guard.py::ManagementPlanePolicyContext` 的类型化字段，不能由查询参数、
+目标标识或自由文本环境标签补齐。组织与部门字段保真携带，但继续只作展示或审计元数据，不作为允许依据；
+改变这一边界须另作 superseding 裁决。
+
+最终判据是：无相应角色与仅有 `admin` 的主体在四个证据入口均于资源 Port 调用前 403；只读审计角色可读取
+同一可信租户内另一用户的证据，但跨租户使用相同 trace、task 或 session 标识仍不可见；只读审计角色不能执行
+管理变更。调用方提交的用户或资源标识只能收窄查询，不能决定授权 scope。
+
+实施复核确认一项裁决原先未预见的阻塞事实：
+`app/ports/auth.py::Principal.org_ctx` 只能证明调用者自己的租户；
+`app/ports/task_store.py::TaskRecord` 只有 `task_id`、`session_id`、`ai_user_id`、`status`、`trace_id`、
+`capability_id`、`error_code`，没有租户维度；仓库也不存在从目标对象标识解析到可信目标租户的服务端来源。
+因此“同租户跨用户读取成功”与“跨租户同标识不可见”在归属列落地前不可能同时满足。
+`P2-AUDIT-READ-AUTHZ-001` 首次开棒已命中停手判据并零改动停手；当前 BLOCKED 于“可信目标租户来源未定”，
+恢复路径待雨爷裁定，不得写成已决或可开棒。
+
+审计修复仍拆为两根严格串行 A 棒：
+
+1. `P2-AUDIT-READ-AUTHZ-001`：角色与动作分离、认证组织上下文保真、主体租户进入 Policy、对象关联与统一
+   不可见语义。它是单租户下也成立的现役安全必达修复，但受上述目标租户来源阻塞。
+2. `P2-AUDIT-TRACE-SCOPE-001`：`app/ports/trace.py::TraceEvent`、
+   `app/ports/trace.py::TracePersistedEvent`、`app/ports/trace.py::TraceQueryPort` 增加可信租户/用户归属合同；
+   `app/infra/observability/postgresql_trace.py::PostgreSQLTraceWriter.record_event` 固化归属，
+   `app/infra/observability/postgresql_trace.py::PostgreSQLTraceReader._list_events` 无条件按可信租户 scope 过滤；
+   顶层凭证形状在构造或写入前 fail-closed，原始持久事件不得直接外露。该棒在单租户 P2 中仍属机会层，
+   但与前棒共同成为 `P2-TENANT-IDENTITY-001` 完成及启用第二租户的硬前置。
+
+`P2-AUDIT-TRACE-SCOPE-001` 需要两次相互独立的专项授权：第一次授权 Trace 表 schema 变更；第二次授权历史行
+回填。两项授权目前均未取得，裁决“必须做”不构成执行授权。历史回填材料必须说明可信映射来源、可归属与不可归属
+数量、`app/runtime/runtime.py::RuntimeImpl.handle_user_action` 产生的孤立动作 Trace 如何处理，以及回滚策略；
+不得用统一默认值猜测租户或用户，不得删除无法归属行。未取得可信归属的历史行保持 Admin 不可见。
+
+**理由**：Policy 决定“谁能做哪类读取”，service 决定“请求指向哪个受控对象”，reader 强制“任何查询都不跨
+可信租户 scope”，三层职责不能互相替代。只做 service 关联覆盖不了没有 Task 记录的孤立动作 Trace；只做 reader
+过滤不能替代角色与动作授权。先冻结授权模型、再落 Trace 归属，可避免用尚未裁定的数据库字段反向定义权限；
+当前阻塞则说明目标对象归属必须先有可信服务端来源，不能用单租户默认值伪造正向证据。
+
+**影响面**：`P2-AUDIT-READ-COVERAGE-001` 盘点任务以结论 C 收口，现役 DAG 由
+`P2-AUDIT-READ-AUTHZ-001 → P2-AUDIT-TRACE-SCOPE-001 → P2-TENANT-IDENTITY-001`
+承接；`P2-TENANT-IDENTITY-001` 的完成判据新增 Admin 四个读取面的跨租户反证。
+`P2-AUDIT-READ-AUTHZ-001` 当前 BLOCKED，`P2-AUDIT-TRACE-SCOPE-001` 另受两项未授权红线阻塞；
+本裁决不授权任何 DB schema 变更、真实数据回填、Golden fixture 或 `FROZEN_GT_IDS` 变更。

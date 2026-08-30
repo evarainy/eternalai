@@ -89,7 +89,7 @@ def test_handle_user_action_signature_matches_governed_contract() -> None:
 
 
 def test_user_action_outcome_literal_values_are_closed() -> None:
-    assert get_args(UserActionOutcome) == (
+    assert get_args(UserActionOutcome.__value__) == (
         "accepted",
         "action_gate_unavailable",
         "no_pending_action",

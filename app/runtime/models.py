@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from app.ports.capability_registry import CapabilityTargetSystem, CapabilityType
 
 
-class ConfirmCardPayload(TypedDict):
+class ConfirmCardPayload(BaseModel):
     """Runtime-owned payload contract for operation confirmation cards."""
 
-    capability_id: str
-    operation_summary: str
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: StrictStr
+    operation_summary: StrictStr
     target_system: CapabilityTargetSystem | None
-    field_names: list[str]
-    displayed_argument_values: dict[str, str]
+    field_names: list[StrictStr]
+    displayed_argument_values: dict[str, StrictStr]
 
 
 class CapabilityRef(BaseModel):
