@@ -22,7 +22,11 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
+from tests.runtime.registry_fakes import (
+    StaticCapabilityRegistry,
+    runtime_output_schema,
+    schema_digest,
+)
 
 
 class SpyTaskStore:
@@ -167,12 +171,14 @@ class SpyTracePort:
 
 class FakeRegistry:
     async def get(self, capability_id: str) -> CapabilitySpec:
+        output_schema = runtime_output_schema("test_runtime_trace_threading.document_status")
         return CapabilitySpec(
             capability_id=capability_id,
             name="Mock capability",
             type="query",
             input_schema_digest="input-digest",
-            output_schema_digest="output-digest",
+            output_schema=output_schema,
+            output_schema_digest=schema_digest(output_schema),
             risk_level="low",
             owner="phase0",
             version="0.1.0",
@@ -470,9 +476,7 @@ def test_b3_negative_prechecks_close_runtime_task_trace_and_sdui_loop(
 
     common_prefix = ["task_created", "intent_parsed", "capability_selected"]
     expected_terminal = (
-        []
-        if expected_task_status == "waiting_user"
-        else ["task_failed", "evaluation_recorded"]
+        [] if expected_task_status == "waiting_user" else ["task_failed", "evaluation_recorded"]
     )
     assert _events(trace_port) == [
         *common_prefix,

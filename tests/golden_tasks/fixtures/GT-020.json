@@ -24,7 +24,19 @@
         "risk_level": "low",
         "execution_identity": "user_delegated",
         "binding_required": false,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "account_set_id": {
+              "type": "string"
+            },
+            "vendor_id": {
+              "type": "string"
+            }
+          }
+        },
+        "output_schema_digest": "97cc703c9ab7db6f5e53a99f49ff5ee3c258ff716b681e429c295be494c2d9f5"
       },
       {
         "capability_id": "u8.b4.document.lookup",

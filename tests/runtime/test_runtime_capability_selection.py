@@ -29,6 +29,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 
 
 class RecordingTaskStore:
@@ -51,9 +52,7 @@ class RecordingTaskStore:
         error_code: str | None = None,
     ) -> TaskRecord:
         self.status_updates.append((task_id, status, error_code))
-        return self.created[0].model_copy(
-            update={"status": status, "error_code": error_code}
-        )
+        return self.created[0].model_copy(update={"status": status, "error_code": error_code})
 
     async def append_event(self, task_id: str, event: TaskEventRecord) -> None:
         self.events.append((task_id, event))
@@ -233,9 +232,7 @@ class StaticRegistry:
         type: str | None = None,
         status: str | None = None,
     ) -> list[CapabilitySpec]:
-        self.list_calls.append(
-            {"target_system": target_system, "type": type, "status": status}
-        )
+        self.list_calls.append({"target_system": target_system, "type": type, "status": status})
         result = list(self.capabilities)
         if target_system is not None:
             result = [item for item in result if item.target_system == target_system]
@@ -254,6 +251,7 @@ def _capability(
     capability_type: CapabilityType = "query",
     input_schema: dict[str, Any] | None = None,
 ) -> CapabilitySpec:
+    output_schema = runtime_output_schema("test_runtime_capability_selection.default")
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
@@ -261,7 +259,8 @@ def _capability(
         intent_tags=intent_tags or [],
         input_schema=input_schema or {},
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner="runtime-selection-test",
         version="1.0.0",
@@ -350,9 +349,7 @@ def test_exact_active_capability_is_selected_for_web_and_cli(channel: str) -> No
 
     assert envelope.status == "completed"
     assert registry.get_calls == [capability.capability_id]
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"}
-    ]
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls == [
         {
             "capability_id": capability.capability_id,
@@ -379,7 +376,7 @@ def test_unique_intent_tag_fallback_selects_canonical_capability_id() -> None:
     assert registry.get_calls == ["pending-workflows"]
     assert registry.list_calls == [
         {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"}
+        {"target_system": None, "type": None, "status": "active"},
     ]
     assert gateway.calls[0]["capability_id"] == capability.capability_id
     selected = next(step for step in trace.steps if step["event_type"] == "capability_selected")
@@ -436,12 +433,10 @@ def test_unregistered_selector_returns_standard_envelope_without_gateway_call() 
     assert registry.list_calls == [
         {"target_system": None, "type": None, "status": "active"},
         {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"}
+        {"target_system": None, "type": None, "status": "active"},
     ]
     assert gateway.calls == []
-    assert "capability_selected" not in {
-        step["event_type"] for step in trace.steps
-    }
+    assert "capability_selected" not in {step["event_type"] for step in trace.steps}
 
 
 def test_ambiguous_intent_tag_is_order_independent_and_fails_closed() -> None:
@@ -480,9 +475,7 @@ def test_exact_id_wins_over_other_capability_tag_regardless_of_registry_order() 
             list(capabilities),
         )
         assert envelope.status == "completed"
-        assert registry.list_calls == [
-            {"target_system": None, "type": None, "status": "active"}
-        ]
+        assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
         selected_ids.append(gateway.calls[0]["capability_id"])
 
     assert selected_ids == ["oa.exact", "oa.exact"]
@@ -534,27 +527,19 @@ def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
     assert envelope.status == "completed"
     assert registry.list_calls == [
         {"target_system": None, "type": None, "status": "active"},
-        {"target_system": "oa", "type": "action", "status": "active"}
+        {"target_system": "oa", "type": "action", "status": "active"},
     ]
     assert gateway.calls[0]["capability_id"] == "oa.action"
-    intent_event = next(
-        step for step in trace.steps if step["event_type"] == "intent_parsed"
-    )
+    intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     assert intent_event["attributes"] == {
         "result": "valid",
-        "intent_fingerprint": (
-            "5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"
-        ),
+        "intent_fingerprint": ("5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"),
         "target_system": "oa",
         "capability_type": "action",
     }
-    selected = next(
-        step for step in trace.steps if step["event_type"] == "capability_selected"
-    )
+    selected = next(step for step in trace.steps if step["event_type"] == "capability_selected")
     assert selected["attributes"] == {
-        "intent_fingerprint": (
-            "5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"
-        ),
+        "intent_fingerprint": ("5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"),
         "selection_rule": "unique_intent_tag",
     }
     assert len(_task_store.events) == 1
@@ -582,9 +567,7 @@ def test_model_generated_intent_is_fingerprinted_before_trace() -> None:
     assert gateway.calls[0]["capability_id"] == "oa.safe"
     serialized_trace = repr(trace.steps)
     assert sensitive_intent not in serialized_trace
-    intent_event = next(
-        step for step in trace.steps if step["event_type"] == "intent_parsed"
-    )
+    intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     selected_event = next(
         step for step in trace.steps if step["event_type"] == "capability_selected"
     )
@@ -650,24 +633,18 @@ def test_intent_boundary_failures_return_safe_failed_envelopes_without_registry_
     assert envelope.status == "failed"
     assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
     assert registry.get_calls == []
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"}
-    ]
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls == []
     assert message_fragment in envelope.message
     assert "暂未接入该能力" not in envelope.message
     assert "Admin Lite" not in envelope.message
     assert all(step["event_type"] != "no_capability_found" for step in trace.steps)
-    intent_event = next(
-        step for step in trace.steps if step["event_type"] == "intent_parsed"
-    )
+    intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     expected_attributes = {"result": "invalid", "reason": expected_reason}
     if expected_subcode is not None:
         expected_attributes["structured_output_error_code"] = expected_subcode
     assert intent_event["attributes"] == expected_attributes
-    serialized = repr(
-        (envelope, task_store.status_updates, trace.steps, gateway.calls)
-    )
+    serialized = repr((envelope, task_store.status_updates, trace.steps, gateway.calls))
     assert canary not in serialized
 
 
@@ -695,9 +672,7 @@ def test_intent_validation_trace_has_only_safe_diagnostics_and_no_rejected_value
     assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
     assert registry.get_calls == []
     assert gateway.calls == []
-    intent_event = next(
-        step for step in trace.steps if step["event_type"] == "intent_parsed"
-    )
+    intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     assert intent_event["attributes"] == {
         "result": "invalid",
         "reason": "structured_output_error",

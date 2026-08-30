@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from app.infra.sdui.credential_markers import has_credential_marker
 from app.ports.response_envelope import (
     BindingRequiredCard,
     ConfirmCard,
@@ -18,11 +18,6 @@ from app.ports.response_envelope import (
 REDACTED_TEXT = "[REDACTED]"
 _DEFAULT_FAILURE_MESSAGE = "Unable to build response envelope."
 _DEFAULT_FAILURE_FALLBACK = "Unable to produce a response. Please retry."
-_CREDENTIAL_MARKER = re.compile(
-    r"(?i)(bearer|token|secret|password|passwd|cookie|session[_-]?id|sessionid|"
-    r"session[_-]?key|"
-    r"access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)"
-)
 _DATALESS_STATUSES = {"blocked", "waiting_user", "no_capability_found"}
 
 
@@ -355,7 +350,7 @@ def _sanitize_ui_fields(ui_fields: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_value(value: Any) -> Any:
     if isinstance(value, str):
-        if _has_credential_marker(value):
+        if has_credential_marker(value):
             return REDACTED_TEXT
         return value
     if isinstance(value, list):
@@ -369,7 +364,7 @@ def _sanitize_mapping(value: dict[Any, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for raw_key, raw_item in value.items():
         key = str(raw_key)
-        if _has_credential_marker(key):
+        if has_credential_marker(key):
             sanitized[REDACTED_TEXT] = REDACTED_TEXT
         else:
             sanitized[key] = _sanitize_value(raw_item)
@@ -381,10 +376,6 @@ def _sanitize_identifier(value: str) -> str:
     if isinstance(sanitized, str):
         return sanitized
     return "unavailable"
-
-
-def _has_credential_marker(value: str) -> bool:
-    return bool(_CREDENTIAL_MARKER.search(value))
 
 
 def _normalized_data(status: ResponseEnvelopeStatus, data: Any) -> dict[str, Any] | None:

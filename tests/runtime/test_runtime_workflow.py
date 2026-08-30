@@ -21,6 +21,7 @@ from app.runtime.models import CapabilityRef
 from app.version_binding import workflow_confirmation_action_digest
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
+from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 
 
 def _capability(
@@ -28,13 +29,16 @@ def _capability(
     capability_type: str,
     *,
     policy_digest: str | None = None,
+    output_schema: dict[str, Any] | None = None,
 ) -> CapabilitySpec:
+    output_schema = output_schema or runtime_output_schema("test_runtime_workflow.default")
     return CapabilitySpec(
         capability_id=capability_id,
         name=capability_id,
         type=capability_type,
         input_schema_digest=f"input-{capability_id}",
-        output_schema_digest=f"output-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
         risk_level="low",
         owner="runtime-workflow-test",
         version="1.0.0",
@@ -50,8 +54,10 @@ def _capability(
 class Registry:
     def __init__(self, *capabilities: CapabilitySpec) -> None:
         self.items = {item.capability_id: item for item in capabilities}
+        self.get_calls: list[str] = []
 
     async def get(self, capability_id: str) -> CapabilitySpec | None:
+        self.get_calls.append(capability_id)
         return self.items.get(capability_id)
 
     async def list(
@@ -867,9 +873,9 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
             confirmed_capability_id="oa.approve.execute",
             arguments={},
         )
-        registry.items["oa.approve.execute"] = registry.items[
-            "oa.approve.execute"
-        ].model_copy(update=drift_patch)
+        registry.items["oa.approve.execute"] = registry.items["oa.approve.execute"].model_copy(
+            update=drift_patch
+        )
         stale = await runtime.handle_user_message(
             channel="mock",
             ai_user_id="user-version-lock",
@@ -892,9 +898,7 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
 
     assert stale.status == "waiting_user"
     assert failed.status == "failed"
-    assert [capability_id for capability_id, _ in gateway.calls] == [
-        "oa.approve.preview"
-    ]
+    assert [capability_id for capability_id, _ in gateway.calls] == ["oa.approve.preview"]
     assert task_store.status_updates == [
         ("waiting_user", "confirm_required"),
         ("failed", "internal_error"),
@@ -1059,10 +1063,7 @@ def test_non_workflow_task_locks_prompt_tool_and_policy_bindings() -> None:
 
     assert completed.status == "completed"
     assert manifest is not None
-    assert {
-        (binding.resource_type, binding.resource_id)
-        for binding in manifest.bindings
-    } == {
+    assert {(binding.resource_type, binding.resource_id) for binding in manifest.bindings} == {
         ("prompt", "runtime.intent_router"),
         ("tool", "oa.document.lookup"),
         ("policy", "oa.document.lookup"),
@@ -1221,10 +1222,7 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
     assert first_request.request_digest != second_request.request_digest
     assert asyncio.run(gate.get_decision(first.response_id)) is not None
     assert asyncio.run(gate.get_decision(second.response_id)) is not None
-    assert any(
-        step["attributes"].get("confirmation_status") == "stale"
-        for step in trace.steps
-    )
+    assert any(step["attributes"].get("confirmation_status") == "stale" for step in trace.steps)
     assert [capability_id for capability_id, _ in gateway.calls] == [
         "oa.first.preview",
         "oa.first.execute",

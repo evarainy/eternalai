@@ -19,15 +19,27 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 )
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
     VersionBindingMismatchError,
+    build_task_version_binding_manifest,
 )
 from app.runtime.models import CapabilityRef
-from app.runtime.runtime import RuntimeImpl, _PendingWorkflow
-from app.workflow.engine import WorkflowEngine
+from app.runtime.response_projection import (
+    ProjectionContractSnapshot,
+    canonical_schema_digest,
+)
+from app.runtime.runtime import (
+    RuntimeImpl,
+    _assert_manifest_projection_source,
+    _PendingWorkflow,
+)
+from app.version_binding import workflow_version_binding
+from app.workflow.engine import WorkflowEngine, _WorkflowVersionBindingsSnapshot
 from app.workflow.models import WorkflowDefinition, WorkflowStep
+from tests.runtime.registry_fakes import runtime_output_schema
 from tests.runtime.test_runtime_workflow import (
     BlockingConfirmationGateway,
     Gateway,
@@ -146,6 +158,34 @@ class CountingWorkflowEngine(WorkflowEngine):
         return await super().resume(**kwargs)
 
 
+class WrongManifestDigestWorkflowEngine(CountingWorkflowEngine):
+    async def version_bindings(
+        self,
+        **kwargs: Any,
+    ) -> _WorkflowVersionBindingsSnapshot:
+        snapshot = await super().version_bindings(**kwargs)
+        wrong_binding = snapshot.workflow_binding.model_copy(update={"digest": "0" * 64})
+        return replace(
+            snapshot,
+            bindings=tuple(
+                wrong_binding if binding == snapshot.workflow_binding else binding
+                for binding in snapshot.bindings
+            ),
+        )
+
+
+class DriftingProjectionSourceWorkflowEngine(CountingWorkflowEngine):
+    async def version_bindings(
+        self,
+        *,
+        workflow_capability: CapabilitySpec,
+    ) -> _WorkflowVersionBindingsSnapshot:
+        drifted_schema = runtime_output_schema("test_runtime_user_action.drift")
+        workflow_capability.output_schema = drifted_schema
+        workflow_capability.output_schema_digest = canonical_schema_digest(drifted_schema)
+        return await super().version_bindings(workflow_capability=workflow_capability)
+
+
 class RaisingExecutionGateway(Gateway):
     async def execute_capability(self, *args: Any, **kwargs: Any) -> ExecutionResult:
         capability_id = args[3]
@@ -195,6 +235,7 @@ class Harness:
     runtime: RuntimeImpl
     principal: Principal
     gateway: Gateway
+    registry: Registry
     gate: CountingHumanGate | None
     engine: CountingWorkflowEngine
     trace: RecordingTrace
@@ -260,13 +301,19 @@ async def _build_harness(
     gateway: Gateway | None = None,
     definition: WorkflowDefinition | None = None,
     confirmed_result: ExecutionResult | None = None,
+    engine_type: type[CountingWorkflowEngine] = CountingWorkflowEngine,
+    expected_start_status: str = "waiting_user",
 ) -> Harness:
     definition = definition or _single_definition()
     gate = gate if with_gate else None
     if with_gate and gate is None:
         gate = CountingHumanGate()
     capabilities = [
-        _capability(definition.workflow_id, "workflow"),
+        _capability(
+            definition.workflow_id,
+            "workflow",
+            output_schema=runtime_output_schema("test_runtime_user_action.structured"),
+        ),
         _capability(_PREVIEW_ID, "query"),
         _capability(_EXECUTE_ID, "action"),
     ]
@@ -305,7 +352,7 @@ async def _build_harness(
     gateway.results.update(results)
     task_store = TaskStore()
     trace = RecordingTrace()
-    engine = CountingWorkflowEngine(
+    engine = engine_type(
         definitions={definition.workflow_id: definition},
         capability_registry=registry,
         gateway=gateway,
@@ -342,11 +389,12 @@ async def _build_harness(
         message=_START_MESSAGE,
         client_capabilities={},
     )
-    assert waiting.status == "waiting_user"
+    assert waiting.status == expected_start_status
     return Harness(
         runtime=runtime,
         principal=principal,
         gateway=gateway,
+        registry=registry,
         gate=gate,
         engine=engine,
         trace=trace,
@@ -375,10 +423,16 @@ def _outcome(envelope: Any) -> str:
     return envelope.data["action_outcome"]
 
 
+def _assert_envelope_omits(envelope: Any, marker: str) -> None:
+    assert marker not in envelope.message
+    assert marker not in envelope.fallback_text
+    assert marker not in envelope.ui.model_dump_json()
+    assert marker not in (envelope.trace_summary or "")
+    assert marker not in envelope.model_dump_json()
+
+
 def _pending(harness: Harness) -> _PendingWorkflow:
-    return harness.runtime._pending_workflows[
-        ("session-action", harness.principal.ai_user_id)
-    ]
+    return harness.runtime._pending_workflows[("session-action", harness.principal.ai_user_id)]
 
 
 def _winner(pending: _PendingWorkflow, suffix: str) -> _PendingWorkflow:
@@ -387,6 +441,30 @@ def _winner(pending: _PendingWorkflow, suffix: str) -> _PendingWorkflow:
         response_id=f"winner-{suffix}",
         gate_request_id=f"winner-{suffix}",
     )
+
+
+def _replace_top_capability(harness: Harness, mode: str) -> None:
+    if mode == "missing":
+        harness.registry.items.pop(_WORKFLOW_ID)
+        return
+    current = harness.registry.items[_WORKFLOW_ID]
+    if mode == "disabled":
+        harness.registry.items[_WORKFLOW_ID] = current.model_copy(
+            update={"status": "disabled"},
+            deep=True,
+        )
+        return
+    if mode == "schema_drift":
+        output_schema = runtime_output_schema("test_runtime_user_action.drift")
+        harness.registry.items[_WORKFLOW_ID] = current.model_copy(
+            update={
+                "output_schema": output_schema,
+                "output_schema_digest": canonical_schema_digest(output_schema),
+            },
+            deep=True,
+        )
+        return
+    raise AssertionError(f"unsupported mutation mode: {mode}")
 
 
 def test_action_without_human_gate_fails_closed_before_resume_or_routing() -> None:
@@ -425,9 +503,7 @@ def test_no_pending_and_cross_identity_are_indistinguishable_and_use_fresh_trace
         exclude={"response_id", "task_id", "session_id", "trace_id"}
     )
     assert comparable(wrong_user) == comparable(wrong_session) == comparable(own_missing)
-    action_events = [
-        event for event in harness.trace.steps if event["event_type"] == "user_action"
-    ]
+    action_events = [event for event in harness.trace.steps if event["event_type"] == "user_action"]
     inbound = [event for event in action_events if event["attributes"] == {"phase": "inbound"}]
     assert len(inbound) == 3
     assert len({event["trace_id"] for event in inbound}) == 3
@@ -543,6 +619,268 @@ def test_version_drift_has_precise_outcome_and_never_executes_adapter() -> None:
     assert len(harness.llm.calls) == llm_calls
 
 
+def test_new_task_binding_and_projection_share_one_selected_workflow_snapshot() -> None:
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness()
+        assert harness.gate is not None
+        manifest = await harness.gate.get_task_binding(harness.waiting.task_id)
+        return harness, manifest
+
+    harness, manifest = asyncio.run(exercise())
+    pending = _pending(harness)
+    selected = harness.registry.items[_WORKFLOW_ID]
+
+    assert harness.registry.get_calls.count(_WORKFLOW_ID) == 1
+    assert pending.projection_snapshot.matches(selected)
+    assert manifest is not None
+    workflow_bindings = [
+        binding for binding in manifest.bindings if binding.resource_type == "workflow"
+    ]
+    assert len(workflow_bindings) == 1
+    assert workflow_bindings[0].resource_id == pending.projection_snapshot.capability_id
+    assert workflow_bindings[0].version == pending.projection_snapshot.capability_version
+    assert workflow_bindings[0] == workflow_version_binding(
+        selected,
+        _single_definition(),
+    )
+    assert pending.projection_snapshot.output_schema_json
+    assert pending.projection_snapshot.declared_output_schema_digest == (
+        selected.output_schema_digest
+    )
+
+
+def test_wrong_workflow_binding_digest_is_rejected_before_adapter_execution() -> None:
+    selected = _capability(
+        _WORKFLOW_ID,
+        "workflow",
+        output_schema=runtime_output_schema("test_runtime_user_action.structured"),
+    )
+    snapshot = ProjectionContractSnapshot.from_capability(selected)
+    expected_binding = workflow_version_binding(selected, _single_definition())
+    wrong_binding = expected_binding.model_copy(update={"digest": "0" * 64})
+    manifest = build_task_version_binding_manifest(
+        task_id="SYNTHETIC_TASK_ID",
+        bindings=(wrong_binding,),
+        locked_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(
+        VersionBindingMismatchError,
+        match="Projection contract differs from the Task version binding",
+    ):
+        _assert_manifest_projection_source(
+            manifest,
+            selected,
+            snapshot,
+            expected_binding,
+        )
+
+    assert snapshot.matches(selected)
+    assert wrong_binding.resource_id == expected_binding.resource_id
+    assert wrong_binding.version == expected_binding.version
+    assert wrong_binding.digest != expected_binding.digest
+
+
+def test_runtime_rejects_wrong_workflow_binding_digest_before_adapter_execution() -> None:
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness(
+            engine_type=WrongManifestDigestWorkflowEngine,
+            expected_start_status="failed",
+        )
+        assert harness.gate is not None
+        manifest = await harness.gate.get_task_binding(harness.waiting.task_id)
+        return harness, manifest
+
+    harness, manifest = asyncio.run(exercise())
+
+    assert harness.gateway.calls == []
+    assert manifest is None
+
+
+def test_selected_to_binding_schema_drift_fails_as_manifest_snapshot_mismatch() -> None:
+    selected = _capability(
+        _WORKFLOW_ID,
+        "workflow",
+        output_schema=runtime_output_schema("test_runtime_user_action.structured"),
+    )
+    snapshot = ProjectionContractSnapshot.from_capability(selected)
+    drifted_schema = runtime_output_schema("test_runtime_user_action.drift")
+    selected.output_schema = drifted_schema
+    selected.output_schema_digest = canonical_schema_digest(drifted_schema)
+    expected_binding = workflow_version_binding(selected, _single_definition())
+    manifest = build_task_version_binding_manifest(
+        task_id="SYNTHETIC_TASK_ID",
+        bindings=(expected_binding,),
+        locked_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(
+        VersionBindingMismatchError,
+        match="Manifest projection source differs from the selected capability snapshot",
+    ):
+        _assert_manifest_projection_source(
+            manifest,
+            selected,
+            snapshot,
+            expected_binding,
+        )
+
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness(
+            engine_type=DriftingProjectionSourceWorkflowEngine,
+            expected_start_status="failed",
+        )
+        assert harness.gate is not None
+        bound_manifest = await harness.gate.get_task_binding(harness.waiting.task_id)
+        return harness, bound_manifest
+
+    harness, bound_manifest = asyncio.run(exercise())
+
+    assert harness.gateway.calls == []
+    assert bound_manifest is None
+
+
+@pytest.mark.parametrize("mode", ("schema_drift", "missing", "disabled"))
+def test_human_gate_registry_change_fails_exact_binding_before_resume(
+    mode: str,
+) -> None:
+    async def exercise() -> tuple[Harness, Any, int]:
+        harness = await _build_harness()
+        _replace_top_capability(harness, mode)
+        gateway_calls = len(harness.gateway.calls)
+        response = await _dispatch(harness)
+        return harness, response, gateway_calls
+
+    harness, response, gateway_calls = asyncio.run(exercise())
+
+    assert _outcome(response) == "action_version_conflict"
+    assert response.data["result"] is None
+    assert len(harness.gateway.calls) == gateway_calls
+    assert harness.engine.resume_calls == 0
+
+
+@pytest.mark.parametrize("mode", ("schema_drift", "missing", "disabled"))
+def test_no_gate_resume_uses_saved_projection_snapshot_after_registry_change(
+    mode: str,
+) -> None:
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness(with_gate=False)
+        saved = _pending(harness).projection_snapshot
+        _replace_top_capability(harness, mode)
+        response = await harness.runtime.handle_user_message(
+            channel="mock",
+            ai_user_id=harness.principal.ai_user_id,
+            session_id="session-action",
+            message="确认",
+            client_capabilities={},
+        )
+        return harness, (saved, response)
+
+    harness, (saved, response) = asyncio.run(exercise())
+
+    assert response.status == "completed"
+    assert response.data == {"safe": "accepted"}
+    assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
+    assert saved.output_schema_json
+
+
+def test_completed_action_preserves_the_text_resume_message_and_fallback() -> None:
+    async def exercise() -> tuple[Any, Any]:
+        text_harness = await _build_harness(with_gate=False)
+        text_response = await text_harness.runtime.handle_user_message(
+            channel="mock",
+            ai_user_id=text_harness.principal.ai_user_id,
+            session_id="session-action",
+            message="确认",
+            client_capabilities={},
+        )
+        action_harness = await _build_harness()
+        action_response = await _dispatch(action_harness)
+        return text_response, action_response
+
+    text_response, action_response = asyncio.run(exercise())
+
+    assert text_response.status == action_response.status == "completed"
+    assert text_response.message == action_response.message == "操作完成"
+    assert text_response.fallback_text == action_response.fallback_text == "Operation completed."
+    assert text_response.data == {"safe": "accepted"}
+    assert action_response.data == {
+        "action_outcome": "accepted",
+        "result": {"safe": "accepted"},
+    }
+
+
+def test_registry_update_during_resume_cannot_change_saved_projection() -> None:
+    async def exercise() -> tuple[Harness, Any]:
+        gateway = InjectingGateway({})
+        harness = await _build_harness(gateway=gateway)
+        gateway.trigger_capability_id = _EXECUTE_ID
+        gateway.on_trigger = lambda: _replace_top_capability(
+            harness,
+            "schema_drift",
+        )
+        response = await _dispatch(harness)
+        return harness, response
+
+    harness, response = asyncio.run(exercise())
+
+    assert _outcome(response) == "accepted"
+    assert response.data["result"] == {"safe": "accepted"}
+    assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
+
+
+def test_multiple_waiting_rounds_carry_the_same_projection_snapshot() -> None:
+    async def exercise() -> tuple[Any, Any]:
+        harness = await _build_harness(definition=_two_confirmation_definition())
+        first_snapshot = _pending(harness).projection_snapshot
+        response = await _dispatch(harness)
+        second_snapshot = _pending(harness).projection_snapshot
+        return first_snapshot, (response, second_snapshot)
+
+    first_snapshot, (response, second_snapshot) = asyncio.run(exercise())
+
+    assert _outcome(response) == "accepted"
+    assert response.status == "waiting_user"
+    assert second_snapshot is first_snapshot
+
+
+def test_mutating_source_schema_cannot_change_saved_snapshot_manifest_or_no_gate_resume() -> None:
+    async def exercise() -> tuple[Any, Any, Any, Any]:
+        gated = await _build_harness()
+        assert gated.gate is not None
+        gated_pending = _pending(gated)
+        manifest_before = await gated.gate.get_task_binding(gated.waiting.task_id)
+        source = gated.registry.items[_WORKFLOW_ID]
+        source.output_schema["properties"]["safe"]["type"] = "integer"
+        manifest_after = await gated.gate.get_task_binding(gated.waiting.task_id)
+
+        ungated = await _build_harness(with_gate=False)
+        ungated_pending = _pending(ungated)
+        original_json = ungated_pending.projection_snapshot.output_schema_json
+        ungated.registry.items[_WORKFLOW_ID].output_schema["properties"]["safe"]["type"] = "integer"
+        response = await ungated.runtime.handle_user_message(
+            channel="mock",
+            ai_user_id=ungated.principal.ai_user_id,
+            session_id="session-action",
+            message="确认",
+            client_capabilities={},
+        )
+        return (
+            gated_pending.projection_snapshot,
+            (manifest_before, manifest_after),
+            (original_json, ungated_pending.projection_snapshot.output_schema_json),
+            response,
+        )
+
+    snapshot, manifests, snapshot_jsons, response = asyncio.run(exercise())
+
+    assert snapshot.load_output_schema()["properties"]["safe"]["type"] == "string"
+    assert manifests[0] == manifests[1]
+    assert snapshot_jsons[0] == snapshot_jsons[1]
+    assert response.status == "completed"
+    assert response.data == {"safe": "accepted"}
+
+
 def test_stale_human_gate_conflict_has_no_result_or_adapter_call() -> None:
     async def exercise() -> tuple[Harness, Any, int, int]:
         gate = ConflictWithoutDecisionGate()
@@ -634,12 +972,38 @@ def test_accepted_action_keeps_business_failure_in_top_level_status(
     assert response.data["result"] is None
 
 
-def test_accepted_result_is_the_builder_sanitized_capability_result() -> None:
+def test_accepted_result_drops_undeclared_credential_key_without_placeholder() -> None:
     async def exercise() -> Any:
         harness = await _build_harness(
             confirmed_result=ExecutionResult(
                 status="completed",
-                data={"safe": "ok", "password": "synthetic-private-value"},
+                data={
+                    "safe": "ok",
+                    "password": "SYNTHETIC_private_canary",
+                },
+                trace_id="completed",
+            )
+        )
+        return await _dispatch(harness)
+
+    response = asyncio.run(exercise())
+
+    assert _outcome(response) == "accepted"
+    assert response.data["result"] == {"safe": "ok"}
+    assert "[REDACTED]" not in response.data["result"]
+    assert "password" not in response.model_dump_json()
+    _assert_envelope_omits(response, "SYNTHETIC_private_canary")
+
+
+def test_accepted_result_redacts_marker_value_in_declared_safe_key() -> None:
+    async def exercise() -> Any:
+        harness = await _build_harness(
+            confirmed_result=ExecutionResult(
+                status="completed",
+                data={
+                    "safe": "ok",
+                    "safe_note": "SYNTHETIC_token_canary",
+                },
                 trace_id="completed",
             )
         )
@@ -650,9 +1014,9 @@ def test_accepted_result_is_the_builder_sanitized_capability_result() -> None:
     assert _outcome(response) == "accepted"
     assert response.data["result"] == {
         "safe": "ok",
-        "[REDACTED]": "[REDACTED]",
+        "safe_note": "[REDACTED]",
     }
-    assert "synthetic-private-value" not in response.model_dump_json()
+    _assert_envelope_omits(response, "SYNTHETIC_token_canary")
 
 
 def test_exception_after_claim_cannot_replay_adapter_execution() -> None:
@@ -862,9 +1226,7 @@ def test_second_structured_confirmation_uses_fresh_claim_and_succeeds() -> None:
     assert second.status == "completed"
     assert harness.engine.resume_calls == 2
     assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
-    assert [call[0] for call in harness.gateway.calls].count(
-        "oa.structured.second.execute"
-    ) == 1
+    assert [call[0] for call in harness.gateway.calls].count("oa.structured.second.execute") == 1
 
 
 def test_user_action_trace_records_inbound_before_outcome() -> None:
@@ -874,9 +1236,7 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
         return harness, response
 
     harness, response = asyncio.run(exercise())
-    action_events = [
-        event for event in harness.trace.steps if event["event_type"] == "user_action"
-    ]
+    action_events = [event for event in harness.trace.steps if event["event_type"] == "user_action"]
 
     assert _outcome(response) == "accepted"
     assert [event["attributes"] for event in action_events] == [

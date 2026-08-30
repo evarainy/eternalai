@@ -9,6 +9,10 @@ from typing import Any, cast
 import pytest
 
 from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.contracts import (
+    OAPendingWorkflowCollection,
+    OASystemMessageCollection,
+)
 from app.infra.adapters.oa.provider import ReplayOAReadProvider
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
@@ -22,15 +26,15 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
 from app.runtime.runtime import RuntimeImpl
-from tests.runtime.registry_fakes import StaticCapabilityRegistry, active_capability
+from tests.runtime.registry_fakes import (
+    StaticCapabilityRegistry,
+    active_capability,
+    runtime_output_schema,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SYSTEM_MESSAGE_CONTRACT_PACK = (
-    REPO_ROOT
-    / "tests"
-    / "contract_packs"
-    / "oa"
-    / "ecology9-system-messages-v1"
+    REPO_ROOT / "tests" / "contract_packs" / "oa" / "ecology9-system-messages-v1"
 )
 
 
@@ -178,6 +182,18 @@ class SpyGateway:
         return self.result
 
 
+def _output_schema_for(capability_id: str) -> dict[str, Any]:
+    if capability_id == "oa.list_pending_workflows":
+        return OAPendingWorkflowCollection.model_json_schema()
+    if capability_id == "oa.list_system_messages":
+        return OASystemMessageCollection.model_json_schema()
+    if capability_id == "oa.get_workflow_status":
+        return runtime_output_schema("test_runtime_response_content.workflow_status")
+    if capability_id == "u8.get_document_status":
+        return runtime_output_schema("test_runtime_response_content.document_status")
+    return runtime_output_schema("registry_fakes.default")
+
+
 def _run_runtime(
     gateway_result: ExecutionResult,
     *,
@@ -203,7 +219,13 @@ def _run_runtime(
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry(capability or capability_id),
+            capability_registry=StaticCapabilityRegistry(
+                capability
+                or active_capability(
+                    capability_id,
+                    output_schema=_output_schema_for(capability_id),
+                )
+            ),
             gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
@@ -255,9 +277,7 @@ def test_system_message_response_discloses_incomplete_result_scope() -> None:
         ExecutionResult(
             status="completed",
             data={
-                "messages": [
-                    {"message_id": "90000001", "title": "合成系统消息标题"}
-                ],
+                "messages": [{"message_id": "90000001", "title": "合成系统消息标题"}],
                 "returned_count": 1,
                 "is_complete": False,
             },
@@ -300,11 +320,14 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
             CapabilityRef,
             CapabilityRef(capability_id=capability_id),
         )
-        registry = StaticCapabilityRegistry(capability_id)
+        registry = StaticCapabilityRegistry(
+            active_capability(
+                capability_id,
+                output_schema=OASystemMessageCollection.model_json_schema(),
+            )
+        )
         gateway = CapabilityGateway(
-            adapter=OAReadAdapter(
-                ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)
-            ),
+            adapter=OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)),
             capability_registry=registry,
         )
         runtime = RuntimeImpl(

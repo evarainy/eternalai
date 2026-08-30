@@ -47,6 +47,12 @@
             "document_status"
           ],
           "properties": {
+            "account_set_id": {
+              "type": "string"
+            },
+            "document_no": {
+              "type": "string"
+            },
             "document_status": {
               "type": "string"
             },
@@ -59,7 +65,7 @@
           }
         },
         "input_schema_digest": "digest_u8_document_input",
-        "output_schema_digest": "digest_u8_document_output"
+        "output_schema_digest": "69c7a5a15ebcdef1bb6388f4fb468e16efa362f92250a0a4f9808c6ea3ed36d7"
       }
     ],
     "mock_u8_state": {

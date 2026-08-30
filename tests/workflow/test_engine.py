@@ -238,6 +238,10 @@ def _run_engine(
         result = await engine.execute(
             workflow_id=definition.workflow_id,
             expected_version=definition.version,
+            workflow_capability=_capability(
+                definition.workflow_id,
+                capability_type="workflow",
+            ),
             task_id="task-1",
             session_id=sid,
             ai_user_id="user-1",
@@ -270,6 +274,10 @@ def _run_engine_with_gateway(
         result = await engine.execute(
             workflow_id=definition.workflow_id,
             expected_version=definition.version,
+            workflow_capability=_capability(
+                definition.workflow_id,
+                capability_type="workflow",
+            ),
             task_id="task-retry",
             session_id="session-retry",
             ai_user_id="user-retry",
@@ -764,6 +772,10 @@ def test_confirm_checkpoint_resumes_with_confirmed_variant_and_locked_definition
         waiting = await engine.execute(
             workflow_id=definition.workflow_id,
             expected_version=definition.version,
+            workflow_capability=_capability(
+                definition.workflow_id,
+                capability_type="workflow",
+            ),
             task_id="task-confirm",
             session_id="session-confirm",
             ai_user_id="user-confirm",

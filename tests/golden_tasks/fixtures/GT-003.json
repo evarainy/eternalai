@@ -53,6 +53,9 @@
             "document_status"
           ],
           "properties": {
+            "document_no": {
+              "type": "string"
+            },
             "document_status": {
               "type": "string"
             },
@@ -65,7 +68,7 @@
           }
         },
         "input_schema_digest": "digest_u8_document_input",
-        "output_schema_digest": "digest_u8_document_output"
+        "output_schema_digest": "0a664b6429d401e99608815c3d19bfa0ca5bb231b2e49993016e711c260a2cc5"
       }
     ],
     "mock_u8_state": {

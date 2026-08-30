@@ -72,6 +72,18 @@ def _load_missing_environment(path: Path) -> None:
 _load_missing_environment(_repository_env_path())
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Install the test-only Runtime schema observer after test env setup."""
+
+    from tests.architecture import runtime_schema_observer
+
+    plugin_name = "p4-runtime-schema-observer"
+    if config.pluginmanager.hasplugin(plugin_name):
+        return
+    runtime_schema_observer.pytest_configure(config)
+    config.pluginmanager.register(runtime_schema_observer, plugin_name)
+
+
 @pytest.fixture(autouse=True)
 def _declare_testing_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the test-only environment exception explicit for every test."""

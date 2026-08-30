@@ -46,6 +46,7 @@ from scripts.smoke.trace_contract import (
     REQUIRED_TRACE_EVENTS as _REQUIRED_TRACE_EVENTS,
 )
 from tests.auth_fakes import TEST_CSRF_ALLOWED_ORIGINS, TEST_CSRF_HEADERS
+from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -58,6 +59,8 @@ _COOKIE_SENTINELS = {
     "loginidweaver": "fixture-login-cookie",
     "loginuuids": "fixture-uuid-cookie",
 }
+
+
 @dataclass(frozen=True)
 class PilotObservation:
     status_code: int
@@ -236,12 +239,8 @@ def test_http_replay_full_chain_sends_session_cookie_and_recovers_principal(
     )
 
     assert runtime_status_codes == [200]
-    assert principal_observations == [
-        identity_surrogate(_LOGIN_ID, key=settings.identity_hmac_key)
-    ]
-    assert outcome.passed(
-        expected_capability_ids=("oa.list_pending_workflows",)
-    ) is True
+    assert principal_observations == [identity_surrogate(_LOGIN_ID, key=settings.identity_hmac_key)]
+    assert outcome.passed(expected_capability_ids=("oa.list_pending_workflows",)) is True
 
 
 async def _run_replay_full_chain(
@@ -262,13 +261,9 @@ async def _run_replay_full_chain(
     )
     session_factory = make_async_session_factory(database_url=settings.database_url)
     ai_user_id = identity_surrogate(_LOGIN_ID, key=settings.identity_hmac_key)
-    llm_provider, authentication = smoke_full_chain._build_replay_dependencies(
-        settings
-    )
+    llm_provider, authentication = smoke_full_chain._build_replay_dependencies(settings)
     capability = next(
-        item
-        for item in expected_oa_capabilities()
-        if item.capability_id == capability_id
+        item for item in expected_oa_capabilities() if item.capability_id == capability_id
     )
     await _cleanup(
         session_factory,
@@ -285,9 +280,7 @@ async def _run_replay_full_chain(
             authentication=authentication,
         )
         if principal_observations is not None:
-            tasks = await PostgreSQLTaskStore(session_factory).list_tasks(
-                ai_user_id=ai_user_id
-            )
+            tasks = await PostgreSQLTaskStore(session_factory).list_tasks(ai_user_id=ai_user_id)
             principal_observations.extend(task.ai_user_id for task in tasks)
         return outcome
     finally:
@@ -380,6 +373,7 @@ async def _run_pilot_request() -> PilotObservation:
     )
     registry = PostgreSQLCapabilityRegistry(session_factory)
     await _cleanup(session_factory, ai_user_id)
+    output_schema = runtime_output_schema("test_pilot_foundation_e2e.pending_workflows")
     await registry.create(
         CapabilitySpec(
             capability_id=_CAPABILITY_ID,
@@ -387,9 +381,9 @@ async def _run_pilot_request() -> PilotObservation:
             type="query",
             intent_tags=["pending-workflows"],
             input_schema={},
-            output_schema={},
+            output_schema=output_schema,
             input_schema_digest="fixture-input",
-            output_schema_digest="fixture-output",
+            output_schema_digest=schema_digest(output_schema),
             risk_level="low",
             owner="pilot-fixture",
             version="1.0.0",
@@ -450,17 +444,15 @@ async def _run_pilot_request() -> PilotObservation:
             ]
         }
 
-        tasks = await PostgreSQLTaskStore(session_factory).list_tasks(
-            ai_user_id=ai_user_id
-        )
+        tasks = await PostgreSQLTaskStore(session_factory).list_tasks(ai_user_id=ai_user_id)
         assert len(tasks) == 1
         assert tasks[0].session_id == envelope["session_id"]
         assert tasks[0].ai_user_id == ai_user_id
         assert tasks[0].ai_user_id != "self-reported-attacker"
 
-        trace_events = await PostgreSQLTraceReader(
-            session_factory
-        ).list_events_by_trace(envelope["trace_id"])
+        trace_events = await PostgreSQLTraceReader(session_factory).list_events_by_trace(
+            envelope["trace_id"]
+        )
         event_types = frozenset(event.event_type for event in trace_events)
         persisted_trace = repr(trace_events)
         sensitive_values_absent = all(
@@ -537,10 +529,7 @@ async def _cleanup(
         )
         for capability_id in capability_ids:
             await session.execute(
-                text(
-                    "DELETE FROM capabilities"
-                    " WHERE capability_id = :capability_id"
-                ),
+                text("DELETE FROM capabilities WHERE capability_id = :capability_id"),
                 {"capability_id": capability_id},
             )
         await session.commit()

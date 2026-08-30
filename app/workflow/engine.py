@@ -14,7 +14,7 @@ from app.ports.capability_gateway import (
     ErrorCode,
     RequestOrgContext,
 )
-from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.human_gate import (
     HumanGatePort,
     VersionBinding,
@@ -52,6 +52,14 @@ class _WorkflowCheckpoint:
     step_outputs: dict[str, dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class _WorkflowVersionBindingsSnapshot:
+    """Bindings and the exact top-level binding derived from one definition snapshot."""
+
+    bindings: tuple[VersionBinding, ...]
+    workflow_binding: VersionBinding
+
+
 class WorkflowEngine:
     """Execute a version-locked tuple of steps without graph semantics."""
 
@@ -85,13 +93,24 @@ class WorkflowEngine:
     async def version_bindings(
         self,
         *,
-        workflow_id: str,
-        expected_version: str,
-    ) -> tuple[VersionBinding, ...]:
+        workflow_capability: CapabilitySpec,
+    ) -> _WorkflowVersionBindingsSnapshot:
         """Resolve the complete immutable tuple before a new Task can execute."""
 
-        definition = self._snapshot_definition(workflow_id, expected_version)
-        return await self._definition_version_bindings(definition)
+        definition = self._snapshot_definition(
+            workflow_capability.capability_id,
+            workflow_capability.version,
+        )
+        workflow_binding = workflow_version_binding(workflow_capability, definition)
+        bindings = await self._definition_version_bindings(
+            definition,
+            workflow_capability=workflow_capability,
+            workflow_binding=workflow_binding,
+        )
+        return _WorkflowVersionBindingsSnapshot(
+            bindings=bindings,
+            workflow_binding=workflow_binding,
+        )
 
     async def resume_version_bindings(
         self,
@@ -113,14 +132,10 @@ class WorkflowEngine:
 
         checkpoint = self._checkpoints.get(task_id)
         if checkpoint is None:
-            raise VersionBindingMismatchError(
-                "No waiting Workflow action is available"
-            )
+            raise VersionBindingMismatchError("No waiting Workflow action is available")
         step = checkpoint.definition.steps[checkpoint.waiting_step_index]
         if step.confirmed_capability_id is None:
-            raise VersionBindingMismatchError(
-                "Waiting Workflow action has no confirmed capability"
-            )
+            raise VersionBindingMismatchError("Waiting Workflow action has no confirmed capability")
         arguments = deepcopy(dict(step.static_arguments))
         for argument_name, value_ref in step.input_mapping.items():
             arguments[argument_name] = self._resolve_value(
@@ -143,6 +158,7 @@ class WorkflowEngine:
         *,
         workflow_id: str,
         expected_version: str,
+        workflow_capability: CapabilitySpec,
         task_id: str,
         session_id: str,
         ai_user_id: str,
@@ -150,10 +166,14 @@ class WorkflowEngine:
         request_context: RequestOrgContext,
     ) -> WorkflowRunResult:
         definition = self._snapshot_definition(workflow_id, expected_version)
+        self._validate_workflow_capability(workflow_capability, definition)
         if self._human_gate_port is None:
             await self._validate_steps(definition)
         else:
-            bindings = await self._definition_version_bindings(definition)
+            bindings = await self._definition_version_bindings(
+                definition,
+                workflow_capability=workflow_capability,
+            )
             await self._human_gate_port.assert_task_bindings(task_id, bindings)
         await self._append_state(
             task_id,
@@ -174,10 +194,7 @@ class WorkflowEngine:
                 step_outputs={},
             )
         except (ValueError, VersionBindingMismatchError) as exc:
-            if (
-                not isinstance(exc, VersionBindingMismatchError)
-                and self._human_gate_port is None
-            ):
+            if not isinstance(exc, VersionBindingMismatchError) and self._human_gate_port is None:
                 raise
             await self._append_state(
                 task_id,
@@ -190,9 +207,7 @@ class WorkflowEngine:
             )
             if isinstance(exc, VersionBindingMismatchError):
                 raise
-            raise VersionBindingMismatchError(
-                "Bound Workflow capability is unavailable"
-            ) from exc
+            raise VersionBindingMismatchError("Bound Workflow capability is unavailable") from exc
 
     async def resume(
         self,
@@ -212,13 +227,9 @@ class WorkflowEngine:
                 expected_action_digest,
                 self.pending_confirmation_action_digest(task_id),
             ):
-                raise VersionBindingMismatchError(
-                    "Pending Workflow action changed after preview"
-                )
+                raise VersionBindingMismatchError("Pending Workflow action changed after preview")
             if self._human_gate_port is not None:
-                bindings = await self._definition_version_bindings(
-                    checkpoint.definition
-                )
+                bindings = await self._definition_version_bindings(checkpoint.definition)
                 await self._human_gate_port.assert_task_bindings(task_id, bindings)
             waiting_step = checkpoint.definition.steps[checkpoint.waiting_step_index]
             await self._validate_confirmed_capability(waiting_step)
@@ -549,28 +560,22 @@ class WorkflowEngine:
     async def _definition_version_bindings(
         self,
         definition: WorkflowDefinition,
+        *,
+        workflow_capability: CapabilitySpec | None = None,
+        workflow_binding: VersionBinding | None = None,
     ) -> tuple[VersionBinding, ...]:
         try:
             await self._validate_steps(definition)
         except ValueError as exc:
-            raise VersionBindingMismatchError(
-                "Bound Workflow capability is unavailable"
-            ) from exc
-        workflow_capability = await self._capability_registry.get(
-            definition.workflow_id
-        )
-        if (
-            workflow_capability is None
-            or workflow_capability.status != "active"
-            or workflow_capability.type != "workflow"
-            or workflow_capability.version != definition.version
-        ):
-            raise VersionBindingMismatchError(
-                "Registered Workflow binding is unavailable"
-            )
-        groups: list[tuple[VersionBinding, ...]] = [
-            (workflow_version_binding(workflow_capability, definition),)
-        ]
+            raise VersionBindingMismatchError("Bound Workflow capability is unavailable") from exc
+        if workflow_capability is None:
+            workflow_capability = await self._capability_registry.get(definition.workflow_id)
+        if workflow_capability is None:
+            raise VersionBindingMismatchError("Registered Workflow binding is unavailable")
+        self._validate_workflow_capability(workflow_capability, definition)
+        if workflow_binding is None:
+            workflow_binding = workflow_version_binding(workflow_capability, definition)
+        groups: list[tuple[VersionBinding, ...]] = [(workflow_binding,)]
         capability_ids: set[str] = set()
         for step in definition.steps:
             capability_ids.add(step.capability_id)
@@ -579,11 +584,22 @@ class WorkflowEngine:
         for capability_id in sorted(capability_ids):
             capability = await self._capability_registry.get(capability_id)
             if capability is None or capability.type == "workflow":
-                raise VersionBindingMismatchError(
-                    "Bound Workflow capability is unavailable"
-                )
+                raise VersionBindingMismatchError("Bound Workflow capability is unavailable")
             groups.append(capability_version_bindings(capability))
         return merge_version_bindings(*groups)
+
+    @staticmethod
+    def _validate_workflow_capability(
+        capability: CapabilitySpec,
+        definition: WorkflowDefinition,
+    ) -> None:
+        if (
+            capability.status != "active"
+            or capability.type != "workflow"
+            or capability.capability_id != definition.workflow_id
+            or capability.version != definition.version
+        ):
+            raise VersionBindingMismatchError("Registered Workflow binding is unavailable")
 
     async def _validate_confirmed_capability(self, step: WorkflowStep) -> None:
         confirmed_capability_id = step.confirmed_capability_id
