@@ -73,6 +73,12 @@ class _CapabilitySelection:
 
 
 @dataclass(frozen=True)
+class _NewTaskVersionBindings:
+    bindings: tuple[VersionBinding, ...]
+    projection_binding: VersionBinding
+
+
+@dataclass(frozen=True)
 class _PendingWorkflow:
     task_id: str
     trace_id: str
@@ -284,9 +290,7 @@ class RuntimeImpl:
                 reason="no_unique_active_candidate",
             )
         selected_capability = selection.capability.model_copy(deep=True)
-        projection_snapshot = ProjectionContractSnapshot.from_capability(
-            selected_capability
-        )
+        projection_snapshot = ProjectionContractSnapshot.from_capability(selected_capability)
         capability_ref = capability_ref.model_copy(
             update={"capability_id": selected_capability.capability_id}
         )
@@ -323,17 +327,17 @@ class RuntimeImpl:
             selected_capability.type != "workflow" or self._workflow_engine is not None
         ):
             try:
+                resolved_bindings = await self._new_task_version_bindings(selected_capability)
                 binding_manifest = build_task_version_binding_manifest(
                     task_id=task_id,
-                    bindings=await self._new_task_version_bindings(
-                        selected_capability
-                    ),
+                    bindings=resolved_bindings.bindings,
                     locked_at=datetime.now(UTC),
                 )
                 _assert_manifest_projection_source(
                     binding_manifest,
                     selected_capability,
                     projection_snapshot,
+                    resolved_bindings.projection_binding,
                 )
                 await self._human_gate_port.bind_task(binding_manifest)
             except (HumanGateConflictError, VersionBindingMismatchError, ValueError):
@@ -402,8 +406,7 @@ class RuntimeImpl:
         request_digest: str | None = None
         gate_manifest_digest: str | None = None
         workflow_waiting = (
-            selected_capability.type == "workflow"
-            and exec_result.status == "waiting_user"
+            selected_capability.type == "workflow" and exec_result.status == "waiting_user"
         )
         if workflow_waiting and self._human_gate_port is not None:
             try:
@@ -417,9 +420,7 @@ class RuntimeImpl:
                     raise VersionBindingMismatchError(
                         "Waiting Workflow has no immutable action digest"
                     )
-                action_digest = (
-                    self._workflow_engine.pending_confirmation_action_digest(task_id)
-                )
+                action_digest = self._workflow_engine.pending_confirmation_action_digest(task_id)
                 preview = _confirm_card_payload(
                     capability_ref,
                     selected_capability,
@@ -779,19 +780,15 @@ class RuntimeImpl:
                     )
                 resume_bindings = merge_version_bindings(
                     (self._intent_version_binding,),
-                    await self._workflow_engine.resume_version_bindings(
-                        task_id=pending.task_id
-                    ),
+                    await self._workflow_engine.resume_version_bindings(task_id=pending.task_id),
                 )
                 await self._human_gate_port.assert_task_bindings(
                     pending.task_id,
                     resume_bindings,
                     exact=True,
                 )
-                current_action_digest = (
-                    self._workflow_engine.pending_confirmation_action_digest(
-                        pending.task_id
-                    )
+                current_action_digest = self._workflow_engine.pending_confirmation_action_digest(
+                    pending.task_id
                 )
                 if not compare_digest(
                     pending.action_digest,
@@ -850,17 +847,13 @@ class RuntimeImpl:
         next_request_digest = pending.request_digest
         if exec_result.status == "waiting_user" and self._human_gate_port is not None:
             try:
-                if (
-                    pending.binding_manifest_digest is None
-                ):
+                if pending.binding_manifest_digest is None:
                     raise VersionBindingMismatchError(
                         "Resumed Workflow has no immutable human gate request"
                     )
                 next_gate_request_id = response_id
-                next_action_digest = (
-                    self._workflow_engine.pending_confirmation_action_digest(
-                        pending.task_id
-                    )
+                next_action_digest = self._workflow_engine.pending_confirmation_action_digest(
+                    pending.task_id
                 )
                 next_capability_ref = CapabilityRef(
                     capability_id=pending.capability_id,
@@ -993,20 +986,36 @@ class RuntimeImpl:
     async def _new_task_version_bindings(
         self,
         capability: CapabilitySpec,
-    ) -> tuple[VersionBinding, ...]:
+    ) -> _NewTaskVersionBindings:
         if capability.type == "workflow":
             if self._workflow_engine is None:
                 raise VersionBindingMismatchError(
                     "Workflow version binding requires a configured engine"
                 )
-            resource_bindings = await self._workflow_engine.version_bindings(
+            workflow_bindings = await self._workflow_engine.version_bindings(
                 workflow_capability=capability,
             )
+            resource_bindings = workflow_bindings.bindings
+            projection_binding = workflow_bindings.workflow_binding
         else:
             resource_bindings = capability_version_bindings(capability)
-        return merge_version_bindings(
-            (self._intent_version_binding,),
-            resource_bindings,
+            matching = tuple(
+                binding
+                for binding in resource_bindings
+                if binding.resource_type == "tool"
+                and binding.resource_id == capability.capability_id
+            )
+            if len(matching) != 1:
+                raise VersionBindingMismatchError(
+                    "Selected capability has no unique projection binding"
+                )
+            projection_binding = matching[0]
+        return _NewTaskVersionBindings(
+            bindings=merge_version_bindings(
+                (self._intent_version_binding,),
+                resource_bindings,
+            ),
+            projection_binding=projection_binding,
         )
 
     async def _finish_version_binding_failure(
@@ -1359,19 +1368,28 @@ def _assert_manifest_projection_source(
     manifest: TaskVersionBindingManifest,
     capability: CapabilitySpec,
     snapshot: ProjectionContractSnapshot,
+    expected_binding: VersionBinding,
 ) -> None:
     if not snapshot.matches(capability):
         raise VersionBindingMismatchError(
-            "Projection contract differs from the selected capability snapshot"
+            "Manifest projection source differs from the selected capability snapshot"
         )
     resource_type = "workflow" if capability.type == "workflow" else "tool"
+    if (
+        expected_binding.resource_type != resource_type
+        or expected_binding.resource_id != capability.capability_id
+        or expected_binding.version != capability.version
+    ):
+        raise VersionBindingMismatchError(
+            "Expected projection binding differs from the selected capability"
+        )
     matching = tuple(
         binding
         for binding in manifest.bindings
         if binding.resource_type == resource_type
         and binding.resource_id == capability.capability_id
     )
-    if len(matching) != 1 or matching[0].version != capability.version:
+    if len(matching) != 1 or matching[0] != expected_binding:
         raise VersionBindingMismatchError(
             "Projection contract differs from the Task version binding"
         )

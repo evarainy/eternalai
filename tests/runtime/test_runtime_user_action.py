@@ -19,16 +19,25 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 )
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
     VersionBindingMismatchError,
+    build_task_version_binding_manifest,
 )
 from app.runtime.models import CapabilityRef
-from app.runtime.response_projection import canonical_schema_digest
-from app.runtime.runtime import RuntimeImpl, _PendingWorkflow
+from app.runtime.response_projection import (
+    ProjectionContractSnapshot,
+    canonical_schema_digest,
+)
+from app.runtime.runtime import (
+    RuntimeImpl,
+    _assert_manifest_projection_source,
+    _PendingWorkflow,
+)
 from app.version_binding import workflow_version_binding
-from app.workflow.engine import WorkflowEngine
+from app.workflow.engine import WorkflowEngine, _WorkflowVersionBindingsSnapshot
 from app.workflow.models import WorkflowDefinition, WorkflowStep
 from tests.runtime.registry_fakes import runtime_output_schema
 from tests.runtime.test_runtime_workflow import (
@@ -149,6 +158,34 @@ class CountingWorkflowEngine(WorkflowEngine):
         return await super().resume(**kwargs)
 
 
+class WrongManifestDigestWorkflowEngine(CountingWorkflowEngine):
+    async def version_bindings(
+        self,
+        **kwargs: Any,
+    ) -> _WorkflowVersionBindingsSnapshot:
+        snapshot = await super().version_bindings(**kwargs)
+        wrong_binding = snapshot.workflow_binding.model_copy(update={"digest": "0" * 64})
+        return replace(
+            snapshot,
+            bindings=tuple(
+                wrong_binding if binding == snapshot.workflow_binding else binding
+                for binding in snapshot.bindings
+            ),
+        )
+
+
+class DriftingProjectionSourceWorkflowEngine(CountingWorkflowEngine):
+    async def version_bindings(
+        self,
+        *,
+        workflow_capability: CapabilitySpec,
+    ) -> _WorkflowVersionBindingsSnapshot:
+        drifted_schema = runtime_output_schema("test_runtime_user_action.drift")
+        workflow_capability.output_schema = drifted_schema
+        workflow_capability.output_schema_digest = canonical_schema_digest(drifted_schema)
+        return await super().version_bindings(workflow_capability=workflow_capability)
+
+
 class RaisingExecutionGateway(Gateway):
     async def execute_capability(self, *args: Any, **kwargs: Any) -> ExecutionResult:
         capability_id = args[3]
@@ -264,6 +301,8 @@ async def _build_harness(
     gateway: Gateway | None = None,
     definition: WorkflowDefinition | None = None,
     confirmed_result: ExecutionResult | None = None,
+    engine_type: type[CountingWorkflowEngine] = CountingWorkflowEngine,
+    expected_start_status: str = "waiting_user",
 ) -> Harness:
     definition = definition or _single_definition()
     gate = gate if with_gate else None
@@ -313,7 +352,7 @@ async def _build_harness(
     gateway.results.update(results)
     task_store = TaskStore()
     trace = RecordingTrace()
-    engine = CountingWorkflowEngine(
+    engine = engine_type(
         definitions={definition.workflow_id: definition},
         capability_registry=registry,
         gateway=gateway,
@@ -350,7 +389,7 @@ async def _build_harness(
         message=_START_MESSAGE,
         client_capabilities={},
     )
-    assert waiting.status == "waiting_user"
+    assert waiting.status == expected_start_status
     return Harness(
         runtime=runtime,
         principal=principal,
@@ -608,6 +647,97 @@ def test_new_task_binding_and_projection_share_one_selected_workflow_snapshot() 
     assert pending.projection_snapshot.declared_output_schema_digest == (
         selected.output_schema_digest
     )
+
+
+def test_wrong_workflow_binding_digest_is_rejected_before_adapter_execution() -> None:
+    selected = _capability(
+        _WORKFLOW_ID,
+        "workflow",
+        output_schema=runtime_output_schema("test_runtime_user_action.structured"),
+    )
+    snapshot = ProjectionContractSnapshot.from_capability(selected)
+    expected_binding = workflow_version_binding(selected, _single_definition())
+    wrong_binding = expected_binding.model_copy(update={"digest": "0" * 64})
+    manifest = build_task_version_binding_manifest(
+        task_id="SYNTHETIC_TASK_ID",
+        bindings=(wrong_binding,),
+        locked_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(
+        VersionBindingMismatchError,
+        match="Projection contract differs from the Task version binding",
+    ):
+        _assert_manifest_projection_source(
+            manifest,
+            selected,
+            snapshot,
+            expected_binding,
+        )
+
+    assert snapshot.matches(selected)
+    assert wrong_binding.resource_id == expected_binding.resource_id
+    assert wrong_binding.version == expected_binding.version
+    assert wrong_binding.digest != expected_binding.digest
+
+
+def test_runtime_rejects_wrong_workflow_binding_digest_before_adapter_execution() -> None:
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness(
+            engine_type=WrongManifestDigestWorkflowEngine,
+            expected_start_status="failed",
+        )
+        assert harness.gate is not None
+        manifest = await harness.gate.get_task_binding(harness.waiting.task_id)
+        return harness, manifest
+
+    harness, manifest = asyncio.run(exercise())
+
+    assert harness.gateway.calls == []
+    assert manifest is None
+
+
+def test_selected_to_binding_schema_drift_fails_as_manifest_snapshot_mismatch() -> None:
+    selected = _capability(
+        _WORKFLOW_ID,
+        "workflow",
+        output_schema=runtime_output_schema("test_runtime_user_action.structured"),
+    )
+    snapshot = ProjectionContractSnapshot.from_capability(selected)
+    drifted_schema = runtime_output_schema("test_runtime_user_action.drift")
+    selected.output_schema = drifted_schema
+    selected.output_schema_digest = canonical_schema_digest(drifted_schema)
+    expected_binding = workflow_version_binding(selected, _single_definition())
+    manifest = build_task_version_binding_manifest(
+        task_id="SYNTHETIC_TASK_ID",
+        bindings=(expected_binding,),
+        locked_at=datetime.now(UTC),
+    )
+
+    with pytest.raises(
+        VersionBindingMismatchError,
+        match="Manifest projection source differs from the selected capability snapshot",
+    ):
+        _assert_manifest_projection_source(
+            manifest,
+            selected,
+            snapshot,
+            expected_binding,
+        )
+
+    async def exercise() -> tuple[Harness, Any]:
+        harness = await _build_harness(
+            engine_type=DriftingProjectionSourceWorkflowEngine,
+            expected_start_status="failed",
+        )
+        assert harness.gate is not None
+        bound_manifest = await harness.gate.get_task_binding(harness.waiting.task_id)
+        return harness, bound_manifest
+
+    harness, bound_manifest = asyncio.run(exercise())
+
+    assert harness.gateway.calls == []
+    assert bound_manifest is None
 
 
 @pytest.mark.parametrize("mode", ("schema_drift", "missing", "disabled"))
