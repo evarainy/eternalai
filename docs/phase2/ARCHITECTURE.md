@@ -100,12 +100,10 @@ EternalAI 是**部署在现有业务系统之上的 AI 工作操作系统**，�
 
 ### 4.1 已建成（有代码、有测试、有现场证据）
 
-`app/ports/` 下 15 个 Protocol 契约：
+`app/ports/` 的 Protocol 数量与完整清单以代码检索结果为准，避免在架构投影里复制会随实现增长而漂移的计数与枚举：
 
 ```text
-adapter │ auth │ capability_gateway │ capability_registry │ identity_mapping
-job_queue │ llm_provider │ policy_guard │ request_context │ response_envelope
-runtime │ secret_provider │ structured_output │ task_store │ trace
+rg '^class .+\(Protocol\)' app/ports
 ```
 
 对应实现分布在 `app/infra/`（adapters、auth、gateway、health、identity、job_queue、llm、observability、persistence、policy、sdui、security）与 `app/`（evaluator、execution_fabric、knowledge、memory、runtime、workflow、contracts、db、admin、api）。
@@ -114,9 +112,9 @@ runtime │ secret_provider │ structured_output │ task_store │ trace
 
 - **OA 只读全链**——两个 capability（`oa.list_pending_workflows`、`oa.list_system_messages`）从请求、真实身份、Gateway、Adapter、Evaluator、Trace 到响应；2026-08-13 完成真实内网现场验收（最小请求头、全新 Cookie 冷启动、两个 capability Live 指纹、真实浏览器 `/chat`）。
 - **认证与会话**——OA 登录、EternalAI Session Cookie、认证 Principal、CSRF（`Origin` + 固定自定义头）、fail-closed 401 重认证。
-- **SDUI 与 ResponseEnvelope**——`confirm_card` 的 `ui.payload` 固定四键，参数值零流入。
+- **SDUI 与 ResponseEnvelope**——`confirm_card` 的 `ui.payload` 键集合由 `app/runtime/models.py::ConfirmCardPayload` 唯一定义；架构投影不复制静态键数。参数值仅能按该合同的安全展示字段进入。
 - **Workflow 执行**——`WorkflowEngine`（`app/workflow/engine.py`）含 checkpoint、resume、条件分支、confirmed capability 校验。
-- **Trace / Evidence / Golden**——Golden Gate 27 题（negative 16、positive 11），凭证扫描 pattern 七条。
+- **Trace / Evidence / Golden**——现役 Golden Gate 结果只见 `docs/phase2/STATUS.md`，冻结题目 ID 只见 `scripts/golden_task_evaluator.py::FROZEN_GT_IDS`；两者口径不同，不在本文件固化题数。凭证扫描规则以现役实现与测试为准。
 
 > 具体基线数字见 `docs/phase2/STATUS.md`；已完成棒见 `git log --grep='phase2('`。
 
@@ -152,17 +150,17 @@ runtime │ secret_provider │ structured_output │ task_store │ trace
 | `AgentOrchestrationPort` | 蓝图 §6.11、L2373 / L2402 / L2403 | `app/ports/` 下不存在 | 隔离第三方 agent 编排框架；蓝图 §6.11 原文：「无论是否引入 PydanticAI，都必须通过 LLMProviderPort / StructuredOutputPort / AgentOrchestrationPort 隔离」 |
 | `WorkflowEnginePort` | 蓝图 L2373 / L2402 / L2403 | `app/ports/` 下不存在；`WorkflowEngine` 是具体类，无 Protocol 抽象 | 隔离工作流引擎实现 |
 
-**为什么这两个接缝是当前最紧的前置**：按 2026-08-17「蓝图优化的落地顺序（四步走）」，路线是 `修文档漂移 → 内网真实 smoke → 修工具描述 → 留孔 + 装现成组件`。前两步已完成，当前落在第三步；「留孔」就是补这两个接缝。装第三方执行内核之前必须先有接缝，否则框架类型会长进业务代码——框架下次改 API 时改的是业务逻辑，想换第二家的成本比第一次更高。**第三步是第四步的前置，不能对调。**
+**这两个接缝仍是装第三方执行内核之前的架构前置，但不是现役 P2 收口前置**：`P2-PORT-SEAM-001` 当前属于机会层；P2 必达阻塞只见 `docs/phase2/STATUS.md`，排期只见 `docs/phase2/PHASE2_PLAN.md`。2026-08-17「蓝图优化的落地顺序（四步走）」中「先留孔、再装现成组件」的依赖关系继续有效：没有接缝就引入框架，会让框架类型长进业务代码。
 
 补接缝是把蓝图欠的账补上，不是新增架构，因此不构成新的架构停点。
 
 ---
 
-## 5. Work Object 层：一层全新的、代码中零存在的枢纽
+## 5. Work Object 层：已落地的跨系统工作枢纽
 
 ### 5.1 实况
 
-对 `app/` 与 `web/src/` 全量检索 `work_object` / `workobject` / `work_candidate` / `workcandidate` / `skillcandidate`（大小写不敏感），**零命中**。
+Work Object 最小真实纵切已经落地：持久化契约见 `app/ports/work_object.py::WorkObjectStorePort`，应用服务见 `app/api/v1/work_objects.py::WorkObjectService`，完成态见 `docs/phase2/PHASE2_PLAN.md`。`WorkCandidate` 仍按 2026-08-19 裁决留位不实现；这不等于 Work Object 层不存在。
 
 ### 5.2 现有 `TaskRecord` 为什么扮演不了这一层
 
@@ -210,31 +208,20 @@ task_id │ session_id │ ai_user_id │ status │ trace_id │ capability_id 
 
 ## 6. 前端：现状与目标
 
-### 6.1 现状（精确清单）
+### 6.1 现状（权威指针）
 
-`web/src/` 下非生成、非测试的源文件共 11 个：
+`web/src/` 的非生成、非测试源文件与 Orval 客户端分组均以目录实际内容为准，不在架构投影里复制会随纵切增长而漂移的文件数和完整枚举。现役代码已包含 Work Object 页面、OA 凭证绑定、确认卡与记录列表组件，以及 Runtime 投影和 User Action outcome 合同；生成客户端只见 `web/src/generated/`。
 
-```text
-App.tsx │ main.tsx
-pages/          LoginPage │ ChatPage │ HealthPage │ loginNavigation.ts
-pages/admin/    BindingsPage │ RegistryPage │ TasksPage │ registryValidation.ts
-components/     RoleSelector
-stores/         authStore │ roleStore
-api/            mutator.ts │ mockHealth.ts
-```
-
-Orval 生成的客户端四组：`auth` / `runtime` / `admin` / `admin-trace`（`web/src/generated/`）。
-
-已装依赖（`web/package.json`）：
+关键直接依赖如下；完整清单与版本范围只见 `web/package.json`：
 
 | 类别 | 已装 |
 |---|---|
 | 运行时 | `react` 18 · `react-dom` 18 · `antd` 6.6.1 · `@tanstack/react-query` 5 · `zustand` 5 · `react-router-dom` 6 |
 | 开发 | `vite` 6 · `vitest` 3 · `orval` 7 · `typescript` 5.6 · `eslint` 9 · `jsdom` 25 |
 
-**已定但未装**（在 `web/package.json`、`package-lock.json` 和 `web/src/` 中均零出现）：
+**已定但尚未作为直接依赖写入 `web/package.json`**：lockfile 可能因传递依赖或 optional peer 出现同名包，不能据此冒充已获直接依赖授权；实际安装仍须服从依赖治理与承接任务范围。
 
-| 未装项 | 已由哪条决定要求 |
+| 目标项 | 已由哪条决定要求 |
 |---|---|
 | `@ant-design/x` 2 | `DECISIONS.md` 2026-08-18「前端技术栈与多 Surface 渲染的衔接」——承载「AI 共事界面」的对话壳 |
 | `@rjsf/antd` / `@rjsf/core` / `@rjsf/utils` / `@rjsf/validator-ajv8` 6.7.x | 同上——承载结构化表单（能力入参、事项工作室字段编辑） |
@@ -330,7 +317,7 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 其中最值得记的一条佐证在 §11.4「禁止依赖规则」：`UI 不得直接调用 Tool / Workflow / Adapter`——这条 Phase 0 写下的禁令，与 2026-08-18「聊天只做卡片路由，不承载自由文本执行」「插槽式模块边界」是同一条线，隔了一整个阶段后仍然对齐。
 
-### 7.3 端口对照：蓝图 25 个「必须保留的端口」vs 现有 15 个
+### 7.3 端口对照：蓝图 25 个「必须保留的端口」vs `app/ports/` 现役契约
 
 蓝图 §11.2 L2367-L2395 列出必须保留的端口。逐个对照 `app/ports/`：
 
@@ -350,19 +337,21 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | `WorkflowEnginePort` | **缺** | 见 §4.3；`WorkflowEngine` 是具体类，无 Protocol |
 | `MemoryPort` | **缺** | `app/memory/session_memory.py::SessionMemory` 是具体类，无 Protocol |
 | `EvaluationPort` | **缺** | `app/evaluator/` 下无 Protocol；`TerminalEvaluator` 是具体类 |
-| `CredentialBindingPort` | 无独立端口 | binding 语义在 `app/ports/auth.py` 内（`SessionBindingError` 等）；**是否需要独立端口待判**，不默认列为缺口 |
-| `HumanGatePort` | 无独立端口 | confirm 语义分布在 `policy_guard` 的 `confirm` 决策值与 `response_envelope` 的 `ConfirmCard`；**是否需要独立端口待判** |
+| `CredentialBindingPort` | **已有独立契约组** | `app/ports/credential_binding.py::CredentialBindingStorePort`、`CredentialBindingVerifierPort` 等按职责拆分 |
+| `HumanGatePort` | **已有** | `app/ports/human_gate.py::HumanGatePort` |
 | `LocalWorkerPort` | **缺** | 本地 capability provider 已定方向（见 §6.5），端口未建 |
 | `VectorStorePort` / `EventBusPort` / `ObjectStoragePort` | 缺 | 后期阶段项，非当前缺口 |
 | `DocumentWorkerPort` / `RPAWorkerPort` / `IoTConnectorPort` / `AgentInteropPort` | 缺 | Phase 3+ 项，非当前缺口 |
 
-现有但蓝图未列的五个：`auth` / `request_context` / `response_envelope` / `runtime` / `task_store`——这些是实现过程中形成的本地契约，不与蓝图冲突。
+现役代码还包含蓝图未逐名列出的本地契约；完整集合只见 `app/ports/` 及其中的 Protocol 声明。这些契约是实现过程中按职责形成的，不因未出现在蓝图枚举中而构成冲突。
 
-**读这张表的正确方式**：`25 − 15 = 10` 不是待办数量。真正与当前阶段相关的只有前四个缺口（`AgentOrchestrationPort`、`WorkflowEnginePort`、`MemoryPort`、`EvaluationPort`）加 `LocalWorkerPort`；其余属 Phase 3+ 或后期阶段项，列在这里是为了说明「为什么现在不做它们」，不是为了排进 DAG。
+**读这张表的正确方式**：蓝图端口名与代码 Protocol class 不是一一对应，不能用两边计数相减推导待办。仍与后续阶段相关的缺口是 `AgentOrchestrationPort`、`WorkflowEnginePort`、`MemoryPort`、`EvaluationPort` 与 `LocalWorkerPort`；它们是否进入当前 DAG 只见 `docs/phase2/PHASE2_PLAN.md`。
 
-### 7.4 七条缺口
+### 7.4 2026-08-19 对照时记录的七条缺口
 
-「缺口」= 蓝图提出了要求，而 `DECISIONS.md` 与 `app/` 现有代码**都没有对应承载**。
+> 历史提示：下表保留 2026-08-19 对照时的问题快照与分类，不是现役缺口计数。现役实现、范围与排期分别只见代码、`docs/phase2/STATUS.md` 和 `docs/phase2/PHASE2_PLAN.md`。
+
+「缺口」在当时的判据是：蓝图提出了要求，而当时的 `DECISIONS.md` 与 `app/` 代码都没有对应承载。
 
 | # | 缺口 | 蓝图出处 | 现状 |
 |---|---|---|---|
@@ -374,7 +363,7 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | G-6 | **Workflow / Skill / Tool / Prompt / Policy 版本锁定**：Task 启动时绑定版本，执行中不得自动切换，新版本只对新 Task 生效，用户确认时展示的预览必须与实际执行版本一致 | §10.4 | 决定组要求确认绑定卡片版本，但未覆盖 Task 启动后的**整体版本锁定**；`app/` 无统一锁定合同 |
 | G-7 | **User Profile Memory 与 Semantic Memory 增强**（蓝图明确列为 Phase 2 交付项） | §13 L2715 | 同 G-4；`P2-MEMORY-001` 已在 DAG 中且标 BLOCKED（数据边界/语料） |
 
-**G-6 值得单独一句**：它与不变量 3「引用不传递权限」是同一个安全面的另一半。引用不传递权限防的是「卡片被转发后被别人点」，版本锁定防的是「用户按 v1 确认、系统执行 v2」。前者已裁决，后者目前无任何承载——而低风险写入（`P2-LOW-RISK-WRITE-001`）正是最需要它的那一棒。
+**G-6 的当时判断值得保留**：它与不变量 3「引用不传递权限」是同一个安全面的另一半。引用不传递权限防的是「卡片被转发后被别人点」，版本锁定防的是「用户按 v1 确认、系统执行 v2」。现役代码已由 `app/ports/human_gate.py` 的不可变 Task 版本绑定合同及 Runtime / Workflow 接线承载，`P2-CONFIRM-BINDING-001` 已完成；因此 G-6 不再是现役缺口。
 
 ---
 
@@ -388,6 +377,8 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 **裁决结果**（权威正文见 `DECISIONS.md` 2026-08-19 的六条，本表只是索引）：
 
+> 历史提示：下表记录 2026-08-19 当时的裁决结果、落点、任务状态与「下一棒」指针，不是今天的排期表。现役指针只见 `docs/phase2/STATUS.md` / `docs/phase2/PHASE2_PLAN.md`。
+
 | # | 裁决 | 落到哪 |
 |---|---|---|
 | D-1 | Work Object 建最小真实纵切，但**首个来源 OA 待办直通 Work Object，不经 `WorkCandidate`**；后者留位不实现 | `P2-WORK-OBJECT-001`（BLOCKED 于同步策略，见 §8.3 V-5） |
@@ -398,7 +389,9 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | D-6 | 薄查询层**不独立成棒**；Work Object 首版列表不做服务端分页排序，数据量上限进验收条件 | 并入 `P2-WORK-OBJECT-001` |
 | D-7 | 下一棒 `P2-PORT-SEAM-001`；`STATUS.md` 与 `PHASE2_PLAN.md` 两处指针已对齐 | 本次 GOV-SYNC |
 
-**另有一项在裁决过程中新发现、尚未裁决**：Work Object 与 OA 的状态同步策略（见 §8.3 V-5）。它决定 Work Object 有哪些字段，是 `P2-WORK-OBJECT-001` 的开工前置。
+其中 D-1 行的 `BLOCKED` 是裁决当时状态；同步策略随后已裁决，`P2-WORK-OBJECT-001` 也已完成。
+
+**裁决过程中发现的 Work Object 与 OA 状态同步策略，已于 2026-08-19 裁决**：权威正文见 `DECISIONS.md` 同日条目，§8.3 V-5 保留解除记录。
 
 以下为裁决前的原始描述，保留以便追溯当时的问题陈述：
 
@@ -412,17 +405,19 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | D-6 | **工作台薄查询层的归属** | ProComponents 已移出基线，工作台表格需先建「antd 6 原生 `Table` + 项目自有薄查询层」，该层目前不存在，2026-08-18 决定称其为「并进后的第一项前置」。**是独立一棒还是并进工作台首棒，未定**。 |
 | D-7 | **`docs/phase2/PHASE2_PLAN.md` 的「下一棒」指针** | 当前留空待裁决。上一棒未自行挑选后继是合规的（实现棒不得自选）。**必须由 GOV-SYNC 裁定**。 |
 
-### 8.2 不需裁决，只等排期或解除 BLOCKED
+> 现役校正（不改写上述原始问题）：Work Object 已完成，当前唯一必达阻塞是 OA 低风险写入协议；`P2-PILOT-OPS-001` 的拆分与 DAG 重排已写入 `PHASE2_PLAN.md`。`HumanGatePort`、凭证绑定契约组和不可变版本绑定也已落地。现役状态与 DAG 仍只见 `STATUS.md` / `PHASE2_PLAN.md`。
+
+### 8.2 其余项的现役处置
 
 | # | 项 | 状态 |
 |---|---|---|
 | E-1 | G-4 / G-7 Memory 六层与 User Profile | `P2-MEMORY-001` 已在 DAG，BLOCKED 于数据边界/语料 |
 | E-2 | G-5 Skill CI/CD 完整生命周期 | P2 只做到 `SkillCandidate` 人工登记（已拍板），完整生命周期属 Phase 3/4 |
-| E-3 | 前端四项已定未装依赖（`@ant-design/x`、RJSF 四包、`@ant-design/icons`、`msw`） | 装哪个由承接该表面的棒决定，硬约束已就地固化（§6.4） |
+| E-3 | 前端四类目标依赖（`@ant-design/x`、RJSF 四包、`@ant-design/icons`、`msw`）尚未作为直接依赖写入 `web/package.json` | 装哪个由承接该表面的棒决定，硬约束已就地固化（§6.4）；lockfile 的传递/optional peer 命中不构成直接依赖授权 |
 | E-4 | G-1 Local Worker 信任模型 | 本地 provider 方向已定，但 Excel / 本地文件场景尚未排期 |
 | E-5 | G-2 Trace / Evidence / Raw Payload 三层 | 已列「待独立 ADR 承接」，属后期治理合同 |
-| E-6 | G-3 `evaluation_mode` 逐能力声明 | 与 `P2-GOLDEN-001` 同一评测面，可合并考虑 |
-| E-7 | `P2-DB-GATEWAY-001` | BLOCKED 于 DBA/业务批准视图 |
+| E-6 | G-3 `evaluation_mode` 逐能力声明 | `P2-GOLDEN-001` 已完成且未实现该合同；后续是否立项只见现役 PLAN，不得再并入已完成棒 |
+| E-7 | `P2-DB-GATEWAY-001` | 已移出 P2；后续出现真实直连需求时再另立项 |
 | E-8 | 第二个真实 Adapter | 待选，首个已现场结项 |
 
 ### 8.3 需要先核实的未验事项
@@ -440,6 +435,6 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 - 本文件**没有**覆盖蓝图 §1、§2、§4、§5、§7、§8（除 §8.4）、§12、§14、§15。§12 / §15 此前已对照，其余章节本轮未纳入。
 - 本文件**没有**对 §8.2 中任何一项排序或估算工作量——那是第③步的事。
-- 本文件**没有**新增任何决定。§8.1 的七项全部是待裁决项，不是结论。
+- 本文件**没有**新增任何决定。§8.1 的原始七项在 2026-08-19 对照时是待裁决问题；现已裁决的结果与历史原始描述均保留在该节，权威正文仍只见 `DECISIONS.md`。
 
 ---
