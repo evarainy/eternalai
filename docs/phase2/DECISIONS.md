@@ -1467,6 +1467,10 @@ access token、refresh token 或其他凭证放入任何获准字段；值层 ma
 `link` / `mobile_link` 的 URL 安全与导航合同仍由 `P2-SDUI-RENDERER-002` 单独裁决；本棒不得提前赋予
 导航语义。
 
+> 后续进展（不改写上段原文）：该导航合同已于 2026-08-30 由本文件「裁决：SDUI 导航、跨语言合同与两棒排期」
+> 裁定，`P2-SDUI-RENDERER-002` 此后是该合同的**实现方**而非裁决方。上段「获准进入 `ResponseEnvelope`
+> 不等于获准渲染成 `href`」的渲染边界继续有效。
+
 **后续演进**：若将来出现“规范化输出中必须存在、但不得进入 `ResponseEnvelope`”的真实字段，
 必须先以新的 ADR 明确推翻本条单合同不变量，再设计类型化展示模型及其同步机制；在此之前不得私设
 第二份字段清单。
@@ -1529,3 +1533,123 @@ sentinel required check，或增加只汇总安全摘要的最终 required check
 
 **影响面**：`P2-OA-ORGANIZATION-DIRECTORY-001` 范围缩小，仍属机会层、不阻塞 P2 收口；
 其采集件前置解除。不改变任何生产代码、公共契约或凭证边界。
+
+## 2026-08-30 — 裁决：SDUI 导航、跨语言合同与两棒排期
+
+**决定**：
+
+1. **OA 消息链接按部署白名单安全导航。** 候选只接受绝对 HTTP(S) URL 或安全的根相对路径；
+   允许的 scheme 闭集是 `http:`、`https:`。`http:` 不是全局放行：只有白名单中显式以 `http:`
+   登记且规范化 origin 完全相等的目标才通过。本项目 OA 现役为内网明文 HTTP，一刀切禁止
+   `http:` 会让真实链接永久不可达；同一 host 的 HTTP 与 HTTPS 也不得互相替代授权。
+
+   可信 OA 基准必须与 `app/config.py::ProductionSettings.oa_base_url` 同源派生，不得从 OA 记录的
+   `link` / `mobile_link`、`app/contracts/sdui/models.py::ResponseEnvelope.data`、`window.location`
+   或自由文本 `ENV` 标签反推。白名单配置缺失或任一项非法时，导航策略整体 fail-closed；根相对候选
+   无法绑定到唯一可信 OA 基准时拒绝，不得取数组第一项，也不得把 `/` 当默认通配。候选经 URL 解析与
+   规范化后，必须同时满足 `candidate.origin === allowed.origin`，以及
+   `candidate.pathname === prefix` 或 `candidate.pathname` 以 `prefix + "/"` 开始；只有显式配置的
+   `/` 才代表该 origin 的全部路径。不得对原始 URL 做 host 或整串前缀比较。
+
+   当前桌面端只给 OA `link` 导航语义，不以 `mobile_link` 回退。拒绝链接能力时，
+   `web/src/components/RecordsList.tsx::RecordsList` 仍展示记录正文和业务信息，不渲染 anchor、原始 URL
+   或点击能力；非空但不可信、OA 未提供链接、部署未配置可信 OA 地址三类状态分别说明原因，并给出“到 OA
+   消息中心查找或联系管理员”的下一步。允许链接显示“去 OA 查看（新窗口）”，固定在新窗口打开，使用
+   `noopener noreferrer`，点击目标不小于 44×44 CSS px，不增加业务提交式二次确认。
+
+2. **`payload.target_system` 的闭集只有一份值权威。**
+   `app/ports/capability_registry.py::CapabilityTargetSystem` 是后端值集合单一权威；
+   `app/contracts/sdui/models.py::TargetSystem` 直接复用它，FastAPI OpenAPI 与 Orval 依次派生前端运行时值
+   和 TypeScript 类型；`web/src/contracts/runtimeProjection.ts::targetSystems` 与
+   `web/src/contracts/runtimeProjection.ts::TargetSystem` 两份手写权威必须消失。
+   `web/src/contracts/runtimeProjection.ts::projectConfirmCard` 对未知 payload target，以及非空
+   `ui.target_system` / `payload.target_system` 不一致，均 fail-closed 为不可操作确认卡；
+   `web/src/pages/ChatPage.tsx::targetSystemLabels` 只承担穷尽的用户可见名称映射，不成为值权威。
+
+3. **记录计数不一致时展示已验证行，同时明确声明不完整。**
+   `web/src/contracts/runtimeProjection.ts::projectPendingWorkflows` 与
+   `web/src/contracts/runtimeProjection.ts::projectSystemMessages` 只接受非负 safe integer 计数；
+   `is_complete !== true`、`returned_count !== items.length`，以及待办的
+   `authoritative_count !== returned_count` 任一成立即为不完整。合法记录继续进入
+   `web/src/contracts/runtimeProjection.ts::RecordsView`；`web/src/components/RecordsList.tsx::RecordsList`
+   必须醒目标明“列表可能不完整”，展示已取回数量、可得时的权威数量，并给出“到 OA 查看完整列表或稍后重试”
+   的下一步。零行但完整性或计数表明应有数据时，不得伪装成正常空状态。该降级结果不得支撑批量动作、
+   全量统计或“全部已处理”结论；组织目录既有的整批 fail-closed 合同不因此放宽。
+
+4. **两处开放 object 收敛为实际接线的具名 exact 合同。**
+   `app/api/v1/runtime.py::handle_action` 必须导出区别于普通 `/handle` 的具名 Action data schema，
+   其外层固定为且只可为两个 required 键
+   `{action_outcome, result}`，显式 `additionalProperties: false`；顶层仍使用
+   `app/contracts/sdui/models.py::ResponseEnvelope`。动态 `result` 只允许承载
+   `app/runtime/response_projection.py::project_response_data` 按
+   `app/ports/capability_registry.py::CapabilitySpec.output_schema` 投影后的结果，再由
+   `app/runtime/runtime.py::RuntimeImpl._finish_user_action_attempt` 装入两层 data，不得把开放 OpenAPI
+   当作绕过投影的授权。
+
+   `app/runtime/models.py::ConfirmCardPayload` 收敛为接入
+   `app/contracts/sdui/models.py::ConfirmCard` 的具名 exact 合同；required 键固定为
+   `capability_id`、`operation_summary`、`target_system`、`field_names`、
+   `displayed_argument_values`，外层显式 `additionalProperties: false`。其中只有
+   `displayed_argument_values` 的键集合动态，值仍必须是 string；confirm component 不得再由
+   `app/contracts/sdui/models.py::UIComponent` 的通用 payload 分支绕过 exact 合同。
+
+   指纹与摘要按真实传导面处理：Runtime OpenAPI 和 Orval 生成物应随 schema 元数据变化；
+   `app/runtime/runtime.py::_confirm_card_payload` 的五键实际值会作为 `preview` 进入
+   `app/version_binding.py::immutable_request_digest`。因此只改类型/schema、wire 五键和值不变时摘要不变；
+   序列化后增加默认键、丢失 `null`、改变 alias 或嵌套值时摘要会变化。实现必须守住固定五键 dict 的 wire
+   等价与请求摘要兼容，不能只按符号引用盘点传导面。
+
+5. **outcome 防漂移守长度、唯一性与集合，不守顺序。**
+   `tests/contracts/test_user_action_outcome_sync.py::test_frontend_user_action_outcomes_match_runtime_port`
+   必须同时守前端原始序列唯一、`app/ports/runtime.py::UserActionOutcome` 原始序列唯一、两侧长度相等、
+   两侧集合相等。顺序没有 wire 语义，单纯重排不应失败；重复值必须失败。
+
+6. **两根 SDUI 棒固定串行。** 顺序唯一为
+   `P2-SDUI-SCHEMA-001 → P2-SDUI-RENDERER-002`；Renderer 必须消费 Schema 已合入的
+   `app/contracts/sdui/models.py::TargetSystem`、`app/runtime/models.py::ConfirmCardPayload` 与生成物合同，
+   不得在旧开放合同上先行建立双轨兼容。
+
+7. **`P2-FE-WORKBENCH-001` 可与上述串行 SDUI 链并行，但文件 ownership 固定分离。**
+
+   - Workbench 独占 `web/src/App.tsx::AppShell`、`web/src/__tests__/App.test.tsx`、
+     `web/src/pages/ChatPage.tsx::ChatPage`、`web/src/pages/ChatPage.module.css`、
+     `web/src/pages/__tests__/ChatPage.test.tsx`、`web/src/pages/WorkObjectsPage.tsx::WorkObjectsPage`、
+     `web/src/pages/__tests__/WorkObjectsPage.test.tsx`、`web/src/styles.css`、
+     `web/src/test/LightweightTable.tsx`，以及其 Scope 明列的新建 AppShell、Dock store/组件与薄查询层文件。
+   - SDUI 串行链独占 `web/openapi/runtime.openapi.json`、`web/src/generated/runtime/`、
+     `web/src/api/__tests__/apiClientsOpenapi.test.ts`、`web/src/contracts/runtimeProjection.ts`、
+     `web/src/contracts/userActionOutcome.ts`、`web/src/components/RecordsList.tsx::RecordsList`、
+     `web/src/components/ConfirmCard.tsx::ConfirmCard`、`web/src/components/RuntimeViews.module.css`、
+     `app/contracts/sdui/models.py`、`app/api/v1/runtime.py::handle_action`、
+     `app/runtime/models.py::ConfirmCardPayload`、
+     `tests/contracts/test_user_action_outcome_sync.py::test_frontend_user_action_outcomes_match_runtime_port`、
+     `tests/contracts/sdui/test_response_envelope_contract.py` 及 confirm/action projection 的直接 Runtime 测试。
+     若 Renderer 采用构建期或静态注入可信 OA 配置，实际选定的 `web/vite.config.ts`、
+     `web/src/__tests__/viteConfig.test.ts` 或 `web/index.html` 载体也归 SDUI 链独占。
+   - 并行期间 `docs/phase2/STATUS.md`、`docs/phase2/PHASE2_PLAN.md`、
+     `docs/phase2/DECISIONS.md` 的共享同步只由独立 GOV-SYNC 承担；实现棒不得跨围栏同步治理状态。
+
+   三项输入仍未获裁，不得写成已决：
+
+   - 现场 OA 合法路径前缀尚未固化；由部署负责人或 OA 管理员提供不含凭证的规范化 OA origin 与获批路径
+     前缀。未提供时保持无链接 fail-closed，不得以 `/` 代替输入。
+   - Web 配置注入载体尚不存在；由 Web 构建/部署负责人会同后端配置负责人确定与
+     `app/config.py::ProductionSettings.oa_base_url` 同源的非秘密载体，不得改由 OA 业务响应下发可信基准。
+   - 具名 schema 的具体 Pydantic 写法未指定；由 `P2-SDUI-SCHEMA-001` 实现者在上述 wire、OpenAPI、
+     exact-key、不可绕过与摘要兼容合同内提出并落地，所需 A 档 Review 核验合同结果；技术写法不得反向改写
+     已裁 wire 语义。
+
+**理由**：外部 OA 值只有经过部署信任基准、规范化 origin 与路径段边界共同授权后才具备导航语义；
+这既阻止 host 后缀嫁接和路径前缀混淆，也保留现役内网 HTTP OA 的真实可达性。后端闭集经
+OpenAPI / Orval 单向派生，避免三份字面量分别漂移。具名 exact 外层把稳定协议传播给跨语言消费者，
+同时保留经过 `app/ports/capability_registry.py::CapabilitySpec.output_schema` 投影的动态业务结果。
+计数降级保留已验证记录的即时价值，
+但不把部分结果伪装成完整集合。Schema 先于 Renderer 消除 producer / consumer 合同竞争；与 Workbench
+按文件围栏并行则避免 `web/src/App.tsx::AppShell`、`web/src/pages/ChatPage.tsx::ChatPage` 与
+`web/src/components/RecordsList.tsx::RecordsList` / `web/src/components/ConfirmCard.tsx::ConfirmCard`
+发生双写。
+
+**影响面**：`docs/phase2/PHASE2_PLAN.md` 中两条欠债由“无人裁决”改为已裁、待实现，并将现役 DAG 固定为
+`P2-SDUI-SCHEMA-001 → P2-SDUI-RENDERER-002`；`P2-FE-WORKBENCH-001` 与 SDUI 链遵守上述文件围栏。
+早先裁决中“当时待裁”的文字保留为历史事实，不回写历史正文。逐条可判定判据与反证方法由承接棒启动提示词
+承载，不作为长期治理合同重复固化。
