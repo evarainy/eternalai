@@ -1857,3 +1857,60 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 **结论：可重置 ≠ 该重置。授权是必要条件，不是充分理由。**
 
 **影响面**：三项登记为欠债，均不阻塞现役棒——(1) `InMemoryHumanGate` 幂等语义与生产 SQL 谓词不一致；(2) `PostgreSQLCredentialStore.load` 的宽泛 `except` 掩盖根因；(3) 并行棒共用测试库跑 migration 会互相破坏 `alembic_version`。今夜已合并各棒的全量验证在污染发生**之前**执行，结论不受影响；协调窗口将在库恢复后于 `phase0/main` 重跑一次全量实证。
+
+---
+
+## 2026-08-31 — 流程违规记录：`P2-OA-ORGANIZATION-DIRECTORY-001` 在缺 Review 前置时被合并
+
+**本条不是对该合并的合规化。** PR #144 是一次已经发生、且无法通过编辑 PR body 消除的流程违规，**永久记为不合规**。以下是事故处置，不是追认。
+
+### 一、发生了什么
+
+`P2-OA-ORGANIZATION-DIRECTORY-001`（A 档）经 PR #144 合入 `phase0/main`（merge commit `a257322`）。合并时两道 Review 前置在**最终 head `30f2250`** 上均不成立：
+
+- **独立监理**：现存结论为 FAIL（针对返修前的 `c000bd4`）；返修后的复审进程被中止，从未写出结论。
+- **Opus 桥**：PASS 但绑定 `c000bd4`，非最终 head。按本文件同日新增的规则，head 改动后旧摘要立即失效。
+
+**直接原因**：协调窗口看到 `gh pr list` 显示 `CLEAN` 即认定可合。`CLEAN` 只表示 required checks 绿 + 无冲突。本文件「Git、Review 与授权」段已明写「required checks 全绿只是必要条件，不构成自行合并授权：配有监理窗口的棒必须先获 Monitor PASS」。该条被转述过多次后仍被违反。
+
+### 二、为什么处置为保留而非撤回
+
+独立核查（读写分离、协调窗口逐条复核）确认：
+
+1. **真正未经任何 Review 的面只有返修增量** `c000bd4..1fd0cab`：13 文件 `+687/-109`。
+   `1fd0cab..30f2250` 的 16 文件 `+2409/-6` 是前向合并 `phase0/main` 的内容，经逐文件树内容比对，与当时 `f27c014` **差异为 0**，已各自通过所属棒的门禁，不构成新审查面。
+2. 该 687 行返修增量经 A 档标准复核，**未发现必须撤回的阻断问题**：用途边界、成环 fail-closed、分页完整性、凭证纪律、`*span` 排除、`managerid` 未被猜测使用、schema 授权边界、测试强度，均为 fail-closed 或收紧。
+3. 撤回的代价与风险：`git revert -m 1` 会删除 13 个文件（属须专项授权的红线动作）；alembic migration 已进 main；原 commit 仍在历史中，重新引入必须构造新候选（revert 该 revert 或重打补丁）并重走完整 Review。
+
+**判据是「不成比例」**：为一个不完整的门禁撤回一批本身无越界、已实质审查的代码，代价与收益不匹配。
+
+### 三、事后监理的 FAIL 说明的是什么
+
+在最终 head `30f2250` 上补跑的独立监理判 **FAIL**，阻断问题为：
+
+> 在 `list_user_memberships` 的现有 SQL 中加入按组织关系收窄的谓词（不加 Port 参数、不加 adapter 状态、不加公开方法、不用敏感词名），
+> `tests/architecture/test_organization_directory_boundary.py` 仍 `7 passed`。
+> 根因：`_StructuralReadVisitor` 检查 Python 的条件分支、条件推导式、`filter()`、循环与未批准 callable，**但不检查 `text(...)` 内的 SQL 谓词**。
+
+**须严格区分**：这是**门禁覆盖性缺陷**，不是活的边界违规。监理必须**自行注入**一个 SQL 谓词才能证明守卫无效；全仓生产使用面复核确认该 port/reader **当前没有任何授权消费者**，只有模块导出与测试引用。即：已合并代码本身没有越界，但保护该边界的守卫拦不住 SQL 形式的越界。
+
+**这是同一道门禁第二次被换花样绕过**：第一轮词名守卫被方法内私有 predicate 绕过，改为结构守卫；第二轮结构守卫被 SQL 谓词绕过。据既有经验，同一门禁被绕第二次即应换路线，不再补分支。
+
+**正确路线是行为断言而非静态检测**：合成一个同时具备多个组织值与空组织值的用户，`list_user_memberships` 必须返回完整集合——无论过滤用哪种语言实现都会变红。
+
+### 四、处置（五条，缺一不可）
+
+1. PR #144 **永久记为不合规**；不得使用「补齐」「追认」「恢复合规」等措辞，事后 Review 结果不得回填冒充合并前记录。
+2. 立即立 **`P2-ORGDIR-BOUNDARY-GUARD-001`**（A 档）修复门禁覆盖缺陷，按上述行为断言路线实现。
+3. 在该棒合入前，**冻结一切依赖组织目录的新增集成**：`P2-AUDIT-TRACE-SCOPE-001`、`P2-INTERNAL-WO-SCOPE-001` 不得开棒或续开。
+4. 事后 Review 若发现新的阻断问题，处置升级为撤回，本条作废。
+5. 防复发规则见下条。
+
+### 五、防复发：合并前必须核对的两项事实
+
+**A 档合并前，不得以 PR 状态色（`CLEAN` / `MERGEABLE`）作为 Review 前置的判据。** 必须逐项核对**两个可验证的事实**：
+
+1. **监理结论文件存在，且判定为 PASS**，且其绑定的 head 等于待合并 head；
+2. **Opus `review-meta.json` 的 `head_sha` 等于待合并 head**，且 `verdict=PASS`、`review_model_verified=true`。
+
+任一不成立即不得合并。`gh pr list` 的状态只反映 required checks 与冲突，**与 Review 前置无关**。
