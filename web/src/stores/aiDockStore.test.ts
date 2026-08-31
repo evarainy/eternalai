@@ -71,18 +71,20 @@ describe('temporary AI Dock state', () => {
     ]);
   });
 
-  it('registers atomically and keeps the previous context when validation fails', () => {
+  it('fails closed without throwing when page-context validation fails', () => {
     useAIDockStore.getState().registerPageContext(validPageContext());
-    const accepted = useAIDockStore.getState().pageContextDeclaration;
 
     expect(() =>
       useAIDockStore.getState().registerPageContext({
         ...validPageContext(),
         page_snapshot: { synthetic: 'value' },
       }),
-    ).toThrow();
+    ).not.toThrow();
 
-    expect(useAIDockStore.getState().pageContextDeclaration).toBe(accepted);
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+    expect(useAIDockStore.getState().contextNotice).toBe(
+      '当前页面上下文不可用；AI 不会读取本页数据。',
+    );
   });
 
   it('starts a visible new session when page context returns after being absent', () => {
@@ -116,18 +118,31 @@ describe('temporary AI Dock state', () => {
     expect(
       useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
     ).toEqual([]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.source_refs,
+    ).toEqual([]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.allowed_capabilities,
+    ).toEqual([]);
     expect(useAIDockStore.getState().sessionId).toBe(
       '22222222-2222-4222-8222-222222222222',
     );
   });
 
-  it('keeps a general session free of work-object refs after page re-registration', () => {
+  it('keeps a general conversation when page-bound values change', () => {
     useAIDockStore.getState().registerPageContext(validPageContext());
     useAIDockStore.getState().startNewSession();
+    const generalSessionId = useAIDockStore.getState().sessionId;
+    useAIDockStore.getState().appendTranscript({
+      role: 'user',
+      text: '继续通用会话',
+    });
 
     useAIDockStore.getState().registerPageContext({
       ...validPageContext(),
       work_object_refs: [{ work_object_id: 'work-2' }],
+      source_refs: [{ source_system: 'oa', source_ref: 'OA-WF-002' }],
+      allowed_capabilities: ['oa.work.write'],
       freshness: { state: 'reported', observed_at: '2026-08-30T10:00:00Z' },
     });
 
@@ -135,6 +150,44 @@ describe('temporary AI Dock state', () => {
     expect(
       useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
     ).toEqual([]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.source_refs,
+    ).toEqual([]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.allowed_capabilities,
+    ).toEqual([]);
+    expect(useAIDockStore.getState().sessionId).toBe(generalSessionId);
+    expect(useAIDockStore.getState().transcript).toEqual([
+      { role: 'user', text: '继续通用会话' },
+    ]);
+  });
+
+  it('returns from a general session to page mode after leaving the page', () => {
+    useAIDockStore.getState().registerPageContext(validPageContext());
+    useAIDockStore.getState().startNewSession();
+
+    useAIDockStore.getState().clearPageContext('work-objects');
+
+    expect(useAIDockStore.getState().sessionContextMode).toBe('page');
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+
+    useAIDockStore.getState().registerPageContext({
+      ...validPageContext(),
+      work_object_refs: [{ work_object_id: 'work-2' }],
+      source_refs: [{ source_system: 'oa', source_ref: 'OA-WF-002' }],
+      allowed_capabilities: ['oa.work.write'],
+    });
+
+    expect(useAIDockStore.getState().sessionContextMode).toBe('page');
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
+    ).toEqual([{ work_object_id: 'work-2' }]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.source_refs,
+    ).toEqual([{ source_system: 'oa', source_ref: 'OA-WF-002' }]);
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.allowed_capabilities,
+    ).toEqual(['oa.work.write']);
   });
 
   it('fails closed into a new session when organization scope changes', () => {

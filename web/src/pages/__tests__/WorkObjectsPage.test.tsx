@@ -3,6 +3,7 @@ import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
+import { AIDock } from '../../app/AIDock';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type {
   InternalWorkObjectView,
@@ -116,12 +117,16 @@ function makeClient() {
   });
 }
 
-function renderPage(queryClient = makeClient()) {
+function renderPage(
+  queryClient = makeClient(),
+  { withDock = false }: { withDock?: boolean } = {},
+) {
   const rendered = render(
     <ConfigProvider theme={{ token: { motion: false } }}>
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <WorkObjectsPage />
+          {withDock ? <AIDock /> : null}
         </QueryClientProvider>
       </AntApp>
     </ConfigProvider>,
@@ -216,6 +221,51 @@ describe('WorkObjectsPage', () => {
     });
 
     page.unmount();
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+  });
+
+  it('keeps the page usable when OA freshness is not a UTC Z timestamp', async () => {
+    const invalidTimestampItem: OAWorkObjectView = {
+      ...WORK_OBJECT,
+      source_fetched_at: '2026-08-19T11:00:00+08:00',
+    };
+    const response = listResponse({ items: [invalidTimestampItem] });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
+
+    renderPage(makeClient(), { withDock: true });
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(
+      await screen.findByText('当前页面上下文不可用；AI 不会读取本页数据。'),
+    ).toBeVisible();
+    expect(screen.getByText('正在协助：未绑定页面上下文')).toBeVisible();
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+  });
+
+  it('keeps the page usable when an OA source reference matches a credential shape', async () => {
+    const credentialShapedSourceRef: OAWorkObjectView = {
+      ...WORK_OBJECT,
+      source_ref: '11010519491231002X',
+    };
+    const response = listResponse({ items: [credentialShapedSourceRef] });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.getWorkObject.mockResolvedValueOnce(credentialShapedSourceRef);
+    useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
+
+    renderPage(makeClient(), { withDock: true });
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
+    expect(
+      await screen.findByText('当前页面上下文不可用；AI 不会读取本页数据。'),
+    ).toBeVisible();
+    expect(
+      screen.getByRole('heading', { level: 1, name: '工作事项' }),
+    ).toBeVisible();
+    expect(screen.getByText('正在协助：未绑定页面上下文')).toBeVisible();
     expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
   });
 

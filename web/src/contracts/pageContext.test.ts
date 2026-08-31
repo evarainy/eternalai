@@ -180,9 +180,11 @@ describe('nine-field page context declaration', () => {
     ).toThrow(PageContextValidationError);
   });
 
-  it('creates a general context as a valid empty reference list, not an exception', () => {
+  it('creates a general context without page-bound references or capabilities', () => {
     const general = createGeneralPageContext(parsePageContext(validContext()));
 
+    expect(general.allowed_capabilities).toEqual([]);
+    expect(general.source_refs).toEqual([]);
     expect(general.work_object_refs).toEqual([]);
     expect(() => {
       const candidate: Record<string, unknown> = { ...general };
