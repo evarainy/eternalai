@@ -278,8 +278,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-WO-SEARCH-001` | P2-INTERNAL-WO-MODEL-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001 | **A** | 依赖未完成；Admin 四个读取面的跨租户反证是完成前置；第二租户硬前置 |
 | `P2-USER-ACTION-REJECT-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：reject/cancel 后 Task 终态待裁 |
-| `P2-AUDIT-READ-AUTHZ-001` | 无 | **A** | **是：可信目标租户来源未定，恢复路径待裁；首次开棒已零改动停手** |
-| `P2-AUDIT-TRACE-SCOPE-001` | P2-AUDIT-READ-AUTHZ-001 | **A** | **是：前棒 BLOCKED；Trace 表 schema 变更与历史行回填须两次独立专项授权，均尚未获得**；机会层，但为 `P2-TENANT-IDENTITY-001` 完成硬前置 |
+| `P2-AUDIT-READ-AUTHZ-001` | 无 | **A** | **是：不单独开棒**。2026-08-31 裁定与 `P2-AUDIT-TRACE-SCOPE-001` 合并交付——归属列落地前「同租户跨用户可读」与「跨租户不可见」不可能同时成立，单独交付会退化为「只能读自己」 |
+| `P2-AUDIT-TRACE-SCOPE-001` | P2-AUDIT-READ-AUTHZ-001 | **A** | 否：Trace 表 schema 变更与历史行回填**已于 2026-08-31 分别获得专项授权**（授权只覆盖 Trace 表，不外溢到 tasks / sessions / binding，见 `docs/phase2/DECISIONS.md`）；与前棒合并交付；为 `P2-TENANT-IDENTITY-001` 完成硬前置 |
 | `P2-FEEDBACK-LOOP-001` | 无 | **A（预判）** | 是：获批 Scope 未定义；机会层 |
 | `P2-MERGE-EVIDENCE-001` | 无 | **C** | 否；机会层 |
 | `P2-CONFIRM-DURABILITY-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：持久化/generation 合同尚未设计 |
