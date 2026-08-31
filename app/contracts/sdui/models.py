@@ -4,17 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from app.ports.capability_registry import CapabilityTargetSystem
-from app.runtime.models import ConfirmCardPayload
 
-UIComponentType: TypeAlias = Literal[
-    "none",
-    "confirm_card",
-    "operator_handback_card",
-    "binding_required_card",
-]
 UIAction: TypeAlias = Literal[
     "confirm",
     "bind_required",
@@ -29,6 +22,18 @@ ResponseEnvelopeStatus: TypeAlias = Literal[
     "failed",
     "no_capability_found",
 ]
+
+
+class ConfirmCardPayload(BaseModel):
+    """Runtime-owned payload contract for operation confirmation cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    capability_id: StrictStr
+    operation_summary: StrictStr
+    target_system: CapabilityTargetSystem | None
+    field_names: list[StrictStr]
+    displayed_argument_values: dict[str, StrictStr]
 
 
 class UIComponent(BaseModel):

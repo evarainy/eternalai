@@ -8,10 +8,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.contracts.sdui.models import ResponseEnvelope, TargetSystem
+from app.contracts.sdui.models import ConfirmCardPayload, ResponseEnvelope, TargetSystem
 from app.main import create_app
 from app.ports.capability_registry import CapabilityTargetSystem
-from app.runtime.models import ConfirmCardPayload
 
 
 def _confirm_payload(**updates: Any) -> dict[str, Any]:

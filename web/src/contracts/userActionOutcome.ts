@@ -20,7 +20,8 @@ export function isUserActionOutcome(value: unknown): value is UserActionOutcome 
 
 export const userActionOutcomeMessages: Record<UserActionOutcome, string> = {
   accepted: '操作已受理，已进入本次执行流程。',
-  action_gate_unavailable: '确认通道暂不可用，本次操作未执行。',
+  action_gate_unavailable:
+    '确认通道暂不可用，无法确认本次操作结果。请先核对业务状态，避免重复提交。',
   no_pending_action: '未找到可继续的待确认操作，本次操作未执行。',
   action_binding_incomplete: '操作绑定信息不完整，本次操作未执行。',
   action_reference_mismatch: '确认引用与当前待办不匹配，本次操作未执行。',

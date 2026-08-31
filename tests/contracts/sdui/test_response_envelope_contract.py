@@ -11,13 +11,13 @@ from pydantic import ValidationError
 from app.contracts.sdui.models import (
     BindingRequiredCard,
     ConfirmCard,
+    ConfirmCardPayload,
     OperatorHandbackCard,
     ResponseEnvelope,
     ResponseEnvelopeStatus,
     TargetSystem,
     UIAction,
     UIComponent,
-    UIComponentType,
     UserAction,
 )
 from app.ports import response_envelope as response_envelope_port
@@ -28,7 +28,6 @@ from app.ports.response_envelope import (
 from app.ports.response_envelope import (
     UIComponent as PortUIComponent,
 )
-from app.runtime.models import ConfirmCardPayload
 
 
 def _literal_values(annotation: object) -> tuple[object, ...]:
@@ -67,12 +66,6 @@ def _extra_forbidden_locations(error: ValidationError) -> set[tuple[str, ...]]:
 
 
 def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
-    assert _literal_values(UIComponentType) == (
-        "none",
-        "confirm_card",
-        "operator_handback_card",
-        "binding_required_card",
-    )
     assert _literal_values(UIAction) == (
         "confirm",
         "bind_required",
@@ -165,6 +158,10 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
     with pytest.raises(ValidationError) as extra_field:
         UIComponent(component_type="none", unexpected="blocked")
     assert _extra_forbidden_locations(extra_field.value) == {("unexpected",)}
+
+
+def test_ui_component_and_confirm_card_public_fields_stay_in_sync() -> None:
+    assert set(UIComponent.model_fields) == set(ConfirmCard.model_fields)
 
 
 def test_response_envelope_fields_types_defaults_and_required_shape_are_exact() -> None:
@@ -476,7 +473,6 @@ def test_port_response_envelope_module_is_reexport_facade() -> None:
         "TargetSystem",
         "UIAction",
         "UIComponent",
-        "UIComponentType",
         "UserAction",
     )
 

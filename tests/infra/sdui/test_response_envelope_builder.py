@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from hashlib import sha256
 from typing import Any
@@ -112,6 +113,17 @@ def test_build_confirm_card_action_confirm() -> None:
     assert envelope.ui.component_type == "confirm_card"
     assert envelope.ui.action == "confirm"
     assert envelope.status == "waiting_user"
+
+
+def test_build_confirm_card_requires_keyword_payload() -> None:
+    parameter = inspect.signature(
+        ResponseEnvelopeBuilder.build_confirm_card
+    ).parameters["payload"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is inspect.Parameter.empty
+    with pytest.raises(TypeError, match="payload"):
+        _builder().build_confirm_card(*_message_args())
 
 
 def test_non_confirm_builder_paths_keep_exact_serialized_bytes() -> None:

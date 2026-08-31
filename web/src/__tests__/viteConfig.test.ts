@@ -13,6 +13,7 @@ describe('Vite API proxy', () => {
       if (!loaded) throw new Error('Vite config was not loaded');
       const proxy = loaded.config.server?.proxy?.['/api/v1'];
       const result = {
+        define: loaded.config.define,
         fileParallelism: loaded.config.test?.fileParallelism,
         target: typeof proxy === 'string' ? proxy : proxy?.target,
         hasRewrite:
@@ -31,12 +32,18 @@ describe('Vite API proxy', () => {
         env: {
           ...process.env,
           ETERNALAI_BACKEND_URL: 'http://127.0.0.1:18000',
+          ETERNALAI_OA_ALLOWED_PATH_PREFIXES: '["/oa","/workflow"]',
+          OA_BASE_URL: 'http://oa.synthetic.invalid',
         },
       },
     );
     const result = JSON.parse(output.split('VITE_PROXY_PROBE=').at(-1) ?? '{}');
 
     expect(result).toEqual({
+      define: {
+        __ETERNALAI_OA_ALLOWED_PATH_PREFIXES__: '"[\\"/oa\\",\\"/workflow\\"]"',
+        __ETERNALAI_OA_BASE_URL__: '"http://oa.synthetic.invalid"',
+      },
       fileParallelism: false,
       hasRewrite: false,
       target: 'http://127.0.0.1:18000',

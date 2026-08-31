@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
-import { projectResponse } from '../../contracts/runtimeProjection';
+import { RecordsList } from '../../components/RecordsList';
+import {
+  projectRecords,
+  projectResponse,
+} from '../../contracts/runtimeProjection';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
@@ -452,7 +458,7 @@ describe('ChatPage response projection', () => {
         ),
       ),
     );
-    renderChat();
+    const { container } = renderChat();
 
     sendMessage('复核参数展示');
 
@@ -460,6 +466,19 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText('decision')).toBeInTheDocument();
     expect(screen.getByText('同意')).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_HIDDEN_ARGUMENT_VALUE');
+    expect(screen.getByText('未提供可展示值')).toBeInTheDocument();
+    const argumentsHeading = screen.getByText('操作参数');
+    const argumentList = argumentsHeading.nextElementSibling;
+    expect(argumentList?.tagName).toBe('DL');
+    expect(
+      Array.from(argumentList?.children ?? []).every(
+        (child) =>
+          child.tagName === 'DIV' &&
+          child.querySelector(':scope > dt') !== null &&
+          child.querySelector(':scope > dd') !== null,
+      ),
+    ).toBe(true);
+    expect(container.querySelector('dl dt:last-child')).toBeNull();
   });
 
   it.each([
@@ -547,8 +566,8 @@ describe('ChatPage response projection', () => {
     expect(document.body.textContent).not.toContain('foo');
   });
 
-  it('marks pending workflows incomplete from runtime completeness and count mismatches', async () => {
-    const first = renderChat();
+  it('marks pending workflows incomplete from count mismatches', async () => {
+    renderChat();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -562,8 +581,13 @@ describe('ChatPage response projection', () => {
 
     sendMessage('数量不一致');
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
-    first.unmount();
+    expect(screen.getByText('当前仅展示已取回的 1 条记录。')).toBeInTheDocument();
+    expect(screen.getByText('OA 标示共有 2 条。')).toBeInTheDocument();
+    expect(screen.getByText('OA 总记录数与实际展示记录数不一致。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
 
+  it('marks pending workflows incomplete when is_complete is false', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -573,8 +597,32 @@ describe('ChatPage response projection', () => {
       ),
     );
     renderChat();
-    sendMessage('运行时声明不完整');
+
+    sendMessage('查询不完整待办');
+
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('采购申请审批')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
+  it('marks system messages incomplete when returned_count is missing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({ data: systemMessagesData({ returned_count: undefined }) }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询不完整消息');
+
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.getByText('OA 未提供本次返回记录数。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
   });
 
   it('marks system messages incomplete when is_complete is false', async () => {
@@ -588,10 +636,115 @@ describe('ChatPage response projection', () => {
     );
     renderChat();
 
-    sendMessage('查询不完整消息');
+    sendMessage('查询生产方声明不完整的消息');
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
+  it('does not render an incomplete zero-row response as a normal empty state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            data: pendingWorkflowsData({
+              workflows: [],
+              returned_count: 0,
+              authoritative_count: 0,
+              is_complete: false,
+            }),
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询零行不完整待办');
+
+    expect(await screen.findByText('当前仅展示已取回的 0 条记录。')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
+  it('renders only an allowlisted OA href with the required new-window attributes', () => {
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: '/oa/messages/001' })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    const { container } = render(<RecordsList records={records} />);
+    const link = screen.getByRole('link', { name: '去 OA 查看（新窗口）' });
+
+    expect(link).toHaveAttribute(
+      'href',
+      'http://oa.synthetic.invalid/oa/messages/001',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link.className).toContain('oaLink');
+    expect(container.textContent).not.toContain('/oa/messages/001');
+  });
+
+  it('keeps the OA navigation click target at least 44 by 44 CSS pixels', () => {
+    const stylesheet = readFileSync(
+      resolve(process.cwd(), 'src/components/RuntimeViews.module.css'),
+      'utf8',
+    );
+    const oaLinkRule = /\.oaLink\s*\{(?<body>[^}]*)\}/.exec(stylesheet);
+
+    expect(oaLinkRule?.groups?.body).toMatch(/min-width:\s*44px\s*;/);
+    expect(oaLinkRule?.groups?.body).toMatch(/min-height:\s*44px\s*;/);
+  });
+
+  it('retains a record but removes an untrusted OA link and gives recovery guidance', () => {
+    const untrustedLink = 'https://evil.synthetic.invalid/oa/messages/001';
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: untrustedLink })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    const { container } = render(<RecordsList records={records} />);
+
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/OA 提供的链接未通过安全校验/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
+    expect(container.textContent).not.toContain(untrustedLink);
+  });
+
+  it('retains a record and gives recovery guidance when OA supplies no link', () => {
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: null })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    render(<RecordsList records={records} />);
+
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/OA 未提供可打开的链接/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
   });
 
   it('renders long message content as folded plain text and never exposes OA links', async () => {
@@ -619,6 +772,8 @@ describe('ChatPage response projection', () => {
     expect(container.querySelector('details')).not.toHaveAttribute('open');
     expect(container.querySelector('script')).toBeNull();
     expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText(/当前部署未配置可信 OA 地址/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(link);
     expect(document.body.textContent).not.toContain(mobileLink);
   });
@@ -650,7 +805,10 @@ describe('ChatPage response projection', () => {
 
   const actionOutcomeCases = [
     ['accepted', '操作已受理，已进入本次执行流程。'],
-    ['action_gate_unavailable', '确认通道暂不可用，本次操作未执行。'],
+    [
+      'action_gate_unavailable',
+      '确认通道暂不可用，无法确认本次操作结果。请先核对业务状态，避免重复提交。',
+    ],
     ['no_pending_action', '未找到可继续的待确认操作，本次操作未执行。'],
     ['action_binding_incomplete', '操作绑定信息不完整，本次操作未执行。'],
     ['action_reference_mismatch', '确认引用与当前待办不匹配，本次操作未执行。'],
@@ -684,7 +842,10 @@ describe('ChatPage response projection', () => {
 
       expect(await screen.findByText(expected)).toBeInTheDocument();
       expect(new Set(actionOutcomeCases.map(([, message]) => message)).size).toBe(9);
-      if (!accepted) {
+      if (actionOutcome === 'action_gate_unavailable') {
+        expect(expected).toContain('无法确认');
+        expect(expected).not.toContain('未执行');
+      } else if (!accepted) {
         expect(expected).toContain('未执行');
       }
       if (actionOutcome === 'action_already_claimed') {

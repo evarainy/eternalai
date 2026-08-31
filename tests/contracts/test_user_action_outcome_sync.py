@@ -46,9 +46,10 @@ def _assert_outcome_sequences_match(
     return True
 
 
-def test_frontend_user_action_outcomes_match_runtime_port() -> None:
-    frontend_source = _FRONTEND_CONTRACT.read_text(encoding="utf-8")
-    runtime_source = _RUNTIME_CONTRACT.read_text(encoding="utf-8")
+def _outcome_sequences(
+    frontend_source: str,
+    runtime_source: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     array_match = _OUTCOME_ARRAY.search(frontend_source)
     alias_match = _OUTCOME_ALIAS.search(runtime_source)
 
@@ -62,28 +63,96 @@ def test_frontend_user_action_outcomes_match_runtime_port() -> None:
         match.group("value")
         for match in _STRING_LITERAL.finditer(alias_match.group("body"))
     )
+    return frontend_outcomes, runtime_outcomes
+
+
+def _rewrite_outcome_literals(
+    source: str,
+    pattern: re.Pattern[str],
+    outcomes: tuple[str, ...],
+) -> str:
+    contract_match = pattern.search(source)
+    assert contract_match is not None
+    body = contract_match.group("body")
+    literal_matches = list(_STRING_LITERAL.finditer(body))
+    assert len(literal_matches) == len(outcomes)
+
+    rewritten = body
+    for literal_match, outcome in reversed(tuple(zip(literal_matches, outcomes))):
+        quote = literal_match.group(0)[0]
+        rewritten = (
+            rewritten[: literal_match.start()]
+            + f"{quote}{outcome}{quote}"
+            + rewritten[literal_match.end() :]
+        )
+    return (
+        source[: contract_match.start("body")]
+        + rewritten
+        + source[contract_match.end("body") :]
+    )
+
+
+def test_frontend_user_action_outcomes_match_runtime_port() -> None:
+    frontend_source = _FRONTEND_CONTRACT.read_text(encoding="utf-8")
+    runtime_source = _RUNTIME_CONTRACT.read_text(encoding="utf-8")
+    frontend_outcomes, runtime_outcomes = _outcome_sequences(
+        frontend_source,
+        runtime_source,
+    )
 
     assert _assert_outcome_sequences_match(frontend_outcomes, runtime_outcomes)
     assert set(get_args(UserActionOutcome.__value__)) == set(runtime_outcomes)
 
 
 @pytest.mark.parametrize(
-    ("frontend_outcomes", "runtime_outcomes"),
-    (
-        (("accepted", "accepted"), ("accepted", "blocked")),
-        (("accepted", "blocked"), ("accepted", "accepted")),
-    ),
+    "duplicate_side",
+    ("frontend", "runtime"),
 )
 def test_outcome_sync_guard_rejects_duplicate_literals_on_either_side(
-    frontend_outcomes: tuple[str, ...],
-    runtime_outcomes: tuple[str, ...],
+    duplicate_side: str,
 ) -> None:
+    frontend_source = _FRONTEND_CONTRACT.read_text(encoding="utf-8")
+    runtime_source = _RUNTIME_CONTRACT.read_text(encoding="utf-8")
+    frontend_outcomes, runtime_outcomes = _outcome_sequences(
+        frontend_source,
+        runtime_source,
+    )
+    if duplicate_side == "frontend":
+        duplicated = (frontend_outcomes[0], frontend_outcomes[0], *frontend_outcomes[2:])
+        frontend_source = _rewrite_outcome_literals(
+            frontend_source,
+            _OUTCOME_ARRAY,
+            duplicated,
+        )
+    else:
+        duplicated = (runtime_outcomes[0], runtime_outcomes[0], *runtime_outcomes[2:])
+        runtime_source = _rewrite_outcome_literals(
+            runtime_source,
+            _OUTCOME_ALIAS,
+            duplicated,
+        )
+
     with pytest.raises(AssertionError, match="must be unique"):
-        _assert_outcome_sequences_match(frontend_outcomes, runtime_outcomes)
+        _assert_outcome_sequences_match(
+            *_outcome_sequences(frontend_source, runtime_source)
+        )
 
 
 def test_outcome_sync_guard_accepts_reordering() -> None:
+    frontend_source = _FRONTEND_CONTRACT.read_text(encoding="utf-8")
+    runtime_source = _RUNTIME_CONTRACT.read_text(encoding="utf-8")
+    frontend_outcomes, _ = _outcome_sequences(frontend_source, runtime_source)
+    reordered = (
+        frontend_outcomes[1],
+        frontend_outcomes[0],
+        *frontend_outcomes[2:],
+    )
+    frontend_source = _rewrite_outcome_literals(
+        frontend_source,
+        _OUTCOME_ARRAY,
+        reordered,
+    )
+
     assert _assert_outcome_sequences_match(
-        ("action_stale", "accepted"),
-        ("accepted", "action_stale"),
+        *_outcome_sequences(frontend_source, runtime_source)
     )
