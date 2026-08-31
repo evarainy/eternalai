@@ -406,6 +406,8 @@ export function createGeneralPageContext(
 ): PageContextDeclaration {
   return parsePageContext({
     ...context,
+    allowed_capabilities: [],
+    source_refs: [],
     work_object_refs: [],
   });
 }

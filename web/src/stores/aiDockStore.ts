@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import {
   createGeneralPageContext,
+  PageContextValidationError,
   parsePageContext,
 } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
@@ -98,15 +99,21 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   clearPageContext: (expectedSurfaceId) =>
     set((state) => {
       const current = state.pageContextDeclaration;
+      if (current === null) {
+        return expectedSurfaceId === undefined && state.sessionContextMode === 'general'
+          ? { sessionContextMode: 'page' }
+          : state;
+      }
       if (
-        current === null ||
-        (expectedSurfaceId !== undefined && current.surface_id !== expectedSurfaceId)
+        expectedSurfaceId !== undefined &&
+        current.surface_id !== expectedSurfaceId
       ) {
         return state;
       }
       return {
         pageContextDeclaration: null,
         contextNotice: '页面上下文已移除；AI 不会继续读取离开的页面。',
+        sessionContextMode: 'page',
       };
     }),
   closeDock: () => set({ mode: 'closed' }),
@@ -122,7 +129,19 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   },
   openDock: () => set((state) => ({ mode: state.lastOpenMode })),
   registerPageContext: (candidate) => {
-    const parsed = parsePageContext(candidate);
+    let parsed: PageContextDeclaration;
+    try {
+      parsed = parsePageContext(candidate);
+    } catch (error) {
+      if (!(error instanceof PageContextValidationError)) {
+        throw error;
+      }
+      set({
+        contextNotice: '当前页面上下文不可用；AI 不会读取本页数据。',
+        pageContextDeclaration: null,
+      });
+      return;
+    }
     set((state) => {
       const next =
         state.sessionContextMode === 'general'
@@ -143,7 +162,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
             transcript: [],
           };
         }
-        return { pageContextDeclaration: next };
+        return { contextNotice: null, pageContextDeclaration: next };
       }
       if (authorityScopeChanged(previous, next)) {
         return {

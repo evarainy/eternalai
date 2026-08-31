@@ -3,11 +3,13 @@ import { ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { PageContextDeclaration } from '../../contracts/pageContext';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { AppShell } from '../AppShell';
 import { workbenchTheme } from '../theme';
+import { usePageContextRegistration } from '../usePageContextRegistration';
 
-function workObjectsPageContext() {
+function workObjectsPageContext(): PageContextDeclaration {
   return {
     surface_id: 'work-objects',
     organization_scope: null,
@@ -28,7 +30,35 @@ function workObjectsPageContext() {
   };
 }
 
-function renderShell(initialPath = '/work-objects') {
+function LandingPageStub() {
+  return (
+    <div>
+      开始新工作页面
+      <Link to="/work-objects">进入工作事项</Link>
+    </div>
+  );
+}
+
+function StaticWorkObjectsPageStub() {
+  return (
+    <div>
+      事项页面
+      <Link to="/admin/tasks">去任务证据</Link>
+    </div>
+  );
+}
+
+function RegisteredWorkObjectsPageStub() {
+  usePageContextRegistration(workObjectsPageContext());
+  return <StaticWorkObjectsPageStub />;
+}
+
+function renderShell(
+  initialPath = '/work-objects',
+  {
+    registerWorkObjectsContext = false,
+  }: { registerWorkObjectsContext?: boolean } = {},
+) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
@@ -38,14 +68,15 @@ function renderShell(initialPath = '/work-objects') {
         <MemoryRouter initialEntries={[initialPath]}>
           <Routes>
             <Route element={<AppShell />}>
-              <Route path="/" element={<div>开始新工作页面</div>} />
+              <Route path="/" element={<LandingPageStub />} />
               <Route
                 path="/work-objects"
                 element={
-                  <div>
-                    事项页面
-                    <Link to="/admin/tasks">去任务证据</Link>
-                  </div>
+                  registerWorkObjectsContext ? (
+                    <RegisteredWorkObjectsPageStub />
+                  ) : (
+                    <StaticWorkObjectsPageStub />
+                  )
                 }
               />
               <Route path="/admin/tasks" element={<div>证据页面</div>} />
@@ -145,5 +176,29 @@ describe('AppShell and singleton AI Dock', () => {
     await waitFor(() =>
       expect(useAIDockStore.getState().pageContextDeclaration).toBeNull(),
     );
+  });
+
+  it('clears a removal notice when the Work Objects page binds again', async () => {
+    useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
+    useAIDockStore.getState().registerPageContext(workObjectsPageContext());
+    renderShell('/', { registerWorkObjectsContext: true });
+
+    await waitFor(() => {
+      expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+      expect(useAIDockStore.getState().contextNotice).toContain(
+        '页面上下文已移除',
+      );
+    });
+
+    fireEvent.click(screen.getByRole('link', { name: '进入工作事项' }));
+
+    await waitFor(() => {
+      expect(useAIDockStore.getState().pageContextDeclaration?.surface_id).toBe(
+        'work-objects',
+      );
+      expect(useAIDockStore.getState().contextNotice).toBeNull();
+    });
+    expect(screen.queryByText(/页面上下文已移除/)).not.toBeInTheDocument();
+    expect(screen.getByText('正在协助：工作事项')).toBeVisible();
   });
 });
