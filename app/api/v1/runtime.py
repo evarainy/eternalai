@@ -68,8 +68,14 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
     fields.update(
         {
             "status": "failed",
-            "message": "操作响应未通过安全校验，本次操作未执行。",
-            "fallback_text": "Action response validation failed; no action was executed.",
+            "message": (
+                "操作响应未通过安全校验，无法确认本次操作结果。"
+                "请先核对业务状态，避免重复提交。"
+            ),
+            "fallback_text": (
+                "Action response validation failed; verify the business state "
+                "before retrying."
+            ),
             "ui": UIComponent(component_type="none", action="none"),
             "data": {
                 "action_outcome": "action_gate_unavailable",

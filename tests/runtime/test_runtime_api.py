@@ -261,14 +261,19 @@ def test_action_response_envelope_rejects_missing_extra_or_flattened_data(
 def test_runtime_action_invalid_data_returns_deterministic_failed_envelope(
     invalid_data: dict[str, Any],
 ) -> None:
-    response = _client(FakeRuntime(action_data=invalid_data)).post(
+    runtime = FakeRuntime(action_data=invalid_data)
+    response = _client(runtime).post(
         "/api/v1/runtime/action",
         json=_valid_action_body(),
     )
 
+    assert runtime.calls == 1
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
-    assert response.json()["message"] == "操作响应未通过安全校验，本次操作未执行。"
+    assert response.json()["message"] == (
+        "操作响应未通过安全校验，无法确认本次操作结果。"
+        "请先核对业务状态，避免重复提交。"
+    )
     assert response.json()["data"] == {
         "action_outcome": "action_gate_unavailable",
         "result": None,

@@ -142,9 +142,15 @@ describe('OA message navigation projection', () => {
     ['malformed HTTP absolute URL', 'http:/oa/messages/001'],
     ['opaque HTTP URL', 'http:oa/messages/001'],
     ['path traversal', '/oa/../admin/messages/001'],
+    ['triply encoded path traversal', '/oa/%25252e%25252e/admin'],
     ['encoded control character', '/oa/%00messages/001'],
+    ['triply encoded control character', '/oa/%252500messages/001'],
     ['literal control character', '/oa/messages/\u0001'],
     ['path-prefix suffix graft', '/oaevil/messages/001'],
+    [
+      'host suffix graft',
+      'http://oa.synthetic.invalid.evil/oa/messages/001',
+    ],
   ])('rejects %s while retaining the record', (_label, link) => {
     const records = projectRecords(systemMessages(link), navigationConfig);
 
@@ -202,6 +208,8 @@ describe('OA message navigation projection', () => {
     'http://@oa.synthetic.invalid',
     'http://oa.synthetic.invalid?source=invalid',
     'http://oa.synthetic.invalid#invalid',
+    'http://oa.synthetic.invalid/?',
+    'http://oa.synthetic.invalid/#',
   ])('fails closed for invalid deployment base %s', (baseUrl) => {
     const records = projectRecords(systemMessages('/oa/messages/001'), {
       baseUrl,

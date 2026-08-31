@@ -168,7 +168,8 @@ function hasControlCharacter(value: string): boolean {
 
 function decodePathForSafety(path: string): string | null {
   let decoded = path;
-  for (let pass = 0; pass < 2; pass += 1) {
+  let stabilized = false;
+  for (let remainingPasses = path.length + 1; remainingPasses > 0; remainingPasses -= 1) {
     let next: string;
     try {
       next = decodeURIComponent(decoded);
@@ -176,11 +177,12 @@ function decodePathForSafety(path: string): string | null {
       return null;
     }
     if (next === decoded) {
+      stabilized = true;
       break;
     }
     decoded = next;
   }
-  if (hasControlCharacter(decoded) || decoded.includes('\\')) {
+  if (!stabilized || hasControlCharacter(decoded) || decoded.includes('\\')) {
     return null;
   }
   if (decoded.split('/').some((segment) => segment === '..')) {
@@ -199,7 +201,9 @@ function normalizeOaNavigationConfig(
   if (
     !/^https?:\/\/[^/\\?#]+(?:\/.*)?$/i.test(rawBaseUrl) ||
     hasControlCharacter(rawBaseUrl) ||
-    rawBaseUrl.includes('\\')
+    rawBaseUrl.includes('\\') ||
+    rawBaseUrl.includes('?') ||
+    rawBaseUrl.includes('#')
   ) {
     return null;
   }
