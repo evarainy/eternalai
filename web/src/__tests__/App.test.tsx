@@ -14,9 +14,12 @@ describe('application authentication boundary', () => {
   beforeEach(() => {
     useAuthStore.setState({ generation: 0, status: 'unauthenticated' });
     useAIDockStore.setState({
+      contextNotice: null,
       draft: '',
       lastOpenMode: 'drawer',
       mode: 'closed',
+      pageContextDeclaration: null,
+      sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
     });

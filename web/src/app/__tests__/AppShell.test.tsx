@@ -1,11 +1,32 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { AppShell } from '../AppShell';
 import { workbenchTheme } from '../theme';
+
+function workObjectsPageContext() {
+  return {
+    surface_id: 'work-objects',
+    organization_scope: null,
+    work_object_refs: [{ work_object_id: 'work-1' }],
+    source_refs: [{ source_system: 'oa', source_ref: 'OA-WF-001' }],
+    filters: [
+      {
+        field: 'view',
+        operator: 'equals',
+        value: 'today',
+        source: 'visible_control',
+      },
+    ],
+    selected_metric: null,
+    allowed_capabilities: [],
+    freshness: { state: 'reported', observed_at: '2026-08-30T09:00:00Z' },
+    visibility: 'principal',
+  };
+}
 
 function renderShell(initialPath = '/work-objects') {
   const client = new QueryClient({
@@ -17,6 +38,7 @@ function renderShell(initialPath = '/work-objects') {
         <MemoryRouter initialEntries={[initialPath]}>
           <Routes>
             <Route element={<AppShell />}>
+              <Route path="/" element={<div>开始新工作页面</div>} />
               <Route
                 path="/work-objects"
                 element={
@@ -38,9 +60,12 @@ function renderShell(initialPath = '/work-objects') {
 describe('AppShell and singleton AI Dock', () => {
   beforeEach(() => {
     useAIDockStore.setState({
+      contextNotice: null,
       draft: '',
       lastOpenMode: 'drawer',
       mode: 'closed',
+      pageContextDeclaration: null,
+      sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
     });
@@ -96,6 +121,7 @@ describe('AppShell and singleton AI Dock', () => {
 
   it('provides visible input guidance, a textual state, and current-location semantics', () => {
     useAIDockStore.setState({ mode: 'drawer' });
+    useAIDockStore.getState().registerPageContext(workObjectsPageContext());
     renderShell();
 
     expect(screen.getByLabelText('要 AI 帮什么')).toBeInTheDocument();
@@ -106,5 +132,18 @@ describe('AppShell and singleton AI Dock', () => {
       'page',
     );
     expect(screen.queryByRole('button', { name: /^⚙$/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the landing page context-free without crashing the singleton Dock', async () => {
+    useAIDockStore.setState({ mode: 'drawer' });
+    useAIDockStore.getState().registerPageContext(workObjectsPageContext());
+
+    renderShell('/');
+
+    expect(screen.getByText('开始新工作页面')).toBeInTheDocument();
+    expect(screen.getByTestId('ai-dock')).not.toBeVisible();
+    await waitFor(() =>
+      expect(useAIDockStore.getState().pageContextDeclaration).toBeNull(),
+    );
   });
 });

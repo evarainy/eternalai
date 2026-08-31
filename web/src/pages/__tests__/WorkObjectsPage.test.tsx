@@ -133,9 +133,12 @@ describe('WorkObjectsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useAIDockStore.setState({
+      contextNotice: null,
       draft: '',
       lastOpenMode: 'drawer',
       mode: 'closed',
+      pageContextDeclaration: null,
+      sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
     });
@@ -170,6 +173,83 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(screen.getByText('当前显示 1 项')).toBeInTheDocument();
     expect(screen.queryByText('内部任务责任人')).not.toBeInTheDocument();
+  });
+
+  it('registers the visible Work Objects page through the nine-field contract', async () => {
+    const capableItem: OAWorkObjectView = {
+      ...WORK_OBJECT,
+      handling_action: 'ai_draft',
+      handling_capability_id: 'oa.work.read',
+    };
+    const response = listResponse({ items: [capableItem] });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.getWorkObject.mockResolvedValueOnce(capableItem);
+
+    const page = renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
+    ).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: '让 AI 先写' }));
+    await waitFor(() => {
+      const context = useAIDockStore.getState().pageContextDeclaration;
+      expect(context?.surface_id).toBe('work-objects');
+      expect(context?.organization_scope).toBeNull();
+      expect(context?.work_object_refs).toEqual([
+        { work_object_id: 'work-object-1' },
+      ]);
+      expect(context?.source_refs).toEqual([
+        { source_system: 'oa', source_ref: 'OA-WF-001' },
+      ]);
+      expect(context?.filters).toEqual([
+        {
+          field: 'view',
+          operator: 'equals',
+          value: 'today',
+          source: 'visible_control',
+        },
+      ]);
+      expect(context?.allowed_capabilities).toEqual(['oa.work.read']);
+      expect(context?.visibility).toBe('principal');
+    });
+
+    page.unmount();
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+  });
+
+  it('registers only the opened row and never hidden pagination rows', async () => {
+    const items = Array.from({ length: 11 }, (_, index): OAWorkObjectView => ({
+      ...WORK_OBJECT,
+      source_ref: `OA-PAGE-${index + 1}`,
+      source_title: `分页事项 ${index + 1}`,
+      work_object_id: `work-page-${index + 1}`,
+    }));
+    const response = listResponse({ items });
+    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.getWorkObject.mockResolvedValueOnce(items[0] as OAWorkObjectView);
+
+    renderPage();
+
+    expect(await screen.findByText('分页事项 1')).toBeInTheDocument();
+    expect(screen.queryByText('分页事项 11')).not.toBeInTheDocument();
+    expect(
+      useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
+    ).toEqual([]);
+    const firstVisibleAction = screen.getAllByRole('button', { name: '去 OA 办' })[0];
+    expect(firstVisibleAction).toBeDefined();
+    fireEvent.click(firstVisibleAction as HTMLElement);
+
+    await waitFor(() =>
+      expect(
+        useAIDockStore.getState().pageContextDeclaration?.work_object_refs,
+      ).toEqual([{ work_object_id: 'work-page-1' }]),
+    );
+    expect(useAIDockStore.getState().pageContextDeclaration?.source_refs).toEqual([
+      { source_system: 'oa', source_ref: 'OA-PAGE-1' },
+    ]);
   });
 
   it('renders exactly one backend-projected handling action per row', async () => {
