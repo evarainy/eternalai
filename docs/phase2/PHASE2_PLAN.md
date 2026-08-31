@@ -156,7 +156,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `InMemoryHumanGate` 幂等语义比生产宽松 | `app/infra/human_gate/in_memory.py::InMemoryHumanGate.record_decision` 用对象相等判幂等（`existing == decision` 即静默返回旧对象），而生产 `app/infra/human_gate/postgresql.py::PostgreSQLHumanGate.record_decision` 用 `AND decision IS NULL` 谓词强制认领一次性。两条 decision 除 `decided_at` 外字段全同，本机相邻 `datetime.now(UTC)` 采样 99,894/100,000 对相等，故第二次认领被误判为幂等写入，`app/runtime/runtime.py::RuntimeImpl._resume_pending_workflow` 收不到 `HumanGateConflictError`，最终返回 `accepted`。fake 比生产宽松，该测试永远抓不到认领一次性的回归 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | `InMemoryHumanGate` 的认领一次性语义与生产 SQL 谓词等价（按 request_id 判是否已有 decision，而非按对象相等），且有确定性回归：两次 decision 的 `decided_at` 相同时仍必须得到 already-claimed | `app/infra/human_gate/in_memory.py::InMemoryHumanGate.record_decision`；`app/infra/human_gate/postgresql.py::PostgreSQLHumanGate.record_decision`；`app/runtime/runtime.py::RuntimeImpl._resume_pending_workflow`；`tests/runtime/test_runtime_user_action.py::test_existing_human_gate_decision_maps_to_already_claimed` |
 | 凭证存储的宽泛 `except` 掩盖根因 | `app/infra/auth/postgresql.py::PostgreSQLCredentialStore.load` 用宽泛 `except Exception` 把驱动层异常统一包装成 `CredentialStoreError`。本机 Windows 默认 `ProactorEventLoop` 与 psycopg async 不兼容，`InterfaceError` 因此被伪装成「凭证无法加载」，排查时无法区分「连接建立失败」「行不存在」「解密失败」三种完全不同的原因 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | `load` 区分驱动/连接层异常与凭证层异常；对调用方的外层错误码不变（不泄露细节），但根因可从日志或异常链定位；并有测试证明连接失败不再被报成凭证无法加载 | `app/infra/auth/postgresql.py::PostgreSQLCredentialStore.load`；`tests/db/test_credential_password_polling_migration.py::test_existing_oa_session_survives_upgrade_and_remains_loadable` |
 | 并行棒共用测试库跑 migration 会互相破坏 | 多根并行 lane 共用 `127.0.0.1:15432` 的 `eternalai_test`。任一 lane 跑 alembic 往返后，`alembic_version` 可能停在其他分支才有的版本，导致其余 lane 的 `tests/db/` 报 `CommandError: Can't locate revision`。2026-08-31 实际发生一次，五个用例受影响，协调窗口 downgrade 后恢复 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 并行 lane 的 migration 测试互不干扰（独立库、独立 schema 或串行化），且有证明：一根 lane 跑完 alembic 往返后，其余 lane 的 `tests/db/` 仍全绿 | `scripts/reset_test_db.py`；`docs/phase2/DECISIONS.md` 2026-08-20「并行 lane 的测试库约束」与 2026-08-31「共享测试库未被污染，两个偶发失败是本机 Windows 环境缺陷」 |
-| 组织目录用途边界守卫拦不住 SQL 形式的关系过滤 | `tests/architecture/test_organization_directory_boundary.py` 的 `_StructuralReadVisitor` 检查 Python 的条件分支、条件推导式、`filter()`、循环与未批准 callable，**不检查 `text(...)` 内的 SQL 谓词**。监理在 `list_user_memberships` 的现有 SQL 中加入按组织关系收窄的谓词（不加 Port 参数、不加 adapter 状态、不加公开方法、不用敏感词名），守卫仍 `7 passed`。同一门禁第二次被换花样绕过（第一轮词名守卫被私有 predicate 绕过）。**当前代码本身无越界**，全仓复核确认该 port/reader 无授权消费者 | 无（不被任务阻塞，但阻塞下游集成） | `P2-ORGDIR-BOUNDARY-GUARD-001` | 守卫改为**行为断言**而非静态检测：合成一个同时具备多个组织值与空组织值的用户，`list_user_memberships` 必须返回完整集合；在既有 SQL 内加入关系谓词时该测试必须变红，恢复后绿。不得退回词名黑名单 | `tests/architecture/test_organization_directory_boundary.py::_StructuralReadVisitor`；`app/infra/organization_directory/` 的 `list_user_memberships`；`docs/phase2/DECISIONS.md` 2026-08-31「流程违规记录」第三节 |
 | 监理棒被中止会把故障注入留在工作区 | 监理做门禁反证时会临时改生产代码再恢复。进程被中止或异常退出时，注入会残留——2026-08-31 实际发生**两次**（ORGDIR 分别残留 `departmentidspan` 字段与 SQL 关系谓词），均由协调窗口手动 `git checkout --` 发现并恢复。若未发现，下一根棒在该 worktree 跑出的测试结果不可信 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 监理棒在首次注入前先记录可还原基线（如 `git stash` 或还原清单），使中止后可自动或一键恢复；并有证明：模拟中止后工作区能回到交付态 | `docs/phase2/DECISIONS.md` 2026-08-31「流程违规记录」第三节；两次残留的实测记录见本行 reason |
 | Dock 落地页清空上下文后提示语残留 | `web/src/stores/aiDockStore.ts::clearPageContext` 在落地页留下「页面上下文已移除」提示；以干净会话重新进入 `/work-objects` 时走不清 notice 的分支，导致 Dock 一边显示「上下文已移除」一边实际已绑定工作事项。用户可见的状态错配，非安全问题。`P2-PAGE-CONTEXT-CONTRACT-001` Opus 最终轮非阻断发现 1 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 重新绑定页面上下文时 `contextNotice` 与实际绑定状态一致，并有覆盖「落地页清空 → 再进事项页」路径的测试 | `web/src/stores/aiDockStore.ts::clearPageContext` |
 | `createGeneralPageContext` 名不副实 | 它只清 `work_object_refs`，「通用」会话仍携带此前打开事项的 `source_refs` 与 `allowed_capabilities`；后续切换事项仍触发 `pageBindingChanged` 并清空通用会话对话。另：`sessionContextMode` 除 `clearSession()` 外永不回到 `page`。`P2-PAGE-CONTEXT-CONTRACT-001` Opus 最终轮非阻断发现 2 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 通用会话不再携带来源页的 `source_refs` / `allowed_capabilities`，或该函数改名以如实反映语义；`sessionContextMode` 有从 `general` 回到 `page` 的正常路径 | `web/src/stores/aiDockStore.ts::createGeneralPageContext` 与同文件 `sessionContextMode` |
@@ -203,6 +202,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | TS/TSX 弱测试确定性门禁 | `scripts/check_weak_tests.py` 已支持前端测试；`uv run python scripts/check_weak_tests.py web/src/pages/__tests__/ChatPage.test.tsx` 确定性返回 `Weak-test check passed.`。 |
 | 统一工作台外壳与首个薄查询层消费者 | `web/src/App.tsx`、`web/src/app/AppShell.tsx`、`web/src/shared/ui/QueryTable.tsx`、`web/src/shared/query/useTableQuery.ts` 与对应前端测试；第二个真实生产消费者仍作为活欠债保留。 |
 | SDUI 具名跨语言 exact 合同 | `ActionResponseData`、`ConfirmCardPayload`、Runtime OpenAPI / Orval 生成物及 action/confirm 合同守卫；后续非阻断发现由 `P2-SDUI-RENDERER-002` 承接。 |
+| 组织目录用途边界行为守卫 | 主防线为 `tests/infra/organization_directory/test_postgresql.py::test_list_user_memberships_returns_complete_set_across_organization_values`：真实 PostgreSQL reader 必须完整返回同一用户的多个组织值与空组织值；`tests/architecture/test_organization_directory_boundary.py` 仅为补充层。SQL 具体组织值谓词与 Python 私有 predicate 两类收窄反证均会使主防线变红。 |
 
 ### 外部验收纪要（待雨爷裁）
 
@@ -266,6 +266,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-GOLDEN-CREDENTIAL-CONTAINER-001` | Golden 敏感父键容器继承守卫。 |
 | `P2-WORK-OBJECT-001` | OA Work Object 与最小工作台。 |
 | `P2-OA-CREDENTIAL-POLL-001` | 用户密码绑定、加密存储与后台轮询。 |
+| `P2-ORGDIR-BOUNDARY-GUARD-001` | 组织目录完整结构关系的真实 PostgreSQL 行为守卫。 |
 
 ### 现役 DAG（仅未完成）
 
@@ -278,7 +279,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-HIKVISION-ADAPTER-001` | P2-READ-ADAPTER-001 | **A** | 是：现场版本、API/SDK、账号与设备/区域范围未到位；机会层 |
 | `P2-PORT-SEAM-001` | 无 | **A** | 否；机会层 |
 | `P2-OA-ORGANIZATION-DIRECTORY-001` | P2-WORK-OBJECT-001 | **A** | 否：接口结构已固化；不完整或 `managerid` 语义不明时 fail-closed |
-| `P2-INTERNAL-WO-SCOPE-001` | P2-INTERNAL-WO-MODEL-001、P2-OA-ORGANIZATION-DIRECTORY-001、P2-ORGDIR-BOUNDARY-GUARD-001 | **A** | **是：冻结中**，须待 `P2-ORGDIR-BOUNDARY-GUARD-001` 合入；另缺唯一主负责人的可信来源。`PrincipalOrgContext` 只有单值 `department_id`，`alembic/versions/` 无任何部门表，`WorkObjectRecord` 只有 assignee 维度。2026-08-31 开棒实测零改动停手。「不依赖 OA 授权模型」仍成立——依赖的是组织**结构数据**，不是 OA 的授权判定 |
+| `P2-INTERNAL-WO-SCOPE-001` | P2-INTERNAL-WO-MODEL-001、P2-OA-ORGANIZATION-DIRECTORY-001、P2-ORGDIR-BOUNDARY-GUARD-001（均已完成） | **A** | **是：唯一主负责人可信来源仍缺失**。组织目录 guard 冻结已解除；`PrincipalOrgContext` 只有单值 `department_id`，`alembic/versions/` 无任何部门表，`WorkObjectRecord` 只有 assignee 维度。2026-08-31 开棒实测零改动停手。「不依赖 OA 授权模型」仍成立——依赖的是组织**结构数据**，不是 OA 的授权判定 |
 | `P2-INTERNAL-WO-DISPATCH-001` | P2-INTERNAL-WO-SCOPE-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-INTERNAL-WO-ATTACHMENT-001` | P2-INTERNAL-WO-DISPATCH-001 | **A** | 是：方案限额矛盾须先裁 |
 | `P2-SDUI-RENDERER-002` | P2-SDUI-RENDERER-001、P2-SDUI-SCHEMA-001（均已完成） | **A** | 否：导航合同已裁；机会层；同时承接 `P2-SDUI-SCHEMA-001` 的七条非阻断欠债 |
@@ -287,8 +288,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001 | **A** | 依赖未完成；Admin 四个读取面的跨租户反证是完成前置；第二租户硬前置 |
 | `P2-USER-ACTION-REJECT-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：reject/cancel 后 Task 终态待裁 |
 | `P2-AUDIT-READ-AUTHZ-001` | 无 | **A** | **是：不单独开棒**。2026-08-31 裁定与 `P2-AUDIT-TRACE-SCOPE-001` 合并交付——归属列落地前「同租户跨用户可读」与「跨租户不可见」不可能同时成立，单独交付会退化为「只能读自己」 |
-| `P2-ORGDIR-BOUNDARY-GUARD-001` | P2-OA-ORGANIZATION-DIRECTORY-001（已合入） | **A** | 否；**下游集成的解冻前置**，见 `docs/phase2/DECISIONS.md` 2026-08-31「流程违规记录」 |
-| `P2-AUDIT-TRACE-SCOPE-001` | P2-AUDIT-READ-AUTHZ-001、P2-ORGDIR-BOUNDARY-GUARD-001 | **A** | **是：冻结中**，须待 `P2-ORGDIR-BOUNDARY-GUARD-001` 合入。Trace 表 schema 变更与历史行回填**已于 2026-08-31 分别获得专项授权**（授权只覆盖 Trace 表，不外溢到 tasks / sessions / binding，见 `docs/phase2/DECISIONS.md`）；与前棒合并交付；为 `P2-TENANT-IDENTITY-001` 完成硬前置 |
+| `P2-AUDIT-TRACE-SCOPE-001` | P2-AUDIT-READ-AUTHZ-001（联合交付）、P2-ORGDIR-BOUNDARY-GUARD-001（已完成） | **A** | 否；组织目录 guard 冻结已解除。Trace 表 schema 变更与历史行回填**已于 2026-08-31 分别获得专项授权**（授权只覆盖 Trace 表，不外溢到 tasks / sessions / binding，见 `docs/phase2/DECISIONS.md`）；与前棒合并交付；为 `P2-TENANT-IDENTITY-001` 完成硬前置 |
 | `P2-FEEDBACK-LOOP-001` | 无 | **A（预判）** | 是：获批 Scope 未定义；机会层 |
 | `P2-CONFIRM-DURABILITY-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：持久化/generation 合同尚未设计 |
 

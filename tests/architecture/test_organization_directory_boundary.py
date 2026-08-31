@@ -1,3 +1,7 @@
+"""Supplementary guard; primary boundary: \
+tests/infra/organization_directory/test_postgresql.py::\
+test_list_user_memberships_returns_complete_set_across_organization_values."""
+
 from __future__ import annotations
 
 import ast
