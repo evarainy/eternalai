@@ -7,6 +7,7 @@ describe('getReturnPath', () => {
   it.each([
     ['/admin/tasks', '/admin/tasks'],
     ['/chat', '/chat'],
+    ['/search', '/search'],
     ['/work-objects', '/work-objects'],
     ['/', '/'],
   ])('allows the named protected path %s', (from, expected) => {

@@ -1,7 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import {
+  Link,
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+} from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PageContextDeclaration } from '../../contracts/pageContext';
 import { useAIDockStore } from '../../stores/aiDockStore';
@@ -53,6 +59,11 @@ function RegisteredWorkObjectsPageStub() {
   return <StaticWorkObjectsPageStub />;
 }
 
+function SearchPageStub() {
+  const location = useLocation();
+  return <div>搜索结果页 {location.search}</div>;
+}
+
 function renderShell(
   initialPath = '/work-objects',
   {
@@ -79,6 +90,7 @@ function renderShell(
                   )
                 }
               />
+              <Route path="/search" element={<SearchPageStub />} />
               <Route path="/admin/tasks" element={<div>证据页面</div>} />
             </Route>
           </Routes>
@@ -163,6 +175,21 @@ describe('AppShell and singleton AI Dock', () => {
       'page',
     );
     expect(screen.queryByRole('button', { name: /^⚙$/ })).not.toBeInTheDocument();
+  });
+
+  it('submits the global Work Object search without changing the AI input', () => {
+    useAIDockStore.setState({ mode: 'drawer' });
+    renderShell('/admin/tasks');
+
+    fireEvent.change(screen.getByLabelText('搜索工作事项'), {
+      target: { value: '  OA-WF-001  ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /搜\s*索/ }));
+
+    expect(screen.getByText('搜索结果页 ?q=OA-WF-001')).toBeInTheDocument();
+    expect(screen.getByText('搜索工作事项', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByLabelText('要 AI 帮什么')).toHaveValue('');
+    expect(useAIDockStore.getState().draft).toBe('');
   });
 
   it('keeps the landing page context-free without crashing the singleton Dock', async () => {

@@ -1,5 +1,5 @@
 const DEFAULT_RETURN_PATH = '/';
-const NAMED_PROTECTED_PATHS = new Set(['/', '/chat', '/work-objects']);
+const NAMED_PROTECTED_PATHS = new Set(['/', '/chat', '/search', '/work-objects']);
 
 export function getReturnPath(state: unknown): string {
   if (

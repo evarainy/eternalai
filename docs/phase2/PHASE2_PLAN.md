@@ -151,6 +151,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 监理棒被中止会把故障注入留在工作区 | 监理做门禁反证时会临时改生产代码再恢复。进程被中止或异常退出时，注入会残留——2026-08-31 实际发生**两次**（ORGDIR 分别残留 `departmentidspan` 字段与 SQL 关系谓词），均由协调窗口手动 `git checkout --` 发现并恢复。若未发现，下一根棒在该 worktree 跑出的测试结果不可信 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 监理棒在首次注入前先记录可还原基线（如 `git stash` 或还原清单），使中止后可自动或一键恢复；并有证明：模拟中止后工作区能回到交付态 | `docs/phase2/DECISIONS.md` 2026-08-31「流程违规记录」第三节；两次残留的实测记录见本行 reason |
 | 记录列表计数投影接受非负 safe integer 之外的值 | 已决裁定要求计数只接受非负 safe integer，但前端 `optionalCount` 当前接受任意 JavaScript `number`；负数、小数、`NaN` 与超出 safe integer 的值会被当作真实计数。现状会进入计数不一致并 fail-closed，不构成安全缺口，但计数合同保真度不足 | 需独立计数输入合同 Scope；本棒只恢复 `is_complete` 完整性信号，不扩改计数语义 | 待 GOV-SYNC 分配 record count validation task_id | `returned_count` 与 `authoritative_count` 仅在为非负 safe integer 时进入投影，其余值按缺失或获批的病态值原因 fail-closed，且负数、小数、`NaN`、超大整数均有回归 | `web/src/contracts/runtimeProjection.ts::optionalCount`；`docs/phase2/DECISIONS.md` 2026-08-30 部分列表裁决；`P2-SDUI-RENDERER-002` 第 1 轮返修指令 |
 | `action_gate_unavailable` outcome 语义被信封校验失败复用 | 后端把既有 `action_gate_unavailable` 闭集 outcome 同时用于信封校验失败，迫使前端去掉“本次操作未执行”的强语义；真正的 gate 不可用场景因此得到更弱提示，跨语言 outcome 的原有含义被放宽 | 需独立跨语言 outcome 语义与错误分类 Scope；本棒不得修改该代码 | 待 GOV-SYNC 分配 action outcome semantics task_id | 信封校验失败使用独立且获批的稳定 outcome / error 分类，`action_gate_unavailable` 只表示 gate 不可用并恢复不执行语义；Python/TypeScript 闭集、生成合同与两类 UI 回归一致 | `app/api/v1/runtime.py:66-88`；`web/src/contracts/userActionOutcome.ts`；`P2-SDUI-RENDERER-002` 第 1 轮返修指令 |
+| 全局搜索只覆盖已加载批次，未做服务端检索 | **reason**：`P2-WO-SEARCH-001` 为克制复用现有授权路径，只对 `GET /api/v1/work-objects` 返回的当前主体可见有界批次做客户端过滤；接口上限为 200 条，未命中不能证明未加载事项不存在，页面已显式披露范围 | **blocked_by_task_id**：待 GOV-SYNC 为“服务端 Work Object 检索合同”分配 task_id；当前没有获批的服务端查询合同，本棒禁止扩大 `app/ports/` | **activation_task_id**：待 GOV-SYNC 分配，不由本棒自行造号 | **expiry_condition**：服务端在完整授权范围内按获批的标题/来源编号/责任人匹配合同检索，复用与列表相同的主体授权，并有跨用户/跨租户真实路径反证；前端不再把已加载批次冒充完整搜索域 | **evidence**：`web/src/pages/WorkObjectSearchPage.tsx` 调用现有生成列表客户端并显示已加载条数；`app/ports/work_object.py::WORK_OBJECT_LIST_LIMIT`；`web/src/pages/__tests__/WorkObjectSearchPage.test.tsx` 的范围披露回归 |
 
 ### 已结项摘要（现役规则或守卫仍生效）
 
@@ -258,6 +259,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-SDUI-RENDERER-002` | OA 安全导航、确认卡目标闭集、部分列表与七项合同欠债收口。 |
 | `P2-TEST-INFRA-WEAKCHECK-001` | 弱测试门禁支持 TypeScript / TSX。 |
 | `P2-FE-WORKBENCH-001` | 统一 AppShell、AI Dock、工作事项与薄查询层首个生产消费者。 |
+| `P2-WO-SEARCH-001` | 顶栏 Work Object 搜索、当前已加载授权批次范围披露、三字段匹配与九字段 Dock 上下文注册。 |
 | `P2-CONFIRM-BINDING-001` | HumanGate 与不可变 Task 版本绑定。 |
 | `P2-GOLDEN-CREDENTIAL-CONTAINER-001` | Golden 敏感父键容器继承守卫。 |
 | `P2-WORK-OBJECT-001` | OA Work Object 与最小工作台。 |
@@ -279,7 +281,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-INTERNAL-WO-DISPATCH-001` | P2-INTERNAL-WO-SCOPE-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-INTERNAL-WO-ATTACHMENT-001` | P2-INTERNAL-WO-DISPATCH-001 | **A** | 是：方案限额矛盾须先裁 |
 | `P2-PAGE-CONTEXT-CONTRACT-001` | 无 | **A** | 否；须先于真实页面上下文注册 |
-| `P2-WO-SEARCH-001` | P2-INTERNAL-WO-MODEL-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001 | **A** | 依赖未完成；Admin 四个读取面的跨租户反证是完成前置；第二租户硬前置 |
 | `P2-USER-ACTION-REJECT-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：reject/cancel 后 Task 终态待裁 |
 | `P2-AUDIT-READ-AUTHZ-001` | 无 | **A** | **是：不单独开棒**。2026-08-31 裁定与 `P2-AUDIT-TRACE-SCOPE-001` 合并交付——归属列落地前「同租户跨用户可读」与「跨租户不可见」不可能同时成立，单独交付会退化为「只能读自己」 |

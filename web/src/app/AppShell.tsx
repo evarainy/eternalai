@@ -1,6 +1,12 @@
-import { useEffect } from 'react';
-import { Button } from 'antd';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Button, Input } from 'antd';
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { AIDock } from './AIDock';
@@ -8,6 +14,7 @@ import styles from './AppShell.module.css';
 
 const locationLabels: Record<string, string> = {
   '/': '开始新工作',
+  '/search': '搜索工作事项',
   '/work-objects': '工作事项',
   '/admin/registry': '功能管理',
   '/admin/tasks': '任务证据',
@@ -16,6 +23,28 @@ const locationLabels: Record<string, string> = {
 
 function locationLabel(pathname: string): string {
   return locationLabels[pathname] ?? '当前位置';
+}
+
+function GlobalWorkObjectSearch({
+  initialValue,
+  onSubmit,
+}: {
+  initialValue: string;
+  onSubmit: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <Input.Search
+      allowClear
+      aria-label="搜索工作事项"
+      enterButton="搜索"
+      onChange={(event) => setValue(event.target.value)}
+      onSearch={onSubmit}
+      placeholder="标题、来源编号或责任人"
+      value={value}
+    />
+  );
 }
 
 function NavigationLink({
@@ -40,6 +69,7 @@ function NavigationLink({
 
 export function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
   const mode = useAIDockStore((state) => state.mode);
   const openDock = useAIDockStore((state) => state.openDock);
@@ -47,6 +77,18 @@ export function AppShell() {
   const isLandingPage = location.pathname === '/' || location.pathname === '/chat';
   const dockOffsetsContent = !isLandingPage && mode === 'pinned';
   const currentLocation = locationLabel(location.pathname);
+  const initialSearchValue =
+    location.pathname === '/search'
+      ? new URLSearchParams(location.search).get('q') ?? ''
+      : '';
+
+  const submitSearch = (value: string) => {
+    const term = value.trim();
+    navigate({
+      pathname: '/search',
+      search: term.length === 0 ? '' : `?${new URLSearchParams({ q: term })}`,
+    });
+  };
 
   useEffect(() => {
     if (isLandingPage) {
@@ -86,6 +128,13 @@ export function AppShell() {
           <div className={styles.location} aria-live="polite">
             <span className={styles.locationLabel}>当前位置</span>
             <strong>{currentLocation}</strong>
+          </div>
+          <div className={styles.topbarSearch}>
+            <GlobalWorkObjectSearch
+              key={`${location.pathname}:${location.search}`}
+              initialValue={initialSearchValue}
+              onSubmit={submitSearch}
+            />
           </div>
           <div className={styles.topbarActions}>
             {!isLandingPage && mode === 'closed' ? (
