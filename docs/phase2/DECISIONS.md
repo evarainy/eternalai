@@ -1714,3 +1714,30 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 承接；`P2-TENANT-IDENTITY-001` 的完成判据新增 Admin 四个读取面的跨租户反证。
 `P2-AUDIT-READ-AUTHZ-001` 当前 BLOCKED，`P2-AUDIT-TRACE-SCOPE-001` 另受两项未授权红线阻塞；
 本裁决不授权任何 DB schema 变更、真实数据回填、Golden fixture 或 `FROZEN_GT_IDS` 变更。
+
+---
+
+## 2026-08-31 — 授权：Trace 归属 schema 与历史回填，审计两棒合并交付
+
+**决定**：雨爷于 2026-08-31 就 `P2-AUDIT-TRACE-SCOPE-001` 给出三项裁定。
+
+### 一、专项授权（两项，各自独立）
+
+1. **Trace 表 schema 变更——已授权。** 允许为 `P2-AUDIT-TRACE-SCOPE-001` 增加可信租户/用户归属列及必要索引与约束，并同步 `app/ports/trace.py::TraceEvent`、`app/ports/trace.py::TracePersistedEvent`、`app/ports/trace.py::TraceQueryPort` 及其 writer 与 reader 实现。
+2. **Trace 历史行回填——已授权。** 允许对上述表的既有行执行归属回填。
+
+### 二、授权边界（不得外溢）
+
+- 本授权**只覆盖 Trace 表**。`tasks`、`sessions`、identity binding 等现役表若也需新增租户列，属 `P2-TENANT-IDENTITY-001` 的另一个 schema scope，**须列出精确表、列、约束与数据处理后另行取得授权**，不得借本授权或 Trace migration 夹带。
+- 本授权**不覆盖** Golden fixture 与 `scripts/golden_task_evaluator.py::FROZEN_GT_IDS`。2026-08-30 裁决已判定这两项不需要改动；若实现方主张必须改，**停手另取显式授权**，不得以更换题面换绿。
+- 回填的执行仍须满足 2026-08-30 裁决已定的材料要求：说明可信映射来源、可归属与不可归属行数、孤立动作 Trace（`app/runtime/runtime.py::RuntimeImpl.handle_user_action` 产生、无 Task 关联）的处理方式与回滚策略。**不得用统一默认值猜测归属，不得删除无法归属的行。**
+
+### 三、两棒合并交付，不发布中间态
+
+`P2-AUDIT-READ-AUTHZ-001` 与 `P2-AUDIT-TRACE-SCOPE-001` **一起做、一起交付**，不单独发布前者。
+
+理由：`P2-AUDIT-READ-AUTHZ-001` 首次开棒已零改动停手，原因是 `app/ports/auth.py::Principal.org_ctx` 只能证明**调用者自己**的租户，而 `app/ports/task_store.py::TaskRecord` 及 Trace 持久模型均无租户维度，仓库也不存在从目标对象标识解析到租户的服务端来源。因此 2026-08-30 裁决的判据 3（同租户跨用户读取成功）与判据 4（跨租户同标识不可见）**在归属列落地前不可能同时满足**。
+
+若只交付前者并采用「不可证明目标租户即拒绝」，实际效果是审计角色**只能读自己的证据**——相对现状（`admin` 可读全部）是**运营能力的实质回退**，会掐掉管理员的跨用户排障路径。归属列落地后两条判据即可同时成立，故合并交付优于分段发布。
+
+**影响面**：`P2-AUDIT-READ-AUTHZ-001` 的 BLOCKED 原因由「授权未取得 + 恢复路径待裁」变更为「与 `P2-AUDIT-TRACE-SCOPE-001` 合并交付，不单独开棒」；`P2-AUDIT-TRACE-SCOPE-001` 的两项红线阻塞解除。两棒仍各为 A 档，仍须监理窗口与 Opus 桥；合并交付不降低任何一棒的 Review 强度，也不豁免全量测试触发条件。
