@@ -89,6 +89,8 @@ export interface SystemMessageView {
 export type RecordsIncompleteReason =
   | 'authoritative_count_missing'
   | 'authoritative_count_mismatch'
+  | 'producer_completeness_missing'
+  | 'producer_declared_incomplete'
   | 'returned_count_missing'
   | 'returned_count_mismatch';
 
@@ -321,9 +323,15 @@ function optionalCount(value: unknown): number | null {
 function recordsIncompleteReasons(
   returnedCount: number | null,
   itemCount: number,
+  isComplete: unknown,
   authoritativeCount?: number | null,
 ): RecordsIncompleteReason[] {
   const reasons: RecordsIncompleteReason[] = [];
+  if (isComplete === undefined) {
+    reasons.push('producer_completeness_missing');
+  } else if (isComplete !== true) {
+    reasons.push('producer_declared_incomplete');
+  }
   if (returnedCount === null) {
     reasons.push('returned_count_missing');
   } else if (returnedCount !== itemCount) {
@@ -445,6 +453,7 @@ function projectPendingWorkflows(data: unknown): RecordsView | null {
   const incompleteReasons = recordsIncompleteReasons(
     returnedCount,
     items.length,
+    data.is_complete,
     authoritativeCount,
   );
   return {
@@ -501,6 +510,7 @@ function projectSystemMessages(
   const incompleteReasons = recordsIncompleteReasons(
     returnedCount,
     items.length,
+    data.is_complete,
   );
   return {
     kind: 'system_messages',

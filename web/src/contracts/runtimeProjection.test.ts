@@ -300,16 +300,19 @@ describe('partial record-list projection', () => {
     expect(records.incompleteReasons).toContain('authoritative_count_mismatch');
   });
 
-  it('does not use is_complete as an independent incompleteness signal', () => {
+  it.each([
+    ['producer declares incomplete', false, 'producer_declared_incomplete'],
+    ['producer completeness is missing', undefined, 'producer_completeness_missing'],
+  ] as const)('marks %s as an independent incompleteness signal', (_label, isComplete, reason) => {
     const records = projectRecords(
-      pendingWorkflows({ is_complete: false }),
+      pendingWorkflows({ is_complete: isComplete }),
       navigationConfig,
     );
 
     expect(records?.kind).toBe('pending_workflows');
     if (records?.kind !== 'pending_workflows') throw new Error('wrong record kind');
     expect(records.items).toHaveLength(1);
-    expect(records.incomplete).toBe(false);
-    expect(records.incompleteReasons).toEqual([]);
+    expect(records.incomplete).toBe(true);
+    expect(records.incompleteReasons).toContain(reason);
   });
 });

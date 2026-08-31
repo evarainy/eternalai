@@ -8,6 +8,8 @@ const LONG_CONTENT_THRESHOLD = 120;
 const incompleteReasonLabels: Record<RecordsIncompleteReason, string> = {
   authoritative_count_missing: 'OA 未提供总记录数。',
   authoritative_count_mismatch: 'OA 总记录数与实际展示记录数不一致。',
+  producer_completeness_missing: 'OA 未声明本次结果是否完整。',
+  producer_declared_incomplete: 'OA 表示本次结果尚未完整返回。',
   returned_count_missing: 'OA 未提供本次返回记录数。',
   returned_count_mismatch: 'OA 返回计数与实际记录数不一致。',
 };

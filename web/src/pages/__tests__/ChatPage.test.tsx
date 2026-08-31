@@ -587,6 +587,25 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
   });
 
+  it('marks pending workflows incomplete when is_complete is false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({ data: pendingWorkflowsData({ is_complete: false }) }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询不完整待办');
+
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('采购申请审批')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
   it('marks system messages incomplete when returned_count is missing', async () => {
     vi.stubGlobal(
       'fetch',
@@ -606,6 +625,25 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
   });
 
+  it('marks system messages incomplete when is_complete is false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({ data: systemMessagesData({ is_complete: false }) }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询生产方声明不完整的消息');
+
+    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
   it('does not render an incomplete zero-row response as a normal empty state', async () => {
     vi.stubGlobal(
       'fetch',
@@ -614,8 +652,9 @@ describe('ChatPage response projection', () => {
           envelope({
             data: pendingWorkflowsData({
               workflows: [],
-              returned_count: 1,
-              authoritative_count: 1,
+              returned_count: 0,
+              authoritative_count: 0,
+              is_complete: false,
             }),
           }),
         ),
@@ -626,7 +665,7 @@ describe('ChatPage response projection', () => {
     sendMessage('查询零行不完整待办');
 
     expect(await screen.findByText('当前仅展示已取回的 0 条记录。')).toBeInTheDocument();
-    expect(screen.getByText('OA 返回计数与实际记录数不一致。')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
     expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
   });
 
