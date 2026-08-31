@@ -1,5 +1,8 @@
 """Add the local read-only organization directory mirror.
 
+This mirror contains rebuildable, read-only derived data. Downgrade discards
+all mirror data; after upgrading again, the directory must be imported anew.
+
 Revision ID: 20260831_120000
 Revises: 20260827_180000
 Create Date: 2026-08-31
@@ -23,7 +26,7 @@ def upgrade() -> None:
         sa.Column("department_id", sa.Text(), primary_key=True),
         sa.Column("parent_department_id", sa.Text(), nullable=True),
         sa.Column("display_name", sa.Text(), nullable=False),
-        sa.Column("organization_id", sa.Text(), nullable=True),
+        sa.Column("subcompany_id", sa.Text(), nullable=True),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
@@ -51,6 +54,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Drop the rebuildable mirror and all data stored in it."""
     op.drop_index(
         "ix_organization_user_memberships_department",
         table_name="organization_user_memberships",

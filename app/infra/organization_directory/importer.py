@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from app.infra.organization_directory.validation import validate_department_graph
+from app.infra.organization_directory.validation import (
+    has_complete_snapshot_evidence,
+    validate_department_graph,
+)
 from app.ports.organization_directory import (
     OrganizationDepartment,
     OrganizationDirectoryError,
+    OrganizationDirectoryPage,
     OrganizationDirectorySnapshot,
     OrganizationUserMembership,
 )
@@ -19,30 +23,58 @@ _CREDENTIAL_FIELDS = frozenset({"sessionkey", "datakey"})
 
 def build_directory_snapshot(
     *,
-    department_rows: Sequence[Mapping[str, Any]],
-    user_rows: Sequence[Mapping[str, Any]],
-    authoritative_user_count: int,
+    departments: Sequence[OrganizationDepartment],
+    user_pages: Sequence[OrganizationDirectoryPage],
+    authoritative_user_count_before: int,
+    authoritative_user_count_after: int | None,
     fetched_at: datetime,
+    count_error_code: Literal["authoritative_count_after_failed"] | None = None,
 ) -> OrganizationDirectorySnapshot:
-    """Build a safe snapshot from already-fetched OA rows.
+    """Aggregate normalized pages and derive completeness from fetch evidence.
 
     Query credentials belong to the transport adapter and are intentionally not
     accepted by this boundary.
     """
-    if not isinstance(authoritative_user_count, int) or authoritative_user_count < 0:
-        raise OrganizationDirectoryError("invalid authoritative directory count")
+    _validate_count(authoritative_user_count_before)
+    if authoritative_user_count_after is not None:
+        _validate_count(authoritative_user_count_after)
 
+    normalized_departments = tuple(departments)
+    validate_department_graph(normalized_departments)
+    snapshot = OrganizationDirectorySnapshot(
+        departments=normalized_departments,
+        user_pages=tuple(user_pages),
+        authoritative_user_count_before=authoritative_user_count_before,
+        authoritative_user_count_after=authoritative_user_count_after,
+        count_error_code=count_error_code,
+        is_complete=False,
+        fetched_at=fetched_at,
+    )
+    return snapshot.model_copy(
+        update={"is_complete": has_complete_snapshot_evidence(snapshot)}
+    )
+
+
+def build_directory_departments(
+    department_rows: Sequence[Mapping[str, Any]],
+) -> tuple[OrganizationDepartment, ...]:
     departments = tuple(_department(row) for row in department_rows)
     validate_department_graph(departments)
-    memberships = tuple(_membership(_raw_fields(row)) for row in user_rows)
-    returned_count = len(user_rows)
-    return OrganizationDirectorySnapshot(
-        departments=departments,
-        memberships=memberships,
-        authoritative_user_count=authoritative_user_count,
-        returned_user_count=returned_count,
-        is_complete=returned_count == authoritative_user_count,
-        fetched_at=fetched_at,
+    return departments
+
+
+def build_directory_page(
+    *,
+    current_page: int,
+    next_page: int | None,
+    is_end: bool,
+    user_rows: Sequence[Mapping[str, Any]],
+) -> OrganizationDirectoryPage:
+    return OrganizationDirectoryPage(
+        current_page=current_page,
+        next_page=next_page,
+        is_end=is_end,
+        memberships=tuple(_membership(_raw_fields(row)) for row in user_rows),
     )
 
 
@@ -62,7 +94,7 @@ def _department(row: Mapping[str, Any]) -> OrganizationDepartment:
         department_id=_required_text(row, "id"),
         parent_department_id=_optional_text(row, "pid"),
         display_name=_required_text(row, "name"),
-        organization_id=_optional_text(row, "psubcompanyid"),
+        subcompany_id=_optional_text(row, "psubcompanyid"),
     )
 
 
@@ -91,4 +123,13 @@ def _optional_text(row: Mapping[str, Any], field: str) -> str | None:
     return value
 
 
-__all__ = ("build_directory_snapshot",)
+def _validate_count(value: int) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise OrganizationDirectoryError("invalid authoritative directory count")
+
+
+__all__ = (
+    "build_directory_departments",
+    "build_directory_page",
+    "build_directory_snapshot",
+)

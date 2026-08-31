@@ -52,7 +52,7 @@ def test_upgrade_creates_only_new_directory_tables_and_indexes() -> None:
     }
     assert "manager_id" not in department_columns | membership_columns
     assert department_columns == {
-        "department_id", "parent_department_id", "display_name", "organization_id", "fetched_at"
+        "department_id", "parent_department_id", "display_name", "subcompany_id", "fetched_at"
     }
     assert membership_columns == {
         "user_id", "department_id", "organization_id", "subcompany_id", "fetched_at"
@@ -71,3 +71,5 @@ def test_downgrade_only_removes_directory_objects() -> None:
     ]
     assert recorder.calls[1][1] == ("organization_user_memberships",)
     assert recorder.calls[3][1] == ("organization_departments",)
+    assert "downgrade discards" in (migration.__doc__ or "").casefold()
+    assert "imported anew" in (migration.__doc__ or "").casefold()

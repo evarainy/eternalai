@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OrganizationDirectoryError(RuntimeError):
@@ -18,7 +18,8 @@ class OrganizationDepartment(BaseModel):
     department_id: str
     parent_department_id: str | None = None
     display_name: str
-    organization_id: str | None = None
+    # OA source: psubcompanyid. This is not the membership orgid field.
+    subcompany_id: str | None = None
 
 
 class OrganizationUserMembership(BaseModel):
@@ -30,15 +31,40 @@ class OrganizationUserMembership(BaseModel):
     subcompany_id: str | None = None
 
 
+class OrganizationDirectoryPage(BaseModel):
+    """One normalized OA user page plus its pagination outcome."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    current_page: int = Field(ge=1)
+    next_page: int | None = Field(default=None, ge=1)
+    is_end: bool
+    memberships: tuple[OrganizationUserMembership, ...]
+    error_code: Literal["page_fetch_failed"] | None = None
+
+
 class OrganizationDirectorySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     departments: tuple[OrganizationDepartment, ...]
-    memberships: tuple[OrganizationUserMembership, ...]
-    authoritative_user_count: int
-    returned_user_count: int
+    user_pages: tuple[OrganizationDirectoryPage, ...]
+    authoritative_user_count_before: int = Field(ge=0)
+    authoritative_user_count_after: int | None = Field(default=None, ge=0)
+    count_error_code: Literal["authoritative_count_after_failed"] | None = None
     is_complete: bool
     fetched_at: datetime
+
+    @property
+    def memberships(self) -> tuple[OrganizationUserMembership, ...]:
+        return tuple(
+            membership
+            for page in self.user_pages
+            for membership in page.memberships
+        )
+
+    @property
+    def returned_user_count(self) -> int:
+        return len(self.memberships)
 
 
 class OrganizationDirectoryPort(Protocol):
@@ -57,10 +83,22 @@ class OrganizationDirectoryPort(Protocol):
     ) -> list[OrganizationUserMembership]: ...
 
 
+class OrganizationDirectorySourcePort(Protocol):
+    """Credential-free structural reads used by the pagination executor."""
+
+    async def fetch_departments(self) -> tuple[OrganizationDepartment, ...]: ...
+
+    async def fetch_authoritative_user_count(self) -> int: ...
+
+    async def fetch_user_page(self, current_page: int) -> OrganizationDirectoryPage: ...
+
+
 __all__ = (
     "OrganizationDepartment",
     "OrganizationDirectoryError",
+    "OrganizationDirectoryPage",
     "OrganizationDirectoryPort",
     "OrganizationDirectorySnapshot",
+    "OrganizationDirectorySourcePort",
     "OrganizationUserMembership",
 )

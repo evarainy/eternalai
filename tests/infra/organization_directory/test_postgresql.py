@@ -12,6 +12,7 @@ from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDi
 from app.ports.organization_directory import (
     OrganizationDepartment,
     OrganizationDirectoryError,
+    OrganizationDirectoryPage,
     OrganizationDirectorySnapshot,
     OrganizationUserMembership,
 )
@@ -29,31 +30,38 @@ def _snapshot(*, complete: bool = True) -> OrganizationDirectorySnapshot:
             OrganizationDepartment(
                 department_id="synthetic-root",
                 display_name="Synthetic root",
-                organization_id="synthetic-org",
+                subcompany_id="synthetic-subcompany",
             ),
             OrganizationDepartment(
                 department_id="synthetic-child",
                 parent_department_id="synthetic-root",
                 display_name="Synthetic child",
-                organization_id="synthetic-org",
+                subcompany_id="synthetic-subcompany",
             ),
             OrganizationDepartment(
                 department_id="synthetic-leaf",
                 parent_department_id="synthetic-child",
                 display_name="Synthetic leaf",
-                organization_id="synthetic-org",
-            ),
-        ),
-        memberships=(
-            OrganizationUserMembership(
-                user_id="synthetic-user",
-                department_id="synthetic-leaf",
-                organization_id="synthetic-org",
                 subcompany_id="synthetic-subcompany",
             ),
         ),
-        authoritative_user_count=1,
-        returned_user_count=1 if complete else 0,
+        user_pages=(
+            OrganizationDirectoryPage(
+                current_page=1,
+                next_page=None,
+                is_end=True,
+                memberships=(
+                    OrganizationUserMembership(
+                        user_id="synthetic-user",
+                        department_id="synthetic-leaf",
+                        organization_id="synthetic-org",
+                        subcompany_id="synthetic-subcompany",
+                    ),
+                ),
+            ),
+        ),
+        authoritative_user_count_before=1,
+        authoritative_user_count_after=1,
         is_complete=complete,
         fetched_at=FETCHED_AT,
     )
@@ -104,7 +112,8 @@ def test_declared_complete_snapshot_must_match_actual_membership_rows() -> None:
     def forbidden_factory():
         raise AssertionError("count mismatch must not access database")
 
-    inconsistent = _snapshot().model_copy(update={"memberships": ()})
+    inconsistent_page = _snapshot().user_pages[0].model_copy(update={"memberships": ()})
+    inconsistent = _snapshot().model_copy(update={"user_pages": (inconsistent_page,)})
     directory = PostgreSQLOrganizationDirectory(forbidden_factory)  # type: ignore[arg-type]
     with pytest.raises(OrganizationDirectoryError, match="incomplete"):
         asyncio.run(directory.replace_snapshot(inconsistent))
