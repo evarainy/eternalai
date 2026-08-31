@@ -202,7 +202,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | TS/TSX 弱测试确定性门禁 | `scripts/check_weak_tests.py` 已支持前端测试；`uv run python scripts/check_weak_tests.py web/src/pages/__tests__/ChatPage.test.tsx` 确定性返回 `Weak-test check passed.`。 |
 | 统一工作台外壳与首个薄查询层消费者 | `web/src/App.tsx`、`web/src/app/AppShell.tsx`、`web/src/shared/ui/QueryTable.tsx`、`web/src/shared/query/useTableQuery.ts` 与对应前端测试；第二个真实生产消费者仍作为活欠债保留。 |
 | SDUI 具名跨语言 exact 合同 | `ActionResponseData`、`ConfirmCardPayload`、Runtime OpenAPI / Orval 生成物及 action/confirm 合同守卫；后续非阻断发现由 `P2-SDUI-RENDERER-002` 承接。 |
-| 组织目录用途边界行为守卫 | 主防线为 `tests/infra/organization_directory/test_postgresql.py::test_list_user_memberships_returns_complete_set_across_organization_values`：真实 PostgreSQL reader 必须完整返回同一用户的多个组织值与空组织值；`tests/architecture/test_organization_directory_boundary.py` 仅为补充层。SQL 具体组织值谓词与 Python 私有 predicate 两类收窄反证均会使主防线变红。 |
+| 组织目录用途边界行为守卫 | 主防线为 `tests/infra/organization_directory/test_postgresql.py::test_list_user_memberships_returns_complete_set_across_organization_values`：真实 PostgreSQL reader 必须完整返回同一用户在 `organization_id` 与 `subcompany_id` 上同时具备非空重复值、双 `NULL` 与独有值的完整 membership 列表；`tests/architecture/test_organization_directory_boundary.py` 仅为补充层。按组织或分公司折叠、非空/具体值收窄、Python 截断或私有 predicate、SQL `LIMIT` 七类反证均会使主防线变红。 |
 
 ### 外部验收纪要（待雨爷裁）
 

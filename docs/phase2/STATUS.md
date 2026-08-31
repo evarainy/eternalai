@@ -1,7 +1,7 @@
 # Phase 2 当前状态
 
 - 当前基线 task_id：`P2-ORGDIR-BOUNDARY-GUARD-001`
-- pytest：`2529 passed, 87 warnings`（0 skipped，0 failed；本棒收尾全量，未使用 `--ignore=`；开工基线为 `2528 passed, 87 warnings`）
+- pytest：`2529 passed, 87 warnings`（0 skipped，0 failed；本棒返修收尾全量，未使用 `--ignore=`；返修开工基线为 `2529 passed, 87 warnings`）
 - 当前实现基线后端定向 pytest：`403 passed, 60 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；本棒实测）
 - 当前实现基线前端 `pnpm --dir web test`：`197 passed, 0 failed, 0 skipped`（20 个测试文件；本棒实测）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；本棒实测）
