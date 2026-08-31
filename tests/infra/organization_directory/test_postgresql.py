@@ -67,6 +67,65 @@ def _snapshot(*, complete: bool = True) -> OrganizationDirectorySnapshot:
     )
 
 
+def _membership_boundary_snapshot() -> OrganizationDirectorySnapshot:
+    base = _snapshot()
+    departments = base.departments + (
+        OrganizationDepartment(
+            department_id="synthetic-extra",
+            parent_department_id="synthetic-root",
+            display_name="Synthetic extra",
+            subcompany_id="synthetic-subcompany-shared",
+        ),
+        OrganizationDepartment(
+            department_id="synthetic-null",
+            parent_department_id="synthetic-root",
+            display_name="Synthetic null",
+            subcompany_id=None,
+        ),
+    )
+    memberships = (
+        OrganizationUserMembership(
+            user_id="synthetic-user",
+            department_id="synthetic-child",
+            organization_id="synthetic-org-shared",
+            subcompany_id="synthetic-subcompany-shared",
+        ),
+        OrganizationUserMembership(
+            user_id="synthetic-user",
+            department_id="synthetic-extra",
+            organization_id="synthetic-org-shared",
+            subcompany_id="synthetic-subcompany-shared",
+        ),
+        OrganizationUserMembership(
+            user_id="synthetic-user",
+            department_id="synthetic-leaf",
+            organization_id=None,
+            subcompany_id=None,
+        ),
+        OrganizationUserMembership(
+            user_id="synthetic-user",
+            department_id="synthetic-null",
+            organization_id=None,
+            subcompany_id=None,
+        ),
+        OrganizationUserMembership(
+            user_id="synthetic-user",
+            department_id="synthetic-root",
+            organization_id="synthetic-org-unique",
+            subcompany_id="synthetic-subcompany-unique",
+        ),
+    )
+    page = base.user_pages[0].model_copy(update={"memberships": memberships})
+    return base.model_copy(
+        update={
+            "departments": departments,
+            "user_pages": (page,),
+            "authoritative_user_count_before": len(memberships),
+            "authoritative_user_count_after": len(memberships),
+        }
+    )
+
+
 def _require_database_url() -> str:
     if not DATABASE_URL:
         raise AssertionError("DATABASE_URL must be set by the test runner environment")
@@ -89,6 +148,58 @@ def test_replaces_and_queries_complete_directory_snapshot() -> None:
             ]
             assert memberships == list(_snapshot().memberships)
             assert await directory.get_department("synthetic-child") == _snapshot().departments[1]
+        finally:
+            async with factory() as session:
+                await session.execute(text("DELETE FROM organization_user_memberships"))
+                await session.execute(text("DELETE FROM organization_departments"))
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_list_user_memberships_returns_complete_set_across_organization_values() -> None:
+    async def exercise() -> None:
+        engine = make_async_engine(_require_database_url())
+        factory = make_async_session_factory(engine)
+        directory = PostgreSQLOrganizationDirectory(factory)
+        try:
+            await directory.replace_snapshot(_membership_boundary_snapshot())
+
+            memberships = await directory.list_user_memberships("synthetic-user")
+
+            assert memberships == [
+                OrganizationUserMembership(
+                    user_id="synthetic-user",
+                    department_id="synthetic-child",
+                    organization_id="synthetic-org-shared",
+                    subcompany_id="synthetic-subcompany-shared",
+                ),
+                OrganizationUserMembership(
+                    user_id="synthetic-user",
+                    department_id="synthetic-extra",
+                    organization_id="synthetic-org-shared",
+                    subcompany_id="synthetic-subcompany-shared",
+                ),
+                OrganizationUserMembership(
+                    user_id="synthetic-user",
+                    department_id="synthetic-leaf",
+                    organization_id=None,
+                    subcompany_id=None,
+                ),
+                OrganizationUserMembership(
+                    user_id="synthetic-user",
+                    department_id="synthetic-null",
+                    organization_id=None,
+                    subcompany_id=None,
+                ),
+                OrganizationUserMembership(
+                    user_id="synthetic-user",
+                    department_id="synthetic-root",
+                    organization_id="synthetic-org-unique",
+                    subcompany_id="synthetic-subcompany-unique",
+                ),
+            ]
         finally:
             async with factory() as session:
                 await session.execute(text("DELETE FROM organization_user_memberships"))
