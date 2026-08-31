@@ -20,7 +20,7 @@ import { workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
-import WorkObjectSearchPage from './pages/WorkObjectSearchPage';
+import WorkObjectSearchPage from './features/work-dispatch/WorkObjectSearchPage';
 import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
 import BindingsPage from './pages/admin/BindingsPage';
@@ -63,7 +63,7 @@ export function ProtectedRoute() {
     return (
       <Navigate
         replace
-        state={{ from: location.pathname }}
+        state={{ from: `${location.pathname}${location.search}` }}
         to="/login"
       />
     );

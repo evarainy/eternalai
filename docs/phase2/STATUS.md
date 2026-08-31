@@ -3,7 +3,7 @@
 - 当前基线 task_id：`P2-WO-SEARCH-001`
 - pytest：`2536 passed, 87 warnings`（0 skipped，0 failed；本棒收口全量，未使用 `--ignore=`；开工基线为 `2536 passed, 87 warnings`）
 - 当前实现基线后端定向 pytest：`409 passed, 60 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；本棒实测）
-- 当前实现基线前端 `pnpm --dir web test`：`261 passed, 0 failed, 0 skipped`（21 个测试文件；本棒实测）
+- 当前实现基线前端 `pnpm --dir web test`：`266 passed, 0 failed, 0 skipped`（21 个测试文件；本棒实测）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；本棒实测）
 - `tests/architecture/`：`112 passed`（本棒实测）
 - 必达主链指针：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。`P2-LOW-RISK-WRITE-001` 当前 **BLOCKED** 于 OA 审批提交协议结构，输入到位前不开棒；这是 P2 收口的唯一真实卡点。

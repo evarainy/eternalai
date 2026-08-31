@@ -2,14 +2,14 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Empty, Flex, Space, Tag, Typography } from 'antd';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ApiError } from '../api/mutator';
-import { usePageContextRegistration } from '../app/usePageContextRegistration';
-import type { PageContextDeclaration } from '../contracts/pageContext';
-import { listWorkObjectsApiV1WorkObjectsGet as listWorkObjects } from '../generated/work-objects/work-objects';
+import { ApiError } from '../../api/mutator';
+import { usePageContextRegistration } from '../../app/usePageContextRegistration';
+import type { PageContextDeclaration } from '../../contracts/pageContext';
+import { listWorkObjectsApiV1WorkObjectsGet as listWorkObjects } from '../../generated/work-objects/work-objects';
 import type {
   WorkObjectListResponseItemsItem,
-} from '../generated/work-objects/work-objects.schemas';
-import { useAuthStore } from '../stores/authStore';
+} from '../../generated/work-objects/work-objects.schemas';
+import { useAuthStore } from '../../stores/authStore';
 import styles from './WorkObjectSearchPage.module.css';
 
 const { Paragraph, Text, Title } = Typography;
@@ -74,6 +74,15 @@ function errorText(error: unknown): string {
   return 'unknown_error: 请求失败';
 }
 
+function SearchPageContextRegistration({
+  declaration,
+}: {
+  declaration: PageContextDeclaration;
+}) {
+  usePageContextRegistration(declaration);
+  return null;
+}
+
 export default function WorkObjectSearchPage() {
   const [searchParams] = useSearchParams();
   const authGeneration = useAuthStore((state) => state.generation);
@@ -85,7 +94,7 @@ export default function WorkObjectSearchPage() {
     queryKey: ['work-objects', authGeneration],
     queryFn: listWorkObjects,
   });
-  const items = listQuery.data?.items ?? EMPTY_ITEMS;
+  const items = listQuery.isSuccess ? listQuery.data.items : EMPTY_ITEMS;
   const results = useMemo(
     () =>
       hasSearch
@@ -137,21 +146,28 @@ export default function WorkObjectSearchPage() {
     };
   }, [hasSearch, resultFreshness, results, term]);
 
-  usePageContextRegistration(pageContextDeclaration);
-
-  const scopeText = listQuery.isLoading
+  const scopeHeadline = listQuery.isPending
+    ? '正在查找'
+    : listQuery.isError
+      ? '查找失败'
+      : hasSearch
+        ? `找到 ${results.length} 条`
+        : '等待搜索';
+  const scopeText = listQuery.isPending
     ? '正在读取当前可见的工作事项批次。'
-    : `当前搜索范围：已加载的 ${loadedCount} 条工作事项。`;
-  const emptyReason = listQuery.isLoading
-    ? '正在读取当前可见的工作事项，因此暂时还不能判断搜索结果。'
-    : listQuery.error
-      ? '当前可见批次读取失败，因此尚未完成搜索。'
+    : listQuery.isError
+      ? '当前可见的工作事项批次读取失败。'
+      : `当前搜索范围：已加载的 ${loadedCount} 条工作事项。`;
+  const emptyReason = listQuery.isPending
+    ? '正在查找当前可见的工作事项，请稍候。'
+    : listQuery.isError
+      ? `查找失败：${errorText(listQuery.error)}。`
       : hasSearch
         ? `没有匹配项。已在当前已加载的 ${loadedCount} 条工作事项中查找；这不代表未加载的事项中一定不存在。`
         : `尚未开始搜索，因为还没有提交关键词。${scopeText}`;
-  const emptyNextStep = listQuery.isLoading
+  const emptyNextStep = listQuery.isPending
     ? '下一步：请稍候，批次加载完成后会自动显示结果。'
-    : listQuery.error
+    : listQuery.isError
       ? '下一步：稍后重试，或先回到工作事项页检查数据状态。'
       : hasSearch
         ? '下一步：检查标题关键词，或输入完整的来源编号、责任人；也可回到工作事项页刷新当前批次后再试。'
@@ -169,13 +185,13 @@ export default function WorkObjectSearchPage() {
             </Paragraph>
           </div>
           <div className={styles.scopeCard} aria-live="polite">
-            <strong>{hasSearch ? `找到 ${results.length} 条` : '等待搜索'}</strong>
+            <strong>{scopeHeadline}</strong>
             <span>{scopeText}</span>
           </div>
         </Flex>
       </Card>
 
-      {listQuery.error ? (
+      {listQuery.isError ? (
         <Alert
           showIcon
           type="error"
@@ -184,7 +200,7 @@ export default function WorkObjectSearchPage() {
         />
       ) : null}
 
-      {listQuery.data?.limit_exceeded ? (
+      {listQuery.isSuccess && listQuery.data.limit_exceeded ? (
         <Alert
           showIcon
           type="warning"
@@ -202,7 +218,7 @@ export default function WorkObjectSearchPage() {
           <Button><Link to="/work-objects">返回工作事项</Link></Button>
         </div>
 
-        {results.length === 0 ? (
+        {!listQuery.isSuccess || results.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={(
@@ -242,6 +258,9 @@ export default function WorkObjectSearchPage() {
           </div>
         )}
       </section>
+      {listQuery.isSuccess ? (
+        <SearchPageContextRegistration declaration={pageContextDeclaration} />
+      ) : null}
     </Space>
   );
 }

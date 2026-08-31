@@ -3,20 +3,20 @@ import { ConfigProvider } from 'antd';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AIDock } from '../../app/AIDock';
+import { AIDock } from '../../../app/AIDock';
 import type {
   OAWorkObjectView,
   WorkObjectListResponse,
-} from '../../generated/work-objects/work-objects.schemas';
-import { useAIDockStore } from '../../stores/aiDockStore';
-import { useAuthStore } from '../../stores/authStore';
+} from '../../../generated/work-objects/work-objects.schemas';
+import { useAIDockStore } from '../../../stores/aiDockStore';
+import { useAuthStore } from '../../../stores/authStore';
 import WorkObjectSearchPage from '../WorkObjectSearchPage';
 
 const apiMocks = vi.hoisted(() => ({
   listWorkObjects: vi.fn(),
 }));
 
-vi.mock('../../generated/work-objects/work-objects', () => ({
+vi.mock('../../../generated/work-objects/work-objects', () => ({
   listWorkObjectsApiV1WorkObjectsGet: apiMocks.listWorkObjects,
 }));
 
@@ -119,6 +119,35 @@ describe('WorkObjectSearchPage', () => {
     },
   );
 
+  it('shows a distinct loading state without a false zero count or page context', () => {
+    apiMocks.listWorkObjects.mockReturnValueOnce(new Promise(() => undefined));
+
+    renderPage('/search?q=budget');
+
+    expect(screen.getByText('正在查找', { selector: 'strong' })).toBeInTheDocument();
+    expect(
+      screen.getByText('正在查找当前可见的工作事项，请稍候。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('找到 0 条')).not.toBeInTheDocument();
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+  });
+
+  it('shows a distinct failure reason and next step without registering a false empty context', async () => {
+    apiMocks.listWorkObjects.mockRejectedValueOnce(new Error('network unavailable'));
+
+    renderPage('/search?q=budget');
+
+    expect(
+      await screen.findByText('查找失败', { selector: 'strong' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('查找失败：network unavailable。')).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/下一步：稍后重试，或先回到工作事项页检查数据状态/),
+    ).toHaveLength(2);
+    expect(screen.queryByText('找到 0 条')).not.toBeInTheDocument();
+    expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
+  });
+
   it.each([
     ['/search?q=oa-ref', 'OA-REF-002'],
     ['/search?q=li', 'Li Ming'],
@@ -162,6 +191,13 @@ describe('WorkObjectSearchPage', () => {
     expect(
       screen.getByText('搜索只覆盖当前已加载的 3 条工作事项'),
     ).toBeInTheDocument();
+    expect(screen.getByText('找到 0 条')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(useAIDockStore.getState().pageContextDeclaration).toMatchObject({
+        surface_id: 'work-object-search',
+        work_object_refs: [],
+      });
+    });
   });
 
   it('registers the hit set through the existing nine-field page-context contract', async () => {
