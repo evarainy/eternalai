@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import uuid4
 
 from sqlalchemy import event, text
 
+from app.api.v1.work_objects import WorkObjectService, WorkObjectView
 from app.db.session import make_async_engine, make_async_session_factory
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
+from app.ports.auth import Principal, PrincipalOrgContext
+from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.work_object import OAPendingWorkSnapshot
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -23,9 +28,14 @@ def _require_db() -> str:
     return DATABASE_URL
 
 
-def _snapshot(*, title: str, status: str) -> OAPendingWorkSnapshot:
+def _snapshot(
+    *,
+    title: str,
+    status: str,
+    source_ref: str = "shared-oa-todo",
+) -> OAPendingWorkSnapshot:
     return OAPendingWorkSnapshot(
-        source_ref="shared-oa-todo",
+        source_ref=source_ref,
         title=title,
         status=status,
         received_at="2026-08-18",
@@ -34,10 +44,22 @@ def _snapshot(*, title: str, status: str) -> OAPendingWorkSnapshot:
     )
 
 
+def _matches_search_contract(item: WorkObjectView, term: str) -> bool:
+    normalized = term.strip().lower()
+    return (
+        (item.source_title is not None and normalized in item.source_title.lower())
+        or (
+            item.source_ref is not None
+            and item.source_ref.strip().lower() == normalized
+        )
+        or (item.assignee_display_name.strip().lower() == normalized)
+    )
+
+
 def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> None:
     database_url = _require_db()
-    user_a = f"work-object-user-a-{uuid4().hex}"
-    user_b = f"work-object-user-b-{uuid4().hex}"
+    user_a = f"tenant-a-work-object-user-{uuid4().hex}"
+    user_b = f"tenant-b-work-object-user-{uuid4().hex}"
     first_fetch = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
     second_fetch = first_fetch + timedelta(minutes=5)
 
@@ -68,13 +90,52 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
             await store.upsert_oa_pending_workflows(
                 assignee_ai_user_id=user_b,
                 assignee_display_name="User B",
-                snapshots=[_snapshot(title="Other user", status="OA_PENDING")],
+                snapshots=[
+                    _snapshot(
+                        source_ref="tenant-b-only-todo",
+                        title="Other tenant user title",
+                        status="OA_PENDING",
+                    )
+                ],
                 fetched_at=first_fetch,
             )
             user_a_records = await store.list_for_assignee(user_a)
             user_b_records = await store.list_for_assignee(user_b)
             assert len(user_a_records) == len(user_b_records) == 1
             assert user_a_records[0].work_object_id != user_b_records[0].work_object_id
+
+            service = WorkObjectService(
+                store=store,
+                gateway=cast(CapabilityGatewayPort, object()),
+                capability_registry=StaticCapabilityRegistry(),
+            )
+            tenant_a_principal = Principal(
+                ai_user_id=user_a,
+                display_name="User A",
+                roles=(),
+                org_ctx=PrincipalOrgContext(tenant_id="tenant-a"),
+            )
+            tenant_b_principal = Principal(
+                ai_user_id=user_b,
+                display_name="User B",
+                roles=(),
+                org_ctx=PrincipalOrgContext(tenant_id="tenant-b"),
+            )
+            tenant_a_candidates = (await service.list_for_principal(tenant_a_principal)).items
+            tenant_b_candidates = (await service.list_for_principal(tenant_b_principal)).items
+            for tenant_b_query in (
+                "other tenant",
+                " TENANT-B-ONLY-TODO ",
+                " user b ",
+            ):
+                assert not any(
+                    _matches_search_contract(item, tenant_b_query)
+                    for item in tenant_a_candidates
+                )
+                assert any(
+                    _matches_search_contract(item, tenant_b_query)
+                    for item in tenant_b_candidates
+                )
 
             marked = await store.set_handling_mark_for_assignee(
                 user_a_records[0].work_object_id,

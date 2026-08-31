@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import App, {
   AuthenticationEffects,
@@ -9,6 +9,11 @@ import App, {
 } from '../App';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div>{`${location.pathname}${location.search}`}</div>;
+}
 
 describe('application authentication boundary', () => {
   beforeEach(() => {
@@ -95,6 +100,32 @@ describe('application authentication boundary', () => {
     expect(
       screen.queryByRole('heading', { name: '登录 EternalAI' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('preserves the search query through the protected-route login return', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/search?q=OA-WF-001']}>
+          <Routes>
+            <Route path="/login" element={<LoginRoute />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/search" element={<LocationProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+    ).toBeInTheDocument();
+
+    act(() => useAuthStore.getState().markAuthenticated());
+
+    expect(await screen.findByText('/search?q=OA-WF-001')).toBeInTheDocument();
   });
 
   it('clears private query data when reauthentication is required', async () => {

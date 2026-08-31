@@ -20,6 +20,7 @@ import { workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
+import WorkObjectSearchPage from './features/work-dispatch/WorkObjectSearchPage';
 import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
 import BindingsPage from './pages/admin/BindingsPage';
@@ -62,7 +63,7 @@ export function ProtectedRoute() {
     return (
       <Navigate
         replace
-        state={{ from: location.pathname }}
+        state={{ from: `${location.pathname}${location.search}` }}
         to="/login"
       />
     );
@@ -96,6 +97,7 @@ export default function App() {
                 <Route element={<AppShell />}>
                   <Route path="/" element={<ChatPage />} />
                   <Route path="/chat" element={<Navigate replace to="/" />} />
+                  <Route path="/search" element={<WorkObjectSearchPage />} />
                   <Route path="/work-objects" element={<WorkObjectsPage />} />
                   <Route path="/admin/registry" element={<RegistryPage />} />
                   <Route path="/admin/tasks" element={<TasksPage />} />

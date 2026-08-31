@@ -16,6 +16,7 @@ interface AIDockProps {
 }
 
 const surfaceLabels: Record<string, string> = {
+  'work-object-search': '工作事项搜索结果',
   'work-objects': '工作事项',
 };
 

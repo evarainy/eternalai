@@ -7,6 +7,8 @@ describe('getReturnPath', () => {
   it.each([
     ['/admin/tasks', '/admin/tasks'],
     ['/chat', '/chat'],
+    ['/search', '/search'],
+    ['/search?q=OA-WF-001', '/search?q=OA-WF-001'],
     ['/work-objects', '/work-objects'],
     ['/', '/'],
   ])('allows the named protected path %s', (from, expected) => {
@@ -22,6 +24,7 @@ describe('getReturnPath', () => {
     ['non-object state', '/chat'],
     ['non-string from', { from: 123 }],
     ['unlisted path', { from: '/health' }],
+    ['unlisted path with query', { from: '/health?q=OA-WF-001' }],
   ];
 
   it.each(rejectedStates)('falls back for %s', (_label, state) => {

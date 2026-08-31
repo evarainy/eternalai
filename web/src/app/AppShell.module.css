@@ -102,14 +102,19 @@
 }
 
 .topbar {
-  display: flex;
+  display: grid;
   min-height: 76px;
+  grid-template-columns: minmax(140px, 1fr) 280px minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
   padding: 10px 28px;
   background: var(--workbench-surface);
   border-bottom: 1px solid var(--workbench-border);
+}
+
+.topbarSearch {
+  width: 280px;
+  justify-self: center;
 }
 
 .location {
@@ -129,6 +134,7 @@
 .topbarActions {
   display: flex;
   align-items: center;
+  justify-self: end;
   gap: 12px;
 }
 
