@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, Input } from 'antd';
+import type { PageContextDeclaration } from '../contracts/pageContext';
 import { projectResponse } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
@@ -11,16 +12,33 @@ import styles from './AIDock.module.css';
 const { TextArea } = Input;
 
 interface AIDockProps {
-  contextLabel: string;
   suppressed?: boolean;
 }
 
-export function AIDock({ contextLabel, suppressed = false }: AIDockProps) {
+const surfaceLabels: Record<string, string> = {
+  'work-objects': '工作事项',
+};
+
+function pageContextLabel(context: PageContextDeclaration | null): string {
+  if (context === null) {
+    return '未绑定页面上下文';
+  }
+  return surfaceLabels[context.surface_id] ?? context.surface_id;
+}
+
+export function AIDock({ suppressed = false }: AIDockProps) {
+  const contextNotice = useAIDockStore((state) => state.contextNotice);
   const draft = useAIDockStore((state) => state.draft);
   const mode = useAIDockStore((state) => state.mode);
+  const pageContextDeclaration = useAIDockStore(
+    (state) => state.pageContextDeclaration,
+  );
   const transcript = useAIDockStore((state) => state.transcript);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const closeDock = useAIDockStore((state) => state.closeDock);
+  const dismissContextNotice = useAIDockStore(
+    (state) => state.dismissContextNotice,
+  );
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const requestInFlight = useRef(false);
@@ -79,6 +97,7 @@ export function AIDock({ contextLabel, suppressed = false }: AIDockProps) {
   };
 
   const hidden = suppressed || mode === 'closed';
+  const contextLabel = pageContextLabel(pageContextDeclaration);
   const dockClassName = `${styles.dock} ${
     mode === 'pinned' ? styles.pinned : styles.drawer
   }`;
@@ -101,9 +120,18 @@ export function AIDock({ contextLabel, suppressed = false }: AIDockProps) {
             <span aria-hidden="true" className={styles.stateIcon}>●</span>
             <span>正在协助：{contextLabel}</span>
           </p>
+          <p className={styles.hint}>
+            可用功能会再次按你的账号权限核对，页面不能增加权限。
+          </p>
+          {contextNotice === null ? null : (
+            <div className={styles.headerActions} role="status">
+              <span>{contextNotice}</span>
+              <Button onClick={dismissContextNotice}>知道了</Button>
+            </div>
+          )}
           <div className={styles.headerActions}>
             <span className={styles.hint}>当前对话只在本次打开应用期间保留。</span>
-            <Button onClick={startNewSession}>新建通用对话</Button>
+            <Button onClick={startNewSession}>新建通用会话</Button>
           </div>
         </header>
 

@@ -182,9 +182,12 @@ function storageText(storage: Storage): string {
 
 beforeEach(() => {
   useAIDockStore.setState({
+    contextNotice: null,
     draft: '',
     lastOpenMode: 'drawer',
     mode: 'closed',
+    pageContextDeclaration: null,
+    sessionContextMode: 'page',
     sessionId: null,
     transcript: [],
   });

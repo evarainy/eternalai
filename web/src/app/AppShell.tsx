@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Button } from 'antd';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAIDockStore } from '../stores/aiDockStore';
@@ -42,9 +43,16 @@ export function AppShell() {
   const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
   const mode = useAIDockStore((state) => state.mode);
   const openDock = useAIDockStore((state) => state.openDock);
+  const clearPageContext = useAIDockStore((state) => state.clearPageContext);
   const isLandingPage = location.pathname === '/' || location.pathname === '/chat';
   const dockOffsetsContent = !isLandingPage && mode === 'pinned';
   const currentLocation = locationLabel(location.pathname);
+
+  useEffect(() => {
+    if (isLandingPage) {
+      clearPageContext();
+    }
+  }, [clearPageContext, isLandingPage]);
 
   return (
     <div
@@ -91,7 +99,7 @@ export function AppShell() {
         </main>
       </div>
 
-      <AIDock contextLabel={currentLocation} suppressed={isLandingPage} />
+      <AIDock suppressed={isLandingPage} />
     </div>
   );
 }
