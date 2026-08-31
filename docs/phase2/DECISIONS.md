@@ -1793,3 +1793,47 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 - `P2-INTERNAL-WO-SCOPE-001` 的「上级主负责人跨层查看与派发」（2026-08-27 裁决）**在现役采集面内无数据来源**，仍 BLOCKED。解除它需要先扩展 OA 只读采集面到**部门表单/部门信息端点**，并以现场数据确认该部署实际使用哪个负责人字段。
 - ADR 中 `managerid` 那条「实现时仍须验证」**已完成验证**，结论为不可用；ADR 的 fail-closed 边界不变。
 - 2026-08-27 裁决本身**不因此失效**——它规定的是授权规则，不是数据来源；若现场部门表也没有负责人数据，则该规则需另行重议，届时由 GOV-SYNC 裁定。
+
+---
+
+## 2026-08-31 — 事实确认：共享测试库未被污染，两个偶发失败是本机 Windows 环境缺陷
+
+**决定**：**不重置测试库**。雨爷已授权重置，但重置前的取证证明重置无效且会销毁证据，故不执行。
+
+**背景**：多根并行棒各自在共享测试库（`127.0.0.1:15432` 的 `eternalai_test`）跑过 alembic 往返后，`phase0/main` 上出现偶发失败，初判为状态污染。取证推翻该判断。
+
+### 一、确实发生过一次真污染，已修复
+
+`alembic_version` 曾停在 `20260831_120000`——该版本只存在于 `P2-OA-ORGANIZATION-DIRECTORY-001` 分支，`phase0/main` 无法解析，导致 `tests/db/` 五个用例报 `CommandError: Can't locate revision`。协调窗口 `downgrade` 到 `20260827_180000` 后恢复。
+
+**这是并行棒共用一个测试库跑 migration 的结构性风险**，与下面两条无关。
+
+### 二、`test_existing_human_gate_decision_maps_to_already_claimed`：测试替身保真度缺陷
+
+`app/infra/human_gate/in_memory.py::InMemoryHumanGate.record_decision` 用**对象相等**判幂等：`existing == decision` 时静默返回旧对象，只有不相等才抛 `HumanGateConflictError`。
+
+而 `app/runtime/runtime.py::RuntimeImpl._resume_pending_workflow` **只有收到 `HumanGateConflictError` 才**转成 already-claimed；幂等返回时会继续 resume，最终返回 `accepted`。
+
+两条 decision 除 `decided_at` 外字段本就全同。本机实测**相邻 `datetime.now(UTC)` 采样 99,894/100,000 对相等**，故两次调用极大概率落在同一时间刻度、对象完全相等，冲突分支不触发。
+
+**生产实现没有此缺陷**：`app/infra/human_gate/postgresql.py::PostgreSQLHumanGate.record_decision` 的 UPDATE 带 `AND decision IS NULL` 谓词，第二次认领匹配 0 行，必然走冲突分支。**认领一次性在生产端由 SQL 谓词强制。**
+
+**因此这是 fake 比生产宽松**——该测试永远抓不到认领一次性的回归。属门禁覆盖性缺陷，不是生产安全漏洞。
+
+### 三、`test_existing_oa_session_survives_upgrade_and_remains_loadable`：Proactor 事件循环不兼容
+
+失败发生在**建立 psycopg async 连接时**，早于任何 SQL。本机默认事件循环实测为 `ProactorEventLoop`，psycopg async 不支持它，须用 Selector loop。
+
+`app/infra/auth/postgresql.py::PostgreSQLCredentialStore.load` 的宽泛 `except Exception` 把驱动层 `InterfaceError` 统一包装成 `CredentialStoreError("OA session credential cannot be loaded")`，**掩盖了真实根因**——这是排查困难的直接原因。
+
+排除了另外两种可能：不是行缺失（`load` 对无行返回 `None` 而非抛错），也不是解密失败（失败在连接建立前，decoder 未执行）。
+
+`P2-OA-ORGANIZATION-DIRECTORY-001` 已在自己的测试里按仓库既有体例切到 Selector loop 绕过；**该绕法尚未推广到既有测试**。
+
+### 四、为什么记这一条
+
+雨爷在授权重置的同时追问「是否需要先检查」。**该追问直接避免了一次错误操作**：两个失败都与数据库状态无关，重置不会修好它们，却会永久销毁判定所需的证据——重置后两者都可能因偶发而变绿，从而被误记为「污染已清除」。
+
+**结论：可重置 ≠ 该重置。授权是必要条件，不是充分理由。**
+
+**影响面**：三项登记为欠债，均不阻塞现役棒——(1) `InMemoryHumanGate` 幂等语义与生产 SQL 谓词不一致；(2) `PostgreSQLCredentialStore.load` 的宽泛 `except` 掩盖根因；(3) 并行棒共用测试库跑 migration 会互相破坏 `alembic_version`。今夜已合并各棒的全量验证在污染发生**之前**执行，结论不受影响；协调窗口将在库恢复后于 `phase0/main` 重跑一次全量实证。
