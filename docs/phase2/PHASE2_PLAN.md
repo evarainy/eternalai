@@ -270,7 +270,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-HIKVISION-ADAPTER-001` | P2-READ-ADAPTER-001 | **A** | 是：现场版本、API/SDK、账号与设备/区域范围未到位；机会层 |
 | `P2-PORT-SEAM-001` | 无 | **A** | 否；机会层 |
 | `P2-OA-ORGANIZATION-DIRECTORY-001` | P2-WORK-OBJECT-001 | **A** | 否：接口结构已固化；不完整或 `managerid` 语义不明时 fail-closed |
-| `P2-INTERNAL-WO-SCOPE-001` | P2-INTERNAL-WO-MODEL-001 | **A** | 否；内部部门树授权不依赖 OA 授权模型 |
+| `P2-INTERNAL-WO-SCOPE-001` | P2-INTERNAL-WO-MODEL-001、P2-OA-ORGANIZATION-DIRECTORY-001 | **A** | **是：缺部门父子关系与唯一主负责人的服务端可信来源**。`PrincipalOrgContext` 只有单值 `department_id`，`alembic/versions/` 无任何部门表，`WorkObjectRecord` 只有 assignee 维度。2026-08-31 开棒实测零改动停手。「不依赖 OA 授权模型」仍成立——依赖的是组织**结构数据**，不是 OA 的授权判定 |
 | `P2-INTERNAL-WO-DISPATCH-001` | P2-INTERNAL-WO-SCOPE-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-INTERNAL-WO-ATTACHMENT-001` | P2-INTERNAL-WO-DISPATCH-001 | **A** | 是：方案限额矛盾须先裁 |
 | `P2-SDUI-RENDERER-002` | P2-SDUI-RENDERER-001、P2-SDUI-SCHEMA-001（均已完成） | **A** | 否：导航合同已裁；机会层；同时承接 `P2-SDUI-SCHEMA-001` 的七条非阻断欠债 |

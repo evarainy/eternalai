@@ -1741,3 +1741,27 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 若只交付前者并采用「不可证明目标租户即拒绝」，实际效果是审计角色**只能读自己的证据**——相对现状（`admin` 可读全部）是**运营能力的实质回退**，会掐掉管理员的跨用户排障路径。归属列落地后两条判据即可同时成立，故合并交付优于分段发布。
 
 **影响面**：`P2-AUDIT-READ-AUTHZ-001` 的 BLOCKED 原因由「授权未取得 + 恢复路径待裁」变更为「与 `P2-AUDIT-TRACE-SCOPE-001` 合并交付，不单独开棒」；`P2-AUDIT-TRACE-SCOPE-001` 的两项红线阻塞解除。两棒仍各为 A 档，仍须监理窗口与 Opus 桥；合并交付不降低任何一棒的 Review 强度，也不豁免全量测试触发条件。
+
+---
+
+## 2026-08-31 — 事实确认：任务派发链整体前置于组织目录，DAG 补一条缺失边
+
+**决定**：`P2-INTERNAL-WO-SCOPE-001` 的 `depends_on` 增加 `P2-OA-ORGANIZATION-DIRECTORY-001`，并标记 BLOCKED。
+
+**问题**：2026-08-21「任务派发拆四棒」把 `P2-INTERNAL-WO-SCOPE-001` 的依赖只写成 `P2-INTERNAL-WO-MODEL-001`；2026-08-27「部门层级在授权中的作用」虽然在实现要求里写明「`P2-OA-ORGANIZATION-DIRECTORY-001` 必须固化部门父子关系与唯一主负责人」，但这条依赖**从未传播进现役 DAG**。2026-08-31 实际开棒后零改动停手，暴露了这条缺失边。
+
+**实测事实**（开棒窗口报告，协调窗口逐条复核）：
+
+- `app/ports/auth.py::PrincipalOrgContext` 只有单值 `tenant_id` / `org_id` / `department_id`，**没有部门父子树，也没有主负责人身份**。
+- `alembic/versions/` 下 11 个 migration **不含任何组织部门表**，无父子关系、无负责人映射。
+- `app/ports/work_object.py::WorkObjectRecord` 与 `WorkObjectStorePort` 只有 assignee 维度，没有 `owner_department_id`、部门可见范围或主负责人合同。
+- `docs/adr/phase2/ADR-P2-OA-DIRECTORY-001-readonly-directory-contract.md` 明确记载 `managerid` 语义未定，**不得猜成部门主负责人**。
+
+因此 2026-08-27 裁决要求的四项——递归部门子树与环检测、主负责人跨层查看与派发、同级/反向/非主负责人隔离、基于服务端可信来源的接线——**在组织结构数据落地前均无法实现**，且无法在不猜测组织结构的前提下绕过。
+
+**为什么这样定**：原 DAG 行的边界描述「内部部门树授权不依赖 OA 授权模型」**本身没错**——本项目确实不采用 OA 的授权判定（身份权限透传）。但它被误读成「也不依赖 OA 的组织结构数据」。两者是不同的东西：**不依赖 OA 判谁有权，不等于不需要知道部门树长什么样。** 补边时保留原句并就地澄清，避免下一个人再踩同一处歧义。
+
+**影响面**：任务派发四棒链整体前置于 `P2-OA-ORGANIZATION-DIRECTORY-001`，现役顺序为
+`P2-OA-ORGANIZATION-DIRECTORY-001 → P2-INTERNAL-WO-SCOPE-001 → P2-INTERNAL-WO-DISPATCH-001 → P2-INTERNAL-WO-ATTACHMENT-001`；
+其中 DISPATCH 另需 `P2-PAGE-CONTEXT-CONTRACT-001`，ATTACHMENT 另受「方案限额矛盾须先裁」阻塞。
+`P2-OA-ORGANIZATION-DIRECTORY-001` 若需要本地组织镜像表，属 **DB schema 变更红线**，须单独取得雨爷授权；2026-08-31 的 Trace 授权**不覆盖**该表。
