@@ -56,9 +56,10 @@ export function ConfirmCard({
                 <dd>{confirm.displayedArgumentValues[fieldName]}</dd>
               </div>
             ) : (
-              <dt className={styles.fieldNameOnly} key={fieldName}>
-                {fieldName}
-              </dt>
+              <div key={fieldName}>
+                <dt>{fieldName}</dt>
+                <dd className={styles.fieldValueUnavailable}>未提供可展示值</dd>
+              </div>
             ),
           )}
           {displayedEntries

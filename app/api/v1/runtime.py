@@ -6,12 +6,12 @@ from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs, ValidationError
 
 from app.api.v1.auth import PrincipalDependency
 from app.contracts.sdui.models import UserAction
 from app.ports.auth import Principal, SessionBindingError
-from app.ports.response_envelope import ResponseEnvelope
+from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import RuntimePort, UserActionOutcome
 
 
@@ -61,6 +61,24 @@ class ActionResponseEnvelope(ResponseEnvelope):
         Any,
         ValidateAs(ActionResponseData, lambda value: value),
     ]
+
+
+def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelope:
+    fields = envelope.model_dump()
+    fields.update(
+        {
+            "status": "failed",
+            "message": "操作响应未通过安全校验，本次操作未执行。",
+            "fallback_text": "Action response validation failed; no action was executed.",
+            "ui": UIComponent(component_type="none", action="none"),
+            "data": {
+                "action_outcome": "action_gate_unavailable",
+                "result": None,
+            },
+            "trace_summary": None,
+        }
+    )
+    return ActionResponseEnvelope.model_validate(fields)
 
 
 def _bind_runtime_request(
@@ -144,6 +162,9 @@ def make_router(
             session_id=session_id,
             action=body.action,
         )
-        return ActionResponseEnvelope.model_validate(envelope.model_dump())
+        try:
+            return ActionResponseEnvelope.model_validate(envelope.model_dump())
+        except ValidationError:
+            return _failed_action_response(envelope)
 
     return router

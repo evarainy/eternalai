@@ -1,10 +1,16 @@
-import type { ResponseEnvelopeStatus } from '../generated/runtime/runtime.schemas';
+import type {
+  ConfirmCardPayloadTargetSystem,
+  ResponseEnvelopeStatus,
+} from '../generated/runtime/runtime.schemas';
 import {
   isUserActionOutcome,
   type UserActionOutcome,
 } from './userActionOutcome';
 
 export const SAFE_INCOMPATIBLE_TEXT = '当前响应无法安全显示，请稍后重试。';
+
+declare const __ETERNALAI_OA_BASE_URL__: string;
+declare const __ETERNALAI_OA_ALLOWED_PATH_PREFIXES__: string;
 
 const SUPPORTED_SCHEMA_VERSION = 'phase0.sdui.v1';
 const responseStatuses = new Set<ResponseEnvelopeStatus>([
@@ -21,7 +27,12 @@ const responseActions = new Set([
   'none',
   null,
 ]);
-const targetSystems = new Set(['oa', 'u8', 'hikvision_ivms']);
+type GeneratedTargetSystem = Exclude<ConfirmCardPayloadTargetSystem, null>;
+const generatedTargetSystemMembership = {
+  oa: true,
+  u8: true,
+  hikvision_ivms: true,
+} as const satisfies Record<GeneratedTargetSystem, true>;
 const confirmPayloadKeys = new Set([
   'capability_id',
   'operation_summary',
@@ -30,7 +41,6 @@ const confirmPayloadKeys = new Set([
   'displayed_argument_values',
 ]);
 
-export type TargetSystem = 'oa' | 'u8' | 'hikvision_ivms';
 export type PresentationKind =
   | 'completed'
   | 'clarification'
@@ -50,7 +60,7 @@ export type PresentationKind =
 export interface ConfirmCardView {
   capabilityId: string;
   operationSummary: string;
-  targetSystem: string | null;
+  targetSystem: ConfirmCardPayloadTargetSystem;
   fieldNames: string[];
   displayedArgumentValues: Record<string, string>;
 }
@@ -71,21 +81,33 @@ export interface SystemMessageView {
   sourceName: string;
   occurredAt: string;
   businessState: string;
+  navigation:
+    | { kind: 'allowed'; href: string }
+    | { kind: 'deployment_unconfigured' | 'missing' | 'untrusted' };
 }
+
+export type RecordsIncompleteReason =
+  | 'authoritative_count_missing'
+  | 'authoritative_count_mismatch'
+  | 'returned_count_missing'
+  | 'returned_count_mismatch'
+  | 'runtime_incomplete';
 
 export type RecordsView =
   | {
       kind: 'pending_workflows';
       items: PendingWorkflowView[];
-      returnedCount: number;
-      authoritativeCount: number;
+      returnedCount: number | null;
+      authoritativeCount: number | null;
       incomplete: boolean;
+      incompleteReasons: RecordsIncompleteReason[];
     }
   | {
       kind: 'system_messages';
       items: SystemMessageView[];
-      returnedCount: number;
+      returnedCount: number | null;
       incomplete: boolean;
+      incompleteReasons: RecordsIncompleteReason[];
     };
 
 export interface ProjectedResponse {
@@ -93,7 +115,7 @@ export interface ProjectedResponse {
   text: string;
   status?: ResponseEnvelopeStatus;
   presentationKind: PresentationKind;
-  targetSystem?: TargetSystem;
+  targetSystem?: GeneratedTargetSystem;
   responseId: string | null;
   confirm: ConfirmCardView | null;
   records: RecordsView | null;
@@ -102,6 +124,201 @@ export interface ProjectedResponse {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGeneratedTargetSystem(value: unknown): value is GeneratedTargetSystem {
+  return (
+    typeof value === 'string' &&
+    Object.prototype.hasOwnProperty.call(generatedTargetSystemMembership, value)
+  );
+}
+
+export interface OaNavigationConfig {
+  baseUrl: string;
+  pathPrefixes: readonly string[];
+}
+
+interface NormalizedOaNavigationConfig {
+  baseUrl: string;
+  origin: string;
+  pathPrefixes: readonly string[];
+}
+
+function deployedOaNavigationConfig(): OaNavigationConfig | null {
+  let pathPrefixes: unknown;
+  try {
+    pathPrefixes = JSON.parse(__ETERNALAI_OA_ALLOWED_PATH_PREFIXES__);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(pathPrefixes)) {
+    return null;
+  }
+  return {
+    baseUrl: __ETERNALAI_OA_BASE_URL__,
+    pathPrefixes,
+  };
+}
+
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f);
+  });
+}
+
+function decodePathForSafety(path: string): string | null {
+  let decoded = path;
+  for (let pass = 0; pass < 2; pass += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      return null;
+    }
+    if (next === decoded) {
+      break;
+    }
+    decoded = next;
+  }
+  if (hasControlCharacter(decoded) || decoded.includes('\\')) {
+    return null;
+  }
+  if (decoded.split('/').some((segment) => segment === '..')) {
+    return null;
+  }
+  return decoded;
+}
+
+function normalizeOaNavigationConfig(
+  config: OaNavigationConfig | null,
+): NormalizedOaNavigationConfig | null {
+  if (config === null || !config.baseUrl.trim() || config.pathPrefixes.length === 0) {
+    return null;
+  }
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(config.baseUrl);
+  } catch {
+    return null;
+  }
+  if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') {
+    return null;
+  }
+
+  const pathPrefixes: string[] = [];
+  for (const rawPrefix of config.pathPrefixes) {
+    if (
+      typeof rawPrefix !== 'string' ||
+      !rawPrefix.startsWith('/') ||
+      rawPrefix.startsWith('//') ||
+      rawPrefix.includes('\\') ||
+      rawPrefix.includes('?') ||
+      rawPrefix.includes('#') ||
+      decodePathForSafety(rawPrefix) === null
+    ) {
+      return null;
+    }
+    let parsedPrefix: URL;
+    try {
+      parsedPrefix = new URL(rawPrefix, baseUrl.origin);
+    } catch {
+      return null;
+    }
+    if (parsedPrefix.origin !== baseUrl.origin) {
+      return null;
+    }
+    pathPrefixes.push(
+      parsedPrefix.pathname === '/'
+        ? '/'
+        : parsedPrefix.pathname.replace(/\/+$/, ''),
+    );
+  }
+  return {
+    baseUrl: baseUrl.origin,
+    origin: baseUrl.origin,
+    pathPrefixes,
+  };
+}
+
+function projectOaNavigation(
+  link: string | null,
+  config: NormalizedOaNavigationConfig | null,
+): SystemMessageView['navigation'] {
+  if (link === null || !link.trim()) {
+    return { kind: 'missing' };
+  }
+  if (config === null) {
+    return { kind: 'deployment_unconfigured' };
+  }
+  if (hasControlCharacter(link)) {
+    return { kind: 'untrusted' };
+  }
+
+  const candidateText = link.trim();
+  const pathText = candidateText.split(/[?#]/, 1)[0] ?? '';
+  const hasAbsoluteScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(candidateText);
+  if (
+    candidateText.includes('\\') ||
+    (!hasAbsoluteScheme &&
+      (!candidateText.startsWith('/') || candidateText.startsWith('//'))) ||
+    decodePathForSafety(pathText) === null
+  ) {
+    return { kind: 'untrusted' };
+  }
+
+  let candidate: URL;
+  try {
+    candidate = new URL(candidateText, config.baseUrl);
+  } catch {
+    return { kind: 'untrusted' };
+  }
+  if (
+    (candidate.protocol !== 'http:' && candidate.protocol !== 'https:') ||
+    candidate.origin !== config.origin
+  ) {
+    return { kind: 'untrusted' };
+  }
+  const pathAllowed = config.pathPrefixes.some(
+    (prefix) =>
+      prefix === '/' ||
+      candidate.pathname === prefix ||
+      candidate.pathname.startsWith(`${prefix}/`),
+  );
+  return pathAllowed
+    ? { kind: 'allowed', href: candidate.href }
+    : { kind: 'untrusted' };
+}
+
+function optionalCount(value: unknown): number | null {
+  return typeof value === 'number' ? value : null;
+}
+
+function recordsIncompleteReasons(
+  returnedCount: number | null,
+  itemCount: number,
+  isComplete: unknown,
+  authoritativeCount?: number | null,
+): RecordsIncompleteReason[] {
+  const reasons: RecordsIncompleteReason[] = [];
+  if (isComplete !== true) {
+    reasons.push('runtime_incomplete');
+  }
+  if (returnedCount === null) {
+    reasons.push('returned_count_missing');
+  } else if (returnedCount !== itemCount) {
+    reasons.push('returned_count_mismatch');
+  }
+  if (authoritativeCount === null) {
+    reasons.push('authoritative_count_missing');
+  } else if (
+    authoritativeCount !== undefined &&
+    returnedCount !== null &&
+    authoritativeCount !== returnedCount
+  ) {
+    reasons.push('authoritative_count_mismatch');
+  }
+  return reasons;
 }
 
 export function projectTextResponse(
@@ -137,12 +354,25 @@ export function projectConfirmCard(value: unknown): ConfirmCardView | null {
     !payload.capability_id.trim() ||
     typeof payload.operation_summary !== 'string' ||
     !(
-      typeof payload.target_system === 'string' ||
-      payload.target_system === null
+      payload.target_system === null ||
+      isGeneratedTargetSystem(payload.target_system)
     ) ||
     !Array.isArray(payload.field_names) ||
     !payload.field_names.every((fieldName) => typeof fieldName === 'string') ||
     !isRecord(payload.displayed_argument_values)
+  ) {
+    return null;
+  }
+  const uiTargetSystem = value.target_system;
+  if (
+    !(
+      uiTargetSystem === undefined ||
+      uiTargetSystem === null ||
+      isGeneratedTargetSystem(uiTargetSystem)
+    ) ||
+    (uiTargetSystem !== undefined &&
+      uiTargetSystem !== null &&
+      uiTargetSystem !== payload.target_system)
   ) {
     return null;
   }
@@ -167,13 +397,7 @@ export function projectConfirmCard(value: unknown): ConfirmCardView | null {
 }
 
 function projectPendingWorkflows(data: unknown): RecordsView | null {
-  if (
-    !isRecord(data) ||
-    !Array.isArray(data.workflows) ||
-    typeof data.returned_count !== 'number' ||
-    typeof data.authoritative_count !== 'number' ||
-    typeof data.is_complete !== 'boolean'
-  ) {
+  if (!isRecord(data) || !Array.isArray(data.workflows)) {
     return null;
   }
 
@@ -200,25 +424,29 @@ function projectPendingWorkflows(data: unknown): RecordsView | null {
     });
   }
 
+  const returnedCount = optionalCount(data.returned_count);
+  const authoritativeCount = optionalCount(data.authoritative_count);
+  const incompleteReasons = recordsIncompleteReasons(
+    returnedCount,
+    items.length,
+    data.is_complete,
+    authoritativeCount,
+  );
   return {
     kind: 'pending_workflows',
     items,
-    returnedCount: data.returned_count,
-    authoritativeCount: data.authoritative_count,
-    incomplete:
-      data.is_complete !== true ||
-      data.returned_count !== data.authoritative_count ||
-      items.length !== data.returned_count,
+    returnedCount,
+    authoritativeCount,
+    incomplete: incompleteReasons.length > 0,
+    incompleteReasons,
   };
 }
 
-function projectSystemMessages(data: unknown): RecordsView | null {
-  if (
-    !isRecord(data) ||
-    !Array.isArray(data.messages) ||
-    typeof data.returned_count !== 'number' ||
-    typeof data.is_complete !== 'boolean'
-  ) {
+function projectSystemMessages(
+  data: unknown,
+  navigationConfig: NormalizedOaNavigationConfig | null,
+): RecordsView | null {
+  if (!isRecord(data) || !Array.isArray(data.messages)) {
     return null;
   }
 
@@ -250,23 +478,39 @@ function projectSystemMessages(data: unknown): RecordsView | null {
       sourceName: message.source_name,
       occurredAt: message.occurred_at,
       businessState: message.business_state,
+      navigation: projectOaNavigation(message.link, navigationConfig),
     });
   }
 
+  const returnedCount = optionalCount(data.returned_count);
+  const incompleteReasons = recordsIncompleteReasons(
+    returnedCount,
+    items.length,
+    data.is_complete,
+  );
   return {
     kind: 'system_messages',
     items,
-    returnedCount: data.returned_count,
-    incomplete:
-      data.is_complete !== true || items.length !== data.returned_count,
+    returnedCount,
+    incomplete: incompleteReasons.length > 0,
+    incompleteReasons,
   };
 }
 
-export function projectRecords(data: unknown): RecordsView | null {
-  return projectPendingWorkflows(data) ?? projectSystemMessages(data);
+export function projectRecords(
+  data: unknown,
+  navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
+): RecordsView | null {
+  return (
+    projectPendingWorkflows(data) ??
+    projectSystemMessages(data, normalizeOaNavigationConfig(navigationConfig))
+  );
 }
 
-function structuredData(value: unknown): {
+function structuredData(
+  value: unknown,
+  navigationConfig: OaNavigationConfig | null,
+): {
   actionOutcome: UserActionOutcome | null;
   records: RecordsView | null;
   incompatible: boolean;
@@ -280,18 +524,21 @@ function structuredData(value: unknown): {
     }
     return {
       actionOutcome: value.action_outcome,
-      records: projectRecords(value.result),
+      records: projectRecords(value.result, navigationConfig),
       incompatible: false,
     };
   }
   return {
     actionOutcome: null,
-    records: projectRecords(value),
+    records: projectRecords(value, navigationConfig),
     incompatible: false,
   };
 }
 
-export function projectResponse(value: unknown): ProjectedResponse {
+export function projectResponse(
+  value: unknown,
+  navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
+): ProjectedResponse {
   if (!isRecord(value) || value.schema_version !== SUPPORTED_SCHEMA_VERSION) {
     return incompatibleResponse();
   }
@@ -313,7 +560,7 @@ export function projectResponse(value: unknown): ProjectedResponse {
     !(
       targetSystem === undefined ||
       targetSystem === null ||
-      (typeof targetSystem === 'string' && targetSystems.has(targetSystem))
+      isGeneratedTargetSystem(targetSystem)
     )
   ) {
     return incompatibleResponse();
@@ -324,7 +571,7 @@ export function projectResponse(value: unknown): ProjectedResponse {
     return incompatibleResponse();
   }
 
-  const data = structuredData(value.data);
+  const data = structuredData(value.data, navigationConfig);
   if (data.incompatible) {
     return incompatibleResponse();
   }
@@ -360,7 +607,7 @@ export function projectResponse(value: unknown): ProjectedResponse {
       ...base,
       presentationKind: 'binding',
       ...(typeof targetSystem === 'string'
-        ? { targetSystem: targetSystem as TargetSystem }
+        ? { targetSystem: targetSystem as GeneratedTargetSystem }
         : {}),
     };
   }

@@ -10,7 +10,6 @@ import {
   projectResponse,
   type PresentationKind,
   type ProjectedResponse,
-  type TargetSystem,
 } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
@@ -18,6 +17,7 @@ import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
+import type { UIComponentTargetSystem } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
 import styles from './ChatPage.module.css';
 
@@ -57,7 +57,10 @@ const presentationLabels: Record<PresentationKind, string> = {
   request_error: '请求失败',
 };
 
-const targetSystemLabels: Record<TargetSystem, string> = {
+const targetSystemLabels: Record<
+  Exclude<UIComponentTargetSystem, null>,
+  string
+> = {
   oa: 'OA',
   u8: 'U8',
   hikvision_ivms: '海康 iVMS',

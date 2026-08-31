@@ -14,7 +14,6 @@ from app.contracts.sdui.models import (
     TargetSystem,
     UIAction,
     UIComponent,
-    UIComponentType,
     UserAction,
 )
 
@@ -27,6 +26,5 @@ __all__ = (
     "TargetSystem",
     "UIAction",
     "UIComponent",
-    "UIComponentType",
     "UserAction",
 )

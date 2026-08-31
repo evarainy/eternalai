@@ -226,7 +226,7 @@ def test_action_response_data_accepts_every_outcome_and_rejects_unknown() -> Non
 def test_action_response_envelope_rejects_missing_extra_or_flattened_data(
     invalid_data: dict[str, Any],
 ) -> None:
-    valid_envelope = ResponseEnvelopeBuilder().build_message(
+    invalid_data_envelope = ResponseEnvelopeBuilder().build_message(
         response_id="response-action-invalid",
         task_id="task-action-invalid",
         session_id="session-action-invalid",
@@ -237,7 +237,44 @@ def test_action_response_envelope_rejects_missing_extra_or_flattened_data(
     )
 
     with pytest.raises(ValidationError):
-        ActionResponseEnvelope.model_validate(valid_envelope.model_dump())
+        ActionResponseEnvelope.model_validate(invalid_data_envelope.model_dump())
+
+
+@pytest.mark.parametrize(
+    "invalid_data",
+    (
+        {"action_outcome": "accepted"},
+        {"result": None},
+        {
+            "action_outcome": "accepted",
+            "result": None,
+            "unexpected": "RAW_INVALID_ACTION_DATA",
+        },
+        {
+            "action_outcome": "accepted",
+            "result": None,
+            "business_key": "RAW_FLATTENED_ACTION_DATA",
+        },
+        {"action_outcome": "future_outcome", "result": None},
+    ),
+)
+def test_runtime_action_invalid_data_returns_deterministic_failed_envelope(
+    invalid_data: dict[str, Any],
+) -> None:
+    response = _client(FakeRuntime(action_data=invalid_data)).post(
+        "/api/v1/runtime/action",
+        json=_valid_action_body(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["message"] == "操作响应未通过安全校验，本次操作未执行。"
+    assert response.json()["data"] == {
+        "action_outcome": "action_gate_unavailable",
+        "result": None,
+    }
+    assert response.json()["ui"]["action"] == "none"
+    assert "RAW_" not in response.text
 
 
 def test_runtime_action_endpoint_rejects_free_text_and_extra_fields() -> None:

@@ -1,7 +1,23 @@
-import type { RecordsView } from '../contracts/runtimeProjection';
+import type {
+  RecordsIncompleteReason,
+  RecordsView,
+} from '../contracts/runtimeProjection';
 import styles from './RuntimeViews.module.css';
 
 const LONG_CONTENT_THRESHOLD = 120;
+const incompleteReasonLabels: Record<RecordsIncompleteReason, string> = {
+  authoritative_count_missing: 'OA 未提供总记录数。',
+  authoritative_count_mismatch: 'OA 总记录数与本次返回数不一致。',
+  returned_count_missing: 'OA 未提供本次返回记录数。',
+  returned_count_mismatch: 'OA 返回计数与实际记录数不一致。',
+  runtime_incomplete: 'OA 表示本次结果尚未完整返回。',
+};
+
+const navigationMessages = {
+  deployment_unconfigured: '当前部署未配置可信 OA 地址。',
+  missing: 'OA 未提供可打开的链接。',
+  untrusted: 'OA 提供的链接未通过安全校验。',
+} as const;
 
 export function RecordsList({ records }: { records: RecordsView }) {
   const heading =
@@ -15,6 +31,22 @@ export function RecordsList({ records }: { records: RecordsView }) {
           <span className={styles.incomplete}>列表可能不完整</span>
         ) : null}
       </div>
+
+      {records.incomplete ? (
+        <div className={styles.incompleteNotice} role="status">
+          <strong>当前仅展示已取回的 {records.items.length} 条记录。</strong>
+          {records.kind === 'pending_workflows' &&
+          records.authoritativeCount !== null ? (
+            <span>OA 标示共有 {records.authoritativeCount} 条。</span>
+          ) : null}
+          <ul>
+            {records.incompleteReasons.map((reason) => (
+              <li key={reason}>{incompleteReasonLabels[reason]}</li>
+            ))}
+          </ul>
+          <span>下一步：到 OA 查看完整列表或稍后重试。</span>
+        </div>
+      ) : null}
 
       <ul className={styles.recordList}>
         {records.kind === 'pending_workflows'
@@ -55,6 +87,21 @@ export function RecordsList({ records }: { records: RecordsView }) {
                   </details>
                 ) : (
                   <p className={styles.content}>{record.content}</p>
+                )}
+                {record.navigation.kind === 'allowed' ? (
+                  <a
+                    className={styles.oaLink}
+                    href={record.navigation.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    去 OA 查看（新窗口）
+                  </a>
+                ) : (
+                  <p className={styles.navigationNotice}>
+                    {navigationMessages[record.navigation.kind]}
+                    下一步：到 OA 消息中心查找或联系管理员。
+                  </p>
                 )}
               </li>
             ))}

@@ -58,9 +58,10 @@ class ResponseEnvelopeBuilder:
         message: str,
         fallback_text: str,
         trace_id: str,
+        *,
+        payload: dict[str, Any],
         data: dict[str, Any] | None = None,
         trace_summary: str | None = None,
-        payload: dict[str, Any] | None = None,
         target_system: TargetSystem | None = None,
     ) -> ResponseEnvelope:
         return self._build_envelope(
@@ -75,7 +76,7 @@ class ResponseEnvelopeBuilder:
             {
                 "action": "confirm",
                 "target_system": target_system,
-                "payload": payload or {},
+                "payload": payload,
             },
             data,
             trace_summary,

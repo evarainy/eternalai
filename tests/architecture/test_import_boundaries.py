@@ -54,6 +54,11 @@ def _boundary_rules() -> list[BoundaryRule]:
             forbidden_imports=("app.infra",),
         ),
         BoundaryRule(
+            name="contracts_no_runtime_imports",
+            source="app.contracts",
+            forbidden_imports=("app.runtime",),
+        ),
+        BoundaryRule(
             name="runtime_no_execution_fabric",
             source="app.runtime",
             forbidden_imports=("app.execution_fabric",),

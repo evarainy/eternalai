@@ -4,7 +4,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
-import { projectResponse } from '../../contracts/runtimeProjection';
+import { RecordsList } from '../../components/RecordsList';
+import {
+  projectRecords,
+  projectResponse,
+} from '../../contracts/runtimeProjection';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
@@ -452,7 +456,7 @@ describe('ChatPage response projection', () => {
         ),
       ),
     );
-    renderChat();
+    const { container } = renderChat();
 
     sendMessage('复核参数展示');
 
@@ -460,6 +464,19 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText('decision')).toBeInTheDocument();
     expect(screen.getByText('同意')).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_HIDDEN_ARGUMENT_VALUE');
+    expect(screen.getByText('未提供可展示值')).toBeInTheDocument();
+    const argumentsHeading = screen.getByText('操作参数');
+    const argumentList = argumentsHeading.nextElementSibling;
+    expect(argumentList?.tagName).toBe('DL');
+    expect(
+      Array.from(argumentList?.children ?? []).every(
+        (child) =>
+          child.tagName === 'DIV' &&
+          child.querySelector(':scope > dt') !== null &&
+          child.querySelector(':scope > dd') !== null,
+      ),
+    ).toBe(true);
+    expect(container.querySelector('dl dt:last-child')).toBeNull();
   });
 
   it.each([
@@ -562,6 +579,10 @@ describe('ChatPage response projection', () => {
 
     sendMessage('数量不一致');
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('当前仅展示已取回的 1 条记录。')).toBeInTheDocument();
+    expect(screen.getByText('OA 标示共有 2 条。')).toBeInTheDocument();
+    expect(screen.getByText('OA 总记录数与本次返回数不一致。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
     first.unmount();
 
     vi.stubGlobal(
@@ -592,6 +613,79 @@ describe('ChatPage response projection', () => {
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
+  it('does not render an incomplete zero-row response as a normal empty state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        response(
+          envelope({
+            data: pendingWorkflowsData({
+              workflows: [],
+              returned_count: 1,
+              authoritative_count: 1,
+            }),
+          }),
+        ),
+      ),
+    );
+    renderChat();
+
+    sendMessage('查询零行不完整待办');
+
+    expect(await screen.findByText('当前仅展示已取回的 0 条记录。')).toBeInTheDocument();
+    expect(screen.getByText('OA 返回计数与实际记录数不一致。')).toBeInTheDocument();
+    expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
+  });
+
+  it('renders only an allowlisted OA href with the required new-window attributes', () => {
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: '/oa/messages/001' })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    const { container } = render(<RecordsList records={records} />);
+    const link = screen.getByRole('link', { name: '去 OA 查看（新窗口）' });
+
+    expect(link).toHaveAttribute(
+      'href',
+      'http://oa.synthetic.invalid/oa/messages/001',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link.className).toContain('oaLink');
+    expect(container.textContent).not.toContain('/oa/messages/001');
+  });
+
+  it('retains a record but removes an untrusted OA link and gives recovery guidance', () => {
+    const untrustedLink = 'https://evil.synthetic.invalid/oa/messages/001';
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: untrustedLink })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    const { container } = render(<RecordsList records={records} />);
+
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/OA 提供的链接未通过安全校验/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
+    expect(container.textContent).not.toContain(untrustedLink);
   });
 
   it('renders long message content as folded plain text and never exposes OA links', async () => {
@@ -619,6 +713,8 @@ describe('ChatPage response projection', () => {
     expect(container.querySelector('details')).not.toHaveAttribute('open');
     expect(container.querySelector('script')).toBeNull();
     expect(container.querySelector('a')).toBeNull();
+    expect(screen.getByText(/当前部署未配置可信 OA 地址/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(link);
     expect(document.body.textContent).not.toContain(mobileLink);
   });
