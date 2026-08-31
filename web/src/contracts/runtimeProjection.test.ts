@@ -195,6 +195,26 @@ describe('OA message navigation projection', () => {
     expect(untrusted.items[0]?.navigation).toEqual({ kind: 'untrusted' });
   });
 
+  it.each([
+    'http:/oa.synthetic.invalid',
+    'http:oa.synthetic.invalid',
+    'http://user@oa.synthetic.invalid',
+    'http://@oa.synthetic.invalid',
+    'http://oa.synthetic.invalid?source=invalid',
+    'http://oa.synthetic.invalid#invalid',
+  ])('fails closed for invalid deployment base %s', (baseUrl) => {
+    const records = projectRecords(systemMessages('/oa/messages/001'), {
+      baseUrl,
+      pathPrefixes: ['/oa'],
+    });
+
+    expect(records?.kind).toBe('system_messages');
+    if (records?.kind !== 'system_messages') throw new Error('wrong record kind');
+    expect(records.items[0]?.navigation).toEqual({
+      kind: 'deployment_unconfigured',
+    });
+  });
+
   it('does not fall back to mobile_link', () => {
     const mobileLink = '/oa/mobile/messages/001';
     const records = projectRecords(
@@ -225,13 +245,27 @@ describe('partial record-list projection', () => {
 
   it('marks count mismatches incomplete without discarding valid rows', () => {
     const records = projectRecords(
-      pendingWorkflows({ authoritative_count: 2 }),
+      pendingWorkflows({ returned_count: 2, authoritative_count: 2 }),
       navigationConfig,
     );
 
     expect(records?.kind).toBe('pending_workflows');
     if (records?.kind !== 'pending_workflows') throw new Error('wrong record kind');
     expect(records.items).toHaveLength(1);
+    expect(records.incompleteReasons).toContain('returned_count_mismatch');
     expect(records.incompleteReasons).toContain('authoritative_count_mismatch');
+  });
+
+  it('does not use is_complete as an independent incompleteness signal', () => {
+    const records = projectRecords(
+      pendingWorkflows({ is_complete: false }),
+      navigationConfig,
+    );
+
+    expect(records?.kind).toBe('pending_workflows');
+    if (records?.kind !== 'pending_workflows') throw new Error('wrong record kind');
+    expect(records.items).toHaveLength(1);
+    expect(records.incomplete).toBe(false);
+    expect(records.incompleteReasons).toEqual([]);
   });
 });

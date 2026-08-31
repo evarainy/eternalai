@@ -252,6 +252,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-USER-ACTION-SEAM-001` | 结构化 `/runtime/action` 与一次性 claim。 |
 | `P2-SDUI-RENDERER-001` | 记录列表、确认卡与 9 值 outcome 的前端投影。 |
 | `P2-SDUI-SCHEMA-001` | Action data 与确认卡 payload 具名跨语言 exact 合同。 |
+| `P2-SDUI-RENDERER-002` | OA 安全导航、确认卡目标闭集、部分列表与七项合同欠债收口。 |
 | `P2-TEST-INFRA-WEAKCHECK-001` | 弱测试门禁支持 TypeScript / TSX。 |
 | `P2-FE-WORKBENCH-001` | 统一 AppShell、AI Dock、工作事项与薄查询层首个生产消费者。 |
 | `P2-CONFIRM-BINDING-001` | HumanGate 与不可变 Task 版本绑定。 |

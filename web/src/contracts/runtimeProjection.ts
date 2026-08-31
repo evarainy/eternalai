@@ -195,13 +195,31 @@ function normalizeOaNavigationConfig(
   if (config === null || !config.baseUrl.trim() || config.pathPrefixes.length === 0) {
     return null;
   }
+  const rawBaseUrl = config.baseUrl.trim().replace(/\/+$/, '');
+  if (
+    !/^https?:\/\/[^/\\?#]+(?:\/.*)?$/i.test(rawBaseUrl) ||
+    hasControlCharacter(rawBaseUrl) ||
+    rawBaseUrl.includes('\\')
+  ) {
+    return null;
+  }
+  const authority =
+    rawBaseUrl.replace(/^https?:\/\//i, '').split('/', 1)[0] ?? '';
   let baseUrl: URL;
   try {
-    baseUrl = new URL(config.baseUrl);
+    baseUrl = new URL(rawBaseUrl);
   } catch {
     return null;
   }
-  if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') {
+  if (
+    (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') ||
+    !baseUrl.hostname ||
+    authority.includes('@') ||
+    baseUrl.username !== '' ||
+    baseUrl.password !== '' ||
+    baseUrl.search !== '' ||
+    baseUrl.hash !== ''
+  ) {
     return null;
   }
 

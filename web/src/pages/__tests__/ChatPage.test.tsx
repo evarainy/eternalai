@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
@@ -653,6 +655,17 @@ describe('ChatPage response projection', () => {
     expect(container.textContent).not.toContain('/oa/messages/001');
   });
 
+  it('keeps the OA navigation click target at least 44 by 44 CSS pixels', () => {
+    const stylesheet = readFileSync(
+      resolve(process.cwd(), 'src/components/RuntimeViews.module.css'),
+      'utf8',
+    );
+    const oaLinkRule = /\.oaLink\s*\{(?<body>[^}]*)\}/.exec(stylesheet);
+
+    expect(oaLinkRule?.groups?.body).toMatch(/min-width:\s*44px\s*;/);
+    expect(oaLinkRule?.groups?.body).toMatch(/min-height:\s*44px\s*;/);
+  });
+
   it('retains a record but removes an untrusted OA link and gives recovery guidance', () => {
     const untrustedLink = 'https://evil.synthetic.invalid/oa/messages/001';
     const records = projectRecords(
@@ -673,6 +686,26 @@ describe('ChatPage response projection', () => {
     expect(screen.getByText(/OA 提供的链接未通过安全校验/)).toBeInTheDocument();
     expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
     expect(container.textContent).not.toContain(untrustedLink);
+  });
+
+  it('retains a record and gives recovery guidance when OA supplies no link', () => {
+    const records = projectRecords(
+      systemMessagesData({
+        messages: [systemMessage({ link: null })],
+      }),
+      {
+        baseUrl: 'http://oa.synthetic.invalid',
+        pathPrefixes: ['/oa'],
+      },
+    );
+    if (records === null) throw new Error('records projection failed');
+
+    render(<RecordsList records={records} />);
+
+    expect(screen.getByText('流程提醒')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(screen.getByText(/OA 未提供可打开的链接/)).toBeInTheDocument();
+    expect(screen.getByText(/到 OA 消息中心查找或联系管理员/)).toBeInTheDocument();
   });
 
   it('renders long message content as folded plain text and never exposes OA links', async () => {
