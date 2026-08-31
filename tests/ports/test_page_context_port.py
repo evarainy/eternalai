@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import pickle
 from typing import Any, cast
 
 import pytest
@@ -86,6 +88,11 @@ def _authority(**overrides: Any) -> PageContextAuthority:
 
 
 def _assert_downstream_rejects_forged_provenance(candidate: object) -> None:
+    with pytest.raises(PageContextAuthorizationError) as model_data_exc_info:
+        as_untrusted_model_data(cast(PageContextResolution, candidate))
+
+    assert model_data_exc_info.value.code == "authorization_provenance_invalid"
+
     with pytest.raises(PageContextAuthorizationError) as exc_info:
         build_page_context_messages(
             system_instruction="TRUSTED SYSTEM INSTRUCTION",
@@ -93,6 +100,20 @@ def _assert_downstream_rejects_forged_provenance(candidate: object) -> None:
         )
 
     assert exc_info.value.code == "authorization_provenance_invalid"
+
+
+def _assert_public_resolution_reads_reject_forged_provenance(
+    candidate: PageContextResolution,
+) -> None:
+    for property_name in (
+        "principal_id",
+        "authorized_context",
+        "rejected_capabilities",
+    ):
+        with pytest.raises(PageContextAuthorizationError) as exc_info:
+            getattr(candidate, property_name)
+
+        assert exc_info.value.code == "authorization_provenance_invalid"
 
 
 def test_contract_has_exactly_the_nine_decided_fields() -> None:
@@ -161,12 +182,125 @@ def test_model_copy_update_cannot_forge_downstream_authorization() -> None:
 def test_resolution_ticket_is_opaque_and_only_the_authorizer_can_issue_it() -> None:
     for pydantic_constructor in ("model_validate", "model_construct", "model_copy"):
         assert not hasattr(PageContextResolution, pydantic_constructor)
+    assert PageContextResolution.__slots__ == ("__weakref__",)
 
     with pytest.raises(TypeError):
         PageContextResolution()
 
+    with pytest.raises(TypeError):
+        PageContextResolution.__new__(PageContextResolution)
+
     forged_ticket = object.__new__(PageContextResolution)
+    _assert_public_resolution_reads_reject_forged_provenance(forged_ticket)
     _assert_downstream_rejects_forged_provenance(forged_ticket)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "forged_value"),
+    [
+        ("_payload", object()),
+        ("principal_id", "principal-attacker"),
+        ("authorized_context", object()),
+        ("rejected_capabilities", ()),
+    ],
+)
+def test_object_setattr_has_no_authorization_state_slot_on_unissued_ticket(
+    attribute_name: str,
+    forged_value: object,
+) -> None:
+    forged_ticket = object.__new__(PageContextResolution)
+
+    with pytest.raises(AttributeError):
+        object.__setattr__(forged_ticket, attribute_name, forged_value)
+
+    assert not hasattr(forged_ticket, "__dict__")
+    _assert_public_resolution_reads_reject_forged_provenance(forged_ticket)
+    _assert_downstream_rejects_forged_provenance(forged_ticket)
+
+
+def test_object_setattr_cannot_override_a_factory_issued_ticket() -> None:
+    resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(),
+    )
+
+    for attribute_name, forged_value in (
+        ("_payload", object()),
+        ("principal_id", "principal-attacker"),
+        ("authorized_context", object()),
+        ("rejected_capabilities", ("admin.root",)),
+    ):
+        with pytest.raises(AttributeError):
+            object.__setattr__(resolution, attribute_name, forged_value)
+
+    assert resolution.principal_id == "principal-1"
+    assert resolution.authorized_context.allowed_capabilities == ("oa.work.read",)
+    assert resolution.rejected_capabilities == ()
+
+
+@pytest.mark.parametrize(
+    "copy_ticket",
+    [
+        copy.copy,
+        copy.deepcopy,
+        lambda ticket: pickle.loads(pickle.dumps(ticket)),
+    ],
+    ids=("copy", "deepcopy", "pickle-round-trip"),
+)
+def test_copy_and_pickle_cannot_transfer_an_issued_authorization(
+    copy_ticket: Any,
+) -> None:
+    resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(),
+    )
+
+    with pytest.raises(TypeError):
+        copy_ticket(resolution)
+
+    assert resolution.principal_id == "principal-1"
+    assert resolution.authorized_context.allowed_capabilities == ("oa.work.read",)
+
+
+def test_pickle_protocol_exposes_no_authorization_state() -> None:
+    resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(),
+    )
+
+    state = resolution.__getstate__()
+
+    assert "principal-1" not in repr(state)
+    assert "oa.work.read" not in repr(state)
+    assert not hasattr(resolution, "__setstate__")
+    with pytest.raises(TypeError):
+        resolution.__reduce__()
+    serialized = pickle.dumps(resolution)
+    assert b"principal-1" not in serialized
+    assert b"oa.work.read" not in serialized
+    with pytest.raises(TypeError):
+        pickle.loads(serialized)
+
+
+def test_issued_ticket_remains_bound_to_its_original_principal() -> None:
+    principal_a_resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(principal_id="principal-a"),
+    )
+    principal_b_resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(principal_id="principal-b"),
+    )
+
+    with pytest.raises(AttributeError):
+        object.__setattr__(
+            principal_a_resolution,
+            "principal_id",
+            principal_b_resolution.principal_id,
+        )
+
+    assert principal_a_resolution.principal_id == "principal-a"
+    assert principal_b_resolution.principal_id == "principal-b"
 
 
 def test_tenth_key_is_rejected_without_partial_acceptance() -> None:

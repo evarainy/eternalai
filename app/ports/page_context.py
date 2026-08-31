@@ -292,8 +292,7 @@ class _PageContextResolutionPayload(NamedTuple):
 class PageContextResolution:
     """Opaque authorization ticket issued only by ``authorize_page_context``."""
 
-    __slots__ = ("_payload", "__weakref__")
-    _payload: _PageContextResolutionPayload
+    __slots__ = ("__weakref__",)
 
     def __new__(cls, *args: object, **kwargs: object) -> PageContextResolution:
         del args, kwargs
@@ -305,17 +304,18 @@ class PageContextResolution:
 
     @property
     def principal_id(self) -> str:
-        return self._payload.principal_id
+        return _require_issued_resolution(self).principal_id
 
     @property
     def authorized_context(self) -> AuthorizedPageContext:
+        payload = _require_issued_resolution(self)
         return AuthorizedPageContext.model_validate_json(
-            self._payload.authorized_context_json
+            payload.authorized_context_json
         )
 
     @property
     def rejected_capabilities(self) -> tuple[str, ...]:
-        return self._payload.rejected_capabilities
+        return _require_issued_resolution(self).rejected_capabilities
 
 
 class _AuthorizePageContext(Protocol):
@@ -342,10 +342,18 @@ class _BuildPageContextMessages(Protocol):
     ) -> tuple[LLMMessage, LLMMessage]: ...
 
 
+class _RequireIssuedResolution(Protocol):
+    def __call__(
+        self,
+        candidate: object,
+    ) -> _PageContextResolutionPayload: ...
+
+
 def _build_page_context_authorization_contract() -> tuple[
     _AuthorizePageContext,
     _AsUntrustedModelData,
     _BuildPageContextMessages,
+    _RequireIssuedResolution,
 ]:
     issued_resolutions: WeakKeyDictionary[
         PageContextResolution,
@@ -416,7 +424,6 @@ def _build_page_context_authorization_contract() -> tuple[
             rejected_capabilities=rejected_capabilities,
         )
         resolution = object.__new__(PageContextResolution)
-        object.__setattr__(resolution, "_payload", payload)
         issued_resolutions[resolution] = payload
         return resolution
 
@@ -456,6 +463,7 @@ def _build_page_context_authorization_contract() -> tuple[
         authorize_page_context,
         as_untrusted_model_data,
         build_page_context_messages,
+        require_issued_resolution,
     )
 
 
@@ -463,6 +471,7 @@ def _build_page_context_authorization_contract() -> tuple[
     authorize_page_context,
     as_untrusted_model_data,
     build_page_context_messages,
+    _require_issued_resolution,
 ) = _build_page_context_authorization_contract()
 
 
