@@ -6,7 +6,8 @@ import json
 import math
 import re
 from datetime import datetime
-from typing import Annotated, Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, NamedTuple, Protocol, TypeAlias
+from weakref import WeakKeyDictionary
 
 from pydantic import (
     AfterValidator,
@@ -196,9 +197,7 @@ class PageFreshness(_PageContextModel):
         return self
 
 
-class PageContextDeclaration(_PageContextModel):
-    """The only page-supplied shape; values remain untrusted declarations."""
-
+class _PageContextData(_PageContextModel):
     surface_id: PageSurfaceId
     organization_scope: OrganizationScope | None
     work_object_refs: Annotated[
@@ -222,7 +221,7 @@ class PageContextDeclaration(_PageContextModel):
     visibility: PageVisibility
 
     @model_validator(mode="after")
-    def validate_unique_collections(self) -> PageContextDeclaration:
+    def validate_unique_collections(self) -> _PageContextData:
         work_object_ids = [item.work_object_id for item in self.work_object_refs]
         source_keys = [
             (item.source_system, item.source_ref) for item in self.source_refs
@@ -246,8 +245,12 @@ class PageContextDeclaration(_PageContextModel):
         return self
 
 
-class AuthorizedPageContext(PageContextDeclaration):
-    """A nine-field context that has passed server-side authorization."""
+class PageContextDeclaration(_PageContextData):
+    """The only page-supplied shape; values remain untrusted declarations."""
+
+
+class AuthorizedPageContext(_PageContextData):
+    """Validated nine-field data; only a resolution ticket proves authorization."""
 
 
 class PageContextAuthority(_PageContextModel):
@@ -262,12 +265,6 @@ class PageContextAuthority(_PageContextModel):
     visible_source_refs: frozenset[SourceReference]
     visible_filters: frozenset[PageFilter]
     visible_selected_metrics: frozenset[PageContextIdentifier]
-
-
-class PageContextResolution(_PageContextModel):
-    principal_id: PageContextIdentifier
-    authorized_context: AuthorizedPageContext
-    rejected_capabilities: tuple[PageCapabilityId, ...]
 
 
 class PageContextModelData(_PageContextModel):
@@ -286,85 +283,187 @@ class PageContextAuthorizationError(RuntimeError):
         super().__init__(code)
 
 
-def authorize_page_context(
-    declaration: PageContextDeclaration,
-    authority: PageContextAuthority,
-) -> PageContextResolution:
-    """Authorize scope/visibility and intersect page capabilities with backend facts."""
-
-    if (
-        declaration.organization_scope is not None
-        and declaration.organization_scope not in authority.organization_scopes
-    ):
-        raise PageContextAuthorizationError("organization_scope_not_authorized")
-    if declaration.visibility not in authority.visibilities:
-        raise PageContextAuthorizationError("visibility_not_authorized")
-    if not set(declaration.work_object_refs).issubset(
-        authority.visible_work_object_refs
-    ):
-        raise PageContextAuthorizationError("work_object_refs_not_visible")
-    if not set(declaration.source_refs).issubset(authority.visible_source_refs):
-        raise PageContextAuthorizationError("source_refs_not_visible")
-    if not set(declaration.filters).issubset(authority.visible_filters):
-        raise PageContextAuthorizationError("filters_not_visible")
-    if (
-        declaration.selected_metric is not None
-        and declaration.selected_metric not in authority.visible_selected_metrics
-    ):
-        raise PageContextAuthorizationError("selected_metric_not_visible")
-
-    backend_capabilities = (
-        authority.registry_capabilities & authority.policy_capabilities
-    )
-    effective_capabilities = tuple(
-        capability_id
-        for capability_id in declaration.allowed_capabilities
-        if capability_id in backend_capabilities
-    )
-    rejected_capabilities = tuple(
-        capability_id
-        for capability_id in declaration.allowed_capabilities
-        if capability_id not in backend_capabilities
-    )
-    authorized_context = AuthorizedPageContext.model_validate(
-        {
-            **declaration.model_dump(mode="python"),
-            "allowed_capabilities": effective_capabilities,
-        }
-    )
-    return PageContextResolution(
-        principal_id=authority.principal_id,
-        authorized_context=authorized_context,
-        rejected_capabilities=rejected_capabilities,
-    )
+class _PageContextResolutionPayload(NamedTuple):
+    principal_id: str
+    authorized_context_json: str
+    rejected_capabilities: tuple[str, ...]
 
 
-def as_untrusted_model_data(context: AuthorizedPageContext) -> PageContextModelData:
-    """Keep page text in a structured data role rather than an instruction channel."""
+class PageContextResolution:
+    """Opaque authorization ticket issued only by ``authorize_page_context``."""
 
-    return PageContextModelData(data=context)
+    __slots__ = ("_payload", "__weakref__")
+    _payload: _PageContextResolutionPayload
+
+    def __new__(cls, *args: object, **kwargs: object) -> PageContextResolution:
+        del args, kwargs
+        raise TypeError("PageContextResolution can only be issued by authorize_page_context")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        del name, value
+        raise TypeError("PageContextResolution is immutable")
+
+    @property
+    def principal_id(self) -> str:
+        return self._payload.principal_id
+
+    @property
+    def authorized_context(self) -> AuthorizedPageContext:
+        return AuthorizedPageContext.model_validate_json(
+            self._payload.authorized_context_json
+        )
+
+    @property
+    def rejected_capabilities(self) -> tuple[str, ...]:
+        return self._payload.rejected_capabilities
 
 
-def build_page_context_messages(
-    *,
-    system_instruction: str,
-    context: AuthorizedPageContext,
-) -> tuple[LLMMessage, LLMMessage]:
-    """Assemble trusted instructions and untrusted page data in separate roles."""
+class _AuthorizePageContext(Protocol):
+    def __call__(
+        self,
+        declaration: PageContextDeclaration,
+        authority: PageContextAuthority,
+    ) -> PageContextResolution: ...
 
-    model_data = as_untrusted_model_data(context)
-    serialized_data = json.dumps(
-        model_data.model_dump(mode="json"),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
+
+class _AsUntrustedModelData(Protocol):
+    def __call__(
+        self,
+        resolution: PageContextResolution,
+    ) -> PageContextModelData: ...
+
+
+class _BuildPageContextMessages(Protocol):
+    def __call__(
+        self,
+        *,
+        system_instruction: str,
+        resolution: PageContextResolution,
+    ) -> tuple[LLMMessage, LLMMessage]: ...
+
+
+def _build_page_context_authorization_contract() -> tuple[
+    _AuthorizePageContext,
+    _AsUntrustedModelData,
+    _BuildPageContextMessages,
+]:
+    issued_resolutions: WeakKeyDictionary[
+        PageContextResolution,
+        _PageContextResolutionPayload,
+    ] = WeakKeyDictionary()
+
+    def require_issued_resolution(
+        candidate: object,
+    ) -> _PageContextResolutionPayload:
+        if not isinstance(candidate, PageContextResolution):
+            raise PageContextAuthorizationError("authorization_provenance_invalid")
+        try:
+            return issued_resolutions[candidate]
+        except KeyError as exc:
+            raise PageContextAuthorizationError(
+                "authorization_provenance_invalid"
+            ) from exc
+
+    def authorize_page_context(
+        declaration: PageContextDeclaration,
+        authority: PageContextAuthority,
+    ) -> PageContextResolution:
+        """Authorize declarations and issue an identity-bound provenance ticket."""
+
+        if (
+            declaration.organization_scope is not None
+            and declaration.organization_scope not in authority.organization_scopes
+        ):
+            raise PageContextAuthorizationError("organization_scope_not_authorized")
+        if declaration.visibility not in authority.visibilities:
+            raise PageContextAuthorizationError("visibility_not_authorized")
+        if not set(declaration.work_object_refs).issubset(
+            authority.visible_work_object_refs
+        ):
+            raise PageContextAuthorizationError("work_object_refs_not_visible")
+        if not set(declaration.source_refs).issubset(authority.visible_source_refs):
+            raise PageContextAuthorizationError("source_refs_not_visible")
+        if not set(declaration.filters).issubset(authority.visible_filters):
+            raise PageContextAuthorizationError("filters_not_visible")
+        if (
+            declaration.selected_metric is not None
+            and declaration.selected_metric not in authority.visible_selected_metrics
+        ):
+            raise PageContextAuthorizationError("selected_metric_not_visible")
+
+        backend_capabilities = (
+            authority.registry_capabilities & authority.policy_capabilities
+        )
+        effective_capabilities = tuple(
+            capability_id
+            for capability_id in declaration.allowed_capabilities
+            if capability_id in backend_capabilities
+        )
+        rejected_capabilities = tuple(
+            capability_id
+            for capability_id in declaration.allowed_capabilities
+            if capability_id not in backend_capabilities
+        )
+        authorized_context = AuthorizedPageContext.model_validate(
+            {
+                **declaration.model_dump(mode="python"),
+                "allowed_capabilities": effective_capabilities,
+            }
+        )
+        payload = _PageContextResolutionPayload(
+            principal_id=authority.principal_id,
+            authorized_context_json=authorized_context.model_dump_json(),
+            rejected_capabilities=rejected_capabilities,
+        )
+        resolution = object.__new__(PageContextResolution)
+        object.__setattr__(resolution, "_payload", payload)
+        issued_resolutions[resolution] = payload
+        return resolution
+
+    def as_untrusted_model_data(
+        resolution: PageContextResolution,
+    ) -> PageContextModelData:
+        """Project only data from a factory-issued authorization ticket."""
+
+        payload = require_issued_resolution(resolution)
+        context = AuthorizedPageContext.model_validate_json(
+            payload.authorized_context_json
+        )
+        return PageContextModelData(data=context)
+
+    def build_page_context_messages(
+        *,
+        system_instruction: str,
+        resolution: PageContextResolution,
+    ) -> tuple[LLMMessage, LLMMessage]:
+        """Assemble messages only from a factory-issued authorization ticket."""
+
+        model_data = as_untrusted_model_data(resolution)
+        serialized_data = json.dumps(
+            model_data.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return (
+            LLMMessage(role="system", content=system_instruction),
+            LLMMessage(
+                role="user",
+                content=f"{PAGE_CONTEXT_DATA_MESSAGE_PREFIX}{serialized_data}",
+            ),
+        )
+
     return (
-        LLMMessage(role="system", content=system_instruction),
-        LLMMessage(
-            role="user",
-            content=f"{PAGE_CONTEXT_DATA_MESSAGE_PREFIX}{serialized_data}",
-        ),
+        authorize_page_context,
+        as_untrusted_model_data,
+        build_page_context_messages,
     )
+
+
+(
+    authorize_page_context,
+    as_untrusted_model_data,
+    build_page_context_messages,
+) = _build_page_context_authorization_contract()
 
 
 class PageContextPort(Protocol):

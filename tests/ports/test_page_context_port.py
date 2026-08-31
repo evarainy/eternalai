@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -11,11 +11,13 @@ from pydantic import ValidationError
 from app.ports.page_context import (
     PAGE_CONTEXT_DATA_MESSAGE_PREFIX,
     PAGE_CONTEXT_FIELD_NAMES,
+    AuthorizedPageContext,
     OrganizationScope,
     PageContextAuthority,
     PageContextAuthorizationError,
     PageContextDeclaration,
     PageContextPort,
+    PageContextResolution,
     as_untrusted_model_data,
     authorize_page_context,
     build_page_context_messages,
@@ -83,6 +85,16 @@ def _authority(**overrides: Any) -> PageContextAuthority:
     return PageContextAuthority.model_validate(values)
 
 
+def _assert_downstream_rejects_forged_provenance(candidate: object) -> None:
+    with pytest.raises(PageContextAuthorizationError) as exc_info:
+        build_page_context_messages(
+            system_instruction="TRUSTED SYSTEM INSTRUCTION",
+            resolution=cast(PageContextResolution, candidate),
+        )
+
+    assert exc_info.value.code == "authorization_provenance_invalid"
+
+
 def test_contract_has_exactly_the_nine_decided_fields() -> None:
     declaration = PageContextDeclaration.model_validate(_valid_declaration_data())
 
@@ -90,6 +102,71 @@ def test_contract_has_exactly_the_nine_decided_fields() -> None:
     assert tuple(declaration.model_dump()) == PAGE_CONTEXT_FIELD_NAMES
     assert hasattr(PageContextPort, "register")
     assert hasattr(PageContextPort, "read")
+
+
+def test_authorized_data_and_page_declaration_have_no_inheritance_relationship() -> None:
+    assert not issubclass(AuthorizedPageContext, PageContextDeclaration)
+    assert not issubclass(PageContextDeclaration, AuthorizedPageContext)
+    assert tuple(AuthorizedPageContext.model_fields) == PAGE_CONTEXT_FIELD_NAMES
+
+
+def test_direct_construction_cannot_forge_downstream_authorization() -> None:
+    raw = _valid_declaration_data()
+    raw["allowed_capabilities"] = ["admin.root"]
+    raw["visibility"] = "organization"
+    forged = AuthorizedPageContext(**raw)
+
+    assert forged.allowed_capabilities == ("admin.root",)
+    _assert_downstream_rejects_forged_provenance(forged)
+
+
+def test_model_validate_cannot_forge_downstream_authorization() -> None:
+    raw = _valid_declaration_data()
+    raw["allowed_capabilities"] = ["admin.root"]
+    raw["visibility"] = "organization"
+    forged = AuthorizedPageContext.model_validate(raw)
+
+    assert forged.allowed_capabilities == ("admin.root",)
+    _assert_downstream_rejects_forged_provenance(forged)
+
+
+def test_model_construct_cannot_forge_downstream_authorization() -> None:
+    raw = _valid_declaration_data()
+    raw["allowed_capabilities"] = ("admin.root",)
+    raw["visibility"] = "world"
+    forged = AuthorizedPageContext.model_construct(**raw)
+
+    assert forged.allowed_capabilities == ("admin.root",)
+    assert forged.visibility == "world"
+    _assert_downstream_rejects_forged_provenance(forged)
+
+
+def test_model_copy_update_cannot_forge_downstream_authorization() -> None:
+    resolution = authorize_page_context(
+        PageContextDeclaration.model_validate(_valid_declaration_data()),
+        _authority(),
+    )
+    forged = resolution.authorized_context.model_copy(
+        update={
+            "allowed_capabilities": ("admin.root",),
+            "visibility": "world",
+        }
+    )
+
+    assert forged.allowed_capabilities == ("admin.root",)
+    assert forged.visibility == "world"
+    _assert_downstream_rejects_forged_provenance(forged)
+
+
+def test_resolution_ticket_is_opaque_and_only_the_authorizer_can_issue_it() -> None:
+    for pydantic_constructor in ("model_validate", "model_construct", "model_copy"):
+        assert not hasattr(PageContextResolution, pydantic_constructor)
+
+    with pytest.raises(TypeError):
+        PageContextResolution()
+
+    forged_ticket = object.__new__(PageContextResolution)
+    _assert_downstream_rejects_forged_provenance(forged_ticket)
 
 
 def test_tenth_key_is_rejected_without_partial_acceptance() -> None:
@@ -303,10 +380,10 @@ def test_page_text_remains_untrusted_model_data_not_an_instruction() -> None:
         ),
     )
 
-    model_data = as_untrusted_model_data(resolution.authorized_context)
+    model_data = as_untrusted_model_data(resolution)
     messages = build_page_context_messages(
         system_instruction="TRUSTED SYSTEM INSTRUCTION",
-        context=resolution.authorized_context,
+        resolution=resolution,
     )
 
     assert model_data.role == "user_data"
