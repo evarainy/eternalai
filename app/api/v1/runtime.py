@@ -73,8 +73,8 @@ def _failed_action_response(envelope: ResponseEnvelope) -> ActionResponseEnvelop
                 "请先核对业务状态，避免重复提交。"
             ),
             "fallback_text": (
-                "Action response validation failed; verify the business state "
-                "before retrying."
+                "Action response validation failed; verify the business state and "
+                "do not submit again until the result is known."
             ),
             "ui": UIComponent(component_type="none", action="none"),
             "data": {

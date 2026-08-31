@@ -274,6 +274,8 @@ def test_runtime_action_invalid_data_returns_deterministic_failed_envelope(
         "操作响应未通过安全校验，无法确认本次操作结果。"
         "请先核对业务状态，避免重复提交。"
     )
+    assert "未执行" not in response.text
+    assert "retry" not in response.text.lower()
     assert response.json()["data"] == {
         "action_outcome": "action_gate_unavailable",
         "result": None,
