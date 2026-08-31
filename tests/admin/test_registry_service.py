@@ -7,7 +7,10 @@ from typing import Any
 
 import pytest
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+)
 from app.admin.registry import (
     AdminCapabilityCreate,
     AdminInvalidStatusTransitionError,
@@ -17,6 +20,7 @@ from app.admin.registry import (
 from app.composition import build_admin_registry_service
 from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
+from app.ports.auth import PrincipalOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
@@ -149,6 +153,7 @@ def _context(*roles: str) -> AdminRequestContext:
         session_id="admin-lite",
         ai_user_id="unverified-admin-request",
         roles=roles,
+        org_ctx=PrincipalOrgContext(),
     )
 
 
@@ -161,7 +166,8 @@ def _service(
         task_store=EmptyTaskStore(),
         identity_mapping=MockIdentityMapping(rows=[]),
         policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
         ),
         trace_port=trace,
         trace_query=EmptyTraceQuery(),

@@ -48,6 +48,7 @@ def _request_context(principal: Principal) -> AdminRequestContext:
         session_id=f"admin-v1:{principal.ai_user_id}",
         ai_user_id=principal.ai_user_id,
         roles=principal.roles,
+        org_ctx=principal.org_ctx,
         principal_authenticated=True,
     )
 

@@ -18,6 +18,8 @@ AdminAction: TypeAlias = Literal[
     "traces_list",
 ]
 
+AUDIT_READER_ROLE = "audit_reader"
+
 ADMIN_POLICY_CAPABILITY_BY_ACTION: dict[AdminAction, str] = {
     "list": "admin_registry_list",
     "get": "admin_registry_get",
@@ -33,3 +35,15 @@ ADMIN_POLICY_CAPABILITY_BY_ACTION: dict[AdminAction, str] = {
 }
 
 ADMIN_LITE_POLICY_CAPABILITY_IDS = frozenset(ADMIN_POLICY_CAPABILITY_BY_ACTION.values())
+
+ADMIN_AUDIT_READ_ACTIONS = frozenset(
+    {
+        "tasks_list",
+        "task_events_list",
+        "bindings_list",
+        "traces_list",
+    }
+)
+ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS = frozenset(
+    ADMIN_POLICY_CAPABILITY_BY_ACTION[action] for action in ADMIN_AUDIT_READ_ACTIONS
+)

@@ -19,6 +19,7 @@ from app.admin.evidence import (
     AdminTaskView,
     AdminTracePersistedView,
 )
+from app.ports.auth import PrincipalOrgContext
 from app.ports.capability_registry import (
     CapabilityAutomationLevel,
     CapabilityExecutionIdentity,
@@ -143,6 +144,7 @@ class AdminRequestContext:
     session_id: str
     ai_user_id: str
     roles: tuple[str, ...]
+    org_ctx: PrincipalOrgContext
     principal_authenticated: bool = False
 
 
@@ -462,6 +464,9 @@ class AdminRegistryService:
             arguments={},
             request_context=ManagementPlanePolicyContext(
                 request_id=context.trace_id,
+                tenant_id=context.org_ctx.tenant_id,
+                org_id=context.org_ctx.org_id,
+                department_id=context.org_ctx.department_id,
                 roles=list(context.roles),
             ),
         )
@@ -756,6 +761,9 @@ class AdminBindingMutationService:
             arguments={},
             request_context=ManagementPlanePolicyContext(
                 request_id=context.trace_id,
+                tenant_id=context.org_ctx.tenant_id,
+                org_id=context.org_ctx.org_id,
+                department_id=context.org_ctx.department_id,
                 roles=list(context.roles),
             ),
         )

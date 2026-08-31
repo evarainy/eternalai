@@ -16,6 +16,7 @@ from app.admin.registry import (
     AdminRoleNotAllowedError,
 )
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
+from app.ports.auth import PrincipalOrgContext
 from app.ports.identity_mapping import (
     IdentityCheckResult,
     IdentityMappingMutationError,
@@ -73,6 +74,7 @@ def _context(*roles: str) -> AdminRequestContext:
         session_id="admin-session",
         ai_user_id=ADMIN_AI_USER_ID,
         roles=roles,
+        org_ctx=PrincipalOrgContext(),
         principal_authenticated=True,
     )
 

@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+    AUDIT_READER_ROLE,
+)
 from app.admin.registry import AdminRegistryService
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.main import create_app
@@ -322,14 +326,15 @@ def _client(
     runtime: RuntimeSentinel | None = None,
     trace_query: RecordingTraceQuery | None = None,
     *,
-    roles: tuple[str, ...] = ("admin",),
+    roles: tuple[str, ...] = (AUDIT_READER_ROLE,),
 ) -> TestClient:
     service = AdminRegistryService(
         capability_registry=RegistrySentinel(),
         task_store=task_store,
         identity_mapping=identity_mapping,
         policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
         ),
         trace_port=trace,
         trace_query=trace_query or RecordingTraceQuery(),
@@ -496,6 +501,7 @@ def test_bindings_list_preserves_existing_active_and_expired_projection_fields()
     assert trace.events[-1].attributes["action"] == "bindings_list"
 
 
+@pytest.mark.parametrize("roles", [(), ("admin",)])
 @pytest.mark.parametrize(
     "url",
     [
@@ -510,11 +516,14 @@ def test_bindings_list_preserves_existing_active_and_expired_projection_fields()
         "/api/v1/admin/bindings?ai_user_id=user-1&target_system=unsupported",
     ],
 )
-def test_each_evidence_action_denies_before_resource_access(url: str) -> None:
+def test_each_evidence_action_denies_before_resource_access(
+    url: str,
+    roles: tuple[str, ...],
+) -> None:
     task_store = RecordingTaskStore([_task(0)], [_event(0)])
     identity_mapping = RecordingIdentityMapping([_binding(0)])
     trace = RecordingTrace()
-    client = _client(task_store, identity_mapping, trace, roles=())
+    client = _client(task_store, identity_mapping, trace, roles=roles)
 
     response = client.get(url, cookies=ADMIN_COOKIES)
 

@@ -7,11 +7,17 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+    AUDIT_READER_ROLE,
+)
 from app.admin.registry import AdminRegistryService
+from app.api.v1.admin import _request_context
 from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.main import create_app
+from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import TaskEventRecord, TaskRecord
 from app.ports.trace import TraceEvent
@@ -192,7 +198,8 @@ def _client(
         task_store=EmptyTaskStore(),
         identity_mapping=MockIdentityMapping(rows=[]),
         policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
         ),
         trace_port=trace,
         trace_query=EmptyTraceQuery(),
@@ -218,6 +225,38 @@ ROLE_DENIED_DETAIL = {
         "message": "Management role is required.",
     }
 }
+
+
+def test_request_context_preserves_authenticated_org_context_object() -> None:
+    org_ctx = PrincipalOrgContext(
+        tenant_id="tenant-admin-context",
+        org_id="org-admin-context",
+        department_id="department-admin-context",
+    )
+    principal = Principal(
+        ai_user_id="user-admin-context",
+        display_name="Admin Context",
+        roles=("admin",),
+        org_ctx=org_ctx,
+    )
+
+    context = _request_context(principal)
+
+    assert context.org_ctx is org_ctx
+    assert context.ai_user_id == principal.ai_user_id
+    assert context.roles == principal.roles
+
+
+def test_audit_reader_cannot_access_registry() -> None:
+    registry = RecordingRegistry([_capability()])
+    trace = RecordingTrace()
+    client = _client(registry, trace, roles=(AUDIT_READER_ROLE,))
+
+    response = client.get("/api/v1/admin/registry", cookies=ADMIN_COOKIES)
+
+    assert response.status_code == 403
+    assert response.json() == ROLE_DENIED_DETAIL
+    assert registry.calls == []
 
 
 def test_registry_list_and_get_return_credential_safe_metadata() -> None:

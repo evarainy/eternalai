@@ -10,7 +10,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+)
 from app.admin.registry import (
     AdminBindingMutationService,
     AdminRegistryService,
@@ -319,7 +322,8 @@ def build_admin_registry_service(
 ) -> AdminRegistryService:
     """Wire Admin Lite with the closed management-action allowlist."""
     policy_guard = MinimalPolicyGuard(
-        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+        audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
     )
     binding_mutations = AdminBindingMutationService(
         identity_mapping=identity_mapping,
