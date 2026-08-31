@@ -564,8 +564,8 @@ describe('ChatPage response projection', () => {
     expect(document.body.textContent).not.toContain('foo');
   });
 
-  it('marks pending workflows incomplete from runtime completeness and count mismatches', async () => {
-    const first = renderChat();
+  it('marks pending workflows incomplete from count mismatches', async () => {
+    renderChat();
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -581,29 +581,16 @@ describe('ChatPage response projection', () => {
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('当前仅展示已取回的 1 条记录。')).toBeInTheDocument();
     expect(screen.getByText('OA 标示共有 2 条。')).toBeInTheDocument();
-    expect(screen.getByText('OA 总记录数与本次返回数不一致。')).toBeInTheDocument();
+    expect(screen.getByText('OA 总记录数与实际展示记录数不一致。')).toBeInTheDocument();
     expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
-    first.unmount();
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(
-        response(
-          envelope({ data: pendingWorkflowsData({ is_complete: false }) }),
-        ),
-      ),
-    );
-    renderChat();
-    sendMessage('运行时声明不完整');
-    expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
   });
 
-  it('marks system messages incomplete when is_complete is false', async () => {
+  it('marks system messages incomplete when returned_count is missing', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         response(
-          envelope({ data: systemMessagesData({ is_complete: false }) }),
+          envelope({ data: systemMessagesData({ returned_count: undefined }) }),
         ),
       ),
     );
@@ -613,7 +600,7 @@ describe('ChatPage response projection', () => {
 
     expect(await screen.findByText('列表可能不完整')).toBeInTheDocument();
     expect(screen.getByText('流程提醒')).toBeInTheDocument();
-    expect(screen.getByText('OA 表示本次结果尚未完整返回。')).toBeInTheDocument();
+    expect(screen.getByText('OA 未提供本次返回记录数。')).toBeInTheDocument();
     expect(screen.getByText('下一步：到 OA 查看完整列表或稍后重试。')).toBeInTheDocument();
   });
 

@@ -139,6 +139,8 @@ describe('OA message navigation projection', () => {
     ['slash-backslash host', '/\\evil.synthetic.invalid/oa/messages/001'],
     ['backslash host', '\\evil.synthetic.invalid\\oa\\messages\\001'],
     ['non-HTTP(S) protocol', 'javascript:alert(1)'],
+    ['malformed HTTP absolute URL', 'http:/oa/messages/001'],
+    ['opaque HTTP URL', 'http:oa/messages/001'],
     ['path traversal', '/oa/../admin/messages/001'],
     ['encoded control character', '/oa/%00messages/001'],
     ['literal control character', '/oa/messages/\u0001'],

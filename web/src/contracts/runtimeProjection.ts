@@ -90,8 +90,7 @@ export type RecordsIncompleteReason =
   | 'authoritative_count_missing'
   | 'authoritative_count_mismatch'
   | 'returned_count_missing'
-  | 'returned_count_mismatch'
-  | 'runtime_incomplete';
+  | 'returned_count_mismatch';
 
 export type RecordsView =
   | {
@@ -257,11 +256,12 @@ function projectOaNavigation(
 
   const candidateText = link.trim();
   const pathText = candidateText.split(/[?#]/, 1)[0] ?? '';
-  const hasAbsoluteScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(candidateText);
+  const isAbsoluteHttpUrl = /^https?:\/\//i.test(candidateText);
+  const isRootRelativePath =
+    candidateText.startsWith('/') && !candidateText.startsWith('//');
   if (
     candidateText.includes('\\') ||
-    (!hasAbsoluteScheme &&
-      (!candidateText.startsWith('/') || candidateText.startsWith('//'))) ||
+    (!isAbsoluteHttpUrl && !isRootRelativePath) ||
     decodePathForSafety(pathText) === null
   ) {
     return { kind: 'untrusted' };
@@ -297,13 +297,9 @@ function optionalCount(value: unknown): number | null {
 function recordsIncompleteReasons(
   returnedCount: number | null,
   itemCount: number,
-  isComplete: unknown,
   authoritativeCount?: number | null,
 ): RecordsIncompleteReason[] {
   const reasons: RecordsIncompleteReason[] = [];
-  if (isComplete !== true) {
-    reasons.push('runtime_incomplete');
-  }
   if (returnedCount === null) {
     reasons.push('returned_count_missing');
   } else if (returnedCount !== itemCount) {
@@ -311,11 +307,7 @@ function recordsIncompleteReasons(
   }
   if (authoritativeCount === null) {
     reasons.push('authoritative_count_missing');
-  } else if (
-    authoritativeCount !== undefined &&
-    returnedCount !== null &&
-    authoritativeCount !== returnedCount
-  ) {
+  } else if (authoritativeCount !== undefined && authoritativeCount !== itemCount) {
     reasons.push('authoritative_count_mismatch');
   }
   return reasons;
@@ -429,7 +421,6 @@ function projectPendingWorkflows(data: unknown): RecordsView | null {
   const incompleteReasons = recordsIncompleteReasons(
     returnedCount,
     items.length,
-    data.is_complete,
     authoritativeCount,
   );
   return {
@@ -486,7 +477,6 @@ function projectSystemMessages(
   const incompleteReasons = recordsIncompleteReasons(
     returnedCount,
     items.length,
-    data.is_complete,
   );
   return {
     kind: 'system_messages',
