@@ -297,6 +297,8 @@ function projectOaNavigation(
   }
   if (
     (candidate.protocol !== 'http:' && candidate.protocol !== 'https:') ||
+    candidate.username !== '' ||
+    candidate.password !== '' ||
     candidate.origin !== config.origin
   ) {
     return { kind: 'untrusted' };

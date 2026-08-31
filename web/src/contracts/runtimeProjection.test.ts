@@ -139,6 +139,12 @@ describe('OA message navigation projection', () => {
     ['slash-backslash host', '/\\evil.synthetic.invalid/oa/messages/001'],
     ['backslash host', '\\evil.synthetic.invalid\\oa\\messages\\001'],
     ['non-HTTP(S) protocol', 'javascript:alert(1)'],
+    ['data URL', 'data:text/html,<script>alert(1)</script>'],
+    ['blob URL', 'blob:http://oa.synthetic.invalid/oa/messages/001'],
+    [
+      'credential-bearing URL',
+      'http://user:pass@oa.synthetic.invalid/oa/messages/001',
+    ],
     ['malformed HTTP absolute URL', 'http:/oa/messages/001'],
     ['opaque HTTP URL', 'http:oa/messages/001'],
     ['path traversal', '/oa/../admin/messages/001'],
@@ -238,6 +244,20 @@ describe('OA message navigation projection', () => {
       });
     },
   );
+
+  it('allows the entire configured origin only for an explicit root prefix', () => {
+    const records = projectRecords(systemMessages('/admin/messages/001'), {
+      baseUrl: navigationConfig.baseUrl,
+      pathPrefixes: ['/'],
+    });
+
+    expect(records?.kind).toBe('system_messages');
+    if (records?.kind !== 'system_messages') throw new Error('wrong record kind');
+    expect(records.items[0]?.navigation).toEqual({
+      kind: 'allowed',
+      href: 'http://oa.synthetic.invalid/admin/messages/001',
+    });
+  });
 
   it('does not fall back to mobile_link', () => {
     const mobileLink = '/oa/mobile/messages/001';
