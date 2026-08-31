@@ -185,7 +185,7 @@ function decodePathForSafety(path: string): string | null {
   if (!stabilized || hasControlCharacter(decoded) || decoded.includes('\\')) {
     return null;
   }
-  if (decoded.split('/').some((segment) => segment === '..')) {
+  if (decoded.split('/').some((segment) => segment === '.' || segment === '..')) {
     return null;
   }
   return decoded;

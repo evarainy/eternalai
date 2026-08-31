@@ -223,6 +223,22 @@ describe('OA message navigation projection', () => {
     });
   });
 
+  it.each(['/.', '/%2e', '/%252e'])(
+    'fails closed when deployment prefix %s normalizes to root',
+    (pathPrefix) => {
+      const records = projectRecords(systemMessages('/admin/messages/001'), {
+        baseUrl: navigationConfig.baseUrl,
+        pathPrefixes: [pathPrefix],
+      });
+
+      expect(records?.kind).toBe('system_messages');
+      if (records?.kind !== 'system_messages') throw new Error('wrong record kind');
+      expect(records.items[0]?.navigation).toEqual({
+        kind: 'deployment_unconfigured',
+      });
+    },
+  );
+
   it('does not fall back to mobile_link', () => {
     const mobileLink = '/oa/mobile/messages/001';
     const records = projectRecords(
