@@ -144,6 +144,7 @@ class WorkObjectStorePort(Protocol):
         self,
         assignee_ai_user_id: str,
         *,
+        search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
     ) -> list[WorkObjectRecord]: ...
 

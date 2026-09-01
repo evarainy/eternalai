@@ -201,7 +201,7 @@ export default function WorkObjectsPage() {
 
   const listQuery = useQuery({
     queryKey: listQueryKey,
-    queryFn: listWorkObjects,
+    queryFn: () => listWorkObjects(),
   });
 
   const syncMutation = useMutation({

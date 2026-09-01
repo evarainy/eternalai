@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy import event, text
 
-from app.api.v1.work_objects import WorkObjectService, WorkObjectView
+from app.api.v1.work_objects import WorkObjectService
 from app.db.session import make_async_engine, make_async_session_factory
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.ports.auth import Principal, PrincipalOrgContext
@@ -41,18 +41,6 @@ def _snapshot(
         received_at="2026-08-18",
         created_at="2026-08-17",
         workflow_type_id="workflow-1",
-    )
-
-
-def _matches_search_contract(item: WorkObjectView, term: str) -> bool:
-    normalized = term.strip().lower()
-    return (
-        (item.source_title is not None and normalized in item.source_title.lower())
-        or (
-            item.source_ref is not None
-            and item.source_ref.strip().lower() == normalized
-        )
-        or (item.assignee_display_name.strip().lower() == normalized)
     )
 
 
@@ -121,21 +109,25 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
                 roles=(),
                 org_ctx=PrincipalOrgContext(tenant_id="tenant-b"),
             )
-            tenant_a_candidates = (await service.list_for_principal(tenant_a_principal)).items
-            tenant_b_candidates = (await service.list_for_principal(tenant_b_principal)).items
             for tenant_b_query in (
                 "other tenant",
                 " TENANT-B-ONLY-TODO ",
                 " user b ",
             ):
-                assert not any(
-                    _matches_search_contract(item, tenant_b_query)
-                    for item in tenant_a_candidates
-                )
-                assert any(
-                    _matches_search_contract(item, tenant_b_query)
-                    for item in tenant_b_candidates
-                )
+                tenant_a_candidates = (
+                    await service.list_for_principal(
+                        tenant_a_principal,
+                        search_term=tenant_b_query,
+                    )
+                ).items
+                tenant_b_candidates = (
+                    await service.list_for_principal(
+                        tenant_b_principal,
+                        search_term=tenant_b_query,
+                    )
+                ).items
+                assert tenant_a_candidates == []
+                assert len(tenant_b_candidates) == 1
 
             marked = await store.set_handling_mark_for_assignee(
                 user_a_records[0].work_object_id,
@@ -185,6 +177,124 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
             ]
             assert list_statements
             assert all("ORDER BY" not in statement.upper() for statement in list_statements)
+            search_statements = [
+                statement for statement in list_statements if "STRPOS" in statement.upper()
+            ]
+            assert search_statements
+            assert all(
+                "assignee_ai_user_id" in statement for statement in search_statements
+            )
+            assert all(
+                "tenant-b-only-todo" not in statement.lower()
+                for statement in search_statements
+            )
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM work_objects "
+                        "WHERE assignee_ai_user_id IN (:user_a, :user_b)"
+                    ),
+                    {"user_a": user_a, "user_b": user_b},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_postgresql_search_matches_approved_fields_and_literal_wildcards() -> None:
+    database_url = _require_db()
+    user_a = f"tenant-a-search-user-{uuid4().hex}"
+    user_b = f"tenant-b-search-user-{uuid4().hex}"
+    fetched_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+
+    async def exercise() -> None:
+        engine = make_async_engine(database_url)
+        factory = make_async_session_factory(engine)
+        store = PostgreSQLWorkObjectStore(factory)
+        try:
+            await store.upsert_oa_pending_workflows(
+                assignee_ai_user_id=user_a,
+                assignee_display_name="Li Ming",
+                snapshots=[
+                    _snapshot(
+                        source_ref="TITLE-001",
+                        title="Quarterly Budget Review",
+                        status="OA_PENDING",
+                    ),
+                    _snapshot(
+                        source_ref=" OA-REF-002 ",
+                        title="合同归档",
+                        status="OA_PENDING",
+                    ),
+                    _snapshot(
+                        source_ref="WILD-003",
+                        title="Literal 100%_ready",
+                        status="OA_PENDING",
+                    ),
+                    _snapshot(
+                        source_ref="PLAIN-004",
+                        title="Literal 100XYready",
+                        status="OA_PENDING",
+                    ),
+                ],
+                fetched_at=fetched_at,
+            )
+            await store.upsert_oa_pending_workflows(
+                assignee_ai_user_id=user_b,
+                assignee_display_name="User B",
+                snapshots=[
+                    _snapshot(
+                        source_ref="TENANT-B-ONLY",
+                        title="Other tenant only",
+                        status="OA_PENDING",
+                    )
+                ],
+                fetched_at=fetched_at,
+            )
+            service = WorkObjectService(
+                store=store,
+                gateway=cast(CapabilityGatewayPort, object()),
+                capability_registry=StaticCapabilityRegistry(),
+            )
+            tenant_a_principal = Principal(
+                ai_user_id=user_a,
+                display_name="Li Ming",
+                roles=(),
+                org_ctx=PrincipalOrgContext(tenant_id="tenant-a"),
+            )
+            tenant_b_principal = Principal(
+                ai_user_id=user_b,
+                display_name="User B",
+                roles=(),
+                org_ctx=PrincipalOrgContext(tenant_id="tenant-b"),
+            )
+
+            async def refs(principal: Principal, term: str) -> set[str | None]:
+                response = await service.list_for_principal(
+                    principal,
+                    search_term=term,
+                )
+                return {item.source_ref for item in response.items}
+
+            assert await refs(tenant_a_principal, "bUdGeT") == {"TITLE-001"}
+            assert await refs(tenant_a_principal, " oa-ref-002 ") == {
+                " OA-REF-002 "
+            }
+            assert await refs(tenant_a_principal, " li ming ") == {
+                "TITLE-001",
+                " OA-REF-002 ",
+                "WILD-003",
+                "PLAIN-004",
+            }
+            assert await refs(tenant_a_principal, "%_") == {"WILD-003"}
+            assert await refs(tenant_a_principal, "oa-ref") == set()
+            assert await refs(tenant_a_principal, "ming") == set()
+            assert await refs(tenant_a_principal, "tenant-b-only") == set()
+            assert await refs(tenant_b_principal, "tenant-b-only") == {
+                "TENANT-B-ONLY"
+            }
         finally:
             async with factory() as session:
                 await session.execute(

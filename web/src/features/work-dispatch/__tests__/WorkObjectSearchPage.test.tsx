@@ -57,6 +57,14 @@ const ASSIGNEE_ITEM: OAWorkObjectView = {
   work_object_id: 'work-assignee',
 };
 
+const MATCH_CASES: Array<
+  [string, string, OAWorkObjectView, string, string]
+> = [
+  ['/search?q=bUdGeT', 'bUdGeT', TITLE_ITEM, 'Quarterly Budget Review', '命中标题'],
+  ['/search?q=%20oa-ref-002%20', 'oa-ref-002', SOURCE_REF_ITEM, '合同归档', '命中来源编号'],
+  ['/search?q=%20li%20ming%20', 'li ming', ASSIGNEE_ITEM, '材料复核', '命中责任人'],
+];
+
 function listResponse(
   overrides: Partial<WorkObjectListResponse> = {},
 ): WorkObjectListResponse {
@@ -104,18 +112,21 @@ describe('WorkObjectSearchPage', () => {
     apiMocks.listWorkObjects.mockResolvedValue(listResponse());
   });
 
-  it.each([
-    ['/search?q=bUdGeT', 'Quarterly Budget Review', '命中标题'],
-    ['/search?q=%20oa-ref-002%20', '合同归档', '命中来源编号'],
-    ['/search?q=%20li%20ming%20', '材料复核', '命中责任人'],
-  ])(
+  it.each(MATCH_CASES)(
     'matches the approved field contract for %s',
-    async (entry, expectedTitle, expectedTag) => {
+    async (entry, expectedQuery, item, expectedTitle, expectedTag) => {
+      apiMocks.listWorkObjects.mockResolvedValueOnce(
+        listResponse({ items: [item] }),
+      );
       renderPage(entry);
 
       expect(await screen.findByText(expectedTitle)).toBeInTheDocument();
       expect(screen.getByText(expectedTag)).toBeInTheDocument();
       expect(screen.getByText('找到 1 条')).toBeInTheDocument();
+      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: expectedQuery });
+      expect(
+        screen.queryByText('结果过多，请缩小范围'),
+      ).not.toBeInTheDocument();
     },
   );
 
@@ -126,7 +137,7 @@ describe('WorkObjectSearchPage', () => {
 
     expect(screen.getByText('正在查找', { selector: 'strong' })).toBeInTheDocument();
     expect(
-      screen.getByText('正在查找当前可见的工作事项，请稍候。'),
+      screen.getByText('正在查找你有权查看的工作事项，请稍候。'),
     ).toBeInTheDocument();
     expect(screen.queryByText('找到 0 条')).not.toBeInTheDocument();
     expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
@@ -154,43 +165,46 @@ describe('WorkObjectSearchPage', () => {
   ])(
     'does not use substring matching for source reference or assignee: %s',
     async (entry, forbiddenText) => {
+      apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({ items: [] }));
       renderPage(entry);
 
       expect(
-        await screen.findByText(/没有匹配项。已在当前已加载的 3 条工作事项中查找/),
+        await screen.findByText(/没有匹配项。已在你有权查看的全部工作事项中检索/),
       ).toBeInTheDocument();
       expect(screen.queryByText(forbiddenText)).not.toBeInTheDocument();
     },
   );
 
-  it('explains the initial state with the loaded search range and a next step', async () => {
+  it('does not request data before a search and explains the next step', () => {
     renderPage('/search');
 
     expect(
-      await screen.findByText(/尚未开始搜索，因为还没有提交关键词.*已加载的 3 条工作事项/),
+      screen.getByText('尚未开始搜索，因为还没有提交关键词。'),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText('提交关键词后，将在你有权查看的全部工作事项中检索。'),
+    ).toBeInTheDocument();
+    expect(apiMocks.listWorkObjects).not.toHaveBeenCalled();
   });
 
-  it('explains a miss without claiming that unloaded Work Objects do not exist', async () => {
+  it('explains a complete-scope miss without showing an overflow warning', async () => {
     apiMocks.listWorkObjects.mockResolvedValueOnce(
-      listResponse({ limit_exceeded: true }),
+      listResponse({ items: [] }),
     );
     renderPage('/search?q=不存在的事项');
 
     expect(
-      await screen.findByText(
-        /已在当前已加载的 3 条工作事项中查找；这不代表未加载的事项中一定不存在/,
-      ),
+      await screen.findByText('没有匹配项。已在你有权查看的全部工作事项中检索。'),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/下一步：检查标题关键词，或输入完整的来源编号、责任人/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('搜索只覆盖当前已加载的 3 条工作事项'),
-    ).toBeInTheDocument();
+      screen.queryByText('结果过多，请缩小范围'),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('找到 0 条')).toBeInTheDocument();
     await waitFor(() => {
       expect(useAIDockStore.getState().pageContextDeclaration).toMatchObject({
@@ -198,6 +212,18 @@ describe('WorkObjectSearchPage', () => {
         work_object_refs: [],
       });
     });
+  });
+
+  it('discloses the unordered and unstable 200-item set when results overflow', async () => {
+    apiMocks.listWorkObjects.mockResolvedValueOnce(
+      listResponse({ items: [TITLE_ITEM], limit_exceeded: true }),
+    );
+    renderPage('/search?q=budget');
+
+    expect(await screen.findByText('结果过多，请缩小范围')).toBeInTheDocument();
+    expect(
+      screen.getByText('当前仅展示 200 条；结果未排序，具体 200 条可能变化。'),
+    ).toBeInTheDocument();
   });
 
   it('registers the hit set through the existing nine-field page-context contract', async () => {
