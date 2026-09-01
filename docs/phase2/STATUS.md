@@ -1,6 +1,6 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-AUDIT-READ-AUTHZ-001` + `P2-AUDIT-TRACE-SCOPE-001`
+- 当前基线 task_id：`P2-GOV-SYNC-050`
 - pytest：`2576 passed, 104 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-01 `P2-GOV-SYNC-049` 实测复核）
 - 当前实现基线后端定向 pytest：`424 passed, 77 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-01 `P2-GOV-SYNC-049` 实测复核）
 - 当前实现基线前端 `pnpm --dir web test`：`266 passed, 0 failed, 0 skipped`（21 个测试文件；2026-09-01 `P2-GOV-SYNC-049` 实测复核）
