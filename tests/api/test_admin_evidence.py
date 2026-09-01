@@ -173,7 +173,7 @@ class RecordingTraceQuery:
         **filters: object,
     ) -> list[TracePersistedEvent]:
         self.calls.append(("trace", trace_id, filters))
-        return self.events
+        return self._filtered(trace_id=trace_id, **filters)
 
     async def list_events_by_task(
         self,
@@ -181,7 +181,7 @@ class RecordingTraceQuery:
         **filters: object,
     ) -> list[TracePersistedEvent]:
         self.calls.append(("task", task_id, filters))
-        return self.events
+        return self._filtered(task_id=task_id, **filters)
 
     async def list_events_by_session(
         self,
@@ -189,7 +189,19 @@ class RecordingTraceQuery:
         **filters: object,
     ) -> list[TracePersistedEvent]:
         self.calls.append(("session", session_id, filters))
-        return self.events
+        return self._filtered(session_id=session_id, **filters)
+
+    def _filtered(self, **filters: object) -> list[TracePersistedEvent]:
+        matched = [
+            event
+            for event in self.events
+            if all(
+                key == "limit" or getattr(event, key) == value
+                for key, value in filters.items()
+                if value is not None
+            )
+        ]
+        return matched[: int(filters.get("limit", TRACE_QUERY_LIMIT))]
 
 
 class AdapterSentinel:
@@ -275,8 +287,7 @@ def _event(index: int) -> TaskEventRecord:
         event_id=f"event-{index:03d}",
         task_id="task-000",
         event_type="capability_selected",
-        timestamp=datetime(2026, 7, 23, tzinfo=timezone.utc)
-        + timedelta(seconds=index),
+        timestamp=datetime(2026, 7, 23, tzinfo=timezone.utc) + timedelta(seconds=index),
         payload=payload,
     )
 
@@ -299,6 +310,8 @@ def _trace_event(index: int) -> TracePersistedEvent:
         trace_id="trace-1",
         task_id="task-1",
         session_id="session-1",
+        tenant_id="default",
+        ai_user_id="user-1",
         event_type="adapter_error",
         status="failed",
         capability_id="oa.leave.apply",
@@ -314,8 +327,19 @@ def _trace_event(index: int) -> TracePersistedEvent:
                 "X-CSRF-Token": "MUST-NOT-LEAK-CSRF-TOKEN",
             },
         },
-        created_at=datetime(2026, 7, 23, tzinfo=timezone.utc)
-        + timedelta(seconds=index),
+        created_at=datetime(2026, 7, 23, tzinfo=timezone.utc) + timedelta(seconds=index),
+    )
+
+
+def _task_trace_proof(index: int) -> TracePersistedEvent:
+    task = _task(index)
+    return _trace_event(index).model_copy(
+        update={
+            "trace_id": task.trace_id,
+            "task_id": task.task_id,
+            "session_id": task.session_id,
+            "ai_user_id": task.ai_user_id,
+        }
     )
 
 
@@ -358,7 +382,12 @@ def test_task_list_is_whitelisted_and_fixed_at_100_regardless_of_limit(
 ) -> None:
     task_store = RecordingTaskStore([_task(index) for index in range(101)])
     trace = RecordingTrace()
-    client = _client(task_store, RecordingIdentityMapping(), trace)
+    client = _client(
+        task_store,
+        RecordingIdentityMapping(),
+        trace,
+        trace_query=RecordingTraceQuery([_task_trace_proof(index) for index in range(101)]),
+    )
 
     response = client.get(
         f"/api/v1/admin/tasks?ai_user_id=user-1&limit={requested_limit}",
@@ -388,7 +417,12 @@ def test_task_events_drop_unknown_sensitive_payload_and_are_fixed_at_100() -> No
         events=[_event(index) for index in range(101)],
     )
     trace = RecordingTrace()
-    client = _client(task_store, RecordingIdentityMapping(), trace)
+    client = _client(
+        task_store,
+        RecordingIdentityMapping(),
+        trace,
+        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+    )
 
     response = client.get(
         "/api/v1/admin/tasks/task-000/events?limit=999999999",
@@ -416,11 +450,14 @@ def test_task_events_drop_unknown_sensitive_payload_and_are_fixed_at_100() -> No
 
 
 def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
-    identity_mapping = RecordingIdentityMapping(
-        [_binding(index) for index in range(101)]
-    )
+    identity_mapping = RecordingIdentityMapping([_binding(index) for index in range(101)])
     trace = RecordingTrace()
-    client = _client(RecordingTaskStore(), identity_mapping, trace)
+    client = _client(
+        RecordingTaskStore([_task(0)]),
+        identity_mapping,
+        trace,
+        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+    )
 
     response = client.get(
         "/api/v1/admin/bindings"
@@ -444,9 +481,7 @@ def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
         "device_domain_id",
         "reason_code",
     }
-    assert identity_mapping.calls == [
-        ("user-1", "oa", "self", "account-set", "device-domain")
-    ]
+    assert identity_mapping.calls == [("user-1", "oa", "self", "account-set", "device-domain")]
     assert trace.events[-1].attributes["action"] == "bindings_list"
 
 
@@ -464,7 +499,12 @@ def test_bindings_list_preserves_existing_active_and_expired_projection_fields()
     )
     identity_mapping = RecordingIdentityMapping([active, expired])
     trace = RecordingTrace()
-    client = _client(RecordingTaskStore(), identity_mapping, trace)
+    client = _client(
+        RecordingTaskStore([_task(0)]),
+        identity_mapping,
+        trace,
+        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+    )
 
     response = client.get(
         "/api/v1/admin/bindings?ai_user_id=user-1&target_system=oa",
@@ -534,10 +574,7 @@ def test_each_evidence_action_denies_before_resource_access(
     assert len(trace.events) == 1
     assert trace.events[0].status == "blocked"
     assert trace.events[0].attributes["role_claim_authenticated"] is True
-    assert (
-        trace.events[0].attributes["role_claim_source"]
-        == "authenticated_principal"
-    )
+    assert trace.events[0].attributes["role_claim_source"] == "authenticated_principal"
 
 
 @pytest.mark.parametrize(
@@ -611,10 +648,61 @@ def test_authorized_task_list_requires_a_bounded_filter() -> None:
     assert trace.events[-1].status == "failed"
 
 
-def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
-    query = RecordingTraceQuery(
-        [_trace_event(index) for index in range(TRACE_QUERY_LIMIT + 1)]
+def test_historical_task_and_binding_without_tenant_trace_proof_are_hidden() -> None:
+    task_store = RecordingTaskStore([_task(0)], [_event(0)])
+    identity_mapping = RecordingIdentityMapping([_binding(0)])
+    trace = RecordingTrace()
+    client = _client(task_store, identity_mapping, trace)
+
+    task_list = client.get(
+        "/api/v1/admin/tasks?ai_user_id=user-1",
+        cookies=ADMIN_COOKIES,
     )
+    task_events = client.get(
+        "/api/v1/admin/tasks/task-000/events",
+        cookies=ADMIN_COOKIES,
+    )
+    bindings = client.get(
+        "/api/v1/admin/bindings?ai_user_id=user-1",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert task_list.status_code == task_events.status_code == bindings.status_code == 200
+    assert task_list.json()["items"] == []
+    assert task_events.json()["items"] == []
+    assert bindings.json() == {"ai_user_id": "user-1", "items": []}
+    assert ("list_events", "task-000") not in task_store.calls
+    assert identity_mapping.calls == []
+
+
+def test_cross_tenant_trace_proof_cannot_unlock_admin_task_or_binding_reads() -> None:
+    cross_tenant = _task_trace_proof(0).model_copy(update={"tenant_id": "other-tenant"})
+    task_store = RecordingTaskStore([_task(0)], [_event(0)])
+    identity_mapping = RecordingIdentityMapping([_binding(0)])
+    trace = RecordingTrace()
+    client = _client(
+        task_store,
+        identity_mapping,
+        trace,
+        trace_query=RecordingTraceQuery([cross_tenant]),
+    )
+
+    task_list = client.get(
+        "/api/v1/admin/tasks?ai_user_id=user-1",
+        cookies=ADMIN_COOKIES,
+    )
+    bindings = client.get(
+        "/api/v1/admin/bindings?ai_user_id=user-1",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert task_list.json()["items"] == []
+    assert bindings.json()["items"] == []
+    assert identity_mapping.calls == []
+
+
+def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
+    query = RecordingTraceQuery([_trace_event(index) for index in range(TRACE_QUERY_LIMIT + 1)])
     trace = RecordingTrace()
     client = _client(
         RecordingTaskStore(),
@@ -624,8 +712,7 @@ def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
     )
 
     response = client.get(
-        "/api/v1/admin/traces"
-        "?trace_id=trace-1&task_id=task-1&session_id=session-1&limit=999999",
+        "/api/v1/admin/traces?trace_id=trace-1&task_id=task-1&session_id=session-1&limit=999999",
         cookies=ADMIN_COOKIES,
     )
 
@@ -664,7 +751,11 @@ def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
         (
             "trace",
             "trace-1",
-            {"task_id": "task-1", "session_id": "session-1"},
+            {
+                "tenant_id": "default",
+                "task_id": "task-1",
+                "session_id": "session-1",
+            },
         )
     ]
     assert trace.events[-1].attributes["action"] == "traces_list"
@@ -695,10 +786,7 @@ def test_trace_list_denies_before_query_and_records_blocked_action() -> None:
     assert trace.events[0].attributes["action"] == "traces_list"
     assert trace.events[0].attributes["authorization_decision"] == "deny"
     assert trace.events[0].attributes["role_claim_authenticated"] is True
-    assert (
-        trace.events[0].attributes["role_claim_source"]
-        == "authenticated_principal"
-    )
+    assert trace.events[0].attributes["role_claim_source"] == "authenticated_principal"
 
 
 @pytest.mark.parametrize(

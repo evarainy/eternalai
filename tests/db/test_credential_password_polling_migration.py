@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import selectors
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -186,7 +188,15 @@ def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
             finally:
                 await async_engine.dispose()
 
-        asyncio.run(load_session())
+        if sys.platform == "win32":
+            asyncio.run(
+                load_session(),
+                loop_factory=lambda: asyncio.SelectorEventLoop(
+                    selectors.SelectSelector()
+                ),
+            )
+        else:
+            asyncio.run(load_session())
     finally:
         command.upgrade(config, "head")
         with engine.begin() as connection:

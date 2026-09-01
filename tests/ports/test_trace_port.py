@@ -61,6 +61,8 @@ def test_trace_event_type_accepts_all_valid_values() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type=value,
             status="ok",
         )
@@ -74,6 +76,8 @@ def test_trace_event_type_rejects_invalid_value() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="invalid_event_type",
             status="ok",
         )
@@ -91,6 +95,8 @@ def test_trace_event_status_accepts_all_valid_values() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status=status,
         )
@@ -104,6 +110,8 @@ def test_trace_event_status_rejects_invalid_value() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status="pending",
         )
@@ -115,6 +123,8 @@ def test_trace_event_has_extra_forbid_config() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status="ok",
             extra_field="should_fail",
@@ -129,8 +139,28 @@ def test_trace_event_requires_core_fields() -> None:
     assert "trace_id" in error_text
     assert "task_id" in error_text
     assert "session_id" in error_text
+    assert "tenant_id" in error_text
+    assert "ai_user_id" in error_text
     assert "event_type" in error_text
     assert "status" in error_text
+
+
+@pytest.mark.parametrize("field", ["tenant_id", "ai_user_id"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_trace_event_rejects_blank_trusted_owner(field: str, value: str) -> None:
+    payload = {
+        "trace_id": "trace-safe",
+        "task_id": "task-safe",
+        "session_id": "session-safe",
+        "tenant_id": "tenant-safe",
+        "ai_user_id": "user-safe",
+        "event_type": "task_created",
+        "status": "ok",
+        field: value,
+    }
+
+    with pytest.raises(ValidationError):
+        TraceEvent.model_validate(payload)
 
 
 def test_trace_event_defaults_optional_fields() -> None:
@@ -138,6 +168,8 @@ def test_trace_event_defaults_optional_fields() -> None:
         trace_id="t",
         task_id="t",
         session_id="s",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
     )
@@ -152,6 +184,8 @@ def test_trace_event_accepts_arbitrary_attributes() -> None:
         trace_id="t",
         task_id="t",
         session_id="s",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
         attributes={"system": "oa", "latency_ms": 42, "nested": {"k": True}},
@@ -166,6 +200,8 @@ def test_trace_event_accepts_all_error_code_values() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="adapter_error",
             status="failed",
             error_code=error_code,
@@ -180,10 +216,56 @@ def test_trace_event_rejects_invalid_error_code() -> None:
             trace_id="t",
             task_id="t",
             session_id="s",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="adapter_error",
             status="failed",
             error_code="not_a_real_error_code",
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("trace_id", "access_token=synthetic-secret"),
+        ("task_id", "Bearer synthetic-secret"),
+        ("session_id", "cookie=synthetic-secret"),
+        ("tenant_id", "password=synthetic-secret"),
+        ("ai_user_id", "api_key=synthetic-secret"),
+        ("capability_id", "client_secret=synthetic-secret"),
+    ],
+)
+def test_trace_event_rejects_credential_shaped_top_level_identifiers(
+    field: str,
+    value: str,
+) -> None:
+    payload = {
+        "trace_id": "trace-safe",
+        "task_id": "task-safe",
+        "session_id": "session-safe",
+        "tenant_id": "tenant-safe",
+        "ai_user_id": "user-safe",
+        "event_type": "task_created",
+        "status": "ok",
+        field: value,
+    }
+
+    with pytest.raises(ValidationError):
+        TraceEvent.model_validate(payload)
+
+
+def test_trace_event_accepts_opaque_hex_identifier_with_long_digit_run() -> None:
+    event = TraceEvent(
+        trace_id="d5517cf65cfc4226b797700109160937",
+        task_id="admin-request:d5517cf65cfc4226b797700109160937",
+        session_id="session-safe",
+        tenant_id="tenant-safe",
+        ai_user_id="user-safe",
+        event_type="admin_action",
+        status="blocked",
+    )
+
+    assert event.trace_id == "d5517cf65cfc4226b797700109160937"
 
 
 def test_trace_event_defines_no_plaintext_credential_slots() -> None:
@@ -208,6 +290,8 @@ def test_trace_event_accepts_arbitrary_str_field_values() -> None:
         trace_id="arbitrary-trace-id-sentinel-abc123-xyz",
         task_id="arbitrary-task-id-sentinel-def456-uvw",
         session_id="arbitrary-session-id-sentinel-ghi789-rst",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
         capability_id="arbitrary-capability-id-sentinel-jkl012-opq",
@@ -237,6 +321,8 @@ def test_trace_persisted_event_defines_exact_read_fields() -> None:
         "trace_id",
         "task_id",
         "session_id",
+        "tenant_id",
+        "ai_user_id",
         "event_type",
         "status",
         "capability_id",
@@ -249,6 +335,8 @@ def test_trace_persisted_event_defines_exact_read_fields() -> None:
         trace_id="trace-1",
         task_id="task-1",
         session_id="session-1",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
         created_at=datetime.now(UTC),
@@ -273,6 +361,8 @@ def test_trace_query_port_defines_only_bounded_read_methods() -> None:
         method = getattr(TraceQueryPort, method_name)
         assert inspect.iscoroutinefunction(method)
         signature = inspect.signature(method)
+        assert signature.parameters["tenant_id"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
         assert signature.parameters["limit"].default == TRACE_QUERY_LIMIT
         assert get_type_hints(method)["return"] == list[TracePersistedEvent]
 
@@ -301,11 +391,20 @@ def test_start_task_trace_is_coroutine_function() -> None:
 def test_start_task_trace_signature() -> None:
     sig = inspect.signature(TracePort.start_task_trace)
 
-    assert list(sig.parameters) == ["self", "trace_id", "task_id", "session_id"]
+    assert list(sig.parameters) == [
+        "self",
+        "trace_id",
+        "task_id",
+        "session_id",
+        "tenant_id",
+        "ai_user_id",
+    ]
     hints = get_type_hints(TracePort.start_task_trace)
     assert hints["trace_id"] is str
     assert hints["task_id"] is str
     assert hints["session_id"] is str
+    assert hints["tenant_id"] is str
+    assert hints["ai_user_id"] is str
     assert hints["return"] is type(None)
 
 
@@ -435,12 +534,17 @@ class _MockTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
     ) -> None:
         await self.record_event(
             TraceEvent(
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="task_created",
                 status="ok",
             )
@@ -451,6 +555,9 @@ class _MockTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: TraceEventType,
         status: TraceEventStatus,
         capability_id: str | None = None,
@@ -462,6 +569,8 @@ class _MockTracePort:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type=event_type,
                 status=status,
                 capability_id=capability_id,
@@ -475,6 +584,9 @@ class _MockTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -485,6 +597,8 @@ class _MockTracePort:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="policy_checked",
                 status=status,
                 capability_id=capability_id,
@@ -498,6 +612,9 @@ class _MockTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -508,6 +625,8 @@ class _MockTracePort:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="gateway_pre_recorded",
                 status=status,
                 capability_id=capability_id,
@@ -521,6 +640,9 @@ class _MockTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -531,6 +653,8 @@ class _MockTracePort:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="task_completed",
                 status=status,
                 capability_id=capability_id,
@@ -544,11 +668,19 @@ def test_concrete_mock_trace_port_can_record_all_event_types() -> None:
     async def exercise() -> None:
         port = _MockTracePort()
         port.set_sanitizer(lambda payload: payload)
-        await port.start_task_trace("trace-1", "task-1", "sess-1")
+        await port.start_task_trace(
+            "trace-1",
+            "task-1",
+            "sess-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
+        )
         await port.record_step(
             "trace-1",
             "task-1",
             "sess-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="capability_selected",
             status="ok",
             capability_id="oa_leave",
@@ -557,6 +689,8 @@ def test_concrete_mock_trace_port_can_record_all_event_types() -> None:
             "trace-1",
             "task-1",
             "sess-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="ok",
             capability_id="oa_leave",
         )
@@ -564,6 +698,8 @@ def test_concrete_mock_trace_port_can_record_all_event_types() -> None:
             "trace-1",
             "task-1",
             "sess-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="ok",
             capability_id="oa_leave",
         )
@@ -571,6 +707,8 @@ def test_concrete_mock_trace_port_can_record_all_event_types() -> None:
             "trace-1",
             "task-1",
             "sess-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="ok",
             capability_id="oa_leave",
         )
@@ -607,6 +745,8 @@ def test_sanitizer_invoked_before_write_in_concrete_mock() -> None:
                 trace_id="t1",
                 task_id="task-1",
                 session_id="sess-1",
+                tenant_id="tenant-test",
+                ai_user_id="user-test",
                 event_type="task_created",
                 status="ok",
             )

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ports.capability_gateway import ErrorCode
 
@@ -108,6 +108,7 @@ _CREDENTIAL_VALUE_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+_TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS = _CREDENTIAL_VALUE_PATTERNS[1:]
 
 
 def redact_trace_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
@@ -138,17 +139,44 @@ def _is_credential_value(value: str) -> bool:
     return any(pattern.search(value) for pattern in _CREDENTIAL_VALUE_PATTERNS)
 
 
+def _is_top_level_credential_value(value: str) -> bool:
+    return any(pattern.search(value) for pattern in _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS)
+
+
 class TraceEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trace_id: str
     task_id: str
     session_id: str
+    tenant_id: str = Field(min_length=1)
+    ai_user_id: str = Field(min_length=1)
     event_type: TraceEventType
     status: TraceEventStatus
     capability_id: str | None = None
     error_code: ErrorCode | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tenant_id", "ai_user_id")
+    @classmethod
+    def reject_blank_owner(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("trace owner must not be blank")
+        return value
+
+    @field_validator(
+        "trace_id",
+        "task_id",
+        "session_id",
+        "tenant_id",
+        "ai_user_id",
+        "capability_id",
+    )
+    @classmethod
+    def reject_top_level_credential_shape(cls, value: str | None) -> str | None:
+        if value is not None and _is_top_level_credential_value(value):
+            raise ValueError("trace top-level identifier has credential shape")
+        return value
 
 
 class TracePersistedEvent(BaseModel):
@@ -158,12 +186,36 @@ class TracePersistedEvent(BaseModel):
     trace_id: str
     task_id: str
     session_id: str
+    tenant_id: str = Field(min_length=1)
+    ai_user_id: str = Field(min_length=1)
     event_type: TraceEventType
     status: TraceEventStatus
     capability_id: str | None = None
     error_code: ErrorCode | None = None
     attributes: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+
+    @field_validator("tenant_id", "ai_user_id")
+    @classmethod
+    def reject_blank_owner(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("trace owner must not be blank")
+        return value
+
+    @field_validator(
+        "event_id",
+        "trace_id",
+        "task_id",
+        "session_id",
+        "tenant_id",
+        "ai_user_id",
+        "capability_id",
+    )
+    @classmethod
+    def reject_top_level_credential_shape(cls, value: str | None) -> str | None:
+        if value is not None and _is_top_level_credential_value(value):
+            raise ValueError("trace top-level identifier has credential shape")
+        return value
 
 
 class TracePort(Protocol):
@@ -176,6 +228,9 @@ class TracePort(Protocol):
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
     ) -> None: ...
 
     async def record_step(
@@ -183,6 +238,9 @@ class TracePort(Protocol):
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: TraceEventType,
         status: TraceEventStatus,
         capability_id: str | None = None,
@@ -195,6 +253,9 @@ class TracePort(Protocol):
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -206,6 +267,9 @@ class TracePort(Protocol):
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -217,6 +281,9 @@ class TracePort(Protocol):
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -229,6 +296,7 @@ class TraceQueryPort(Protocol):
         self,
         trace_id: str,
         *,
+        tenant_id: str,
         task_id: str | None = None,
         session_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,
@@ -238,6 +306,7 @@ class TraceQueryPort(Protocol):
         self,
         task_id: str,
         *,
+        tenant_id: str,
         trace_id: str | None = None,
         session_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,
@@ -247,6 +316,7 @@ class TraceQueryPort(Protocol):
         self,
         session_id: str,
         *,
+        tenant_id: str,
         trace_id: str | None = None,
         task_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,

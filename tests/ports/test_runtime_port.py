@@ -23,11 +23,12 @@ class _MockRuntime:
     async def handle_user_message(
         self,
         channel: str,
-        ai_user_id: str,
+        principal: Principal,
         session_id: str,
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
+        del principal
         response_payload: dict[str, Any] = {
             "response_id": "resp-001",
             "task_id": "task-001",
@@ -47,8 +48,8 @@ class _MockRuntime:
         session_id: str,
         action: UserAction,
     ) -> ResponseEnvelope:
-        del channel, principal, action
-        return await self.handle_user_message("api", "user", session_id, "action", {})
+        del channel, action
+        return await self.handle_user_message("api", principal, session_id, "action", {})
 
 
 def test_runtime_port_protocol_defines_message_and_structured_action_methods() -> None:
@@ -64,12 +65,13 @@ def test_handle_user_message_signature_matches_spec_8_6_8() -> None:
     assert list(signature.parameters) == [
         "self",
         "channel",
-        "ai_user_id",
+        "principal",
         "session_id",
         "message",
         "client_capabilities",
     ]
     assert inspect.iscoroutinefunction(RuntimePort.handle_user_message)
+    assert get_type_hints(RuntimePort.handle_user_message)["principal"] is Principal
 
 
 def test_handle_user_action_signature_matches_governed_contract() -> None:
@@ -130,7 +132,12 @@ def test_concrete_runtime_mock_accepts_each_channel_and_returns_real_response_en
         for channel in ("web", "cli", "api", "mock"):
             result = await runtime.handle_user_message(
                 channel,
-                "user-sentinel-1",
+                Principal(
+                    ai_user_id="user-sentinel-1",
+                    display_name="Sentinel User",
+                    roles=("user",),
+                    org_ctx=PrincipalOrgContext(tenant_id="tenant-sentinel"),
+                ),
                 "sess-sentinel-1",
                 "msg-sentinel-1",
                 {"feat": True, "level": 3},
@@ -170,7 +177,12 @@ def test_handle_user_message_accepts_arbitrary_str_inputs() -> None:
 
         result = await runtime.handle_user_message(
             "api",
-            "usr-42-arbitrary",
+            Principal(
+                ai_user_id="usr-42-arbitrary",
+                display_name="Arbitrary User",
+                roles=("user",),
+                org_ctx=PrincipalOrgContext(tenant_id="tenant-arbitrary"),
+            ),
             "sess-99-arbitrary",
             "arbitrary message content 123",
             {"arbitrary_cap": "yes"},

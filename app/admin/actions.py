@@ -36,7 +36,7 @@ ADMIN_POLICY_CAPABILITY_BY_ACTION: dict[AdminAction, str] = {
 
 ADMIN_LITE_POLICY_CAPABILITY_IDS = frozenset(ADMIN_POLICY_CAPABILITY_BY_ACTION.values())
 
-ADMIN_AUDIT_READ_ACTIONS = frozenset(
+ADMIN_AUDIT_READ_ACTIONS: frozenset[AdminAction] = frozenset(
     {
         "tasks_list",
         "task_events_list",

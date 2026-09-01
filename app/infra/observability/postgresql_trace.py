@@ -45,10 +45,12 @@ class PostgreSQLTraceWriter:
             await session.execute(
                 text(
                     "INSERT INTO trace_events"
-                    " (event_id, trace_id, task_id, session_id, event_type, status,"
+                    " (event_id, trace_id, task_id, session_id, tenant_id, ai_user_id,"
+                    " event_type, status,"
                     " capability_id, error_code, attributes, created_at)"
                     " VALUES"
-                    " (:event_id, :trace_id, :task_id, :session_id, :event_type,"
+                    " (:event_id, :trace_id, :task_id, :session_id, :tenant_id,"
+                    " :ai_user_id, :event_type,"
                     " :status, :capability_id, :error_code,"
                     " CAST(:attributes AS JSONB), :created_at)"
                 ),
@@ -57,6 +59,8 @@ class PostgreSQLTraceWriter:
                     "trace_id": event.trace_id,
                     "task_id": event.task_id,
                     "session_id": event.session_id,
+                    "tenant_id": event.tenant_id,
+                    "ai_user_id": event.ai_user_id,
                     "event_type": event.event_type,
                     "status": event.status,
                     "capability_id": event.capability_id,
@@ -82,7 +86,11 @@ class PostgreSQLTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
     ) -> None:
+        del tenant_id, ai_user_id
         return None
 
     async def record_step(
@@ -90,6 +98,9 @@ class PostgreSQLTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: TraceEventType,
         status: TraceEventStatus,
         capability_id: str | None = None,
@@ -101,6 +112,8 @@ class PostgreSQLTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type=event_type,
                 status=status,
                 capability_id=capability_id,
@@ -114,6 +127,9 @@ class PostgreSQLTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -124,6 +140,8 @@ class PostgreSQLTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="policy_checked",
                 status=status,
                 capability_id=capability_id,
@@ -137,6 +155,9 @@ class PostgreSQLTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -147,6 +168,8 @@ class PostgreSQLTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="gateway_pre_recorded",
                 status=status,
                 capability_id=capability_id,
@@ -160,11 +183,15 @@ class PostgreSQLTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
+        del tenant_id, ai_user_id
         return None
 
 
@@ -178,12 +205,14 @@ class PostgreSQLTraceReader:
         self,
         trace_id: str,
         *,
+        tenant_id: str,
         task_id: str | None = None,
         session_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,
     ) -> list[TracePersistedEvent]:
         return await self._list_events(
             trace_id=trace_id,
+            tenant_id=tenant_id,
             task_id=task_id,
             session_id=session_id,
             limit=limit,
@@ -193,12 +222,14 @@ class PostgreSQLTraceReader:
         self,
         task_id: str,
         *,
+        tenant_id: str,
         trace_id: str | None = None,
         session_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,
     ) -> list[TracePersistedEvent]:
         return await self._list_events(
             trace_id=trace_id,
+            tenant_id=tenant_id,
             task_id=task_id,
             session_id=session_id,
             limit=limit,
@@ -208,12 +239,14 @@ class PostgreSQLTraceReader:
         self,
         session_id: str,
         *,
+        tenant_id: str,
         trace_id: str | None = None,
         task_id: str | None = None,
         limit: int = TRACE_QUERY_LIMIT,
     ) -> list[TracePersistedEvent]:
         return await self._list_events(
             trace_id=trace_id,
+            tenant_id=tenant_id,
             task_id=task_id,
             session_id=session_id,
             limit=limit,
@@ -222,6 +255,7 @@ class PostgreSQLTraceReader:
     async def _list_events(
         self,
         *,
+        tenant_id: str,
         trace_id: str | None,
         task_id: str | None,
         session_id: str | None,
@@ -229,7 +263,8 @@ class PostgreSQLTraceReader:
     ) -> list[TracePersistedEvent]:
         filters: list[str] = []
         parameters: dict[str, str | int] = {
-            "limit": max(1, min(limit, TRACE_QUERY_LIMIT))
+            "tenant_id": tenant_id,
+            "limit": max(1, min(limit, TRACE_QUERY_LIMIT)),
         }
         for column, value in (
             ("trace_id", trace_id),
@@ -241,9 +276,11 @@ class PostgreSQLTraceReader:
                 parameters[column] = value
         if not filters:
             raise ValueError("at least one trace filter is required")
+        filters.insert(0, "tenant_id = :tenant_id")
 
         query = (
-            "SELECT event_id, trace_id, task_id, session_id, event_type, status,"
+            "SELECT event_id, trace_id, task_id, session_id, tenant_id, ai_user_id,"
+            " event_type, status,"
             " capability_id, error_code, attributes, created_at"
             " FROM trace_events WHERE "
             + " AND ".join(filters)
@@ -264,6 +301,8 @@ def _persisted_event_from_row(row: Any) -> TracePersistedEvent:
         trace_id=mapping["trace_id"],
         task_id=mapping["task_id"],
         session_id=mapping["session_id"],
+        tenant_id=mapping["tenant_id"],
+        ai_user_id=mapping["ai_user_id"],
         event_type=mapping["event_type"],
         status=mapping["status"],
         capability_id=mapping["capability_id"],

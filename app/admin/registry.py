@@ -43,7 +43,7 @@ from app.ports.identity_mapping import (
     TargetSystem,
 )
 from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyGuardPort
-from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskStorePort
+from app.ports.task_store import TASK_STORE_QUERY_LIMIT, TaskRecord, TaskStorePort
 from app.ports.trace import (
     TRACE_QUERY_LIMIT,
     TraceEvent,
@@ -307,10 +307,11 @@ class AdminRegistryService:
             session_id=session_id,
             ai_user_id=ai_user_id,
         )
-        views = [
-            AdminTaskView.from_record(task)
-            for task in tasks[:TASK_STORE_QUERY_LIMIT]
-        ]
+        visible_tasks = []
+        for task in tasks[:TASK_STORE_QUERY_LIMIT]:
+            if await self._task_has_tenant_trace(task, context.org_ctx.tenant_id):
+                visible_tasks.append(task)
+        views = [AdminTaskView.from_record(task) for task in visible_tasks]
         await self._record(
             action="tasks_list",
             context=context,
@@ -326,7 +327,8 @@ class AdminRegistryService:
         context: AdminRequestContext,
     ) -> list[AdminTaskEventView]:
         await self._authorize("task_events_list", context)
-        if await self._task_store.get_task(task_id) is None:
+        task = await self._task_store.get_task(task_id)
+        if task is None:
             await self._record(
                 action="task_events_list",
                 context=context,
@@ -335,6 +337,15 @@ class AdminRegistryService:
                 attributes={"reason_code": "task_not_found"},
             )
             raise AdminTaskNotFoundError(task_id)
+        if not await self._task_has_tenant_trace(task, context.org_ctx.tenant_id):
+            await self._record(
+                action="task_events_list",
+                context=context,
+                status="ok",
+                decision="allow",
+                attributes={"result_count": 0},
+            )
+            return []
         events = await self._task_store.list_events(task_id)
         views = [
             AdminTaskEventView.from_record(event)
@@ -366,6 +377,22 @@ class AdminRegistryService:
         if target_system is not None and target_system not in get_args(TargetSystem):
             await self._record_invalid_binding_query("target_system_invalid", context)
             raise AdminBindingQueryInvalidError("target_system is invalid")
+        tasks = await self._task_store.list_tasks(ai_user_id=ai_user_id)
+        target_in_tenant = False
+        for task in tasks[:TASK_STORE_QUERY_LIMIT]:
+            if await self._task_has_tenant_trace(task, context.org_ctx.tenant_id):
+                target_in_tenant = True
+                break
+        if not target_in_tenant:
+            response = AdminBindingListResponse(ai_user_id=ai_user_id, items=[])
+            await self._record(
+                action="bindings_list",
+                context=context,
+                status="ok",
+                decision="allow",
+                attributes={"result_count": 0},
+            )
+            return response
         mappings = await self._identity_mapping.list_mappings(
             ai_user_id,
             target_system=cast(TargetSystem | None, target_system),
@@ -413,17 +440,22 @@ class AdminRegistryService:
         if trace_id is not None:
             events = await self._trace_query.list_events_by_trace(
                 trace_id,
+                tenant_id=context.org_ctx.tenant_id,
                 task_id=task_id,
                 session_id=session_id,
             )
         elif task_id is not None:
             events = await self._trace_query.list_events_by_task(
                 task_id,
+                tenant_id=context.org_ctx.tenant_id,
                 session_id=session_id,
             )
         else:
             assert session_id is not None
-            events = await self._trace_query.list_events_by_session(session_id)
+            events = await self._trace_query.list_events_by_session(
+                session_id,
+                tenant_id=context.org_ctx.tenant_id,
+            )
 
         views = [
             AdminTracePersistedView.from_record(event)
@@ -437,6 +469,20 @@ class AdminRegistryService:
             attributes={"result_count": len(views)},
         )
         return views
+
+    async def _task_has_tenant_trace(
+        self,
+        task: TaskRecord,
+        tenant_id: str,
+    ) -> bool:
+        events = await self._trace_query.list_events_by_task(
+            task.task_id,
+            tenant_id=tenant_id,
+            trace_id=task.trace_id,
+            session_id=task.session_id,
+            limit=1,
+        )
+        return bool(events and events[0].ai_user_id == task.ai_user_id)
 
     async def _record_invalid_binding_query(
         self,
@@ -574,6 +620,8 @@ class AdminRegistryService:
                 trace_id=context.trace_id,
                 task_id=f"admin-request:{context.trace_id}",
                 session_id=context.session_id,
+                tenant_id=context.org_ctx.tenant_id,
+                ai_user_id=context.ai_user_id,
                 event_type="admin_action",
                 status=status,
                 capability_id=capability_id,
@@ -823,6 +871,8 @@ class AdminBindingMutationService:
                 trace_id=context.trace_id,
                 task_id=f"admin-request:{context.trace_id}",
                 session_id=context.session_id,
+                tenant_id=context.org_ctx.tenant_id,
+                ai_user_id=context.ai_user_id,
                 event_type="admin_action",
                 status=status,
                 attributes=attributes,

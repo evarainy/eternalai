@@ -69,6 +69,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -89,6 +90,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.gateway_calls.append({"status": status, "error_code": error_code})
 
@@ -101,6 +103,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.finalizes.append({"status": status, "error_code": error_code})
 

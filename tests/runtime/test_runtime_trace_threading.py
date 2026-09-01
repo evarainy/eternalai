@@ -22,6 +22,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import (
     StaticCapabilityRegistry,
     runtime_output_schema,
@@ -84,6 +85,7 @@ class ExistingSessionStore:
 class SpyTracePort:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
+        self.owners: list[tuple[str, str]] = []
 
     def set_sanitizer(self, hook: Any) -> None:
         return None
@@ -96,20 +98,27 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
     ) -> None:
-        return None
+        self.owners.append((tenant_id, ai_user_id))
 
     async def record_step(
         self,
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: str,
         status: str,
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
+        self.owners.append((tenant_id, ai_user_id))
         self.steps.append(
             {
                 "trace_id": trace_id,
@@ -128,18 +137,24 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: str,
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        self.owners.append((tenant_id, ai_user_id))
 
     async def record_gateway_call(
         self,
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: str,
         capability_id: str | None = None,
         error_code: str | None = None,
@@ -149,11 +164,13 @@ class SpyTracePort:
             trace_id,
             task_id,
             session_id,
-            "gateway_pre_recorded",
-            status,
-            capability_id,
-            error_code,
-            attributes,
+            tenant_id=tenant_id,
+            ai_user_id=ai_user_id,
+            event_type="gateway_pre_recorded",
+            status=status,
+            capability_id=capability_id,
+            error_code=error_code,
+            attributes=attributes,
         )
 
     async def finalize_task_trace(
@@ -161,12 +178,15 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: str,
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
-        return None
+        self.owners.append((tenant_id, ai_user_id))
 
 
 class FakeRegistry:
@@ -301,7 +321,7 @@ def _run_runtime(
         )
         envelope = await runtime.handle_user_message(
             channel="web",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message=message,
             client_capabilities={},
@@ -349,6 +369,7 @@ def test_runtime_and_gateway_share_trace_id_and_gateway_steps_are_visible() -> N
     ]
     trace_ids = {step["trace_id"] for step in trace_port.steps}
     assert len(trace_ids) == 1
+    assert set(trace_port.owners) == {("tenant-test", "ai-user-1")}
     assert identity_mapping.last_context is not None
     assert policy_guard.last_context is not None
     assert identity_mapping.last_context.request_id == next(iter(trace_ids))

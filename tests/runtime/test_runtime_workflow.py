@@ -21,6 +21,7 @@ from app.runtime.models import CapabilityRef
 from app.version_binding import workflow_confirmation_action_digest
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 
 
@@ -132,6 +133,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -276,7 +278,7 @@ def test_runtime_executes_registered_workflow_without_calling_workflow_as_adapte
         sid = "session-1"
         envelope = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id=sid,
             message="check document",
             client_capabilities={},
@@ -406,7 +408,7 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
 
         envelope = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id="session-policy-terminal",
             message="policy terminal workflow",
             client_capabilities={},
@@ -471,7 +473,7 @@ def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> N
         sid = "session-unconfigured"
         envelope = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id=sid,
             message="unconfigured workflow",
             client_capabilities={},
@@ -491,6 +493,8 @@ def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> N
     assert trace.steps[-1]["error_code"] == "internal_error"
     assert trace.steps[-1]["attributes"]["evaluation_result"] == "failed"
     assert trace.finalizations[-1] == {
+        "tenant_id": "tenant-test",
+        "ai_user_id": "user-1",
         "status": "failed",
         "capability_id": "oa.workflow.unconfigured",
         "error_code": "internal_error",
@@ -592,7 +596,7 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
 
         waiting = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id="session-resume",
             message="submit workflow",
             client_capabilities={},
@@ -611,14 +615,14 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
         )
         wrong_user = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-2",
+            principal=runtime_principal("user-2"),
             session_id="session-resume",
             message=confirm_message,
             client_capabilities={},
         )
         wrong_session = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id="session-other",
             message=confirm_message,
             client_capabilities={},
@@ -631,7 +635,7 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
         )
         resumed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-1",
+            principal=runtime_principal("user-1"),
             session_id="session-resume",
             message=confirm_message,
             client_capabilities={},
@@ -754,14 +758,14 @@ def test_confirmation_prefixed_new_request_falls_through_to_intent_routing() -> 
 
         waiting = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-follow-up",
+            principal=runtime_principal("user-follow-up"),
             session_id="session-follow-up",
             message="submit leave",
             client_capabilities={},
         )
         completed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-follow-up",
+            principal=runtime_principal("user-follow-up"),
             session_id="session-follow-up",
             message=follow_up,
             client_capabilities={},
@@ -854,7 +858,7 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
 
         waiting = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-version-lock",
+            principal=runtime_principal("user-version-lock"),
             session_id="session-version-lock",
             message="approve with locked version",
             client_capabilities={},
@@ -878,7 +882,7 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
         )
         stale = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-version-lock",
+            principal=runtime_principal("user-version-lock"),
             session_id="session-version-lock",
             message=f"确认 {waiting.task_id}",
             client_capabilities={},
@@ -886,7 +890,7 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
         assert await gate.get_decision(waiting.response_id) is None
         failed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-version-lock",
+            principal=runtime_principal("user-version-lock"),
             session_id="session-version-lock",
             message=f"确认 {waiting.response_id}",
             client_capabilities={},
@@ -979,14 +983,14 @@ def test_concurrent_duplicate_confirmation_executes_current_request_once() -> No
 
         waiting = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-concurrent-confirmation",
+            principal=runtime_principal("user-concurrent-confirmation"),
             session_id="session-concurrent-confirmation",
             message="approve concurrently",
             client_capabilities={},
         )
         confirmation = {
             "channel": "mock",
-            "ai_user_id": "user-concurrent-confirmation",
+            "principal": runtime_principal("user-concurrent-confirmation"),
             "session_id": "session-concurrent-confirmation",
             "message": f"确认 {waiting.response_id}",
             "client_capabilities": {},
@@ -1051,7 +1055,7 @@ def test_non_workflow_task_locks_prompt_tool_and_policy_bindings() -> None:
         )
         completed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-direct-binding",
+            principal=runtime_principal("user-direct-binding"),
             session_id="session-direct-binding",
             message="lookup document",
             client_capabilities={},
@@ -1169,21 +1173,21 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
 
         first = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-two-gates",
+            principal=runtime_principal("user-two-gates"),
             session_id="session-two-gates",
             message="run two confirmations",
             client_capabilities={},
         )
         second = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-two-gates",
+            principal=runtime_principal("user-two-gates"),
             session_id="session-two-gates",
             message="确认",
             client_capabilities={},
         )
         stale = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-two-gates",
+            principal=runtime_principal("user-two-gates"),
             session_id="session-two-gates",
             message=f"确认 {first.response_id}",
             client_capabilities={},
@@ -1191,7 +1195,7 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
         assert await gate.get_decision(second.response_id) is None
         completed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-two-gates",
+            principal=runtime_principal("user-two-gates"),
             session_id="session-two-gates",
             message="确认",
             client_capabilities={},
@@ -1303,7 +1307,7 @@ def test_runtime_preserves_workflow_terminal_error_without_reporting_completed(
         )
         envelope = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-failure",
+            principal=runtime_principal("user-failure"),
             session_id="session-failure",
             message="run failing workflow",
             client_capabilities={},
@@ -1406,7 +1410,7 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
         )
         waiting = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-resume-failure",
+            principal=runtime_principal("user-resume-failure"),
             session_id="session-resume-failure",
             message="start resumable failure",
             client_capabilities={},
@@ -1423,7 +1427,7 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
         )
         failed = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-resume-failure",
+            principal=runtime_principal("user-resume-failure"),
             session_id="session-resume-failure",
             message=confirm_message,
             client_capabilities={},
@@ -1433,7 +1437,7 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
             await engine.resume(task_id=waiting.task_id, confirmed=True)
         repeated = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-resume-failure",
+            principal=runtime_principal("user-resume-failure"),
             session_id="session-resume-failure",
             message=confirm_message,
             client_capabilities={},

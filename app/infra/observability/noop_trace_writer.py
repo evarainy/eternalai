@@ -69,7 +69,11 @@ class NoopTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
     ) -> None:
+        del tenant_id, ai_user_id
         return None
 
     async def record_step(
@@ -77,6 +81,9 @@ class NoopTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: TraceEventType,
         status: TraceEventStatus,
         capability_id: str | None = None,
@@ -88,6 +95,8 @@ class NoopTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type=event_type,
                 status=status,
                 capability_id=capability_id,
@@ -101,6 +110,9 @@ class NoopTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -111,6 +123,8 @@ class NoopTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="policy_checked",
                 status=status,
                 capability_id=capability_id,
@@ -124,6 +138,9 @@ class NoopTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
@@ -134,6 +151,8 @@ class NoopTraceWriter:
                 trace_id=trace_id,
                 task_id=task_id,
                 session_id=session_id,
+                tenant_id=tenant_id,
+                ai_user_id=ai_user_id,
                 event_type="gateway_pre_recorded",
                 status=status,
                 capability_id=capability_id,
@@ -147,9 +166,13 @@ class NoopTraceWriter:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: TraceEventStatus,
         capability_id: str | None = None,
         error_code: ErrorCode | None = None,
         attributes: dict[str, Any] | None = None,
     ) -> None:
+        del tenant_id, ai_user_id
         return None

@@ -467,7 +467,11 @@ def test_missing_required_trace_event_cannot_pass_full_chain_check() -> None:
             )
 
     class FakeTraceQuery:
-        async def list_events_by_trace(self, _trace_id: str) -> list[Any]:
+        async def list_events_by_trace(
+            self,
+            _trace_id: str,
+            **_filters: Any,
+        ) -> list[Any]:
             return events
 
     outcome = asyncio.run(
@@ -550,7 +554,11 @@ def _run_synthetic_probe_failure(
             return httpx.Response(200, json=response_payload)
 
     class FakeTraceQuery:
-        async def list_events_by_trace(self, _trace_id: str) -> list[Any]:
+        async def list_events_by_trace(
+            self,
+            _trace_id: str,
+            **_filters: Any,
+        ) -> list[Any]:
             return trace_events
 
     with pytest.raises(full_chain_module._FullChainCheckError) as captured:

@@ -187,9 +187,7 @@ def test_management_builder_injects_the_closed_admin_action_allowlist() -> None:
 
     capabilities = asyncio.run(service.list_capabilities(_context("admin")))
 
-    assert [capability.capability_id for capability in capabilities] == [
-        "oa.leave.apply"
-    ]
+    assert [capability.capability_id for capability in capabilities] == ["oa.leave.apply"]
     assert registry.calls == [("list", None)]
     assert trace.events[0].attributes["policy_capability_id"] == "admin_registry_list"
 
@@ -296,6 +294,8 @@ def test_deprecated_transition_is_rejected_and_traced(action: str) -> None:
             trace_id="trace-admin",
             task_id="admin-request:trace-admin",
             session_id="admin-lite",
+            tenant_id="default",
+            ai_user_id="unverified-admin-request",
             event_type="admin_action",
             status="failed",
             capability_id="oa.leave.apply",
@@ -303,8 +303,8 @@ def test_deprecated_transition_is_rejected_and_traced(action: str) -> None:
                 "action": action,
                 "policy_capability_id": f"admin_registry_{action}",
                 "authorization_decision": "allow",
-                    "role_claim_source": "unverified_context",
-                    "role_claim_authenticated": False,
+                "role_claim_source": "unverified_context",
+                "role_claim_authenticated": False,
                 "reason_code": "invalid_status_transition",
                 "before_status": "deprecated",
                 "after_status": "deprecated",

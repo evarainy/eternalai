@@ -24,6 +24,9 @@ from app.ports.trace import (
 )
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+TENANT_ID = "tenant-test"
+OTHER_TENANT_ID = "tenant-other"
+AI_USER_ID = "user-test"
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -63,18 +66,80 @@ def test_all_21_trace_event_types_persist_and_read_back() -> None:
                         trace_id=trace_id,
                         task_id="task-all-types",
                         session_id="session-all-types",
+                        tenant_id="tenant-test",
+                        ai_user_id="user-test",
                         event_type=event_type,
                         status="ok",
                         attributes={"event_type": event_type},
                     )
                 )
 
-            persisted = await reader.list_events_by_trace(trace_id)
+            persisted = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=TENANT_ID,
+            )
 
             assert len(event_types) == 21
             assert len(persisted) == 21
             assert {event.event_type for event in persisted} == set(event_types)
+            assert {(event.tenant_id, event.ai_user_id) for event in persisted} == {
+                (TENANT_ID, AI_USER_ID)
+            }
             assert all(event.created_at.utcoffset() is not None for event in persisted)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
+def test_reader_enforces_tenant_scope_for_same_trace_task_and_session() -> None:
+    _require_db()
+    suffix = uuid4().hex
+    trace_id = f"shared-trace-{suffix}"
+    task_id = f"shared-task-{suffix}"
+    session_id = f"shared-session-{suffix}"
+
+    async def exercise() -> None:
+        engine = _make_engine()
+        try:
+            factory = _make_factory(engine)
+            writer = PostgreSQLTraceWriter(factory)
+            reader = PostgreSQLTraceReader(factory)
+            for tenant_id, ai_user_id in (
+                (TENANT_ID, AI_USER_ID),
+                (OTHER_TENANT_ID, "user-other"),
+            ):
+                await writer.record_event(
+                    TraceEvent(
+                        trace_id=trace_id,
+                        task_id=task_id,
+                        session_id=session_id,
+                        tenant_id=tenant_id,
+                        ai_user_id=ai_user_id,
+                        event_type="task_created",
+                        status="ok",
+                    )
+                )
+
+            own = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=TENANT_ID,
+                task_id=task_id,
+                session_id=session_id,
+            )
+            other = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=OTHER_TENANT_ID,
+                task_id=task_id,
+                session_id=session_id,
+            )
+
+            assert [(event.tenant_id, event.ai_user_id) for event in own] == [
+                (TENANT_ID, AI_USER_ID)
+            ]
+            assert [(event.tenant_id, event.ai_user_id) for event in other] == [
+                (OTHER_TENANT_ID, "user-other")
+            ]
         finally:
             await engine.dispose()
 
@@ -100,6 +165,8 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                     trace_id=trace_id,
                     task_id="task-redaction",
                     session_id="session-redaction",
+                    tenant_id="tenant-test",
+                    ai_user_id="user-test",
                     event_type="adapter_called",
                     status="ok",
                     attributes={
@@ -117,13 +184,15 @@ def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
                 )
             )
 
-            persisted = await reader.list_events_by_trace(trace_id)
+            persisted = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=TENANT_ID,
+            )
             async with factory() as session:
                 raw_attributes = (
                     await session.execute(
                         text(
-                            "SELECT attributes::text FROM trace_events"
-                            " WHERE trace_id = :trace_id"
+                            "SELECT attributes::text FROM trace_events WHERE trace_id = :trace_id"
                         ),
                         {"trace_id": trace_id},
                     )
@@ -172,15 +241,14 @@ def test_identity_sanitizer_override_cannot_bypass_final_redaction() -> None:
                     trace_id=trace_id,
                     task_id="task-identity-hook",
                     session_id="session-identity-hook",
+                    tenant_id="tenant-test",
+                    ai_user_id="user-test",
                     event_type="adapter_called",
                     status="ok",
                     attributes={
                         "authorization": f"Bearer {token}",
                         "token": direct_token,
-                        "dsn": (
-                            "postgresql+psycopg://alice:"
-                            f"{uri_password}@db.example.test/app"
-                        ),
+                        "dsn": (f"postgresql+psycopg://alice:{uri_password}@db.example.test/app"),
                         "headers": {
                             "X-Api-Key": api_key,
                             "X-CSRF-Token": csrf_token,
@@ -193,8 +261,7 @@ def test_identity_sanitizer_override_cannot_bypass_final_redaction() -> None:
                 raw_attributes = (
                     await session.execute(
                         text(
-                            "SELECT attributes::text FROM trace_events"
-                            " WHERE trace_id = :trace_id"
+                            "SELECT attributes::text FROM trace_events WHERE trace_id = :trace_id"
                         ),
                         {"trace_id": trace_id},
                     )
@@ -230,34 +297,51 @@ def test_only_record_event_is_a_persistence_landing_point() -> None:
             factory = _make_factory(engine)
             writer = PostgreSQLTraceWriter(factory)
             reader = PostgreSQLTraceReader(factory)
-            await writer.start_task_trace(trace_id, "task-landing", "session-landing")
+            await writer.start_task_trace(
+                trace_id,
+                "task-landing",
+                "session-landing",
+                tenant_id=TENANT_ID,
+                ai_user_id=AI_USER_ID,
+            )
             await writer.record_step(
                 trace_id,
                 "task-landing",
                 "session-landing",
-                "task_created",
-                "ok",
+                tenant_id=TENANT_ID,
+                ai_user_id=AI_USER_ID,
+                event_type="task_created",
+                status="ok",
             )
             await writer.record_policy_decision(
                 trace_id,
                 "task-landing",
                 "session-landing",
-                "ok",
+                tenant_id=TENANT_ID,
+                ai_user_id=AI_USER_ID,
+                status="ok",
             )
             await writer.record_gateway_call(
                 trace_id,
                 "task-landing",
                 "session-landing",
-                "ok",
+                tenant_id=TENANT_ID,
+                ai_user_id=AI_USER_ID,
+                status="ok",
             )
             await writer.finalize_task_trace(
                 trace_id,
                 "task-landing",
                 "session-landing",
-                "ok",
+                tenant_id=TENANT_ID,
+                ai_user_id=AI_USER_ID,
+                status="ok",
             )
 
-            persisted = await reader.list_events_by_trace(trace_id)
+            persisted = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=TENANT_ID,
+            )
 
             assert [event.event_type for event in persisted] == [
                 "task_created",
@@ -287,10 +371,12 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                 await session.execute(
                     text(
                         "INSERT INTO trace_events"
-                        " (event_id, trace_id, task_id, session_id, event_type, status,"
+                        " (event_id, trace_id, task_id, session_id, tenant_id, ai_user_id,"
+                        " event_type, status,"
                         " capability_id, error_code, attributes, created_at)"
                         " VALUES"
                         " (:event_id, :trace_id, :task_id, :session_id,"
+                        " :tenant_id, :ai_user_id,"
                         " 'task_created', 'ok', NULL, NULL,"
                         " CAST(:attributes AS JSONB), :created_at)"
                     ),
@@ -300,6 +386,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": trace_id,
                             "task_id": task_id,
                             "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "created-first"}),
                             "created_at": created_at - timedelta(seconds=1),
                         },
@@ -308,6 +396,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": trace_id,
                             "task_id": task_id,
                             "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "b"}),
                             "created_at": created_at,
                         },
@@ -316,6 +406,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": trace_id,
                             "task_id": task_id,
                             "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "a"}),
                             "created_at": created_at,
                         },
@@ -324,6 +416,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": f"other-{trace_id}",
                             "task_id": f"other-{task_id}",
                             "session_id": other_session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "other"}),
                             "created_at": created_at + timedelta(seconds=1),
                         },
@@ -332,6 +426,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": trace_id,
                             "task_id": f"trace-conflict-{task_id}",
                             "session_id": f"trace-conflict-{session_id}",
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "trace-only"}),
                             "created_at": created_at + timedelta(seconds=2),
                         },
@@ -340,6 +436,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": f"task-conflict-{trace_id}",
                             "task_id": task_id,
                             "session_id": f"task-conflict-{session_id}",
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "task-only"}),
                             "created_at": created_at + timedelta(seconds=3),
                         },
@@ -348,6 +446,8 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
                             "trace_id": f"session-conflict-{trace_id}",
                             "task_id": f"session-conflict-{task_id}",
                             "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"order": "session-only"}),
                             "created_at": created_at + timedelta(seconds=4),
                         },
@@ -358,20 +458,26 @@ def test_reader_filters_sorting_and_cross_session_isolation() -> None:
             reader = PostgreSQLTraceReader(factory)
             by_trace = await reader.list_events_by_trace(
                 trace_id,
+                tenant_id=TENANT_ID,
                 task_id=task_id,
                 session_id=session_id,
             )
             by_task = await reader.list_events_by_task(
                 task_id,
+                tenant_id=TENANT_ID,
                 trace_id=trace_id,
                 session_id=session_id,
             )
             by_session = await reader.list_events_by_session(
                 session_id,
+                tenant_id=TENANT_ID,
                 trace_id=trace_id,
                 task_id=task_id,
             )
-            other_session = await reader.list_events_by_session(other_session_id)
+            other_session = await reader.list_events_by_session(
+                other_session_id,
+                tenant_id=TENANT_ID,
+            )
 
             expected_ids = [f"{prefix}-z", f"{prefix}-a", f"{prefix}-b"]
             assert [event.event_id for event in by_trace] == expected_ids
@@ -399,10 +505,12 @@ def test_reader_enforces_exact_limit_for_default_huge_and_negative_values() -> N
                 await session.execute(
                     text(
                         "INSERT INTO trace_events"
-                        " (event_id, trace_id, task_id, session_id, event_type, status,"
+                        " (event_id, trace_id, task_id, session_id, tenant_id, ai_user_id,"
+                        " event_type, status,"
                         " capability_id, error_code, attributes, created_at)"
                         " VALUES"
                         " (:event_id, :trace_id, :task_id, :session_id,"
+                        " :tenant_id, :ai_user_id,"
                         " 'task_created', 'ok', NULL, NULL,"
                         " CAST(:attributes AS JSONB), :created_at)"
                     ),
@@ -412,6 +520,8 @@ def test_reader_enforces_exact_limit_for_default_huge_and_negative_values() -> N
                             "trace_id": f"trace-{prefix}",
                             "task_id": f"task-{prefix}",
                             "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
                             "attributes": json.dumps({"index": index}),
                             "created_at": start + timedelta(microseconds=index),
                         }
@@ -421,9 +531,20 @@ def test_reader_enforces_exact_limit_for_default_huge_and_negative_values() -> N
                 await session.commit()
 
             reader = PostgreSQLTraceReader(factory)
-            default = await reader.list_events_by_session(session_id)
-            huge = await reader.list_events_by_session(session_id, limit=10**9)
-            negative = await reader.list_events_by_session(session_id, limit=-1)
+            default = await reader.list_events_by_session(
+                session_id,
+                tenant_id=TENANT_ID,
+            )
+            huge = await reader.list_events_by_session(
+                session_id,
+                tenant_id=TENANT_ID,
+                limit=10**9,
+            )
+            negative = await reader.list_events_by_session(
+                session_id,
+                tenant_id=TENANT_ID,
+                limit=-1,
+            )
 
             assert len(default) == TRACE_QUERY_LIMIT == 100
             assert len(huge) == TRACE_QUERY_LIMIT
@@ -448,6 +569,8 @@ def test_writer_fails_closed_when_sanitizer_raises() -> None:
         trace_id="trace-fail-closed",
         task_id="task-fail-closed",
         session_id="session-fail-closed",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
         attributes={"userpassword": sensitive_value},

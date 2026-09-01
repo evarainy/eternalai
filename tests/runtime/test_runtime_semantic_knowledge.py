@@ -16,6 +16,7 @@ from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 from app.ports.response_envelope import ResponseEnvelope
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
 from tests.runtime.test_runtime_capability_selection import (
     ExistingSessionStore,
@@ -93,7 +94,7 @@ def _run(
     envelope = asyncio.run(
         runtime.handle_user_message(
             channel="mock",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message=message,
             client_capabilities={},
@@ -287,7 +288,7 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
     async def exercise() -> None:
         await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message="first request",
             client_capabilities={},
@@ -295,7 +296,7 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
         registry.capabilities = [first_disabled]
         await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message="second request",
             client_capabilities={},
@@ -303,7 +304,7 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
         registry.capabilities = [replacement]
         await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message="third request",
             client_capabilities={},

@@ -317,7 +317,10 @@ async def _run_capability_probe(
 
     if envelope.status != "completed":
         try:
-            trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
+            trace_events = await trace_query.list_events_by_trace(
+                envelope.trace_id,
+                tenant_id="default",
+            )
             runtime_error_code = _runtime_error_code_from_terminal_trace(
                 trace_events,
                 envelope=envelope,
@@ -336,7 +339,10 @@ async def _run_capability_probe(
         raise _FullChainCheckError("capability_output_invalid") from None
 
     try:
-        trace_events = await trace_query.list_events_by_trace(envelope.trace_id)
+        trace_events = await trace_query.list_events_by_trace(
+            envelope.trace_id,
+            tenant_id="default",
+        )
         event_types = frozenset(event.event_type for event in trace_events)
         selected_capability_ids = {
             event.capability_id

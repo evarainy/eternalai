@@ -28,6 +28,7 @@ from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
 from app.runtime.runtime import RuntimeImpl, _confirm_card_payload
 from app.version_binding import immutable_request_digest
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import (
     StaticCapabilityRegistry,
     active_capability,
@@ -107,6 +108,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -120,6 +122,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -140,6 +143,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -152,6 +156,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -164,6 +169,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -237,7 +243,7 @@ def _run_runtime(
         )
         return await runtime.handle_user_message(
             channel="web",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message=message,
             client_capabilities={},
@@ -345,7 +351,7 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
         )
         return await runtime.handle_user_message(
             channel="web",
-            ai_user_id="ai-user-system-message",
+            principal=runtime_principal("ai-user-system-message"),
             session_id="session-system-message",
             message=message,
             client_capabilities={},

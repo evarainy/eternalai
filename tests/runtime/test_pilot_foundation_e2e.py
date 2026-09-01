@@ -451,7 +451,8 @@ async def _run_pilot_request() -> PilotObservation:
         assert tasks[0].ai_user_id != "self-reported-attacker"
 
         trace_events = await PostgreSQLTraceReader(session_factory).list_events_by_trace(
-            envelope["trace_id"]
+            envelope["trace_id"],
+            tenant_id="default",
         )
         event_types = frozenset(event.event_type for event in trace_events)
         persisted_trace = repr(trace_events)
