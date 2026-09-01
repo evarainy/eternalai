@@ -42,11 +42,12 @@ def _record(**updates: object) -> WorkObjectRecord:
     return TypeAdapter(WorkObjectRecord).validate_python(values, strict=True)
 
 
-def test_task_record_contract_remains_the_frozen_execution_record_shape() -> None:
+def test_task_record_contract_includes_trusted_tenant_ownership() -> None:
     assert set(TaskRecord.model_fields) == {
         "task_id",
         "session_id",
         "ai_user_id",
+        "tenant_id",
         "status",
         "trace_id",
         "capability_id",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 TaskStatus: TypeAlias = Literal[
     "created",
@@ -23,10 +23,21 @@ class TaskRecord(BaseModel):
     task_id: str
     session_id: str
     ai_user_id: str
+    tenant_id: str | None
     status: TaskStatus
     trace_id: str | None = None
     capability_id: str | None = None
     error_code: str | None = None
+
+    @field_validator("tenant_id")
+    @classmethod
+    def _tenant_id_must_be_non_blank_when_known(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("tenant_id must not be blank")
+        return value
 
 
 class TaskEventRecord(BaseModel):
@@ -60,6 +71,7 @@ class TaskStorePort(Protocol):
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]: ...
 
     async def list_events(self, task_id: str) -> list[TaskEventRecord]: ...

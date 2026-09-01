@@ -54,6 +54,7 @@ class MemoryTaskStore:
             task_id=task_id,
             session_id=original.session_id,
             ai_user_id=original.ai_user_id,
+            tenant_id=original.tenant_id,
             status=cast(Any, status),
             trace_id=original.trace_id,
             error_code=error_code,
@@ -67,6 +68,7 @@ class MemoryTaskStore:
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]:
         return []
 

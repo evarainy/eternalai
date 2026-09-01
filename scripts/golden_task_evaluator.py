@@ -155,6 +155,7 @@ class SpyTaskStore:
             task_id=task_id,
             session_id=created.session_id,
             ai_user_id=created.ai_user_id,
+            tenant_id=created.tenant_id,
             status=cast(Any, status),
             trace_id=created.trace_id,
             error_code=error_code,

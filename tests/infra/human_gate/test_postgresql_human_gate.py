@@ -52,6 +52,7 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
                     task_id=task_id,
                     session_id="human-gate-session",
                     ai_user_id="human-gate-user",
+                    tenant_id="human-gate-tenant",
                     status="running",
                 )
             )

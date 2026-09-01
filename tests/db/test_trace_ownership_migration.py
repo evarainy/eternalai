@@ -212,6 +212,16 @@ def test_backfill_assigns_only_unique_exact_owner_and_roundtrip_loses_no_rows() 
     command.downgrade(config, PREVIOUS_REVISION)
     try:
         _seed_previous_revision(prefix)
+        command.upgrade(config, "20260901_090000")
+
+        engine = create_engine(normalize_database_url(_database_url()))
+        try:
+            assert "tenant_id" not in {
+                column["name"] for column in inspect(engine).get_columns("tasks")
+            }
+        finally:
+            engine.dispose()
+
         command.upgrade(config, "head")
 
         expected = {
@@ -224,10 +234,6 @@ def test_backfill_assigns_only_unique_exact_owner_and_roundtrip_loses_no_rows() 
 
         engine = create_engine(normalize_database_url(_database_url()))
         try:
-            inspector = inspect(engine)
-            assert "tenant_id" not in {
-                column["name"] for column in inspector.get_columns("tasks")
-            }
             with engine.connect() as connection:
                 persisted = connection.execute(
                     text(
@@ -236,9 +242,9 @@ def test_backfill_assigns_only_unique_exact_owner_and_roundtrip_loses_no_rows() 
                     ),
                     {"prefix": f"{prefix}-event-%"},
                 ).mappings()
-                assert {
-                    row["event_id"]: row["attributes"] for row in persisted
-                } == {event_id: {} for event_id in expected}
+                assert {row["event_id"]: row["attributes"] for row in persisted} == {
+                    event_id: {} for event_id in expected
+                }
 
             with pytest.raises(IntegrityError):
                 with engine.begin() as connection:

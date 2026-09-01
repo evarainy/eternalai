@@ -96,13 +96,15 @@ class RecordingTaskStore:
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]:
-        self.calls.append(("list_tasks", (session_id, ai_user_id)))
+        self.calls.append(("list_tasks", (session_id, ai_user_id, tenant_id)))
         return [
             task
             for task in self.tasks
             if (session_id is None or task.session_id == session_id)
             and (ai_user_id is None or task.ai_user_id == ai_user_id)
+            and (tenant_id is None or task.tenant_id == tenant_id)
         ]
 
     async def list_events(self, task_id: str) -> list[TaskEventRecord]:
@@ -258,11 +260,17 @@ ROLE_DENIED_DETAIL = {
 }
 
 
-def _task(index: int, *, ai_user_id: str = "user-1") -> TaskRecord:
+def _task(
+    index: int,
+    *,
+    ai_user_id: str = "user-1",
+    tenant_id: str | None = "default",
+) -> TaskRecord:
     return TaskRecord(
         task_id=f"task-{index:03d}",
         session_id="session-1",
         ai_user_id=ai_user_id,
+        tenant_id=tenant_id,
         status="failed" if index % 2 else "completed",
         trace_id=f"private-trace-{index}",
         capability_id="oa.leave.apply",
@@ -382,11 +390,12 @@ def test_task_list_is_whitelisted_and_fixed_at_100_regardless_of_limit(
 ) -> None:
     task_store = RecordingTaskStore([_task(index) for index in range(101)])
     trace = RecordingTrace()
+    trace_query = RecordingTraceQuery([_task_trace_proof(index) for index in range(101)])
     client = _client(
         task_store,
         RecordingIdentityMapping(),
         trace,
-        trace_query=RecordingTraceQuery([_task_trace_proof(index) for index in range(101)]),
+        trace_query=trace_query,
     )
 
     response = client.get(
@@ -406,7 +415,8 @@ def test_task_list_is_whitelisted_and_fixed_at_100_regardless_of_limit(
         "error_code",
     }
     assert "private-trace" not in str(items)
-    assert task_store.calls == [("list_tasks", (None, "user-1"))]
+    assert task_store.calls == [("list_tasks", (None, "user-1", "default"))]
+    assert trace_query.calls == []
     assert trace.events[-1].attributes["action"] == "tasks_list"
     assert trace.events[-1].attributes["result_count"] == 100
 
@@ -417,11 +427,12 @@ def test_task_events_drop_unknown_sensitive_payload_and_are_fixed_at_100() -> No
         events=[_event(index) for index in range(101)],
     )
     trace = RecordingTrace()
+    trace_query = RecordingTraceQuery([_task_trace_proof(0)])
     client = _client(
         task_store,
         RecordingIdentityMapping(),
         trace,
-        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+        trace_query=trace_query,
     )
 
     response = client.get(
@@ -446,17 +457,19 @@ def test_task_events_drop_unknown_sensitive_payload_and_are_fixed_at_100() -> No
         ("get_task", "task-000"),
         ("list_events", "task-000"),
     ]
+    assert trace_query.calls == []
     assert trace.events[-1].attributes["action"] == "task_events_list"
 
 
 def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
     identity_mapping = RecordingIdentityMapping([_binding(index) for index in range(101)])
     trace = RecordingTrace()
+    trace_query = RecordingTraceQuery([_task_trace_proof(0)])
     client = _client(
-        RecordingTaskStore([_task(0)]),
+        RecordingTaskStore([_task(index) for index in range(101)]),
         identity_mapping,
         trace,
-        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+        trace_query=trace_query,
     )
 
     response = client.get(
@@ -482,6 +495,7 @@ def test_bindings_require_a_user_forward_filters_and_are_fixed_at_100() -> None:
         "reason_code",
     }
     assert identity_mapping.calls == [("user-1", "oa", "self", "account-set", "device-domain")]
+    assert trace_query.calls == []
     assert trace.events[-1].attributes["action"] == "bindings_list"
 
 
@@ -499,11 +513,12 @@ def test_bindings_list_preserves_existing_active_and_expired_projection_fields()
     )
     identity_mapping = RecordingIdentityMapping([active, expired])
     trace = RecordingTrace()
+    trace_query = RecordingTraceQuery([_task_trace_proof(0)])
     client = _client(
         RecordingTaskStore([_task(0)]),
         identity_mapping,
         trace,
-        trace_query=RecordingTraceQuery([_task_trace_proof(0)]),
+        trace_query=trace_query,
     )
 
     response = client.get(
@@ -538,6 +553,7 @@ def test_bindings_list_preserves_existing_active_and_expired_projection_fields()
         ],
     }
     assert identity_mapping.calls == [("user-1", "oa", None, None, None)]
+    assert trace_query.calls == []
     assert trace.events[-1].attributes["action"] == "bindings_list"
 
 
@@ -648,11 +664,17 @@ def test_authorized_task_list_requires_a_bounded_filter() -> None:
     assert trace.events[-1].status == "failed"
 
 
-def test_historical_task_and_binding_without_tenant_trace_proof_are_hidden() -> None:
-    task_store = RecordingTaskStore([_task(0)], [_event(0)])
+def test_historical_null_tenant_task_and_binding_are_hidden_without_trace_queries() -> None:
+    task_store = RecordingTaskStore([_task(0, tenant_id=None)], [_event(0)])
     identity_mapping = RecordingIdentityMapping([_binding(0)])
     trace = RecordingTrace()
-    client = _client(task_store, identity_mapping, trace)
+    trace_query = RecordingTraceQuery([_task_trace_proof(0)])
+    client = _client(
+        task_store,
+        identity_mapping,
+        trace,
+        trace_query=trace_query,
+    )
 
     task_list = client.get(
         "/api/v1/admin/tasks?ai_user_id=user-1",
@@ -673,22 +695,30 @@ def test_historical_task_and_binding_without_tenant_trace_proof_are_hidden() -> 
     assert bindings.json() == {"ai_user_id": "user-1", "items": []}
     assert ("list_events", "task-000") not in task_store.calls
     assert identity_mapping.calls == []
+    assert trace_query.calls == []
 
 
-def test_cross_tenant_trace_proof_cannot_unlock_admin_task_or_binding_reads() -> None:
-    cross_tenant = _task_trace_proof(0).model_copy(update={"tenant_id": "other-tenant"})
-    task_store = RecordingTaskStore([_task(0)], [_event(0)])
+def test_cross_tenant_task_cannot_unlock_admin_task_event_or_binding_reads() -> None:
+    task_store = RecordingTaskStore(
+        [_task(0, tenant_id="other-tenant")],
+        [_event(0)],
+    )
     identity_mapping = RecordingIdentityMapping([_binding(0)])
     trace = RecordingTrace()
+    trace_query = RecordingTraceQuery([_task_trace_proof(0)])
     client = _client(
         task_store,
         identity_mapping,
         trace,
-        trace_query=RecordingTraceQuery([cross_tenant]),
+        trace_query=trace_query,
     )
 
     task_list = client.get(
         "/api/v1/admin/tasks?ai_user_id=user-1",
+        cookies=ADMIN_COOKIES,
+    )
+    task_events = client.get(
+        "/api/v1/admin/tasks/task-000/events",
         cookies=ADMIN_COOKIES,
     )
     bindings = client.get(
@@ -697,8 +727,45 @@ def test_cross_tenant_trace_proof_cannot_unlock_admin_task_or_binding_reads() ->
     )
 
     assert task_list.json()["items"] == []
+    assert task_events.json()["items"] == []
     assert bindings.json()["items"] == []
+    assert ("list_events", "task-000") not in task_store.calls
     assert identity_mapping.calls == []
+    assert trace_query.calls == []
+
+
+def test_same_tenant_audit_reader_can_read_another_users_task_evidence() -> None:
+    task_store = RecordingTaskStore(
+        [_task(0, ai_user_id="other-user")],
+        [_event(0)],
+    )
+    identity_mapping = RecordingIdentityMapping([_binding(0)])
+    trace_query = RecordingTraceQuery()
+    client = _client(
+        task_store,
+        identity_mapping,
+        RecordingTrace(),
+        trace_query=trace_query,
+    )
+
+    task_list = client.get(
+        "/api/v1/admin/tasks?ai_user_id=other-user",
+        cookies=ADMIN_COOKIES,
+    )
+    task_events = client.get(
+        "/api/v1/admin/tasks/task-000/events",
+        cookies=ADMIN_COOKIES,
+    )
+    bindings = client.get(
+        "/api/v1/admin/bindings?ai_user_id=other-user",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert [item["task_id"] for item in task_list.json()["items"]] == ["task-000"]
+    assert [item["task_id"] for item in task_events.json()["items"]] == ["task-000"]
+    assert len(bindings.json()["items"]) == 1
+    assert identity_mapping.calls == [("other-user", None, None, None, None)]
+    assert trace_query.calls == []
 
 
 def test_trace_list_is_bounded_whitelisted_and_redacted_on_read() -> None:
