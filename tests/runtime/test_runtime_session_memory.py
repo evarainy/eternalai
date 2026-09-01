@@ -50,6 +50,7 @@ class RecordingTaskStore:
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]:
         return []
 

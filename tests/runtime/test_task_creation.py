@@ -46,6 +46,7 @@ class SpyTaskStore:
             task_id=task_id,
             session_id=created.session_id,
             ai_user_id=created.ai_user_id,
+            tenant_id=created.tenant_id,
             status=status,
             trace_id=created.trace_id,
             error_code=error_code,
@@ -59,6 +60,7 @@ class SpyTaskStore:
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]:
         return []
 
@@ -93,7 +95,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -107,7 +109,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -128,7 +130,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -141,7 +143,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -154,7 +156,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -186,6 +188,36 @@ class SpyGateway:
         return self.result
 
 
+def _runtime_for_message() -> tuple[
+    RuntimeImpl,
+    SpyTaskStore,
+    SpySessionStore,
+    SpyGateway,
+]:
+    task_store = SpyTaskStore()
+    session_store = SpySessionStore()
+    trace_port = SpyTracePort()
+    structured_output = MockStructuredOutputProvider()
+    structured_output.register(
+        "test message",
+        CapabilityRef,
+        CapabilityRef(capability_id="test.cap"),
+    )
+    gateway = SpyGateway(ExecutionResult(status="completed", trace_id="gw-trace"))
+    runtime = RuntimeImpl(
+        task_store=task_store,
+        session_store=session_store,
+        capability_registry=StaticCapabilityRegistry("test.cap"),
+        gateway=gateway,
+        trace_port=trace_port,
+        llm_provider=MockLLMProvider(),
+        structured_output=structured_output,
+        intent_model="test-intent-model",
+        response_builder=ResponseEnvelopeBuilder(),
+    )
+    return runtime, task_store, session_store, gateway
+
+
 def test_capability_ref_accepts_required_fields_and_defaults_arguments() -> None:
     default_ref = CapabilityRef(capability_id="some.capability")
     explicit_ref = CapabilityRef(capability_id="x", arguments={"key": "val"})
@@ -202,27 +234,7 @@ def test_capability_ref_rejects_extra_fields() -> None:
 
 def test_handle_user_message_creates_running_task_executes_gateway_and_completes_task() -> None:
     async def exercise_runtime() -> ResponseEnvelope:
-        task_store = SpyTaskStore()
-        session_store = SpySessionStore()
-        trace_port = SpyTracePort()
-        structured_output = MockStructuredOutputProvider()
-        structured_output.register(
-            "test message",
-            CapabilityRef,
-            CapabilityRef(capability_id="test.cap"),
-        )
-        gateway = SpyGateway(ExecutionResult(status="completed", trace_id="gw-trace"))
-        runtime = RuntimeImpl(
-            task_store=task_store,
-            session_store=session_store,
-            capability_registry=StaticCapabilityRegistry("test.cap"),
-            gateway=gateway,
-            trace_port=trace_port,
-            llm_provider=MockLLMProvider(),
-            structured_output=structured_output,
-            intent_model="test-intent-model",
-            response_builder=ResponseEnvelopeBuilder(),
-        )
+        runtime, task_store, session_store, gateway = _runtime_for_message()
 
         result = await runtime.handle_user_message(
             channel="web",
@@ -234,6 +246,7 @@ def test_handle_user_message_creates_running_task_executes_gateway_and_completes
 
         assert len(task_store.created) == 1
         assert task_store.created[0].status == "running"
+        assert task_store.created[0].tenant_id == "tenant-test"
         assert session_store.created == [SessionRecord(session_id="session-1")]
         assert len(gateway.calls) == 1
         assert gateway.calls[0]["capability_id"] == "test.cap"
@@ -241,5 +254,24 @@ def test_handle_user_message_creates_running_task_executes_gateway_and_completes
         assert isinstance(result, ResponseEnvelope)
         assert result.status == "completed"
         return result
+
+    asyncio.run(exercise_runtime())
+
+
+def test_handle_user_message_rejects_blank_tenant_before_task_store_write() -> None:
+    async def exercise_runtime() -> None:
+        runtime, task_store, _, gateway = _runtime_for_message()
+
+        with pytest.raises(ValidationError, match="tenant_id must not be blank"):
+            await runtime.handle_user_message(
+                channel="web",
+                principal=runtime_principal("ai-user-1", tenant_id=" "),
+                session_id="session-blank-tenant",
+                message="test message",
+                client_capabilities={},
+            )
+
+        assert task_store.created == []
+        assert gateway.calls == []
 
     asyncio.run(exercise_runtime())

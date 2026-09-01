@@ -221,6 +221,7 @@ class RuntimeImpl:
                 task_id=task_id,
                 session_id=session_id,
                 ai_user_id=ai_user_id,
+                tenant_id=memory_key.tenant_id,
                 status="running",
                 trace_id=trace_id,
             )

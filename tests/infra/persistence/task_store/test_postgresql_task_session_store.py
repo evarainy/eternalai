@@ -3,6 +3,7 @@
 Requires DATABASE_URL environment variable pointing to a live PostgreSQL instance.
 Run: uv run alembic upgrade head  before executing these tests.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,27 +32,57 @@ def _require_db() -> None:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_engine():  # type: ignore[return]
     from app.db.session import make_async_engine
+
     return make_async_engine(DATABASE_URL)
 
 
 def _make_factory(engine):  # type: ignore[return]
     from app.db.session import make_async_session_factory
+
     return make_async_session_factory(engine)
 
 
 def _task_store(factory):  # type: ignore[return]
     from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+
     return PostgreSQLTaskStore(factory)
 
 
 def _session_store(factory):  # type: ignore[return]
     from app.infra.persistence.task_store.postgresql import PostgreSQLSessionStore
+
     return PostgreSQLSessionStore(factory)
 
 
 # ── TaskStore tests ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("tenant_id", [None, "", " "])
+def test_create_task_rejects_missing_or_blank_tenant_before_opening_a_db_session(
+    tenant_id: str | None,
+):
+    from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+    from app.ports.task_store import TaskRecord
+
+    class ExplodingSessionFactory:
+        def __call__(self):  # type: ignore[no-untyped-def]
+            raise AssertionError("create_task reached the database session factory")
+
+    store = PostgreSQLTaskStore(ExplodingSessionFactory())  # type: ignore[arg-type]
+    record = TaskRecord.model_construct(
+        task_id="historical-only-record",
+        session_id="historical-only-session",
+        ai_user_id="historical-only-user",
+        tenant_id=tenant_id,
+        status="completed",
+    )
+
+    with pytest.raises(ValueError, match="tenant_id is required when creating a task"):
+        asyncio.run(store.create_task(record))
+
 
 def test_create_task_returns_task_record_and_round_trips_arbitrary_strings():
     """
@@ -72,6 +103,7 @@ def test_create_task_returns_task_record_and_round_trips_arbitrary_strings():
         task_id=task_id,
         session_id=session_id,
         ai_user_id=ai_user_id,
+        tenant_id="tenant-roundtrip",
         status="created",
         trace_id=trace_id,
         capability_id=capability_id,
@@ -92,6 +124,7 @@ def test_create_task_returns_task_record_and_round_trips_arbitrary_strings():
             assert fetched.task_id == task_id
             assert fetched.session_id == session_id
             assert fetched.ai_user_id == ai_user_id
+            assert fetched.tenant_id == "tenant-roundtrip"
             assert fetched.status == "created"
             assert fetched.trace_id == trace_id
             assert fetched.capability_id == capability_id
@@ -112,12 +145,14 @@ def test_create_task_duplicate_rejection_preserves_original_record():
         task_id=task_id,
         session_id=str(uuid.uuid4()),
         ai_user_id="original-user",
+        tenant_id="tenant-original",
         status="created",
     )
     duplicate = TaskRecord(
         task_id=task_id,
         session_id=str(uuid.uuid4()),
         ai_user_id="different-user",
+        tenant_id="tenant-duplicate",
         status="running",
     )
 
@@ -131,6 +166,7 @@ def test_create_task_duplicate_rejection_preserves_original_record():
             fetched = await store.get_task(task_id)
             assert fetched is not None
             assert fetched.ai_user_id == "original-user"
+            assert fetched.tenant_id == "tenant-original"
             assert fetched.status == "created"
         finally:
             await engine.dispose()
@@ -147,6 +183,55 @@ def test_get_task_returns_none_for_unknown_task_id():
             store = _task_store(_make_factory(engine))
             result = await store.get_task(str(uuid.uuid4()))
             assert result is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_historical_null_tenant_task_can_be_read_and_updated_without_backfill():
+    _require_db()
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    task_id = str(uuid.uuid4())
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            async with engine.connect() as connection:
+                transaction = await connection.begin()
+                factory = async_sessionmaker(
+                    bind=connection,
+                    expire_on_commit=False,
+                    join_transaction_mode="create_savepoint",
+                )
+                try:
+                    async with factory() as session:
+                        await session.execute(
+                            text(
+                                "INSERT INTO tasks"
+                                " (task_id, session_id, ai_user_id, tenant_id, status)"
+                                " VALUES (:task_id, :session_id, :ai_user_id, NULL, 'created')"
+                            ),
+                            {
+                                "task_id": task_id,
+                                "session_id": str(uuid.uuid4()),
+                                "ai_user_id": "historical-user",
+                            },
+                        )
+                        await session.commit()
+
+                    store = _task_store(factory)
+                    fetched = await store.get_task(task_id)
+                    assert fetched is not None
+                    assert fetched.tenant_id is None
+
+                    updated = await store.update_status(task_id, "completed")
+                    assert updated.status == "completed"
+                    assert updated.tenant_id is None
+                finally:
+                    await transaction.rollback()
         finally:
             await engine.dispose()
 
@@ -175,6 +260,7 @@ def test_update_status_round_trips_all_task_status_values():
                     task_id=task_id,
                     session_id=str(uuid.uuid4()),
                     ai_user_id="u1",
+                    tenant_id="tenant-status",
                     status="created",
                 )
                 await store.create_task(record)
@@ -210,6 +296,7 @@ def test_update_status_sets_error_code_correctly():
                     task_id=task_id,
                     session_id=str(uuid.uuid4()),
                     ai_user_id="u1",
+                    tenant_id="tenant-error",
                     status="created",
                 )
             )
@@ -279,6 +366,7 @@ def test_append_event_returns_none_and_verifies_event_id_type_payload():
                     task_id=task_id,
                     session_id=str(uuid.uuid4()),
                     ai_user_id="u1",
+                    tenant_id="tenant-event",
                     status="created",
                 )
             )
@@ -294,13 +382,15 @@ def test_append_event_returns_none_and_verifies_event_id_type_payload():
 
             # Direct SQL verify: event_id, event_type, payload all round-trip
             async with factory() as session:
-                row = (await session.execute(
-                    text(
-                        "SELECT event_id, event_type, payload"
-                        " FROM task_events WHERE event_id = :eid"
-                    ),
-                    {"eid": event_id},
-                )).fetchone()
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT event_id, event_type, payload"
+                            " FROM task_events WHERE event_id = :eid"
+                        ),
+                        {"eid": event_id},
+                    )
+                ).fetchone()
             assert row is not None
             assert row.event_id == event_id
             assert row.event_type == event_type
@@ -353,12 +443,14 @@ def test_list_tasks_supports_session_user_and_intersection_filters():
             task_id=str(uuid.uuid4()),
             session_id=session_id,
             ai_user_id=user_id,
+            tenant_id="tenant-a",
             status="completed",
         ),
         TaskRecord(
             task_id=str(uuid.uuid4()),
             session_id=session_id,
             ai_user_id=other_user_id,
+            tenant_id="tenant-b",
             status="failed",
             error_code="adapter_error",
         ),
@@ -366,6 +458,7 @@ def test_list_tasks_supports_session_user_and_intersection_filters():
             task_id=str(uuid.uuid4()),
             session_id=other_session_id,
             ai_user_id=user_id,
+            tenant_id="tenant-a",
             status="running",
         ),
     ]
@@ -383,6 +476,18 @@ def test_list_tasks_supports_session_user_and_intersection_filters():
                 session_id=session_id,
                 ai_user_id=user_id,
             )
+            tenant_session = await store.list_tasks(
+                session_id=session_id,
+                tenant_id="tenant-a",
+            )
+            tenant_user = await store.list_tasks(
+                ai_user_id=user_id,
+                tenant_id="tenant-a",
+            )
+            cross_tenant = await store.list_tasks(
+                ai_user_id=user_id,
+                tenant_id="tenant-b",
+            )
 
             assert {item.task_id for item in by_session} == {
                 records[0].task_id,
@@ -393,8 +498,16 @@ def test_list_tasks_supports_session_user_and_intersection_filters():
                 records[2].task_id,
             }
             assert intersection == [records[0]]
+            assert tenant_session == [records[0]]
+            assert {item.task_id for item in tenant_user} == {
+                records[0].task_id,
+                records[2].task_id,
+            }
+            assert cross_tenant == []
             with pytest.raises(ValueError, match="session_id or ai_user_id"):
                 await store.list_tasks()
+            with pytest.raises(ValueError, match="session_id or ai_user_id"):
+                await store.list_tasks(tenant_id="tenant-a")
         finally:
             await engine.dispose()
 
@@ -419,10 +532,10 @@ def test_list_tasks_enforces_exact_fixed_limit_in_postgresql():
                 await session.execute(
                     text(
                         "INSERT INTO tasks"
-                        " (task_id, session_id, ai_user_id, status,"
+                        " (task_id, session_id, ai_user_id, tenant_id, status,"
                         " trace_id, capability_id, error_code)"
                         " VALUES"
-                        " (:task_id, :session_id, :ai_user_id, 'completed',"
+                        " (:task_id, :session_id, :ai_user_id, :tenant_id, 'completed',"
                         " NULL, 'oa.leave.apply', NULL)"
                     ),
                     [
@@ -430,6 +543,7 @@ def test_list_tasks_enforces_exact_fixed_limit_in_postgresql():
                             "task_id": f"{prefix}-{index:03d}",
                             "session_id": session_id,
                             "ai_user_id": user_id,
+                            "tenant_id": "tenant-limit",
                         }
                         for index in range(TASK_STORE_QUERY_LIMIT + 1)
                     ],
@@ -471,6 +585,7 @@ def test_list_events_round_trips_payload_in_order_with_exact_fixed_limit():
                     task_id=task_id,
                     session_id=str(uuid.uuid4()),
                     ai_user_id="bounded-event-user",
+                    tenant_id="tenant-events",
                     status="completed",
                 )
             )
@@ -508,6 +623,7 @@ def test_list_events_round_trips_payload_in_order_with_exact_fixed_limit():
 
 
 # ── SessionStore tests ─────────────────────────────────────────────────────────
+
 
 def test_create_session_returns_session_record_and_round_trips():
     _require_db()

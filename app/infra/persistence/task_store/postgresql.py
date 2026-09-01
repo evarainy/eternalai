@@ -28,6 +28,8 @@ class PostgreSQLTaskStore:
         self._session_factory = session_factory
 
     async def create_task(self, record: TaskRecord) -> TaskRecord:
+        if record.tenant_id is None or not record.tenant_id.strip():
+            raise ValueError("tenant_id is required when creating a task")
         async with self._session_factory() as session:
             existing = (
                 await session.execute(
@@ -41,16 +43,17 @@ class PostgreSQLTaskStore:
                 await session.execute(
                     text(
                         "INSERT INTO tasks"
-                        " (task_id, session_id, ai_user_id, status,"
+                        " (task_id, session_id, ai_user_id, tenant_id, status,"
                         " trace_id, capability_id, error_code)"
                         " VALUES"
-                        " (:task_id, :session_id, :ai_user_id, :status,"
+                        " (:task_id, :session_id, :ai_user_id, :tenant_id, :status,"
                         " :trace_id, :capability_id, :error_code)"
                     ),
                     {
                         "task_id": record.task_id,
                         "session_id": record.session_id,
                         "ai_user_id": record.ai_user_id,
+                        "tenant_id": record.tenant_id,
                         "status": record.status,
                         "trace_id": record.trace_id,
                         "capability_id": record.capability_id,
@@ -68,7 +71,7 @@ class PostgreSQLTaskStore:
             row = (
                 await session.execute(
                     text(
-                        "SELECT task_id, session_id, ai_user_id, status,"
+                        "SELECT task_id, session_id, ai_user_id, tenant_id, status,"
                         " trace_id, capability_id, error_code"
                         " FROM tasks WHERE task_id = :task_id"
                     ),
@@ -94,7 +97,7 @@ class PostgreSQLTaskStore:
                         "UPDATE tasks"
                         " SET status = :status, error_code = :error_code"
                         " WHERE task_id = :task_id"
-                        " RETURNING task_id, session_id, ai_user_id, status,"
+                        " RETURNING task_id, session_id, ai_user_id, tenant_id, status,"
                         " trace_id, capability_id, error_code"
                     ),
                     {"task_id": task_id, "status": status, "error_code": error_code},
@@ -137,6 +140,7 @@ class PostgreSQLTaskStore:
         *,
         session_id: str | None = None,
         ai_user_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[TaskRecord]:
         filters: list[str] = []
         parameters: dict[str, str | int] = {"limit": TASK_STORE_QUERY_LIMIT}
@@ -146,15 +150,16 @@ class PostgreSQLTaskStore:
         if ai_user_id is not None:
             filters.append("ai_user_id = :ai_user_id")
             parameters["ai_user_id"] = ai_user_id
-        if not filters:
+        if session_id is None and ai_user_id is None:
             raise ValueError("session_id or ai_user_id is required")
+        if tenant_id is not None:
+            filters.append("tenant_id = :tenant_id")
+            parameters["tenant_id"] = tenant_id
 
         query = (
-            "SELECT task_id, session_id, ai_user_id, status,"
+            "SELECT task_id, session_id, ai_user_id, tenant_id, status,"
             " trace_id, capability_id, error_code"
-            " FROM tasks WHERE "
-            + " AND ".join(filters)
-            + " ORDER BY task_id ASC LIMIT :limit"
+            " FROM tasks WHERE " + " AND ".join(filters) + " ORDER BY task_id ASC LIMIT :limit"
         )
         async with self._session_factory() as session:
             rows = (await session.execute(text(query), parameters)).fetchall()
@@ -178,9 +183,7 @@ class PostgreSQLTaskStore:
                 task_id=row.task_id,
                 event_type=row.event_type,
                 timestamp=row.timestamp,
-                payload=(
-                    row.payload if isinstance(row.payload, dict) else json.loads(row.payload)
-                ),
+                payload=(row.payload if isinstance(row.payload, dict) else json.loads(row.payload)),
             )
             for row in rows
         ]
@@ -191,6 +194,7 @@ def _task_record_from_row(row: Any) -> TaskRecord:
         task_id=row.task_id,
         session_id=row.session_id,
         ai_user_id=row.ai_user_id,
+        tenant_id=row.tenant_id,
         status=row.status,
         trace_id=row.trace_id,
         capability_id=row.capability_id,

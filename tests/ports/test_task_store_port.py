@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, get_args, get_type_hints
 
+import pytest
 from pydantic import ValidationError
 
 from app.ports.task_store import (
@@ -28,12 +29,14 @@ def test_task_record_uses_spec_8_6_2_fields_and_status_values() -> None:
         task_id="task-001",
         session_id="session-001",
         ai_user_id="ai-user-001",
+        tenant_id="tenant-001",
         status="no_capability_found",
     )
 
     assert record.task_id == "task-001"
     assert record.session_id == "session-001"
     assert record.ai_user_id == "ai-user-001"
+    assert record.tenant_id == "tenant-001"
     assert record.status == "no_capability_found"
     assert record.trace_id is None
     assert record.capability_id is None
@@ -54,12 +57,47 @@ def test_task_record_rejects_status_outside_common_contract() -> None:
             task_id="task-001",
             session_id="session-001",
             ai_user_id="ai-user-001",
+            tenant_id="tenant-001",
             status="clarification_needed",
         )
     except ValidationError as exc:
         assert "Input should be" in str(exc)
     else:
         raise AssertionError("TaskRecord accepted a status outside spec section 8.6.2")
+
+
+def test_task_record_requires_explicit_tenant_field() -> None:
+    with pytest.raises(ValidationError, match="tenant_id"):
+        TaskRecord(
+            task_id="task-001",
+            session_id="session-001",
+            ai_user_id="ai-user-001",
+            status="created",
+        )
+
+
+@pytest.mark.parametrize("tenant_id", ["", " ", "\t\r\n"])
+def test_task_record_rejects_blank_tenant_before_store_write(tenant_id: str) -> None:
+    with pytest.raises(ValidationError, match="tenant_id must not be blank"):
+        TaskRecord(
+            task_id="task-001",
+            session_id="session-001",
+            ai_user_id="ai-user-001",
+            tenant_id=tenant_id,
+            status="created",
+        )
+
+
+def test_task_record_allows_explicit_null_only_for_historical_hydration() -> None:
+    record = TaskRecord(
+        task_id="historical-task",
+        session_id="historical-session",
+        ai_user_id="historical-user",
+        tenant_id=None,
+        status="completed",
+    )
+
+    assert record.tenant_id is None
 
 
 def test_session_record_stays_minimal_without_invented_identity_semantics() -> None:
@@ -135,13 +173,20 @@ class TestTaskStorePortProtocol:
         hints = get_type_hints(TaskStorePort.list_tasks)
         signature = inspect.signature(TaskStorePort.list_tasks)
 
-        assert list(signature.parameters) == ["self", "session_id", "ai_user_id"]
+        assert list(signature.parameters) == [
+            "self",
+            "session_id",
+            "ai_user_id",
+            "tenant_id",
+        ]
         assert signature.parameters["session_id"].kind is inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters["ai_user_id"].kind is inspect.Parameter.KEYWORD_ONLY
         assert signature.parameters["session_id"].default is None
         assert signature.parameters["ai_user_id"].default is None
+        assert signature.parameters["tenant_id"].default is None
         assert hints["session_id"] == str | None
         assert hints["ai_user_id"] == str | None
+        assert hints["tenant_id"] == str | None
         assert hints["return"] == list[TaskRecord]
         assert inspect.iscoroutinefunction(TaskStorePort.list_tasks)
 

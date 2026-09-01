@@ -1962,3 +1962,22 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 **一处相关自查**：`P2-AUDIT-READ-AUTHZ-001 + P2-AUDIT-TRACE-SCOPE-001`（PR #150）的监理提示词按修正前的四类框架编写，同样把「授权边界与 scope 越界」划给了 Opus。**实际覆盖未缺失**——该提示词在「变异与故障注入」和「测试数据充分性」两类下明写了跨租户 / 跨用户负向构造，并要求使用两个不同且非空的租户值、同一 trace / task / session 标识在两个租户下都存在（防止「查不到」只是因为该标识本身不存在），监理亦已实测。属分类归属写错、执行覆盖未缺。此例反向印证第 2 点修正的必要性。
 
 **影响面**：本条只更正记录，不改变任何现役规则；`AGENTS.md` 的监理与 Opus 分工以其落盘文本为唯一权威。`P2-GOV-SYNC-048` 的独立评审第二轮结论为 PASS（零阻断、零非阻断），绑定 base `8787a58`、candidate `120fbe5`，其内容与主干 `97783af` + `cab1952` 逐字一致。分支 `phase2/P2-GOV-SYNC-048` 内容已全部在主干，属冗余；删除分支是红线，未处置。
+
+---
+
+## 2026-09-01 — 授权：`P2-TASK-TENANT-COLUMN-001` 的 `tasks` 可信租户切片
+
+**决定**：雨爷授权为 `tasks` 增加可信租户列及必要约束与索引，并同步
+`app/ports/task_store.py::TaskRecord`、全部生产 Task 创建路径与 Admin 读取路径。
+
+**历史行采用方案 A**：migration 只增加可空列，不设置默认值，不猜测、不回填、不删除；升级前存在的 Task
+保持 `tenant_id = NULL`，继续对 Admin 证据面 fail-closed 不可见。这是已接受结果，不是本棒需要恢复的对象。
+本棒阶段二开工对当前 `DATABASE_URL` 做只读实测：Alembic 为 `20260901_090000`，`tasks=0`、distinct
+`task_id=0`。此前审计棒记录的 115/115 是另一时点的历史快照，不冒充本棒实测，也不据此实施回填。
+
+**授权边界**：本授权只覆盖 `tasks`。`sessions`、identity binding、组织目录镜像及其他表一律不动；这些表和
+真实组织身份来源仍属 `P2-TENANT-IDENTITY-001` 的剩余 schema / identity scope，须另行取得专项授权。
+本授权不覆盖 Golden fixture、`FROZEN_GT_IDS`、第二租户接入、新依赖或未列模块重构。
+
+**切片关系**：`P2-TASK-TENANT-COLUMN-001` 是从 `P2-TENANT-IDENTITY-001` schema scope 中切出的
+`tasks` 切片。后继棒不得把本次授权外推到其余表；历史 NULL Task 的恢复路径也须另行裁定。
