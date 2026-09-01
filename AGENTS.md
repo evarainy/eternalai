@@ -27,7 +27,10 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 - Phase 2 不建独立 per-task Task Record。每个 PR body 必须固定包含 `## Scope`、`## 验证结果（实际执行的最小充分验证原始结果 + CI run；pytest / Golden 仅在命中触发条件时列入）`、`## 本棒新增欠债` 三段；PR body 是绑定 commit 与 CI run 的永久任务记录。
 - PR body 三段必须在合并前全部完成；`## 本棒新增欠债` 中每条欠债须在合并前具备 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence 五个字段。合并后补写不计为合规任务记录。required checks 全绿只是必要条件，不构成自行合并授权：配有监理窗口的棒必须先获 Monitor PASS；未配监理窗口的棒，只有启动提示词显式授权时才可自行合并。
 - A 档棒的 PR 还必须在合并前于 `## 验证结果` 下放置 `### Opus 评审桥` JSON 摘要；B / C 档不适用。摘要字段闭集仅为 `requested_model`、`observed_model`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`，不得放模型响应原文或任何敏感值。合规摘要须同时满足 `review_model_verified=true`、`observed_model` 等于现役锁定模型、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，且 `base_sha` / `head_sha` 绑定最终候选；head 改动后旧摘要立即失效，必须重新评审并替换。合并后补写不计为合规任务记录。
-- A 档的两道 Review **必须串行，监理在前、Opus 在后**：实现棒自审 → 独立监理 PASS → 才跑 Opus 桥 → 合并。Opus 评审环境无 shell，只能静态阅读；把只有执行才能判定的问题交给它，会得到不可靠的 PASS，且 head 一变绑定即失效、整轮作废。据此分工：**攻击矩阵、故障注入、门禁是否真会变红、migration 往返、测试替身保真度归监理；合同完整性、类型层可达性、授权边界与 scope 越界、声明缺失、跨文件一致性归 Opus。** 监理判 FAIL 时不得先跑 Opus。
+- A 档的两道 Review **必须串行，监理在前、Opus 在后**：实现棒自审 → 独立监理 PASS → 才跑 Opus 桥 → 合并。监理判 FAIL 时不得先跑 Opus。
+- **监理是独立执行取证方**（沿用「监理」这一既有称谓，Monitor PASS 同义），不是第二个读代码的人。分工判据只有一条：**这件事靠读代码能不能判定？** 能读出来的一律归 Opus，监理不得重复复核。监理只做四类必须执行才能判定的取证：①**变异与故障注入**——把本棒改动回滚，或按 schema 允许的合法形态收窄生产逻辑后，相关门禁是否真的变红；②**测试数据充分性**——fixture 与被测输入的取值是否恰好让守卫看不见某类合法形态，须通过改动 fixture 取值重跑来证伪；③**依赖保真度**——断言是否走真实依赖路径（真实 DB、真实授权路径、真实 migration 往返）而非替身；④**数字复核**——自己重跑并与登记基线逐项对照。
+- Opus 评审环境无 shell，只能静态阅读；把只有执行才能判定的问题交给它，会得到不可靠的 PASS，且 head 一变绑定即失效、整轮作废。归 Opus 的是：合同完整性、类型层可达性、授权边界与 scope 越界、目录与分层合规、声明缺失、跨文件一致性。这些项不得同时出现在监理合同里。
+- **监理返修上限三轮。** 第三轮监理仍未 PASS 即停手上报，由雨爷裁决是交付确有缺陷还是监理判据失焦，不得自行开第四轮。轮次按同一 task_id 下的监理结论份数计。
 - 本棒走多重的流程由下方「任务分档」决定：它规定要写几份提示词、要不要独占 worktree、要不要配监理窗口、要不要过 Opus 桥。
 - 仓库 owner 待办：为 `phase0/main` 的 GitHub 分支保护打开 **Do not allow bypassing the above settings**。本项是已登记欠债；没有专项授权时 agent 不得修改该设置。
 - 删除文件/目录或改写历史、secrets/`.env`、DB schema/真实数据、全局/系统变更、公开发布/生产部署、rebase、reset-hard、force push，均需对应动作的专项授权；风险标签不构成授权。不得绕过 hooks 或 branch protection。
@@ -122,6 +125,7 @@ Phase 1 已完成。当前 Phase 2 状态只见 `docs/phase2/STATUS.md`；已完
 
 ## 按需读取（默认不读）
 
+- Phase 2 监理提示词模板：`docs/phase2/MONITOR_PROMPT_TEMPLATE.md`（生成 A 档监理提示词时读）。
 - Phase 1：`docs/phase1/TASK_PROMPT_TEMPLATE.md`、`docs/phase1/TASK_INDEX.md`、`docs/phase1/tasks/<task_id>.md`、`docs/phase1/task_logs/`、`docs/phase1/ROLE_POLICY.md`。
 - 旧记录 schema：`docs/dev/task_record_schema.yaml`。
 - 跨阶段：`docs/phase0/CONTEXT_LOADING_STRATEGY.md`、`docs/phase0/ROLE_AND_METHOD_GUARDRAILS.md`、`docs/phase0/REPOSITORY_CONTEXT_MAP.md`、`docs/phase0/CODING_STYLE_BASELINE.md`、`docs/phase0/BOUNDARY_CHECKLIST.md`。
