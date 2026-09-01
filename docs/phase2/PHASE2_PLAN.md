@@ -156,6 +156,14 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 记录列表计数投影接受非负 safe integer 之外的值 | 已决裁定要求计数只接受非负 safe integer，但前端 `optionalCount` 当前接受任意 JavaScript `number`；负数、小数、`NaN` 与超出 safe integer 的值会被当作真实计数。现状会进入计数不一致并 fail-closed，不构成安全缺口，但计数合同保真度不足 | 需独立计数输入合同 Scope；本棒只恢复 `is_complete` 完整性信号，不扩改计数语义 | 待 GOV-SYNC 分配 record count validation task_id | `returned_count` 与 `authoritative_count` 仅在为非负 safe integer 时进入投影，其余值按缺失或获批的病态值原因 fail-closed，且负数、小数、`NaN`、超大整数均有回归 | `web/src/contracts/runtimeProjection.ts::optionalCount`；`docs/phase2/DECISIONS.md` 2026-08-30 部分列表裁决；`P2-SDUI-RENDERER-002` 第 1 轮返修指令 |
 | `action_gate_unavailable` outcome 语义被信封校验失败复用 | 后端把既有 `action_gate_unavailable` 闭集 outcome 同时用于信封校验失败，迫使前端去掉“本次操作未执行”的强语义；真正的 gate 不可用场景因此得到更弱提示，跨语言 outcome 的原有含义被放宽 | 需独立跨语言 outcome 语义与错误分类 Scope；本棒不得修改该代码 | 待 GOV-SYNC 分配 action outcome semantics task_id | 信封校验失败使用独立且获批的稳定 outcome / error 分类，`action_gate_unavailable` 只表示 gate 不可用并恢复不执行语义；Python/TypeScript 闭集、生成合同与两类 UI 回归一致 | `app/api/v1/runtime.py:66-88`；`web/src/contracts/userActionOutcome.ts`；`P2-SDUI-RENDERER-002` 第 1 轮返修指令 |
 | 新增前端页面目录合同缺少架构守卫 | **reason**：现役裁决禁止新增页面进入扁平 `web/src/components/` / `web/src/pages/`，但当前 `tests/architecture/test_frontend_layer_boundaries.py` 只覆盖既有三条依赖边界，没有覆盖页面落点；因此架构测试绿色不能证明该合同合规，本棒首轮曾实际把新增搜索页放错目录而未被拦截 | **blocked_by_task_id**：无硬依赖；本次返修合同只允许登记缺口，不实现守卫 | **activation_task_id**：待 GOV-SYNC 分配前端页面目录守卫 task_id | **expiry_condition**：架构守卫在新增 TS/TSX 页面落入扁平 `components/` / `pages/` 时 fail-closed，同时祖父化存量文件、允许页面落入 `features/<feature>/`，并以故意放错新增页面的反证证明门禁会变红 | **evidence**：`docs/phase2/DECISIONS.md`「八、前端目录、状态与 API 边界」；`tests/architecture/test_frontend_layer_boundaries.py`；返修后的 `web/src/features/work-dispatch/WorkObjectSearchPage.tsx` |
+| 服务端与前端的去空白/大小写折叠语义不完全等价 | `BTRIM` 只去 U+0020，而改动前的前端 `.trim()` 还会去制表符与不换行空格；`LOWER()` 对非 ASCII 的折叠依赖数据库排序规则。存成 `"\tOA-REF-002\t"` 这类带制表符的来源编号，改动前能命中、改动后不再命中。已覆盖的形状（ASCII 大小写、中文、首尾空格、`%_` 字面量）行为一致，仍在获批的三条匹配规则之内 | 无（不被任务阻塞） | `P2-WO-SEARCH-NORMALIZE-001` | 服务端去空白覆盖前端 `.trim()` 的同一字符集合，或明确裁定只支持普通空格并在文档与文案中写明；带制表符 / 不换行空格的来源编号有回归 | `app/infra/persistence/work_object/postgresql.py` 的 `BTRIM` / `LOWER` 谓词 |
+| 一条前端负向测试已空转 | `does not use substring matching for source reference or assignee` 现在 mock 空响应后只断言空状态文案，无法因其名称所指的原因失败。真正的负向覆盖已移至真实 PostgreSQL 测试（`refs(..., "oa-ref") == set()` / `refs(..., "ming") == set()`），合同覆盖未缺，但该用例名不副实 | 无 | `P2-WO-SEARCH-TEST-FIDELITY-001` | 该用例改为断言实际传给客户端的 `q` 值，或改名以如实反映其断言内容；名称与断言一致 | `web/src/features/work-dispatch/__tests__/WorkObjectSearchPage.test.tsx` |
+| 搜索词进入 URL 查询串，形成新的暴露面 | 改为服务端检索后搜索词随 URL 查询串传输，可能落入反向代理或 uvicorn 的访问日志；改动前该词从不离开浏览器。`app/` 内部没有查询串日志记录。这是已批准接口形态的固有结果，非缺陷，但属新增暴露面 | 无 | `P2-SEARCH-QUERY-EXPOSURE-001` | 确认部署侧访问日志不记录查询串，或改用不经查询串的传输方式，或经裁定在内网部署下接受该暴露并记录理由 | `app/api/v1/work_objects.py` 的 `q` 查询参数；`web/src/features/work-dispatch/WorkObjectSearchPage.tsx` 的 URL 同步 |
+| 候选中夹带与本棒无关的格式化改动 | `app/admin/registry.py`、`app/infra/persistence/task_store/postgresql.py` 及若干测试文件中含纯 `ruff format` 重排（如 `_OA_BINDING_ID_PATTERN`、`SpyTracePort` 缩进），与租户归属无关。它放大了可评审面，但不改变任何行为，ruff 与 mypy 均绿 | 无（不被任务阻塞） | `P2-COMMIT-HYGIENE-001` | 确立并执行「格式化改动与功能改动分开提交」的做法，使单棒 diff 不再夹带无关重排；或经裁定接受当前做法并记录理由 | 本 PR 中上述文件的 diff |
+| 一级导航缺三项、`/messages` 无占位页、左导航不可折叠，顶栏缺组织范围/系统状态/通知 | 雨爷 2026-09-01 在本地环境手工走查发现。`web/src/app/AppShell.tsx` 的左导航只有「工作事项」`/work-objects` 与折叠的管理员二级组，缺「任务交办」`/work-dispatch`、「软件中心」`/apps`、「消息」`/messages`；`/messages` 裁决明写「当前只放占位页」，属执行缺口。左导航无任何折叠逻辑。顶栏只有搜索框与 `topbarActions`，组织范围（只读显示，不做全局选择器）、系统状态（任一目标系统凭证失效时红点 + 数字，展开列出状态与重新绑定动作）与通知（与系统状态为两类信号，不合并计数）均未实现。`/work-dispatch`、`/apps` 对应功能任务尚未落地，导航项可先放，落地页必须如实说明「功能未开发 + 计划做什么」，不得空白或 404。顶栏系统状态复用现有 `credential-bindings` 接口与已生成客户端，不新增后端接口 | 无 | `P2-FE-NAV-SHELL-001` | 四项一级导航平铺可见、`/messages` 有占位页、`/work-dispatch` 与 `/apps` 落地页如实说明未开发并写明计划、左导航可折叠为图标条且折叠状态持久化；顶栏同时呈现只读组织范围、系统状态与通知三类元素且两类信号不合并计数；上述行为均有前端测试 | `web/src/app/AppShell.tsx`；`docs/phase2/DECISIONS.md`「2026-08-27 — 裁决：前端信息架构与终态导航」§一、§三、§四 |
+| AppShell 三栏骨架为手写 CSS，未使用 antd 骨架组件 | 雨爷 2026-09-01 手工走查提出「整个页面也十分简陋布局不合理」。`antd@6.6.1` 已装、25 个文件在用，但 `AppShell.tsx` 只 import 了 `Button` 与 `Input`，三栏布局、导航、顶栏全为手写 CSS module，视觉体系不统一。处置方向为改用 antd 的 Layout / Menu 等骨架组件重做 AppShell，并一并落实导航折叠与顶栏三元素；`P2-FE-ANTD6-001` 已裁定移除 ProComponents，不得回退引入。视觉参照物已由 2026-09-01 裁决定为飞书并作三条调整。**须先出可视方案经雨爷确认再实现** | `P2-FE-NAV-SHELL-001`；且须雨爷先确认可视方案 | `P2-FE-VISUAL-REFACTOR-001` | 可视方案经雨爷确认后，AppShell 三栏骨架、左导航与顶栏改由 antd 骨架组件承载，未回退引入 ProComponents，既有前端测试与页面目录合同不破 | `web/src/app/AppShell.tsx` 及其 CSS module；`docs/phase2/DECISIONS.md`「2026-08-27 — 裁决：前端信息架构与终态导航」§四、「2026-09-01 — 裁决：`P2-FE-VISUAL-REFACTOR-001` 的视觉参照物定为飞书」；`P2-FE-ANTD6-001` |
+| AI 助手匹配不上时未如实告知，硬套已注册能力 | 雨爷 2026-09-01 手工走查发现。注册能力只有 `oa.list_pending_workflows`（intent_tags `oa.pending_workflows` / `oa.pending_approvals`）与 `oa.list_system_messages`（`oa.system_messages`）两个；用户问任何问题都会被匹配到其中之一，于是永远回「你有几个待办」。**能力只有两个是 P2 既定范围（「真实但克制」），不是缺陷**；缺陷在于匹配不上时没有如实告知。`app/runtime/runtime.py::_finish_no_capability_found` 存在但未触发，需查明是意图匹配过于宽松（什么都能匹上）还是兜底文案本身不清晰。期望行为：匹配不上时明确告诉用户「我目前只能查 OA 待办和系统消息」，并给下一步，而不是硬套一个能力 | 无 | `P2-RUNTIME-NO-CAPABILITY-COPY-001` | 与已注册能力无关的自然语言输入走到 `no_capability_found` 兜底，用户得到「当前能做什么 + 下一步」的明确告知；有负向测试证明不再硬套能力，且 Golden negative / boundary 仍 100% 通过 | `app/runtime/runtime.py::_select_capability` 与 `app/runtime/runtime.py::_finish_no_capability_found`；`scripts/smoke/capabilities.py` 的两个 canonical 能力定义 |
+| 软件中心 `/apps` 经裁决列入 P2 一级导航，现役 DAG 无对应任务（待裁决） | `docs/phase2/DECISIONS.md`「2026-08-27 — 裁决：前端信息架构与终态导航」§一把「软件中心 `/apps`」列为四项一级导航之一并标注 P2，§三进一步规定其三块内容、八字段展示白名单与「P2 只做看和用」；但 `docs/phase2/PHASE2_PLAN.md` 全文（现役 DAG、已完成任务索引、已撤销或已拆分索引、已结项摘要）搜不到 `/apps`、「软件中心」或任何等价命名的 task_id。裁决要求与排期不一致，属疑似排期漏项。本棒只登记，不自行立项排期 | 无 | 待雨爷裁定：或补立软件中心 task_id 并排期，或修订该裁决把 `/apps` 移出 P2 | 软件中心 `/apps` 有唯一对应的现役 task_id 并进入 DAG，或裁决明确 `/apps` 不在 P2 范围内且导航口径同步更正；两份治理文档不再相互矛盾 | `docs/phase2/DECISIONS.md`「2026-08-27 — 裁决：前端信息架构与终态导航」§一与§三；`docs/phase2/PHASE2_PLAN.md` 现役 DAG 与已完成任务索引（2026-09-01 对 `apps` / `软件中心` / `应用` / `registry` 全文检索无对应 task_id）|
 
 ### 已结项摘要（现役规则或守卫仍生效）
 
@@ -272,12 +280,13 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-ORGDIR-BOUNDARY-GUARD-001` | 组织目录完整结构关系的真实 PostgreSQL 行为守卫。 |
 | `P2-AUDIT-READ-AUTHZ-001` | `audit_reader` 与管理角色动作分离，四个证据入口先授权后访问资源，认证主体组织上下文保真进入管理面 Policy。 |
 | `P2-AUDIT-TRACE-SCOPE-001` | 新 Trace 固化可信租户/用户；三种读取强制租户谓词；历史 134 行无可信归属并保持 NULL；四个 Admin 证据入口以同租户 Trace 证明收窄对象。 |
+| `P2-WO-SEARCH-SERVER-001` | 服务端 Work Object 检索：`GET /api/v1/work-objects` 可选 `q`，三字段匹配走与列表完全相同的授权路径，上限 200 显式溢出。 |
+| `P2-TASK-TENANT-COLUMN-001` | `tasks` 表可信租户列与 Admin 直判归属；历史行按方案 A 保持 `NULL` 并继续 fail-closed 不可见。 |
 
 ### 现役 DAG（仅未完成）
 
 | task_id | depends_on | 预判档位 | BLOCKED / 边界 |
 |---|---|---|---|
-| `P2-WO-SEARCH-SERVER-001` | P2-WO-SEARCH-001 | **A** | 否；候选已完成，等待独立监理与后续 A 档 Review，不自行 push / PR / merge |
 | `P2-LOW-RISK-WRITE-001` | P2-GOLDEN-001、P2-CONFIRM-BINDING-001、P2-SDUI-RENDERER-001、P2-ENVELOPE-MESSAGE-REDACTION-001（均已完成） | **A** | **是：OA 审批提交协议结构未知；输入到位前不开棒** |
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
 | `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 是：获批知识语料与用户数据边界未到位；机会层 |
@@ -289,13 +298,19 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-INTERNAL-WO-DISPATCH-001` | P2-INTERNAL-WO-SCOPE-001、P2-PAGE-CONTEXT-CONTRACT-001 | **A** | 依赖未完成 |
 | `P2-INTERNAL-WO-ATTACHMENT-001` | P2-INTERNAL-WO-DISPATCH-001 | **A** | 是：方案限额矛盾须先裁 |
 | `P2-PAGE-CONTEXT-CONTRACT-001` | 无 | **A** | 否；须先于真实页面上下文注册 |
-| `P2-TASK-TENANT-COLUMN-001` | P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001（均已完成） | **A** | 候选已实现，等待独立监理与后续 A 档 Review；只覆盖 `tasks`，历史行按方案 A 留空，不自行 push / PR / merge |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001、P2-TASK-TENANT-COLUMN-001 | **A** | `tasks` 切片完成后仍待真实组织身份来源、sessions、identity binding、组织目录等剩余 scope 的独立授权与实现；第二租户硬前置 |
 | `P2-AUDIT-READ-HARDENING-001` | P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001（均已完成） | **A** | 否；剩余仅收口事件集合存在性差异与 Trace reader 历史 NULL 归属行直接断言；列表 Trace 证明查询放大已由 `P2-TASK-TENANT-COLUMN-001` 关闭 |
 | `P2-TRACE-CONTRACT-HARDENING-001` | P2-AUDIT-TRACE-SCOPE-001（已完成） | **A** | 否；收口孤立动作可信租户断言、`TracePersistedEvent` 凭证形状负向测试与顶层模式具名选择 |
 | `P2-USER-ACTION-REJECT-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：reject/cancel 后 Task 终态待裁 |
 | `P2-FEEDBACK-LOOP-001` | 无 | **A（预判）** | 是：获批 Scope 未定义；机会层 |
 | `P2-CONFIRM-DURABILITY-001` | P2-USER-ACTION-SEAM-001 | **A** | 是：持久化/generation 合同尚未设计 |
+| `P2-WO-SEARCH-NORMALIZE-001` | P2-WO-SEARCH-SERVER-001（已完成） | **A** | 是：须先裁定服务端去空白 / 大小写折叠的目标字符集合（对齐前端 `.trim()`，还是明确只支持普通空格）；改动触及授权路径 SQL |
+| `P2-WO-SEARCH-TEST-FIDELITY-001` | P2-WO-SEARCH-SERVER-001（已完成） | **C** | 否；只改前端测试的名称或断言，不动生产代码 |
+| `P2-SEARCH-QUERY-EXPOSURE-001` | P2-WO-SEARCH-SERVER-001（已完成） | **A（预判）** | 是：三条出路（确认部署侧不记查询串 / 改用不经查询串的传输方式 / 裁定接受该暴露）须先由雨爷择一 |
+| `P2-COMMIT-HYGIENE-001` | 无 | **C** | 是：是否立「格式化改动与功能改动分开提交」的规则须雨爷先裁；落点在 `AGENTS.md`，由 GOV-SYNC 承载 |
+| `P2-FE-NAV-SHELL-001` | 无（`credential-bindings` 接口与已生成客户端在位，不新增后端接口） | **B（预判）** | 否；`/work-dispatch`、`/apps` 落地页只做「功能未开发 + 计划做什么」的如实说明，不实现其功能 |
+| `P2-FE-VISUAL-REFACTOR-001` | P2-FE-NAV-SHELL-001 | **B（预判）** | 是：须先出可视方案经雨爷确认再实现；视觉参照物已定为飞书并作三条调整，不得回退引入 ProComponents |
+| `P2-RUNTIME-NO-CAPABILITY-COPY-001` | 无 | **A（预判）** | 否；改动触及意图匹配与 `no_capability_found` 终态判定，须跑 Golden gate |
 
 稳定必达主链：`FOUNDATION → OA_READ_CONTRACT → READ_ADAPTER → WORK_OBJECT → GOLDEN_001 → ENVELOPE_MESSAGE_REDACTION → LOW_RISK_WRITE → GOLDEN_002`。`LOW_RISK_WRITE` 另依赖已完成的 `CONFIRM_BINDING`，并由已完成的 `CAPABILITY_AUTOMATION_LEVEL → USER_ACTION_SEAM → SDUI_RENDERER` 支链提供展示与结构化动作合同。PLAN 不声明“当前下一棒”，当前指针只见 `docs/phase2/STATUS.md`。
 

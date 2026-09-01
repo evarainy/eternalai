@@ -1,6 +1,6 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-TASK-TENANT-COLUMN-001`（候选已实现，等待独立监理与后续 A 档 Review）
+- 当前基线 task_id：`P2-GOV-SYNC-051`（治理同步棒，C 档零代码改动：转抄四条 PR 欠债、登记界面待办与软件中心 `/apps` 待裁决项、落盘 OA 深链配置事实确认与视觉参照裁决）
 - pytest：`2595 passed, 108 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - 当前实现基线后端定向 pytest：`429 passed, 81 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - 当前实现基线前端 `pnpm --dir web test`：`267 passed, 0 failed, 0 skipped`（21 个测试文件；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
