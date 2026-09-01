@@ -6,6 +6,7 @@
  */
 import type {
   GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200,
+  ListWorkObjectsApiV1WorkObjectsGetParams,
   SetHandlingMarkRequest,
   SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200,
   WorkObjectListResponse
@@ -19,10 +20,11 @@ import { customInstance } from '../../api/mutator';
  * @summary List Work Objects
  */
 export const listWorkObjectsApiV1WorkObjectsGet = (
-
+    params?: ListWorkObjectsApiV1WorkObjectsGetParams,
  ) => {
       return customInstance<WorkObjectListResponse>(
-      {url: `/api/v1/work-objects`, method: 'GET'
+      {url: `/api/v1/work-objects`, method: 'GET',
+        params
     },
       );
     }

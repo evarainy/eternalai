@@ -125,6 +125,10 @@ export interface WorkObjectListResponse {
   limit_exceeded: boolean;
 }
 
+export type ListWorkObjectsApiV1WorkObjectsGetParams = {
+q?: string | null;
+};
+
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView | InternalWorkObjectView;
 
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200 = OAWorkObjectView | InternalWorkObjectView;

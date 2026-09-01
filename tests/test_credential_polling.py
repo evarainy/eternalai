@@ -300,9 +300,10 @@ class CanaryWorkObjectStore:
         self,
         assignee_ai_user_id: str,
         *,
+        search_term: str | None = None,
         limit: int = 201,
     ) -> list[WorkObjectRecord]:
-        del limit
+        del limit, search_term
         assert assignee_ai_user_id == PRINCIPAL.ai_user_id
         return []
 

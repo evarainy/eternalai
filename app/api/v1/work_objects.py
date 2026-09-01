@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, NoReturn, TypeAlias
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -142,9 +142,15 @@ class WorkObjectService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
-    async def list_for_principal(self, principal: Principal) -> WorkObjectListResponse:
+    async def list_for_principal(
+        self,
+        principal: Principal,
+        *,
+        search_term: str | None = None,
+    ) -> WorkObjectListResponse:
         records = await self._store.list_for_assignee(
             principal.ai_user_id,
+            search_term=search_term,
             limit=WORK_OBJECT_LIST_FETCH_LIMIT,
         )
         capabilities = await self._capability_registry.list(status="active")
@@ -274,9 +280,14 @@ def make_router(
 
     @router.get("", response_model=WorkObjectListResponse)
     async def list_work_objects(
+        q: Annotated[str | None, Query()] = None,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectListResponse:
-        return await configured().list_for_principal(principal)
+        search_term = q.strip() if q is not None else None
+        return await configured().list_for_principal(
+            principal,
+            search_term=search_term or None,
+        )
 
     @router.post("/sync", response_model=WorkObjectListResponse)
     async def sync_work_objects(

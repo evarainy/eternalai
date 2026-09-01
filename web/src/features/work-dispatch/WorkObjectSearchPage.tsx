@@ -91,18 +91,11 @@ export default function WorkObjectSearchPage() {
   const hasSearch = rawTerm !== null && term.length > 0;
 
   const listQuery = useQuery({
-    queryKey: ['work-objects', authGeneration],
-    queryFn: listWorkObjects,
+    queryKey: ['work-objects', authGeneration, 'search', term],
+    queryFn: () => listWorkObjects({ q: term }),
+    enabled: hasSearch,
   });
-  const items = listQuery.isSuccess ? listQuery.data.items : EMPTY_ITEMS;
-  const results = useMemo(
-    () =>
-      hasSearch
-        ? items.filter((item) => matchedFields(item, term).length > 0)
-        : EMPTY_ITEMS,
-    [hasSearch, items, term],
-  );
-  const loadedCount = items.length;
+  const results = listQuery.isSuccess ? listQuery.data.items : EMPTY_ITEMS;
   const resultFreshness = newestFetchedAt(results);
 
   const pageContextDeclaration = useMemo<PageContextDeclaration>(() => {
@@ -146,39 +139,41 @@ export default function WorkObjectSearchPage() {
     };
   }, [hasSearch, resultFreshness, results, term]);
 
-  const scopeHeadline = listQuery.isPending
-    ? '正在查找'
-    : listQuery.isError
-      ? '查找失败'
-      : hasSearch
-        ? `找到 ${results.length} 条`
-        : '等待搜索';
-  const scopeText = listQuery.isPending
-    ? '正在读取当前可见的工作事项批次。'
-    : listQuery.isError
-      ? '当前可见的工作事项批次读取失败。'
-      : `当前搜索范围：已加载的 ${loadedCount} 条工作事项。`;
-  const emptyReason = listQuery.isPending
-    ? '正在查找当前可见的工作事项，请稍候。'
-    : listQuery.isError
-      ? `查找失败：${errorText(listQuery.error)}。`
-      : hasSearch
-        ? `没有匹配项。已在当前已加载的 ${loadedCount} 条工作事项中查找；这不代表未加载的事项中一定不存在。`
-        : `尚未开始搜索，因为还没有提交关键词。${scopeText}`;
-  const emptyNextStep = listQuery.isPending
-    ? '下一步：请稍候，批次加载完成后会自动显示结果。'
-    : listQuery.isError
-      ? '下一步：稍后重试，或先回到工作事项页检查数据状态。'
-      : hasSearch
-        ? '下一步：检查标题关键词，或输入完整的来源编号、责任人；也可回到工作事项页刷新当前批次后再试。'
-        : '下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人，然后点击“搜索”。';
+  const scopeHeadline = !hasSearch
+    ? '等待搜索'
+    : listQuery.isPending
+      ? '正在查找'
+      : listQuery.isError
+        ? '查找失败'
+        : `找到 ${results.length} 条`;
+  const scopeText = !hasSearch
+    ? '提交关键词后，将在你有权查看的全部工作事项中检索。'
+    : listQuery.isPending
+      ? '正在检索你有权查看的全部工作事项。'
+      : listQuery.isError
+        ? '工作事项搜索请求失败。'
+        : '搜索范围：你有权查看的全部工作事项。';
+  const emptyReason = !hasSearch
+    ? '尚未开始搜索，因为还没有提交关键词。'
+    : listQuery.isPending
+      ? '正在查找你有权查看的工作事项，请稍候。'
+      : listQuery.isError
+        ? `查找失败：${errorText(listQuery.error)}。`
+        : '没有匹配项。已在你有权查看的全部工作事项中检索。';
+  const emptyNextStep = !hasSearch
+    ? '下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人，然后点击“搜索”。'
+    : listQuery.isPending
+      ? '下一步：请稍候，检索完成后会自动显示结果。'
+      : listQuery.isError
+        ? '下一步：稍后重试，或先回到工作事项页检查数据状态。'
+        : '下一步：检查标题关键词，或输入完整的来源编号、责任人后重试。';
 
   return (
     <Space className={styles.page} orientation="vertical" size="large">
       <Card className={styles.hero} styles={{ body: { padding: 28 } }}>
         <Flex align="center" justify="space-between" gap={24} wrap>
           <div>
-            <Text className={styles.eyebrow}>只查工作事项，不搜索消息、材料或会话</Text>
+            <Text className={styles.eyebrow}>只查你有权查看的工作事项，不搜索消息、材料或会话</Text>
             <Title className={styles.title} level={1}>工作事项搜索</Title>
             <Paragraph className={styles.copy}>
               标题可输入其中一段；来源编号和责任人请输入完整内容。
@@ -191,21 +186,21 @@ export default function WorkObjectSearchPage() {
         </Flex>
       </Card>
 
-      {listQuery.isError ? (
+      {hasSearch && listQuery.isError ? (
         <Alert
           showIcon
           type="error"
-          title="当前批次读取失败"
+          title="工作事项搜索失败"
           description={`${errorText(listQuery.error)}；下一步：稍后重试，或先回到工作事项页检查数据状态。`}
         />
       ) : null}
 
-      {listQuery.isSuccess && listQuery.data.limit_exceeded ? (
+      {hasSearch && listQuery.isSuccess && listQuery.data.limit_exceeded ? (
         <Alert
           showIcon
           type="warning"
-          title={`搜索只覆盖当前已加载的 ${loadedCount} 条工作事项`}
-          description="列表接口仍有未加载事项；本次无命中不能证明系统中的其他事项不存在。"
+          title="结果过多，请缩小范围"
+          description="当前仅展示 200 条；结果未排序，具体 200 条可能变化。"
         />
       ) : null}
 
@@ -258,7 +253,7 @@ export default function WorkObjectSearchPage() {
           </div>
         )}
       </section>
-      {listQuery.isSuccess ? (
+      {hasSearch && listQuery.isSuccess ? (
         <SearchPageContextRegistration declaration={pageContextDeclaration} />
       ) : null}
     </Space>

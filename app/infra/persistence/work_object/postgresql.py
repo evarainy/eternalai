@@ -90,10 +90,28 @@ class PostgreSQLWorkObjectStore:
         self,
         assignee_ai_user_id: str,
         *,
+        search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
     ) -> list[WorkObjectRecord]:
         if not 1 <= limit <= WORK_OBJECT_LIST_FETCH_LIMIT:
             raise ValueError("Work Object list limit is outside the allowed range")
+        normalized_search_term = (
+            search_term.strip() if search_term is not None else None
+        )
+        search_clause = ""
+        parameters: dict[str, object] = {
+            "assignee_ai_user_id": assignee_ai_user_id,
+            "limit": limit,
+        }
+        if normalized_search_term:
+            search_clause = (
+                "AND ("
+                "STRPOS(LOWER(source_title), LOWER(:search_term)) > 0 "
+                "OR LOWER(BTRIM(source_ref)) = LOWER(BTRIM(:search_term)) "
+                "OR LOWER(BTRIM(assignee_display_name)) "
+                "= LOWER(BTRIM(:search_term))) "
+            )
+            parameters["search_term"] = normalized_search_term
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -102,12 +120,10 @@ class PostgreSQLWorkObjectStore:
                         + _WORK_OBJECT_COLUMNS
                         + " FROM work_objects "
                         "WHERE assignee_ai_user_id = :assignee_ai_user_id "
-                        "LIMIT :limit"
+                        + search_clause
+                        + "LIMIT :limit"
                     ),
-                    {
-                        "assignee_ai_user_id": assignee_ai_user_id,
-                        "limit": limit,
-                    },
+                    parameters,
                 )
             ).fetchall()
         return [_record_from_row(row) for row in rows]

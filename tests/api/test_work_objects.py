@@ -50,6 +50,7 @@ class MemoryWorkObjectStore:
             for record in records or []
         }
         self.upsert_calls = 0
+        self.list_calls: list[dict[str, object]] = []
 
     async def upsert_oa_pending_workflows(
         self,
@@ -96,13 +97,42 @@ class MemoryWorkObjectStore:
         self,
         assignee_ai_user_id: str,
         *,
+        search_term: str | None = None,
         limit: int = 201,
     ) -> list[WorkObjectRecord]:
-        return [
+        self.list_calls.append(
+            {
+                "assignee_ai_user_id": assignee_ai_user_id,
+                "search_term": search_term,
+                "limit": limit,
+            }
+        )
+        normalized_search_term = (
+            search_term.strip().lower() if search_term is not None else None
+        )
+        records = [
             record
             for record in self.records.values()
             if record.assignee_ai_user_id == assignee_ai_user_id
-        ][:limit]
+        ]
+        if normalized_search_term:
+            records = [
+                record
+                for record in records
+                if (
+                    record.source_title is not None
+                    and normalized_search_term in record.source_title.lower()
+                )
+                or (
+                    record.source_ref is not None
+                    and record.source_ref.strip().lower() == normalized_search_term
+                )
+                or (
+                    record.assignee_display_name.strip().lower()
+                    == normalized_search_term
+                )
+            ]
+        return records[:limit]
 
     async def get_for_assignee(
         self,
@@ -612,6 +642,52 @@ def test_list_returns_one_bounded_batch_with_explicit_overflow() -> None:
     client = _client(MemoryWorkObjectStore(records), RecordingGateway())
 
     response = client.get("/api/v1/work-objects")
+
+    assert response.status_code == 200
+    assert response.json()["limit"] == 200
+    assert response.json()["limit_exceeded"] is True
+    assert len(response.json()["items"]) == 200
+
+
+def test_list_search_trims_query_and_only_returns_server_matches() -> None:
+    records = [_record(index=1), _record(index=2)]
+    store = MemoryWorkObjectStore(records)
+    client = _client(store, RecordingGateway())
+
+    response = client.get("/api/v1/work-objects", params={"q": "  APPROVAL 2  "})
+
+    assert response.status_code == 200
+    assert [item["work_object_id"] for item in response.json()["items"]] == [
+        "work-user-a-2"
+    ]
+    assert store.list_calls == [
+        {
+            "assignee_ai_user_id": "user-a",
+            "search_term": "APPROVAL 2",
+            "limit": 201,
+        }
+    ]
+
+
+def test_list_whitespace_query_preserves_the_existing_list_behavior() -> None:
+    store = MemoryWorkObjectStore([_record()])
+    client = _client(store, RecordingGateway())
+
+    response = client.get("/api/v1/work-objects", params={"q": "   "})
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert store.list_calls[0]["search_term"] is None
+
+
+def test_list_search_reports_overflow_after_filtering() -> None:
+    records = [
+        _record(source_ref=f"oa-todo-{index}", index=index)
+        for index in range(1, 202)
+    ]
+    client = _client(MemoryWorkObjectStore(records), RecordingGateway())
+
+    response = client.get("/api/v1/work-objects", params={"q": "pending approval"})
 
     assert response.status_code == 200
     assert response.json()["limit"] == 200
