@@ -13,6 +13,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.exc import IntegrityError
 
 from app.db.config import normalize_database_url
 
@@ -71,15 +72,82 @@ def _assert_tenant_schema(connection: Connection) -> None:
     assert {constraint["name"] for constraint in inspector.get_check_constraints("tasks")} >= {
         "ck_tasks_tenant_id_non_blank"
     }
-    assert {index["name"] for index in inspector.get_indexes("tasks")} >= {
-        "ix_tasks_tenant_session",
-        "ix_tasks_tenant_ai_user",
-    }
+    indexes = {index["name"]: index["column_names"] for index in inspector.get_indexes("tasks")}
+    assert indexes["ix_tasks_tenant_session"] == ["tenant_id", "session_id"]
+    assert indexes["ix_tasks_tenant_ai_user"] == ["tenant_id", "ai_user_id"]
+
+
+def _insert_task_with_tenant(connection: Connection, tenant_id: str | None) -> str:
+    task_id = f"task-tenant-constraint-{uuid4().hex}"
+    connection.execute(
+        text(
+            "INSERT INTO tasks"
+            " (task_id, session_id, ai_user_id, status, tenant_id)"
+            " VALUES (:task_id, :session_id, :ai_user_id, :status, :tenant_id)"
+        ),
+        {
+            "task_id": task_id,
+            "session_id": f"{task_id}-session",
+            "ai_user_id": f"{task_id}-user",
+            "status": "completed",
+            "tenant_id": tenant_id,
+        },
+    )
+    return task_id
 
 
 def test_zero_synthetic_tasks_are_rejected_as_non_discriminating() -> None:
     with pytest.raises(AssertionError, match="non-empty synthetic pre-upgrade Tasks"):
         _synthetic_task_rows(0)
+
+
+def test_tenant_check_constraint_rejects_blank_values_and_preserves_nullable_history() -> None:
+    engine = create_engine(normalize_database_url(_database_url()))
+    migration = _load_migration()
+    try:
+        with engine.connect() as connection:
+            transaction = connection.begin()
+            try:
+                migration.op = Operations(MigrationContext.configure(connection))
+                migration.downgrade()
+                migration.upgrade()
+
+                for rejected_tenant_id in ("", "   "):
+                    savepoint = connection.begin_nested()
+                    try:
+                        with pytest.raises(IntegrityError) as exc_info:
+                            _insert_task_with_tenant(connection, rejected_tenant_id)
+                        sqlstate = getattr(exc_info.value.orig, "sqlstate", None) or getattr(
+                            exc_info.value.orig,
+                            "pgcode",
+                            None,
+                        )
+                        assert sqlstate == "23514"
+                    finally:
+                        savepoint.rollback()
+
+                allowed_tenant_ids = (None, "tenant-x", "\t")
+                inserted = {
+                    _insert_task_with_tenant(connection, tenant_id): tenant_id
+                    for tenant_id in allowed_tenant_ids
+                }
+                persisted = dict(
+                    connection.execute(
+                        text(
+                            "SELECT task_id, tenant_id FROM tasks"
+                            " WHERE task_id = ANY(:task_ids)"
+                        ),
+                        {"task_ids": sorted(inserted)},
+                    ).all()
+                )
+                assert persisted == inserted
+                # PostgreSQL BTRIM(text) removes spaces by default, not tabs. The
+                # current migration therefore intentionally records this boundary.
+                assert any(tenant_id == "\t" for tenant_id in persisted.values())
+            finally:
+                transaction.rollback()
+    finally:
+        engine.dispose()
 
 
 def test_non_empty_historical_tasks_survive_upgrade_downgrade_upgrade() -> None:
