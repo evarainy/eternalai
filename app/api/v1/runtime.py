@@ -144,7 +144,7 @@ def make_router(
         )
         envelope: ResponseEnvelope = await bound_runtime.handle_user_message(
             channel=body.channel,
-            ai_user_id=principal.ai_user_id,
+            principal=principal,
             session_id=session_id,
             message=body.message,
             client_capabilities=body.client_capabilities,

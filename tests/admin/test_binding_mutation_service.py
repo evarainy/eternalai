@@ -16,6 +16,7 @@ from app.admin.registry import (
     AdminRoleNotAllowedError,
 )
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
+from app.ports.auth import PrincipalOrgContext
 from app.ports.identity_mapping import (
     IdentityCheckResult,
     IdentityMappingMutationError,
@@ -32,9 +33,7 @@ BINDING_ID = f"oa-session-v1:{TARGET_AI_USER_ID}"
 class RecordingMutationPort:
     def __init__(
         self,
-        outcome: IdentityMappingMutationResult
-        | IdentityMappingMutationError
-        | None,
+        outcome: IdentityMappingMutationResult | IdentityMappingMutationError | None,
     ) -> None:
         self.outcome = outcome
         self.calls: list[tuple[str, str]] = []
@@ -73,6 +72,7 @@ def _context(*roles: str) -> AdminRequestContext:
         session_id="admin-session",
         ai_user_id=ADMIN_AI_USER_ID,
         roles=roles,
+        org_ctx=PrincipalOrgContext(),
         principal_authenticated=True,
     )
 
@@ -101,9 +101,7 @@ def _service(
 ) -> AdminBindingMutationService:
     return AdminBindingMutationService(
         identity_mapping=cast(IdentityMappingPort, port),
-        policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
-        ),
+        policy_guard=MinimalPolicyGuard(admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS),
         trace_port=cast(TracePort, trace),
     )
 
@@ -147,6 +145,8 @@ async def test_admin_cross_user_mutations_use_distinct_port_methods_and_safe_aud
             trace_id="trace-binding-mutation",
             task_id="admin-request:trace-binding-mutation",
             session_id="admin-session",
+            tenant_id="default",
+            ai_user_id=ADMIN_AI_USER_ID,
             event_type="admin_action",
             status="ok",
             attributes={
@@ -211,9 +211,7 @@ async def test_missing_binding_is_distinct_from_mutation_unavailable() -> None:
 @pytest.mark.anyio
 async def test_storage_failure_is_rethrown_without_exception_chain_or_sensitive_data() -> None:
     sensitive_marker = "synthetic-" + uuid4().hex
-    port = RecordingMutationPort(
-        IdentityMappingMutationError(f"credential={sensitive_marker}")
-    )
+    port = RecordingMutationPort(IdentityMappingMutationError(f"credential={sensitive_marker}"))
     trace = RecordingTrace()
 
     with pytest.raises(AdminBindingMutationUnavailableError) as exc_info:
@@ -247,9 +245,7 @@ async def test_invalid_binding_input_is_not_copied_into_trace_or_error() -> None
 
 @pytest.mark.anyio
 async def test_idempotent_revoke_preserves_revoked_state_and_reports_unchanged() -> None:
-    port = RecordingMutationPort(
-        _mutation_result(previous_bind_status="revoked", changed=False)
-    )
+    port = RecordingMutationPort(_mutation_result(previous_bind_status="revoked", changed=False))
     trace = RecordingTrace()
 
     result = await _service(port, trace).revoke_binding(BINDING_ID, _context("admin"))
@@ -262,9 +258,7 @@ async def test_idempotent_revoke_preserves_revoked_state_and_reports_unchanged()
 
 @pytest.mark.anyio
 async def test_revoke_expired_binding_audits_expired_to_revoked_transition() -> None:
-    port = RecordingMutationPort(
-        _mutation_result(previous_bind_status="expired", changed=True)
-    )
+    port = RecordingMutationPort(_mutation_result(previous_bind_status="expired", changed=True))
     trace = RecordingTrace()
 
     result = await _service(port, trace).revoke_binding(BINDING_ID, _context("admin"))

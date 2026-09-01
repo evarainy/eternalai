@@ -25,7 +25,7 @@ class RuntimePort(Protocol):
     async def handle_user_message(
         self,
         channel: Literal["web", "cli", "api", "mock"],
-        ai_user_id: str,
+        principal: Principal,
         session_id: str,
         message: str,
         client_capabilities: dict[str, Any],

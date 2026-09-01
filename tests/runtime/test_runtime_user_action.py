@@ -68,6 +68,9 @@ class RecordingTrace:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: str,
         status: str,
         capability_id: str | None = None,
@@ -76,6 +79,8 @@ class RecordingTrace:
     ) -> None:
         self.steps.append(
             {
+                "tenant_id": tenant_id,
+                "ai_user_id": ai_user_id,
                 "trace_id": trace_id,
                 "task_id": task_id,
                 "session_id": session_id,
@@ -384,7 +389,7 @@ async def _build_harness(
     principal = _principal()
     waiting = await runtime.handle_user_message(
         channel="mock",
-        ai_user_id=principal.ai_user_id,
+        principal=principal,
         session_id="session-action",
         message=_START_MESSAGE,
         client_capabilities={},
@@ -769,7 +774,7 @@ def test_no_gate_resume_uses_saved_projection_snapshot_after_registry_change(
         _replace_top_capability(harness, mode)
         response = await harness.runtime.handle_user_message(
             channel="mock",
-            ai_user_id=harness.principal.ai_user_id,
+            principal=harness.principal,
             session_id="session-action",
             message="确认",
             client_capabilities={},
@@ -789,7 +794,7 @@ def test_completed_action_preserves_the_text_resume_message_and_fallback() -> No
         text_harness = await _build_harness(with_gate=False)
         text_response = await text_harness.runtime.handle_user_message(
             channel="mock",
-            ai_user_id=text_harness.principal.ai_user_id,
+            principal=text_harness.principal,
             session_id="session-action",
             message="确认",
             client_capabilities={},
@@ -860,7 +865,7 @@ def test_mutating_source_schema_cannot_change_saved_snapshot_manifest_or_no_gate
         ungated.registry.items[_WORKFLOW_ID].output_schema["properties"]["safe"]["type"] = "integer"
         response = await ungated.runtime.handle_user_message(
             channel="mock",
-            ai_user_id=ungated.principal.ai_user_id,
+            principal=ungated.principal,
             session_id="session-action",
             message="确认",
             client_capabilities={},
@@ -1117,7 +1122,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         )
         writer_loses = await harness.runtime.handle_user_message(
             channel="mock",
-            ai_user_id=harness.principal.ai_user_id,
+            principal=harness.principal,
             session_id="session-action",
             message="replace pending",
             client_capabilities={},
@@ -1267,3 +1272,6 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
     ]
     assert action_events[0]["trace_id"] == action_events[1]["trace_id"]
     assert action_events[0]["task_id"] == action_events[1]["task_id"]
+    assert {
+        (event["tenant_id"], event["ai_user_id"]) for event in action_events
+    } == {("default", harness.principal.ai_user_id)}

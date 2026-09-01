@@ -96,12 +96,16 @@ class RecordingPolicyGuard:
 class RecordingTrace:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
+        self.owners: list[tuple[str, str]] = []
 
     async def record_step(
         self,
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         event_type: str,
         status: str,
         capability_id: str | None = None,
@@ -109,6 +113,7 @@ class RecordingTrace:
         attributes: dict[str, Any] | None = None,
     ) -> None:
         sid = session_id
+        self.owners.append((tenant_id, ai_user_id))
         self.steps.append(
             {
                 "trace_id": trace_id,
@@ -127,6 +132,9 @@ class RecordingTrace:
         trace_id: str,
         task_id: str,
         session_id: str,
+        *,
+        tenant_id: str,
+        ai_user_id: str,
         status: str,
         capability_id: str | None = None,
         error_code: str | None = None,
@@ -136,11 +144,13 @@ class RecordingTrace:
             trace_id,
             task_id,
             session_id,
-            "gateway_pre_recorded",
-            status,
-            capability_id,
-            error_code,
-            attributes,
+            tenant_id=tenant_id,
+            ai_user_id=ai_user_id,
+            event_type="gateway_pre_recorded",
+            status=status,
+            capability_id=capability_id,
+            error_code=error_code,
+            attributes=attributes,
         )
 
 
@@ -249,7 +259,11 @@ def _run_engine(
                 "requester": "alice",
                 sensitive_key: sensitive_value,
             },
-            request_context=RequestOrgContext(request_id="trace-1", channel="mock"),
+            request_context=RequestOrgContext(
+                request_id="trace-1",
+                tenant_id="tenant-workflow",
+                channel="mock",
+            ),
         )
         return result, trace, task_store
 
@@ -353,6 +367,7 @@ def test_linear_steps_branch_and_io_mapping_run_through_gateway_in_order() -> No
         "adapter_called",
         "gateway_post_recorded",
     ]
+    assert set(trace.owners) == {("tenant-workflow", "user-1")}
     workflow_trace = [step for step in trace.steps if "workflow_id" in step["attributes"]]
     assert [step["attributes"]["step_id"] for step in workflow_trace] == [
         "lookup",

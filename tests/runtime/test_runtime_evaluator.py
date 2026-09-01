@@ -30,6 +30,7 @@ from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult, WorkflowRunStatus
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import active_capability
 
 MESSAGE = "evaluate terminal request"
@@ -139,6 +140,7 @@ class Trace:
         trace_id: str,
         task_id: str,
         session_id: str,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -152,6 +154,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -182,6 +185,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.finalizations.append(
             {
@@ -293,7 +297,7 @@ def _handle(runtime: RuntimeImpl, message: str = MESSAGE) -> ResponseEnvelope:
     return asyncio.run(
         runtime.handle_user_message(
             channel="mock",
-            ai_user_id="user-evaluator",
+            principal=runtime_principal("user-evaluator"),
             session_id="session-evaluator",
             message=message,
             client_capabilities={},

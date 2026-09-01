@@ -8,7 +8,11 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+    AUDIT_READER_ROLE,
+)
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyDecision
@@ -32,6 +36,7 @@ def _decide(
     context = (
         ManagementPlanePolicyContext(
             request_id="policy-test-request",
+            tenant_id="tenant-policy-test",
             roles=roles or [],
         )
         if management_plane
@@ -43,7 +48,8 @@ def _decide(
                 ADMIN_LITE_POLICY_CAPABILITY_IDS
                 if configure_admin_allowlist
                 else ()
-            )
+            ),
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
         ).decide(
             ai_user_id="policy-test-user",
             capability_id=capability_id,
@@ -79,12 +85,9 @@ def test_admin_capability_denies_role_not_allowed() -> None:
         "admin_registry_create",
         "admin_registry_enable",
         "admin_registry_disable",
-        "admin_tasks_list",
-        "admin_task_events_list",
-        "admin_bindings_list",
     ],
 )
-def test_admin_role_allows_only_closed_admin_lite_actions(
+def test_admin_role_allows_only_registry_and_mutation_actions(
     capability_id: str,
 ) -> None:
     result = _decide(
@@ -95,6 +98,63 @@ def test_admin_role_allows_only_closed_admin_lite_actions(
     )
 
     assert result == PolicyDecision(decision="allow")
+
+
+@pytest.mark.parametrize(
+    "capability_id",
+    sorted(ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS),
+)
+def test_audit_reader_role_alone_allows_only_evidence_actions(
+    capability_id: str,
+) -> None:
+    result = _decide(
+        capability_id=capability_id,
+        arguments={},
+        roles=[AUDIT_READER_ROLE],
+        management_plane=True,
+    )
+
+    assert result == PolicyDecision(decision="allow")
+
+
+@pytest.mark.parametrize(
+    "capability_id",
+    sorted(ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS),
+)
+def test_admin_role_alone_cannot_read_audit_evidence(capability_id: str) -> None:
+    result = _decide(
+        capability_id=capability_id,
+        arguments={},
+        roles=["admin"],
+        management_plane=True,
+    )
+
+    assert result == PolicyDecision(decision="deny", reason_code="role_not_allowed")
+
+
+@pytest.mark.parametrize(
+    "capability_id",
+    [
+        "admin_registry_list",
+        "admin_registry_get",
+        "admin_registry_create",
+        "admin_registry_enable",
+        "admin_registry_disable",
+        "admin_bindings_revoke",
+        "admin_bindings_reset",
+    ],
+)
+def test_audit_reader_role_does_not_unlock_management_actions(
+    capability_id: str,
+) -> None:
+    result = _decide(
+        capability_id=capability_id,
+        arguments={},
+        roles=[AUDIT_READER_ROLE],
+        management_plane=True,
+    )
+
+    assert result == PolicyDecision(decision="deny", reason_code="role_not_allowed")
 
 
 def test_admin_role_does_not_unlock_other_admin_capabilities() -> None:

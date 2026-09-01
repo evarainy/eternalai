@@ -7,7 +7,11 @@ from typing import Any, Literal, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from app.admin.actions import ADMIN_LITE_POLICY_CAPABILITY_IDS
+from app.admin.actions import (
+    ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    ADMIN_LITE_POLICY_CAPABILITY_IDS,
+    AUDIT_READER_ROLE,
+)
 from app.admin.registry import AdminRegistryService
 from app.composition import build_admin_registry_service
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
@@ -184,11 +188,13 @@ def test_revoke_noop_result_cannot_report_http_success() -> None:
     assert trace.events[0].attributes["reason_code"] == "binding_mutation_unavailable"
 
 
+@pytest.mark.parametrize("roles", [("employee",), (AUDIT_READER_ROLE,)])
 @pytest.mark.parametrize("operation", ["revoke", "reset"])
 def test_non_admin_cross_user_mutation_is_403_and_never_calls_the_port(
     operation: Literal["revoke", "reset"],
+    roles: tuple[str, ...],
 ) -> None:
-    client, port, trace = _client(_outcome(), roles=("employee",))
+    client, port, trace = _client(_outcome(), roles=roles)
 
     response = client.post(
         f"/api/v1/admin/bindings/{BINDING_ID}/{operation}",
@@ -282,7 +288,8 @@ def test_plain_registry_service_type_mismatch_returns_distinct_503() -> None:
         task_store=cast(TaskStorePort, object()),
         identity_mapping=cast(IdentityMappingPort, port),
         policy_guard=MinimalPolicyGuard(
-            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
+            admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+            audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
         ),
         trace_port=cast(TracePort, trace),
         trace_query=cast(TraceQueryPort, object()),

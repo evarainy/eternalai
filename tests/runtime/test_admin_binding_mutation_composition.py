@@ -12,6 +12,7 @@ from app.admin.registry import (
     AdminRequestContext,
 )
 from app.composition import ProductionComponents, build_admin_registry_service
+from app.ports.auth import PrincipalOrgContext
 from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.identity_mapping import (
     IdentityCheckResult,
@@ -88,6 +89,7 @@ async def test_builder_returns_the_additive_subclass_with_working_mutations() ->
             session_id="admin-session",
             ai_user_id="usr_v1_synthetic",
             roles=("admin",),
+            org_ctx=PrincipalOrgContext(),
             principal_authenticated=True,
         ),
     )

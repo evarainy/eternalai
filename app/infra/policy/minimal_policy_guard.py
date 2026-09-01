@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any
 
+from app.admin.actions import AUDIT_READER_ROLE
 from app.ports.policy_guard import (
     ManagementPlanePolicyContext,
     PolicyDecision,
@@ -19,8 +20,10 @@ class MinimalPolicyGuard(PolicyGuardPort):
     def __init__(
         self,
         admin_capability_ids: Collection[str] = (),
+        audit_read_capability_ids: Collection[str] = (),
     ) -> None:
         self._admin_capability_ids = frozenset(admin_capability_ids)
+        self._audit_read_capability_ids = frozenset(audit_read_capability_ids)
 
     async def decide(
         self,
@@ -40,16 +43,21 @@ class MinimalPolicyGuard(PolicyGuardPort):
                     decision="deny",
                     reason_code="role_not_allowed",
                 )
-            if "admin" not in request_context.roles:
+            if capability_id not in self._admin_capability_ids:
                 return PolicyDecision(
                     decision="deny",
-                    reason_code="role_not_allowed",
+                    reason_code="admin_action_not_allowed",
                 )
-            if capability_id in self._admin_capability_ids:
+            required_role = (
+                AUDIT_READER_ROLE
+                if capability_id in self._audit_read_capability_ids
+                else "admin"
+            )
+            if required_role in request_context.roles:
                 return PolicyDecision(decision="allow")
             return PolicyDecision(
                 decision="deny",
-                reason_code="admin_action_not_allowed",
+                reason_code="role_not_allowed",
             )
         if capability_id.endswith("_confirm"):
             return PolicyDecision(

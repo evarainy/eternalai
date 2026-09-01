@@ -18,6 +18,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -92,6 +93,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -105,6 +107,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -125,6 +128,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -137,6 +141,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -149,6 +154,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -220,7 +226,7 @@ def test_handle_user_message_creates_running_task_executes_gateway_and_completes
 
         result = await runtime.handle_user_message(
             channel="web",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message="test message",
             client_capabilities={},

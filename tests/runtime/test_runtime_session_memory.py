@@ -15,6 +15,7 @@ from app.ports.llm_provider import LLMCompletionResponse, LLMMessage
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -79,7 +80,7 @@ class RecordingTracePort:
         self.events.append(event.model_dump())
 
     async def start_task_trace(
-        self, trace_id: str, task_id: str, session_id: str
+        self, trace_id: str, task_id: str, session_id: str, **_owner: Any
     ) -> None:
         self.events.append({"event_type": "trace_started"})
 
@@ -93,6 +94,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.events.append(
             {
@@ -221,7 +223,7 @@ async def _handle(
 ) -> Any:
     return await runtime.handle_user_message(
         channel="mock",
-        ai_user_id=ai_user_id,
+        principal=runtime_principal(ai_user_id),
         session_id=session_id,
         message=message,
         client_capabilities={},

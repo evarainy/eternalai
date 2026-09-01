@@ -54,12 +54,12 @@ class RecordingRuntime:
     async def handle_user_message(
         self,
         channel: str,
-        ai_user_id: str,
+        principal: Principal,
         session_id: str,
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
-        self.calls.append((ai_user_id, session_id))
+        self.calls.append((principal.ai_user_id, session_id))
         return ResponseEnvelopeBuilder().build_message(
             response_id="response-auth",
             task_id="task-auth",

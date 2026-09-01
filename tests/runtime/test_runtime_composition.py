@@ -150,7 +150,7 @@ class RecordingTracePort:
         self.steps.append(cast(dict[str, Any], event.model_dump()))
 
     async def start_task_trace(
-        self, trace_id: str, task_id: str, session_id: str
+        self, trace_id: str, task_id: str, session_id: str, **_owner: Any
     ) -> None:
         return None
 
@@ -164,6 +164,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append({"event_type": event_type})
 
@@ -179,6 +180,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append({"event_type": "gateway_pre_recorded"})
 
@@ -278,29 +280,51 @@ class CapturingTraceLogger:
 
 
 async def _record_representative_semantic_sequence(trace_port: Any) -> None:
-    await trace_port.start_task_trace("trace-equivalence", "task-equivalence", "session")
+    owner = {"tenant_id": "tenant-test", "ai_user_id": "user-test"}
+    await trace_port.start_task_trace(
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        **owner,
+    )
     await trace_port.record_step(
-        "trace-equivalence", "task-equivalence", "session", "task_created", "ok"
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        **owner,
+        event_type="task_created",
+        status="ok",
     )
     await trace_port.record_gateway_call(
         "trace-equivalence",
         "task-equivalence",
         "session",
-        "ok",
-        "oa.synthetic.query",
+        **owner,
+        status="ok",
+        capability_id="oa.synthetic.query",
     )
     await trace_port.record_step(
         "trace-equivalence",
         "task-equivalence",
         "session",
-        "response_envelope_created",
-        "ok",
+        **owner,
+        event_type="response_envelope_created",
+        status="ok",
     )
     await trace_port.record_step(
-        "trace-equivalence", "task-equivalence", "session", "task_completed", "ok"
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        **owner,
+        event_type="task_completed",
+        status="ok",
     )
     await trace_port.finalize_task_trace(
-        "trace-equivalence", "task-equivalence", "session", "ok"
+        "trace-equivalence",
+        "task-equivalence",
+        "session",
+        **owner,
+        status="ok",
     )
 
 

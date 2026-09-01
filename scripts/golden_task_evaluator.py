@@ -27,6 +27,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.ports.adapter import AdapterPort, AdapterResult, MockErrorMode
+from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import RequestChannel, RequestOrgContext
 from app.ports.capability_registry import (
     CapabilityAutomationLevel,
@@ -186,6 +187,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -199,6 +201,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -219,6 +222,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -231,6 +235,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+        **_owner: Any,
     ) -> None:
         await self.record_step(
             trace_id,
@@ -252,6 +257,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -710,9 +716,15 @@ async def _run_fixture(
     try:
         _apply_fixture_adapter_injections(given)
         session_id = f"session-{fixture['golden_task_id'].lower()}"
+        principal = Principal(
+            ai_user_id=str(given["ai_user_id"]),
+            display_name="Golden Task User",
+            roles=("user",),
+            org_ctx=PrincipalOrgContext(tenant_id="golden-test"),
+        )
         envelope = await runtime.handle_user_message(
             channel=cast(RequestChannel, when.get("channel", "web")),
-            ai_user_id=str(given["ai_user_id"]),
+            principal=principal,
             session_id=session_id,
             message=str(when["message"]),
             client_capabilities={},
@@ -733,7 +745,7 @@ async def _run_fixture(
                 source_definition_version_after_first = replacement.version
             envelope = await runtime.handle_user_message(
                 channel=cast(RequestChannel, when.get("channel", "web")),
-                ai_user_id=str(given["ai_user_id"]),
+                principal=principal,
                 session_id=session_id,
                 message=str(confirmation_message),
                 client_capabilities={},

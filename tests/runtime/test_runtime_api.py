@@ -34,6 +34,7 @@ class FakeRuntime:
     def __init__(self, action_data: dict[str, Any] | None = None) -> None:
         self.calls = 0
         self.ai_user_ids: list[str] = []
+        self.principals: list[Principal] = []
         self.session_ids: list[str] = []
         self.action_data = (
             {
@@ -47,13 +48,14 @@ class FakeRuntime:
     async def handle_user_message(
         self,
         channel: str,
-        ai_user_id: str,
+        principal: Principal,
         session_id: str,
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
         self.calls += 1
-        self.ai_user_ids.append(ai_user_id)
+        self.principals.append(principal)
+        self.ai_user_ids.append(principal.ai_user_id)
         self.session_ids.append(session_id)
         return ResponseEnvelopeBuilder().build_message(
             response_id="response-1",
@@ -136,6 +138,7 @@ def test_runtime_handle_endpoint_returns_response_envelope_json_with_injected_ru
     assert body["session_id"].startswith("sid_v1.")
     assert body["trace_id"] == "trace-1"
     assert runtime.ai_user_ids == ["usr_v1_synthetic"]
+    assert runtime.principals[0].org_ctx.tenant_id == "default"
     assert runtime.session_ids == [body["session_id"]]
 
 
@@ -197,10 +200,7 @@ def test_action_response_data_accepts_every_outcome_and_rejects_unknown() -> Non
     outcomes = get_args(UserActionOutcome.__value__)
 
     for outcome in outcomes:
-        assert (
-            ActionResponseData(action_outcome=outcome, result=None).action_outcome
-            == outcome
-        )
+        assert ActionResponseData(action_outcome=outcome, result=None).action_outcome == outcome
 
     with pytest.raises(ValidationError):
         ActionResponseData(action_outcome="unknown", result=None)
@@ -271,8 +271,7 @@ def test_runtime_action_invalid_data_returns_deterministic_failed_envelope(
     assert response.status_code == 200
     assert response.json()["status"] == "failed"
     assert response.json()["message"] == (
-        "操作响应未通过安全校验，无法确认本次操作结果。"
-        "请先核对业务状态，避免重复提交。"
+        "操作响应未通过安全校验，无法确认本次操作结果。请先核对业务状态，避免重复提交。"
     )
     assert "未执行" not in response.text
     assert "retry" not in response.text.lower()
@@ -370,9 +369,7 @@ def test_missing_principal_precedes_body_validation() -> None:
     body = _valid_body()
     body["extra_field"] = "not allowed"
 
-    response = TestClient(
-        create_app(csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS)
-    ).post(
+    response = TestClient(create_app(csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS)).post(
         "/api/v1/runtime/handle",
         json=body,
     )

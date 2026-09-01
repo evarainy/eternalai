@@ -19,6 +19,9 @@ class ManagementPlanePolicyContext(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str
+    tenant_id: str
+    org_id: str | None = None
+    department_id: str | None = None
     roles: list[str] = Field(default_factory=list)
 
 

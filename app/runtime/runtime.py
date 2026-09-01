@@ -142,13 +142,14 @@ class RuntimeImpl:
     async def handle_user_message(
         self,
         channel: Literal["web", "cli", "api", "mock"],
-        ai_user_id: str,
+        principal: Principal,
         session_id: str,
         message: str,
         client_capabilities: dict[str, Any],
     ) -> ResponseEnvelope:
+        ai_user_id = principal.ai_user_id
         memory_key = SessionMemoryKey(
-            tenant_id="default",
+            tenant_id=principal.org_ctx.tenant_id,
             session_id=session_id,
             ai_user_id=ai_user_id,
         )
@@ -175,6 +176,7 @@ class RuntimeImpl:
                     return await self._build_stale_confirmation_response(
                         pending=pending,
                         session_id=session_id,
+                        memory_key=memory_key,
                     )
                 try:
                     return await self._resume_pending_workflow(
@@ -194,6 +196,7 @@ class RuntimeImpl:
                         session_id=session_id,
                         trace_id=pending.trace_id,
                         capability_id=pending.capability_id,
+                        memory_key=memory_key,
                     )
                 finally:
                     with self._pending_confirmation_claim_lock:
@@ -202,6 +205,7 @@ class RuntimeImpl:
                 return await self._build_stale_confirmation_response(
                     pending=pending,
                     session_id=session_id,
+                    memory_key=memory_key,
                 )
 
         task_id = str(uuid4())
@@ -221,11 +225,19 @@ class RuntimeImpl:
                 trace_id=trace_id,
             )
         )
-        await self._trace_port.start_task_trace(trace_id, task_id, session_id)
+        await self._trace_port.start_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+        )
         await self._trace_port.record_step(
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="task_created",
             status="ok",
         )
@@ -247,6 +259,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="intent_parsed",
             status="ok" if parse_ok else "failed",
             attributes=_intent_trace_attributes(
@@ -270,6 +284,7 @@ class RuntimeImpl:
                     session_id,
                     trace_id,
                     reason="no_active_capability_registered",
+                    memory_key=memory_key,
                 )
             return await self._finish_intent_failure(
                 response_id,
@@ -277,6 +292,7 @@ class RuntimeImpl:
                 session_id,
                 trace_id,
                 reason=intent_result.failure_reason or "schema_invalid",
+                memory_key=memory_key,
             )
 
         intent_selector = capability_ref.capability_id
@@ -288,6 +304,7 @@ class RuntimeImpl:
                 session_id,
                 trace_id,
                 reason="no_unique_active_candidate",
+                memory_key=memory_key,
             )
         selected_capability = selection.capability.model_copy(deep=True)
         projection_snapshot = ProjectionContractSnapshot.from_capability(selected_capability)
@@ -313,6 +330,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="capability_selected",
             status="ok",
             capability_id=capability_ref.capability_id,
@@ -347,6 +366,7 @@ class RuntimeImpl:
                     session_id=session_id,
                     trace_id=trace_id,
                     capability_id=selected_capability.capability_id,
+                    memory_key=memory_key,
                 )
         request_context = RequestOrgContext(
             request_id=trace_id,
@@ -496,6 +516,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
         )
@@ -511,6 +533,8 @@ class RuntimeImpl:
                 trace_id,
                 task_id,
                 session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
                 event_type=terminal_event,
                 status="ok" if terminal_event == "task_completed" else "failed",
                 capability_id=capability_ref.capability_id,
@@ -526,12 +550,15 @@ class RuntimeImpl:
                     business_status=exec_result.status,
                     error_code=exec_result.error_code,
                     capability_id=capability_ref.capability_id,
+                    memory_key=memory_key,
                 )
             finalize_status = _map_task_to_finalize_status(final_task_status)
             await self._trace_port.finalize_task_trace(
                 trace_id,
                 task_id,
                 session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
                 status=finalize_status,
                 capability_id=capability_ref.capability_id,
                 error_code=exec_result.error_code,
@@ -553,10 +580,17 @@ class RuntimeImpl:
         del channel
         action_trace_id = str(uuid4())
         action_task_id = str(uuid4())
+        memory_key = SessionMemoryKey(
+            tenant_id=principal.org_ctx.tenant_id,
+            session_id=session_id,
+            ai_user_id=principal.ai_user_id,
+        )
         await self._trace_port.record_step(
             action_trace_id,
             action_task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="user_action",
             status="ok",
             attributes={"phase": "inbound"},
@@ -568,6 +602,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_gate_unavailable",
             )
 
@@ -577,6 +612,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="no_pending_action",
             )
         if (
@@ -588,6 +624,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_binding_incomplete",
             )
         if action.response_id != (pending.gate_request_id or pending.response_id):
@@ -595,6 +632,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_reference_mismatch",
             )
 
@@ -612,14 +650,10 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome=outcome,
             )
 
-        memory_key = SessionMemoryKey(
-            tenant_id=principal.org_ctx.tenant_id,
-            session_id=session_id,
-            ai_user_id=principal.ai_user_id,
-        )
         try:
             envelope = await self._resume_pending_workflow(
                 pending_key=pending_key,
@@ -632,6 +666,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_already_claimed",
             )
         except _ActionStaleError:
@@ -639,6 +674,7 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_stale",
             )
         except VersionBindingMismatchError:
@@ -646,12 +682,14 @@ class RuntimeImpl:
                 action_trace_id=action_trace_id,
                 action_task_id=action_task_id,
                 session_id=session_id,
+                memory_key=memory_key,
                 outcome="action_version_conflict",
             )
         return await self._finish_user_action_attempt(
             action_trace_id=action_trace_id,
             action_task_id=action_task_id,
             session_id=session_id,
+            memory_key=memory_key,
             outcome="accepted",
             envelope=envelope,
         )
@@ -662,6 +700,7 @@ class RuntimeImpl:
         action_trace_id: str,
         action_task_id: str,
         session_id: str,
+        memory_key: SessionMemoryKey,
         outcome: UserActionOutcome,
         envelope: ResponseEnvelope | None = None,
     ) -> ResponseEnvelope:
@@ -688,6 +727,8 @@ class RuntimeImpl:
             action_trace_id,
             action_task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="user_action",
             status="ok" if outcome == "accepted" else "blocked",
             attributes={"phase": "outcome", "action_outcome": outcome},
@@ -734,6 +775,7 @@ class RuntimeImpl:
         *,
         pending: _PendingWorkflow,
         session_id: str,
+        memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
         envelope = self._response_builder.build_message(
             str(uuid4()),
@@ -749,6 +791,8 @@ class RuntimeImpl:
             pending.trace_id,
             pending.task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
             attributes={"confirmation_status": "stale"},
@@ -898,6 +942,7 @@ class RuntimeImpl:
                     session_id=session_id,
                     trace_id=pending.trace_id,
                     capability_id=pending.capability_id,
+                    memory_key=memory_key,
                 )
         capability_ref = CapabilityRef(
             capability_id=pending.capability_id,
@@ -916,6 +961,8 @@ class RuntimeImpl:
             pending.trace_id,
             pending.task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
         )
@@ -931,6 +978,8 @@ class RuntimeImpl:
                 pending.trace_id,
                 pending.task_id,
                 session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
                 event_type=terminal_event,
                 status="ok" if terminal_event == "task_completed" else "failed",
                 capability_id=pending.capability_id,
@@ -967,11 +1016,14 @@ class RuntimeImpl:
                 business_status=exec_result.status,
                 error_code=exec_result.error_code,
                 capability_id=pending.capability_id,
+                memory_key=memory_key,
             )
             await self._trace_port.finalize_task_trace(
                 pending.trace_id,
                 pending.task_id,
                 session_id,
+                tenant_id=memory_key.tenant_id,
+                ai_user_id=memory_key.ai_user_id,
                 status=_map_task_to_finalize_status(final_task_status),
                 capability_id=pending.capability_id,
                 error_code=exec_result.error_code,
@@ -1026,6 +1078,7 @@ class RuntimeImpl:
         session_id: str,
         trace_id: str,
         capability_id: str,
+        memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
         error_code: ErrorCode = "internal_error"
         await self._task_store.update_status(task_id, "failed", error_code)
@@ -1042,6 +1095,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
         )
@@ -1049,6 +1104,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="task_failed",
             status="failed",
             capability_id=capability_id,
@@ -1061,11 +1118,14 @@ class RuntimeImpl:
             business_status="failed",
             error_code=error_code,
             capability_id=capability_id,
+            memory_key=memory_key,
         )
         await self._trace_port.finalize_task_trace(
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             status="failed",
             capability_id=capability_id,
             error_code=error_code,
@@ -1118,6 +1178,7 @@ class RuntimeImpl:
         trace_id: str,
         *,
         reason: IntentFailureReason,
+        memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
         message, fallback_text = _intent_failure_message(reason)
         await self._task_store.update_status(task_id, "failed", "internal_error")
@@ -1134,6 +1195,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
         )
@@ -1141,6 +1204,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="task_failed",
             status="failed",
             error_code="internal_error",
@@ -1151,11 +1216,14 @@ class RuntimeImpl:
             session_id=session_id,
             business_status="failed",
             error_code="internal_error",
+            memory_key=memory_key,
         )
         await self._trace_port.finalize_task_trace(
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             status="failed",
             error_code="internal_error",
         )
@@ -1168,6 +1236,8 @@ class RuntimeImpl:
         session_id: str,
         trace_id: str,
         reason: str,
+        *,
+        memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
         active_capabilities = await self._capability_registry.list(status="active")
         message, fallback_text = self._semantic_knowledge.no_capability_guidance(
@@ -1182,6 +1252,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="no_capability_found",
             status="blocked",
             error_code="capability_not_found",
@@ -1199,6 +1271,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="response_envelope_created",
             status="ok",
         )
@@ -1206,6 +1280,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="task_failed",
             status="failed",
             error_code="capability_not_found",
@@ -1216,11 +1292,14 @@ class RuntimeImpl:
             session_id=session_id,
             business_status="no_capability_found",
             error_code="capability_not_found",
+            memory_key=memory_key,
         )
         await self._trace_port.finalize_task_trace(
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             status="blocked",
             error_code="capability_not_found",
         )
@@ -1232,6 +1311,7 @@ class RuntimeImpl:
         trace_id: str,
         task_id: str,
         session_id: str,
+        memory_key: SessionMemoryKey,
         business_status: TerminalBusinessStatus,
         error_code: ErrorCode | None,
         capability_id: str | None = None,
@@ -1249,6 +1329,8 @@ class RuntimeImpl:
             trace_id,
             task_id,
             session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
             event_type="evaluation_recorded",
             status="ok" if conclusion.evaluation_result == "passed" else "failed",
             capability_id=capability_id,

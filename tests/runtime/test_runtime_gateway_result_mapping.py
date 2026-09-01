@@ -29,6 +29,7 @@ from tests.auth_fakes import (
     auth_cookies,
     make_session_binder,
 )
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -100,6 +101,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -113,6 +115,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -132,6 +135,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -144,6 +148,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.record_gateway_call_count += 1
 
@@ -156,6 +161,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         return None
 
@@ -243,7 +249,7 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
 
         envelope = await runtime.handle_user_message(
             channel="mock",
-            ai_user_id="ai-user-1",
+            principal=runtime_principal("ai-user-1"),
             session_id="session-1",
             message="mapped message",
             client_capabilities={},

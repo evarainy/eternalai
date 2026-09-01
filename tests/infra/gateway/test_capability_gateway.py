@@ -227,6 +227,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -252,6 +253,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.record_gateway_call_count += 1
         self.record_gateway_call_kwargs = {
@@ -287,6 +289,7 @@ class FakeTrace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
+    **_owner: Any,
     ) -> None:
         self.finalize_task_trace_count += 1
         self.finalize_task_trace_kwargs = {

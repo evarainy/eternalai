@@ -133,6 +133,7 @@ def test_policy_request_context_keeps_business_and_management_planes_distinct() 
     business = RequestOrgContext(request_id="runtime-request", roles=["admin"])
     management = ManagementPlanePolicyContext(
         request_id="admin-request",
+        tenant_id="tenant-admin",
         roles=["admin"],
     )
 

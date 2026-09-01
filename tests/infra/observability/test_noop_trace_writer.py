@@ -41,6 +41,8 @@ def _trace_event(attributes: dict[str, Any] | None = None) -> TraceEvent:
         trace_id="trace-1",
         task_id="task-1",
         session_id="session-1",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
         attributes=attributes or {},
@@ -167,9 +169,7 @@ def test_record_event_reapplies_mandatory_redaction_after_custom_hook() -> None:
     password_marker = "synthetic-" + "hook-password"
     writer.set_sanitizer(lambda attributes: attributes)
 
-    asyncio.run(
-        writer.record_event(_trace_event({"userpassword": password_marker}))
-    )
+    asyncio.run(writer.record_event(_trace_event({"userpassword": password_marker})))
 
     logged_event = _logged_trace_event(logger)
     assert logged_event["attributes"] == {"userpassword": "[REDACTED]"}
@@ -207,7 +207,15 @@ def test_record_event_soft_fails_when_logger_raises() -> None:
 def test_start_task_trace_is_a_non_semantic_lifecycle_hook() -> None:
     writer = _CapturingTraceWriter()
 
-    asyncio.run(writer.start_task_trace("trace-1", "task-1", "session-1"))
+    asyncio.run(
+        writer.start_task_trace(
+            "trace-1",
+            "task-1",
+            "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
+        )
+    )
 
     assert writer.events == []
 
@@ -221,6 +229,8 @@ def test_record_step_delegates_with_all_fields() -> None:
             "trace-1",
             "task-1",
             "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="adapter_error",
             status="failed",
             capability_id="oa.leave.apply",
@@ -252,6 +262,8 @@ def test_record_step_supports_distinct_evaluation_event() -> None:
             "trace-1",
             "task-1",
             "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="evaluation_recorded",
             status="failed",
             capability_id="oa.leave.apply",
@@ -275,6 +287,8 @@ def test_record_step_supports_admin_action_event() -> None:
             "trace-admin",
             "admin-request:trace-admin",
             "admin-lite",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="admin_action",
             status="blocked",
             capability_id="oa.leave.apply",
@@ -300,6 +314,8 @@ def test_record_policy_decision_delegates_policy_checked() -> None:
             "trace-1",
             "task-1",
             "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="blocked",
             capability_id="oa.leave.apply",
             error_code="policy_denied",
@@ -323,6 +339,8 @@ def test_record_gateway_call_delegates_gateway_pre_recorded() -> None:
             "trace-1",
             "task-1",
             "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="ok",
             capability_id="oa.leave.apply",
             attributes={"gateway": "pre"},
@@ -344,6 +362,8 @@ def test_finalize_task_trace_is_a_non_semantic_lifecycle_hook() -> None:
             "trace-1",
             "task-1",
             "session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             status="failed",
             capability_id="oa.leave.apply",
             error_code="internal_error",
@@ -360,6 +380,8 @@ def test_trace_event_extra_field_raises_validation_error() -> None:
             trace_id="trace-1",
             task_id="task-1",
             session_id="session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status="ok",
             extra_field="unexpected",
@@ -374,6 +396,8 @@ def test_all_trace_event_type_values_construct_valid_events() -> None:
             trace_id="trace-1",
             task_id="task-1",
             session_id="session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type=event_type,
             status="ok",
         )
@@ -386,6 +410,8 @@ def test_all_trace_event_status_values_construct_valid_events() -> None:
             trace_id="trace-1",
             task_id="task-1",
             session_id="session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status=status,
         )
@@ -398,6 +424,8 @@ def test_invalid_trace_event_type_raises_validation_error() -> None:
             trace_id="trace-1",
             task_id="task-1",
             session_id="session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="invalid_event_type",
             status="ok",
         )
@@ -409,6 +437,8 @@ def test_invalid_trace_event_status_raises_validation_error() -> None:
             trace_id="trace-1",
             task_id="task-1",
             session_id="session-1",
+            tenant_id="tenant-test",
+            ai_user_id="user-test",
             event_type="task_created",
             status="pending",
         )
@@ -419,6 +449,8 @@ def test_trace_event_accepts_arbitrary_trace_task_session_strings() -> None:
         trace_id="arbitrary-trace-id-sentinel-abc123-xyz",
         task_id="arbitrary-task-id-sentinel-def456-uvw",
         session_id="arbitrary-session-id-sentinel-ghi789-rst",
+        tenant_id="tenant-test",
+        ai_user_id="user-test",
         event_type="task_created",
         status="ok",
     )

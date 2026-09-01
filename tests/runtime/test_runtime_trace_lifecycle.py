@@ -18,6 +18,7 @@ from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import CapabilityRef
 from app.runtime.runtime import RuntimeImpl
+from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 
@@ -143,7 +144,7 @@ def _run_runtime(
     envelope = asyncio.run(
         runtime.handle_user_message(
             channel="mock",
-            ai_user_id="synthetic-user",
+            principal=runtime_principal("synthetic-user"),
             session_id="synthetic-session",
             message=message,
             client_capabilities={},
@@ -176,7 +177,7 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
     envelope = asyncio.run(
         runtime.handle_user_message(
             channel="mock",
-            ai_user_id="synthetic-user",
+            principal=runtime_principal("synthetic-user"),
             session_id="synthetic-session",
             message=message,
             client_capabilities={},
@@ -234,9 +235,7 @@ def test_real_writer_terminal_matrix_is_followed_by_one_evaluation(
     event_types = _event_types(events)
 
     terminals = [
-        event_type
-        for event_type in event_types
-        if event_type in {"task_completed", "task_failed"}
+        event_type for event_type in event_types if event_type in {"task_completed", "task_failed"}
     ]
     assert terminals == ([] if expected_terminal is None else [expected_terminal])
     assert event_types.count("task_completed") == (expected_terminal == "task_completed")
@@ -255,9 +254,7 @@ def test_real_writer_terminal_matrix_is_followed_by_one_evaluation(
 
 def test_real_writer_structured_output_parse_failure_has_one_failed_terminal() -> None:
     _, events, task_store = _run_runtime(
-        ResultGateway(
-            ExecutionResult(status="completed", trace_id="unused-synthetic-trace")
-        ),
+        ResultGateway(ExecutionResult(status="completed", trace_id="unused-synthetic-trace")),
         malformed=True,
     )
     event_types = _event_types(events)

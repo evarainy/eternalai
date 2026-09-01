@@ -107,6 +107,8 @@ def test_trace_event_attributes_do_not_contain_secret_value() -> None:
         "trace_id": "tr-001",
         "task_id": "task-001",
         session_key: "sess-" + "001",
+        "tenant_id": "tenant-test",
+        "ai_user_id": "user-test",
         "event_type": "adapter_called",
         "status": "ok",
         "attributes": {
