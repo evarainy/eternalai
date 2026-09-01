@@ -1981,3 +1981,54 @@ Trace 不适用 2026-08-21「个人备忘的隐私边界，管理员不得读取
 
 **切片关系**：`P2-TASK-TENANT-COLUMN-001` 是从 `P2-TENANT-IDENTITY-001` schema scope 中切出的
 `tasks` 切片。后继棒不得把本次授权外推到其余表；历史 NULL Task 的恢复路径也须另行裁定。
+
+---
+
+## 2026-09-01 — 事实确认：OA 深链前缀与后端 OA API 路径不同源
+
+**事实**：`OA_BASE_URL` 与 `ETERNALAI_OA_ALLOWED_PATH_PREFIXES` 管的是**给用户点击跳转的 OA 深链**，
+**不是**后端调 OA 的 API 路径。两者不同源，任何一侧都不得从另一侧反推。
+
+- **深链侧**：`web/vite.config.ts` 在构建期把 `OA_BASE_URL` 与 `ETERNALAI_OA_ALLOWED_PATH_PREFIXES` 注入为
+  `__ETERNALAI_OA_BASE_URL__` / `__ETERNALAI_OA_ALLOWED_PATH_PREFIXES__`；
+  `web/src/contracts/runtimeProjection.ts::deployedOaNavigationConfig` 读取它们，对目标 origin 与路径段前缀
+  校验，不匹配即判 `untrusted`、不可跳转。**现役真实值：origin `http://34.64.8.50`，放行路径段前缀 `/wui`。**
+- **后端侧**：后端调 OA 的具体 API 路径是 `.env` / `.env.smoke` 的 `OA_*_PATH` 系列——
+  `app/config.py` 读取 `OA_MESSAGE_CENTER_PATH`、`OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH`、
+  `OA_PENDING_WORKFLOWS_COUNTS_PATH`、`OA_PENDING_WORKFLOWS_DATAS_PATH`。
+- `OA_BASE_URL` 只承载 origin，被两侧共用；**路径不共用**。
+
+**为什么记这条**：2026-09-01 起本地环境时，深链放行前缀是从 `OA_*_PATH` 系列反推的，得到的前缀与用户实际
+深链前缀不同，「去 OA 办理」链接因此被判 `untrusted` 不可跳转。**该 fail-closed 行为正确**，缺陷在配置来源
+错误，不在守卫。
+
+**约束**：深链放行前缀只能来自用户实际点击的 OA 深链 URL，不得从后端 API 路径反推；反之亦然。两侧路径变更
+互不传播，改一侧不得顺手改另一侧。
+
+**边界**：本条只记配置语义与来源，不改变任何守卫行为，也不授权修改现役配置值。
+
+---
+
+## 2026-09-01 — 裁决：`P2-FE-VISUAL-REFACTOR-001` 的视觉参照物定为飞书
+
+**决定**：`P2-FE-VISUAL-REFACTOR-001` 的视觉参照物定为**飞书**，并结合本项目自身特点调整。
+
+**理由**：本项目用户画像已由 2026-08-27「裁决：低数字素养用户的界面硬约束」定为**低数字素养、逐词阅读、
+倾向按分类浏览而非搜索**。用户日常已在使用飞书 / 钉钉一类办公系统，沿用其视觉惯例（左侧竖排导航、卡片列表、
+蓝色主色、中等信息密度）可把首次使用的学习成本降到最低。Linear / Notion 一类留白大、灰阶为主、靠图标表意的
+风格对该用户群是负担；传统后台管理系统的密集表格方向相反，信息密度过高。
+
+**结合自身特点的三条调整**（不是照抄飞书）：
+
+1. 字号与行距**大于**飞书默认，服务逐词阅读的用户；
+2. 每个空状态、失败态、降级态都必须写人话并给下一步——这是「空状态统一规范」已裁定的硬要求，也是本系统
+   区别于普通后台的地方；
+3. 不引入 ProComponents（`P2-FE-ANTD6-001` 已裁定移除，不得回退）。
+
+**边界**：本条只定视觉参照与调整方向，**不授权直接改代码**。`P2-FE-VISUAL-REFACTOR-001` 仍须先出可视方案
+经雨爷确认后才能实现。该前置与 `docs/phase2/PHASE2_PLAN.md` 活欠债表中 `activation_task_id =
+P2-FE-VISUAL-REFACTOR-001` 那条的 `blocked_by_task_id` / `expiry_condition` 是同一口径，不得写成两套。
+
+**引用更正**：口头交办把「空状态统一规范」与终态导航裁决记为 2026-08-30，落盘原文实为 2026-08-27
+「裁决：前端信息架构与终态导航（原 13 项，经同日后续裁定修订）」§一、§三、§四；本条与本轮欠债登记
+一律按落盘原文引用。
