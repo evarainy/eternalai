@@ -10,6 +10,9 @@ describe('getReturnPath', () => {
     ['/search', '/search'],
     ['/search?q=OA-WF-001', '/search?q=OA-WF-001'],
     ['/work-objects', '/work-objects'],
+    ['/work-dispatch', '/work-dispatch'],
+    ['/apps', '/apps'],
+    ['/messages', '/messages'],
     ['/', '/'],
   ])('allows the named protected path %s', (from, expected) => {
     expect(getReturnPath({ from })).toBe(expected);
@@ -20,6 +23,8 @@ describe('getReturnPath', () => {
     ['backslash URL variant', { from: '/\\evil.com' }],
     ['absolute URL', { from: 'https://evil.com' }],
     ['chat prefix confusion', { from: '/chatevil' }],
+    ['apps prefix confusion', { from: '/appsevil' }],
+    ['dispatch prefix confusion', { from: '/work-dispatchevil' }],
     ['null state', null],
     ['non-object state', '/chat'],
     ['non-string from', { from: 123 }],

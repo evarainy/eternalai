@@ -1,26 +1,53 @@
+/*
+ * 2026-09-02 裁决：AI 面板是覆盖在正文之上的浮动面板，可拖动 / 收起 / 放大，任何模式都不挤压正文
+ * 宽度。因此 `drawer` 与 `pinned` 都是 `position: fixed`，两者只差尺寸；`pinned` 是「放大的浮动
+ * 面板」，不再是推挤主内容的固定栏。
+ */
 .dock {
+  position: fixed;
   z-index: 30;
   min-width: 0;
   color: var(--workbench-text);
   background: var(--workbench-surface);
-  border-left: 1px solid var(--workbench-border);
-  box-shadow: -12px 0 36px rgb(30 43 36 / 12%);
+  border: 1px solid var(--workbench-border);
+  border-radius: 12px;
+  box-shadow: -12px 0 36px rgb(30 43 36 / 18%);
 }
 
 .drawer {
-  position: fixed;
   top: 16px;
   right: 16px;
-  bottom: 16px;
   width: min(420px, calc(100vw - 32px));
-  border: 1px solid var(--workbench-border);
-  border-radius: 12px;
+  height: min(720px, calc(100vh - 32px));
 }
 
 .pinned {
-  position: sticky;
-  top: 0;
-  height: 100vh;
+  top: 16px;
+  right: 16px;
+  width: min(760px, calc(100vw - 32px));
+  height: min(880px, calc(100vh - 32px));
+}
+
+.windowControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dragHandle {
+  display: inline-flex;
+  min-width: var(--workbench-target-size);
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  justify-content: center;
+  color: var(--workbench-text);
+  background: var(--workbench-surface);
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  cursor: move;
+  font-family: inherit;
+  font-size: 20px;
 }
 
 .inner {
