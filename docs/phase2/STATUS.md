@@ -1,6 +1,6 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-GOV-SYNC-052`（治理同步棒，C 档零代码改动：落盘视觉方向改玻璃拟态并推翻 2026-08-20「拟态玻璃本阶段不做」、导航五项与工作事项三分类两项裁决更正、OA 头像接口事实确认，并登记模糊层预算固化欠债）
+- 当前基线 task_id：`P2-GOV-SYNC-053`（治理同步棒，C 档零代码改动：落盘 2026-09-02 界面定稿评审的三条裁决——顶栏「组织范围」改「部门 / 姓名」并移除内线电话行、软件中心「新建应用」界面先行不受「创建功能属后续」阻断、任务交办的控件闭集与附件字段与主动作按钮蓝字例外——并登记五条界面输入欠债，更正顶栏欠债的 expiry_condition）
 - pytest：`2595 passed, 108 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - 当前实现基线后端定向 pytest：`429 passed, 81 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - 当前实现基线前端 `pnpm --dir web test`：`267 passed, 0 failed, 0 skipped`（21 个测试文件；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
@@ -11,4 +11,5 @@
 - 当前实现基线摘要：新 Task 从既有 `Principal` / `PrincipalOrgContext` 固化非空 `tenant_id`，缺失或空白租户在写入 SQL 前显式失败；Task Store 与 Admin Task / event / 对应 Binding 读取直接按可信 Task 租户列收窄，不再以逐 Task Trace 查询证明租户，列表查询放大已关闭。migration 对三条合成升级前 Task 完成 upgrade → downgrade → upgrade 往返，行数与 task_id 集合不变、升级后租户均为 NULL、downgrade 后行仍在；空合成集被测试主动拒绝，不能平凡通过。Trace reader 与孤立动作 Trace 的既有租户合同不变。
 - P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
 - 剩余必达链只含 `P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`；Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md`。
+- 前端界面链指针：`P2-FE-NAV-SHELL-001` → `P2-FE-VISUAL-REFACTOR-001` → 交办页样式落地。界面方案已于 2026-09-02 定稿（iOS 26 玻璃拟态，11 张画板），相关裁决已全部落盘于 `docs/phase2/DECISIONS.md`；该链无棒间前置阻塞，但 `P2-FE-NAV-SHELL-001` 开工前须先取得 OA 头像接口的结构描述，见 `docs/phase2/PHASE2_PLAN.md` 活欠债。该链属机会层，不改变必达主链的 BLOCKED 状态。
 - 机会层任务、依赖与 BLOCKED 条件只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 task_id 不等于排期。
