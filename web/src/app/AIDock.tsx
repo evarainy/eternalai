@@ -1,5 +1,10 @@
-import { useRef } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type {
+  CSSProperties,
+  FormEvent,
+  KeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+} from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, Input } from 'antd';
 import type { PageContextDeclaration } from '../contracts/pageContext';
@@ -11,9 +16,31 @@ import styles from './AIDock.module.css';
 
 const { TextArea } = Input;
 
+/** 键盘移动浮动面板的步长；提供给不能使用鼠标拖动的用户。 */
+export const DOCK_KEYBOARD_STEP = 24;
+
 interface AIDockProps {
   suppressed?: boolean;
 }
+
+interface DockPosition {
+  left: number;
+  top: number;
+}
+
+interface DragOrigin extends DockPosition {
+  height: number;
+  pointerLeft: number;
+  pointerTop: number;
+  width: number;
+}
+
+const KEYBOARD_MOVES: Record<string, readonly [number, number] | undefined> = {
+  ArrowDown: [0, DOCK_KEYBOARD_STEP],
+  ArrowLeft: [-DOCK_KEYBOARD_STEP, 0],
+  ArrowRight: [DOCK_KEYBOARD_STEP, 0],
+  ArrowUp: [0, -DOCK_KEYBOARD_STEP],
+};
 
 const surfaceLabels: Record<string, string> = {
   'work-object-search': '工作事项搜索结果',
@@ -25,6 +52,20 @@ function pageContextLabel(context: PageContextDeclaration | null): string {
     return '未绑定页面上下文';
   }
   return surfaceLabels[context.surface_id] ?? context.surface_id;
+}
+
+function clampToViewport(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): DockPosition {
+  const maxLeft = Math.max(0, window.innerWidth - width);
+  const maxTop = Math.max(0, window.innerHeight - height);
+  return {
+    left: Math.min(Math.max(left, 0), maxLeft),
+    top: Math.min(Math.max(top, 0), maxTop),
+  };
 }
 
 export function AIDock({ suppressed = false }: AIDockProps) {
@@ -41,8 +82,13 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     (state) => state.dismissContextNotice,
   );
   const setDraft = useAIDockStore((state) => state.setDraft);
+  const setMode = useAIDockStore((state) => state.setMode);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
   const requestInFlight = useRef(false);
+  const dockRef = useRef<HTMLElement | null>(null);
+  const dragOrigin = useRef<DragOrigin | null>(null);
+  const [position, setPosition] = useState<DockPosition | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
@@ -69,6 +115,36 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       requestInFlight.current = false;
     },
   });
+
+  useEffect(() => {
+    if (!dragging) {
+      return;
+    }
+    const move = (event: MouseEvent) => {
+      const origin = dragOrigin.current;
+      if (origin === null) {
+        return;
+      }
+      setPosition(
+        clampToViewport(
+          origin.left + event.clientX - origin.pointerLeft,
+          origin.top + event.clientY - origin.pointerTop,
+          origin.width,
+          origin.height,
+        ),
+      );
+    };
+    const stop = () => {
+      dragOrigin.current = null;
+      setDragging(false);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', stop);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', stop);
+    };
+  }, [dragging]);
 
   const submit = () => {
     const message = draft.trim();
@@ -97,25 +173,98 @@ export function AIDock({ suppressed = false }: AIDockProps) {
     }
   };
 
+  const currentRect = () => dockRef.current?.getBoundingClientRect() ?? null;
+
+  const startDrag = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const rect = currentRect();
+    if (rect === null) {
+      return;
+    }
+    event.preventDefault();
+    dragOrigin.current = {
+      height: rect.height,
+      left: position?.left ?? rect.left,
+      pointerLeft: event.clientX,
+      pointerTop: event.clientY,
+      top: position?.top ?? rect.top,
+      width: rect.width,
+    };
+    setDragging(true);
+  };
+
+  const moveBy = (horizontal: number, vertical: number) => {
+    const rect = currentRect();
+    setPosition((current) =>
+      clampToViewport(
+        (current?.left ?? rect?.left ?? 0) + horizontal,
+        (current?.top ?? rect?.top ?? 0) + vertical,
+        rect?.width ?? 0,
+        rect?.height ?? 0,
+      ),
+    );
+  };
+
+  const handleHandleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const move = KEYBOARD_MOVES[event.key];
+    if (move === undefined) {
+      return;
+    }
+    event.preventDefault();
+    moveBy(move[0], move[1]);
+  };
+
   const hidden = suppressed || mode === 'closed';
   const contextLabel = pageContextLabel(pageContextDeclaration);
   const dockClassName = `${styles.dock} ${
     mode === 'pinned' ? styles.pinned : styles.drawer
   }`;
+  const positionStyle: CSSProperties | undefined =
+    position === null
+      ? undefined
+      : {
+          bottom: 'auto',
+          left: `${position.left}px`,
+          right: 'auto',
+          top: `${position.top}px`,
+        };
 
   return (
     <aside
       aria-label="AI 助手"
       className={hidden ? undefined : dockClassName}
+      data-floating="true"
       data-mode={mode}
+      data-positioned={position === null ? 'false' : 'true'}
       data-testid="ai-dock"
       hidden={hidden}
+      ref={dockRef}
+      style={positionStyle}
     >
       <div className={styles.inner}>
         <header className={styles.header}>
           <div className={styles.headerLine}>
             <h2 className={styles.title}>AI 助手</h2>
-            <Button onClick={closeDock}>关闭 AI 助手</Button>
+            <div className={styles.windowControls}>
+              <button
+                aria-label="移动 AI 助手：可用鼠标拖动，也可先聚焦本按钮再按方向键移动"
+                className={styles.dragHandle}
+                onKeyDown={handleHandleKeyDown}
+                onMouseDown={startDrag}
+                title="拖动或按方向键移动"
+                type="button"
+              >
+                <span aria-hidden="true">✥</span>
+              </button>
+              {position === null ? null : (
+                <Button onClick={() => setPosition(null)}>复位</Button>
+              )}
+              {mode === 'pinned' ? (
+                <Button onClick={() => setMode('drawer')}>还原大小</Button>
+              ) : (
+                <Button onClick={() => setMode('pinned')}>放大</Button>
+              )}
+              <Button onClick={closeDock}>关闭 AI 助手</Button>
+            </div>
           </div>
           <p className={styles.context} role="status">
             <span aria-hidden="true" className={styles.stateIcon}>●</span>

@@ -1,5 +1,13 @@
 const DEFAULT_RETURN_PATH = '/';
-const NAMED_PROTECTED_PATHS = new Set(['/', '/chat', '/search', '/work-objects']);
+const NAMED_PROTECTED_PATHS = new Set([
+  '/',
+  '/apps',
+  '/chat',
+  '/messages',
+  '/search',
+  '/work-dispatch',
+  '/work-objects',
+]);
 
 export function getReturnPath(state: unknown): string {
   const from =

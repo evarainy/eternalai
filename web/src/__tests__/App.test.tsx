@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App, {
   AuthenticationEffects,
   LoginRoute,
@@ -9,6 +9,15 @@ import App, {
 } from '../App';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
+import { useNavigationStore } from '../stores/navigationStore';
+
+const apiMocks = vi.hoisted(() => ({
+  getBinding: vi.fn(),
+}));
+
+vi.mock('../generated/credential-bindings/credential-bindings', () => ({
+  getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
+}));
 
 function LocationProbe() {
   const location = useLocation();
@@ -28,6 +37,16 @@ describe('application authentication boundary', () => {
       sessionId: null,
       transcript: [],
     });
+    useNavigationStore.setState({ collapsed: false });
+    apiMocks.getBinding.mockReset();
+    apiMocks.getBinding.mockResolvedValue({
+      bound: true,
+      poll_failure_count: 0,
+      poll_status: 'active',
+      target_system: 'oa',
+      updated_at: null,
+    });
+    window.localStorage.clear();
     window.history.pushState({}, '', '/health');
   });
 
@@ -61,7 +80,7 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { name: '把要办的事说清楚' }),
     ).toBeInTheDocument();
-    expect(window.location.pathname).toBe('/');
+    expect(window.location.pathname).toBe('/chat');
   });
 
   it('allows a protected route only while the in-memory session is authenticated', async () => {
@@ -158,32 +177,49 @@ describe('application authentication boundary', () => {
     expect(useAuthStore.getState().status).toBe('unauthenticated');
   });
 
-  it('uses the landing-page logo and keeps all existing authenticated routes in one shell', () => {
+  it('sends the bare root to the AI assistant route and keeps one shell for every authenticated route', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', '/');
     render(<App />);
 
-    expect(screen.getByRole('link', { name: /EternalAI/ })).toHaveAttribute(
-      'href',
-      '/',
-    );
-    expect(screen.getByRole('link', { name: '工作事项' })).toHaveAttribute(
-      'href',
-      '/work-objects',
-    );
-    expect(screen.getByRole('link', { name: '功能管理' })).toHaveAttribute(
-      'href',
-      '/admin/registry',
-    );
-    expect(screen.getByRole('link', { name: '任务证据' })).toHaveAttribute(
-      'href',
-      '/admin/tasks',
-    );
-    expect(screen.getByRole('link', { name: '账号绑定' })).toHaveAttribute(
-      'href',
-      '/admin/bindings',
-    );
-    expect(screen.getByText('当前位置')).toBeInTheDocument();
-    expect(screen.getByText('开始新工作', { selector: 'strong' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: '把要办的事说清楚' }),
+    ).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/chat');
+    expect(screen.queryByRole('link', { name: /EternalAI/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('app-brand').tagName).toBe('DIV');
+
+    for (const [name, href] of [
+      ['AI 助手', '/chat'],
+      ['工作事项', '/work-objects'],
+      ['任务交办', '/work-dispatch'],
+      ['软件中心', '/apps'],
+      ['消息', '/messages'],
+      ['功能管理', '/admin/registry'],
+      ['任务证据', '/admin/tasks'],
+      ['账号绑定', '/admin/bindings'],
+    ]) {
+      expect(screen.getByRole('link', { name })).toHaveAttribute('href', href);
+    }
+    expect(screen.queryByText('当前位置')).not.toBeInTheDocument();
+    expect(screen.queryByText('开始新工作', { selector: 'strong' })).toBeNull();
+  });
+
+  it.each([
+    ['/work-dispatch', '任务交办'],
+    ['/apps', '软件中心'],
+    ['/messages', '消息'],
+  ])('mounts the %s landing page inside the shell', async (path, heading) => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    window.history.pushState({}, '', path);
+    render(<App />);
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: heading }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: '这个页面现在做不了什么' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });
 });

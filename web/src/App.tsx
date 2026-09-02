@@ -20,6 +20,9 @@ import { workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
+import AppsPage from './features/apps/AppsPage';
+import MessagesPage from './features/messages/MessagesPage';
+import WorkDispatchLandingPage from './features/work-dispatch/WorkDispatchLandingPage';
 import WorkObjectSearchPage from './features/work-dispatch/WorkObjectSearchPage';
 import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
@@ -94,11 +97,14 @@ export default function App() {
               <Route path="/health" element={<HealthPage />} />
               <Route path="/login" element={<LoginRoute />} />
               <Route element={<ProtectedRoute />}>
+                <Route path="/" element={<Navigate replace to="/chat" />} />
                 <Route element={<AppShell />}>
-                  <Route path="/" element={<ChatPage />} />
-                  <Route path="/chat" element={<Navigate replace to="/" />} />
+                  <Route path="/chat" element={<ChatPage />} />
                   <Route path="/search" element={<WorkObjectSearchPage />} />
                   <Route path="/work-objects" element={<WorkObjectsPage />} />
+                  <Route path="/work-dispatch" element={<WorkDispatchLandingPage />} />
+                  <Route path="/apps" element={<AppsPage />} />
+                  <Route path="/messages" element={<MessagesPage />} />
                   <Route path="/admin/registry" element={<RegistryPage />} />
                   <Route path="/admin/tasks" element={<TasksPage />} />
                   <Route path="/admin/bindings" element={<BindingsPage />} />
