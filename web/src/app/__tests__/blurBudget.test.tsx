@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type { WorkObjectListResponse } from '../../generated/work-objects/work-objects.schemas';
+import AppsPage from '../../features/apps/AppsPage';
 import ChatPage from '../../pages/ChatPage';
 import LoginPage from '../../pages/LoginPage';
 import WorkDispatchPage from '../../features/work-dispatch/WorkDispatchPage';
@@ -99,6 +100,7 @@ function renderScreen(initialPath: string) {
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/work-objects" element={<WorkObjectsPage />} />
                 <Route path="/work-dispatch" element={<WorkDispatchPage />} />
+                <Route path="/apps" element={<AppsPage />} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -310,6 +312,37 @@ describe('per-screen blur-layer budget', () => {
       'features/work-dispatch/WorkDispatchPage.module.css .panel',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
+  it('keeps the software-centre screen on its single content panel', async () => {
+    renderScreen('/apps');
+    await screen.findByTestId('oa-status');
+
+    const layers = describeBlurLayers(shellElement());
+    expect(layers).toEqual([
+      'app/AppShell.module.css .floatingEntry',
+      'app/AppShell.module.css .sidebar',
+      'app/AppShell.module.css .topbar',
+      'features/apps/AppsPage.module.css .panel',
+    ]);
+    expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
+  /*
+   * 「新建应用」是一个盖住整屏的弹窗。弹窗自己不许再买一层模糊——遮罩按画板就是一层纯半透明黑。
+   * 谁给遮罩或弹窗本体加上 `backdrop-filter`，这里的列表就会多出一项 → 变红。
+   */
+  it('adds no blur layer when the create-software dialog covers the screen', async () => {
+    renderScreen('/apps');
+    await screen.findByTestId('oa-status');
+    const before = describeBlurLayers(shellElement());
+
+    fireEvent.click(screen.getByRole('button', { name: /新建应用/ }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+
+    const after = describeBlurLayers(document.body);
+    expect(after).toEqual(before);
+    expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
   it('keeps the login screen on its single glass card', () => {

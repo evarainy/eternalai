@@ -4,7 +4,7 @@
 - 上一棒基线 task_id：`P2-GOV-SYNC-054`（治理同步棒，C 档零代码改动：落盘 OA 用户信息接口的脱敏结构与四条边界、把「意图路由缺『都不匹配』出口」落为事实确认并据此扩大 `P2-RUNTIME-NO-CAPABILITY-COPY-001` 的范围、统一 `pinned` 措辞冲突；给五项无主工作分配 task_id（`P2-USER-PROFILE-READ-001` / `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` / `P2-FE-DIR-GUARD-001`，模糊层预算确认归 `P2-FE-VISUAL-REFACTOR-001`），清掉现役 DAG 三行已完成过期项，把四条界面输入欠债从三列表归位到六列活欠债表，并登记同源监理补审欠账）
 - pytest：`2595 passed, 108 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - 当前实现基线后端定向 pytest：`429 passed, 81 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
-- 当前实现基线前端 `pnpm --dir web test`：`362 passed, 0 failed, 0 skipped`（30 个测试文件；2026-09-03 `P2-FE-VISUAL-REFACTOR-001` 返修第二轮实测复核）
+- 当前实现基线前端 `pnpm --dir web test`：`390 passed, 0 failed, 0 skipped`（30 个测试文件；2026-09-04 `P2-FE-VISUAL-REFACTOR-001` 返修第二轮实测复核）
 - Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
 - `tests/architecture/`：`112 passed`（2026-09-03 `P2-FE-VISUAL-REFACTOR-001` 实测复核）
 - 必达主链指针：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。`P2-LOW-RISK-WRITE-001` 当前 **BLOCKED** 于 OA 审批提交协议结构，输入到位前不开棒；这是 P2 收口的唯一真实卡点。

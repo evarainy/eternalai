@@ -345,6 +345,31 @@ function recordsIncompleteReasons(
   return reasons;
 }
 
+/**
+ * 「打开 OA 办公系统」这条链接。
+ *
+ * 复用系统消息深链的**同一条**校验路径（`projectOaNavigation`）：目标 origin 必须等于部署配置的
+ * `OA_BASE_URL`，路径必须落在 `ETERNALAI_OA_ALLOWED_PATH_PREFIXES` 放行的前缀里，任何一项不满足就
+ * 判 `untrusted`、不给可点的链接。打开的路径取放行前缀表的第一项——它就是用户实际点击的 OA 深链前缀
+ * （2026-09-01 事实确认：深链前缀只能来自用户真实点击的 OA URL，不得从后端 API 路径反推），不是这里
+ * 编出来的一个地址。
+ *
+ * 用户浏览器自带 OA 的会话 cookie，因此新窗口打开即是已登录态，本函数不接任何后端。
+ */
+export function oaWorkbenchNavigation(
+  navigationConfig: OaNavigationConfig | null = deployedOaNavigationConfig(),
+): SystemMessageView['navigation'] {
+  const config = normalizeOaNavigationConfig(navigationConfig);
+  if (config === null) {
+    return { kind: 'deployment_unconfigured' };
+  }
+  const entryPath = config.pathPrefixes[0];
+  if (entryPath === undefined) {
+    return { kind: 'deployment_unconfigured' };
+  }
+  return projectOaNavigation(entryPath, config);
+}
+
 export function projectTextResponse(
   text: string,
   presentationKind: PresentationKind,
