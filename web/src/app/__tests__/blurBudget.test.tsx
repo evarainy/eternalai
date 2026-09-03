@@ -7,6 +7,7 @@ import type { CredentialBindingView } from '../../generated/credential-bindings/
 import type { WorkObjectListResponse } from '../../generated/work-objects/work-objects.schemas';
 import ChatPage from '../../pages/ChatPage';
 import LoginPage from '../../pages/LoginPage';
+import WorkDispatchPage from '../../features/work-dispatch/WorkDispatchPage';
 import WorkObjectsPage from '../../pages/WorkObjectsPage';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
@@ -97,6 +98,7 @@ function renderScreen(initialPath: string) {
               <Route element={<AppShell />}>
                 <Route path="/chat" element={<ChatPage />} />
                 <Route path="/work-objects" element={<WorkObjectsPage />} />
+                <Route path="/work-dispatch" element={<WorkDispatchPage />} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -294,6 +296,20 @@ describe('per-screen blur-layer budget', () => {
     const after = describeBlurLayers(shellElement());
     expect(after).toEqual(before);
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
+  it('keeps the dispatch draft screen on its single content panel', async () => {
+    renderScreen('/work-dispatch');
+    await screen.findByTestId('app-topbar');
+
+    const layers = describeBlurLayers(shellElement());
+    expect(layers).toEqual([
+      'app/AppShell.module.css .floatingEntry',
+      'app/AppShell.module.css .sidebar',
+      'app/AppShell.module.css .topbar',
+      'features/work-dispatch/WorkDispatchPage.module.css .panel',
+    ]);
+    expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
   it('keeps the login screen on its single glass card', () => {

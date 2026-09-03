@@ -213,8 +213,6 @@ describe('application authentication boundary', () => {
    * 结构。
    */
   it.each([
-    ['/work-dispatch', '任务交办', '任务交办还没有开发，这里派不了活，也存不了草稿。'],
-    ['/apps', '软件中心', '软件中心还没有开发，这里还看不到、也打不开任何软件。'],
     ['/messages', '消息', '消息功能还没有开发，这里收不到也发不出消息。'],
   ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
@@ -226,6 +224,29 @@ describe('application authentication boundary', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
+  });
+
+  /*
+   * 任务交办与软件中心不再是占位页：前者是九类字段的交办草稿表单，后者是业务系统卡片列表。这里只钉
+   * 「路由挂的是那一页、且仍在同一个外壳里」，页面自身的合同各由自己的测试文件承担。
+   */
+  it('mounts the dispatch draft form at /work-dispatch instead of a placeholder', async () => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    window.history.pushState({}, '', '/work-dispatch');
+    render(<App />);
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: '任务交办' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('这是 AI 生成的草稿，尚未发布')).toBeInTheDocument();
+    expect(screen.getByLabelText('截止时间')).toHaveAttribute(
+      'type',
+      'datetime-local',
+    );
+    expect(
+      screen.queryByText('任务交办还没有开发，这里派不了活，也存不了草稿。'),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });
 });

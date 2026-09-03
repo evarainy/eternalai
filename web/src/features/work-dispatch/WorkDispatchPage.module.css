@@ -1,0 +1,392 @@
+/*
+ * 任务交办页，版式照定稿画板 `Dispatch.dc.html`。
+ *
+ * 玻璃硬约束：整页只有 `.panel`（内容面板）一处声明 `backdrop-filter`；顶部的一句话输入卡是实心白
+ * （画板上就是 `background:#fff`），按钮、芯片、提醒策略一律只用低不透明度白加边缘高光，不带模糊、
+ * 不带固定填充色。模糊层计数见 `app/__tests__/blurBudget.test.tsx`。
+ *
+ * 字号相对画板的两处上调（下限只许上调）：字段标签由画板的 15px 提到 16px 辅助字号下限；输入框里的
+ * 取值由 17px 提到 19px 正文下限。
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 所在页由左导航高亮表明，视觉上不再放一个大标题；标题只留给读屏软件。 */
+.pageTitle {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.srOnly {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- 顶部一句话输入 ---------- */
+
+.brief {
+  flex: none;
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 8px 22px -14px rgb(16 26 58 / 45%),
+    inset 0 0 0 1px rgb(255 255 255 / 90%);
+}
+
+.briefInput {
+  padding: 0 !important;
+  color: var(--workbench-text) !important;
+  font-size: var(--workbench-font-body) !important;
+  line-height: var(--workbench-line-height) !important;
+}
+
+.briefBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.briefButton {
+  min-height: var(--workbench-target-size);
+  margin-left: auto;
+  gap: 8px;
+}
+
+/* ---------- 内容面板 ---------- */
+
+.panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--workbench-panel-fill);
+  backdrop-filter: blur(20px) saturate(150%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+/* 琥珀提示条：草稿在点「发布」之前不会下发，这一条常驻，不随滚动消失。 */
+.draftNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 24px;
+  background: rgb(255 206 138 / 34%);
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.draftMark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 11px;
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-warning);
+  place-items: center;
+}
+
+.draftTitle {
+  color: var(--workbench-warning);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.draftHint {
+  color: var(--workbench-warning);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 24px 4px;
+}
+
+/* 分组标题：小号加粗 + 一条发丝线，靠分组和留白撑结构，不靠大标题。 */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  margin: 4px 0 0;
+  gap: 12px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+}
+
+.sectionHead > i {
+  flex: 1;
+  height: 1px;
+  background: var(--workbench-hair);
+}
+
+.gridKindTitle,
+.gridScope,
+.gridRequirement {
+  display: grid;
+  gap: 8px 16px;
+}
+
+.gridKindTitle {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+}
+
+.gridScope {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.gridRequirement {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (width <= 1100px) {
+  .gridKindTitle,
+  .gridScope,
+  .gridRequirement {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  align-content: start;
+}
+
+/*
+ * 字段标签：画板 15px，这里按落盘的辅助字号下限提到 16px。标签一律是可见的真标签，不用 placeholder
+ * 顶替。
+ */
+.field > label,
+.fieldLabel {
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: 1.3;
+}
+
+.field :global(.ant-input),
+.field :global(.ant-input-affix-wrapper),
+.field :global(.ant-select-selector) {
+  /*
+   * 交办草稿是「核对」不是「从零填表」：框放轻——白 62% + 1px 发丝边，不要深内阴影，否则整页会变成
+   * 一堵框。
+   */
+  background: rgb(255 255 255 / 62%) !important;
+  border: 0 !important;
+  border-radius: var(--workbench-radius-control) !important;
+  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
+    inset 0 0 0 1px rgb(22 29 46 / 11%) !important;
+  font-size: var(--workbench-font-body) !important;
+}
+
+.select {
+  width: 100%;
+}
+
+.select :global(.ant-select-selector) {
+  min-height: var(--workbench-target-size);
+}
+
+.dateInput {
+  min-height: var(--workbench-target-size);
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--workbench-radius-control);
+  background: rgb(255 255 255 / 62%);
+  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
+    inset 0 0 0 1px rgb(22 29 46 / 11%);
+  color: var(--workbench-text);
+  font-family: inherit;
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+/* ---------- 交办对象 ---------- */
+
+.chipWell {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--workbench-radius-control);
+  background: rgb(255 255 255 / 62%);
+  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
+    inset 0 0 0 1px rgb(22 29 46 / 11%);
+}
+
+.chip {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 12px;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.chipRemove {
+  display: grid;
+  width: var(--workbench-target-size);
+  height: var(--workbench-target-size);
+  border: 0;
+  background: none;
+  color: var(--workbench-text-secondary);
+  cursor: pointer;
+  place-items: center;
+}
+
+.chipInput,
+.chipInput:global(.ant-input) {
+  width: 12em;
+  min-width: 8em;
+  flex: 1;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.chipAdd {
+  min-height: var(--workbench-target-size);
+  gap: 6px;
+}
+
+.attachmentWell {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 提醒策略 ---------- */
+
+.reminderRow {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+}
+
+.reminderOn,
+.reminderOff {
+  min-height: var(--workbench-target-size);
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  color: var(--workbench-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.reminderOn {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 2px rgb(47 107 255 / 45%);
+  font-weight: 700;
+}
+
+/* 未选中不靠颜色单独表意：选中的另有蓝色内边与加粗字重，两处差别同时存在。 */
+.reminderOff {
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text-secondary);
+  opacity: 0.72;
+}
+
+/* ---------- 页脚 ---------- */
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 8px;
+  padding: 10px 24px;
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
+}
+
+.footerCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.footerWarn {
+  margin: 0;
+  color: var(--workbench-warning);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.footerActions {
+  display: flex;
+  margin-left: auto;
+  gap: 12px;
+}
+
+.footerButton {
+  min-width: 126px;
+  min-height: 48px;
+  font-size: 18px;
+}
+
+/*
+ * 2026-09-02 裁决的唯一例外：主动作按钮的「蓝字 + 蓝色高光内边」只归本页的「发布」。玻璃本体仍不
+ * 填色——蓝的是文字与那一圈内边，不是底。
+ */
+:global(.ant-btn).publishButton.publishButton {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 1.8px rgb(47 107 255 / 48%), inset 0 -1px 2px rgb(22 29 46 / 6%),
+    0 8px 22px -10px rgb(30 72 200 / 42%);
+  color: var(--workbench-primary);
+  font-weight: 700;
+}
+
+.notice {
+  margin: 0;
+  padding: 12px 24px 14px;
+  background: rgb(255 206 138 / 26%);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+.caption {
+  margin: 0;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: var(--workbench-line-height);
+}

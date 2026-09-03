@@ -28,6 +28,13 @@ export const BACKGROUND_PRESET_LABELS: Record<BackgroundPreset, string> = {
 export const BLUR_LAYER_BUDGET = 6;
 
 /**
+ * antd 默认会给「恰好两个汉字」的按钮文字中间插一个真空格（`发布` → `发 布`）。那是给通用中文排版做的
+ * 视觉修饰，但在这套界面里它同时改掉了**读屏软件念出来的按钮名**，也让按钮上的字看起来像断开的两个词。
+ * 一律关掉。
+ */
+export const WORKBENCH_BUTTON_CONFIG = { autoInsertSpace: false } as const;
+
+/**
  * 玻璃面在最深底图上的**合成底色**，作为对比度基准。
  *
  * 这两个值不是「画出来的颜色」，而是把 CSS 里的半透明面与三套底图中最深的一套（`bgA`：四层彩色
