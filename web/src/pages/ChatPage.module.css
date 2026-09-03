@@ -2,57 +2,83 @@
  * 玻璃硬约束在本文件里的落点：只有 `.sessionRail`（左栏）与 `.conversation`（内容面板）声明
  * `backdrop-filter`。加上外壳的左导航与顶栏，AI 助手页整屏共 4 层——该页不渲染悬浮入口与浮动面板。
  * 承载对话正文的 `.conversation` 垫 86% 白，正文不靠玻璃承载。
+ *
+ * 2026-09-04 雨爷实机走查：「AI 助手页面字体、页面排版也过大，一个页面里无法显示输入框，丑陋且低效」。
+ * 本文件因此照定稿画板 `Chat.dc.html` 逐项收敛：左栏 252px / 圆角 26 / padding 18 12；右侧面板正文区
+ * padding 34 36、欢迎图标 60px、欢迎标题 28px、说明 17px、提示卡两列 padding 16 18 圆角 20（主问句
+ * 17px、副说明 14px）、输入区 padding 0 36 30、输入卡 padding 16 圆角 22、占位 17px、发送按钮 40px。
+ *
+ * 「一屏内必须看得见输入框」不靠估算高度，靠**结构**保证：`.page` 吃满外壳留给内容的高度，
+ * `.transcript` 是**唯一**可伸缩且可滚动的一格（`flex:1;min-height:0;overflow-y:auto`），`.composer`
+ * 是 `flex:none`。于是无论对话多长、视口多矮，输入框都留在视口内，滚动只发生在对话区里。
  */
 .page {
   display: grid;
   width: 100%;
+  flex: 1;
   min-height: 0;
   gap: 16px;
-  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-columns: 252px minmax(0, 1fr);
 }
 
 /* ---------- 左栏「我问过的」 ---------- */
 .sessionRail {
   display: grid;
   align-content: start;
-  gap: 12px;
-  padding: 18px 16px;
+  min-height: 0;
+  gap: 8px;
+  padding: 18px 12px;
+  overflow-y: auto;
   background: var(--workbench-glass-fill-raised);
   backdrop-filter: blur(26px) saturate(180%);
   border: 1px solid var(--workbench-edge);
-  border-radius: var(--workbench-radius-panel);
+  border-radius: 26px;
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
+/* 画板 `.btn`：44px 高的胶囊，不是 52px 的大按钮。 */
 .newSessionButton {
-  min-height: 52px;
+  min-height: 44px;
   background-image: var(--workbench-chip-fill-strong);
   border: 0;
+  border-radius: 999px;
   box-shadow: var(--workbench-chip-edge-strong);
   color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
 }
 
+/* 画板把「我问过的」画成 `.cap`：14px、说明色、不加粗——它是分组名，不是标题层级。 */
 .railTitle {
-  margin: 4px 0 0;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 700;
+  margin: 12px 0 0;
+  padding: 0 8px;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  font-weight: 400;
   line-height: 1.35;
 }
 
 .railText {
   margin: 0;
+  padding: 0 8px;
   color: var(--workbench-text-caption);
   font-size: var(--workbench-font-caption);
   line-height: 1.6;
 }
 
+/* 画板的会话行：padding 12 14、圆角 16、标题 17px。 */
+.sessionRail :global(.ant-conversations-item) {
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  font-size: 17px;
+}
+
 .main {
   display: flex;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
-  gap: 16px;
 }
 
 /* 标题不占版面，只留给读屏软件定位本页；所在页由左导航高亮表明。 */
@@ -71,7 +97,7 @@
 /* ---------- 内容面板 ---------- */
 .conversation {
   display: flex;
-  min-height: min(560px, calc(100vh - 300px));
+  min-height: 0;
   flex: 1;
   flex-direction: column;
   overflow: hidden;
@@ -82,63 +108,93 @@
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
+/* 唯一可滚动的一格：它让位，输入框才永远在视口内。 */
 .transcript {
   display: flex;
-  min-height: 340px;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
-  padding: 28px;
+  overflow-y: auto;
+  padding: 34px 36px;
 }
 
 .emptyState {
   display: grid;
-  width: min(100%, 640px);
-  margin: auto;
-  gap: 20px;
-  padding: 24px 0;
+  width: 100%;
+  align-content: start;
+}
+
+.welcome :global(.ant-welcome-icon) {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  flex: none;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 20px;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
 }
 
 .welcome :global(.ant-welcome-title) {
-  font-size: var(--workbench-font-body);
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .welcome :global(.ant-welcome-description) {
+  margin-top: 8px;
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
+  font-size: 17px;
+  line-height: 1.45;
 }
 
+.prompts {
+  margin-top: 28px;
+}
+
+/* 画板把「可以这样问我」画成 `.aux`：16px、不加粗——它领起四张卡，不是一级标题。 */
 .prompts :global(.ant-prompts-title) {
+  margin-bottom: 12px;
   color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-auxiliary);
-  font-weight: 700;
+  font-weight: 400;
+}
+
+/* 画板是两列等宽卡片，不是竖着排成一长条。 */
+.prompts :global(.ant-prompts-list) {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .prompts :global(.ant-prompts-item) {
-  min-height: var(--workbench-target-size);
-  background: rgb(255 255 255 / 62%);
+  min-height: 0;
+  padding: 16px 18px;
+  background: rgb(255 255 255 / 78%);
   border: 0;
-  border-radius: var(--workbench-radius-card);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%),
-    0 6px 16px -12px rgb(16 26 58 / 34%);
+  border-radius: 20px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 90%),
+    0 8px 20px -12px rgb(16 26 58 / 40%);
 }
 
 .prompts :global(.ant-prompts-label) {
   color: var(--workbench-text);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: 17px;
   font-weight: 600;
 }
 
 .prompts :global(.ant-prompts-desc) {
+  margin-top: 4px;
   color: var(--workbench-text-caption);
   font-size: var(--workbench-font-caption);
+  line-height: 1.5;
 }
 
 .messageList {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -158,8 +214,10 @@
 
 .message {
   width: fit-content;
-  max-width: min(76%, 680px);
-  padding: 14px 18px;
+  max-width: 90%;
+  padding: 12px 16px;
+  font-size: 17px;
+  line-height: 1.65;
   background: rgb(255 255 255 / 94%);
   border-radius: 20px 20px 20px 6px;
   box-shadow: 0 6px 16px -10px rgb(16 26 58 / 38%),
@@ -219,7 +277,7 @@
 
 .statusLabel {
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: var(--workbench-font-caption);
 }
 
 .messageText {
@@ -244,11 +302,12 @@
 
 .pendingNotice {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 16px;
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: var(--workbench-font-caption);
 }
 
 .pendingDot {
@@ -261,56 +320,68 @@
 
 .failureNotice {
   max-width: 40em;
+  flex: none;
   margin: 16px 0 0;
   color: var(--workbench-error);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: var(--workbench-font-caption);
   line-height: var(--workbench-line-height);
 }
 
+/* `flex:none`：它不参与伸缩，所以永远在视口内。画板的 `padding:0 36px 30px`。 */
 .composer {
   display: flex;
+  flex: none;
   flex-direction: column;
-  gap: 10px;
-  padding: 18px 24px 22px;
-  box-shadow: inset 0 1px 0 var(--workbench-hair);
+  gap: 6px;
+  padding: 0 36px 30px;
 }
 
-.composerHeading,
 .composerActions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  margin-top: 12px;
 }
 
+/*
+ * 输入框的可见标签留着（不用占位文字代替标签），但按画板收成一行 14px 的说明字号：画板上这里没有
+ * 标题层级，只有输入卡本身。
+ */
 .composerLabel {
-  font-weight: 700;
+  padding: 0 4px;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.4;
 }
 
-.composerHint,
-.safetyHint {
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+/* 画板底注：一行 14px，跟着输入卡走。 */
+.composerHint {
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
 }
 
+/* 画板的输入卡是实心白，不是玻璃凹槽：`padding:16;border-radius:22;background:#fff`。 */
 .sender {
-  padding: 12px 16px;
-  background: rgb(255 255 255 / 72%);
+  padding: 16px;
+  background: #fff;
   border: 0;
   border-radius: 22px;
-  box-shadow: inset 0 2px 4px rgb(16 26 58 / 10%),
-    inset 0 0 0 1px rgb(255 255 255 / 62%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 90%),
+    0 8px 22px -14px rgb(16 26 58 / 45%);
 }
 
 .sender :global(.ant-sender-input) {
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .composerActions :global(.ant-btn) {
-  min-height: var(--workbench-target-size);
-  padding-inline: 22px;
+  height: 40px;
+  min-height: 40px;
+  margin-left: auto;
+  padding-inline: 18px;
   border-radius: 999px;
+  font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
 }
 
@@ -334,31 +405,16 @@
 }
 
 @media (max-width: 767px) {
-  .conversation {
-    min-height: 480px;
-  }
-
   .transcript {
-    min-height: 260px;
     padding: 20px 16px;
   }
 
-  .message {
-    max-width: 90%;
+  .prompts :global(.ant-prompts-list) {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .composer {
-    padding: 16px;
-  }
-
-  .composerHeading,
-  .composerActions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .composerActions :global(.ant-btn) {
-    width: 100%;
+    padding: 0 16px 16px;
   }
 }
 

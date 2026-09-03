@@ -8,6 +8,7 @@ import { Button, Input, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
+import { Icon } from '../shared/ui/Icon';
 import {
   projectResponse,
   type PresentationKind,
@@ -67,7 +68,7 @@ const targetSystemLabels: Record<
 
 /**
  * 提示词卡。2026-08-27「低数字素养用户的界面硬约束」§二 的缓解模式要求给可见示例，不能只留一个空
- * 白输入框；这里的四条与 `Chat.dc.html` 定稿一致。
+ * 白输入框；这里的四条主问句与副说明都逐字照 `Chat.dc.html` 定稿。
  */
 const STARTER_PROMPTS = [
   {
@@ -78,7 +79,7 @@ const STARTER_PROMPTS = [
   {
     key: 'due-soon',
     label: '有没有快到期的事？',
-    description: '只看这两天到期的',
+    description: '只看 48 小时内到期的',
   },
   {
     key: 'messages',
@@ -88,7 +89,7 @@ const STARTER_PROMPTS = [
   {
     key: 'capabilities',
     label: '你能帮我做什么？',
-    description: '看看现在会哪些事',
+    description: '看看我现在会哪些事',
   },
 ] as const;
 
@@ -276,9 +277,15 @@ export default function ChatPage() {
           >
             {transcript.length === 0 ? (
               <div className={styles.emptyState}>
+                {/*
+                  画板这里是「王主任，早上好」。姓名与职务当前没有后端读取端点（见顶栏同一处的
+                  fail-closed 文案），编一个名字就是造数据，所以标题留「为什么是空的」这句实话，
+                  版式（60px 图标 + 大字标题 + 一句 17px 说明）照画板。
+                */}
                 <Welcome
                   className={styles.welcome}
                   variant="borderless"
+                  icon={<Icon name="spark" size={26} strokeWidth={1.9} />}
                   title="这里现在是空的，因为你还没有问过。"
                   description="我能帮你查 OA 里的待办和系统消息，说人话就行。"
                 />
@@ -290,7 +297,6 @@ export default function ChatPage() {
                     setDraft(typeof label === 'string' ? label : '');
                   }}
                   title="可以这样问我"
-                  vertical
                 />
               </div>
             ) : (
@@ -344,24 +350,24 @@ export default function ChatPage() {
             ) : null}
           </div>
 
+          {/*
+            2026-09-04：说明文字按画板砍到只剩两处——输入框的可见标签（无障碍要求，不用占位文字代替
+            标签），与画板底注那一行。删掉「Enter 发送 · Shift + Enter 换行」和「页面只展示安全文本，
+            不展示内部追踪信息。」：画板上没有，属于我们自己加的说明。
+          */}
           <form className={styles.composer} onSubmit={handleSubmit}>
-            <div className={styles.composerHeading}>
-              <label className={styles.composerLabel} htmlFor="chat-request">
-                办理请求
-              </label>
-              <Text className={styles.composerHint} id="chat-request-hint">
-                Enter 发送 · Shift + Enter 换行
-              </Text>
-            </div>
+            <label className={styles.composerLabel} htmlFor="chat-request">
+              办理请求
+            </label>
             <Sender
-              autoSize={{ minRows: 2, maxRows: 6 }}
+              autoSize={{ minRows: 1, maxRows: 6 }}
               className={styles.sender}
               components={{ input: RequestTextArea }}
               disabled={mutation.isPending}
               footer={
                 <div className={styles.composerActions}>
-                  <Text className={styles.safetyHint}>
-                    页面只展示安全文本，不展示内部追踪信息。
+                  <Text className={styles.composerHint} id="chat-request-hint">
+                    回答基于 OA 实时数据，正式办理以 OA 为准
                   </Text>
                   <Button
                     type="primary"
@@ -369,13 +375,13 @@ export default function ChatPage() {
                     loading={mutation.isPending}
                     disabled={!draft.trim() || mutation.isPending}
                   >
-                    发送办理请求
+                    发送
                   </Button>
                 </div>
               }
               onChange={(value) => setDraft(value)}
               onSubmit={submit}
-              placeholder="请完整描述要办理或查询的事项…"
+              placeholder="问点什么，比如：我今天有什么要办的"
               suffix={false}
               value={draft}
             />

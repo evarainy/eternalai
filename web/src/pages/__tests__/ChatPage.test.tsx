@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { WORKBENCH_BUTTON_CONFIG } from '../../app/theme';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { RecordsList } from '../../components/RecordsList';
 import {
@@ -164,9 +165,14 @@ function makeClient() {
   });
 }
 
+/*
+ * 按钮配置必须和 `App.tsx` 用同一份：antd 默认会给两个汉字的按钮文案中间插一个空格（「发送」→
+ * 「发 送」），应用侧用 `WORKBENCH_BUTTON_CONFIG` 关掉了这个行为。测试里不带它，可及名称就和实机
+ * 不一致，按名字找按钮的断言会对着一个真实界面里并不存在的名字通过或失败。
+ */
 function renderChat(client = makeClient()) {
   const rendered = render(
-    <ConfigProvider>
+    <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
       <QueryClientProvider client={client}>
         <ChatPage />
       </QueryClientProvider>
@@ -179,7 +185,7 @@ function sendMessage(message: string) {
   fireEvent.change(screen.getByLabelText('办理请求'), {
     target: { value: message },
   });
-  fireEvent.click(screen.getByRole('button', { name: '发送办理请求' }));
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
 }
 
 function storageText(storage: Storage): string {
@@ -284,7 +290,7 @@ describe('ChatPage request boundary', () => {
     sendMessage('只发送一次');
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
     expect(screen.getByLabelText('办理请求')).toBeDisabled();
-    const pendingButton = screen.getByText('发送办理请求').closest('button');
+    const pendingButton = screen.getByText('发送').closest('button');
     expect(pendingButton).not.toBeNull();
     fireEvent.click(pendingButton as HTMLButtonElement);
     const form = screen.getByLabelText('办理请求').closest('form');
@@ -1143,7 +1149,7 @@ describe('ChatPage HTTP failures', () => {
     const jsonSpy = vi.spyOn(failedResponse, 'json');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(failedResponse));
     render(
-      <ConfigProvider>
+      <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
         <QueryClientProvider client={client}>
           <MemoryRouter initialEntries={['/chat']}>
             <AuthenticationEffects />
