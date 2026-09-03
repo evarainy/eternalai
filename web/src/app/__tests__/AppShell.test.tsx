@@ -254,7 +254,9 @@ describe('AppShell and singleton AI Dock', () => {
     renderShell();
 
     expect(screen.getByLabelText('要 AI 帮什么')).toBeInTheDocument();
-    expect(screen.getByText('写清对象、时间和要得到的结果')).toBeInTheDocument();
+    expect(
+      screen.queryByText('写清对象、时间和要得到的结果'),
+    ).not.toBeInTheDocument();
     expect(screen.getByText('正在协助：工作事项')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '工作事项' })).toHaveAttribute(
       'aria-current',

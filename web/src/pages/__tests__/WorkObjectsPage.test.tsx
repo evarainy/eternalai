@@ -4,7 +4,6 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
 import { AIDock } from '../../app/AIDock';
-import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type {
   InternalWorkObjectView,
   OAWorkObjectView,
@@ -15,20 +14,10 @@ import { useAuthStore } from '../../stores/authStore';
 import WorkObjectsPage from '../WorkObjectsPage';
 
 const apiMocks = vi.hoisted(() => ({
-  bindPassword: vi.fn(),
   getWorkObject: vi.fn(),
-  getBinding: vi.fn(),
   listWorkObjects: vi.fn(),
   setHandlingMark: vi.fn(),
   syncWorkObjects: vi.fn(),
-  unbindPassword: vi.fn(),
-}));
-
-vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
-  bindPasswordApiV1CredentialBindingsTargetSystemPut: apiMocks.bindPassword,
-  getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
-  unbindPasswordApiV1CredentialBindingsTargetSystemDelete:
-    apiMocks.unbindPassword,
 }));
 
 vi.mock('../../generated/work-objects/work-objects', () => ({
@@ -89,14 +78,6 @@ const INTERNAL_WORK_OBJECT: InternalWorkObjectView = {
   work_object_id: 'internal-work-object-1',
 };
 
-const UNBOUND_CREDENTIAL: CredentialBindingView = {
-  bound: false,
-  poll_failure_count: 0,
-  poll_status: 'unbound',
-  target_system: 'oa',
-  updated_at: null,
-};
-
 function listResponse(
   overrides: Partial<WorkObjectListResponse> = {},
 ): WorkObjectListResponse {
@@ -151,14 +132,6 @@ describe('WorkObjectsPage', () => {
     apiMocks.listWorkObjects.mockResolvedValue(listResponse());
     apiMocks.syncWorkObjects.mockResolvedValue(listResponse());
     apiMocks.getWorkObject.mockResolvedValue(WORK_OBJECT);
-    apiMocks.getBinding.mockResolvedValue(UNBOUND_CREDENTIAL);
-    apiMocks.bindPassword.mockResolvedValue({
-      ...UNBOUND_CREDENTIAL,
-      bound: true,
-      poll_status: 'active',
-      updated_at: '2026-08-21T03:00:00Z',
-    });
-    apiMocks.unbindPassword.mockResolvedValue(UNBOUND_CREDENTIAL);
     apiMocks.setHandlingMark.mockResolvedValue({
       ...WORK_OBJECT,
       handling_mark: 'handled_elsewhere',
@@ -176,7 +149,8 @@ describe('WorkObjectsPage', () => {
     renderPage();
 
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
-    expect(screen.getByText('当前显示 1 项')).toBeInTheDocument();
+    expect(screen.getByTestId('work-count-urgent')).toHaveTextContent('1');
+    expect(screen.getByTestId('work-count-todo')).toHaveTextContent('0');
     expect(screen.queryByText('内部任务责任人')).not.toBeInTheDocument();
   });
 
@@ -212,7 +186,7 @@ describe('WorkObjectsPage', () => {
         {
           field: 'view',
           operator: 'equals',
-          value: 'today',
+          value: 'urgent',
           source: 'visible_control',
         },
       ]);
@@ -350,7 +324,7 @@ describe('WorkObjectsPage', () => {
     }
   });
 
-  it('defines Today as due today, overdue, or waiting for confirmation and can switch to All', async () => {
+  it('defines Urgent as overdue, due today or tomorrow, or waiting for confirmation, and can switch to Todo', async () => {
     const futureItem: OAWorkObjectView = {
       ...WORK_OBJECT,
       due_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
@@ -376,23 +350,67 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(screen.getByText('等待确认的事项')).toBeInTheDocument();
     expect(screen.queryByText('下周再办的事项')).not.toBeInTheDocument();
-    expect(screen.getByText('当前显示 2 项')).toBeInTheDocument();
+    expect(screen.getByTestId('work-count-urgent')).toHaveTextContent('2');
+    expect(screen.getByTestId('work-count-todo')).toHaveTextContent('1');
+    expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
 
-    fireEvent.click(screen.getByRole('radio', { name: '全部' }));
+    fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
 
     expect(screen.getByText('下周再办的事项')).toBeInTheDocument();
-    expect(screen.getByText('当前显示 3 项')).toBeInTheDocument();
+    expect(screen.queryByText('核对本月采购流程')).not.toBeInTheDocument();
+    expect(screen.queryByText('等待确认的事项')).not.toBeInTheDocument();
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
+  });
+
+  /*
+   * 「已完成」后端没有数据源。这条钉死两件事：计数只给占位符（既不是编出来的数字，也不是会被读成
+   * 「我没有已完成的」的 0），空态把缺口本身说出来。任何一处改成显示数字都会变红。
+   */
+  it('shows the Done category without inventing a count and names the missing data source', async () => {
+    renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    const doneCount = screen.getByTestId('work-count-done');
+    expect(doneCount).toHaveTextContent('—');
+    expect(doneCount.textContent).not.toMatch(/[0-9]/);
+
+    fireEvent.click(screen.getByRole('radio', { name: /已完成/ }));
+
+    expect(screen.getByText('办结数据还没有接进来。')).toBeInTheDocument();
+    expect(
+      screen.getByText('下一步：办结记录接进来后，这里会自动出现。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('核对本月采购流程')).not.toBeInTheDocument();
+  });
+
+  /*
+   * 画板上首屏顶部只有分类控件与列表。把 hero 卡或页面内凭证卡加回来，这条就会变红。
+   */
+  it('drops the hero card and the in-page credential card from the first screen', async () => {
+    renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(screen.queryByText('后台同步凭证')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '绑定 OA 密码' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('每一行都写明责任人、截止时间和下一步。'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 1, name: '工作事项' }),
+    ).toBeInTheDocument();
   });
 
   it('keeps source and state text visible and pairs status color with an icon and words', async () => {
     renderPage();
 
     expect(await screen.findByText(/OA-WF-001/)).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤：待办/)).toBeInTheDocument();
-    expect(screen.getAllByText(/数据截至：/).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('OA 办公系统')).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤 待办/)).toBeInTheDocument();
+    expect(screen.getAllByText(/^数据截至 /).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('筛选')).toBeInTheDocument();
-    const overdueStatus = screen.getByText(/已逾期/);
+    const overdueStatus = within(screen.getByRole('table')).getByText(/已逾期/);
     expect(overdueStatus.querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 
@@ -403,15 +421,15 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(container.querySelector('[data-density="compact"]')).not.toBeNull();
     expect(container.querySelector('.ant-table-body')).toBeNull();
-    expect(screen.getByRole('columnheader', { name: /标题/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /事项/ })).toBeInTheDocument();
     expect(
-      screen.getByRole('columnheader', { name: /责任人或责任部门/ }),
+      screen.getByRole('columnheader', { name: /责任人 \/ 部门/ }),
     ).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /截止时间/ })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /下一动作/ })).toBeInTheDocument();
   });
 
-  it('explains why Today is empty and gives a concrete next step', async () => {
+  it('explains why Urgent is empty and gives a concrete next step', async () => {
     const futureItem: OAWorkObjectView = {
       ...WORK_OBJECT,
       due_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
@@ -425,13 +443,9 @@ describe('WorkObjectsPage', () => {
 
     renderPage();
 
+    expect(await screen.findByText('现在没有要紧的事。')).toBeInTheDocument();
     expect(
-      await screen.findByText(
-        '今日为空，因为没有今天截止、已经逾期或等待确认的事项。',
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('下一步：可切换到“全部”查看以后要办的事项，或刷新 OA 事项。'),
+      screen.getByText('下一步：到「待办」里还有 1 件。'),
     ).toBeInTheDocument();
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
   });
@@ -452,68 +466,11 @@ describe('WorkObjectsPage', () => {
       screen.getByText('仍在显示上次成功拉取的数据；请以每项的数据截至时间为准。'),
     ).toBeInTheDocument();
     expect(screen.getByText(/oa_sync_failed: OA 暂时不可用/)).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤：待办/)).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤 待办/)).toBeInTheDocument();
     expect(screen.getByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
     expect(screen.getByText('分页只整理已取得的部分，不代表 OA 里的全部事项。')).toBeInTheDocument();
     expect(container.querySelector('.ant-pagination')).toBeInTheDocument();
     expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1);
-  });
-
-  it('clears plaintext fields immediately while an OA binding request is pending', async () => {
-    let resolveBinding!: (binding: CredentialBindingView) => void;
-    const pendingBinding = new Promise<CredentialBindingView>((resolve) => {
-      resolveBinding = resolve;
-    });
-    apiMocks.bindPassword.mockReset().mockReturnValueOnce(pendingBinding);
-    renderPage();
-
-    expect(await screen.findByText('尚未绑定')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '绑定 OA 密码' }));
-    const loginId = screen.getByLabelText('OA 登录标识');
-    const password = screen.getByLabelText('OA 密码');
-    fireEvent.change(loginId, { target: { value: 'LOGIN-ID-CANARY' } });
-    fireEvent.change(password, { target: { value: 'PASSWORD-CANARY' } });
-    fireEvent.click(screen.getByRole('button', { name: '验证并保存' }));
-
-    await waitFor(() => {
-      expect(apiMocks.bindPassword).toHaveBeenCalledWith('oa', {
-        login_id: 'LOGIN-ID-CANARY',
-        password: 'PASSWORD-CANARY',
-      });
-    });
-    await waitFor(() => {
-      expect(screen.getByLabelText('OA 登录标识')).toHaveValue('');
-      expect(screen.getByLabelText('OA 密码')).toHaveValue('');
-    });
-    expect(screen.queryByText('PASSWORD-CANARY')).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveBinding({
-        ...UNBOUND_CREDENTIAL,
-        bound: true,
-        poll_status: 'active',
-        updated_at: '2026-08-21T03:00:00Z',
-      });
-      await pendingBinding;
-    });
-    expect(await screen.findByText('后台轮询已启用')).toBeInTheDocument();
-  });
-
-  it.each([
-    ['invalid', '密码已失效，需重新绑定'],
-    ['captcha_required', 'OA 要求验证码，轮询已停止'],
-  ] as const)('shows the terminal %s state as a rebind warning', async (status, label) => {
-    apiMocks.getBinding.mockResolvedValueOnce({
-      ...UNBOUND_CREDENTIAL,
-      bound: true,
-      poll_status: status,
-      updated_at: '2026-08-21T03:00:00Z',
-    });
-
-    renderPage();
-
-    expect(await screen.findByText(label)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '重新绑定' })).toBeInTheDocument();
   });
 
   it('routes an expired OA identity to the existing reauthentication state', async () => {
@@ -627,7 +584,7 @@ describe('WorkObjectsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
       expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
       expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
     });
@@ -666,13 +623,13 @@ describe('WorkObjectsPage', () => {
 
     resolveSync(listResponse({ items: [refreshedSource] }));
     await waitFor(() => {
-      expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
       expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     });
     resolveMark(markedOldSource);
 
     expect(await screen.findByText('处理痕迹已记录；OA 状态未被修改')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
   });
@@ -702,7 +659,7 @@ describe('WorkObjectsPage', () => {
 
     resolveSync(listResponse({ items: [refreshedSource] }));
     expect(await screen.findByText('task-new')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     await act(async () => {
       resolveDetail(WORK_OBJECT);
@@ -710,7 +667,7 @@ describe('WorkObjectsPage', () => {
     });
 
     expect(screen.getByText('task-new')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤：OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
   });
 

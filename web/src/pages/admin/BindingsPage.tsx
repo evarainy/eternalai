@@ -14,6 +14,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ApiError } from '../../api/mutator';
+import OACredentialBindingCard from '../../components/OACredentialBindingCard';
 import {
   listBindings,
   resetBinding,
@@ -227,6 +228,12 @@ export default function BindingsPage() {
 
   return (
     <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+      {/*
+        2026-09-03：工作事项页按画板去掉了页面内的凭证卡，OA 密码的绑定 / 重新绑定 / 解除绑定
+        落到「账号绑定」这一页——顶栏系统状态面板的「重新绑定」本来就指向这里。
+      */}
+      <OACredentialBindingCard />
+
       <div>
         <Title level={3} style={{ marginBottom: 0 }}>
           Binding 查看

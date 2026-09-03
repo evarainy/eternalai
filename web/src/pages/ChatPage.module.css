@@ -55,24 +55,17 @@
   gap: 16px;
 }
 
-.pageHeader {
-  padding: 0 4px;
-}
-
-/* 标题收到 26px；一屏一个重点，层级靠字重与留白拉开。正文仍是 19px。 */
-.title {
-  margin: 0 !important;
-  font-size: 26px !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.02em;
-}
-
-.subtitle {
-  max-width: 40em;
-  margin: 10px 0 0 !important;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
+/* 标题不占版面，只留给读屏软件定位本页；所在页由左导航高亮表明。 */
+.pageTitle {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* ---------- 内容面板 ---------- */

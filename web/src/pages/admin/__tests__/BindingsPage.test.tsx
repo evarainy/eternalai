@@ -23,6 +23,23 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock('../../../generated/admin/admin', () => apiMocks);
 
+/*
+ * 2026-09-03：OA 密码凭证卡从工作事项页搬到本页，所以本页的测试也要备好它的凭证接口替身，
+ * 否则这张卡会去打真实请求。
+ */
+const credentialMocks = vi.hoisted(() => ({
+  bindPassword: vi.fn(),
+  getBinding: vi.fn(),
+  unbindPassword: vi.fn(),
+}));
+
+vi.mock('../../../generated/credential-bindings/credential-bindings', () => ({
+  bindPasswordApiV1CredentialBindingsTargetSystemPut: credentialMocks.bindPassword,
+  getBindingApiV1CredentialBindingsTargetSystemGet: credentialMocks.getBinding,
+  unbindPasswordApiV1CredentialBindingsTargetSystemDelete:
+    credentialMocks.unbindPassword,
+}));
+
 const bindings: AdminBindingView[] = [
   {
     binding_id: 'binding-1',
@@ -92,6 +109,26 @@ describe('BindingsPage', () => {
     apiMocks.listBindings.mockResolvedValue({ ai_user_id: 'user-1', items: bindings });
     apiMocks.revokeBinding.mockResolvedValue(revokeResponse);
     apiMocks.resetBinding.mockResolvedValue(resetResponse);
+    credentialMocks.getBinding.mockResolvedValue({
+      bound: false,
+      poll_failure_count: 0,
+      poll_status: 'unbound',
+      target_system: 'oa',
+      updated_at: null,
+    });
+  });
+
+  /*
+   * 工作事项页删掉页面内凭证卡后，OA 密码的绑定入口必须仍然存在——顶栏系统状态面板的
+   * 「重新绑定」就指向本页。把凭证卡搬回工作事项页或整块删掉，这条都会变红。
+   */
+  it('carries the OA password binding entry that the work-objects page no longer shows', async () => {
+    renderPage();
+
+    expect(await screen.findByText('后台同步凭证')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '绑定 OA 密码' }),
+    ).toBeInTheDocument();
   });
 
   it('does not call listBindings when ai_user_id is empty', async () => {

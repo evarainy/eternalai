@@ -271,9 +271,6 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             <Icon className={styles.stateIcon} name="spark" size={18} strokeWidth={1.9} />
             <span>正在协助：{contextLabel}</span>
           </p>
-          <p className={styles.hint}>
-            可用功能会再次按你的账号权限核对，页面不能增加权限。
-          </p>
           {contextNotice === null ? null : (
             <div className={styles.headerActions} role="status">
               <span>{contextNotice}</span>
@@ -317,16 +314,16 @@ export function AIDock({ suppressed = false }: AIDockProps) {
         </div>
 
         <form className={styles.composer} onSubmit={handleSubmit}>
+          {/*
+            2026-09-03：只留下无障碍名称需要的标签，删掉「写清对象、时间和要得到的结果」这类
+            说明——低数字素养用户要的是一屏一个重点，不是更多提示语。
+          */}
           <div className={styles.composerHeading}>
             <label className={styles.label} htmlFor="ai-dock-request">
               要 AI 帮什么
             </label>
-            <span className={styles.hint} id="ai-dock-request-hint">
-              写清对象、时间和要得到的结果
-            </span>
           </div>
           <TextArea
-            aria-describedby="ai-dock-request-hint"
             id="ai-dock-request"
             placeholder="例如：帮我梳理这页事项中今天必须完成的工作"
             value={draft}

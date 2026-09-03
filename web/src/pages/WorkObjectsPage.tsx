@@ -4,7 +4,6 @@ import {
   Alert,
   App as AntApp,
   Button,
-  Card,
   Descriptions,
   Drawer,
   Flex,
@@ -17,7 +16,6 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { ApiError } from '../api/mutator';
 import { usePageContextRegistration } from '../app/usePageContextRegistration';
-import OACredentialBindingCard from '../components/OACredentialBindingCard';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import {
   getWorkObjectApiV1WorkObjectsWorkObjectIdGet as getWorkObject,
@@ -38,7 +36,19 @@ import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import styles from './WorkObjectsPage.module.css';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text } = Typography;
+
+/**
+ * 2026-09-03 画板 `Main.dc.html` 定稿的三分类：互斥、各带计数，一件事只会落在一个分类里。
+ *
+ * `done`（已完成）**后端没有数据源**——`GET /api/v1/work-objects` 只返回 OA 待办快照，没有办结事项。
+ * 按「UI 决定要有什么功能，不决定数据可不可信」这条护栏，这一格照常显示但计数写占位符，
+ * 既不编数字也不写 `0`（`0` 会被读成「我没有已完成的」，同样是假信息）。
+ */
+type WorkObjectView = 'urgent' | 'todo' | 'done';
+
+/** 「已完成」的计数占位：没有数据源时显示它，不显示任何数字。 */
+const UNAVAILABLE_COUNT = '—';
 
 function workObjectsQueryKey(authGeneration: number) {
   return ['work-objects', authGeneration] as const;
@@ -126,7 +136,20 @@ function formatTimestamp(value: string): string {
   }).format(timestamp);
 }
 
-function isTodayWorkObject(item: OAWorkObjectView, now: Date): boolean {
+function endOfDay(now: Date, dayOffset: number): Date {
+  const boundary = new Date(now);
+  boundary.setDate(boundary.getDate() + dayOffset);
+  boundary.setHours(23, 59, 59, 999);
+  return boundary;
+}
+
+/**
+ * 紧急 = 已逾期（`due_at < now`）或今明两天到期或等你确认（`handling_mark`）。
+ *
+ * 画板上还有一条「派发时标了紧急」，**本页不实现**：后端 `OAWorkObjectView` 没有该字段，它由后续的
+ * 任务派发模块提供。不拿别的字段凑，界面上也不出现这四个字，免得让人以为它已经生效。
+ */
+function isUrgentWorkObject(item: OAWorkObjectView, now: Date): boolean {
   if (item.handling_mark === 'pending_sync_confirmation') {
     return true;
   }
@@ -137,9 +160,7 @@ function isTodayWorkObject(item: OAWorkObjectView, now: Date): boolean {
   if (Number.isNaN(dueAt.getTime())) {
     return false;
   }
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
-  return dueAt <= endOfToday;
+  return dueAt <= endOfDay(now, 1);
 }
 
 function dueTimestamp(value: string | null): number {
@@ -150,28 +171,90 @@ function dueTimestamp(value: string | null): number {
   return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
-function dueStatus(value: string | null): {
+interface DueBadge {
   className: string | undefined;
   icon: IconName;
   label: string;
-} {
+}
+
+/**
+ * 行内截止状态徽标：颜色 + 图标 + 文字三者齐备，不允许只靠颜色区分（2026-08-27 §五）。
+ * 没到期、没给截止时间、时间格式异常都不出徽标——那一行本来就不紧急，多一个灰徽标只是噪声。
+ */
+function dueBadge(value: string | null, now: Date): DueBadge | null {
   if (value === null) {
-    return { className: styles.neutralStatus, icon: 'clock', label: '未提供截止时间' };
+    return null;
   }
   const dueAt = new Date(value);
   if (Number.isNaN(dueAt.getTime())) {
-    return { className: styles.neutralStatus, icon: 'clock', label: '截止时间格式异常' };
+    return null;
   }
-  const now = new Date();
-  const endOfToday = new Date(now);
-  endOfToday.setHours(23, 59, 59, 999);
   if (dueAt < now) {
     return { className: styles.errorStatus, icon: 'alert', label: '已逾期' };
   }
-  if (dueAt <= endOfToday) {
-    return { className: styles.warningStatus, icon: 'alert', label: '今日截止' };
+  if (dueAt <= endOfDay(now, 1)) {
+    return { className: styles.warningStatus, icon: 'clock', label: '今明到期' };
   }
-  return { className: styles.neutralStatus, icon: 'clock', label: '尚未到期' };
+  return null;
+}
+
+/** 截止时间按日历距离压成一格能放下的短句，避免整行被完整时间戳撑开。 */
+function formatDueAt(value: string | null, now: Date): string {
+  if (value === null) {
+    return 'OA 未提供';
+  }
+  const dueAt = new Date(value);
+  if (Number.isNaN(dueAt.getTime())) {
+    return value;
+  }
+  const clock = new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(dueAt);
+  for (const [offset, prefix] of [
+    [-1, '昨天'],
+    [0, '今天'],
+    [1, '明天'],
+  ] as const) {
+    if (dueAt <= endOfDay(now, offset) && dueAt > endOfDay(now, offset - 1)) {
+      return `${prefix} ${clock}`;
+    }
+  }
+  return `${new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+  }).format(dueAt)} ${clock}`;
+}
+
+/** 顶部的数据截至写全日期但不写秒：秒对判断新鲜度没用，只是把这一行撑长。 */
+function formatFreshness(value: string): string {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+  // `dateStyle` 不能和 `hour` / `minute` 同时给，Intl 会直接抛错，所以这里逐项写。
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(timestamp);
+}
+
+/** 行内的数据截至只保留时分：同一批快照的日期都一样，写全反而把副行挤到换行。 */
+function formatFreshnessClock(value: string): string {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(timestamp);
 }
 
 function errorText(error: unknown): string {
@@ -194,9 +277,40 @@ function handlingMarkTag(mark: OAWorkObjectView['handling_mark']) {
   return <Tag><Icon name="minus" size={16} /> 未标记</Tag>;
 }
 
+function dueBadgeOf(item: OAWorkObjectView) {
+  const badge = dueBadge(item.due_at, new Date());
+  if (badge === null) {
+    return null;
+  }
+  return (
+    <span className={badge.className}>
+      <Icon name={badge.icon} size={16} /> {badge.label}
+    </span>
+  );
+}
+
+/** 行内处理痕迹徽标：只在有痕迹时出现，措辞按画板写成用户视角的一句话。 */
+function markBadge(mark: OAWorkObjectView['handling_mark']) {
+  if (mark === 'pending_sync_confirmation') {
+    return (
+      <span className={styles.pendingStatus}>
+        <Icon name="clock" size={16} /> 等你确认
+      </span>
+    );
+  }
+  if (mark === 'handled_elsewhere') {
+    return (
+      <span className={styles.neutralStatus}>
+        <Icon name="check" size={16} /> 已在别处处理
+      </span>
+    );
+  }
+  return null;
+}
+
 export default function WorkObjectsPage() {
   const [selectedWorkObjectId, setSelectedWorkObjectId] = useState<string>();
-  const [view, setView] = useState<'today' | 'all'>('today');
+  const [view, setView] = useState<WorkObjectView>('urgent');
   const autoSyncGeneration = useRef<number>();
   const queryClient = useQueryClient();
   const authGeneration = useAuthStore((state) => state.generation);
@@ -374,13 +488,21 @@ export default function WorkObjectsPage() {
     return newest;
   }, undefined);
 
-  const visibleItems = useMemo(
-    () =>
-      view === 'today'
-        ? oaItems.filter((item) => isTodayWorkObject(item, new Date()))
-        : oaItems,
-    [oaItems, view],
-  );
+  const { todoItems, urgentItems } = useMemo(() => {
+    const now = new Date();
+    const urgent: OAWorkObjectView[] = [];
+    const todo: OAWorkObjectView[] = [];
+    for (const item of oaItems) {
+      (isUrgentWorkObject(item, now) ? urgent : todo).push(item);
+    }
+    return { todoItems: todo, urgentItems: urgent };
+  }, [oaItems]);
+
+  /*
+   * 「已完成」永远给空数组：后端没有办结数据源，任何非空列表都会是编出来的。空态里写明缺口。
+   */
+  const visibleItems =
+    view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : [];
   const contextWorkObject =
     selectedWorkObjectId !== undefined &&
     detailQuery.data?.state_authority === 'external_snapshot'
@@ -437,25 +559,34 @@ export default function WorkObjectsPage() {
   const columns = useMemo<ColumnsType<OAWorkObjectView>>(
     () => [
       {
-        title: '标题',
+        title: '事项',
         dataIndex: 'source_title',
         key: 'source_title',
-        width: '42%',
+        width: '48%',
         render: (value: string, item) => (
           <div className={styles.workItemTitle}>
-            <Text strong>{value}</Text>
-            <div className={styles.sourceLine}>
-              <span>OA</span>
-              <span>{item.source_ref}</span>
-              <span>当前步骤：{item.source_status}</span>
-              <span>数据截至：{formatTimestamp(item.source_fetched_at)}</span>
+            <div className={styles.titleLine}>
+              <Text className={styles.titleText} strong>
+                {value}
+              </Text>
+              {dueBadgeOf(item)}
+              {markBadge(item.handling_mark)}
             </div>
-            {item.handling_mark === null ? null : handlingMarkTag(item.handling_mark)}
+            {/*
+              来源系统 · 来源编号 · 当前步骤 · 数据截至：四段常驻可见，不折叠、不靠 hover
+              （2026-08-27 §五）。
+            */}
+            <div className={styles.sourceLine}>
+              <span>OA 办公系统</span>
+              <span>{item.source_ref}</span>
+              <span>当前步骤 {item.source_status}</span>
+              <span>数据截至 {formatFreshnessClock(item.source_fetched_at)}</span>
+            </div>
           </div>
         ),
       },
       {
-        title: '责任人或责任部门',
+        title: '责任人 / 部门',
         dataIndex: 'assignee_display_name',
         key: 'assignee_display_name',
         width: '18%',
@@ -472,24 +603,26 @@ export default function WorkObjectsPage() {
         title: '截止时间',
         dataIndex: 'due_at',
         key: 'due_at',
-        width: '20%',
+        width: '16%',
         sorter: (left, right) => dueTimestamp(left.due_at) - dueTimestamp(right.due_at),
         render: (value: string | null) => {
-          const status = dueStatus(value);
+          const now = new Date();
+          const dueAt = value === null ? null : new Date(value);
+          const pressing =
+            dueAt !== null &&
+            !Number.isNaN(dueAt.getTime()) &&
+            dueAt <= endOfDay(now, 0);
           return (
-            <div className={styles.dueCell}>
-              <span className={status.className}>
-                <Icon name={status.icon} size={16} /> {status.label}
-              </span>
-              <span>{value ? formatTimestamp(value) : 'OA 未提供'}</span>
-            </div>
+            <span className={pressing ? styles.duePressing : undefined}>
+              {formatDueAt(value, now)}
+            </span>
           );
         },
       },
       {
         title: '下一动作',
         key: 'handling_action',
-        width: '20%',
+        width: '18%',
         render: (_, item) => (
           <Button
             className={styles.actionButton}
@@ -504,6 +637,31 @@ export default function WorkObjectsPage() {
     [assigneeFilters],
   );
 
+  /*
+   * 空态按 `Empty.dc.html` 的语言：先说清「为什么是空的」，再给一条能立刻做的下一步。
+   * 「已完成」是后端缺口，空态必须把缺口本身说出来，不能写成「你没有已完成的事项」。
+   */
+  const [emptyReason, emptyNextStep] =
+    view === 'done'
+      ? [
+          '办结数据还没有接进来。',
+          '下一步：办结记录接进来后，这里会自动出现。',
+        ]
+      : oaItems.length === 0
+        ? [
+            '还没有取得可显示的 OA 事项。',
+            '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
+          ]
+        : view === 'urgent'
+          ? [
+              '现在没有要紧的事。',
+              `下一步：到「待办」里还有 ${todoItems.length} 件。`,
+            ]
+          : [
+              '「待办」里现在没有事项。',
+              `下一步：到「紧急」里还有 ${urgentItems.length} 件。`,
+            ];
+
   const syncError = syncMutation.error;
   const requiresReauthentication =
     syncError instanceof ApiError && syncError.code === 'oa_reauthentication_required';
@@ -517,36 +675,12 @@ export default function WorkObjectsPage() {
       orientation="vertical"
       size="large"
     >
-      <Card className={styles.hero} styles={{ body: { padding: 28 } }}>
-        <Flex align="center" justify="space-between" gap={24} wrap>
-          <div>
-            <Title level={1} className={styles.heroTitle}>
-              工作事项
-            </Title>
-            <Paragraph className={styles.heroCopy}>
-              每一行都写明责任人、截止时间和下一步。
-            </Paragraph>
-          </div>
-          <Space orientation="vertical" align="end" className={styles.heroStatus}>
-            <Text>
-              <Icon name="list" size={16} /> <span>当前显示 {visibleItems.length} 项</span>
-            </Text>
-            <Text>
-              <Icon name="clock" size={16} /> 最新数据截至：
-              {newestFetchedAt ? formatTimestamp(newestFetchedAt) : '尚未取得 OA 数据'}
-            </Text>
-            <Button
-              type="primary"
-              loading={syncMutation.isPending}
-              onClick={() => syncMutation.mutate(authGeneration)}
-            >
-              刷新 OA 事项
-            </Button>
-          </Space>
-        </Flex>
-      </Card>
-
-      <OACredentialBindingCard />
+      {/*
+        画板上没有独立的大标题块，也没有页面内的凭证卡：所在页由左导航高亮表明，OA 凭证状态与
+        「重新绑定」入口都在顶栏系统状态面板与 `/admin/bindings`。这里只保留一个不占版面的
+        标题，供读屏软件定位本页。
+      */}
+      <h1 className={styles.pageTitle}>工作事项</h1>
 
       {listQuery.error ? (
         <Alert
@@ -599,39 +733,65 @@ export default function WorkObjectsPage() {
 
       <section className={styles.listSection} aria-labelledby="work-view-label">
         <div className={styles.viewBar}>
-          <div>
-            <span className={styles.viewLabel} id="work-view-label">查看范围</span>
-            <p className={styles.viewHint}>“今日”包括今天截止、已经逾期和等待你确认的事项。</p>
-          </div>
+          <span className={styles.viewLabel} id="work-view-label">
+            事项分类
+          </span>
           <Radio.Group
             aria-labelledby="work-view-label"
+            className={styles.segmented}
             buttonStyle="solid"
             optionType="button"
             value={view}
-            onChange={(event) => setView(event.target.value as 'today' | 'all')}
+            onChange={(event) => setView(event.target.value as WorkObjectView)}
           >
-            <Radio.Button value="today">今日</Radio.Button>
-            <Radio.Button value="all">全部</Radio.Button>
+            <Radio.Button value="urgent">
+              紧急<span className={styles.segmentCount} data-testid="work-count-urgent">
+                {urgentItems.length}
+              </span>
+            </Radio.Button>
+            <Radio.Button value="todo">
+              待办<span className={styles.segmentCount} data-testid="work-count-todo">
+                {todoItems.length}
+              </span>
+            </Radio.Button>
+            <Radio.Button value="done">
+              已完成<span className={styles.segmentCount} data-testid="work-count-done">
+                {UNAVAILABLE_COUNT}
+              </span>
+            </Radio.Button>
           </Radio.Group>
+          <p className={styles.stamp}>
+            数据截至{' '}
+            {newestFetchedAt ? formatFreshness(newestFetchedAt) : '尚未取得 OA 数据'}
+          </p>
+          <Button
+            className={styles.refreshButton}
+            loading={syncMutation.isPending}
+            onClick={() => syncMutation.mutate(authGeneration)}
+          >
+            刷新 OA 事项
+          </Button>
         </div>
-      <QueryTable<OAWorkObjectView>
-        rowKey="work_object_id"
-        columns={columns}
-        dataSource={visibleItems}
-        emptyReason={
-          view === 'today'
-            ? '今日为空，因为没有今天截止、已经逾期或等待确认的事项。'
-            : '全部为空，因为目前还没有取得可显示的 OA 事项。'
-        }
-        emptyNextStep={
-          view === 'today'
-            ? '下一步：可切换到“全部”查看以后要办的事项，或刷新 OA 事项。'
-            : '下一步：先检查 OA 账号绑定状态，再选择“刷新 OA 事项”。'
-        }
-        loading={listQuery.isLoading}
-        queryResetKey={view}
-        tableLayout="fixed"
-      />
+        <p className={styles.rule}>
+          紧急 = 已逾期、今明两天到期，或等你确认。一件事只会出现在一个分类里。
+        </p>
+        <QueryTable<OAWorkObjectView>
+          rowKey="work_object_id"
+          columns={columns}
+          dataSource={visibleItems}
+          emptyReason={emptyReason}
+          emptyNextStep={emptyNextStep}
+          loading={listQuery.isLoading}
+          queryResetKey={view}
+          tableLayout="fixed"
+        />
+        {/*
+          汇总句照画板，但去掉「加起来就是你的全部事项」——「已完成」还没有数据源，那句话会变成
+          一个查不出来的承诺。
+        */}
+        <p className={styles.after}>
+          紧急 {urgentItems.length} 件、待办 {todoItems.length} 件，互不重叠。「已完成」还没有接进来。
+        </p>
       </section>
 
       <Drawer

@@ -23,7 +23,7 @@ import type { UIComponentTargetSystem } from '../generated/runtime/runtime.schem
 import { useAIDockStore } from '../stores/aiDockStore';
 import styles from './ChatPage.module.css';
 
-const { Paragraph, Text, Title } = Typography;
+const { Text } = Typography;
 
 const presentationLabels: Record<PresentationKind, string> = {
   completed: '办理完成',
@@ -253,23 +253,20 @@ export default function ChatPage() {
             items={[{ key: 'current', label: '本次对话' }]}
           />
         )}
+        {/*
+          两段话说的是同一件事，合成一句：既留住「历史存不起来」这条真限制，又不再堆说明。
+        */}
         <p className={styles.railText}>
-          以前问过的还存不起来。刷新页面或者关掉浏览器，上面这一条就没有了。
-        </p>
-        <p className={styles.railText}>
-          能把问过的存下来要等以后的版本。现在要留档的事，请到「工作事项」里办，那里的记录是存住的。
+          以前问过的还存不起来，刷新就没了。要留档请到「工作事项」里办。
         </p>
       </aside>
 
       <div className={styles.main}>
-        <header className={styles.pageHeader}>
-          <Title level={1} className={styles.title}>
-            把要办的事说清楚
-          </Title>
-          <Paragraph className={styles.subtitle}>
-            写清对象、时间和想要的结果。
-          </Paragraph>
-        </header>
+        {/*
+          2026-09-03：删掉「把要办的事说清楚 / 写清对象、时间和想要的结果」这一组说明；所在页由
+          左导航高亮表明，标题只留给读屏软件定位，不占版面。
+        */}
+        <h1 className={styles.pageTitle}>AI 助手</h1>
 
         <section className={styles.conversation} aria-label="办理会话">
           <div
@@ -283,7 +280,7 @@ export default function ChatPage() {
                   className={styles.welcome}
                   variant="borderless"
                   title="这里现在是空的，因为你还没有问过。"
-                  description="我能查 OA 待办和 OA 系统消息，说人话就行。不会办的事我会直接说不会，不瞎编。"
+                  description="我能帮你查 OA 里的待办和系统消息，说人话就行。"
                 />
                 <Prompts
                   className={styles.prompts}

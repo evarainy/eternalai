@@ -72,13 +72,13 @@ describe('application authentication boundary', () => {
       await screen.findByRole('heading', { name: '欢迎回来' }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { name: '把要办的事说清楚' }),
+      screen.queryByRole('heading', { level: 1, name: 'AI 助手' }),
     ).not.toBeInTheDocument();
 
     act(() => useAuthStore.getState().markAuthenticated());
 
     expect(
-      await screen.findByRole('heading', { name: '把要办的事说清楚' }),
+      await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
     ).toBeInTheDocument();
     expect(window.location.pathname).toBe('/chat');
   });
@@ -185,7 +185,7 @@ describe('application authentication boundary', () => {
     render(<App />);
 
     expect(
-      await screen.findByRole('heading', { name: '把要办的事说清楚' }),
+      await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
     ).toBeInTheDocument();
     expect(window.location.pathname).toBe('/chat');
     expect(screen.queryByRole('link', { name: /EternalAI/ })).not.toBeInTheDocument();

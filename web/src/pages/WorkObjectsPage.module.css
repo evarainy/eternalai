@@ -8,46 +8,22 @@
 }
 
 /*
- * 玻璃硬约束：本页只有 `.listSection`（内容面板）声明 `backdrop-filter`。`.hero` 直接坐落在底图上，
- * 按「小元件不自带模糊」处理成低不透明度白 + 边缘高光的扁平玻璃卡，不再用深绿实底填充。
+ * 2026-09-03 按画板 `Main.dc.html` 重排：页面顶部不再有 hero 卡与页面内凭证卡，整页只剩
+ * `.listSection` 一块内容面板，因此本页也只有它一处声明 `backdrop-filter`（模糊层预算见
+ * `app/__tests__/blurBudget.test.tsx`）。
+ *
+ * 标题不占版面但保留给读屏软件：所在页由左导航高亮表明，视觉上再放一个大标题只会把事项挤下去。
  */
-.hero {
+.pageTitle {
+  position: absolute;
   overflow: hidden;
-  color: var(--workbench-text);
-  background: rgb(255 255 255 / 52%);
-  border: 1px solid var(--workbench-edge);
-  border-radius: var(--workbench-radius-panel);
-  box-shadow: var(--workbench-lift), var(--workbench-sheen);
-}
-
-.heroStatus :global(.ant-typography) {
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 650;
-}
-
-/*
- * 页面标题收到 26px：一屏只有一个重点，层级靠字重与留白拉开，不靠把标题放大。正文 19px
- * （`--workbench-font-body`）不动——2026-08-27 的可读性硬约束给的是下限，不是「什么都放大」。
- */
-.heroTitle {
-  margin: 0 0 8px !important;
-  color: var(--workbench-text) !important;
-  font-size: 26px !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.01em;
-}
-
-.heroCopy {
-  max-width: 40em;
-  margin: 0 !important;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
-}
-
-.heroStatus {
-  min-width: 280px;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .listSection {
@@ -62,31 +38,125 @@
 
 .viewBar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 18px 20px;
-  background: rgb(22 29 46 / 3.5%);
-  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+  gap: 12px 20px;
+  padding: 14px 20px 12px;
 }
 
+/* 分类是分段控件本身，标签只留给读屏软件，视觉上不再多一行说明。 */
 .viewLabel {
-  display: block;
-  font-weight: 750;
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.viewHint {
-  margin: 4px 0 0;
+/* 三分类分段控件：胶囊底槽 + 选中项白玻璃，点击目标高度保持 44px 下限。 */
+.segmented {
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgb(22 29 46 / 5%);
+  box-shadow: inset 0 1px 3px rgb(16 26 58 / 10%);
+}
+
+.segmented :global(.ant-radio-button-wrapper) {
+  display: inline-flex;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+  padding: 0 22px;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: transparent;
+  color: var(--workbench-text-secondary);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: var(--workbench-target-size);
+}
+
+.segmented :global(.ant-radio-button-wrapper)::before {
+  display: none;
+}
+
+.segmented :global(.ant-radio-button-wrapper-checked) {
+  background: rgb(255 255 255 / 78%) !important;
+  color: var(--workbench-primary) !important;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 1px rgb(255 255 255 / 70%), 0 5px 14px -7px rgb(16 26 58 / 30%);
+}
+
+.segmentCount {
+  margin-left: 8px;
   color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-auxiliary);
+  font-weight: 400;
 }
 
-.workItemTitle,
-.dueCell {
+.segmented :global(.ant-radio-button-wrapper-checked) .segmentCount {
+  color: var(--workbench-primary);
+  font-weight: 600;
+}
+
+/*
+ * 「数据截至」是硬要求，必须常驻可见（2026-08-19 裁定）。同步周期不写：前端拿不到后台轮询间隔的
+ * 真实配置值，写一个「每 10 分钟」就是编数据。
+ */
+.stamp {
+  margin: 0 0 0 auto;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+  text-align: right;
+}
+
+.refreshButton {
+  min-height: var(--workbench-target-size);
+}
+
+.rule {
+  margin: 0;
+  padding: 0 20px 12px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.after {
+  margin: 0;
+  padding: 14px 20px;
+  background: rgb(22 29 46 / 3.5%);
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.workItemTitle {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
+.titleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.titleText {
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+/*
+ * 来源系统 · 来源编号 · 当前步骤 · 数据截至：常驻可见的灰色副行，不折叠也不靠 hover。
+ * 画板给的是 14px，这里按落盘的辅助字号下限提到 16px——下限只许上调不许下调。
+ */
 .sourceLine {
   display: flex;
   flex-wrap: wrap;
@@ -103,12 +173,17 @@
 
 .errorStatus,
 .warningStatus,
+.pendingStatus,
 .neutralStatus {
+  display: inline-flex;
   width: fit-content;
-  padding: 2px 7px;
-  border-radius: 4px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .errorStatus {
@@ -123,10 +198,21 @@
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%);
 }
 
+.pendingStatus {
+  color: var(--workbench-primary);
+  background: rgb(109 156 255 / 24%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%);
+}
+
 .neutralStatus {
   color: var(--workbench-text-secondary);
   background: rgb(22 29 46 / 7%);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%);
+}
+
+.duePressing {
+  color: var(--workbench-error);
+  font-weight: 700;
 }
 
 .actionButton {
@@ -144,6 +230,12 @@
   color: var(--workbench-primary);
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
+}
+
+/* 行高压到能在 1280x800 首屏放下 3~4 条：靠收紧单元格上下内边距，不动字号与点击目标下限。 */
+.listSection :global(.ant-table-cell) {
+  padding-top: 12px !important;
+  padding-bottom: 12px !important;
 }
 
 .page[data-density='compact'] :global(.ant-table-cell) {
