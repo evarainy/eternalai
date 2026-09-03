@@ -2,12 +2,12 @@
  * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」的四条硬约束在本文件里的落点：
  *
  * 1. 模糊层预算：本文件只有 `.sidebar`、`.topbar`、`.floatingEntry` 三处声明 `backdrop-filter`。
- *    顶栏弹层 `.panel` 承载正文，改用近乎不透明的底且**不加模糊**——既守住「正文区不做半透明」，
+ *    顶栏弹层 `.popover` 承载正文，改用近乎不透明的底且**不加模糊**——既守住「正文区不做半透明」，
  *    也把单屏层数留给内容面板与浮动窗。`web/src/app/__tests__/blurBudget.test.tsx` 在真实渲染结果
  *    上数这些层。
  * 2. 小元件：`.navLink` / `.signalButton` / `.avatarButton` / `.badge*` 一律不带模糊，只用低不透明
  *    度白 + 边缘高光。
- * 3. 正文区：`.panel` 用 `--workbench-panel-fill`（86% 白），不靠玻璃承载正文。
+ * 3. 正文区：`.popover` 用 `--workbench-panel-fill`（86% 白），不靠玻璃承载正文。
  * 4. 颜色：按钮、图标、导航选中态都不填固定色，颜色由底图透出；固有色只留给语义（红/琥珀/绿）与
  *    状态圆点。
  */
@@ -206,6 +206,7 @@
 }
 
 .stage {
+  position: relative;
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -227,32 +228,59 @@
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
+/*
+ * 顶栏搜索。画板 `Main.dc.html` 的 `.search` 是 392×46 的凹槽：更深的内阴影 + 更亮的边 + 更深的提示
+ * 文字，左边一个搜索图标，**没有右侧的独立搜索按钮**。原实现用 antd 的 `Input.Search`，`enterButton`
+ * 按 antd 的 table 布局挤在右侧且与输入框不等高——雨爷 2026-09-04 说的「显示不明显、搜索按钮位置没
+ * 对齐」就是这两处。这里改回画板形态：左侧图标本身是提交按钮，44×44、垂直居中。
+ */
 .topbarSearch {
   width: var(--topbar-search-width);
-  flex: none;
+  min-width: var(--topbar-search-min-width);
+  flex: 0 1 auto;
   margin-right: auto;
 }
 
-/* 搜索框做成明显的凹槽，提示文字用与正文同级的对比度，不靠 placeholder 代替标签。 */
-.topbarSearch :global(.ant-input-affix-wrapper),
-.topbarSearch :global(.ant-input-group-wrapper) :global(.ant-input) {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-}
-
-.topbarSearch :global(.ant-input-wrapper) {
-  padding: 0 4px 0 12px;
+.searchField {
+  display: flex;
+  height: 46px;
+  align-items: center;
+  padding: 0 14px 0 1px;
+  gap: 4px;
   background-image: var(--workbench-well-fill);
   border-radius: 16px;
   box-shadow: var(--workbench-well-edge);
 }
 
-.topbarSearch :global(.ant-btn) {
-  background-image: var(--workbench-chip-fill-strong);
+.searchSubmit {
+  display: grid;
+  width: var(--workbench-target-size);
+  height: var(--workbench-target-size);
+  flex: none;
+  padding: 0;
+  color: var(--workbench-text-secondary);
+  background: none;
   border: 0;
-  box-shadow: var(--workbench-chip-edge-strong);
+  border-radius: 14px;
+  cursor: pointer;
+  place-items: center;
+}
+
+.searchInput,
+.searchInput :global(.ant-input) {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   color: var(--workbench-text);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
 }
 
 .identity {
@@ -384,36 +412,251 @@
 }
 
 /*
- * 顶栏弹层。承载正文，因此垫 86% 白且**不加模糊**——正文一律不靠玻璃承载，模糊层预算也留给内容
- * 面板与浮动窗。
+ * ---------- 顶栏弹出层 ----------
+ *
+ * 画板 `TopPops.dc.html` / `Notify.dc.html` 的 `.pop`：绝对定位、圆角 26px、锚在顶栏正下方、右对齐到
+ * 各自的触发按钮，宽度分别是用户菜单 268px、系统状态 384px、通知 412px。它们**浮在正文之上**，不进
+ * `.stage` 的纵向流，因此不会把主内容往下推。
+ *
+ * 画板的 `.pop` 是带 32px 模糊的玻璃。这里**不加模糊**（模糊层预算留给内容面板与浮动窗），因此也不能
+ * 照用 86% 白：实测在没有模糊的情况下，身后正文会透上来读成一团重影（1280×800 实拍可见「刷新 OA
+ * 事项」压在菜单行上）。改垫实心白——边缘高光与投影仍在，层次靠它们，不靠透明度。
  */
-.panel {
-  display: grid;
-  flex: none;
-  gap: 12px;
-  padding: 20px 24px;
-  background: var(--workbench-panel-fill);
+.popover {
+  position: absolute;
+  z-index: 8;
+  top: 78px;
+  display: flex;
+  max-height: calc(100vh - 110px);
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #fff;
   border: 1px solid var(--workbench-edge);
-  border-radius: var(--workbench-radius-panel);
+  border-radius: 26px;
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
-.panelTitle {
+/* 右偏移逐个从顶栏元素宽度算出来，弹层因此始终落在自己的触发按钮下方。 */
+.popover[data-panel='user'] {
+  right: 6px;
+  width: 268px;
+}
+
+.popover[data-panel='notifications'] {
+  right: calc(6px + var(--topbar-avatar-width) + var(--topbar-gap));
+  width: 412px;
+}
+
+.popover[data-panel='system-status'] {
+  right: calc(
+    6px + var(--topbar-avatar-width) + var(--topbar-gap) +
+      var(--topbar-notifications-width) + var(--topbar-gap)
+  );
+  width: 384px;
+}
+
+.popover[data-panel='style'] {
+  right: calc(
+    6px + var(--topbar-avatar-width) + var(--topbar-gap) +
+      var(--topbar-notifications-width) + var(--topbar-gap) +
+      var(--topbar-system-status-width) + var(--topbar-gap)
+  );
+  width: 320px;
+}
+
+.popHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 18px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.popTitle {
   margin: 0;
   font-size: 19px;
   font-weight: 600;
   line-height: 1.35;
 }
 
-.panel p {
-  max-width: 40em;
+.popIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 12px;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
+}
+
+.popIcon[data-tone='attention'] {
+  color: var(--workbench-error);
+}
+
+.popIcon[data-tone='unknown'],
+.popIcon[data-tone='retrying'] {
+  color: var(--workbench-warning);
+}
+
+.popIcon[data-tone='normal'] {
+  color: var(--workbench-success);
+}
+
+.popNote {
+  flex: none;
+  margin: 0;
+  padding: 10px 18px;
+  color: var(--workbench-text-caption);
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.6;
+}
+
+.popBody {
+  display: grid;
+  flex: none;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.popEmpty {
   margin: 0;
   line-height: var(--workbench-line-height);
 }
 
-.panelHint {
+.popHint {
+  margin: 0;
   color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+/* 画板 `.pill`：14px、圆角胶囊，用作状态标。颜色是允许的语义固有色。 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: var(--workbench-font-caption);
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.pill[data-tone='ok'] {
+  color: var(--workbench-success);
+  background: rgb(112 214 166 / 30%);
+}
+
+.pill[data-tone='alert'] {
+  color: var(--workbench-error);
+  background: rgb(255 158 152 / 34%);
+}
+
+.pill[data-tone='muted'] {
+  color: var(--workbench-text-caption);
+  background: rgb(22 29 46 / 7%);
+}
+
+.popHead .pill {
+  margin-left: auto;
+}
+
+/* ---------- 系统状态行（画板 `.nrow`） ---------- */
+.statusRow {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 18px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.statusRow:last-child {
+  box-shadow: none;
+}
+
+/*
+ * 状态靠颜色区分（画板 `.dot`），文字同时把状态说清楚——颜色不是唯一的区分手段。原实现用
+ * `？ × — ! √` 这类字符符号，2026-09-04 雨爷判为不符合定稿，已整体去掉。
+ */
+.statusDot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  margin-top: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 50%);
+}
+
+.statusRow[data-status-kind='normal'] .statusDot {
+  background: #2fc14e;
+}
+
+.statusRow[data-status-kind='attention'] .statusDot {
+  background: #e0342c;
+}
+
+.statusRow[data-status-kind='retrying'] .statusDot,
+.statusRow[data-status-kind='unknown'] .statusDot {
+  background: #f0840a;
+}
+
+.statusRow[data-status-kind='loading'] .statusDot,
+.statusRow[data-status-kind='unbound'] .statusDot,
+.statusRow[data-status-kind='unchecked'] .statusDot {
+  background: #98a1b5;
+}
+
+.statusBody {
+  min-width: 0;
+  flex: 1;
+}
+
+.statusName {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.statusText {
+  margin: 6px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: 1.6;
+}
+
+.statusActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.statusAction {
+  display: inline-flex;
+  height: var(--workbench-target-size);
+  align-items: center;
+  padding: 0 18px;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  border-radius: 999px;
+  box-shadow: var(--workbench-chip-edge-strong);
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.statusTechnical {
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
 }
 
 .backgroundChoices {
@@ -465,125 +708,124 @@
   background-image: linear-gradient(150deg, #70d6ba, #7ec4ff);
 }
 
-.statusRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  background: rgb(255 255 255 / 62%);
-  border: 1px solid var(--workbench-edge);
-  border-radius: var(--workbench-radius-card);
-  box-shadow: var(--workbench-sheen);
-}
-
-.statusRow[data-status-kind='attention'] {
-  box-shadow: var(--workbench-sheen), inset 0 0 0 2px rgb(168 35 28 / 34%);
-}
-
-.statusRow[data-status-kind='unknown'] {
-  box-shadow: var(--workbench-sheen), inset 0 0 0 2px rgb(140 74 0 / 34%);
-}
-
-/* 加载中：不给语义色，避免「还在读」被读成「有问题」或「正常」。 */
-.statusRow[data-status-kind='loading'] {
-  box-shadow: var(--workbench-sheen), inset 0 0 0 2px rgb(22 29 46 / 14%);
-}
-
-.statusMarker {
-  display: grid;
-  width: 28px;
-  flex: none;
-  place-items: center;
-}
-
-.statusRow[data-status-kind='attention'] .statusMarker {
-  color: var(--workbench-error);
-}
-
-.statusRow[data-status-kind='unknown'] .statusMarker {
-  color: var(--workbench-warning);
-}
-
-.statusRow[data-status-kind='normal'] .statusMarker {
-  color: var(--workbench-success);
-}
-
-.statusRow[data-status-kind='loading'] .statusMarker {
-  color: var(--workbench-text-secondary);
-}
-
-.statusBody {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 4px;
-}
-
-.panelAction,
 .panelInlineLink {
-  display: inline-flex;
-  min-height: var(--workbench-target-size);
-  align-items: center;
-  padding: 0 16px;
   color: var(--workbench-primary);
-  border-radius: 999px;
   font-weight: 650;
-}
-
-.panelAction {
-  background-image: var(--workbench-chip-fill);
-  box-shadow: var(--workbench-chip-edge);
-  text-decoration: none;
-}
-
-.panelInlineLink {
-  min-height: 0;
   padding: 0 4px;
 }
 
-.userMenuIdentity {
-  display: grid;
-  gap: 4px;
-  padding-bottom: 12px;
+/* ---------- 用户菜单（画板 268px 弹层） ---------- */
+.userHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 13px;
+  padding: 18px 18px 16px;
   box-shadow: inset 0 -1px 0 var(--workbench-hair);
 }
 
-.userMenuList {
+.userAvatar {
   display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 50%;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
 }
 
-.userMenuItem {
+.userWho {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+/* 姓名与「部门 · 职务」都没有数据源，这一格放的是 fail-closed 文案，字号按辅助档而不是姓名档。 */
+.userName {
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.userMeta {
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.35;
+}
+
+.menuGroup,
+.menuFoot {
+  display: grid;
+  flex: none;
+  gap: 2px;
+  padding: 8px;
+}
+
+.menuFoot {
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
+}
+
+/* 画板 `.mrow`：48px 高、17px、圆角 15px。 */
+.menuRow {
   display: flex;
   min-height: 48px;
   width: 100%;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   color: var(--workbench-text);
   background: none;
   border: 0;
-  border-radius: var(--workbench-radius-control);
+  border-radius: 15px;
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.35;
   text-align: left;
   text-decoration: none;
+  white-space: nowrap;
 }
 
-.userMenuItem:hover {
+.menuRow[data-tone='alert'] {
+  color: var(--workbench-error);
+}
+
+.menuRow[data-inert='true'] {
+  color: var(--workbench-text-secondary);
+  cursor: default;
+}
+
+.menuRow:not([data-inert='true']):hover {
   background-image: var(--workbench-chip-fill);
   box-shadow: var(--workbench-chip-edge);
 }
 
-.userMenuSeparated {
-  margin-top: 8px;
-  padding-top: 12px;
-  box-shadow: inset 0 1px 0 var(--workbench-hair);
+.menuIcon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  color: inherit;
+  background-image: var(--workbench-chip-fill);
+  border-radius: 10px;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
+}
+
+.menuNote {
+  margin-left: auto;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.menuRow .pill {
+  margin-left: auto;
 }
 
 .content {

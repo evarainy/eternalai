@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
 import {
@@ -29,6 +31,17 @@ import {
 } from '../shellLayout';
 import { workbenchTheme } from '../theme';
 import { usePageContextRegistration } from '../usePageContextRegistration';
+
+/*
+ * 样式表原文；用来核对画板给的尺寸真的写进了 CSS，而不是只写在注释里。`new URL()` 在这一屏里解析出的
+ * 是 jsdom 的 URL 实例，`fileURLToPath` 不认，所以先取 `.href` 交给它自己解析。
+ */
+function readSource(relativePath: string): string {
+  return readFileSync(
+    fileURLToPath(new URL(relativePath, import.meta.url).href),
+    'utf-8',
+  );
+}
 
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
@@ -462,27 +475,32 @@ describe('AppShell topbar', () => {
 
     const sidebar = screen.getByRole('complementary', { name: '主导航' });
     expect(
-      within(sidebar).queryByRole('button', { name: '退出登录（本地）' }),
+      within(sidebar).queryByRole('button', { name: /退出登录/ }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: '退出登录（本地）' }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /退出登录/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('topbar-avatar'));
 
     const menu = screen.getByRole('region', { name: '用户菜单' });
-    expect(
-      within(menu).getByRole('button', { name: '退出登录（本地）' }),
-    ).toBeInTheDocument();
-    expect(within(menu).getByRole('link', { name: '账号绑定' })).toHaveAttribute(
+    /*
+     * 画板 `TopPops.dc.html` 的用户菜单五行照抄，「退出登录」不再带「（本地）」后缀——那个后缀是我们
+     * 自己加的。它说明的那件事（只退工作台、不退 OA）改由行右侧的短注承担，仍然如实。
+     */
+    const logout = within(menu).getByRole('button', { name: /退出登录/ });
+    expect(logout).toBeInTheDocument();
+    expect(logout).toHaveTextContent('只退工作台');
+    expect(within(menu).getByRole('link', { name: /账号绑定/ })).toHaveAttribute(
       'href',
       '/admin/bindings',
     );
+    expect(
+      within(menu).getAllByText((_, node) => node?.textContent === '换个界面风格').length,
+    ).toBeGreaterThan(0);
     expect(within(menu).getByText(/怎么用 \/ 找人帮忙/)).toBeInTheDocument();
     expect(menu.textContent).not.toContain('8012');
     expect(menu.textContent).not.toContain('内线');
 
-    fireEvent.click(within(menu).getByRole('button', { name: '退出登录（本地）' }));
+    fireEvent.click(logout);
 
     expect(useAuthStore.getState().status).toBe('unauthenticated');
   });
@@ -534,12 +552,18 @@ describe('AppShell topbar', () => {
 
     fireEvent.click(statusButton);
 
+    expect(screen.getByText('OA 办公系统')).toBeInTheDocument();
     expect(
-      screen.getByText('OA 系统：密码已失效，后台同步已停止'),
+      screen.getByText(
+        '你在 OA 的密码已经失效，现在取不到新数据。重新绑定大概 10 秒。',
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '重新绑定' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '重新绑定 OA 账号' })).toHaveAttribute(
       'href',
       '/admin/bindings',
+    );
+    expect(screen.getByTestId('system-status-summary')).toHaveTextContent(
+      '1 个不正常',
     );
     expect(apiMocks.getBinding).toHaveBeenCalledWith('oa');
   });
@@ -562,10 +586,8 @@ describe('AppShell topbar', () => {
       '…',
     );
     fireEvent.click(loadingButton);
-    expect(screen.getByText('OA 系统：正在读取')).toBeInTheDocument();
-    expect(
-      screen.queryByText('OA 系统：正常'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('正在读取。读到了这里会自己变。')).toBeInTheDocument();
+    expect(screen.queryByText('正常。')).not.toBeInTheDocument();
 
     await act(async () => {
       resolveBinding(binding());
@@ -574,7 +596,7 @@ describe('AppShell topbar', () => {
     expect(
       await screen.findByRole('button', { name: '系统状态，暂无需要处理的项' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('OA 系统：正常')).toBeInTheDocument();
+    expect(screen.getByText('正常。')).toBeInTheDocument();
   });
 
   it('says the system status is unknown instead of pretending it is normal', async () => {
@@ -590,10 +612,12 @@ describe('AppShell topbar', () => {
 
     fireEvent.click(statusButton);
 
-    expect(screen.getByText('OA 系统：读不到，暂时不知道')).toBeInTheDocument();
     expect(
-      screen.getByText('下一步：刷新本页；还是取不到就找管理员，别当成正常。'),
+      screen.getByText(
+        '读不到，暂时不知道。刷新本页；还是取不到就找管理员，别当成正常。',
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByTestId('system-status-summary')).toHaveTextContent('读不到');
   });
 
   it('shows no attention count while OA credentials are healthy', async () => {
@@ -623,5 +647,154 @@ describe('AppShell topbar', () => {
       'href',
       '/work-objects',
     );
+  });
+});
+
+/*
+ * 2026-09-04 雨爷实机走查：「右上角用户头像点击后不是一个弹出层变成了一个很宽的占用主页面的层，这个
+ * 也不符合我们的设计稿，这句话我说了很多次了」「系统状态图标要通过颜色区分，你就照搬我们设计稿」。
+ *
+ * 下面这组断言把画板 `TopPops.dc.html` 的两条尺寸（用户菜单 268px、系统状态 384px）与「浮在正文之上
+ * 而不是挤开正文」的定位方式钉在渲染结果与样式表上：谁把 `.popover` 改回流内块、或把宽度改宽，这里
+ * 就会变红。
+ */
+describe('AppShell topbar popovers follow the finalized canvas', () => {
+  beforeEach(resetStores);
+
+  function popoverRule(panel: string): string {
+    const css = readSource('../AppShell.module.css');
+    const block = new RegExp(
+      `\\.popover\\[data-panel='${panel}'\\]\\s*\\{([^}]*)\\}`,
+    ).exec(css);
+    if (block === null) {
+      throw new Error(`No .popover[data-panel='${panel}'] rule in AppShell.module.css`);
+    }
+    return block[1] ?? '';
+  }
+
+  it('floats every topbar panel above the content instead of pushing it down', () => {
+    const css = readSource('../AppShell.module.css');
+    const popover = /\.popover\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+
+    expect(popover).toContain('position: absolute');
+    expect(popover).not.toContain('position: static');
+    expect(/\.stage\s*\{[^}]*position: relative/.test(css)).toBe(true);
+  });
+
+  it('gives the user menu the 268px width the canvas draws', () => {
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
+    const popover = screen.getByTestId('topbar-popover');
+    expect(popover).toHaveAttribute('data-panel', 'user');
+    expect(popoverRule('user')).toContain('width: 268px');
+    // 弹层打开时主内容仍在，且弹层不是主内容的祖先——它是覆盖层，不是新的页面区块。
+    expect(screen.getByText('事项页面')).toBeInTheDocument();
+    expect(popover.contains(screen.getByTestId('app-main'))).toBe(false);
+  });
+
+  it('lists the five canvas rows and reads the OA binding state instead of assuming it', async () => {
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    const rowLabels = ['账号绑定', '换个界面风格', '个人设置', '怎么用 / 找人帮忙', '退出登录'];
+    for (const label of rowLabels) {
+      expect(within(menu).getByText(label)).toBeInTheDocument();
+    }
+    expect(await within(menu).findByText('OA 已绑')).toBeInTheDocument();
+    // 姓名 / 部门 / 职务没有数据源：如实说明，不得出现任何像姓名的占位值。
+    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_STATEMENT)).toBeInTheDocument();
+    expect(menu.textContent).not.toMatch(/王|张三|李四|主任科员/);
+  });
+
+  it('says the OA binding could not be read rather than showing it as bound', async () => {
+    apiMocks.getBinding.mockRejectedValue(new Error('unreachable'));
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(await within(menu).findByText('读不到')).toBeInTheDocument();
+    expect(within(menu).queryByText('OA 已绑')).not.toBeInTheDocument();
+  });
+
+  it('gives the system status panel the 384px width and colour-coded rows, not glyphs', async () => {
+    apiMocks.getBinding.mockResolvedValue(binding({ poll_status: 'invalid' }));
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole('button', { name: '系统状态，1 项需要处理' }),
+    );
+
+    const panel = screen.getByRole('region', { name: '系统状态' });
+    expect(panel).toHaveAttribute('data-panel', 'system-status');
+    expect(popoverRule('system-status')).toContain('width: 384px');
+
+    /*
+     * 状态靠颜色区分：每一行带一个 `data-status-kind`，样式表按该值给圆点上色。原实现用的
+     * `？ × — ! √` 这类字符符号必须一个都不剩。
+     */
+    const kinds = Array.from(
+      panel.querySelectorAll('[data-status-kind]'),
+      (row) => row.getAttribute('data-status-kind'),
+    );
+    expect(kinds).toEqual(['attention', 'unchecked', 'unchecked']);
+    expect(panel.textContent ?? '').not.toMatch(/[？×—!√✓✗⚠]/u);
+
+    const css = readSource('../AppShell.module.css');
+    for (const kind of ['normal', 'attention', 'unchecked']) {
+      expect(css).toContain(`.statusRow[data-status-kind='${kind}'] .statusDot`);
+    }
+  });
+
+  /*
+   * 「AI 助手」「工作台自己的数据」两行画板上有，但工作台没有任何健康检查来源。行位照画板保留，状态
+   * 一律标成「还没有接上检查」——既不编「正常」，也不编一个不存在的检查周期。
+   */
+  it('never claims the assistant or the workbench itself is healthy', async () => {
+    renderShell();
+    fireEvent.click(
+      await screen.findByRole('button', { name: '系统状态，暂无需要处理的项' }),
+    );
+
+    const panel = screen.getByRole('region', { name: '系统状态' });
+    for (const name of ['AI 助手', '工作台自己的数据']) {
+      const row = within(panel).getByText(name).closest('[data-status-kind]');
+      expect(row).not.toBeNull();
+      expect(row).toHaveAttribute('data-status-kind', 'unchecked');
+      expect(row).toHaveTextContent('还没有接上检查，这里不代表正常。');
+    }
+    expect(panel.textContent).not.toContain('每 2 分钟');
+    expect(panel.textContent).not.toMatch(/每 \d+ 分钟自动检查/);
+  });
+
+  it('closes an open panel with Escape so it cannot sit on top of the content', () => {
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    expect(screen.getByTestId('topbar-popover')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByTestId('topbar-popover')).not.toBeInTheDocument();
+  });
+
+  /*
+   * 「页面最上方搜索框显示不明显且搜索按钮位置没对齐」。画板 `Main.dc.html` 的搜索是一个 46px 高的
+   * 凹槽，左边一个图标、右边一行提示文字，没有独立按钮。这里钉死：提交入口就是那个左侧图标按钮，
+   * 与输入框在同一个 flex 行里垂直居中；凹槽自己带画板那组内阴影。
+   */
+  it('rebuilds the search box as the 46px well the canvas draws', () => {
+    renderShell('/admin/tasks');
+
+    const submit = screen.getByRole('button', { name: '搜索' });
+    const field = submit.parentElement;
+    expect(field?.tagName).toBe('FORM');
+    expect(field).toContainElement(screen.getByLabelText('搜索工作事项'));
+
+    const css = readSource('../AppShell.module.css');
+    const rule = /\.searchField\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toContain('height: 46px');
+    expect(rule).toContain('align-items: center');
+    expect(rule).toContain('var(--workbench-well-edge)');
+    expect(css).not.toContain('ant-input-group-addon');
   });
 });
