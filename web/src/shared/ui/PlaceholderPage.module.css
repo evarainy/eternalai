@@ -1,81 +1,84 @@
 /*
- * 未开发页面的统一外观。`.page` 就是这三个落地页的**内容面板**：按玻璃硬约束垫 86% 白（正文不靠
- * 玻璃承载），并且是本页唯一一处 `backdrop-filter`。里面的 `.section` 是坐落在已模糊表面之上的小
- * 卡片，只用低不透明度白 + 边缘高光，不再叠模糊。
+ * 未开发页面的统一外观，形态照 `_scratch/design/glass/Empty.dc.html`：一块**居中的紧凑玻璃卡**，
+ * 不撑满整屏，避免整页只有说明文字造成的大面积空洞。
+ *
+ * 玻璃硬约束：`.page` 是本页的内容面板，按「正文区不做半透明」垫 86% 白，并且是本页唯一一处
+ * `backdrop-filter`；里面的图标底座与动作按钮一律不叠模糊，只用低不透明度白 + 边缘高光。
+ *
+ * 字号：正文仍是 19px（`--workbench-font-body`），只把标题层级往下收——层级靠字重与留白拉开，
+ * 不靠把标题放大。
  */
 .page {
   display: grid;
-  align-content: start;
-  gap: 20px;
-  padding: 28px 32px 32px;
+  max-width: 620px;
+  margin: 24px auto;
+  justify-items: center;
+  padding: 44px 40px 40px;
   background: var(--workbench-panel-fill);
   backdrop-filter: blur(20px) saturate(150%);
   border: 1px solid var(--workbench-edge);
   border-radius: var(--workbench-radius-panel);
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
+  text-align: center;
+}
+
+.mark {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 24px;
+  box-shadow: var(--workbench-chip-edge);
 }
 
 .title {
-  margin: 0;
-  font-size: 28px;
+  margin: 20px 0 0;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1.35;
 }
 
-.section {
-  display: grid;
-  max-width: 56em;
-  gap: 10px;
-  padding: 20px 22px;
-  background: rgb(255 255 255 / 62%);
-  border: 1px solid var(--workbench-edge);
-  border-radius: var(--workbench-radius-card);
-  box-shadow: var(--workbench-sheen);
+.reason {
+  max-width: 34em;
+  margin: 12px 0 0;
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
 }
 
-.sectionTitle {
+.nextStep {
+  max-width: 34em;
+  margin: 8px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+.actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+/* 动作按钮＝玻璃芯片：不填固定色，颜色由底图透出；点击目标不小于 44×44。 */
+.action {
+  display: inline-flex;
+  min-height: 52px;
   align-items: center;
-  gap: 10px;
-  margin: 0;
-  font-size: 21px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.sectionIcon {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  flex: none;
-  place-items: center;
-  background-image: var(--workbench-chip-fill);
-  border-radius: 10px;
-  box-shadow: var(--workbench-chip-edge);
-  font-size: 17px;
-}
-
-.text {
-  max-width: 40em;
-  margin: 0;
+  padding: 0 26px;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  border-radius: 999px;
+  box-shadow: var(--workbench-chip-edge-strong);
   font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
+  font-weight: 700;
+  text-decoration: none;
 }
 
-.list {
-  display: grid;
-  max-width: 40em;
-  gap: 10px;
-  margin: 0;
-  padding-left: 22px;
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
-}
-
-.list a {
-  display: inline-block;
-  min-height: var(--workbench-target-size);
-  padding: 8px 4px;
+.nextStep a {
   color: var(--workbench-primary);
   font-weight: 650;
 }

@@ -31,6 +31,8 @@ import type {
   WorkObjectListResponse,
   WorkObjectListResponseItemsItem,
 } from '../generated/work-objects/work-objects.schemas';
+import { Icon } from '../shared/ui/Icon';
+import type { IconName } from '../shared/ui/Icon';
 import { QueryTable } from '../shared/ui/QueryTable';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
@@ -148,24 +150,28 @@ function dueTimestamp(value: string | null): number {
   return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
 }
 
-function dueStatus(value: string | null) {
+function dueStatus(value: string | null): {
+  className: string | undefined;
+  icon: IconName;
+  label: string;
+} {
   if (value === null) {
-    return { className: styles.neutralStatus, icon: '○', label: '未提供截止时间' };
+    return { className: styles.neutralStatus, icon: 'clock', label: '未提供截止时间' };
   }
   const dueAt = new Date(value);
   if (Number.isNaN(dueAt.getTime())) {
-    return { className: styles.neutralStatus, icon: '○', label: '截止时间格式异常' };
+    return { className: styles.neutralStatus, icon: 'clock', label: '截止时间格式异常' };
   }
   const now = new Date();
   const endOfToday = new Date(now);
   endOfToday.setHours(23, 59, 59, 999);
   if (dueAt < now) {
-    return { className: styles.errorStatus, icon: '!', label: '已逾期' };
+    return { className: styles.errorStatus, icon: 'alert', label: '已逾期' };
   }
   if (dueAt <= endOfToday) {
-    return { className: styles.warningStatus, icon: '!', label: '今日截止' };
+    return { className: styles.warningStatus, icon: 'alert', label: '今日截止' };
   }
-  return { className: styles.neutralStatus, icon: '○', label: '尚未到期' };
+  return { className: styles.neutralStatus, icon: 'clock', label: '尚未到期' };
 }
 
 function errorText(error: unknown): string {
@@ -180,12 +186,12 @@ function errorText(error: unknown): string {
 
 function handlingMarkTag(mark: OAWorkObjectView['handling_mark']) {
   if (mark === 'pending_sync_confirmation') {
-    return <Tag color="gold"><span aria-hidden="true">!</span> {handlingMarkLabels[mark]}</Tag>;
+    return <Tag color="gold"><Icon name="clock" size={16} /> {handlingMarkLabels[mark]}</Tag>;
   }
   if (mark === 'handled_elsewhere') {
-    return <Tag color="green"><span aria-hidden="true">✓</span> {handlingMarkLabels[mark]}</Tag>;
+    return <Tag color="green"><Icon name="check" size={16} /> {handlingMarkLabels[mark]}</Tag>;
   }
-  return <Tag><span aria-hidden="true">○</span> 未标记</Tag>;
+  return <Tag><Icon name="minus" size={16} /> 未标记</Tag>;
 }
 
 export default function WorkObjectsPage() {
@@ -439,7 +445,7 @@ export default function WorkObjectsPage() {
           <div className={styles.workItemTitle}>
             <Text strong>{value}</Text>
             <div className={styles.sourceLine}>
-              <span><span aria-hidden="true">▣</span> OA</span>
+              <span>OA</span>
               <span>{item.source_ref}</span>
               <span>当前步骤：{item.source_status}</span>
               <span>数据截至：{formatTimestamp(item.source_fetched_at)}</span>
@@ -473,7 +479,7 @@ export default function WorkObjectsPage() {
           return (
             <div className={styles.dueCell}>
               <span className={status.className}>
-                <span aria-hidden="true">{status.icon}</span> {status.label}
+                <Icon name={status.icon} size={16} /> {status.label}
               </span>
               <span>{value ? formatTimestamp(value) : 'OA 未提供'}</span>
             </div>
@@ -514,21 +520,19 @@ export default function WorkObjectsPage() {
       <Card className={styles.hero} styles={{ body: { padding: 28 } }}>
         <Flex align="center" justify="space-between" gap={24} wrap>
           <div>
-            <Text className={styles.heroEyebrow}>今天先做什么，一眼就能看清</Text>
             <Title level={1} className={styles.heroTitle}>
               工作事项
             </Title>
             <Paragraph className={styles.heroCopy}>
-              这里显示已保存的 OA 事项。每一行都告诉你责任人、截止时间和下一步。
+              每一行都写明责任人、截止时间和下一步。
             </Paragraph>
           </div>
           <Space orientation="vertical" align="end" className={styles.heroStatus}>
             <Text>
-              <span aria-hidden="true">●</span>{' '}
-              <span>当前显示 {visibleItems.length} 项</span>
+              <Icon name="list" size={16} /> <span>当前显示 {visibleItems.length} 项</span>
             </Text>
             <Text>
-              <span aria-hidden="true">◷</span> 最新数据截至：
+              <Icon name="clock" size={16} /> 最新数据截至：
               {newestFetchedAt ? formatTimestamp(newestFetchedAt) : '尚未取得 OA 数据'}
             </Text>
             <Button
@@ -589,7 +593,7 @@ export default function WorkObjectsPage() {
           showIcon
           type="warning"
           title={`事项超过首版展示上限 ${listQuery.data.limit} 条`}
-          description="当前只取得一个有界批次；下方分页只整理已取得的事项，不代表 OA 中的全部事项。"
+          description="分页只整理已取得的部分，不代表 OA 里的全部事项。"
         />
       ) : null}
 
@@ -657,7 +661,7 @@ export default function WorkObjectsPage() {
             showIcon
             type="info"
             title="内部事项暂未在此页面展示"
-            description="当前页面只展示字段完整的 OA 事项；内部事项将在后续交办功能中提供业务展示。"
+            description="内部事项以后在交办功能里看。"
           />
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>

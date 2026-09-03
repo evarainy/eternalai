@@ -267,7 +267,7 @@ export default function ChatPage() {
             把要办的事说清楚
           </Title>
           <Paragraph className={styles.subtitle}>
-            写清对象、时间和想得到的结果。系统会告诉你已经完成、还需补什么，或为什么暂时不能办理。
+            写清对象、时间和想要的结果。
           </Paragraph>
         </header>
 

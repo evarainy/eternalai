@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import type { WorkObjectListResponse } from '../../generated/work-objects/work-objects.schemas';
 import ChatPage from '../../pages/ChatPage';
+import LoginPage from '../../pages/LoginPage';
 import WorkObjectsPage from '../../pages/WorkObjectsPage';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
@@ -103,6 +104,34 @@ function renderScreen(initialPath: string) {
       </AntApp>
     </ConfigProvider>,
   );
+}
+
+/**
+ * 登录页是**外壳之外的独立一屏**：它挂在 `ProtectedRoute` 之外、不经过 `AppShell`，模糊层预算必须
+ * 单独按这一屏计算。
+ */
+function renderLoginScreen(): HTMLElement {
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
+  const { container } = render(
+    <ConfigProvider>
+      <AntApp>
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/login']}>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </AntApp>
+    </ConfigProvider>,
+  );
+  const screenRoot = container.firstElementChild;
+  if (!(screenRoot instanceof HTMLElement)) {
+    throw new Error('LoginPage root element is missing.');
+  }
+  return screenRoot;
 }
 
 function shellElement(): HTMLElement {
@@ -265,6 +294,13 @@ describe('per-screen blur-layer budget', () => {
     const after = describeBlurLayers(shellElement());
     expect(after).toEqual(before);
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
+  it('keeps the login screen on its single glass card', () => {
+    const layers = describeBlurLayers(renderLoginScreen());
+
+    expect(layers).toEqual(['pages/LoginPage.module.css .card']);
+    expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
   it('does not count the closed floating panel that is still in the tree', async () => {

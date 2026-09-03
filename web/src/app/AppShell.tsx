@@ -9,6 +9,8 @@ import { useAIDockStore } from '../stores/aiDockStore';
 import { useAppearanceStore } from '../stores/appearanceStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
+import { Icon } from '../shared/ui/Icon';
+import type { IconName } from '../shared/ui/Icon';
 import { AIDock } from './AIDock';
 import {
   IDENTITY_UNAVAILABLE_NEXT_STEP,
@@ -33,24 +35,27 @@ const BINDINGS_PATH = '/admin/bindings';
 const WORK_OBJECTS_PATH = '/work-objects';
 
 interface PrimaryNavigationItem {
-  icon: string;
+  icon: IconName;
   label: string;
   to: string;
 }
 
-/** 2026-09-02 裁决：一级导航五项平铺，顺序与路径固定。 */
+/**
+ * 2026-09-02 裁决：一级导航五项平铺，顺序与路径固定。图标取定稿画板符号表（`shared/ui/Icon`），
+ * 与画板左导航逐项对应，不再用字符符号。
+ */
 const PRIMARY_NAVIGATION: readonly PrimaryNavigationItem[] = [
-  { icon: '✦', label: 'AI 助手', to: AI_ASSISTANT_PATH },
-  { icon: '▤', label: '工作事项', to: WORK_OBJECTS_PATH },
-  { icon: '✎', label: '任务交办', to: '/work-dispatch' },
-  { icon: '▦', label: '软件中心', to: '/apps' },
-  { icon: '✉', label: '消息', to: '/messages' },
+  { icon: 'chat', label: 'AI 助手', to: AI_ASSISTANT_PATH },
+  { icon: 'list', label: '工作事项', to: WORK_OBJECTS_PATH },
+  { icon: 'send', label: '任务交办', to: '/work-dispatch' },
+  { icon: 'grid', label: '软件中心', to: '/apps' },
+  { icon: 'mail', label: '消息', to: '/messages' },
 ];
 
 const ADMIN_NAVIGATION: readonly PrimaryNavigationItem[] = [
-  { icon: '◆', label: '功能管理', to: '/admin/registry' },
-  { icon: '▣', label: '任务证据', to: '/admin/tasks' },
-  { icon: '●', label: '账号绑定', to: BINDINGS_PATH },
+  { icon: 'tool', label: '功能管理', to: '/admin/registry' },
+  { icon: 'file', label: '任务证据', to: '/admin/tasks' },
+  { icon: 'card', label: '账号绑定', to: BINDINGS_PATH },
 ];
 
 type TopbarPanel = 'style' | 'system-status' | 'notifications' | 'user';
@@ -97,8 +102,8 @@ type SystemStatusKind =
 type SystemStatusFetch = 'loading' | 'ready' | 'error';
 
 interface SystemStatusRow {
+  icon: IconName;
   kind: SystemStatusKind;
-  marker: string;
   name: string;
   statusText: string;
   nextStep: string;
@@ -115,26 +120,26 @@ function oaSystemStatusRow(
 ): SystemStatusRow {
   if (fetchState === 'loading') {
     return {
+      icon: 'clock',
       kind: 'loading',
-      marker: '…',
       name: 'OA 系统',
       statusText: '正在读取',
-      nextStep: '下一步：等一下，读到了这里会自己变。现在还不知道是不是正常。',
+      nextStep: '下一步：稍等，读到了这里会自己变。',
     };
   }
   if (fetchState === 'error' || binding === undefined) {
     return {
+      icon: 'help',
       kind: 'unknown',
-      marker: '？',
       name: 'OA 系统',
       statusText: '读不到，暂时不知道',
-      nextStep: '下一步：刷新本页；仍然取不到时请联系管理员。在弄清楚之前，不要当成正常。',
+      nextStep: '下一步：刷新本页；还是取不到就找管理员，别当成正常。',
     };
   }
   if (binding.poll_status === 'invalid') {
     return {
+      icon: 'alert',
       kind: 'attention',
-      marker: '×',
       name: 'OA 系统',
       statusText: '密码已失效，后台同步已停止',
       nextStep: '下一步：去「账号绑定」重新绑定 OA 密码。',
@@ -142,8 +147,8 @@ function oaSystemStatusRow(
   }
   if (binding.poll_status === 'captcha_required') {
     return {
+      icon: 'alert',
       kind: 'attention',
-      marker: '×',
       name: 'OA 系统',
       statusText: 'OA 要求输入验证码，后台同步已停止',
       nextStep: '下一步：去「账号绑定」重新绑定 OA 密码。',
@@ -151,8 +156,8 @@ function oaSystemStatusRow(
   }
   if (!binding.bound) {
     return {
+      icon: 'minus',
       kind: 'unbound',
-      marker: '—',
       name: 'OA 系统',
       statusText: '尚未绑定',
       nextStep: '下一步：去「账号绑定」绑定 OA 密码后才能后台同步。',
@@ -160,16 +165,16 @@ function oaSystemStatusRow(
   }
   if (binding.poll_status === 'retrying') {
     return {
+      icon: 'alert',
       kind: 'retrying',
-      marker: '!',
       name: 'OA 系统',
       statusText: '正在重试（不是密码问题）',
       nextStep: '下一步：先照常办事；持续不恢复时请联系管理员。',
     };
   }
   return {
+    icon: 'check',
     kind: 'normal',
-    marker: '√',
     name: 'OA 系统',
     statusText: '正常',
     nextStep: '下一步：不需要处理。',
@@ -205,14 +210,14 @@ function NavigationLink({
   to,
 }: {
   collapsed: boolean;
-  icon: string;
+  icon: IconName;
   label: string;
   to: string;
 }) {
   return (
     <NavLink aria-label={label} className={styles.navLink} title={label} to={to}>
-      <span aria-hidden="true" className={styles.navIcon}>
-        {icon}
+      <span className={styles.navIcon}>
+        <Icon name={icon} size={17} strokeWidth={1.9} />
       </span>
       {collapsed ? null : <span className={styles.navText}>{label}</span>}
     </NavLink>
@@ -290,8 +295,8 @@ export function AppShell() {
         data-collapsed={collapsed ? 'true' : 'false'}
       >
         <div className={styles.brand} data-testid="app-brand">
-          <span aria-hidden="true" className={styles.brandMark}>
-            ⚡
+          <span className={styles.brandMark}>
+            <Icon name="bolt" size={21} strokeWidth={1.9} />
           </span>
           {collapsed ? null : (
             <span className={styles.brandText}>
@@ -319,8 +324,8 @@ export function AppShell() {
               className={styles.adminSummary}
               title="管理页面"
             >
-              <span aria-hidden="true" className={styles.navIcon}>
-                ⚙
+              <span className={styles.navIcon}>
+                <Icon name="sliders" size={17} strokeWidth={1.9} />
               </span>
               {collapsed ? null : <span className={styles.navText}>管理页面</span>}
             </summary>
@@ -345,8 +350,8 @@ export function AppShell() {
             title={collapsed ? '展开导航' : '收起导航'}
             type="button"
           >
-            <span aria-hidden="true" className={styles.navIcon}>
-              {collapsed ? '»' : '«'}
+            <span className={styles.navIcon} data-direction={collapsed ? 'expand' : 'collapse'}>
+              <Icon name="expandnav" size={17} strokeWidth={1.9} />
             </span>
             {collapsed ? null : (
               <span className={styles.navText}>{collapsed ? '展开导航' : '收起导航'}</span>
@@ -371,7 +376,6 @@ export function AppShell() {
             data-testid="topbar-identity"
           >
             <span className={styles.identityLine}>{IDENTITY_UNAVAILABLE_STATEMENT}</span>
-            <span className={styles.identityLine}>{IDENTITY_UNAVAILABLE_NEXT_STEP}</span>
           </div>
 
           <button
@@ -382,9 +386,7 @@ export function AppShell() {
             onClick={() => togglePanel('style')}
             type="button"
           >
-            <span aria-hidden="true" className={styles.signalIcon}>
-              ◐
-            </span>
+            <Icon className={styles.signalIcon} name="droplet" size={18} />
             <span className={styles.signalText}>风格</span>
           </button>
 
@@ -396,9 +398,7 @@ export function AppShell() {
             onClick={() => togglePanel('system-status')}
             type="button"
           >
-            <span aria-hidden="true" className={styles.signalIcon}>
-              ◉
-            </span>
+            <Icon className={styles.signalIcon} name={statusRow.icon} size={18} />
             <span className={styles.signalText}>系统状态</span>
             {statusLoading ? (
               <span className={styles.badgeUnknown} data-testid="system-status-count">
@@ -423,9 +423,7 @@ export function AppShell() {
             onClick={() => togglePanel('notifications')}
             type="button"
           >
-            <span aria-hidden="true" className={styles.signalIcon}>
-              ⚑
-            </span>
+            <Icon className={styles.signalIcon} name="bell" size={18} />
             <span className={styles.signalText}>通知</span>
           </button>
 
@@ -438,14 +436,14 @@ export function AppShell() {
             onClick={() => togglePanel('user')}
             type="button"
           >
-            <span aria-hidden="true">☻</span>
+            <Icon name="user" size={24} />
           </button>
         </header>
 
         {openPanel === 'style' ? (
           <section aria-label="界面风格" className={styles.panel} role="region">
             <h2 className={styles.panelTitle}>界面风格</h2>
-            <p>选一张底图。字号、按钮大小和文字都不会跟着变，只换背景颜色。</p>
+            <p>选一张底图。字号和按钮大小都不会跟着变。</p>
             <div className={styles.backgroundChoices}>
               {BACKGROUND_PRESETS.map((preset) => (
                 <button
@@ -464,9 +462,7 @@ export function AppShell() {
                 </button>
               ))}
             </div>
-            <p className={styles.panelHint}>
-              选好就生效，下次打开还是这一张。
-            </p>
+            <p className={styles.panelHint}>选好就生效，下次打开还是这一张。</p>
           </section>
         ) : null}
 
@@ -480,14 +476,11 @@ export function AppShell() {
               <span className={styles.identityLine}>
                 {IDENTITY_UNAVAILABLE_NEXT_STEP}
               </span>
-              <p className={styles.panelHint}>
-                也取不到你的照片，所以这里只放一个通用图形，不是别人的头像。
-              </p>
             </div>
             <ul className={styles.userMenuList}>
               <li>
                 <Link className={styles.userMenuItem} to={BINDINGS_PATH}>
-                  <span aria-hidden="true">●</span>
+                  <Icon name="card" size={20} />
                   <span>账号绑定</span>
                 </Link>
               </li>
@@ -497,15 +490,13 @@ export function AppShell() {
                   onClick={() => setOpenPanel('style')}
                   type="button"
                 >
-                  <span aria-hidden="true">◐</span>
+                  <Icon name="droplet" size={20} />
                   <span>换个界面风格</span>
                 </button>
               </li>
               <li className={styles.userMenuItem}>
-                <span aria-hidden="true">?</span>
-                <span>
-                  怎么用 / 找人帮忙：这一项还没有内容。现在遇到问题，请直接找本单位的系统管理员。
-                </span>
+                <Icon name="help" size={20} />
+                <span>怎么用 / 找人帮忙：遇到问题请找本单位的系统管理员。</span>
               </li>
               <li className={styles.userMenuSeparated}>
                 <button
@@ -513,13 +504,13 @@ export function AppShell() {
                   onClick={() => markUnauthenticated()}
                   type="button"
                 >
-                  <span aria-hidden="true">⏻</span>
+                  <Icon name="external" size={20} />
                   <span>退出登录（本地）</span>
                 </button>
               </li>
             </ul>
             <p className={styles.panelHint}>
-              「退出登录（本地）」只清掉这台电脑上的登录状态，不会退出 OA。
+              退出登录只清这台电脑上的登录状态，不会退出 OA。
             </p>
           </section>
         ) : null}
@@ -528,8 +519,8 @@ export function AppShell() {
           <section aria-label="系统状态" className={styles.panel} role="region">
             <h2 className={styles.panelTitle}>系统状态</h2>
             <div className={styles.statusRow} data-status-kind={statusRow.kind}>
-              <span aria-hidden="true" className={styles.statusMarker}>
-                {statusRow.marker}
+              <span className={styles.statusMarker}>
+                <Icon name={statusRow.icon} size={22} strokeWidth={1.9} />
               </span>
               <div className={styles.statusBody}>
                 <strong>
@@ -542,7 +533,7 @@ export function AppShell() {
               </Link>
             </div>
             <p className={styles.panelHint}>
-              这里现在只能显示 OA 一项。其余项目的判定来源还没有定下来，所以不显示；不显示不等于它们正常。
+              只能显示 OA 一项；其余系统还没有判定来源，不显示不等于正常。
             </p>
           </section>
         ) : null}
@@ -552,11 +543,10 @@ export function AppShell() {
             <h2 className={styles.panelTitle}>通知</h2>
             <p>这里现在是空的。</p>
             <p className={styles.panelHint}>
-              为什么是空的：消息功能还没有开发，系统还不会给你发提醒。通知和上面的系统状态是两回事，
-              两边的数字各算各的，不会合并成一个。
+              消息功能还没有开发，系统还不会给你发提醒。
             </p>
             <p className={styles.panelHint}>
-              现在怎么办：要办的事请看
+              要办的事请看
               <Link className={styles.panelInlineLink} to={WORK_OBJECTS_PATH}>
                 工作事项
               </Link>
@@ -578,9 +568,7 @@ export function AppShell() {
           onClick={openDock}
           type="button"
         >
-          <span aria-hidden="true" className={styles.floatingIcon}>
-            ✦
-          </span>
+          <Icon className={styles.floatingIcon} name="spark" size={21} strokeWidth={1.9} />
           <span className={styles.floatingText}>问 AI</span>
         </button>
       )}

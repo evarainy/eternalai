@@ -11,6 +11,7 @@ import type { PageContextDeclaration } from '../contracts/pageContext';
 import { projectResponse } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
+import { Icon } from '../shared/ui/Icon';
 import { useAIDockStore } from '../stores/aiDockStore';
 import styles from './AIDock.module.css';
 
@@ -253,7 +254,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
                 title="拖动或按方向键移动"
                 type="button"
               >
-                <span aria-hidden="true">✥</span>
+                <Icon name="maximize" size={20} />
               </button>
               {position === null ? null : (
                 <Button onClick={() => setPosition(null)}>复位</Button>
@@ -267,7 +268,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
             </div>
           </div>
           <p className={styles.context} role="status">
-            <span aria-hidden="true" className={styles.stateIcon}>●</span>
+            <Icon className={styles.stateIcon} name="spark" size={18} strokeWidth={1.9} />
             <span>正在协助：{contextLabel}</span>
           </p>
           <p className={styles.hint}>
@@ -305,7 +306,7 @@ export function AIDock({ suppressed = false }: AIDockProps) {
                   key={`${entry.role}-${index}`}
                 >
                   <div className={styles.messageMeta}>
-                    <span aria-hidden="true">{entry.role === 'user' ? '●' : '◆'}</span>
+                    <Icon name={entry.role === 'user' ? 'user' : 'spark'} size={18} />
                     <strong>{entry.role === 'user' ? '你' : 'AI 回复'}</strong>
                   </div>
                   <p className={styles.messageText}>{entry.text}</p>

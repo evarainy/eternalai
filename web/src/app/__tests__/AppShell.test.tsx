@@ -261,6 +261,7 @@ describe('AppShell and singleton AI Dock', () => {
       'page',
     );
     expect(screen.queryByRole('button', { name: /^⚙$/ })).not.toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/[✦▤✎▦✉☻⊘◇➜◐◉⚑⚡⚙⏻✥«»]/u);
   });
 
   it('submits the global Work Object search without changing the AI input', () => {
@@ -421,12 +422,16 @@ describe('AppShell topbar', () => {
     expect(screen.queryByText('搜索工作事项', { selector: 'strong' })).toBeNull();
   });
 
-  it('states that the department and name cannot be read instead of blanking or faking them', () => {
+  it('states that the department and name cannot be read, on the single line the slot has', () => {
     renderShell();
 
+    /*
+     * 画板上这一格只有一行（`办公室 / 王××`）。返修把顶栏压回一行：如实说明取不到留在顶栏，下一步
+     * 移进头像点开的用户菜单（见下一条），两句合起来仍满足 2026-08-27 的「说明 + 下一步」。
+     */
     const identity = screen.getByTestId('topbar-identity');
     expect(identity).toHaveTextContent(IDENTITY_UNAVAILABLE_STATEMENT);
-    expect(identity).toHaveTextContent(IDENTITY_UNAVAILABLE_NEXT_STEP);
+    expect(identity).not.toHaveTextContent(IDENTITY_UNAVAILABLE_NEXT_STEP);
     expect(identity.textContent?.trim().length ?? 0).toBeGreaterThan(0);
     expect(identity.textContent).not.toMatch(/[A-Za-z0-9]/);
     expect(identity.textContent).not.toContain('/');
@@ -585,9 +590,7 @@ describe('AppShell topbar', () => {
 
     expect(screen.getByText('OA 系统：读不到，暂时不知道')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        '下一步：刷新本页；仍然取不到时请联系管理员。在弄清楚之前，不要当成正常。',
-      ),
+      screen.getByText('下一步：刷新本页；还是取不到就找管理员，别当成正常。'),
     ).toBeInTheDocument();
   });
 
@@ -611,7 +614,7 @@ describe('AppShell topbar', () => {
 
     expect(screen.getByText('这里现在是空的。')).toBeInTheDocument();
     expect(
-      screen.getByText(/消息功能还没有开发，系统还不会给你发提醒/),
+      screen.getByText('消息功能还没有开发，系统还不会给你发提醒。'),
     ).toBeInTheDocument();
     const panel = screen.getByRole('region', { name: '通知' });
     expect(within(panel).getByRole('link', { name: '工作事项' })).toHaveAttribute(

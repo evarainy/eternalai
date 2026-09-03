@@ -454,7 +454,7 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByText(/oa_sync_failed: OA 暂时不可用/)).toBeInTheDocument();
     expect(screen.getByText(/当前步骤：待办/)).toBeInTheDocument();
     expect(screen.getByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
-    expect(screen.getByText(/下方分页只整理已取得的事项/)).toBeInTheDocument();
+    expect(screen.getByText('分页只整理已取得的部分，不代表 OA 里的全部事项。')).toBeInTheDocument();
     expect(container.querySelector('.ant-pagination')).toBeInTheDocument();
     expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1);
   });

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import AppsPage from '../AppsPage';
@@ -24,27 +24,23 @@ function renderPage() {
 }
 
 describe('AppsPage landing', () => {
-  it('writes the three decided empty-state sections instead of "暂无数据"', () => {
+  /*
+   * 2026-08-27「空状态统一规范」的实质（为什么为空 + 下一步）在返修后由「一句原因 + 一句下一步 +
+   * 一排按钮」承担，不再是三个带标题的区块。
+   */
+  it('states why it is empty and what to do instead, in one sentence each', () => {
     renderPage();
 
     expect(
       screen.getByRole('heading', { level: 1, name: '软件中心' }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('region', { name: '这个页面现在做不了什么' }),
-    ).toHaveTextContent('软件中心还没有开发');
-    expect(screen.getByRole('region', { name: '现在怎么办' })).toBeInTheDocument();
+      screen.getByText('软件中心还没有开发，这里还看不到、也打不开任何软件。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('OA 请照原来的方式打开；要绑账号请去「账号绑定」。'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
-  });
-
-  it('names the three decided blocks plus self-registration as future work', () => {
-    renderPage();
-
-    const planned = screen.getByRole('region', { name: '以后会做什么' });
-    expect(planned).toHaveTextContent('业务系统');
-    expect(planned).toHaveTextContent('单位软件');
-    expect(planned).toHaveTextContent('我的功能');
-    expect(planned).toHaveTextContent('提交审核后才对别人可见');
   });
 
   it('does not offer a create-software button in this landing bar', () => {
@@ -54,15 +50,34 @@ describe('AppsPage landing', () => {
     expect(screen.queryByRole('link', { name: /新建/ })).not.toBeInTheDocument();
   });
 
-  it('offers a currently usable alternative path', () => {
+  it('offers a currently usable alternative path as an action, not as prose', () => {
     renderPage();
 
-    const alternatives = screen.getByRole('region', { name: '现在怎么办' });
-    expect(within(alternatives).getByRole('link', { name: '账号绑定' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '去账号绑定' })).toHaveAttribute(
       'href',
       '/admin/bindings',
     );
-    expect(alternatives).toHaveTextContent('OA 请照原来的方式打开');
+  });
+
+  /* 「一屏一个重点」：整页只有一个标题，不再是「页面标题 + 三个分段标题 + 三份清单」。 */
+  it('keeps a single heading and no sectioned explanation blocks', () => {
+    renderPage();
+
+    expect(screen.getAllByRole('heading')).toHaveLength(1);
+    expect(screen.queryByRole('heading', { level: 2 })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    expect(screen.queryByText('以后会做什么')).not.toBeInTheDocument();
+    expect(screen.queryByText('现在怎么办')).not.toBeInTheDocument();
+  });
+
+  it('draws its icon as an inline stroke SVG instead of a text glyph', () => {
+    const { container } = renderPage();
+
+    const icon = container.querySelector('svg');
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute('stroke')).toBe('currentColor');
+    expect(icon?.getAttribute('fill')).toBe('none');
+    expect(icon?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('keeps internal object names out of the user-facing copy', () => {

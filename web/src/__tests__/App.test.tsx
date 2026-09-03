@@ -57,7 +57,7 @@ describe('application authentication boundary', () => {
       render(<App />);
 
       expect(
-        await screen.findByRole('heading', { name: '登录 EternalAI' }),
+        await screen.findByRole('heading', { name: '欢迎回来' }),
       ).toBeInTheDocument();
       expect(screen.queryByText('Registry 管理')).not.toBeInTheDocument();
     },
@@ -69,7 +69,7 @@ describe('application authentication boundary', () => {
     render(<App />);
 
     expect(
-      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+      await screen.findByRole('heading', { name: '欢迎回来' }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole('heading', { name: '把要办的事说清楚' }),
@@ -117,7 +117,7 @@ describe('application authentication boundary', () => {
 
     expect(await screen.findByText('受保护目标')).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { name: '登录 EternalAI' }),
+      screen.queryByRole('heading', { name: '欢迎回来' }),
     ).not.toBeInTheDocument();
   });
 
@@ -139,7 +139,7 @@ describe('application authentication boundary', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+      await screen.findByRole('heading', { name: '欢迎回来' }),
     ).toBeInTheDocument();
 
     act(() => useAuthStore.getState().markAuthenticated());
@@ -207,11 +207,16 @@ describe('application authentication boundary', () => {
     expect(screen.queryByText('开始新工作', { selector: 'strong' })).toBeNull();
   });
 
+  /*
+   * 落地页返修后是「一句标题 + 一句原因 + 一句下一步 + 一排按钮」，不再是三个 `region` 分段，所以这里
+   * 钉的是**为什么为空这句话真的显示出来了**（2026-08-27「空状态统一规范」的实质），而不是原来的分段
+   * 结构。
+   */
   it.each([
-    ['/work-dispatch', '任务交办'],
-    ['/apps', '软件中心'],
-    ['/messages', '消息'],
-  ])('mounts the %s landing page inside the shell', async (path, heading) => {
+    ['/work-dispatch', '任务交办', '任务交办还没有开发，这里派不了活，也存不了草稿。'],
+    ['/apps', '软件中心', '软件中心还没有开发，这里还看不到、也打不开任何软件。'],
+    ['/messages', '消息', '消息功能还没有开发，这里收不到也发不出消息。'],
+  ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
     render(<App />);
@@ -219,9 +224,8 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('region', { name: '这个页面现在做不了什么' }),
-    ).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });
 });

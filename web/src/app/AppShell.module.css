@@ -143,6 +143,7 @@
   font-weight: 700;
 }
 
+/* 图标底座：只放 `shared/ui/Icon` 的内联 SVG，颜色由 `currentColor` 继承，不自带模糊、不填固定色。 */
 .navIcon {
   display: grid;
   width: 30px;
@@ -153,7 +154,11 @@
   background-image: var(--workbench-chip-fill);
   border-radius: 10px;
   box-shadow: var(--workbench-chip-edge);
-  font-size: 17px;
+}
+
+/* 「收起导航」用同一个双箭头图标水平翻转，与画板一致。 */
+.navIcon[data-direction='collapse'] svg {
+  transform: scaleX(-1);
 }
 
 .navLink[aria-current='page'] .navIcon {
@@ -309,7 +314,6 @@
 
 .signalIcon {
   flex: none;
-  font-size: 18px;
 }
 
 .signalText {
@@ -396,7 +400,7 @@
 
 .panelTitle {
   margin: 0;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 600;
   line-height: 1.35;
 }
@@ -486,10 +490,10 @@
 }
 
 .statusMarker {
+  display: grid;
   width: 28px;
   flex: none;
-  font-size: 20px;
-  text-align: center;
+  place-items: center;
 }
 
 .statusRow[data-status-kind='attention'] .statusMarker {
@@ -615,7 +619,7 @@
 }
 
 .floatingIcon {
-  font-size: 21px;
+  flex: none;
 }
 
 .floatingText {

@@ -87,7 +87,7 @@
 
 .title {
   margin: 0;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 600;
   line-height: 1.35;
 }
@@ -107,9 +107,9 @@
 }
 
 .stateIcon {
+  flex: none;
   color: var(--workbench-primary);
-  font-size: 18px;
-  line-height: 1.45;
+  vertical-align: -3px;
 }
 
 .transcript {

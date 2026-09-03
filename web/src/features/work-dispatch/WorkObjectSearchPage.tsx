@@ -12,7 +12,7 @@ import type {
 import { useAuthStore } from '../../stores/authStore';
 import styles from './WorkObjectSearchPage.module.css';
 
-const { Paragraph, Text, Title } = Typography;
+const { Paragraph, Title } = Typography;
 const EMPTY_ITEMS: WorkObjectListResponseItemsItem[] = [];
 
 function normalizedEqualityValue(value: string): string {
@@ -161,19 +161,18 @@ export default function WorkObjectSearchPage() {
         ? `查找失败：${errorText(listQuery.error)}。`
         : '没有匹配项。已在你有权查看的全部工作事项中检索。';
   const emptyNextStep = !hasSearch
-    ? '下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人，然后点击“搜索”。'
+    ? '下一步：在顶部搜索框输入标题片段、完整来源编号或完整责任人。'
     : listQuery.isPending
       ? '下一步：请稍候，检索完成后会自动显示结果。'
       : listQuery.isError
         ? '下一步：稍后重试，或先回到工作事项页检查数据状态。'
-        : '下一步：检查标题关键词，或输入完整的来源编号、责任人后重试。';
+        : '下一步：换个标题关键词，或输入完整的来源编号、责任人。';
 
   return (
     <Space className={styles.page} orientation="vertical" size="large">
       <Card className={styles.hero} styles={{ body: { padding: 28 } }}>
         <Flex align="center" justify="space-between" gap={24} wrap>
           <div>
-            <Text className={styles.eyebrow}>只查你有权查看的工作事项，不搜索消息、材料或会话</Text>
             <Title className={styles.title} level={1}>工作事项搜索</Title>
             <Paragraph className={styles.copy}>
               标题可输入其中一段；来源编号和责任人请输入完整内容。

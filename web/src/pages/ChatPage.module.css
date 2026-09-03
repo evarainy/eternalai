@@ -59,9 +59,10 @@
   padding: 0 4px;
 }
 
+/* 标题收到 26px；一屏一个重点，层级靠字重与留白拉开。正文仍是 19px。 */
 .title {
   margin: 0 !important;
-  font-size: clamp(28px, 3vw, 38px) !important;
+  font-size: 26px !important;
   font-weight: 700 !important;
   letter-spacing: -0.02em;
 }

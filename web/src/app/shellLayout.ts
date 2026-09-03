@@ -67,8 +67,12 @@ export function singleLineTextWidth(text: string): number {
  * 顶栏「部门 / 姓名」的 fail-closed 文案。
  *
  * 后端当前没有「当前用户身份」读取接口（`LoginResponse` 只有 `authenticated`），前端拿不到部门与
- * 姓名。按 2026-08-27「低数字素养用户的界面硬约束」，这里如实说明取不到并给出下一步，不显示空位、
- * 不显示登录标识、不显示假名。两行都必须在 `TOPBAR_IDENTITY_WIDTH` 内单行放下。
+ * 姓名。按 2026-08-27「低数字素养用户的界面硬约束」，这里如实说明取不到，不显示空位、不显示登录
+ * 标识、不显示假名。
+ *
+ * 顶栏这一格照画板只占**一行**，因此只放 `IDENTITY_UNAVAILABLE_STATEMENT`；下一步
+ * （`IDENTITY_UNAVAILABLE_NEXT_STEP`）放在头像点开的用户菜单里，两句合起来仍然满足「说明 + 下一步」。
+ * 两行都必须在 `TOPBAR_IDENTITY_WIDTH` 内单行放下。
  */
 export const IDENTITY_UNAVAILABLE_STATEMENT = '暂时取不到部门和姓名';
 export const IDENTITY_UNAVAILABLE_NEXT_STEP = '请刷新或重新登录';
