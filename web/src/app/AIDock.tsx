@@ -242,44 +242,65 @@ export function AIDock({ suppressed = false }: AIDockProps) {
       style={positionStyle}
     >
       <div className={styles.inner}>
+        {/*
+          画板 `FloatingAI.dc.html` 的 `.fhead`：58px 一行，左边图标 + 标题，右边一排 36px 纯图标按钮。
+          原来那一排带文字的 antd 按钮（复位 / 放大 / 关闭 AI 助手 / 新建通用会话）与两段说明一起被
+          雨爷 2026-09-04 判为「说明文字太多、界面过大」，这里按画板收成图标。功能一个不少。
+        */}
         <header className={styles.header}>
-          <div className={styles.headerLine}>
-            <h2 className={styles.title}>AI 助手</h2>
-            <div className={styles.windowControls}>
+          <span className={styles.headerIcon}>
+            <Icon name="chat" size={18} strokeWidth={1.9} />
+          </span>
+          <h2 className={styles.title}>AI 助手</h2>
+          <div className={styles.windowControls}>
+            <button
+              aria-label="新建通用会话"
+              className={styles.windowButton}
+              onClick={startNewSession}
+              title="新建通用会话"
+              type="button"
+            >
+              <Icon name="plus" size={18} strokeWidth={1.9} />
+            </button>
+            <button
+              aria-label="移动 AI 助手：可用鼠标拖动，也可先聚焦本按钮再按方向键移动"
+              className={styles.windowButton}
+              onKeyDown={handleHandleKeyDown}
+              onMouseDown={startDrag}
+              title="拖动或按方向键移动"
+              type="button"
+            >
+              <Icon name="maximize" size={18} strokeWidth={1.9} />
+            </button>
+            {position === null ? null : (
               <button
-                aria-label="移动 AI 助手：可用鼠标拖动，也可先聚焦本按钮再按方向键移动"
-                className={styles.dragHandle}
-                onKeyDown={handleHandleKeyDown}
-                onMouseDown={startDrag}
-                title="拖动或按方向键移动"
+                aria-label="复位"
+                className={styles.windowButton}
+                onClick={() => setPosition(null)}
+                title="复位"
                 type="button"
               >
-                <Icon name="maximize" size={20} />
+                <Icon name="expandnav" size={18} strokeWidth={1.9} />
               </button>
-              {position === null ? null : (
-                <Button onClick={() => setPosition(null)}>复位</Button>
-              )}
-              {mode === 'pinned' ? (
-                <Button onClick={() => setMode('drawer')}>还原大小</Button>
-              ) : (
-                <Button onClick={() => setMode('pinned')}>放大</Button>
-              )}
-              <Button onClick={closeDock}>关闭 AI 助手</Button>
-            </div>
-          </div>
-          <p className={styles.context} role="status">
-            <Icon className={styles.stateIcon} name="spark" size={18} strokeWidth={1.9} />
-            <span>正在协助：{contextLabel}</span>
-          </p>
-          {contextNotice === null ? null : (
-            <div className={styles.headerActions} role="status">
-              <span>{contextNotice}</span>
-              <Button onClick={dismissContextNotice}>知道了</Button>
-            </div>
-          )}
-          <div className={styles.headerActions}>
-            <span className={styles.hint}>当前对话只在本次打开应用期间保留。</span>
-            <Button onClick={startNewSession}>新建通用会话</Button>
+            )}
+            <button
+              aria-label={mode === 'pinned' ? '还原大小' : '放大'}
+              className={styles.windowButton}
+              onClick={() => setMode(mode === 'pinned' ? 'drawer' : 'pinned')}
+              title={mode === 'pinned' ? '还原大小' : '放大'}
+              type="button"
+            >
+              <Icon name={mode === 'pinned' ? 'minus' : 'grid'} size={18} strokeWidth={1.9} />
+            </button>
+            <button
+              aria-label="关闭 AI 助手"
+              className={styles.windowButton}
+              onClick={closeDock}
+              title="关闭 AI 助手"
+              type="button"
+            >
+              <Icon name="close" size={18} strokeWidth={1.9} />
+            </button>
           </div>
         </header>
 
@@ -288,24 +309,37 @@ export function AIDock({ suppressed = false }: AIDockProps) {
           aria-live="polite"
           className={styles.transcript}
         >
-          {transcript.length === 0 ? (
-            <div className={styles.emptyState}>
-              <strong>还没有对话，因为你尚未向 AI 提问。</strong>
-              <p>下一步：在下方写清要处理的事项，再选择“发送”。</p>
+          {/* 一行说明当前绑着哪个页面的上下文。这是真实状态，不是提示语，所以留；但只占一行 14px。 */}
+          <p className={styles.context} role="status">
+            正在协助：{contextLabel}
+          </p>
+          {contextNotice === null ? null : (
+            <div className={styles.notice} role="status">
+              <span>{contextNotice}</span>
+              <button
+                className={styles.noticeButton}
+                onClick={dismissContextNotice}
+                type="button"
+              >
+                知道了
+              </button>
             </div>
+          )}
+          {transcript.length === 0 ? (
+            <p className={styles.emptyState}>还没有对话。</p>
           ) : (
             <ol className={styles.messageList}>
               {transcript.map((entry, index) => (
                 <li
                   className={`${styles.message} ${
-                    entry.role === 'user' ? styles.userMessage : ''
+                    entry.role === 'user' ? styles.userMessage : styles.assistantMessage
                   }`}
                   key={`${entry.role}-${index}`}
                 >
-                  <div className={styles.messageMeta}>
-                    <Icon name={entry.role === 'user' ? 'user' : 'spark'} size={18} />
-                    <strong>{entry.role === 'user' ? '你' : 'AI 回复'}</strong>
-                  </div>
+                  {/* 说话人靠气泡的左右对齐区分（画板做法）；读屏软件另有这一段文字。 */}
+                  <span className={styles.speaker}>
+                    {entry.role === 'user' ? '你' : 'AI 回复'}
+                  </span>
                   <p className={styles.messageText}>{entry.text}</p>
                 </li>
               ))}
@@ -314,32 +348,28 @@ export function AIDock({ suppressed = false }: AIDockProps) {
         </div>
 
         <form className={styles.composer} onSubmit={handleSubmit}>
-          {/*
-            2026-09-03：只留下无障碍名称需要的标签，删掉「写清对象、时间和要得到的结果」这类
-            说明——低数字素养用户要的是一屏一个重点，不是更多提示语。
-          */}
-          <div className={styles.composerHeading}>
-            <label className={styles.label} htmlFor="ai-dock-request">
-              要 AI 帮什么
-            </label>
-          </div>
-          <TextArea
-            id="ai-dock-request"
-            placeholder="例如：帮我梳理这页事项中今天必须完成的工作"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <div className={styles.composerActions}>
-            <span className={styles.hint}>Enter 发送，Shift + Enter 换行</span>
-            <Button
-              disabled={draft.trim().length === 0 || mutation.isPending}
-              htmlType="submit"
-              loading={mutation.isPending}
-              type="primary"
-            >
-              发送
-            </Button>
+          <div className={styles.sender}>
+            <TextArea
+              aria-label="要 AI 帮什么"
+              autoSize={{ maxRows: 5, minRows: 1 }}
+              id="ai-dock-request"
+              placeholder="接着问……"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+            />
+            <div className={styles.senderBar}>
+              <span className={styles.hint}>可拖动 · 可收起</span>
+              <Button
+                className={styles.sendButton}
+                disabled={draft.trim().length === 0 || mutation.isPending}
+                htmlType="submit"
+                loading={mutation.isPending}
+                type="primary"
+              >
+                发送
+              </Button>
+            </div>
           </div>
         </form>
       </div>
