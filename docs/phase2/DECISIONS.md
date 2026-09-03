@@ -921,6 +921,13 @@ P2 全局搜索只搜 Work Object，精确字段为**标题、来源编号、责
 4. P2 **不做** `/ai/sessions/:id` 路由。一个刷新即失效的 URL 会被收藏、转发，却只能打开空内容，是产品陷阱。
 5. 「须能从 `sessionId` 冷启动恢复」整条移到 P3，与会话持久化同批。
 
+> **2026-09-02 修订**：本段第 2 条的 `pinned` 语义由「**推挤主内容**」改为「**放大的浮动面板**」——
+> `drawer` 与 `pinned` 都是覆盖在正文之上的浮层，**任何模式下主内容宽度都不变**。三态合同
+> （`closed` / `drawer` / `pinned`）本身，以及本段第 3 条的 **AppShell 单例**与**跨路由会话连续性**，
+> **全部不变**。依据为本文件同日「一级导航改为五项，工作事项筛选改为三状态互斥，顶栏取消当前位置」中
+> 「常驻浮动入口……覆盖在正文之上，可拖动、可收起、可放大，不挤压正文宽度」一句；`P2-FE-NAV-SHELL-001`
+> 已按该形态实现，本注记只统一措辞，不新增实现要求。
+
 **为什么**：`alembic/versions/20260604_090000_task_session_schema.py::upgrade` 创建的 `sessions` 只有 `session_id`；`app/ports/task_store.py::SessionStorePort` 只有 `create_session` / `get_session`；仓库没有对话原文持久化。`web/src/pages/ChatPage.tsx::ChatPage` 挂载时以 `crypto.randomUUID()` 生成局部 `sessionId`，而 `web/src/App.tsx::AppShell` 的路由切换会卸载子页面；`web/src/stores/` 现只有 `authStore` / `roleStore`。所以丢失不需要刷新，普通路由切换就会发生；AppShell 单例与 Zustand 是 P2 内解决当前会话连续性的最低充分边界，不等于历史持久化。
 
 页面向 Dock 注册的上下文固定为九字段：`surface_id`、`organization_scope`、`work_object_refs`、`source_refs`、`filters`、`selected_metric`、`allowed_capabilities`、`freshness`、`visibility`。这是 Port 与安全边界，不是每个页面自行拼装的 UI 细节；单立 **A 档** `P2-PAGE-CONTEXT-CONTRACT-001`，无前置，并须先于第一个真正注册上下文的 `P2-INTERNAL-WO-DISPATCH-001`。
@@ -2125,6 +2132,12 @@ Chrome 101 上**是支持的**，因此不是可行性问题，而是代价问�
 须先取得并核对，不得按既有 OA 接口的形状推定。头像 URL 与二进制内容均属人员信息，遵循既有脱敏规则，不
 进 Trace、fixture expected、日志与报告。
 
+> **2026-09-02 修订**：本段的「尚未落盘」已由本文件同日「事实确认：OA 用户信息接口的路径与返回形态」
+> 解除——接口路径、query 参数名与响应字段结构均已以脱敏结构描述落盘。**仍未取得的是该条边界第 2 项的
+> 三项未知**（取头像图要不要带 cookie / 认证头、图片响应的 Content-Type 与状态码、头像取不到时该字段
+> 的形态），这三项**继续适用「不得推定」**。承载棒也已更正：`P2-FE-NAV-SHELL-001` 已完成且只做了
+> fail-closed 占位，真实实现归 `P2-USER-PROFILE-READ-001`（后端身份读取端点）。脱敏约束不变。
+
 
 ## 2026-09-02 — 裁决：顶栏「组织范围」改为「部门 / 姓名」，并移除内线电话行
 
@@ -2213,3 +2226,80 @@ Chrome 101 上**是支持的**，因此不是可行性问题，而是代价问�
 「AI 草稿不等于发布，发布必须是显式人工动作」、九类字段发布前全部摊开可见，**全部继续有效**。
 
 **影响面**：任务交办的前端实现棒；`P2-INTERNAL-WO-ATTACHMENT-001` 的界面消费面。
+
+## 2026-09-02 — 事实确认：OA 用户信息接口的路径与返回形态
+
+**来源与边界**：本结构由雨爷 2026-09-02 显式授权，从他本人**脱敏后的单个采集件**中提取，
+**只保留结构，不含任何真实取值**；原始采集件不进仓库，本条不复制其内容。
+
+**请求**：
+
+```text
+GET <OA_BASE>/api/hrm/resource/getResourceBaseTitle
+query 参数名：id、isMobx、__random__；无请求体
+```
+
+**响应**：顶层为 JSON 对象 `{ result, hasRight, id }`。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `result.lastname` | string | **完整姓名**（字段名叫 lastname，但承载的不是姓氏，实现时勿被字段名误导） |
+| `result.messagerurl` | string | 头像**相对路径**，形如 `/messager/usericon/<x>.jpg`，相对站点根，URL 本身不带 query |
+| `result.orginfo` | string | **一段 HTML `<a>` 片段**，单位名与部门名是链接文本，单位 ID / 部门 ID 内嵌在 `onclick="javascript:viewSubCompany(<id>)"` / `viewDepartment(<id>)` 属性里；**没有平铺字段，也没有独立 JSON 子对象** |
+| `result.requestParams` | string | **被二次序列化的 JSON 字符串**，需再 `JSON.parse` 一次；解出后含 `shortname`（姓名缩写）、`lastname`、`gender`、`headformat`、`isDefault`、`background`、`fontcolor`、`defaultmessagerurl` |
+| `result.workcode` | string | 本例为空串 |
+| `result.sex` | object | `{ name: string, value: string }` |
+| `hasRight` | boolean | 与 `result` 同级 |
+| `id` | string | 与请求 query 的 `id` 同值，但响应里是字符串 |
+
+**四条边界**（本条的承重部分）：
+
+1. **前端够不到这个接口**：浏览器不能直连 OA（跨域 + 需带 OA session），且 `orginfo` 的 HTML 解析必须
+   在后端做。要显示部门 / 姓名 / 头像，**必须由后端新增身份读取端点**代持用户 OA session 去取并解析。
+2. **三项未知，不得推定**：采集件只有一条 entry，头像图片本身的请求没有被抓到。因此「取头像图要不要带
+   cookie / 认证头」「图片响应的 Content-Type 与状态码」「头像取不到时该字段是空串 / null / 缺失 /
+   默认图」**三项均无证据**，实现时不得按既有 OA 接口的形状推定，须另行取得。
+3. 另有五项无证据：错误响应形态、`sex.value` 的取值闭集、`workcode` / `defaultmessagerurl` 为空是常态
+   还是本例偶然、是否存在多尺寸头像字段、`isDefault` / `headformat` / `background` / `fontcolor` 的确切
+   业务含义。
+4. 头像 URL 与二进制内容、姓名、单位、部门均属人员信息，遵循既有脱敏规则，**不进 Trace、fixture
+   expected、日志与报告**。
+
+**影响面**：本条解除 2026-09-02「OA 提供用户头像接口，顶栏头像取用户本人照片」边界段所要求的「结构未
+落盘」前置，`PHASE2_PLAN.md` 中「OA 头像接口的字段名、路径与返回形态未取得」一条据本条关闭；后端身份
+读取端点由 `P2-USER-PROFILE-READ-001` 承载（A 档，新增公共 API 属人工停点），第 2 条的三项未知在其开棒
+前仍须另行取得，取不到时头像部分 fail-closed 退回显示姓氏。
+
+## 2026-09-02 — 事实确认与范围裁决：意图路由缺「都不匹配」出口，`P2-RUNTIME-NO-CAPABILITY-COPY-001` 范围据此扩大
+
+**四条已核实事实**（本棒逐条复核现役代码）：
+
+1. `app/runtime/intent_router.py::_INTENT_SYSTEM_PROMPT` 原文要求 "Choose an exact capability_id from the
+   provided active capability input contracts"，**没有「都不匹配」这一选项**。
+2. `app/runtime/runtime.py::handle_user_message` 每轮都以 `self._capability_registry.list(status="active")`
+   取全部 active 能力清单，并整体传给 intent router。
+3. `no_capability_found` 终态只在两处到达：**能力目录为空**（`no_active_capability_registered`）与
+   **匹配不唯一**（`no_unique_active_candidate`——`_select_capability` 返回 `None`，覆盖「exact id 命中
+   但非 active 或约束不符」与「intent_tag 命中数不为 1」两种情形）。
+4. 因此「用户问的根本不是办事」**没有合法出口**：只要目录非空且模型给出一个能匹上的 `capability_id`，
+   纯问答 / 闲聊就被强制路由成一次能力调用。
+
+**现场表现**：雨爷 2026-09-02 反馈 chat 无论问什么都回复 OA 待办信息。
+
+**裁决**：
+
+> `P2-RUNTIME-NO-CAPABILITY-COPY-001` 的范围**由「改 `no_capability_found` 的用户可见文案」扩为「补齐
+> 意图路由的缺失出口」**：意图路由须允许「用户请求不对应任何已注册能力」成为一种**合法且可判定的结果**，
+> 而不是只能在目录为空或匹配不唯一时才到达终态。该棒因此触及意图匹配与终态判定，**须跑 Golden gate**，
+> 档位维持 **A**。
+
+**不在本条裁定范围**：具体实现路径（给提示词加一个 `null` 出路、加一类「问答」能力、还是在 Runtime 加
+分支）由该棒自行出方案；本条只把「必须有这个出口」这条合同写死。
+
+**与既有裁决的关系**：现役只注册 `oa.list_pending_workflows` 与 `oa.list_system_messages` 两个能力，
+**能力少是 P2「真实但克制」的既定范围，不是缺陷**（2026-08-19 收口标准修订）；本条不改变该范围，只要求
+匹配不上时如实告知。
+
+**影响面**：`P2-RUNTIME-NO-CAPABILITY-COPY-001` 的 Scope、档位与验证要求；`PHASE2_PLAN.md` 中「AI 助手
+匹配不上时未如实告知，硬套已注册能力」一条活欠债的 reason / expiry_condition / evidence 据本条改写，
+现役 DAG 中该行的边界描述同步更正。
