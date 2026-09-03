@@ -2,25 +2,121 @@
   box-sizing: border-box;
 }
 
+/*
+ * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」：暖纸色系（#f4f1e8 / #fffdf8 / #e7e3d8）与衬线标题
+ * 字族一并弃用。玻璃只用在大面（左导航 / 顶栏 / 内容面板 / 浮动窗 / 悬浮按钮）；按钮、芯片、图标
+ * 底座、选中态一律不自带模糊，只用低不透明度白加边缘高光。
+ */
 :root {
-  --workbench-bg: #f4f1e8;
-  --workbench-surface: #fffdf8;
-  --workbench-border: #c9c7bd;
-  --workbench-text: #17231d;
-  --workbench-text-secondary: #46544c;
-  --workbench-primary: #1f4f8a;
+  --workbench-text: #161d2e;
+  --workbench-text-secondary: #454e66;
+  --workbench-text-caption: #4f5872;
+  --workbench-primary: #2450c8;
   --workbench-focus: #b44b00;
+  --workbench-success: #0b5c2b;
+  --workbench-warning: #8c4a00;
+  --workbench-error: #a8231c;
+
+  /* 玻璃材质。半透明面 + 边缘高光；模糊由具体的大面自己声明，不写进这些变量。 */
+  --workbench-panel-fill: rgb(255 255 255 / 86%);
+  --workbench-glass-fill: rgb(255 255 255 / 58%);
+  --workbench-glass-fill-raised: rgb(255 255 255 / 66%);
+  --workbench-edge: rgb(255 255 255 / 78%);
+  --workbench-hair: rgb(22 29 46 / 10%);
+  --workbench-border: rgb(22 29 46 / 14%);
+  --workbench-sheen: inset 0 1px 0 rgb(255 255 255 / 92%),
+    inset 0 -1px 0 rgb(255 255 255 / 32%);
+  --workbench-lift: 0 12px 38px -14px rgb(16 26 58 / 36%),
+    0 3px 10px -3px rgb(16 26 58 / 14%);
+
+  /* 小元件的玻璃：低不透明度白 + 边缘高光，不带模糊、不带固定填充色。 */
+  --workbench-chip-fill: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 46%),
+      rgb(255 255 255 / 6%) 55%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 22%), rgb(255 255 255 / 10%));
+  --workbench-chip-edge: inset 0 1px 0 rgb(255 255 255 / 94%),
+    inset 0 0 0 1px rgb(255 255 255 / 55%), inset 0 -1px 1px rgb(22 29 46 / 5%),
+    0 4px 12px -9px rgb(16 26 58 / 28%);
+  --workbench-chip-fill-strong: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 66%),
+      rgb(255 255 255 / 14%) 55%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 34%), rgb(255 255 255 / 18%));
+  --workbench-chip-edge-strong: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 1.5px rgb(255 255 255 / 85%), inset 0 -1px 2px rgb(22 29 46 / 7%),
+    0 6px 16px -9px rgb(16 26 58 / 42%);
+  /* 凹槽：搜索框、输入框这类「可以往里写」的控件。 */
+  --workbench-well-fill: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 12%),
+      rgb(255 255 255 / 32%) 70%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 22%), rgb(255 255 255 / 14%));
+  --workbench-well-edge: inset 0 3px 6px rgb(16 26 58 / 20%),
+    inset 0 0 0 1.5px rgb(255 255 255 / 70%), 0 1px 0 rgb(255 255 255 / 55%);
+
+  /*
+   * 三套底图。玻璃是靠底图透出来的，所以外壳之外的页面（登录页）也需要一层真实的底，否则半透明的
+   * 按钮与卡片会退化成一片近白、看不出是可以按的。默认预设画在 `body` 上；用户选中的预设由 AppShell
+   * 画在外壳根节点上盖住它。
+   */
+  --workbench-ground-a:
+    radial-gradient(780px 580px at 6% 4%, rgb(88 136 255 / 52%), transparent 62%),
+    radial-gradient(700px 540px at 94% 2%, rgb(96 198 255 / 46%), transparent 60%),
+    radial-gradient(760px 640px at 78% 92%, rgb(178 146 255 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 10% 96%, rgb(112 230 206 / 38%), transparent 62%),
+    linear-gradient(160deg, #eef2fc 0%, #e5ebf8 55%, #e9effb 100%);
+  --workbench-ground-b:
+    radial-gradient(780px 580px at 8% 6%, rgb(255 186 124 / 54%), transparent 62%),
+    radial-gradient(700px 540px at 92% 4%, rgb(255 152 182 / 46%), transparent 60%),
+    radial-gradient(760px 640px at 76% 92%, rgb(190 152 255 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 10% 96%, rgb(255 214 140 / 40%), transparent 62%),
+    linear-gradient(160deg, #fcf2ea 0%, #f8eef2 55%, #f6f0fb 100%);
+  --workbench-ground-c:
+    radial-gradient(780px 580px at 6% 8%, rgb(112 214 186 / 52%), transparent 62%),
+    radial-gradient(700px 540px at 94% 4%, rgb(126 196 255 / 44%), transparent 60%),
+    radial-gradient(760px 640px at 78% 90%, rgb(196 228 142 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 12% 94%, rgb(146 206 255 / 36%), transparent 62%),
+    linear-gradient(160deg, #eef7f2 0%, #e8f1f4 55%, #eef5ee 100%);
+
+  --workbench-radius-panel: 24px;
+  --workbench-radius-card: 18px;
+  --workbench-radius-control: 15px;
+
   --workbench-font-body: 19px;
   --workbench-font-auxiliary: 16px;
-  --workbench-line-height: 1.4;
+  --workbench-font-caption: 14px;
+  --workbench-line-height: 1.45;
   --workbench-target-size: 44px;
-  --workbench-font-body-family: 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
-  --workbench-font-heading: 'STZhongsong', 'Noto Serif CJK SC', 'Source Han Serif SC', 'Microsoft YaHei', serif;
+  --workbench-font-body-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', sans-serif;
+
+  /*
+   * 运行时结果卡（`components/RuntimeViews.module.css`）与 AI 助手页共用的一组语义变量。
+   * 原先由 `ChatPage` 用 antd token 逐个注入到内联 style 上；玻璃方向下颜色由底图透出，注入那一层
+   * 只会把 antd 的默认色重新写死，因此改为在这里一次性绑到工作台令牌上。
+   */
+  --chat-color-bg: var(--workbench-panel-fill);
+  --chat-color-bg-soft: rgb(255 255 255 / 55%);
+  --chat-color-border: var(--workbench-hair);
+  --chat-color-primary: var(--workbench-primary);
+  --chat-color-primary-soft: rgb(47 107 255 / 12%);
+  --chat-color-on-primary: var(--workbench-text);
+  --chat-color-success: var(--workbench-success);
+  --chat-color-warning: var(--workbench-warning);
+  --chat-color-error: var(--workbench-error);
+  --chat-color-neutral: var(--workbench-text-caption);
+  --chat-color-text: var(--workbench-text);
+  --chat-color-text-secondary: var(--workbench-text-secondary);
+  --chat-shadow: var(--workbench-lift);
 }
 
 html {
   color: var(--workbench-text);
-  background: var(--workbench-bg);
+  background: #eef2fc;
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
 }
@@ -29,7 +125,7 @@ body {
   margin: 0;
   padding: 0;
   color: var(--workbench-text);
-  background: var(--workbench-bg);
+  background: var(--workbench-ground-a) fixed;
   font-family: var(--workbench-font-body-family);
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
@@ -40,7 +136,7 @@ body {
 }
 
 ::placeholder {
-  color: #59665f !important;
+  color: var(--workbench-text-caption) !important;
   opacity: 1;
 }
 
@@ -70,4 +166,31 @@ body {
 .ant-table-filter-dropdown .ant-dropdown-menu-item {
   min-width: var(--workbench-target-size);
   min-height: var(--workbench-target-size);
+}
+
+/*
+ * 2026-09-02 玻璃硬约束第 4 条：按钮不得带固定填充色，颜色由底图透出。antd 6 的实心主按钮默认是一块
+ * 纯蓝，这里统一换成「提亮一档的玻璃 + 深色字」——主次之分靠亮度和字重，不靠填色。
+ *
+ * 例外只留给语义：`ant-btn-dangerous` 保留 antd 的危险色，`ant-btn-link` / `ant-btn-text` 保持无底。
+ * 主动作按钮的「蓝字 + 蓝色高光内边」是另一条已裁决的例外，当前只归任务交办页的「发布」，本处不用。
+ */
+.ant-btn-default:not(.ant-btn-dangerous),
+.ant-btn-primary:not(.ant-btn-dangerous) {
+  color: var(--workbench-text);
+  background-color: transparent;
+  background-image: var(--workbench-chip-fill);
+  border-color: transparent;
+  box-shadow: var(--workbench-chip-edge);
+}
+
+.ant-btn-primary:not(.ant-btn-dangerous) {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
+  font-weight: 700;
+}
+
+.ant-btn-default:not(.ant-btn-dangerous):disabled,
+.ant-btn-primary:not(.ant-btn-dangerous):disabled {
+  color: var(--workbench-text-caption);
 }

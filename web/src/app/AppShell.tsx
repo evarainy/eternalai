@@ -6,6 +6,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
 import type { CredentialBindingView } from '../generated/credential-bindings/credential-bindings.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
+import { useAppearanceStore } from '../stores/appearanceStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { AIDock } from './AIDock';
@@ -24,6 +25,7 @@ import {
   TOPBAR_STYLE_WIDTH,
   TOPBAR_SYSTEM_STATUS_WIDTH,
 } from './shellLayout';
+import { BACKGROUND_PRESETS, BACKGROUND_PRESET_LABELS } from './theme';
 import styles from './AppShell.module.css';
 
 const AI_ASSISTANT_PATH = '/chat';
@@ -51,7 +53,7 @@ const ADMIN_NAVIGATION: readonly PrimaryNavigationItem[] = [
   { icon: '●', label: '账号绑定', to: BINDINGS_PATH },
 ];
 
-type TopbarPanel = 'style' | 'system-status' | 'notifications';
+type TopbarPanel = 'style' | 'system-status' | 'notifications' | 'user';
 
 interface ShellCssVariables extends CSSProperties {
   '--shell-sidebar-width': string;
@@ -83,7 +85,16 @@ function shellCssVariables(collapsed: boolean): ShellCssVariables {
   };
 }
 
-type SystemStatusKind = 'unknown' | 'unbound' | 'attention' | 'retrying' | 'normal';
+type SystemStatusKind =
+  | 'loading'
+  | 'unknown'
+  | 'unbound'
+  | 'attention'
+  | 'retrying'
+  | 'normal';
+
+/** 读取后端状态的三态：还在读 / 读到了 / 读不到。出错不得退化成「没有需要处理的项」。 */
+type SystemStatusFetch = 'loading' | 'ready' | 'error';
 
 interface SystemStatusRow {
   kind: SystemStatusKind;
@@ -100,14 +111,23 @@ interface SystemStatusRow {
  */
 function oaSystemStatusRow(
   binding: CredentialBindingView | undefined,
-  unavailable: boolean,
+  fetchState: SystemStatusFetch,
 ): SystemStatusRow {
-  if (unavailable || binding === undefined) {
+  if (fetchState === 'loading') {
+    return {
+      kind: 'loading',
+      marker: '…',
+      name: 'OA 系统',
+      statusText: '正在读取',
+      nextStep: '下一步：等一下，读到了这里会自己变。现在还不知道是不是正常。',
+    };
+  }
+  if (fetchState === 'error' || binding === undefined) {
     return {
       kind: 'unknown',
       marker: '？',
       name: 'OA 系统',
-      statusText: '暂时不知道',
+      statusText: '读不到，暂时不知道',
       nextStep: '下一步：刷新本页；仍然取不到时请联系管理员。在弄清楚之前，不要当成正常。',
     };
   }
@@ -208,6 +228,8 @@ export function AppShell() {
   const clearPageContext = useAIDockStore((state) => state.clearPageContext);
   const collapsed = useNavigationStore((state) => state.collapsed);
   const toggleCollapsed = useNavigationStore((state) => state.toggleCollapsed);
+  const background = useAppearanceStore((state) => state.background);
+  const setBackground = useAppearanceStore((state) => state.setBackground);
   const [openPanel, setOpenPanel] = useState<TopbarPanel | null>(null);
 
   const isAIAssistantPage = location.pathname === AI_ASSISTANT_PATH;
@@ -220,12 +242,15 @@ export function AppShell() {
     queryKey: ['credential-binding', authGeneration, 'oa'] as const,
     queryFn: () => getBinding('oa'),
   });
-  const statusRow = oaSystemStatusRow(
-    bindingQuery.data,
-    bindingQuery.isError || bindingQuery.isPending,
-  );
+  const statusFetch: SystemStatusFetch = bindingQuery.isPending
+    ? 'loading'
+    : bindingQuery.isError
+      ? 'error'
+      : 'ready';
+  const statusRow = oaSystemStatusRow(bindingQuery.data, statusFetch);
   const attentionCount = statusRow.kind === 'attention' ? 1 : 0;
   const statusUnknown = statusRow.kind === 'unknown';
+  const statusLoading = statusRow.kind === 'loading';
 
   const submitSearch = (value: string) => {
     const term = value.trim();
@@ -244,15 +269,18 @@ export function AppShell() {
     }
   }, [clearPageContext, isAIAssistantPage]);
 
-  const systemStatusLabel = statusUnknown
-    ? '系统状态，暂时无法判断'
-    : attentionCount > 0
-      ? `系统状态，${attentionCount} 项需要处理`
-      : '系统状态，暂无需要处理的项';
+  const systemStatusLabel = statusLoading
+    ? '系统状态，正在读取'
+    : statusUnknown
+      ? '系统状态，暂时无法判断'
+      : attentionCount > 0
+        ? `系统状态，${attentionCount} 项需要处理`
+        : '系统状态，暂无需要处理的项';
 
   return (
     <div
-      className={styles.shell}
+      className={`${styles.shell} ${styles[background]}`}
+      data-background={background}
       data-collapsed={collapsed ? 'true' : 'false'}
       style={shellCssVariables(collapsed)}
     >
@@ -262,8 +290,15 @@ export function AppShell() {
         data-collapsed={collapsed ? 'true' : 'false'}
       >
         <div className={styles.brand} data-testid="app-brand">
-          <span className={styles.brandName}>EternalAI</span>
-          {collapsed ? null : <small>办事工作台</small>}
+          <span aria-hidden="true" className={styles.brandMark}>
+            ⚡
+          </span>
+          {collapsed ? null : (
+            <span className={styles.brandText}>
+              <span className={styles.brandName}>EternalAI</span>
+              <small>办事工作台</small>
+            </span>
+          )}
         </div>
         <nav aria-label="工作区" className={styles.nav}>
           {PRIMARY_NAVIGATION.map((item) => (
@@ -317,18 +352,6 @@ export function AppShell() {
               <span className={styles.navText}>{collapsed ? '展开导航' : '收起导航'}</span>
             )}
           </button>
-          <button
-            aria-label="退出登录（本地）"
-            className={styles.sidebarAction}
-            onClick={() => markUnauthenticated()}
-            title="退出登录（本地）"
-            type="button"
-          >
-            <span aria-hidden="true" className={styles.navIcon}>
-              ⏻
-            </span>
-            {collapsed ? null : <span className={styles.navText}>退出登录（本地）</span>}
-          </button>
         </div>
       </aside>
 
@@ -377,7 +400,11 @@ export function AppShell() {
               ◉
             </span>
             <span className={styles.signalText}>系统状态</span>
-            {statusUnknown ? (
+            {statusLoading ? (
+              <span className={styles.badgeUnknown} data-testid="system-status-count">
+                …
+              </span>
+            ) : statusUnknown ? (
               <span className={styles.badgeUnknown} data-testid="system-status-count">
                 ？
               </span>
@@ -402,22 +429,98 @@ export function AppShell() {
             <span className={styles.signalText}>通知</span>
           </button>
 
-          <span
-            aria-label="用户头像：暂时取不到你的照片"
-            className={styles.avatar}
+          <button
+            aria-expanded={openPanel === 'user'}
+            aria-label="用户菜单，暂时取不到你的照片"
+            className={styles.avatarButton}
             data-slot="avatar"
             data-testid="topbar-avatar"
-            role="img"
+            onClick={() => togglePanel('user')}
+            type="button"
           >
             <span aria-hidden="true">☻</span>
-          </span>
+          </button>
         </header>
 
         {openPanel === 'style' ? (
           <section aria-label="界面风格" className={styles.panel} role="region">
             <h2 className={styles.panelTitle}>界面风格</h2>
-            <p>换底图在下一版提供。</p>
-            <p>现在整套界面只有一种风格，这个按钮暂时不会改变任何显示。</p>
+            <p>选一张底图。字号、按钮大小和文字都不会跟着变，只换背景颜色。</p>
+            <div className={styles.backgroundChoices}>
+              {BACKGROUND_PRESETS.map((preset) => (
+                <button
+                  aria-pressed={background === preset}
+                  className={styles.backgroundChoice}
+                  key={preset}
+                  onClick={() => setBackground(preset)}
+                  type="button"
+                >
+                  <span
+                    aria-hidden="true"
+                    className={styles.backgroundSwatch}
+                    data-preset={preset}
+                  />
+                  <span>{BACKGROUND_PRESET_LABELS[preset]}</span>
+                </button>
+              ))}
+            </div>
+            <p className={styles.panelHint}>
+              选好就生效，下次打开还是这一张。
+            </p>
+          </section>
+        ) : null}
+
+        {openPanel === 'user' ? (
+          <section aria-label="用户菜单" className={styles.panel} role="region">
+            <h2 className={styles.panelTitle}>你的账号</h2>
+            <div className={styles.userMenuIdentity}>
+              <span className={styles.identityLine}>
+                {IDENTITY_UNAVAILABLE_STATEMENT}
+              </span>
+              <span className={styles.identityLine}>
+                {IDENTITY_UNAVAILABLE_NEXT_STEP}
+              </span>
+              <p className={styles.panelHint}>
+                也取不到你的照片，所以这里只放一个通用图形，不是别人的头像。
+              </p>
+            </div>
+            <ul className={styles.userMenuList}>
+              <li>
+                <Link className={styles.userMenuItem} to={BINDINGS_PATH}>
+                  <span aria-hidden="true">●</span>
+                  <span>账号绑定</span>
+                </Link>
+              </li>
+              <li>
+                <button
+                  className={styles.userMenuItem}
+                  onClick={() => setOpenPanel('style')}
+                  type="button"
+                >
+                  <span aria-hidden="true">◐</span>
+                  <span>换个界面风格</span>
+                </button>
+              </li>
+              <li className={styles.userMenuItem}>
+                <span aria-hidden="true">?</span>
+                <span>
+                  怎么用 / 找人帮忙：这一项还没有内容。现在遇到问题，请直接找本单位的系统管理员。
+                </span>
+              </li>
+              <li className={styles.userMenuSeparated}>
+                <button
+                  className={styles.userMenuItem}
+                  onClick={() => markUnauthenticated()}
+                  type="button"
+                >
+                  <span aria-hidden="true">⏻</span>
+                  <span>退出登录（本地）</span>
+                </button>
+              </li>
+            </ul>
+            <p className={styles.panelHint}>
+              「退出登录（本地）」只清掉这台电脑上的登录状态，不会退出 OA。
+            </p>
           </section>
         ) : null}
 

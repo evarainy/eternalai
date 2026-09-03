@@ -17,6 +17,7 @@
     "generate:api": "orval --config orval.config.ts && node scripts/normalize-generated.mjs"
   },
   "dependencies": {
+    "@ant-design/x": "^2.9.0",
     "@tanstack/react-query": "^5.0.0",
     "antd": "^6.6.1",
     "react": "^18.0.0",

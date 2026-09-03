@@ -1,6 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -1219,5 +1226,112 @@ describe('ChatPage HTTP failures', () => {
     expect(document.body.textContent).not.toContain('RAW_NETWORK_DETAIL');
     expect(useAuthStore.getState().status).toBe('authenticated');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * 2026-09-02 裁决把「我问过的」从工作事项页迁到 AI 助手页左栏；2026-08-27 §一/§六 同时裁定会话持久化
+ * 整体归 P3，P2「不用一个刷新即失效的历史入口制造可恢复假象」。下面把这条边界钉死。
+ */
+describe('ChatPage assistant surfaces', () => {
+  it('offers the starter prompts instead of an empty box, and a prompt fills the request', () => {
+    renderChat();
+
+    expect(screen.getByText('这里现在是空的，因为你还没有问过。')).toBeInTheDocument();
+    expect(screen.getByText('可以这样问我')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('我今天有什么要办的？'));
+
+    expect(useAIDockStore.getState().draft).toBe('我今天有什么要办的？');
+    expect(screen.getByLabelText('办理请求')).toHaveValue('我今天有什么要办的？');
+  });
+
+  it('keeps a visible label for the request box rather than relying on the placeholder', () => {
+    renderChat();
+
+    const input = screen.getByLabelText('办理请求');
+    expect(input.tagName).toBe('TEXTAREA');
+    expect(input).toHaveAttribute('id', 'chat-request');
+    expect(input).toHaveAttribute('aria-describedby', 'chat-request-hint');
+    const visibleLabel = document.querySelector('label[for="chat-request"]');
+    expect(visibleLabel).not.toBeNull();
+    expect(visibleLabel).toHaveTextContent('办理请求');
+  });
+
+  it('lists only the current temporary conversation and says history is not stored yet', () => {
+    renderChat();
+
+    const rail = screen.getByRole('complementary', { name: '我问过的' });
+    expect(within(rail).getByRole('heading', { name: '我问过的' })).toBeInTheDocument();
+    expect(within(rail).getByText('现在没有正在进行的对话。')).toBeInTheDocument();
+    expect(
+      within(rail).getByText(/以前问过的还存不起来/),
+    ).toBeInTheDocument();
+    expect(within(rail).getByText(/请到「工作事项」里办/)).toBeInTheDocument();
+    expect(within(rail).queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('shows exactly one conversation entry once the current session has content', () => {
+    renderChat();
+
+    act(() => {
+      useAIDockStore.getState().appendTranscript({ role: 'user', text: '先问一句' });
+      useAIDockStore.getState().appendTranscript({ role: 'user', text: '再问一句' });
+    });
+
+    const rail = screen.getByRole('complementary', { name: '我问过的' });
+    const entries = within(rail).getAllByRole('listitem');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toHaveTextContent('本次对话');
+    expect(rail.textContent).not.toContain('先问一句');
+    expect(within(rail).getByText(/以前问过的还存不起来/)).toBeInTheDocument();
+  });
+
+  it('separates the loading, empty and failed states of the conversation', async () => {
+    let resolveRequest!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveRequest = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    // 空：说明「为什么空」，不是留白。
+    expect(screen.getByText('这里现在是空的，因为你还没有问过。')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    sendMessage('查一下我的待办');
+
+    // 加载中：有明确的进行中提示。
+    expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
+    expect(
+      screen.queryByText('这里现在是空的，因为你还没有问过。'),
+    ).not.toBeInTheDocument();
+
+    act(() =>
+      resolveRequest(
+        response(
+          { detail: { code: 'RAW_HTTP_503', message: 'RAW_BACKEND_BODY' } },
+          { ok: false, status: 503, statusText: 'Service Unavailable' },
+        ),
+      ),
+    );
+
+    // 出错：说明这一条没办成，不把失败伪装成「没有数据」。
+    expect(
+      await screen.findByText('办理服务暂时不可用，请稍后再试。'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('服务不可用')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        '上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('这里现在是空的，因为你还没有问过。'),
+    ).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
   });
 });

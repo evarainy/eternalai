@@ -19,6 +19,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PageContextDeclaration } from '../../contracts/pageContext';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
 import { useAIDockStore } from '../../stores/aiDockStore';
+import { useAppearanceStore } from '../../stores/appearanceStore';
+import { useAuthStore } from '../../stores/authStore';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { AppShell } from '../AppShell';
 import {
@@ -150,6 +152,8 @@ function resetStores(): void {
   apiMocks.getBinding.mockResolvedValue(binding());
   window.localStorage.clear();
   useNavigationStore.setState({ collapsed: false });
+  useAppearanceStore.setState({ background: 'bgA' });
+  useAuthStore.setState({ generation: 1, status: 'authenticated' });
   useAIDockStore.setState({
     contextNotice: null,
     draft: '',
@@ -429,32 +433,77 @@ describe('AppShell topbar', () => {
     expect(within(identity).queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('renders a neutral avatar placeholder that is neither clickable nor a fake initial', () => {
+  it('turns the avatar into the user menu trigger without inventing a photo or an initial', () => {
     renderShell();
 
     const avatar = screen.getByTestId('topbar-avatar');
-    expect(avatar).toHaveAttribute('role', 'img');
-    expect(avatar).toHaveAccessibleName('用户头像：暂时取不到你的照片');
-    expect(avatar.tagName).toBe('SPAN');
+    expect(avatar.tagName).toBe('BUTTON');
+    expect(avatar).toHaveAccessibleName('用户菜单，暂时取不到你的照片');
+    expect(avatar).toHaveAttribute('aria-expanded', 'false');
     expect(avatar.textContent).not.toMatch(/[一-龥A-Za-z]/);
-    expect(screen.queryByRole('button', { name: /头像/ })).not.toBeInTheDocument();
+
+    fireEvent.click(avatar);
+
+    expect(avatar).toHaveAttribute('aria-expanded', 'true');
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_STATEMENT)).toBeInTheDocument();
+    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_NEXT_STEP)).toBeInTheDocument();
   });
 
-  it('offers a focusable style control that says the feature is not available yet', () => {
+  it('carries logout in the user menu instead of the sidebar and keeps the help entry honest', () => {
+    renderShell();
+
+    const sidebar = screen.getByRole('complementary', { name: '主导航' });
+    expect(
+      within(sidebar).queryByRole('button', { name: '退出登录（本地）' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '退出登录（本地）' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(
+      within(menu).getByRole('button', { name: '退出登录（本地）' }),
+    ).toBeInTheDocument();
+    expect(within(menu).getByRole('link', { name: '账号绑定' })).toHaveAttribute(
+      'href',
+      '/admin/bindings',
+    );
+    expect(within(menu).getByText(/怎么用 \/ 找人帮忙/)).toBeInTheDocument();
+    expect(menu.textContent).not.toContain('8012');
+    expect(menu.textContent).not.toContain('内线');
+
+    fireEvent.click(within(menu).getByRole('button', { name: '退出登录（本地）' }));
+
+    expect(useAuthStore.getState().status).toBe('unauthenticated');
+  });
+
+  it('switches the background image from the style control and remembers the choice', () => {
     renderShell();
 
     const styleButton = screen.getByRole('button', { name: '切换界面风格' });
     styleButton.focus();
     expect(styleButton).toHaveFocus();
     expect(styleButton).toHaveAttribute('aria-expanded', 'false');
+    expect(shellElement()).toHaveAttribute('data-background', 'bgA');
 
     fireEvent.click(styleButton);
 
     expect(styleButton).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByText('换底图在下一版提供。')).toBeInTheDocument();
+    expect(screen.queryByText('换底图在下一版提供。')).not.toBeInTheDocument();
+    const warm = screen.getByRole('button', { name: '暖橙' });
+    expect(warm).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(warm);
+
+    expect(warm).toHaveAttribute('aria-pressed', 'true');
+    expect(useAppearanceStore.getState().background).toBe('bgB');
+    expect(shellElement()).toHaveAttribute('data-background', 'bgB');
     expect(
-      screen.getByText('现在整套界面只有一种风格，这个按钮暂时不会改变任何显示。'),
-    ).toBeInTheDocument();
+      window.localStorage.getItem('eternalai-appearance-background'),
+    ).toContain('"background":"bgB"');
   });
 
   it('counts invalid OA credentials on the system status control only', async () => {
@@ -488,6 +537,39 @@ describe('AppShell topbar', () => {
     expect(apiMocks.getBinding).toHaveBeenCalledWith('oa');
   });
 
+  /*
+   * 2026-08-20「每个前端棒的最低体验要求」：取后端数据的区块要有加载中 / 空 / 出错三态，且出错不得
+   * 冒充「没有数据」。系统状态面板的「还在读」与「读不到」是两回事，不能并成一个「暂时不知道」。
+   */
+  it('separates “still loading” from “could not read” on the system status panel', async () => {
+    let resolveBinding!: (value: CredentialBindingView) => void;
+    apiMocks.getBinding.mockReturnValue(
+      new Promise<CredentialBindingView>((resolve) => {
+        resolveBinding = resolve;
+      }),
+    );
+    renderShell();
+
+    const loadingButton = screen.getByRole('button', { name: '系统状态，正在读取' });
+    expect(within(loadingButton).getByTestId('system-status-count')).toHaveTextContent(
+      '…',
+    );
+    fireEvent.click(loadingButton);
+    expect(screen.getByText('OA 系统：正在读取')).toBeInTheDocument();
+    expect(
+      screen.queryByText('OA 系统：正常'),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveBinding(binding());
+    });
+
+    expect(
+      await screen.findByRole('button', { name: '系统状态，暂无需要处理的项' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('OA 系统：正常')).toBeInTheDocument();
+  });
+
   it('says the system status is unknown instead of pretending it is normal', async () => {
     apiMocks.getBinding.mockRejectedValue(new Error('unreachable'));
     renderShell();
@@ -501,7 +583,7 @@ describe('AppShell topbar', () => {
 
     fireEvent.click(statusButton);
 
-    expect(screen.getByText('OA 系统：暂时不知道')).toBeInTheDocument();
+    expect(screen.getByText('OA 系统：读不到，暂时不知道')).toBeInTheDocument();
     expect(
       screen.getByText(
         '下一步：刷新本页；仍然取不到时请联系管理员。在弄清楚之前，不要当成正常。',

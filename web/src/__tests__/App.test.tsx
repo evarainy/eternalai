@@ -172,6 +172,8 @@ describe('application authentication boundary', () => {
     window.history.pushState({}, '', '/');
     render(<App />);
 
+    // 2026-09-02 定稿把「退出登录（本地）」从左导航底部移进顶栏头像的用户菜单。
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
     fireEvent.click(screen.getByRole('button', { name: '退出登录（本地）' }));
 
     expect(useAuthStore.getState().status).toBe('unauthenticated');
