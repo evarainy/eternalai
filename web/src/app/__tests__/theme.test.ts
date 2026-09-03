@@ -79,13 +79,32 @@ const TEXT_COLORS: readonly [string, string][] = [
   ['语义 · 正常', workbenchTokens.colors.success],
 ];
 
+/*
+ * 定稿画板 `_scratch/design/glass/*.dc.html` 实测在用的全部字号。画板不进仓库（`_scratch/` 是
+ * 忽略目录），所以这里抄成常量，改动时以画板为准。
+ */
+const CANVAS_FONT_SIZES: readonly number[] = [14, 15, 16, 17, 18, 19, 21, 34];
+
 describe('low-digital-literacy design tokens', () => {
+  /*
+   * 2026-09-04 雨爷推翻了「正文 19px / 辅助 ≥16px」的事实前提：2026-08-27 那条裁决的依据是「用户
+   * 年龄层偏大」，实际用户都是年轻人。**尺寸下限口径就此作废**，现役口径是「照搬设计稿实测值」。
+   *
+   * 因此这里把原来的 `>= 16` / `>= 14` / `<= 1.45` 三条下限换成**等值 + 画板闭集成员**：
+   * - 把任一字号改成画板上没有的值（例如为了「更好读」提到 20px），闭集断言变红；
+   * - 把它改成画板上另一个合法值（例如 16→17），等值断言变红，逼着改动人回来对画板。
+   * 下限写法两种都放过，正是它让上一轮把画板的 14px 改成 16px 而没有任何门禁拦住。
+   *
+   * 行高同理：画板 `.root` 就是 1.45，不是一个区间。
+   */
   it('fixes body, auxiliary, line-height, and target-size constraints in one token source', () => {
     expect(workbenchTokens.bodyFontSize).toBe(19);
-    expect(workbenchTokens.auxiliaryFontSize).toBeGreaterThanOrEqual(16);
-    expect(workbenchTokens.captionFontSize).toBeGreaterThanOrEqual(14);
-    expect(workbenchTokens.lineHeight).toBeGreaterThanOrEqual(1.4);
-    expect(workbenchTokens.lineHeight).toBeLessThanOrEqual(1.45);
+    expect(workbenchTokens.auxiliaryFontSize).toBe(16);
+    expect(workbenchTokens.captionFontSize).toBe(14);
+    expect(CANVAS_FONT_SIZES).toContain(workbenchTokens.bodyFontSize);
+    expect(CANVAS_FONT_SIZES).toContain(workbenchTokens.auxiliaryFontSize);
+    expect(CANVAS_FONT_SIZES).toContain(workbenchTokens.captionFontSize);
+    expect(workbenchTokens.lineHeight).toBe(1.45);
     expect(workbenchTokens.minimumTargetSize).toBeGreaterThanOrEqual(44);
     expect(workbenchTheme.token?.fontSize).toBe(workbenchTokens.bodyFontSize);
     expect(workbenchTheme.token?.fontSizeSM).toBe(

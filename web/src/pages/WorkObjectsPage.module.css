@@ -109,9 +109,9 @@
  */
 .stamp {
   margin: 0 0 0 auto;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
   text-align: right;
 }
 
@@ -155,15 +155,16 @@
 
 /*
  * 来源系统 · 来源编号 · 当前步骤 · 数据截至：常驻可见的灰色副行，不折叠也不靠 hover。
- * 画板给的是 14px，这里按落盘的辅助字号下限提到 16px——下限只许上调不许下调。
+ * 字号是画板 `Main.dc.html` 的 `.meta`：14px。2026-09-04 雨爷推翻了「辅助 ≥16px」那条下限
+ * （它的前提是用户年龄层偏大，实际都是年轻人），这里把当时的上调改回画板值。
  */
 .sourceLine {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 8px;
-  color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
 }
 
 .sourceLine > span:not(:last-child)::after {
@@ -171,6 +172,7 @@
   content: '·';
 }
 
+/* 画板 `.tag`：14px、字重 500、圆角胶囊。 */
 .errorStatus,
 .warningStatus,
 .pendingStatus,
@@ -181,8 +183,9 @@
   gap: 4px;
   padding: 2px 9px;
   border-radius: 999px;
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 700;
+  font-size: var(--workbench-font-caption);
+  font-weight: 500;
+  line-height: 1.3;
   white-space: nowrap;
 }
 

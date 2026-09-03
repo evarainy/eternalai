@@ -56,8 +56,9 @@
   min-width: 0;
 }
 
+/* 画板：品牌名 17px、「欢迎回来」34px。 */
 .brandName {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: 1.5px;
   line-height: 1.25;
@@ -70,8 +71,8 @@
 }
 
 .welcome {
-  margin: 32px 0 0;
-  font-size: 32px;
+  margin: 34px 0 0;
+  font-size: 34px;
   font-weight: 700;
   letter-spacing: 1px;
   line-height: 1.25;

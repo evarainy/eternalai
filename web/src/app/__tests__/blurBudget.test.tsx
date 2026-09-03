@@ -300,6 +300,29 @@ describe('per-screen blur-layer budget', () => {
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
+  /*
+   * 2026-09-04 把用户菜单与系统状态改成了画板的 268px / 384px 弹出层。弹出层承载正文，按落盘的
+   * 玻璃约束**不许买模糊**——三个顶栏弹层各开一次，列表都不能多出一项。上面那条只覆盖了「界面
+   * 风格」，另外两个是本轮改过的面，这里逐个钉死。
+   */
+  it.each([
+    ['用户菜单', '用户菜单，暂时取不到你的照片'],
+    ['系统状态', '系统状态，暂无需要处理的项'],
+  ])('adds no blur layer when the %s popover is open', async (region, trigger) => {
+    renderScreen('/work-objects');
+    await waitFor(() =>
+      expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
+    );
+    const before = describeBlurLayers(shellElement());
+
+    fireEvent.click(await screen.findByRole('button', { name: trigger }));
+    expect(screen.getByRole('region', { name: region })).toBeInTheDocument();
+
+    const after = describeBlurLayers(shellElement());
+    expect(after).toEqual(before);
+    expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
   it('keeps the dispatch draft screen on its single content panel', async () => {
     renderScreen('/work-dispatch');
     await screen.findByTestId('app-topbar');

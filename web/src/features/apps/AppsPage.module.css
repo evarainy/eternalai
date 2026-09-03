@@ -241,15 +241,14 @@
 }
 
 /*
- * 画板把卡片副行、状态标签与字段提示都画成 14px（`--workbench-font-caption`）。这里一律用 16px 的
- * 辅助字号：落盘的可读性下限是「正文 19px / 辅助 ≥16px」，只许上调不许下调，工作事项页也是整页
- * 不低于 16px。颜色与字重照画板，只把字号提上来。
+ * 卡片副行、状态标签与字段提示：画板 `Apps.dc.html` 的 `.cap` 就是 14px。2026-09-04 雨爷推翻了
+ * 「辅助 ≥16px」那条下限，这里把当时为守下限做的 14→16 上调改回画板值。
  */
 .caption {
   margin: 0;
   color: var(--workbench-text-caption);
-  font-size: var(--workbench-font-auxiliary);
-  line-height: var(--workbench-line-height);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
 }
 
 /* ---------- 新建应用弹窗 ---------- */
@@ -314,9 +313,10 @@
   font-weight: 700;
 }
 
+/* 画板 `.opt .od`：14px。 */
 .optionHint {
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: var(--workbench-font-caption);
   line-height: 1.5;
 }
 
@@ -338,12 +338,12 @@
   align-content: start;
 }
 
-/* 字段标签：画板 15px，这里按落盘的辅助字号下限提到 16px。 */
+/* 字段标签：画板 `AppNew.dc.html` 的 `.form2 .fld label` 就是 15px。 */
 .field > label,
 .fieldLabel {
   padding: 0;
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: 15px;
   line-height: 1.3;
 }
 

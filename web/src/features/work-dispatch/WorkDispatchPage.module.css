@@ -5,8 +5,9 @@
  * （画板上就是 `background:#fff`），按钮、芯片、提醒策略一律只用低不透明度白加边缘高光，不带模糊、
  * 不带固定填充色。模糊层计数见 `app/__tests__/blurBudget.test.tsx`。
  *
- * 字号相对画板的两处上调（下限只许上调）：字段标签由画板的 15px 提到 16px 辅助字号下限；输入框里的
- * 取值由 17px 提到 19px 正文下限。
+ * 字号一律是画板实测值：字段标签 15px（`.form2 .fld label`），输入框里的取值 17px（`.inp`）。
+ * 2026-09-04 雨爷推翻了「正文 19px / 辅助 ≥16px」那条下限，原先为守它做的 15→16、17→19 两处上调
+ * 已改回画板值。
  */
 
 .page {
@@ -179,14 +180,11 @@
   align-content: start;
 }
 
-/*
- * 字段标签：画板 15px，这里按落盘的辅助字号下限提到 16px。标签一律是可见的真标签，不用 placeholder
- * 顶替。
- */
+/* 字段标签：画板 `.form2 .fld label` 就是 15px。标签一律是可见的真标签，不用 placeholder 顶替。 */
 .field > label,
 .fieldLabel {
   color: var(--workbench-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  font-size: 15px;
   line-height: 1.3;
 }
 
@@ -202,7 +200,8 @@
   border-radius: var(--workbench-radius-control) !important;
   box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
     inset 0 0 0 1px rgb(22 29 46 / 11%) !important;
-  font-size: var(--workbench-font-body) !important;
+  /* 画板 `.inp`：框里的取值是 17px。 */
+  font-size: 17px !important;
 }
 
 .select {
@@ -223,7 +222,8 @@
     inset 0 0 0 1px rgb(22 29 46 / 11%);
   color: var(--workbench-text);
   font-family: inherit;
-  font-size: var(--workbench-font-body);
+  /* 画板 `.inp`：框里的取值是 17px。 */
+  font-size: 17px;
   line-height: var(--workbench-line-height);
 }
 
