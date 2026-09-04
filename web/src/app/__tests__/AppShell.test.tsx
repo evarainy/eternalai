@@ -730,21 +730,65 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     expect(popoverRule('system-status')).toContain('width: 384px');
 
     /*
-     * 状态靠颜色区分：每一行带一个 `data-status-kind`，样式表按该值给圆点上色。原实现用的
-     * `？ × — ! √` 这类字符符号必须一个都不剩。
+     * 状态靠颜色区分：每一行带一个 `data-status-kind`，行里那个圆点自己也带同一个值，样式表按该值
+     * 上色。原实现用的 `？ × — ! √` 这类字符符号必须一个都不剩。
      */
-    const kinds = Array.from(
-      panel.querySelectorAll('[data-status-kind]'),
-      (row) => row.getAttribute('data-status-kind'),
+    const rows = Array.from(
+      panel.querySelectorAll('[data-status-kind]:not([aria-hidden="true"])'),
     );
-    expect(kinds).toEqual(['attention', 'unchecked', 'unchecked']);
+    expect(rows.map((row) => row.getAttribute('data-status-kind'))).toEqual([
+      'attention',
+      'unchecked',
+      'unchecked',
+    ]);
+    for (const row of rows) {
+      const dot = row.querySelector('[aria-hidden="true"][data-status-kind]');
+      expect(dot).not.toBeNull();
+      expect(dot?.getAttribute('data-status-kind')).toBe(
+        row.getAttribute('data-status-kind'),
+      );
+    }
     expect(panel.textContent ?? '').not.toMatch(/[？×—!√✓✗⚠]/u);
 
+    /*
+     * 一份色值，两个落点：面板行的圆点与顶栏触发器的圆点共用同一组规则。谁在别处再写一套色值，
+     * 这里读到的规则就不再同时带上两个类名。
+     */
     const css = readSource('../AppShell.module.css');
     for (const kind of ['normal', 'attention', 'unchecked']) {
-      expect(css).toContain(`.statusRow[data-status-kind='${kind}'] .statusDot`);
+      expect(css).toContain(`.statusDot[data-status-kind='${kind}']`);
+      expect(css).toContain(`.signalDot[data-status-kind='${kind}']`);
     }
   });
+
+  /*
+   * 雨爷 2026-09-04 走查：「系统状态那里要与设计稿一样，是通过带颜色的点来判断系统现在的状态。」
+   * 面板内部本来就是圆点，缺的是**顶栏那个触发器**——它还是一个线框图标。画板 `TopPops.dc.html` 的
+   * 顶栏这一格是 `<span class="dot" style="background:#e0342c"></span>系统状态`。
+   *
+   * 这条同时钉住无障碍底线：圆点是 `aria-hidden` 的纯视觉件，按钮的可见文字与 `aria-label` 必须仍然
+   * 把状态说清楚——颜色不能是唯一的区分手段。
+   */
+  it.each([
+    ['invalid' as const, 'attention', '系统状态，1 项需要处理'],
+    ['active' as const, 'normal', '系统状态，暂无需要处理的项'],
+  ])(
+    'shows a colour-coded dot in the topbar trigger when OA is %s',
+    async (pollStatus, kind, label) => {
+      apiMocks.getBinding.mockResolvedValue(binding({ poll_status: pollStatus }));
+      renderShell();
+
+      const trigger = await screen.findByRole('button', { name: label });
+      const dot = within(trigger).getByTestId('topbar-system-status-dot');
+      expect(dot).toHaveAttribute('data-status-kind', kind);
+      expect(dot).toHaveAttribute('aria-hidden', 'true');
+      // 颜色之外仍有文字：可见的「系统状态」四个字 + `aria-label` 里的整句状态。
+      expect(trigger).toHaveTextContent('系统状态');
+      expect(trigger).toHaveAttribute('aria-label', label);
+      // 触发器里不再有线框图标。
+      expect(trigger.querySelector('svg')).toBeNull();
+    },
+  );
 
   /*
    * 「AI 助手」「工作台自己的数据」两行画板上有，但工作台没有任何健康检查来源。行位照画板保留，状态

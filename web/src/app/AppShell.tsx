@@ -539,7 +539,18 @@ export function AppShell() {
             onClick={() => togglePanel('system-status')}
             type="button"
           >
-            <Icon className={styles.signalIcon} name={statusRow.icon} size={18} />
+            {/*
+              画板 `TopPops.dc.html` 的顶栏这一格是**带颜色的圆点**（`<span class="dot"
+              style="background:#e0342c"></span>系统状态`），不是线框图标。颜色取自与面板里同一份
+              `data-status-kind` 映射，不另写一套色值；圆点只承担视觉，可见文字「系统状态」与按钮
+              `aria-label` 里的整句状态仍在，颜色不是唯一的区分手段。
+            */}
+            <span
+              aria-hidden="true"
+              className={styles.signalDot}
+              data-status-kind={statusRow.kind}
+              data-testid="topbar-system-status-dot"
+            />
             <span className={styles.signalText}>系统状态</span>
             {statusLoading ? (
               <span className={styles.badgeUnknown} data-testid="system-status-count">
@@ -725,7 +736,11 @@ export function AppShell() {
                     data-status-kind={row.kind}
                     key={row.key}
                   >
-                    <span aria-hidden="true" className={styles.statusDot} />
+                    <span
+                      aria-hidden="true"
+                      className={styles.statusDot}
+                      data-status-kind={row.kind}
+                    />
                     <div className={styles.statusBody}>
                       <div className={styles.statusName}>{row.name}</div>
                       <p className={styles.statusText}>{row.statusText}</p>

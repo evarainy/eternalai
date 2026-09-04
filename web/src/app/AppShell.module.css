@@ -625,34 +625,52 @@
 }
 
 /*
- * 状态靠颜色区分（画板 `.dot`），文字同时把状态说清楚——颜色不是唯一的区分手段。原实现用
- * `？ × — ! √` 这类字符符号，2026-09-04 雨爷判为不符合定稿，已整体去掉。
+ * 状态圆点。画板 `.dot` 就是 `width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 3px rgba(255,255,255,.5)`，
+ * 顶栏触发器（`TopPops.dc.html` 的 `<span class="dot" style="background:#e0342c"></span>系统状态`）与
+ * 面板里的每一行用的是**同一个** `.dot`，所以这里也只有一份尺寸与一份色值：面板行用 `.statusDot`
+ * （多一个 `margin-top` 与第一行文字对齐），顶栏用 `.signalDot`，颜色规则两者共用，不写第二套色板。
+ *
+ * 颜色不是唯一的区分手段（2026-08-27 §九仍然有效）：圆点是视觉主通道，按钮的可见文字「系统状态」
+ * 与 `aria-label` 里的整句状态是可访问性兜底，两者都在。原实现用 `？ × — ! √` 这类字符符号，
+ * 2026-09-04 雨爷判为不符合定稿，已整体去掉。
  */
-.statusDot {
+.statusDot,
+.signalDot {
   width: 9px;
   height: 9px;
   flex: none;
-  margin-top: 8px;
   border-radius: 50%;
   box-shadow: 0 0 0 3px rgb(255 255 255 / 50%);
 }
 
-.statusRow[data-status-kind='normal'] .statusDot {
+/* 面板行是多行文字，圆点要落在第一行的行心上。 */
+.statusDot {
+  margin-top: 8px;
+}
+
+.statusDot[data-status-kind='normal'],
+.signalDot[data-status-kind='normal'] {
   background: #2fc14e;
 }
 
-.statusRow[data-status-kind='attention'] .statusDot {
+.statusDot[data-status-kind='attention'],
+.signalDot[data-status-kind='attention'] {
   background: #e0342c;
 }
 
-.statusRow[data-status-kind='retrying'] .statusDot,
-.statusRow[data-status-kind='unknown'] .statusDot {
+.statusDot[data-status-kind='retrying'],
+.statusDot[data-status-kind='unknown'],
+.signalDot[data-status-kind='retrying'],
+.signalDot[data-status-kind='unknown'] {
   background: #f0840a;
 }
 
-.statusRow[data-status-kind='loading'] .statusDot,
-.statusRow[data-status-kind='unbound'] .statusDot,
-.statusRow[data-status-kind='unchecked'] .statusDot {
+.statusDot[data-status-kind='loading'],
+.statusDot[data-status-kind='unbound'],
+.statusDot[data-status-kind='unchecked'],
+.signalDot[data-status-kind='loading'],
+.signalDot[data-status-kind='unbound'],
+.signalDot[data-status-kind='unchecked'] {
   background: #98a1b5;
 }
 
