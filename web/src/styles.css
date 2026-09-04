@@ -12,7 +12,14 @@
   --workbench-text-secondary: #454e66;
   --workbench-text-caption: #4f5872;
   --workbench-primary: #2450c8;
-  --workbench-focus: #b44b00;
+  /*
+   * 2026-09-04：焦点环原来是 `#b44b00`——暖纸色系被弃用时漏掉的一处橙色。玻璃换血把
+   * `background` / `surface` / `primary` 都换了，唯独它没换，于是每个输入框一聚焦就弹一圈橙。
+   * 按 2026-09-02 裁决，`colorPrimary` 保留为语义强调色（链接、焦点环、语义提示），焦点环正是
+   * 它该用的地方。实算（`theme.test.ts` 有守卫）：#2450c8 对读物面 #ebf2ff 是 6.11:1、对最深
+   * 底图上的玻璃合成底 #c4d9fe 是 4.81:1，都过 SC 1.4.11 的 3:1。
+   */
+  --workbench-focus: var(--workbench-primary);
   --workbench-success: #0b5c2b;
   --workbench-warning: #8c4a00;
   --workbench-error: #a8231c;
@@ -174,9 +181,71 @@ body {
   opacity: 1;
 }
 
+/*
+ * 键盘焦点的兜底环。链接、纯按钮这些没有自定义焦点态的元素全靠它，**不许删**；`outline-offset`
+ * 取正值，环画在元素外沿而不是内缩。
+ */
 :where(a, button, input, textarea, summary, [tabindex]):focus-visible {
   outline: 3px solid var(--workbench-focus) !important;
   outline-offset: 3px;
+}
+
+/*
+ * antd 的输入类组件是「外层容器画圆角与可见边框、内层才是真正的 `<input>`」。上面那条兜底规则命中的
+ * 是**内层**，于是焦点环出现在可见边框内侧、圆角也对不上——雨爷 2026-09-04 走查说的「点击输入框后
+ * 周边会显示比视觉上输入框小一圈的边框」就是它，再叠上那个橙色，就是他说的「十分难看」。
+ *
+ * 修法两步：内层的 outline 抑制掉；焦点态改画在**承担可见边框的那一层**。判别靠 antd 自己的变体类：
+ * 外层容器带 `-outlined`，内层 `<input>` 只有裸 `.ant-input`（实机 DOM 核对过），所以下面这组选择器
+ * 天然只命中外层，不会误伤内层。
+ *
+ * 写法与已有的三处 `:focus-within` 统一到同一对令牌——顶栏搜索框 `.searchField`、AI 助手输入卡
+ * `.sender`、交办页 `.briefInput` / `.chipWell` 用的都是：非聚焦 `--workbench-field-face`（1px 可辨
+ * 边界，近白面上实算 ≈4.1:1），聚焦 `--workbench-field-face-focus`（2px 主题色）。
+ */
+.ant-input-affix-wrapper > input.ant-input:focus-visible,
+.ant-select-input:focus-visible,
+.ant-input-number-input:focus-visible,
+.ant-picker-input > input:focus-visible {
+  outline: none !important;
+}
+
+/*
+ * 带边框的输入类控件自己已经有 2px 主题色聚焦环（下面那条 `-focus`，实机测 6.5:1），再叠一圈 3px 的
+ * 兜底 outline 就是同一个控件上套两个同色环。键盘可达性没有因此变差：焦点态仍然是一圈高对比的 2px
+ * 主题色，只是不再画两遍。没有自定义焦点态的元素（链接、纯按钮）依旧走上面那条兜底规则。
+ */
+.ant-input-outlined:focus-visible,
+.ant-input-affix-wrapper-outlined:focus-visible,
+.ant-input-number-outlined:focus-visible,
+.ant-picker-outlined:focus-visible {
+  outline: none !important;
+}
+
+.ant-input-outlined,
+.ant-input-affix-wrapper-outlined,
+.ant-input-number-outlined,
+.ant-select-outlined,
+.ant-picker-outlined {
+  border-color: transparent;
+  box-shadow: var(--workbench-field-face);
+}
+
+.ant-input-outlined:focus,
+.ant-input-outlined-focused,
+.ant-input-affix-wrapper-outlined:focus-within,
+.ant-input-number-outlined:focus-within,
+.ant-select-outlined:focus-within,
+.ant-picker-outlined-focused,
+.ant-picker-outlined:focus-within {
+  border-color: transparent;
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/* 外层已经画了那道边界，内层不再叠第二层。 */
+.ant-input-affix-wrapper > .ant-input,
+.ant-input-number-outlined .ant-input-number-input {
+  box-shadow: none;
 }
 
 .ant-btn,
@@ -207,7 +276,20 @@ body {
  * 纯蓝，这里统一换成「提亮一档的玻璃 + 深色字」——主次之分靠亮度和字重，不靠填色。
  *
  * 例外只留给语义：`ant-btn-dangerous` 保留 antd 的危险色，`ant-btn-link` / `ant-btn-text` 保持无底。
- * 主动作按钮的「蓝字 + 蓝色高光内边」是另一条已裁决的例外，当前只归任务交办页的「发布」，本处不用。
+ *
+ * 2026-09-04 补第二层（雨爷走查第 5 条：「所有右侧页面内的按钮都是纯白色，搭配白色背景区分度不明显」）。
+ * 原来这两条只有 `--workbench-chip-edge` 那一圈**白色**内边，在近白的内容面板上等于没有边界。WCAG 2.2
+ * SC 1.4.11 的原文是：边界若承担「让用户识别这里存在一个可操作控件」的职责，该边界与相邻色必须 ≥3:1，
+ * 且**阴影可以增加可见性但不能替代这条 3:1**——所以这里两样都给，不是只加投影。
+ *
+ * 三层分工（全站同一套，各页不再自定义）：
+ * - 主动作 `.ant-btn-primary`：蓝字 + 蓝色高光内边 + 更重的主题色投影（2026-09-02 裁决允许的
+ *   `.btn.go` 语言）。
+ * - 次动作 `.ant-btn-default`：可辨边界 + 轻主题色投影。
+ * - 文字按钮 `.ant-btn-link` / `.ant-btn-text`：无边框无投影，只有文字色（见下方那条）。
+ *
+ * 玻璃本体仍**不填鲜艳色**（2026-09-02 裁决）：主题色只出现在边框与投影上；按钮仍不加
+ * `backdrop-filter`（模糊层预算 ≤6）。
  */
 .ant-btn-default:not(.ant-btn-dangerous),
 .ant-btn-primary:not(.ant-btn-dangerous) {
@@ -215,13 +297,27 @@ body {
   background-color: transparent;
   background-image: var(--workbench-chip-fill);
   border-color: transparent;
-  box-shadow: var(--workbench-chip-edge);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
 }
 
 .ant-btn-primary:not(.ant-btn-dangerous) {
+  color: var(--workbench-primary);
   background-image: var(--workbench-chip-fill-strong);
-  box-shadow: var(--workbench-chip-edge-strong);
+  box-shadow: var(--workbench-control-ring-primary),
+    var(--workbench-chip-edge-strong), var(--workbench-control-glow-strong);
   font-weight: 700;
+}
+
+/* 文字按钮：无边框、无投影，只靠文字色。 */
+.ant-btn-link:not(.ant-btn-dangerous),
+.ant-btn-text:not(.ant-btn-dangerous) {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ant-btn-link:not(.ant-btn-dangerous) {
+  color: var(--workbench-primary);
 }
 
 .ant-btn-default:not(.ant-btn-dangerous):disabled,

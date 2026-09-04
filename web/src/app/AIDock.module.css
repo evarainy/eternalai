@@ -145,6 +145,10 @@
   line-height: 1.5;
 }
 
+/*
+ * 这是个裸 `<button>`，全局的 `.ant-btn-default` 规则够不着它，边界得自己写。次动作一档：
+ * 可辨边界 + 轻主题色投影（WCAG 2.2 SC 1.4.11，2026-09-04）。
+ */
 .noticeButton {
   min-height: 32px;
   padding: 0 14px;
@@ -152,7 +156,8 @@
   background-image: var(--workbench-chip-fill);
   border: 0;
   border-radius: 999px;
-  box-shadow: var(--workbench-chip-edge);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
   cursor: pointer;
   font-family: inherit;
   font-size: var(--workbench-font-caption);

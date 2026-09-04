@@ -93,18 +93,32 @@
   margin-top: 26px;
 }
 
-/* 输入框做成凹槽：玻璃面上「可以往里写」的地方要一眼看出来。 */
+/*
+ * 输入框做成凹槽：玻璃面上「可以往里写」的地方要一眼看出来。
+ *
+ * 2026-09-04：描边从 `--workbench-well-edge`（那一圈 70% 白）换成全站共用的 `--workbench-field-face`。
+ * 白边在玻璃面上与相邻色几乎没有对比，不满足 WCAG 2.2 SC 1.4.11 的 3:1；换过来后是 1px 深墨边，
+ * 实算 ≈4.1:1。聚焦态本页原来一条都没有，靠的是全局 `:focus-visible` 打在内层 `<input>` 上的橙色环，
+ * 正是雨爷 2026-09-04 说的「比视觉上输入框小一圈」——改为在承担可见边框的这一层画 2px 主题色，写法与
+ * 顶栏搜索框、AI 助手输入卡、交办页各字段完全一致。
+ */
 .form :global(.ant-input-affix-wrapper),
 .form :global(.ant-input) {
   min-height: 52px;
   background-color: transparent;
   background-image: var(--workbench-well-fill);
   border-color: transparent;
-  box-shadow: var(--workbench-well-edge);
+  box-shadow: var(--workbench-field-face);
 }
 
-/* 带后缀图标的输入框（密码）外层已经是凹槽，内层 input 不再叠第二层内阴影。 */
-.form :global(.ant-input-affix-wrapper .ant-input) {
+.form :global(.ant-input):focus,
+.form :global(.ant-input-affix-wrapper):focus-within {
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/* 带后缀图标的输入框（密码）外层已经是凹槽，内层 input 不再叠第二层内阴影——聚焦时也不叠。 */
+.form :global(.ant-input-affix-wrapper .ant-input),
+.form :global(.ant-input-affix-wrapper .ant-input):focus {
   min-height: auto;
   background-color: transparent;
   background-image: none;

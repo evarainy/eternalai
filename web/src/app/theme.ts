@@ -74,7 +74,13 @@ export const workbenchTokens = {
     textSecondary: '#454e66',
     placeholder: '#4f5872',
     primary: '#2450c8',
-    focus: '#b44b00',
+    /*
+     * 2026-09-04：焦点环原来是 `#b44b00`——暖纸色系被弃用时漏掉的一处橙色，玻璃换血把 background /
+     * surface / primary 都换了，唯独它没换，于是每个输入框一聚焦就弹一圈橙。按 2026-09-02 裁决，
+     * `colorPrimary` 保留为语义强调色（链接、焦点环、语义提示），焦点环正是它该用的地方。
+     * **必须与 `primary` 同值**，`theme.test.ts` 有守卫钉住这条，别只改一头。
+     */
+    focus: '#2450c8',
     success: '#0b5c2b',
     warning: '#8c4a00',
     error: '#a8231c',

@@ -179,6 +179,16 @@ describe('glass reading surfaces', () => {
     }
   });
 
+  /*
+   * 2026-09-04：焦点环曾经是暖纸色系遗留的橙色 `#b44b00`——它自己是过 3:1 的，所以上面那条对比度守卫
+   * 一路放行，直到雨爷实机走查才看见「点一下输入框弹一圈橙」。对比度达标不等于配色属于现役色板，所以
+   * 这里再钉一条：焦点环必须就是主题色本身。橙色若被改回来，这条会打红。
+   */
+  it('draws the focus ring in the theme colour, not the retired warm-paper orange', () => {
+    expect(workbenchTokens.colors.focus).toBe(workbenchTokens.colors.primary);
+    expect(workbenchTokens.colors.focus).not.toBe('#b44b00');
+  });
+
   it('keeps body-bearing panels opaque enough and large glass translucent', () => {
     expect(alphaOf(workbenchTokens.panelFill)).toBeGreaterThanOrEqual(0.86);
     expect(alphaOf(workbenchTokens.glassFill)).toBeLessThan(

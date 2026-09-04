@@ -36,13 +36,20 @@
   box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
-/* 画板 `.btn`：44px 高的胶囊，不是 52px 的大按钮。 */
+/*
+ * 画板 `.btn`：44px 高的胶囊，不是 52px 的大按钮。
+ *
+ * 2026-09-04：这里原来只有 `--workbench-chip-edge-strong` 那一圈白内边，在近白的左栏上等于没有边界。
+ * 按 WCAG 2.2 SC 1.4.11 补 `--workbench-control-ring`（1px 可辨边界）并叠主题色投影，与全站
+ * `.ant-btn-default` 同一套；玻璃本体仍不填鲜艳色。
+ */
 .newSessionButton {
   min-height: 44px;
   background-image: var(--workbench-chip-fill-strong);
   border: 0;
   border-radius: 999px;
-  box-shadow: var(--workbench-chip-edge-strong);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge-strong),
+    var(--workbench-control-glow);
   color: var(--workbench-text);
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;

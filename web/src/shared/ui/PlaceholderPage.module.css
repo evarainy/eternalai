@@ -63,7 +63,12 @@
   margin-top: 24px;
 }
 
-/* 动作按钮＝玻璃芯片：不填固定色，颜色由底图透出；点击目标不小于 44×44。 */
+/*
+ * 动作按钮＝玻璃芯片：不填固定色，颜色由底图透出；点击目标不小于 44×44。
+ *
+ * 2026-09-04：它是 `<Link>` 不是 `.ant-btn`，全局那条按钮规则够不着，可辨边界与主题色投影在这里
+ * 自己写一遍（WCAG 2.2 SC 1.4.11：投影不能替代边界的 3:1）。
+ */
 .action {
   display: inline-flex;
   min-height: 52px;
@@ -72,7 +77,8 @@
   color: var(--workbench-text);
   background-image: var(--workbench-chip-fill-strong);
   border-radius: 999px;
-  box-shadow: var(--workbench-chip-edge-strong);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge-strong),
+    var(--workbench-control-glow);
   font-size: var(--workbench-font-body);
   font-weight: 700;
   text-decoration: none;
