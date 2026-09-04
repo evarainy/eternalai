@@ -1,0 +1,138 @@
+/*
+ * 登录页是外壳之外的**独立一屏**：它挂在 `ProtectedRoute` 之外，不经过 `AppShell`，所以玻璃材质必须
+ * 在本文件里自己落地，不能指望外壳的换皮覆盖过来。底图由 `styles.css` 画在 `body` 上。
+ *
+ * 2026-09-02 玻璃四条硬约束在本文件里的落点：
+ * 1. 模糊层预算：整屏只有 `.card` 一处 `backdrop-filter`（1 层，预算 6）。
+ * 2. 小元件：品牌底座与提交按钮不带模糊，只用低不透明度白 + 边缘高光。
+ * 3. 正文区：登录卡只承载两个字段与一句副标题，不是正文列表面板，按大面玻璃（58% 白）处理，与左导航
+ *    / 顶栏同档；对比度按 `theme.ts` 的 `glassSurface`（最深底图上的最坏合成底色）核。
+ * 4. 颜色：按钮不填固定色，颜色由底图透出；品牌标记的蓝是语义强调色。
+ *
+ * 可读性令牌一律不下调：正文 19px、辅助 16px、说明 14px、控件高 ≥44px。
+ */
+.screen {
+  display: grid;
+  min-height: 100vh;
+  align-content: center;
+  justify-items: center;
+  padding: 32px 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 472px;
+  padding: 44px 44px 36px;
+  color: var(--workbench-text);
+  background: var(--workbench-glass-fill);
+  backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: 36px;
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brandMark {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  flex: none;
+  place-items: center;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 17px;
+  box-shadow: var(--workbench-chip-edge);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.brandText {
+  display: grid;
+  min-width: 0;
+}
+
+/* 画板：品牌名 17px、「欢迎回来」34px。 */
+.brandName {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  line-height: 1.25;
+}
+
+.brandSub {
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.35;
+}
+
+.welcome {
+  margin: 34px 0 0;
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1.25;
+}
+
+.subtitle {
+  margin: 10px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.alert {
+  margin-top: 22px;
+}
+
+.form {
+  margin-top: 26px;
+}
+
+/*
+ * 输入框做成凹槽：玻璃面上「可以往里写」的地方要一眼看出来。
+ *
+ * 2026-09-04：描边从 `--workbench-well-edge`（那一圈 70% 白）换成全站共用的 `--workbench-field-face`。
+ * 白边在玻璃面上与相邻色几乎没有对比，不满足 WCAG 2.2 SC 1.4.11 的 3:1；换过来后是 1px 深墨边，
+ * 实算 ≈4.1:1。聚焦态本页原来一条都没有，靠的是全局 `:focus-visible` 打在内层 `<input>` 上的橙色环，
+ * 正是雨爷 2026-09-04 说的「比视觉上输入框小一圈」——改为在承担可见边框的这一层画 2px 主题色，写法与
+ * 顶栏搜索框、AI 助手输入卡、交办页各字段完全一致。
+ */
+.form :global(.ant-input-affix-wrapper),
+.form :global(.ant-input) {
+  min-height: 52px;
+  background-color: transparent;
+  background-image: var(--workbench-well-fill);
+  border-color: transparent;
+  box-shadow: var(--workbench-field-face);
+}
+
+.form :global(.ant-input):focus,
+.form :global(.ant-input-affix-wrapper):focus-within {
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/* 带后缀图标的输入框（密码）外层已经是凹槽，内层 input 不再叠第二层内阴影——聚焦时也不叠。 */
+.form :global(.ant-input-affix-wrapper .ant-input),
+.form :global(.ant-input-affix-wrapper .ant-input):focus {
+  min-height: auto;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+
+.submit {
+  height: 56px !important;
+  font-size: var(--workbench-font-body) !important;
+}
+
+.note {
+  margin: 18px 0 0;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.6;
+}

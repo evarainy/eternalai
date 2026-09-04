@@ -1,0 +1,551 @@
+/*
+ * 软件中心，版式照定稿画板 `Apps.dc.html`；「新建应用」弹窗照 `AppNew.dc.html`（两者共用本文件）。
+ *
+ * 玻璃硬约束：整页**一处 `backdrop-filter` 都不声明**（2026-09-04 起，内容面板不再买模糊，理由见
+ * 下方 `.panel`）。软件卡、状态标签、选择芯片
+ * 一律只用低不透明度白加边缘高光，不带模糊、不带固定填充色；弹窗遮罩也不加模糊（画板 `.mask` 就是
+ * 一层纯半透明黑），否则弹窗一开就多一层合成。模糊层计数见 `app/__tests__/blurBudget.test.tsx`。
+ */
+
+.page {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+}
+
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
+.panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 18px 24px 14px;
+}
+
+.headCopy {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+/* 标题 24px：层级靠字重与留白，不靠把字号一路往上顶。正文仍是 19px。 */
+.title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.aux {
+  margin: 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.newButton {
+  min-height: 46px;
+  margin-left: auto;
+  gap: 8px;
+}
+
+.sections {
+  display: grid;
+  gap: 20px;
+  padding: 4px 24px 22px;
+}
+
+.section {
+  display: grid;
+  min-width: 0;
+  gap: 11px;
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px;
+}
+
+.sectionHead > h2 {
+  margin: 0;
+  font-size: var(--workbench-font-body);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.cardGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (width <= 1100px) {
+  .cardGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- 软件卡 ---------- */
+
+/*
+ * 雨爷 2026-09-04 走查第 3 条：「系统卡片展示不美观，整个纯白的的底，按钮在这个页面下也不明显。」
+ *
+ * 原来卡片是 52% 白压在 86% 白的内容面板上——合成后约 #F9FAFD，与面板几乎同色，那道 80% 白的内边
+ * 更是看不见，于是整块读起来就是一片白。改法（只动观感，一条数据都没加）：
+ *
+ * 1. **卡片不再是纯白**：换成从近白到浅蓝灰的竖向渐变，合成后底部约 #E8EEFB，明确比面板深一档；
+ * 2. **给一道看得见的描边**：`rgb(22 29 46 / 14%)` 的 1px 内边（卡片是容器不是控件，不适用 SC 1.4.11
+ *    的 3:1 硬指标，这里取的是「能分出层」的最小值，不把整页变成一堵框）；
+ * 3. **抬起来一点**：投影从 `-12px` 扩散改到 `-14px` 更远更柔，卡片从面板上浮出来。
+ */
+.appCard {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 17px;
+  border-radius: 20px;
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 70%) 0%,
+    rgb(226 234 250 / 76%) 100%
+  );
+  box-shadow: inset 0 0 0 1px rgb(22 29 46 / 14%),
+    0 10px 24px -14px rgb(16 26 58 / 42%);
+}
+
+.appMark {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 15px;
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text-secondary);
+  place-items: center;
+}
+
+.appBody {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+}
+
+/* 状态标签紧跟在系统名右边（2026-09-02 第二轮意见），不是右侧单独一列。 */
+.appTitleLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.appName {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.pillOk,
+.pillWarn,
+.pillNeutral {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.pillOk {
+  background: rgb(112 214 166 / 34%);
+  color: var(--workbench-success);
+}
+
+.pillWarn {
+  background: rgb(255 206 138 / 44%);
+  color: var(--workbench-warning);
+}
+
+.pillNeutral {
+  background: rgb(22 29 46 / 8%);
+  color: var(--workbench-text-secondary);
+}
+
+/* 右侧动作上下居中（2026-09-02 第二轮意见）。 */
+.appActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+/*
+ * 卡片上的动作按钮。原来只有 `--workbench-chip-edge` 那一圈白色内边，在浅色卡上等于没有边界——
+ * 这正是雨爷说的「按钮在这个页面下也不明显」。按 WCAG 2.2 SC 1.4.11 补上**可辨边界**（≥3:1）并叠
+ * 主题色投影；玻璃本体仍不填鲜艳色，主题色只出现在边框与投影上。
+ */
+.openLink,
+.bindLink {
+  display: inline-flex;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
+  color: var(--workbench-text);
+  font-size: 17px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* 「去绑账号」是这张卡上的主动作：蓝字 + 蓝边 + 更重的主题色投影。 */
+.bindLink {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-control-ring-primary),
+    var(--workbench-chip-edge-strong), var(--workbench-control-glow-strong);
+  color: var(--workbench-primary);
+  font-weight: 700;
+}
+
+/*
+ * 后端没有数据源的地方一律用这一句如实说明顶上，不摆编出来的卡片。字号按辅助下限 16px，不缩到
+ * 说明字号。
+ */
+.sectionNote {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: var(--workbench-radius-card);
+  background: rgb(22 29 46 / 4%);
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+/*
+ * 业务系统一块的说明就坐在卡片网格的第二格里：真卡只有 OA 一张，右半格空着会显得像没加载出来。
+ * 把「其余三个系统还没接进来」放在那一格，位置是画板上第二张卡的位置，但它是一段说明、不是一张卡，
+ * 不会让人以为那也是个能点的系统。
+ */
+.gridNote {
+  display: flex;
+  align-items: center;
+}
+
+.notice {
+  margin: 0;
+  padding: 12px 16px;
+  border-radius: var(--workbench-radius-card);
+  background: rgb(255 206 138 / 30%);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+/*
+ * 卡片副行、状态标签与字段提示：画板 `Apps.dc.html` 的 `.cap` 就是 14px。2026-09-04 雨爷推翻了
+ * 「辅助 ≥16px」那条下限，这里把当时为守下限做的 14→16 上调改回画板值。
+ */
+.caption {
+  margin: 0;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
+}
+
+/* ---------- 新建应用弹窗 ---------- */
+
+/*
+ * 遮罩保持画板的纯半透明黑：弹窗不该额外买一层模糊合成。
+ *
+ * 这里**没有**写覆盖遮罩的规则。实测 antd v6 把遮罩挂在 `.ant-modal-root` 下、把弹窗本体挂在
+ * `.ant-modal-wrap` 下，两者既不是父子也不是相邻兄弟，所以任何以本弹窗 class 起头的选择器都够不着
+ * 遮罩，写了也只是看着像做了防护。遮罩本身不带 `backdrop-filter`，这一点由
+ * `app/__tests__/blurBudget.test.tsx` 的「弹窗盖住整屏后模糊层列表不变」那条断言在**真实渲染的**
+ * DOM 上守着——谁给遮罩或弹窗本体加上模糊，那条会变红。
+ */
+
+.dialog :global(.ant-modal-content) {
+  border-radius: 30px;
+  background: var(--workbench-panel-fill);
+}
+
+.optionSet {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.optionGrid {
+  display: grid;
+  margin-top: 7px;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.optionOn,
+.optionOff {
+  display: grid;
+  min-height: var(--workbench-target-size);
+  gap: 4px;
+  padding: 13px 15px;
+  border: 0;
+  border-radius: 18px;
+  background: rgb(255 255 255 / 40%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 66%);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.optionOn {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 2px rgb(47 107 255 / 45%), 0 6px 16px -10px rgb(16 26 58 / 40%);
+}
+
+.optionTitle {
+  color: var(--workbench-text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.optionOn .optionTitle {
+  font-weight: 700;
+}
+
+/* 画板 `.opt .od`：14px。 */
+.optionHint {
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
+}
+
+.dialogGrid {
+  display: grid;
+  margin-top: 14px;
+  gap: 11px 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  align-content: start;
+}
+
+/* 字段标签：画板 `AppNew.dc.html` 的 `.form2 .fld label` 就是 15px。 */
+.field > label,
+.fieldLabel {
+  padding: 0;
+  color: var(--workbench-text-secondary);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.field :global(.ant-input),
+.field :global(.ant-input-affix-wrapper) {
+  background: rgb(255 255 255 / 62%) !important;
+  border: 0 !important;
+  border-radius: var(--workbench-radius-control) !important;
+  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
+    inset 0 0 0 1px rgb(22 29 46 / 11%) !important;
+  font-size: var(--workbench-font-body) !important;
+}
+
+.choiceRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.choiceOn,
+.choiceOff {
+  min-height: var(--workbench-target-size);
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  color: var(--workbench-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.choiceOn {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 2px rgb(47 107 255 / 45%);
+  font-weight: 700;
+}
+
+/* 未选中不靠颜色单独表意：选中的另有蓝色内边与加粗字重。 */
+.choiceOff {
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text-secondary);
+  opacity: 0.72;
+}
+
+.choiceOff:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.chipWell {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--workbench-radius-control);
+  background: rgb(255 255 255 / 62%);
+  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
+    inset 0 0 0 1px rgb(22 29 46 / 11%);
+}
+
+.chip {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 12px;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.chipRemove {
+  display: grid;
+  width: var(--workbench-target-size);
+  height: var(--workbench-target-size);
+  border: 0;
+  background: none;
+  color: var(--workbench-text-secondary);
+  cursor: pointer;
+  place-items: center;
+}
+
+.chipInput {
+  width: 12em;
+  min-width: 8em;
+  flex: 1;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.chipAdd {
+  min-height: var(--workbench-target-size);
+  gap: 6px;
+}
+
+.dialogWarn {
+  display: flex;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 18px;
+  border-radius: 20px;
+  background: rgb(255 206 138 / 32%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 55%);
+}
+
+.warnMark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 12px;
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-warning);
+  place-items: center;
+}
+
+.warnTitle {
+  color: var(--workbench-warning);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.warnCopy {
+  margin: 4px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: 1.5;
+}
+
+.dialogFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin: 14px -24px 0;
+  padding: 12px 24px;
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
+}
+
+.dialogActions {
+  display: flex;
+  margin-left: auto;
+  gap: 12px;
+}
+
+.dialogActions :global(.ant-btn) {
+  min-height: var(--workbench-target-size);
+}
+
+.dialogNotice {
+  margin: 0 -24px;
+  padding: 12px 24px;
+  background: rgb(255 206 138 / 26%);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}

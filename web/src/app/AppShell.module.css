@@ -1,79 +1,145 @@
+/*
+ * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」的四条硬约束在本文件里的落点：
+ *
+ * 1. 模糊层预算：本文件只有 `.sidebar`、`.topbar`、`.floatingEntry` 三处声明 `backdrop-filter`。
+ *    顶栏弹层 `.popover` 承载正文，改用近乎不透明的底且**不加模糊**——既守住「正文区不做半透明」，
+ *    也把单屏层数留给内容面板与浮动窗。`web/src/app/__tests__/blurBudget.test.tsx` 在真实渲染结果
+ *    上数这些层。
+ * 2. 小元件：`.navLink` / `.signalButton` / `.avatarButton` / `.badge*` 一律不带模糊，只用低不透明
+ *    度白 + 边缘高光。
+ * 3. 正文区：`.popover` 用 `--workbench-panel-fill`（86% 白），不靠玻璃承载正文。
+ * 4. 颜色：按钮、图标、导航选中态都不填固定色，颜色由底图透出；固有色只留给语义（红/琥珀/绿）与
+ *    状态圆点。
+ */
+
 .shell {
+  position: relative;
   display: grid;
   min-height: 100vh;
+  padding: 16px;
+  gap: 16px;
   grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
-  background: var(--workbench-bg);
 }
 
+/*
+ * 底图三套预设。换底图只换 `.shell` 上的这一个 class，组件一律不动。
+ *
+ * 2026-09-04：底图从 `background-attachment: fixed` 换成一层**自身 `position: fixed`** 的伪元素。
+ * 理由与实测数据写在 `styles.css` 的 `body::before` 上——`background-attachment: fixed` 让浏览器无法
+ * 把滚动交给合成器，每帧重画整屏背景，这才是雨爷说的「交办页向下滑动卡顿」的真凶（去掉内容面板的
+ * `backdrop-filter` 对帧时毫无改善，换掉这一行则直接回到 60fps）。观感不变：底图本来就相对视口固定。
+ * 2026-09-04 第二次复核补了「光栅路径」这个变量：那批数字只在**软件光栅**下成立，GPU 光栅下模糊
+ * 是免费的、复现不出卡顿。完整对照表与逐层拆解写在 `styles.css` 的 `body::before` 上方。
+ */
+.shell::before {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+}
+
+.bgA::before {
+  background: var(--workbench-ground-a);
+}
+
+.bgB::before {
+  background: var(--workbench-ground-b);
+}
+
+.bgC::before {
+  background: var(--workbench-ground-c);
+}
+
+/* ---------- 左导航（玻璃大面 1/3） ---------- */
 .sidebar {
   position: sticky;
-  top: 0;
+  top: 16px;
   display: flex;
-  height: 100vh;
+  height: calc(100vh - 32px);
   flex-direction: column;
-  padding: 18px 14px;
-  color: #f7fbf8;
-  background: #163b31;
-  border-right: 1px solid #0c2d25;
+  padding: 18px 12px 12px;
+  overflow: hidden;
+  color: var(--workbench-text);
+  background: var(--workbench-glass-fill);
+  backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: 28px;
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
 .sidebar[data-collapsed='true'] {
-  padding: 18px var(--shell-sidebar-collapsed-padding);
+  padding: 18px var(--shell-sidebar-collapsed-padding) 12px;
 }
 
 .brand {
-  display: grid;
-  min-height: 64px;
-  align-content: center;
-  padding: 0 12px;
-  color: #fff;
-  font-family: var(--workbench-font-heading);
-  font-size: 24px;
-  font-weight: 800;
-  line-height: 1.2;
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px 18px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
 }
 
 .sidebar[data-collapsed='true'] .brand {
-  padding: 0;
-  font-size: 18px;
-  text-align: center;
+  justify-content: center;
+  padding: 0 0 18px;
+}
+
+.brandMark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  place-items: center;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 13px;
+  box-shadow: var(--workbench-chip-edge);
+}
+
+.brandText {
+  display: grid;
+  min-width: 0;
 }
 
 .brandName {
   overflow: hidden;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  line-height: 1.25;
   white-space: nowrap;
 }
 
 .brand small {
-  margin-top: 3px;
-  color: #c7ddd4;
-  font-family: var(--workbench-font-body-family);
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 500;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.35;
 }
 
 .nav {
   display: grid;
-  gap: 8px;
-  margin-top: 30px;
+  gap: 4px;
+  margin-top: 12px;
 }
 
 .navLink,
 .adminSummary,
 .sidebarAction {
   display: flex;
-  min-height: var(--workbench-target-size);
+  min-height: 48px;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  color: #f7fbf8;
+  gap: 12px;
+  padding: 9px 10px;
+  color: var(--workbench-text-secondary);
   background: none;
-  border: 2px solid transparent;
-  border-radius: 8px;
+  border: 0;
+  border-radius: var(--workbench-radius-control);
   font-family: inherit;
   font-size: var(--workbench-font-auxiliary);
-  font-weight: 650;
-  line-height: 1.3;
+  font-weight: 500;
+  line-height: 1.35;
   text-align: left;
   text-decoration: none;
 }
@@ -83,18 +149,38 @@
 .sidebar[data-collapsed='true'] .sidebarAction {
   min-width: var(--workbench-target-size);
   justify-content: center;
-  padding: 8px 0;
+  padding: 9px 0;
 }
 
+/* 选中态没有固定填充色：只是把玻璃提亮一档，底图照样透出来。 */
 .navLink[aria-current='page'] {
-  color: #173f73;
-  background: #dbeafe;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
+  font-weight: 700;
 }
 
+/* 图标底座：只放 `shared/ui/Icon` 的内联 SVG，颜色由 `currentColor` 继承，不自带模糊、不填固定色。 */
 .navIcon {
-  width: 24px;
+  display: grid;
+  width: 30px;
+  height: 30px;
   flex: none;
-  text-align: center;
+  place-items: center;
+  color: inherit;
+  background-image: var(--workbench-chip-fill);
+  border-radius: 10px;
+  box-shadow: var(--workbench-chip-edge);
+}
+
+/* 「收起导航」用同一个双箭头图标水平翻转，与画板一致。 */
+.navIcon[data-direction='collapse'] svg {
+  transform: scaleX(-1);
+}
+
+.navLink[aria-current='page'] .navIcon {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
 }
 
 .navText {
@@ -105,7 +191,9 @@
 }
 
 .adminGroup {
-  margin-top: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
 }
 
 .adminSummary {
@@ -114,18 +202,20 @@
 
 .adminLinks {
   display: grid;
-  gap: 4px;
-  padding: 8px 0 0 18px;
+  gap: 2px;
+  padding: 4px 0 0 18px;
 }
 
 .sidebar[data-collapsed='true'] .adminLinks {
-  padding: 8px 0 0;
+  padding: 4px 0 0;
 }
 
 .sidebarFooter {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   margin: auto 0 0;
+  padding-top: 12px;
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
 }
 
 .sidebarAction {
@@ -133,23 +223,118 @@
 }
 
 .stage {
+  position: relative;
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  gap: 16px;
 }
 
+/* ---------- 顶栏（玻璃大面 2/3） ---------- */
 .topbar {
   display: flex;
-  min-height: 76px;
+  min-height: 72px;
+  flex: none;
   align-items: center;
-  padding: 10px var(--topbar-padding);
+  padding: 0 var(--topbar-padding);
   gap: var(--topbar-gap);
-  background: var(--workbench-surface);
-  border-bottom: 1px solid var(--workbench-border);
+  background: var(--workbench-glass-fill-raised);
+  backdrop-filter: blur(26px) saturate(180%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
+/*
+ * 顶栏搜索。画板 `Main.dc.html` 的 `.search` 是 392×46 的凹槽：更深的内阴影 + 更亮的边 + 更深的提示
+ * 文字。整体尺寸照画板不变，但**按钮回来了**：雨爷 2026-09-04 第二次走查说「页面最上方的搜索按钮
+ * 丢失」，以他为准，右侧放一个带「搜索」二字的提交按钮。
+ *
+ * 两条都要满足，缺一条就是上一轮那个「看不出能按」的结果：
+ * - **垂直居中**：`.searchField` 是 `align-items: center` 的 flex 行，按钮 36px 高、凹槽 46px 高，
+ *   上下各留 5px，不再出现 antd `enterButton` 那种与输入框不等高、贴着上沿的情况；
+ * - **可辨边界 + 主题色投影**（WCAG 2.2 SC 1.4.11）：凹槽本身换成 `--workbench-field-face`（1px 深色
+ *   边界，实算 ≈4.1:1），按钮叠 `--workbench-control-ring` + `--workbench-control-glow`。只加投影不做
+ *   边界不满足 1.4.11。
+ */
 .topbarSearch {
   width: var(--topbar-search-width);
-  flex: none;
+  min-width: var(--topbar-search-min-width);
+  flex: 0 1 auto;
   margin-right: auto;
+}
+
+.searchField {
+  display: flex;
+  height: 46px;
+  align-items: center;
+  padding: 0 5px 0 14px;
+  gap: 8px;
+  background-color: var(--workbench-field-fill);
+  background-image: var(--workbench-well-fill);
+  border-radius: 16px;
+  box-shadow: var(--workbench-field-face);
+}
+
+.searchField:focus-within {
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/*
+ * 「搜索」按钮在这个凹槽**里面**，它一拿到键盘焦点，`:focus-within` 会把整条凹槽一起点亮，屏幕上于是同时出现
+ * 两个环（凹槽一圈 + 按钮自己那圈）。这里在支持 `:has()` 的浏览器上把凹槽那圈收回去，一次只留一个环。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回**今天的
+ * 行为**（多一个环），而不是退到「一个环都没有」——后者会让键盘用户找不到焦点。
+ */
+.searchField:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
+}
+
+.searchIcon {
+  display: grid;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  place-items: center;
+}
+
+/* 36px 高、上下自动居中；文字按钮不靠图标猜，直接写「搜索」。 */
+.searchSubmit {
+  display: inline-flex;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  align-self: center;
+  padding: 0 16px;
+  color: var(--workbench-text);
+  background-color: transparent;
+  background-image: var(--workbench-chip-fill-strong);
+  border: 0;
+  border-radius: 12px;
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.searchInput,
+.searchInput :global(.ant-input) {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: var(--workbench-text);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
 }
 
 .identity {
@@ -173,18 +358,25 @@
   min-height: var(--workbench-target-size);
   align-items: center;
   justify-content: center;
-  padding: 8px 12px;
-  gap: 6px;
-  color: var(--workbench-text);
-  background: var(--workbench-surface);
-  border: 1px solid var(--workbench-border);
-  border-radius: 8px;
+  padding: 0 14px;
+  gap: 9px;
+  color: var(--workbench-text-secondary);
+  background-image: var(--workbench-chip-fill);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: var(--workbench-chip-edge);
   cursor: pointer;
   font-family: inherit;
   font-size: var(--workbench-font-auxiliary);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.signalButton[aria-expanded='true'] {
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
 }
 
 .signalButton[data-slot='style'] {
@@ -204,7 +396,6 @@
 
 .signalIcon {
   flex: none;
-  font-size: 18px;
 }
 
 .signalText {
@@ -215,143 +406,534 @@
 .badgeAlert,
 .badgeUnknown {
   display: inline-flex;
-  min-width: 22px;
-  height: 22px;
+  min-width: 24px;
+  height: 24px;
   flex: none;
   align-items: center;
   justify-content: center;
-  padding: 0 4px;
-  border-radius: 11px;
-  font-size: 14px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: var(--workbench-font-caption);
   font-weight: 700;
 }
 
+/* 语义色是允许的固有色：红=需要处理，琥珀=判断不了。 */
 .badgeAlert {
-  color: #fff;
-  background: #a8271d;
+  color: var(--workbench-error);
+  background-image: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 58%),
+      rgb(255 255 255 / 12%) 55%
+    ),
+    linear-gradient(155deg, rgb(226 76 69 / 34%), rgb(192 40 32 / 30%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%),
+    inset 0 0 0 1px rgb(192 40 32 / 30%);
 }
 
 .badgeUnknown {
-  color: #17231d;
-  background: #e7e3d8;
-  border: 1px solid var(--workbench-border);
+  color: var(--workbench-warning);
+  background-image: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 58%),
+      rgb(255 255 255 / 12%) 55%
+    ),
+    linear-gradient(155deg, rgb(255 206 138 / 46%), rgb(240 132 10 / 30%));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 95%),
+    inset 0 0 0 1px rgb(168 92 7 / 30%);
 }
 
-.avatar {
+.avatarButton {
   display: inline-flex;
   width: var(--topbar-avatar-width);
   height: var(--topbar-avatar-width);
   flex: none;
   align-items: center;
   justify-content: center;
+  padding: 0;
   color: var(--workbench-text-secondary);
-  background: #e7e3d8;
-  border: 1px solid var(--workbench-border);
+  background-image: var(--workbench-chip-fill);
+  border: 0;
   border-radius: 50%;
+  box-shadow: var(--workbench-chip-edge);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 22px;
 }
 
-.panel {
-  display: grid;
-  gap: 10px;
-  padding: 18px 28px;
-  background: var(--workbench-surface);
-  border-bottom: 1px solid var(--workbench-border);
+.avatarButton[aria-expanded='true'] {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
 }
 
-.panelTitle {
+/*
+ * ---------- 顶栏弹出层 ----------
+ *
+ * 画板 `TopPops.dc.html` / `Notify.dc.html` 的 `.pop`：绝对定位、圆角 26px、锚在顶栏正下方、右对齐到
+ * 各自的触发按钮，宽度分别是用户菜单 268px、系统状态 384px、通知 412px。它们**浮在正文之上**，不进
+ * `.stage` 的纵向流，因此不会把主内容往下推。
+ *
+ * 画板的 `.pop` 是带 32px 模糊的玻璃。这里**不加模糊**（模糊层预算留给内容面板与浮动窗），因此也不能
+ * 照用 86% 白：实测在没有模糊的情况下，身后正文会透上来读成一团重影（1280×800 实拍可见「刷新 OA
+ * 事项」压在菜单行上）。改垫实心白——边缘高光与投影仍在，层次靠它们，不靠透明度。
+ */
+.popover {
+  position: absolute;
+  z-index: 8;
+  top: 78px;
+  display: flex;
+  max-height: calc(100vh - 110px);
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--workbench-edge);
+  border-radius: 26px;
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+/* 右偏移逐个从顶栏元素宽度算出来，弹层因此始终落在自己的触发按钮下方。 */
+.popover[data-panel='user'] {
+  right: 6px;
+  width: 268px;
+}
+
+.popover[data-panel='notifications'] {
+  right: calc(6px + var(--topbar-avatar-width) + var(--topbar-gap));
+  width: 412px;
+}
+
+.popover[data-panel='system-status'] {
+  right: calc(
+    6px + var(--topbar-avatar-width) + var(--topbar-gap) +
+      var(--topbar-notifications-width) + var(--topbar-gap)
+  );
+  width: 384px;
+}
+
+.popover[data-panel='style'] {
+  right: calc(
+    6px + var(--topbar-avatar-width) + var(--topbar-gap) +
+      var(--topbar-notifications-width) + var(--topbar-gap) +
+      var(--topbar-system-status-width) + var(--topbar-gap)
+  );
+  width: 320px;
+}
+
+.popHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 18px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.popTitle {
   margin: 0;
-  font-family: var(--workbench-font-heading);
-  font-size: 21px;
-  line-height: 1.3;
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.35;
 }
 
-.panel p {
-  max-width: 40em;
+.popIcon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 12px;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
+}
+
+.popIcon[data-tone='attention'] {
+  color: var(--workbench-error);
+}
+
+.popIcon[data-tone='unknown'],
+.popIcon[data-tone='retrying'] {
+  color: var(--workbench-warning);
+}
+
+.popIcon[data-tone='normal'] {
+  color: var(--workbench-success);
+}
+
+.popNote {
+  flex: none;
+  margin: 0;
+  padding: 10px 18px;
+  color: var(--workbench-text-caption);
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.6;
+}
+
+.popBody {
+  display: grid;
+  flex: none;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.popEmpty {
   margin: 0;
   line-height: var(--workbench-line-height);
 }
 
-.panelHint {
+.popHint {
+  margin: 0;
   color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
 }
 
+/* 画板 `.pill`：14px、圆角胶囊，用作状态标。颜色是允许的语义固有色。 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: var(--workbench-font-caption);
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.pill[data-tone='ok'] {
+  color: var(--workbench-success);
+  background: rgb(112 214 166 / 30%);
+}
+
+.pill[data-tone='alert'] {
+  color: var(--workbench-error);
+  background: rgb(255 158 152 / 34%);
+}
+
+.pill[data-tone='muted'] {
+  color: var(--workbench-text-caption);
+  background: rgb(22 29 46 / 7%);
+}
+
+.popHead .pill {
+  margin-left: auto;
+}
+
+/* ---------- 系统状态行（画板 `.nrow`） ---------- */
 .statusRow {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px 14px;
-  background: var(--workbench-bg);
-  border: 1px solid var(--workbench-border);
-  border-radius: 8px;
-}
-
-.statusRow[data-status-kind='attention'] {
-  border-color: #a8271d;
-}
-
-.statusRow[data-status-kind='unknown'] {
-  border-color: #765400;
-}
-
-.statusMarker {
-  width: 28px;
   flex: none;
-  font-size: 20px;
-  text-align: center;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px 18px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.statusRow:last-child {
+  box-shadow: none;
+}
+
+/*
+ * 状态圆点。画板 `.dot` 就是 `width:9px;height:9px;border-radius:50%;box-shadow:0 0 0 3px rgba(255,255,255,.5)`，
+ * 顶栏触发器（`TopPops.dc.html` 的 `<span class="dot" style="background:#e0342c"></span>系统状态`）与
+ * 面板里的每一行用的是**同一个** `.dot`，所以这里也只有一份尺寸与一份色值：面板行用 `.statusDot`
+ * （多一个 `margin-top` 与第一行文字对齐），顶栏用 `.signalDot`，颜色规则两者共用，不写第二套色板。
+ *
+ * 颜色不是唯一的区分手段（2026-08-27 §九仍然有效）：圆点是视觉主通道，按钮的可见文字「系统状态」
+ * 与 `aria-label` 里的整句状态是可访问性兜底，两者都在。原实现用 `？ × — ! √` 这类字符符号，
+ * 2026-09-04 雨爷判为不符合定稿，已整体去掉。
+ */
+.statusDot,
+.signalDot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 50%);
+}
+
+/* 面板行是多行文字，圆点要落在第一行的行心上。 */
+.statusDot {
+  margin-top: 8px;
+}
+
+.statusDot[data-status-kind='normal'],
+.signalDot[data-status-kind='normal'] {
+  background: #2fc14e;
+}
+
+.statusDot[data-status-kind='attention'],
+.signalDot[data-status-kind='attention'] {
+  background: #e0342c;
+}
+
+.statusDot[data-status-kind='retrying'],
+.statusDot[data-status-kind='unknown'],
+.signalDot[data-status-kind='retrying'],
+.signalDot[data-status-kind='unknown'] {
+  background: #f0840a;
+}
+
+.statusDot[data-status-kind='loading'],
+.statusDot[data-status-kind='unbound'],
+.statusDot[data-status-kind='unchecked'],
+.signalDot[data-status-kind='loading'],
+.signalDot[data-status-kind='unbound'],
+.signalDot[data-status-kind='unchecked'] {
+  background: #98a1b5;
 }
 
 .statusBody {
-  display: grid;
   min-width: 0;
   flex: 1;
-  gap: 4px;
 }
 
-.panelAction,
-.panelInlineLink {
-  display: inline-flex;
-  min-height: var(--workbench-target-size);
+.statusName {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.statusText {
+  margin: 6px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: 1.6;
+}
+
+.statusActions {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 0 12px;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.statusAction {
+  display: inline-flex;
+  height: var(--workbench-target-size);
+  align-items: center;
+  padding: 0 18px;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  border-radius: 999px;
+  box-shadow: var(--workbench-chip-edge-strong);
+  font-size: 17px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.statusTechnical {
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+}
+
+.backgroundChoices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.backgroundChoice {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: var(--workbench-chip-edge);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+}
+
+.backgroundChoice[aria-pressed='true'] {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge-strong);
+  font-weight: 700;
+}
+
+.backgroundSwatch {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px rgb(255 255 255 / 85%);
+}
+
+.backgroundSwatch[data-preset='bgA'] {
+  background-image: linear-gradient(150deg, #5888ff, #b292ff);
+}
+
+.backgroundSwatch[data-preset='bgB'] {
+  background-image: linear-gradient(150deg, #ffba7c, #ff98b6);
+}
+
+.backgroundSwatch[data-preset='bgC'] {
+  background-image: linear-gradient(150deg, #70d6ba, #7ec4ff);
+}
+
+.panelInlineLink {
   color: var(--workbench-primary);
   font-weight: 650;
-}
-
-.panelInlineLink {
-  min-height: 0;
   padding: 0 4px;
 }
 
-.content {
-  min-width: 0;
-  padding: 28px;
+/* ---------- 用户菜单（画板 268px 弹层） ---------- */
+.userHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 13px;
+  padding: 18px 18px 16px;
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
 }
 
+.userAvatar {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  color: var(--workbench-text-secondary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 50%;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
+}
+
+.userWho {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+/* 姓名与「部门 · 职务」都没有数据源，这一格放的是 fail-closed 文案，字号按辅助档而不是姓名档。 */
+.userName {
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.userMeta {
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.35;
+}
+
+.menuGroup,
+.menuFoot {
+  display: grid;
+  flex: none;
+  gap: 2px;
+  padding: 8px;
+}
+
+.menuFoot {
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
+}
+
+/* 画板 `.mrow`：48px 高、17px、圆角 15px。 */
+.menuRow {
+  display: flex;
+  min-height: 48px;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  color: var(--workbench-text);
+  background: none;
+  border: 0;
+  border-radius: 15px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.menuRow[data-tone='alert'] {
+  color: var(--workbench-error);
+}
+
+.menuRow[data-inert='true'] {
+  color: var(--workbench-text-secondary);
+  cursor: default;
+}
+
+.menuRow:not([data-inert='true']):hover {
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-chip-edge);
+}
+
+.menuIcon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  color: inherit;
+  background-image: var(--workbench-chip-fill);
+  border-radius: 10px;
+  box-shadow: var(--workbench-chip-edge);
+  place-items: center;
+}
+
+.menuNote {
+  margin-left: auto;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.menuRow .pill {
+  margin-left: auto;
+}
+
+.content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ---------- 悬浮入口（玻璃大面 3/3） ---------- */
 .floatingEntry {
   position: fixed;
   z-index: 20;
-  right: 24px;
-  bottom: 24px;
+  right: 28px;
+  bottom: 28px;
   display: flex;
-  min-height: 56px;
+  min-height: 58px;
   align-items: center;
-  padding: 0 20px;
-  gap: 8px;
-  color: #fff;
-  background: var(--workbench-primary);
-  border: 2px solid #12305a;
-  border-radius: 28px;
-  box-shadow: 0 10px 26px rgb(30 43 36 / 28%);
+  padding: 0 26px;
+  gap: 10px;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill-strong);
+  backdrop-filter: blur(24px) saturate(195%);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 1.5px rgb(255 255 255 / 62%), 0 16px 36px -14px rgb(16 26 58 / 50%);
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--workbench-font-body);
+  font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
 }
 
 .floatingIcon {
-  font-size: 20px;
+  flex: none;
 }
 
 .floatingText {

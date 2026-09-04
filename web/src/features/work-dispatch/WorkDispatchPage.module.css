@@ -1,0 +1,469 @@
+/*
+ * 任务交办页，版式照定稿画板 `Dispatch.dc.html`。
+ *
+ * 玻璃硬约束：整页**一处 `backdrop-filter` 都不声明**（2026-09-04 起，内容面板不再买模糊，理由见
+ * 下方 `.panel`）；顶部的一句话输入卡是实心白
+ * （画板上就是 `background:#fff`），按钮、芯片、提醒策略一律只用低不透明度白加边缘高光，不带模糊、
+ * 不带固定填充色。模糊层计数见 `app/__tests__/blurBudget.test.tsx`。
+ *
+ * 字号一律是画板实测值：字段标签 15px（`.form2 .fld label`），输入框里的取值 17px（`.inp`）。
+ * 2026-09-04 雨爷推翻了「正文 19px / 辅助 ≥16px」那条下限，原先为守它做的 15→16、17→19 两处上调
+ * 已改回画板值。
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 所在页由左导航高亮表明，视觉上不再放一个大标题；标题只留给读屏软件。 */
+.pageTitle {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.srOnly {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- 顶部一句话输入 ---------- */
+
+/*
+ * 2026-09-04 返修第 2 条：这一格是本页的**主入口**，原来只有一行高、又被下面两段说明压住，看起来
+ * 不像可输入。改法三条：卡片放大（padding 14→18、圆角 22→24）、输入框从 1 行起改成 3 行起、
+ * 输入框自己带**可辨边界**（WCAG 2.2 SC 1.4.11：≥3:1，聚焦换 2px 主题色），不是只加内阴影。
+ */
+.brief {
+  flex: none;
+  padding: 18px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 10px 26px -14px rgb(16 26 58 / 45%),
+    inset 0 0 0 1px rgb(255 255 255 / 90%);
+}
+
+.briefInput,
+.briefInput:global(.ant-input) {
+  padding: 14px 16px !important;
+  background-color: var(--workbench-field-fill) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--workbench-field-face) !important;
+  color: var(--workbench-text) !important;
+  font-size: var(--workbench-font-body) !important;
+  line-height: var(--workbench-line-height) !important;
+}
+
+.briefInput:focus,
+.briefInput:global(.ant-input):focus {
+  box-shadow: var(--workbench-field-face-focus) !important;
+}
+
+/*
+ * 这个输入框的焦点环画在它**自己**身上（上面那条 2px 主题色内环），所以不需要再吃全局那条 3px 兜底
+ * outline——两者同色、一个内一个外，叠出来就是雨爷说的「两个框」。抑制掉的只是重复的那一圈，焦点态
+ * 本身没有变弱。
+ */
+.briefInput:focus-visible,
+.briefInput:global(.ant-input):focus-visible {
+  outline: none !important;
+}
+
+.briefBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.briefButton {
+  min-height: var(--workbench-target-size);
+  margin-left: auto;
+  gap: 8px;
+}
+
+/* ---------- 内容面板 ---------- */
+
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
+.panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+/* 琥珀提示条：草稿在点「发布」之前不会下发，这一条常驻，不随滚动消失。 */
+.draftNotice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 24px;
+  background: rgb(255 206 138 / 34%);
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
+}
+
+.draftMark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 11px;
+  background-image: var(--workbench-chip-fill);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-warning);
+  place-items: center;
+}
+
+.draftTitle {
+  color: var(--workbench-warning);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.draftHint {
+  color: var(--workbench-warning);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 24px 4px;
+}
+
+/* 分组标题：小号加粗 + 一条发丝线，靠分组和留白撑结构，不靠大标题。 */
+.sectionHead {
+  display: flex;
+  align-items: center;
+  margin: 4px 0 0;
+  gap: 12px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 600;
+}
+
+.sectionHead > i {
+  flex: 1;
+  height: 1px;
+  background: var(--workbench-hair);
+}
+
+.gridKindTitle,
+.gridScope,
+.gridRequirement {
+  display: grid;
+  gap: 8px 16px;
+}
+
+.gridKindTitle {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+}
+
+.gridScope {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.gridRequirement {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (width <= 1100px) {
+  .gridKindTitle,
+  .gridScope,
+  .gridRequirement {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  align-content: start;
+}
+
+/* 字段标签：画板 `.form2 .fld label` 就是 15px。标签一律是可见的真标签，不用 placeholder 顶替。 */
+.field > label,
+.fieldLabel {
+  color: var(--workbench-text-secondary);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+/*
+ * 上一轮按「核对草稿不是从零填表」把描边放到白 62% + `rgb(22 29 46 / 11%)` 的发丝边——那道边与相邻
+ * 色只有约 1.1:1，雨爷 2026-09-04 实机走查的结论就是看不出这里能输入。以雨爷为准改成可辨边界：
+ * `--workbench-field-face` 的 1px 深墨边在近白面上实算约 4.1:1，满足 SC 1.4.11 的 3:1；聚焦换 2px
+ * 主题色。轻底色仍在（6% 墨），不是一堵深框。
+ */
+.field :global(.ant-input),
+.field :global(.ant-input-affix-wrapper),
+.field :global(.ant-select-selector) {
+  background: var(--workbench-field-fill) !important;
+  border: 0 !important;
+  border-radius: var(--workbench-radius-control) !important;
+  box-shadow: var(--workbench-field-face) !important;
+  /* 画板 `.inp`：框里的取值是 17px。 */
+  font-size: 17px !important;
+}
+
+.field :global(.ant-input):focus,
+.field :global(.ant-input-affix-wrapper-focused),
+.field :global(.ant-select-focused) :global(.ant-select-selector) {
+  box-shadow: var(--workbench-field-face-focus) !important;
+}
+
+.select {
+  width: 100%;
+}
+
+.select :global(.ant-select-selector) {
+  min-height: var(--workbench-target-size);
+}
+
+.dateInput {
+  min-height: var(--workbench-target-size);
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--workbench-radius-control);
+  background: var(--workbench-field-fill);
+  box-shadow: var(--workbench-field-face);
+  color: var(--workbench-text);
+  font-family: inherit;
+  /* 画板 `.inp`：框里的取值是 17px。 */
+  font-size: 17px;
+  line-height: var(--workbench-line-height);
+}
+
+/* ---------- 交办对象 ---------- */
+
+.chipWell {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: var(--workbench-radius-control);
+  background: var(--workbench-field-fill);
+  box-shadow: var(--workbench-field-face);
+}
+
+.chipWell:focus-within {
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/*
+ * 每个芯片的「删除」按钮都在这个凹槽**里面**，它一拿到键盘焦点，`:focus-within` 会把整条凹槽一起点亮，屏幕上于是同时出现
+ * 两个环（凹槽一圈 + 按钮自己那圈）。这里在支持 `:has()` 的浏览器上把凹槽那圈收回去，一次只留一个环。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回**今天的
+ * 行为**（多一个环），而不是退到「一个环都没有」——后者会让键盘用户找不到焦点。
+ */
+.chipWell:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
+}
+
+/*
+ * 凹槽已经画了那一圈，里面这个输入框不再画第二圈。基态那条 `box-shadow: none !important` 挡不住聚焦
+ * 态——实机量到的是 `rgb(36,80,200) 0 0 0 2px inset` 仍然出现在 `<input>` 自己身上，于是「凹槽环 +
+ * 输入框环 + 兜底 outline」三个环叠在一起。兜底 outline 由 `.chipWell` 上的 `data-focus-ring="host"`
+ * 抑制，输入框自己这圈在这里抑制。
+ */
+.chipInput:focus,
+.chipInput:focus-visible,
+.chipInput:global(.ant-input):focus,
+.chipInput:global(.ant-input):focus-visible {
+  box-shadow: none !important;
+}
+
+.chip {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 12px;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.chipRemove {
+  display: grid;
+  width: var(--workbench-target-size);
+  height: var(--workbench-target-size);
+  border: 0;
+  background: none;
+  color: var(--workbench-text-secondary);
+  cursor: pointer;
+  place-items: center;
+}
+
+.chipInput,
+.chipInput:global(.ant-input) {
+  width: 12em;
+  min-width: 8em;
+  flex: 1;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.chipAdd {
+  min-height: var(--workbench-target-size);
+  gap: 6px;
+}
+
+.attachmentWell {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 提醒策略 ---------- */
+
+.reminderRow {
+  display: flex;
+  flex-wrap: wrap;
+  min-height: var(--workbench-target-size);
+  align-items: center;
+  gap: 8px;
+}
+
+.reminderOn,
+.reminderOff {
+  min-height: var(--workbench-target-size);
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background-image: var(--workbench-chip-fill-strong);
+  color: var(--workbench-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--workbench-font-auxiliary);
+}
+
+.reminderOn {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 2px rgb(47 107 255 / 45%);
+  font-weight: 700;
+}
+
+/* 未选中不靠颜色单独表意：选中的另有蓝色内边与加粗字重，两处差别同时存在。 */
+.reminderOff {
+  box-shadow: var(--workbench-chip-edge);
+  color: var(--workbench-text-secondary);
+  opacity: 0.72;
+}
+
+/* ---------- 页脚 ---------- */
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-top: 8px;
+  padding: 10px 24px;
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
+}
+
+.footerCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.footerWarn {
+  margin: 0;
+  color: var(--workbench-warning);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.footerActions {
+  display: flex;
+  margin-left: auto;
+  gap: 12px;
+}
+
+.footerButton {
+  min-width: 126px;
+  min-height: 48px;
+  font-size: 18px;
+}
+
+/*
+ * 「发布」是本页主动作：蓝字 + 蓝色高光内边（2026-09-02 裁决的例外）。玻璃本体仍不填色——蓝的是
+ * 文字与那一圈内边，不是底。
+ *
+ * 2026-09-04：那一圈内边原来手写成 `rgb(47 107 255 / 48%)`，在近白面上合成出 #99B6FE，实算只有
+ * **1.95:1**，达不到 WCAG 2.2 SC 1.4.11 的 3:1——它看着蓝，但不构成可辨边界。换成全站共用的
+ * `--workbench-control-ring-primary`；2026-09-04 雨爷放宽为「边框可以做与主题同色的填充色」后，该令牌
+ * 已是 `--workbench-primary` 本色 `#2450c8`（不再半透明，实算 6.11:1），线宽 1.5px→2px。并把投影
+ * 换成同一套 `--workbench-control-glow-strong`，与软件中心的「去绑账号」、全局 `.ant-btn-primary`
+ * 用的是同一组令牌，不再各页一套。
+ */
+:global(.ant-btn).publishButton.publishButton {
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-control-ring-primary),
+    var(--workbench-chip-edge-strong), var(--workbench-control-glow-strong);
+  color: var(--workbench-primary);
+  font-weight: 700;
+}
+
+.notice {
+  margin: 0;
+  padding: 12px 24px 14px;
+  background: rgb(255 206 138 / 26%);
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+.caption {
+  margin: 0;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: var(--workbench-line-height);
+}

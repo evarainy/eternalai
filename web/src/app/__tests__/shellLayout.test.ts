@@ -5,13 +5,19 @@ import {
   IDENTITY_UNAVAILABLE_LINES,
   LAYOUT_BASELINE_WIDTH,
   MINIMUM_TARGET_SIZE,
+  SHELL_COLUMN_GAP,
+  SHELL_PADDING,
   SIDEBAR_COLLAPSED_WIDTH,
   SIDEBAR_EXPANDED_WIDTH,
   TOPBAR_ELEMENT_WIDTHS,
+  TOPBAR_HORIZONTAL_PADDING,
   TOPBAR_IDENTITY_WIDTH,
+  TOPBAR_SEARCH_MIN_WIDTH,
+  TOPBAR_SEARCH_WIDTH,
   collapsedNavigationTargetWidth,
   singleLineTextWidth,
   topbarAvailableWidth,
+  topbarMinimumRequiredWidth,
   topbarRequiredWidth,
 } from '../shellLayout';
 
@@ -23,10 +29,28 @@ function readSource(relativePath: string): string {
 }
 
 describe('AppShell 1280px layout budget', () => {
+  /*
+   * 2026-09-04 实机走查：1280×800 下顶栏溢出，右端头像被裁掉并压出横向滚动条。原核算漏了外壳的左右
+   * 内边距与列间隙共 48px。这条断言现在按补全后的可用宽度核**收缩到底**的顶栏——搜索框可让位，所以
+   * 它才是必须放得下的那个数；把 `topbarAvailableWidth()` 里任何一项扣除删掉，这条就会变红。
+   */
   it('fits the six fixed topbar elements next to the expanded sidebar', () => {
     expect(TOPBAR_ELEMENT_WIDTHS).toHaveLength(6);
-    expect(topbarRequiredWidth()).toBeLessThanOrEqual(
+    expect(topbarMinimumRequiredWidth()).toBeLessThanOrEqual(
       topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH, LAYOUT_BASELINE_WIDTH),
+    );
+    expect(TOPBAR_SEARCH_MIN_WIDTH).toBeLessThan(TOPBAR_SEARCH_WIDTH);
+  });
+
+  it('counts the shell padding and the column gap against the topbar budget', () => {
+    expect(
+      topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH, LAYOUT_BASELINE_WIDTH),
+    ).toBe(
+      LAYOUT_BASELINE_WIDTH -
+        SHELL_PADDING * 2 -
+        SIDEBAR_EXPANDED_WIDTH -
+        SHELL_COLUMN_GAP -
+        TOPBAR_HORIZONTAL_PADDING * 2,
     );
   });
 
@@ -34,6 +58,7 @@ describe('AppShell 1280px layout budget', () => {
     expect(topbarAvailableWidth(SIDEBAR_COLLAPSED_WIDTH)).toBeGreaterThan(
       topbarAvailableWidth(SIDEBAR_EXPANDED_WIDTH),
     );
+    // 收起导航后连画板给的 392px 全宽搜索框也放得下。
     expect(topbarRequiredWidth()).toBeLessThanOrEqual(
       topbarAvailableWidth(SIDEBAR_COLLAPSED_WIDTH),
     );

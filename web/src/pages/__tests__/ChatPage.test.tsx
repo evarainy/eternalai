@@ -1,10 +1,18 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { WORKBENCH_BUTTON_CONFIG } from '../../app/theme';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { RecordsList } from '../../components/RecordsList';
 import {
@@ -14,6 +22,7 @@ import {
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
+import { greetingByHour } from '../chatGreeting';
 
 const runtimeMock = vi.hoisted(() => ({
   action: vi.fn(),
@@ -157,9 +166,14 @@ function makeClient() {
   });
 }
 
+/*
+ * 按钮配置必须和 `App.tsx` 用同一份：antd 默认会给两个汉字的按钮文案中间插一个空格（「发送」→
+ * 「发 送」），应用侧用 `WORKBENCH_BUTTON_CONFIG` 关掉了这个行为。测试里不带它，可及名称就和实机
+ * 不一致，按名字找按钮的断言会对着一个真实界面里并不存在的名字通过或失败。
+ */
 function renderChat(client = makeClient()) {
   const rendered = render(
-    <ConfigProvider>
+    <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
       <QueryClientProvider client={client}>
         <ChatPage />
       </QueryClientProvider>
@@ -172,7 +186,7 @@ function sendMessage(message: string) {
   fireEvent.change(screen.getByLabelText('办理请求'), {
     target: { value: message },
   });
-  fireEvent.click(screen.getByRole('button', { name: '发送办理请求' }));
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
 }
 
 function storageText(storage: Storage): string {
@@ -277,7 +291,7 @@ describe('ChatPage request boundary', () => {
     sendMessage('只发送一次');
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
     expect(screen.getByLabelText('办理请求')).toBeDisabled();
-    const pendingButton = screen.getByText('发送办理请求').closest('button');
+    const pendingButton = screen.getByText('发送').closest('button');
     expect(pendingButton).not.toBeNull();
     fireEvent.click(pendingButton as HTMLButtonElement);
     const form = screen.getByLabelText('办理请求').closest('form');
@@ -1136,7 +1150,7 @@ describe('ChatPage HTTP failures', () => {
     const jsonSpy = vi.spyOn(failedResponse, 'json');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(failedResponse));
     render(
-      <ConfigProvider>
+      <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
         <QueryClientProvider client={client}>
           <MemoryRouter initialEntries={['/chat']}>
             <AuthenticationEffects />
@@ -1219,5 +1233,207 @@ describe('ChatPage HTTP failures', () => {
     expect(document.body.textContent).not.toContain('RAW_NETWORK_DETAIL');
     expect(useAuthStore.getState().status).toBe('authenticated');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * 2026-09-02 裁决把「我问过的」从工作事项页迁到 AI 助手页左栏；2026-08-27 §一/§六 同时裁定会话持久化
+ * 整体归 P3，P2「不用一个刷新即失效的历史入口制造可恢复假象」。下面把这条边界钉死。
+ */
+describe('ChatPage assistant surfaces', () => {
+  it('offers the starter prompts instead of an empty box, and a prompt fills the request', () => {
+    renderChat();
+
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
+    expect(screen.getByText('可以这样问我')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('我今天有什么要办的？'));
+
+    expect(useAIDockStore.getState().draft).toBe('我今天有什么要办的？');
+    expect(screen.getByLabelText('办理请求')).toHaveValue('我今天有什么要办的？');
+  });
+
+  /*
+   * 雨爷 2026-09-04 返修第 4 条：删掉输入框上方那个可见标签「办理请求」（画板 `Chat.dc.html` 上没有
+   * 这一行），同轮删掉底注「回答基于 OA 实时数据，正式办理以 OA 为准」。**无障碍名称不许跟着丢**：
+   * 输入框仍必须有「办理请求」这个可及名称，且不再指向一个已被删掉的 `aria-describedby` 目标。
+   */
+  it('drops the visible label and footnote while keeping the accessible name', () => {
+    renderChat();
+
+    const input = screen.getByLabelText('办理请求');
+    expect(input.tagName).toBe('TEXTAREA');
+    expect(input).toHaveAttribute('id', 'chat-request');
+    expect(input).toHaveAttribute('aria-label', '办理请求');
+    // 可见标签与底注都不该再出现，`aria-describedby` 不许指向不存在的 id。
+    expect(document.querySelector('label[for="chat-request"]')).toBeNull();
+    expect(input).not.toHaveAttribute('aria-describedby');
+    expect(document.getElementById('chat-request-hint')).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      '回答基于 OA 实时数据，正式办理以 OA 为准',
+    );
+  });
+
+  /*
+   * 空态标题：画板是「王主任，早上好」，姓名与职务没有后端读取端点，只落不带称呼的问候。这条钉死
+   * **不许出现称呼**，也不许把一句说明重新做成最大字号的标题。
+   */
+  it('greets without inventing a name and keeps the empty reason in the description', () => {
+    renderChat();
+
+    const title = document.querySelector('.ant-welcome-title');
+    expect(title).not.toBeNull();
+    expect(['夜里好', '早上好', '中午好', '下午好', '晚上好']).toContain(
+      title?.textContent,
+    );
+    expect(title?.textContent).not.toMatch(/主任|王|先生|女士/);
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
+  });
+
+  it('maps every part of the day to a greeting without a form of address', () => {
+    const cases: [number, string][] = [
+      [2, '夜里好'],
+      [8, '早上好'],
+      [12, '中午好'],
+      [15, '下午好'],
+      [21, '晚上好'],
+    ];
+    for (const [hour, expected] of cases) {
+      expect(greetingByHour(new Date(2026, 8, 4, hour, 0, 0))).toBe(expected);
+    }
+  });
+
+  it('lists only the current temporary conversation and says history is not stored yet', () => {
+    renderChat();
+
+    const rail = screen.getByRole('complementary', { name: '我问过的' });
+    expect(within(rail).getByRole('heading', { name: '我问过的' })).toBeInTheDocument();
+    /*
+     * 2026-09-04 返修：左栏三行说明砍成一行。留下的必须是那条**真限制**（历史存不起来），
+     * 「现在没有对话」由空列表本身表明，不再多写一句。
+     */
+    expect(within(rail).getByText('以前问过的存不起来，刷新就没了。')).toBeInTheDocument();
+    expect(rail.textContent).not.toContain('现在没有正在进行的对话。');
+    expect(rail.textContent).not.toContain('要留档请到「工作事项」里办。');
+    expect(
+      within(rail).queryAllByText(/存不起来|留档|没有正在进行/),
+    ).toHaveLength(1);
+    expect(within(rail).queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('shows exactly one conversation entry once the current session has content', () => {
+    renderChat();
+
+    act(() => {
+      useAIDockStore.getState().appendTranscript({ role: 'user', text: '先问一句' });
+      useAIDockStore.getState().appendTranscript({ role: 'user', text: '再问一句' });
+    });
+
+    const rail = screen.getByRole('complementary', { name: '我问过的' });
+    const entries = within(rail).getAllByRole('listitem');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toHaveTextContent('本次对话');
+    expect(rail.textContent).not.toContain('先问一句');
+    expect(within(rail).getByText(/以前问过的存不起来/)).toBeInTheDocument();
+  });
+
+  it('separates the loading, empty and failed states of the conversation', async () => {
+    let resolveRequest!: (value: Response) => void;
+    const fetchMock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveRequest = resolve;
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+
+    // 空：说明「为什么空」，不是留白。这句话现在在问候语下面的说明行里。
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    sendMessage('查一下我的待办');
+
+    // 加载中：有明确的进行中提示。
+    expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
+    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
+
+    act(() =>
+      resolveRequest(
+        response(
+          { detail: { code: 'RAW_HTTP_503', message: 'RAW_BACKEND_BODY' } },
+          { ok: false, status: 503, statusText: 'Service Unavailable' },
+        ),
+      ),
+    );
+
+    // 出错：说明这一条没办成，不把失败伪装成「没有数据」。
+    expect(
+      await screen.findByText('办理服务暂时不可用，请稍后再试。'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('服务不可用')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        '上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
+  });
+});
+
+/*
+ * 2026-09-04 雨爷裁定：「`/chat` 欢迎语 28px 不要被限制死，要美观好看。」
+ *
+ * 解除限制不等于没人管——不然下一个窗口为了「照搬画板闭集」把它改回 21px，没有任何门禁会红。所以
+ * 这里把**展示级下限**单独钉住：闭集（`theme.test.ts` 的 `CANVAS_FONT_SIZES`）从此不管这一处，改由
+ * 本条管。反过来也钉住上限，防止有人把它当标题一路放大到跟提示卡抢分量。
+ */
+describe('/chat 欢迎语：展示级字号，不受正文闭集约束', () => {
+  const stylesheet = readFileSync(
+    resolve(process.cwd(), 'src/pages/ChatPage.module.css'),
+    'utf-8',
+  );
+  /** 剥掉块注释：注释里复盘旧值不算「还在渲染路径上」。 */
+  const declarations = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '');
+  const GREETING_RULE =
+    /\.welcome :global\(\.ant-welcome-title\)[^{}]*\{[^}]*\}/;
+
+  function fontSize(rule: RegExp, what: string): number {
+    const block = rule.exec(declarations)?.[0];
+    const matched = block === undefined ? null : /font-size:\s*(\d+)px/.exec(block);
+    if (matched?.[1] === undefined) {
+      throw new Error(`missing_font_size:${what}`);
+    }
+    return Number(matched[1]);
+  }
+
+  it('欢迎语落在展示级区间，且明显大于同块的说明文字', () => {
+    const greeting = fontSize(GREETING_RULE, 'welcome-title');
+    const description = fontSize(
+      /\.welcome :global\(\.ant-welcome-description\)[^{}]*\{[^}]*\}/,
+      'welcome-description',
+    );
+
+    expect(greeting).toBeGreaterThanOrEqual(28);
+    expect(greeting).toBeLessThanOrEqual(40);
+    expect(greeting).toBeGreaterThan(description);
+  });
+
+  it('解除限制只到这一处：本文件其余字号仍是画板闭集成员', () => {
+    const CANVAS_FONT_SIZES = [14, 15, 16, 17, 18, 19, 21, 34];
+    const greetingRule = GREETING_RULE.exec(declarations);
+    if (greetingRule === null) {
+      throw new Error('missing_rule:welcome-title');
+    }
+    const others = declarations.replace(greetingRule[0], '');
+    const sizes = [...others.matchAll(/font-size:\s*(\d+)px/g)].map(
+      ([, raw]) => Number(raw),
+    );
+
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const size of sizes) {
+      expect(CANVAS_FONT_SIZES).toContain(size);
+    }
   });
 });
