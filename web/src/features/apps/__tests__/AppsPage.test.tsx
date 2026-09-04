@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -5,6 +7,14 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialBindingView } from '../../../generated/credential-bindings/credential-bindings.schemas';
 import AppsPage from '../AppsPage';
+
+/** vitest 下 `import.meta.url` 是 jsdom 的 URL 实例，`fileURLToPath` 不认，先取 `.href`。 */
+function readSource(relativePath: string): string {
+  return readFileSync(
+    fileURLToPath(new URL(relativePath, import.meta.url).href),
+    'utf8',
+  );
+}
 
 /** 2026-08-27 §九：前台不得出现这些内部对象名。 */
 const FORBIDDEN_INTERNAL_TERMS = [
@@ -287,5 +297,35 @@ describe('AppsPage vocabulary', () => {
     await screen.findByTestId('oa-status');
 
     expect(screen.getByRole('button', { name: /新建应用/ })).toBeInTheDocument();
+  });
+
+  /*
+   * 雨爷 2026-09-04 走查第 3 条：「整个纯白的的底，按钮在这个页面下也不明显。」这条钉死改后的两点，
+   * 都会被回滚打红：
+   *
+   * 1. 卡片**不是纯白**——底不再是 `rgb(255 255 255 / 52%)` 那种只有白的填充，而且有一道看得见的
+   *    深色描边把它从面板上分出来；
+   * 2. 卡片上的动作按钮带**可辨边界 + 主题色投影**（WCAG 2.2 SC 1.4.11：阴影不能替代 3:1 的边界），
+   *    不是只有一圈白色高光。
+   */
+  it('lifts the system card off the panel instead of leaving it white on white', () => {
+    const css = readSource('../AppsPage.module.css');
+
+    const card = /\.appCard\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(card).not.toContain('background: rgb(255 255 255 / 52%)');
+    expect(card).toContain('rgb(226 234 250 / 76%)');
+    expect(card).toContain('inset 0 0 0 1px rgb(22 29 46 / 14%)');
+
+    const action = /\.openLink,\s*\.bindLink\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(action).toContain('var(--workbench-control-ring)');
+    expect(action).toContain('var(--workbench-control-glow)');
+
+    // 第一条是 `.openLink, .bindLink` 合并规则，第二条才是「去绑账号」自己的主动作规则。
+    const bindRules = [...css.matchAll(/\.bindLink\s*\{([^}]*)\}/g)].map(
+      (match) => match[1],
+    );
+    expect(bindRules).toHaveLength(2);
+    expect(bindRules[1]).toContain('var(--workbench-control-ring-primary)');
+    expect(bindRules[1]).toContain('var(--workbench-control-glow-strong)');
   });
 });

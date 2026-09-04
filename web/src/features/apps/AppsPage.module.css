@@ -101,6 +101,17 @@
 
 /* ---------- 软件卡 ---------- */
 
+/*
+ * 雨爷 2026-09-04 走查第 3 条：「系统卡片展示不美观，整个纯白的的底，按钮在这个页面下也不明显。」
+ *
+ * 原来卡片是 52% 白压在 86% 白的内容面板上——合成后约 #F9FAFD，与面板几乎同色，那道 80% 白的内边
+ * 更是看不见，于是整块读起来就是一片白。改法（只动观感，一条数据都没加）：
+ *
+ * 1. **卡片不再是纯白**：换成从近白到浅蓝灰的竖向渐变，合成后底部约 #E8EEFB，明确比面板深一档；
+ * 2. **给一道看得见的描边**：`rgb(22 29 46 / 14%)` 的 1px 内边（卡片是容器不是控件，不适用 SC 1.4.11
+ *    的 3:1 硬指标，这里取的是「能分出层」的最小值，不把整页变成一堵框）；
+ * 3. **抬起来一点**：投影从 `-12px` 扩散改到 `-14px` 更远更柔，卡片从面板上浮出来。
+ */
 .appCard {
   display: flex;
   min-width: 0;
@@ -108,9 +119,13 @@
   gap: 14px;
   padding: 15px 17px;
   border-radius: 20px;
-  background: rgb(255 255 255 / 52%);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 80%),
-    0 6px 16px -12px rgb(16 26 58 / 34%);
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 70%) 0%,
+    rgb(226 234 250 / 76%) 100%
+  );
+  box-shadow: inset 0 0 0 1px rgb(22 29 46 / 14%),
+    0 10px 24px -14px rgb(16 26 58 / 42%);
 }
 
 .appMark {
@@ -183,6 +198,11 @@
   gap: 8px;
 }
 
+/*
+ * 卡片上的动作按钮。原来只有 `--workbench-chip-edge` 那一圈白色内边，在浅色卡上等于没有边界——
+ * 这正是雨爷说的「按钮在这个页面下也不明显」。按 WCAG 2.2 SC 1.4.11 补上**可辨边界**（≥3:1）并叠
+ * 主题色投影；玻璃本体仍不填鲜艳色，主题色只出现在边框与投影上。
+ */
 .openLink,
 .bindLink {
   display: inline-flex;
@@ -192,7 +212,8 @@
   padding: 0 18px;
   border-radius: 999px;
   background-image: var(--workbench-chip-fill);
-  box-shadow: var(--workbench-chip-edge);
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
   color: var(--workbench-text);
   font-size: 17px;
   font-weight: 500;
@@ -200,9 +221,12 @@
   white-space: nowrap;
 }
 
+/* 「去绑账号」是这张卡上的主动作：蓝字 + 蓝边 + 更重的主题色投影。 */
 .bindLink {
   background-image: var(--workbench-chip-fill-strong);
-  box-shadow: var(--workbench-chip-edge-strong);
+  box-shadow: var(--workbench-control-ring-primary),
+    var(--workbench-chip-edge-strong), var(--workbench-control-glow-strong);
+  color: var(--workbench-primary);
   font-weight: 700;
 }
 
