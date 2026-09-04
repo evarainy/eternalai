@@ -778,23 +778,39 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
   });
 
   /*
-   * 「页面最上方搜索框显示不明显且搜索按钮位置没对齐」。画板 `Main.dc.html` 的搜索是一个 46px 高的
-   * 凹槽，左边一个图标、右边一行提示文字，没有独立按钮。这里钉死：提交入口就是那个左侧图标按钮，
-   * 与输入框在同一个 flex 行里垂直居中；凹槽自己带画板那组内阴影。
+   * 雨爷 2026-09-04 第二次走查：「页面最上方的搜索按钮丢失。」上一轮按画板把按钮收成了左侧的纯图标
+   * 提交键，实机上读不出是个按钮。这里钉死返修后的形态：
+   *
+   * 1. 右侧有一个**带可见文字「搜索」**的提交按钮，不是只有 `aria-label` 的图标键；
+   * 2. 左侧图标退回装饰（`aria-hidden`），整个搜索框里只有一个提交按钮；
+   * 3. 按钮与输入框在同一个 flex 行里 `align-items: center` 垂直居中，且按钮自己 `align-self: center`；
+   * 4. 凹槽与按钮都带**可辨边界**（WCAG 2.2 SC 1.4.11），不是只有白色高光：凹槽用
+   *    `--workbench-field-face`，按钮用 `--workbench-control-ring` + `--workbench-control-glow`。
    */
-  it('rebuilds the search box as the 46px well the canvas draws', () => {
+  it('brings back a labelled search button aligned inside the 46px well', () => {
     renderShell('/admin/tasks');
 
     const submit = screen.getByRole('button', { name: '搜索' });
+    expect(submit.tagName).toBe('BUTTON');
+    expect(submit).toHaveAttribute('type', 'submit');
+    // 可见文字，不是只有无障碍名称：上一轮丢的就是这个。
+    expect(submit.textContent).toBe('搜索');
+
     const field = submit.parentElement;
     expect(field?.tagName).toBe('FORM');
     expect(field).toContainElement(screen.getByLabelText('搜索工作事项'));
+    expect(within(field as HTMLElement).getAllByRole('button', { name: '搜索' })).toHaveLength(1);
 
     const css = readSource('../AppShell.module.css');
-    const rule = /\.searchField\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    expect(rule).toContain('height: 46px');
-    expect(rule).toContain('align-items: center');
-    expect(rule).toContain('var(--workbench-well-edge)');
+    const fieldRule = /\.searchField\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(fieldRule).toContain('height: 46px');
+    expect(fieldRule).toContain('align-items: center');
+    expect(fieldRule).toContain('var(--workbench-field-face)');
+
+    const submitRule = /\.searchSubmit\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(submitRule).toContain('align-self: center');
+    expect(submitRule).toContain('var(--workbench-control-ring)');
+    expect(submitRule).toContain('var(--workbench-control-glow)');
     expect(css).not.toContain('ant-input-group-addon');
   });
 });

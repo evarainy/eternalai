@@ -254,9 +254,14 @@ const UNCHECKED_STATUS_ROWS: readonly SystemStatusRow[] = [
 ];
 
 /**
- * 顶栏搜索。画板 `Main.dc.html` 的搜索是一个 392×46 的凹槽：左边一个搜索图标，右边一行提示文字，
- * **没有独立的搜索按钮**。这里把那个图标做成真正的提交按钮（44×44，垂直居中），既照画板收掉了原先
- * 挤在右侧、与输入框不齐的 `enterButton`，又保留了一个可点、可读屏的提交入口。
+ * 顶栏搜索。画板 `Main.dc.html` 画的是一个 392×46 的凹槽，左边一个图标、右边一行提示文字，**画板上
+ * 没有独立按钮**；上一轮据此把按钮收成了左侧那个纯图标提交键。雨爷 2026-09-04 第二次走查的结论是
+ * 「页面最上方的搜索按钮丢失」——**以雨爷为准**，把带文字的搜索按钮加回来：
+ *
+ * - 左侧图标退回装饰（`aria-hidden`），提交入口只有右侧那一个，读屏软件不会听到两个「搜索」；
+ * - 按钮与输入框在同一个 flex 行里，靠 `align-items: center` 垂直居中（这正是他上一轮提的对齐问题）；
+ * - 可见性按 WCAG 2.2 SC 1.4.11 做：1px 可辨边界（≥3:1）+ 主题色投影，两者并用，不是只加投影；
+ * - 凹槽整体仍是画板的 392×46，提示文字不变。
  */
 function GlobalWorkObjectSearch({
   initialValue,
@@ -274,9 +279,9 @@ function GlobalWorkObjectSearch({
 
   return (
     <form className={styles.searchField} onSubmit={handleSubmit} role="search">
-      <button aria-label="搜索" className={styles.searchSubmit} type="submit">
+      <span aria-hidden="true" className={styles.searchIcon}>
         <Icon name="search" size={19} />
-      </button>
+      </span>
       <Input
         allowClear
         aria-label="搜索工作事项"
@@ -286,6 +291,9 @@ function GlobalWorkObjectSearch({
         value={value}
         variant="borderless"
       />
+      <button className={styles.searchSubmit} type="submit">
+        搜索
+      </button>
     </form>
   );
 }
