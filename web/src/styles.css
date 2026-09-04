@@ -73,28 +73,38 @@
    * 搭配白色背景区分度不明显」。SC 1.4.11 的原文是：边界若承担「让用户识别这里存在一个可操作控件」
    * 的职责，该边界与相邻色必须 ≥3:1；**阴影可以增加可见性，但不能替代这条 3:1**。所以这里同时给两样：
    *
-   * - `--workbench-control-edge`：1px 可辨边界。近白面（内容面板 86% 白压在底图上，实测约 #FBFCFE）
-   *   上 58% 的深墨合成后约 #7A7D8A，对比度实算 ≈4.1:1，留足余量；把 alpha 降到调研里 Material 给的
-   *   42% 只有 2.57:1，**不达标**，故不取那个值。
+   * - `--workbench-control-edge` / `-primary`：按钮边框。**2026-09-04 雨爷放宽了 2026-09-02 那条
+   *   「按钮、图标、导航选中态不得带固定填充色」——原话是「按钮边框可以做填充色（与主题同色）」。**
+   *   放宽的范围按字面取：**只有边框上实色，玻璃本体照旧不填**。所以这两枚从半透明发丝边
+   *   （58% 深墨 / 78% 蓝，合成后 4.03 与 4.19:1）换成 `--workbench-primary` 本色 `#2450c8`，
+   *   不再半透明——内容面板上实算 **6.11:1**、大面玻璃上 **4.81:1**，比原来厚一倍余量。
+   *   上一轮渲染层最低的两处（「新对话」3.14、「打开」3.23，都落在大面玻璃上）就是被半透明拖低的。
    * - `--workbench-control-glow`：主题色投影，取调研区间 `y 0~3 / blur 2~8 / spread 0 / opacity 20~26%`。
    *
-   * 玻璃本体仍**不填鲜艳色**（2026-09-02 裁决）：主题色只出现在边框与投影上；小元件仍不加
+   * 玻璃本体仍**不填鲜艳色**：主题色只出现在边框、投影与文字上；小元件仍不加
    * `backdrop-filter`（模糊层预算 ≤6）。
    *
-   * 分三层用：主动作 = `-primary` 一组（蓝字 + 蓝边 + 主题色投影）；次动作 = 无后缀一组；文字按钮无边
-   * 无影，只有文字色。
+   * 分三层用，三层结构不变，只是边框强度提升：主动作 = `-primary` 一组（**2px** 实色边 + 蓝字 +
+   * 更重的主题色投影）；次动作 = 无后缀一组（**1px** 实色边 + 墨字 + 轻投影）；文字按钮无边无影，
+   * 只有文字色。两者同色，靠**线宽 + 字色 + 投影**分层，不靠边框颜色分层。
    */
-  --workbench-control-edge: rgb(22 29 46 / 58%);
-  --workbench-control-edge-primary: rgb(30 72 200 / 78%);
+  --workbench-control-edge: var(--workbench-primary);
+  --workbench-control-edge-primary: var(--workbench-primary);
   --workbench-control-glow: 0 2px 6px rgb(36 80 200 / 22%);
   --workbench-control-glow-strong: 0 3px 8px rgb(36 80 200 / 26%);
   /* `border: 0` 的自绘控件用这两条：第一段就是那道可辨边界，必须排在白色高光之前才不会被盖掉。 */
   --workbench-control-ring: inset 0 0 0 1px var(--workbench-control-edge);
-  --workbench-control-ring-primary: inset 0 0 0 1.5px
+  --workbench-control-ring-primary: inset 0 0 0 2px
     var(--workbench-control-edge-primary);
-  /* 输入框：轻底色 + 1px 可辨边界，聚焦换 2px 主题色（调研 §4 的推荐次序）。 */
+  /*
+   * 输入框边界**不跟着按钮走**：轻底色 + 1px 深墨发丝边，聚焦换 2px 主题色（调研 §4 的推荐次序）。
+   * 2026-09-04 雨爷放宽的是「按钮边框」，不是输入框；把输入框也刷成主题色实色会让静息态的表单看起来
+   * 全都处于聚焦态，反而分不出焦点落在哪。所以这里单列一枚 `--workbench-field-edge`，与按钮那两枚
+   * 解耦，各自的 3:1 由 `controlAffordance.test.ts` 分别钉住。
+   */
+  --workbench-field-edge: rgb(22 29 46 / 58%);
   --workbench-field-fill: rgb(22 29 46 / 6%);
-  --workbench-field-face: inset 0 0 0 1px var(--workbench-control-edge),
+  --workbench-field-face: inset 0 0 0 1px var(--workbench-field-edge),
     inset 0 2px 4px rgb(16 26 58 / 10%);
   --workbench-field-face-focus: inset 0 0 0 2px var(--workbench-primary),
     inset 0 2px 4px rgb(16 26 58 / 10%);

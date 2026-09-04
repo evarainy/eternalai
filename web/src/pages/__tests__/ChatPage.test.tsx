@@ -1381,3 +1381,59 @@ describe('ChatPage assistant surfaces', () => {
     expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
   });
 });
+
+/*
+ * 2026-09-04 雨爷裁定：「`/chat` 欢迎语 28px 不要被限制死，要美观好看。」
+ *
+ * 解除限制不等于没人管——不然下一个窗口为了「照搬画板闭集」把它改回 21px，没有任何门禁会红。所以
+ * 这里把**展示级下限**单独钉住：闭集（`theme.test.ts` 的 `CANVAS_FONT_SIZES`）从此不管这一处，改由
+ * 本条管。反过来也钉住上限，防止有人把它当标题一路放大到跟提示卡抢分量。
+ */
+describe('/chat 欢迎语：展示级字号，不受正文闭集约束', () => {
+  const stylesheet = readFileSync(
+    resolve(process.cwd(), 'src/pages/ChatPage.module.css'),
+    'utf-8',
+  );
+  /** 剥掉块注释：注释里复盘旧值不算「还在渲染路径上」。 */
+  const declarations = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '');
+  const GREETING_RULE =
+    /\.welcome :global\(\.ant-welcome-title\)[^{}]*\{[^}]*\}/;
+
+  function fontSize(rule: RegExp, what: string): number {
+    const block = rule.exec(declarations)?.[0];
+    const matched = block === undefined ? null : /font-size:\s*(\d+)px/.exec(block);
+    if (matched?.[1] === undefined) {
+      throw new Error(`missing_font_size:${what}`);
+    }
+    return Number(matched[1]);
+  }
+
+  it('欢迎语落在展示级区间，且明显大于同块的说明文字', () => {
+    const greeting = fontSize(GREETING_RULE, 'welcome-title');
+    const description = fontSize(
+      /\.welcome :global\(\.ant-welcome-description\)[^{}]*\{[^}]*\}/,
+      'welcome-description',
+    );
+
+    expect(greeting).toBeGreaterThanOrEqual(28);
+    expect(greeting).toBeLessThanOrEqual(40);
+    expect(greeting).toBeGreaterThan(description);
+  });
+
+  it('解除限制只到这一处：本文件其余字号仍是画板闭集成员', () => {
+    const CANVAS_FONT_SIZES = [14, 15, 16, 17, 18, 19, 21, 34];
+    const greetingRule = GREETING_RULE.exec(declarations);
+    if (greetingRule === null) {
+      throw new Error('missing_rule:welcome-title');
+    }
+    const others = declarations.replace(greetingRule[0], '');
+    const sizes = [...others.matchAll(/font-size:\s*(\d+)px/g)].map(
+      ([, raw]) => Number(raw),
+    );
+
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const size of sizes) {
+      expect(CANVAS_FONT_SIZES).toContain(size);
+    }
+  });
+});

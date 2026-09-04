@@ -62,12 +62,27 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 /**
- * 把 `rgb(r g b / a%)` 这样的一层半透明描边按 source-over 合成到相邻底色上。边界的对比度必须按
- * **合成后**的颜色算：`rgb(255 255 255 / 94%)` 压在近白面上就等于看不见。
+ * 把一层描边按 source-over 合成到相邻底色上。边界的对比度必须按**合成后**的颜色算：
+ * `rgb(255 255 255 / 94%)` 压在近白面上就等于看不见。
+ *
+ * 三种写法都收：`rgb(r g b / a%)` 半透明、`#rrggbb` 不透明，以及 2026-09-04 起按钮边框在用的
+ * `var(--other-token)` 间接引用（一层层跟到底，跟不到就抛，不静默当成不透明黑）。**不许跟丢**——
+ * 跟丢会让 6.11:1 悄悄算成别的数。
  */
 function compositeOver(edge: string, backdrop: string): string {
+  let resolved = edge;
+  for (let hop = 0; hop < 8 && resolved.startsWith('var(--'); hop += 1) {
+    const reference = /^var\(\s*--([\w-]+)\s*\)$/.exec(resolved);
+    if (reference === null) {
+      throw new Error(`unsupported_edge:${edge}`);
+    }
+    resolved = token(reference[1] as string);
+  }
+  if (/^#[0-9a-f]{6}$/i.test(resolved)) {
+    return resolved;
+  }
   const matched = /^rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\/\s*([\d.]+)%\s*\)$/.exec(
-    edge,
+    resolved,
   );
   if (matched === null) {
     throw new Error(`unsupported_edge:${edge}`);
@@ -144,6 +159,44 @@ describe('可辨边界的数值（WCAG 2.2 SC 1.4.11）', () => {
         surface,
       ),
     ).toBeGreaterThanOrEqual(3);
+  });
+
+  /*
+   * 2026-09-04：按钮边框从半透明发丝边换成主题色**实色**（雨爷原话「按钮边框可以做填充色（与主题
+   * 同色）」，放宽了 2026-09-02「不得带固定填充色」那条——放宽面按字面只到**边框**，玻璃本体照旧
+   * 不填）。上一轮渲染层最低只有 3.14:1，余量不厚，根因就是半透明边被底图透上来的亮色拖淡。
+   *
+   * 所以这里不只钉「过 3:1」，还钉**「不许再半透明」**：一旦有人给这两枚加回 alpha，下面这条立刻红。
+   * 只钉数值是拦不住的——58% 深墨那个旧值本身也过 3:1。
+   */
+  it.each([
+    ['次动作', 'workbench-control-edge'],
+    ['主动作', 'workbench-control-edge-primary'],
+  ])('%s 按钮边框是主题色本色，不带 alpha', (_name, tokenName) => {
+    expect(token(tokenName)).toBe('var(--workbench-primary)');
+    expect(token('workbench-primary')).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  /*
+   * 输入框边界与按钮边框 2026-09-04 起解耦（按钮实色、输入框仍是深墨发丝边），所以它自己的 3:1
+   * 得单独钉住——否则把 `--workbench-field-edge` 调淡不会有任何门禁变红。
+   */
+  it.each(SURFACES)('输入框静息边界在「%s」上过 3:1', (_surfaceName, surface) => {
+    expect(
+      contrastRatio(
+        compositeOver(token('workbench-field-edge'), surface),
+        surface,
+      ),
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  /* 主动作线宽必须比次动作粗：两者同色之后，线宽是分层的承重项之一。 */
+  it('主动作边框比次动作粗，同色也分得出层', () => {
+    const width = (name: string): number =>
+      Number(/inset 0 0 0 ([\d.]+)px/.exec(token(name))?.[1]);
+    expect(width('workbench-control-ring-primary')).toBeGreaterThan(
+      width('workbench-control-ring'),
+    );
   });
 
   /*
@@ -294,7 +347,7 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
 
   it('聚焦环是 2px 主题色，非聚焦是 1px 可辨边界——全站同一对令牌', () => {
     expect(token('workbench-field-face')).toContain(
-      'inset 0 0 0 1px var(--workbench-control-edge)',
+      'inset 0 0 0 1px var(--workbench-field-edge)',
     );
     expect(token('workbench-field-face-focus')).toContain(
       'inset 0 0 0 2px var(--workbench-primary)',
