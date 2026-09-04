@@ -21,17 +21,32 @@
   grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
 }
 
-/* 底图三套预设。换底图只换 `.shell` 上的这一个 class，组件一律不动。 */
-.bgA {
-  background: var(--workbench-ground-a) fixed;
+/*
+ * 底图三套预设。换底图只换 `.shell` 上的这一个 class，组件一律不动。
+ *
+ * 2026-09-04：底图从 `background-attachment: fixed` 换成一层**自身 `position: fixed`** 的伪元素。
+ * 理由与实测数据写在 `styles.css` 的 `body::before` 上——`background-attachment: fixed` 让浏览器无法
+ * 把滚动交给合成器，每帧重画整屏背景，这才是雨爷说的「交办页向下滑动卡顿」的真凶（去掉内容面板的
+ * `backdrop-filter` 对帧时毫无改善，换掉这一行则直接回到 60fps）。观感不变：底图本来就相对视口固定。
+ */
+.shell::before {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
 }
 
-.bgB {
-  background: var(--workbench-ground-b) fixed;
+.bgA::before {
+  background: var(--workbench-ground-a);
 }
 
-.bgC {
-  background: var(--workbench-ground-c) fixed;
+.bgB::before {
+  background: var(--workbench-ground-b);
+}
+
+.bgC::before {
+  background: var(--workbench-ground-c);
 }
 
 /* ---------- 左导航（玻璃大面 1/3） ---------- */

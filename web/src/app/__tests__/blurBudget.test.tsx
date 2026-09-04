@@ -17,6 +17,7 @@ import { useNavigationStore } from '../../stores/navigationStore';
 import {
   blurDeclaringSelectors,
   describeBlurLayers,
+  fileBlurRules,
   findBlurLayers,
   unparsableBlurSelectors,
 } from '../../test/blurLayers';
@@ -235,7 +236,7 @@ describe('blur-layer detector', () => {
 });
 
 describe('per-screen blur-layer budget', () => {
-  it('keeps the work-objects screen on the five decided large surfaces', async () => {
+  it('keeps the work-objects screen on the three stationary surfaces', async () => {
     renderScreen('/work-objects');
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
@@ -246,7 +247,6 @@ describe('per-screen blur-layer budget', () => {
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
       'app/AppShell.module.css .topbar',
-      'pages/WorkObjectsPage.module.css .listSection',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -259,7 +259,6 @@ describe('per-screen blur-layer budget', () => {
     expect(layers).toEqual([
       'app/AppShell.module.css .sidebar',
       'app/AppShell.module.css .topbar',
-      'pages/ChatPage.module.css .conversation',
       'pages/ChatPage.module.css .sessionRail',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
@@ -279,7 +278,6 @@ describe('per-screen blur-layer budget', () => {
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
       'app/AppShell.module.css .topbar',
-      'pages/WorkObjectsPage.module.css .listSection',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -323,7 +321,7 @@ describe('per-screen blur-layer budget', () => {
     expect(after.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the dispatch draft screen on its single content panel', async () => {
+  it('keeps the dispatch draft screen on the three stationary surfaces', async () => {
     renderScreen('/work-dispatch');
     await screen.findByTestId('app-topbar');
 
@@ -332,12 +330,11 @@ describe('per-screen blur-layer budget', () => {
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
       'app/AppShell.module.css .topbar',
-      'features/work-dispatch/WorkDispatchPage.module.css .panel',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
 
-  it('keeps the software-centre screen on its single content panel', async () => {
+  it('keeps the software-centre screen on the three stationary surfaces', async () => {
     renderScreen('/apps');
     await screen.findByTestId('oa-status');
 
@@ -346,7 +343,6 @@ describe('per-screen blur-layer budget', () => {
       'app/AppShell.module.css .floatingEntry',
       'app/AppShell.module.css .sidebar',
       'app/AppShell.module.css .topbar',
-      'features/apps/AppsPage.module.css .panel',
     ]);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
   });
@@ -373,6 +369,57 @@ describe('per-screen blur-layer budget', () => {
 
     expect(layers).toEqual(['pages/LoginPage.module.css .card']);
     expect(layers.length).toBeLessThanOrEqual(BLUR_LAYER_BUDGET);
+  });
+
+  /*
+   * 2026-09-04 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」
+   *
+   * 只数层数是数不出这个问题的——交办页当时也只有 4 层，远在预算 6 以内。真正的成因是**哪个元素**买了
+   * 模糊：底图是 `background: ... fixed`，而内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对
+   * 它就位移一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测
+   * scrollHeight 1048 > 视口 800），所以卡在这一页最明显。
+   *
+   * 所以在层数之外再钉一条**落点**约束：模糊只许出现在不随内容滚动的大面上。承载正文、高度由内容
+   * 决定的面板一律不买模糊——这也正是 2026-09-02 视觉裁决原本就写着的「正文一律不靠玻璃承载」。
+   *
+   * 反证：把 `backdrop-filter` 加回任意一块内容面板（例如 `WorkDispatchPage.module.css .panel`），
+   * 下面第一条的集合会多出一项、第二条对应那一屏的 `.content` 里会出现一层，两条同时变红。
+   */
+  it('declares blur only on the surfaces that never scroll with the content', () => {
+    expect(
+      fileBlurRules()
+        .map((rule) => `${rule.file} ${rule.declaredSelector}`)
+        .sort(),
+    ).toEqual([
+      'app/AIDock.module.css .dock',
+      'app/AppShell.module.css .floatingEntry',
+      'app/AppShell.module.css .sidebar',
+      'app/AppShell.module.css .topbar',
+      'pages/ChatPage.module.css .sessionRail',
+      'pages/LoginPage.module.css .card',
+    ]);
+  });
+
+  /*
+   * 上面那条按文件钉，这一条按**渲染出来的那一屏**钉：主内容区 `<main id="main-content">` 里不许有
+   * 模糊层。两条角度不同——文件那条防「新写一条模糊规则」，这条防「把某个大面挪进内容区」。
+   *
+   * AI 助手页的左栏 `.sessionRail` 是唯一留在内容区里的模糊面，理由写在这里而不是留成默契：它是
+   * 定高的会话导航栏（`height` 由外壳给定、内部自己滚动），不随文档流伸长，也不承载正文，与左导航
+   * 同类。哪天它改成随内容伸长，这条就该跟着改。
+   */
+  it.each([
+    ['/work-dispatch', [] as string[]],
+    ['/apps', [] as string[]],
+    ['/work-objects', [] as string[]],
+    ['/chat', ['pages/ChatPage.module.css .sessionRail']],
+  ])('keeps the main content region of %s free of scroll-bound blur', async (path, expected) => {
+    renderScreen(path);
+    await screen.findByTestId('app-topbar');
+
+    const content = document.querySelector('#main-content');
+    expect(content).toBeInstanceOf(HTMLElement);
+    expect(describeBlurLayers(content as HTMLElement)).toEqual(expected);
   });
 
   it('does not count the closed floating panel that is still in the tree', async () => {

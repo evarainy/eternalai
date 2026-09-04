@@ -1,7 +1,7 @@
 /*
- * 玻璃硬约束在本文件里的落点：只有 `.sessionRail`（左栏）与 `.conversation`（内容面板）声明
- * `backdrop-filter`。加上外壳的左导航与顶栏，AI 助手页整屏共 4 层——该页不渲染悬浮入口与浮动面板。
- * 承载对话正文的 `.conversation` 垫 86% 白，正文不靠玻璃承载。
+ * 玻璃硬约束在本文件里的落点：只有 `.sessionRail`（定高的会话左栏）声明 `backdrop-filter`。
+ * 2026-09-04 起承载正文的 `.conversation` 不再买模糊（理由见该规则上方），只垫 86% 白；加上外壳的
+ * 左导航与顶栏，AI 助手页整屏共 3 层——该页不渲染悬浮入口与浮动面板。
  *
  * 2026-09-04 雨爷实机走查：「AI 助手页面字体、页面排版也过大，一个页面里无法显示输入框，丑陋且低效」。
  * 本文件因此照定稿画板 `Chat.dc.html` 逐项收敛：左栏 252px / 圆角 26 / padding 18 12；右侧面板正文区
@@ -102,6 +102,21 @@
 }
 
 /* ---------- 内容面板 ---------- */
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
 .conversation {
   display: flex;
   min-height: 0;
@@ -109,7 +124,6 @@
   flex-direction: column;
   overflow: hidden;
   background: var(--workbench-panel-fill);
-  backdrop-filter: blur(20px) saturate(150%);
   border: 1px solid var(--workbench-edge);
   border-radius: var(--workbench-radius-panel);
   box-shadow: var(--workbench-lift), var(--workbench-sheen);

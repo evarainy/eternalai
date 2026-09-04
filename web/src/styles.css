@@ -166,10 +166,40 @@ body {
   margin: 0;
   padding: 0;
   color: var(--workbench-text);
-  background: var(--workbench-ground-a) fixed;
   font-family: var(--workbench-font-body-family);
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
+}
+
+/*
+ * 底图画在一层**自身 `position: fixed`** 的伪元素上，不再用 `background-attachment: fixed`。
+ *
+ * 2026-09-04 雨爷走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」我按「模糊面随滚动重采样」
+ * 去改内容面板，实测**没有任何改善**（交办页滚动帧时中位数 33.3ms → 33.3ms）。逐项对照实验才定位到
+ * 真凶是这一行：
+ *
+ * | 变体（1280×800 无头 Chromium，交办页来回滚 3×147 帧） | 帧时中位 | p95 | >33ms 帧 |
+ * |---|---|---|---|
+ * | 不滚动（对照） | 16.6ms | 16.8 | 0 |
+ * | 现状 | 33.3ms | 50.9 | 328 |
+ * | 只去掉全部 `backdrop-filter` | 33.3ms | 50.3 | 366 |
+ * | 只把 `background-attachment` 改成 `scroll` | 16.6ms | 16.9 | 0 |
+ * | 改成 `position: fixed` 的底图层 | 16.6ms | 16.8 | 0 |
+ *
+ * `background-attachment: fixed` 让背景相对视口固定、相对元素滚动，浏览器因此**无法把滚动交给合成器**，
+ * 每一帧都要重画整屏背景。换成一层自己 `position: fixed` 的伪元素后，这层进独立合成层、滚动时一动
+ * 不动，观感完全一样（底图本来就相对视口固定），帧时回到 60fps。
+ *
+ * `z-index: -1`：`html` 有不透明底色 `#eef2fc`，所以这层画在画布底色之上、所有内容之下；`body` 与
+ * `.shell` 都不创建层叠上下文，负 z-index 因此落在根层叠上下文的同一层，按树序叠放，不会盖住内容。
+ */
+body::before {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  background: var(--workbench-ground-a);
+  inset: 0;
+  pointer-events: none;
 }
 
 #root {
