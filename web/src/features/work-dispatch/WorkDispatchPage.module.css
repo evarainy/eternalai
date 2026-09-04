@@ -43,20 +43,34 @@
 
 /* ---------- 顶部一句话输入 ---------- */
 
+/*
+ * 2026-09-04 返修第 2 条：这一格是本页的**主入口**，原来只有一行高、又被下面两段说明压住，看起来
+ * 不像可输入。改法三条：卡片放大（padding 14→18、圆角 22→24）、输入框从 1 行起改成 3 行起、
+ * 输入框自己带**可辨边界**（WCAG 2.2 SC 1.4.11：≥3:1，聚焦换 2px 主题色），不是只加内阴影。
+ */
 .brief {
   flex: none;
-  padding: 14px 16px;
-  border-radius: 22px;
+  padding: 18px;
+  border-radius: 24px;
   background: #fff;
-  box-shadow: 0 8px 22px -14px rgb(16 26 58 / 45%),
+  box-shadow: 0 10px 26px -14px rgb(16 26 58 / 45%),
     inset 0 0 0 1px rgb(255 255 255 / 90%);
 }
 
-.briefInput {
-  padding: 0 !important;
+.briefInput,
+.briefInput:global(.ant-input) {
+  padding: 14px 16px !important;
+  background-color: var(--workbench-field-fill) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--workbench-field-face) !important;
   color: var(--workbench-text) !important;
   font-size: var(--workbench-font-body) !important;
   line-height: var(--workbench-line-height) !important;
+}
+
+.briefInput:focus,
+.briefInput:global(.ant-input):focus {
+  box-shadow: var(--workbench-field-face-focus) !important;
 }
 
 .briefBar {
@@ -64,7 +78,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  margin-top: 6px;
+  margin-top: 12px;
 }
 
 .briefButton {
@@ -188,20 +202,27 @@
   line-height: 1.3;
 }
 
+/*
+ * 上一轮按「核对草稿不是从零填表」把描边放到白 62% + `rgb(22 29 46 / 11%)` 的发丝边——那道边与相邻
+ * 色只有约 1.1:1，雨爷 2026-09-04 实机走查的结论就是看不出这里能输入。以雨爷为准改成可辨边界：
+ * `--workbench-field-face` 的 1px 深墨边在近白面上实算约 4.1:1，满足 SC 1.4.11 的 3:1；聚焦换 2px
+ * 主题色。轻底色仍在（6% 墨），不是一堵深框。
+ */
 .field :global(.ant-input),
 .field :global(.ant-input-affix-wrapper),
 .field :global(.ant-select-selector) {
-  /*
-   * 交办草稿是「核对」不是「从零填表」：框放轻——白 62% + 1px 发丝边，不要深内阴影，否则整页会变成
-   * 一堵框。
-   */
-  background: rgb(255 255 255 / 62%) !important;
+  background: var(--workbench-field-fill) !important;
   border: 0 !important;
   border-radius: var(--workbench-radius-control) !important;
-  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
-    inset 0 0 0 1px rgb(22 29 46 / 11%) !important;
+  box-shadow: var(--workbench-field-face) !important;
   /* 画板 `.inp`：框里的取值是 17px。 */
   font-size: 17px !important;
+}
+
+.field :global(.ant-input):focus,
+.field :global(.ant-input-affix-wrapper-focused),
+.field :global(.ant-select-focused) :global(.ant-select-selector) {
+  box-shadow: var(--workbench-field-face-focus) !important;
 }
 
 .select {
@@ -217,9 +238,8 @@
   padding: 0 12px;
   border: 0;
   border-radius: var(--workbench-radius-control);
-  background: rgb(255 255 255 / 62%);
-  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
-    inset 0 0 0 1px rgb(22 29 46 / 11%);
+  background: var(--workbench-field-fill);
+  box-shadow: var(--workbench-field-face);
   color: var(--workbench-text);
   font-family: inherit;
   /* 画板 `.inp`：框里的取值是 17px。 */
@@ -237,9 +257,12 @@
   gap: 7px;
   padding: 6px 10px;
   border-radius: var(--workbench-radius-control);
-  background: rgb(255 255 255 / 62%);
-  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
-    inset 0 0 0 1px rgb(22 29 46 / 11%);
+  background: var(--workbench-field-fill);
+  box-shadow: var(--workbench-field-face);
+}
+
+.chipWell:focus-within {
+  box-shadow: var(--workbench-field-face-focus);
 }
 
 .chip {

@@ -90,12 +90,21 @@ export default function WorkDispatchPage() {
     <div className={styles.page}>
       <h1 className={styles.pageTitle}>任务交办</h1>
 
+      {/*
+        本页的主入口。雨爷 2026-09-04 走查第 2 条：「生成草稿的输入框过小，大部分页面被下面的解析性
+        文字占用了，解析性的文字全部删除。输入框边框要有阴影才好让人知道那里能输入内容。」
+
+        - 输入框放大到 3 行起（原来 1 行），成为这一页的视觉重心；
+        - 输入框下方原来的两段说明（画板那句「用一句话说明交办事项即可……」与我们自加的「自动把这句
+          话拆成下面的字段还没有接进来」）合成**一行**，且并排在按钮同一行里，不再单占版面；
+        - 边框按 WCAG 2.2 SC 1.4.11 做成可辨边界（≥3:1），聚焦时换 2px 主题色，不是只加内阴影。
+      */}
       <section className={styles.brief}>
         <label className={styles.srOnly} htmlFor="dispatch-brief">
           用一句话说明要交办的事
         </label>
         <Input.TextArea
-          autoSize={{ maxRows: 3, minRows: 1 }}
+          autoSize={{ maxRows: 6, minRows: 3 }}
           className={styles.briefInput}
           id="dispatch-brief"
           onChange={(event) => update('brief', event.target.value)}
@@ -105,16 +114,13 @@ export default function WorkDispatchPage() {
         />
         <div className={styles.briefBar}>
           <span className={styles.caption}>
-            用一句话说明交办事项即可；也可跳过，直接在下方逐项填写。
+            生成草稿还没有接进来；可直接在下方逐项填写。
           </span>
           <Button className={styles.briefButton} disabled type="primary">
             <Icon name="spark" size={17} strokeWidth={1.9} />
             生成草稿
           </Button>
         </div>
-        <p className={styles.caption}>
-          自动把这句话拆成下面的字段还没有接进来，请自己逐项填。
-        </p>
       </section>
 
       <section className={styles.panel}>
@@ -225,9 +231,14 @@ export default function WorkDispatchPage() {
                 添加
               </Button>
             </div>
+            {/*
+              这一行是**解析结果**不是解析说明（画板 `Dispatch.dc.html` 的
+              「原句中识别交办对象 7 个……去重后实际交办 6 个」就在这个位置），按返修要求保留。
+              空态那句只留状态，不再教怎么操作——输入框的占位文字已经写了。
+            */}
             <p className={styles.caption}>
               {targetCount === 0
-                ? '还没有交办对象，在这里一个一个添加。'
+                ? '还没有交办对象。'
                 : `已添加交办对象 ${targetCount} 个，重复添加的会自动去掉。`}
             </p>
           </div>
@@ -300,15 +311,18 @@ export default function WorkDispatchPage() {
           </div>
         </div>
 
+        {/*
+          页脚原来还有一句「下发还没有接进来，点「发布」发不出去；「存草稿」只存这台电脑。」——它是
+          说明不是结果，按返修第 2 条删掉。**如实告知没有丢**：点「发布」立刻给的是同一句实话
+          （`PUBLISH_BLOCKED_NOTICE`，`role="status"`），点「存草稿」给的是 `SAVE_NOTICE`，
+          都不冒充成功。
+        */}
         <footer className={styles.footer}>
           <div className={styles.footerCopy}>
             <p className={styles.caption}>
               {targetCount === 0
                 ? '发布前对方不可见。'
                 : `发布后，${targetCount} 个交办对象的工作事项中各生成一条；发布前对方不可见。`}
-            </p>
-            <p className={styles.footerWarn}>
-              下发还没有接进来，点「发布」发不出去；「存草稿」只存这台电脑。
             </p>
           </div>
           <div className={styles.footerActions}>

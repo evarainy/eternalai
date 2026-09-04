@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -5,6 +7,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../../app/theme';
 import { DRAFT_STORAGE_KEY, parseDraft } from '../dispatchDraft';
 import WorkDispatchPage from '../WorkDispatchPage';
+
+/** vitest 下 `import.meta.url` 是 jsdom 的 URL 实例，`fileURLToPath` 不认，先取 `.href`。 */
+function readSource(relativePath: string): string {
+  return readFileSync(
+    fileURLToPath(new URL(relativePath, import.meta.url).href),
+    'utf8',
+  );
+}
 
 /** 2026-08-27 §九：前台不得出现这些内部对象名。 */
 const FORBIDDEN_INTERNAL_TERMS = [
@@ -128,9 +138,7 @@ describe('WorkDispatchPage form', () => {
   it('deduplicates dispatch targets and counts only what was really added', () => {
     renderPage();
 
-    expect(
-      screen.getByText('还没有交办对象，在这里一个一个添加。'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('还没有交办对象。')).toBeInTheDocument();
 
     const targetInput = screen.getByLabelText('交办对象');
     for (const target of ['办公室', '财务科', '办公室']) {
@@ -152,15 +160,17 @@ describe('WorkDispatchPage form', () => {
   /*
    * 后端不做（2026-09-02 裁决「界面先行、后端不做」）：AI 生成草稿、附件上传、下发三处都没有接进来。
    * 界面必须**逐处如实说明**，不许摆一个能点却什么也不干的按钮，更不许给一个假的成功。
+   *
+   * 2026-09-04 返修第 2 条把输入框下方的说明段落删成一行，页脚那句「下发还没有接进来……」也删了。
+   * 这条断言随之改口径：**告知没有被删掉，只是换了落点**——生成草稿与添加附件仍是 disabled 且各自
+   * 带一句话，下发那句改由点「发布」时的 `role="status"` 当场给出（下一条用例钉死）。
    */
   it('says plainly which parts have no backend instead of faking them', () => {
     renderPage();
 
     expect(screen.getByRole('button', { name: /生成草稿/ })).toBeDisabled();
     expect(
-      screen.getByText(
-        '自动把这句话拆成下面的字段还没有接进来，请自己逐项填。',
-      ),
+      screen.getByText('生成草稿还没有接进来；可直接在下方逐项填写。'),
     ).toBeInTheDocument();
 
     expect(screen.getByRole('button', { name: /添加附件/ })).toBeDisabled();
@@ -170,11 +180,47 @@ describe('WorkDispatchPage form', () => {
       ),
     ).toBeInTheDocument();
 
+    // 删掉的是常驻说明，不是如实告知：这一句现在必须由「发布」当场给出。
     expect(
-      screen.getByText(
+      screen.queryByText(
         '下发还没有接进来，点「发布」发不出去；「存草稿」只存这台电脑。',
       ),
-    ).toBeInTheDocument();
+    ).toBeNull();
+    fireEvent.change(screen.getByLabelText('标题'), {
+      target: { value: '报送第三季度政务信息' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '下发还没有接进来，现在发不出去。',
+    );
+  });
+
+  /*
+   * 返修第 2 条的另外两半，都是可被回滚打红的硬事实：
+   * 1. 顶部输入框是本页主入口——`minRows` 至少 3 行，不再是原来的 1 行；
+   * 2. 输入框与各字段的描边必须是**可辨边界**（`--workbench-field-face`，实算 ≈4.1:1），
+   *    不是原来那道 `rgb(22 29 46 / 11%)` 的发丝边（≈1.1:1）。
+   */
+  it('makes the draft box the visual anchor with a discernible border', () => {
+    renderPage();
+
+    const brief = screen.getByLabelText('用一句话说明要交办的事');
+    expect(brief.tagName).toBe('TEXTAREA');
+    /*
+     * antd 的 `autoSize` 靠布局测量算高，jsdom 量到的一律是 0，DOM 上读不出行数。所以起始行数只能
+     * 钉在源码上——这一条同样是可回滚打红的：把 `minRows` 调回 1 或删掉 `autoSize`，它立刻变红。
+     */
+    const source = readSource('../WorkDispatchPage.tsx');
+    const autoSize = /autoSize=\{\{([^}]*)\}\}/.exec(source)?.[1] ?? '';
+    expect(Number(/minRows:\s*(\d+)/.exec(autoSize)?.[1] ?? '0')).toBeGreaterThanOrEqual(3);
+
+    const css = readSource('../WorkDispatchPage.module.css');
+    const briefRule = /\.briefInput,[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(briefRule).toContain('var(--workbench-field-face)');
+    const fieldRule =
+      /\.field :global\(\.ant-input\),[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(fieldRule).toContain('var(--workbench-field-face)');
+    expect(css).not.toContain('inset 0 0 0 1px rgb(22 29 46 / 11%)');
   });
 
   it('answers the publish button with the real outcome, never with a fake success', () => {
