@@ -22,6 +22,7 @@ import {
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
+import { greetingByHour } from '../chatGreeting';
 
 const runtimeMock = vi.hoisted(() => ({
   action: vi.fn(),
@@ -1243,7 +1244,7 @@ describe('ChatPage assistant surfaces', () => {
   it('offers the starter prompts instead of an empty box, and a prompt fills the request', () => {
     renderChat();
 
-    expect(screen.getByText('这里现在是空的，因为你还没有问过。')).toBeInTheDocument();
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
     expect(screen.getByText('可以这样问我')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('我今天有什么要办的？'));
@@ -1252,16 +1253,54 @@ describe('ChatPage assistant surfaces', () => {
     expect(screen.getByLabelText('办理请求')).toHaveValue('我今天有什么要办的？');
   });
 
-  it('keeps a visible label for the request box rather than relying on the placeholder', () => {
+  /*
+   * 雨爷 2026-09-04 返修第 4 条：删掉输入框上方那个可见标签「办理请求」（画板 `Chat.dc.html` 上没有
+   * 这一行），同轮删掉底注「回答基于 OA 实时数据，正式办理以 OA 为准」。**无障碍名称不许跟着丢**：
+   * 输入框仍必须有「办理请求」这个可及名称，且不再指向一个已被删掉的 `aria-describedby` 目标。
+   */
+  it('drops the visible label and footnote while keeping the accessible name', () => {
     renderChat();
 
     const input = screen.getByLabelText('办理请求');
     expect(input.tagName).toBe('TEXTAREA');
     expect(input).toHaveAttribute('id', 'chat-request');
-    expect(input).toHaveAttribute('aria-describedby', 'chat-request-hint');
-    const visibleLabel = document.querySelector('label[for="chat-request"]');
-    expect(visibleLabel).not.toBeNull();
-    expect(visibleLabel).toHaveTextContent('办理请求');
+    expect(input).toHaveAttribute('aria-label', '办理请求');
+    // 可见标签与底注都不该再出现，`aria-describedby` 不许指向不存在的 id。
+    expect(document.querySelector('label[for="chat-request"]')).toBeNull();
+    expect(input).not.toHaveAttribute('aria-describedby');
+    expect(document.getElementById('chat-request-hint')).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      '回答基于 OA 实时数据，正式办理以 OA 为准',
+    );
+  });
+
+  /*
+   * 空态标题：画板是「王主任，早上好」，姓名与职务没有后端读取端点，只落不带称呼的问候。这条钉死
+   * **不许出现称呼**，也不许把一句说明重新做成最大字号的标题。
+   */
+  it('greets without inventing a name and keeps the empty reason in the description', () => {
+    renderChat();
+
+    const title = document.querySelector('.ant-welcome-title');
+    expect(title).not.toBeNull();
+    expect(['夜里好', '早上好', '中午好', '下午好', '晚上好']).toContain(
+      title?.textContent,
+    );
+    expect(title?.textContent).not.toMatch(/主任|王|先生|女士/);
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
+  });
+
+  it('maps every part of the day to a greeting without a form of address', () => {
+    const cases: [number, string][] = [
+      [2, '夜里好'],
+      [8, '早上好'],
+      [12, '中午好'],
+      [15, '下午好'],
+      [21, '晚上好'],
+    ];
+    for (const [hour, expected] of cases) {
+      expect(greetingByHour(new Date(2026, 8, 4, hour, 0, 0))).toBe(expected);
+    }
   });
 
   it('lists only the current temporary conversation and says history is not stored yet', () => {
@@ -1269,11 +1308,16 @@ describe('ChatPage assistant surfaces', () => {
 
     const rail = screen.getByRole('complementary', { name: '我问过的' });
     expect(within(rail).getByRole('heading', { name: '我问过的' })).toBeInTheDocument();
-    expect(within(rail).getByText('现在没有正在进行的对话。')).toBeInTheDocument();
+    /*
+     * 2026-09-04 返修：左栏三行说明砍成一行。留下的必须是那条**真限制**（历史存不起来），
+     * 「现在没有对话」由空列表本身表明，不再多写一句。
+     */
+    expect(within(rail).getByText('以前问过的存不起来，刷新就没了。')).toBeInTheDocument();
+    expect(rail.textContent).not.toContain('现在没有正在进行的对话。');
+    expect(rail.textContent).not.toContain('要留档请到「工作事项」里办。');
     expect(
-      within(rail).getByText(/以前问过的还存不起来/),
-    ).toBeInTheDocument();
-    expect(within(rail).getByText(/请到「工作事项」里办/)).toBeInTheDocument();
+      within(rail).queryAllByText(/存不起来|留档|没有正在进行/),
+    ).toHaveLength(1);
     expect(within(rail).queryAllByRole('listitem')).toHaveLength(0);
   });
 
@@ -1290,7 +1334,7 @@ describe('ChatPage assistant surfaces', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toHaveTextContent('本次对话');
     expect(rail.textContent).not.toContain('先问一句');
-    expect(within(rail).getByText(/以前问过的还存不起来/)).toBeInTheDocument();
+    expect(within(rail).getByText(/以前问过的存不起来/)).toBeInTheDocument();
   });
 
   it('separates the loading, empty and failed states of the conversation', async () => {
@@ -1303,17 +1347,15 @@ describe('ChatPage assistant surfaces', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderChat();
 
-    // 空：说明「为什么空」，不是留白。
-    expect(screen.getByText('这里现在是空的，因为你还没有问过。')).toBeInTheDocument();
+    // 空：说明「为什么空」，不是留白。这句话现在在问候语下面的说明行里。
+    expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
 
     sendMessage('查一下我的待办');
 
     // 加载中：有明确的进行中提示。
     expect(await screen.findByRole('status')).toHaveTextContent('正在办理');
-    expect(
-      screen.queryByText('这里现在是空的，因为你还没有问过。'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
 
     act(() =>
       resolveRequest(
@@ -1335,9 +1377,7 @@ describe('ChatPage assistant surfaces', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('这里现在是空的，因为你还没有问过。'),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/这里还没有对话。/)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/RAW_HTTP|RAW_BACKEND_BODY/);
   });
 });

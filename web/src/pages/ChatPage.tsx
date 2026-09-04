@@ -22,6 +22,7 @@ import {
 } from '../generated/runtime/runtime';
 import type { UIComponentTargetSystem } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
+import { greetingByHour } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
@@ -96,16 +97,18 @@ const STARTER_PROMPTS = [
 type RequestTextAreaProps = ComponentProps<typeof Input.TextArea>;
 
 /**
- * `Sender` 会把传给它的 `id` / `aria-*` 同时贴到外层容器和内部 textarea 上，于是一个可见标签会指向
- * 两个元素。这里改为只在真正的输入框上挂标签与说明，容器保持干净：可见标签仍然存在（不用 placeholder
- * 代替标签），而 `getByLabelText` 也只会命中输入框本身。
+ * `Sender` 会把传给它的 `id` / `aria-*` 同时贴到外层容器和内部 textarea 上，于是一个标签会指向两个
+ * 元素。这里只在真正的输入框上挂名称，容器保持干净，`getByLabelText` 也只会命中输入框本身。
+ *
+ * 2026-09-04：可见标签「办理请求」按返修要求删掉（画板 `Chat.dc.html` 上没有这一行），无障碍名称
+ * 改由 `aria-label` 承担，读屏软件听到的仍是「办理请求」；`aria-describedby` 指向的那行底注同轮删除，
+ * 属性一并去掉，避免指向一个不存在的 id。
  */
 const RequestTextArea = forwardRef<TextAreaRef, RequestTextAreaProps>(
   function RequestTextArea(props, ref) {
     return (
       <Input.TextArea
         {...props}
-        aria-describedby="chat-request-hint"
         aria-label="办理请求"
         id="chat-request"
         ref={ref}
@@ -245,9 +248,7 @@ export default function ChatPage() {
           新对话
         </Button>
         <h2 className={styles.railTitle}>我问过的</h2>
-        {transcript.length === 0 ? (
-          <p className={styles.railText}>现在没有正在进行的对话。</p>
-        ) : (
+        {transcript.length === 0 ? null : (
           <Conversations
             activeKey="current"
             aria-label="当前对话"
@@ -255,11 +256,11 @@ export default function ChatPage() {
           />
         )}
         {/*
-          两段话说的是同一件事，合成一句：既留住「历史存不起来」这条真限制，又不再堆说明。
+          2026-09-04 返修：左栏原来三行说明（「现在没有正在进行的对话。」「以前问过的还存不起来，
+          刷新就没了。」「要留档请到「工作事项」里办。」）砍成**一行**。留下的是那条真限制——历史
+          存不起来；「现在没有对话」由空列表本身表明，不用再写一句。
         */}
-        <p className={styles.railText}>
-          以前问过的还存不起来，刷新就没了。要留档请到「工作事项」里办。
-        </p>
+        <p className={styles.railText}>以前问过的存不起来，刷新就没了。</p>
       </aside>
 
       <div className={styles.main}>
@@ -278,16 +279,18 @@ export default function ChatPage() {
             {transcript.length === 0 ? (
               <div className={styles.emptyState}>
                 {/*
-                  画板这里是「王主任，早上好」。姓名与职务当前没有后端读取端点（见顶栏同一处的
-                  fail-closed 文案），编一个名字就是造数据，所以标题留「为什么是空的」这句实话，
-                  版式（60px 图标 + 大字标题 + 一句 17px 说明）照画板。
+                  画板是「王主任，早上好」。姓名与职务当前没有后端读取端点（见顶栏同一处的
+                  fail-closed 文案），编一个名字就是造数据，所以只落**不带称呼**的问候；版式
+                  （60px 图标 + 大字标题 + 一句 17px 说明）照画板。原来标题位放的是
+                  「这里现在是空的，因为你还没有问过。」——把一句说明做成了全页最大字号的标题。
+                  那句实话没有删，收进了下面这行说明里。
                 */}
                 <Welcome
                   className={styles.welcome}
                   variant="borderless"
                   icon={<Icon name="spark" size={26} strokeWidth={1.9} />}
-                  title="这里现在是空的，因为你还没有问过。"
-                  description="我能帮你查 OA 里的待办和系统消息，说人话就行。"
+                  title={greetingByHour()}
+                  description="这里还没有对话。我能帮你查 OA 里的待办和系统消息，说人话就行。"
                 />
                 <Prompts
                   className={styles.prompts}
@@ -351,24 +354,21 @@ export default function ChatPage() {
           </div>
 
           {/*
-            2026-09-04：说明文字按画板砍到只剩两处——输入框的可见标签（无障碍要求，不用占位文字代替
-            标签），与画板底注那一行。删掉「Enter 发送 · Shift + Enter 换行」和「页面只展示安全文本，
-            不展示内部追踪信息。」：画板上没有，属于我们自己加的说明。
+            2026-09-04 返修第 4 条：删掉底注「回答基于 OA 实时数据，正式办理以 OA 为准」，也删掉输入框
+            上方那个可见标签「办理请求」（画板 `Chat.dc.html` 上没有这一行）。无障碍名称没有丢，改由
+            输入框自己的 `aria-label` 承担。输入框同轮放大：起始 1 行改 3 行，边界改成可辨边界。
+
+            「一屏内看得见输入框」仍不靠估算高度，靠结构：`.transcript` 是唯一可伸缩可滚动的一格，
+            `.composer` 是 `flex:none`，所以输入框放大只会挤压对话区，不会被顶出视口。
           */}
           <form className={styles.composer} onSubmit={handleSubmit}>
-            <label className={styles.composerLabel} htmlFor="chat-request">
-              办理请求
-            </label>
             <Sender
-              autoSize={{ minRows: 1, maxRows: 6 }}
+              autoSize={{ minRows: 3, maxRows: 6 }}
               className={styles.sender}
               components={{ input: RequestTextArea }}
               disabled={mutation.isPending}
               footer={
                 <div className={styles.composerActions}>
-                  <Text className={styles.composerHint} id="chat-request-hint">
-                    回答基于 OA 实时数据，正式办理以 OA 为准
-                  </Text>
                   <Button
                     type="primary"
                     htmlType="submit"
