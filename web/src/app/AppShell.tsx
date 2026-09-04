@@ -278,7 +278,12 @@ function GlobalWorkObjectSearch({
   };
 
   return (
-    <form className={styles.searchField} onSubmit={handleSubmit} role="search">
+    <form
+      className={styles.searchField}
+      data-focus-ring="host"
+      onSubmit={handleSubmit}
+      role="search"
+    >
       <span aria-hidden="true" className={styles.searchIcon}>
         <Icon name="search" size={19} />
       </span>

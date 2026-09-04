@@ -301,7 +301,10 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
     );
     for (const [path, selector] of [
       ['../AppShell.module.css', '.searchField:focus-within {'],
-      ['../../pages/ChatPage.module.css', '.sender:focus-within {'],
+      [
+        '../../pages/ChatPage.module.css',
+        '.sender:global(.ant-sender):focus-within {',
+      ],
       ['../../pages/LoginPage.module.css', '.form :global(.ant-input):focus,'],
       [
         '../../features/work-dispatch/WorkDispatchPage.module.css',
@@ -320,5 +323,118 @@ describe('焦点环画在可见边框那一层，颜色是主题色', () => {
       'var(--workbench-field-face)',
     );
     expect(css).not.toContain('var(--workbench-well-edge)');
+  });
+});
+
+/*
+ * 2026-09-04 第三次走查，雨爷截图 `C:.png`：AI 助手页的输入框聚焦后是**两个框叠着**——外层蓝色圆角
+ * 框（`.sender:focus-within`，对的），内层一圈内缩、无圆角的框（错的）。
+ *
+ * 实机 `getComputedStyle` 量到的内层那圈是：`outline: 3px solid rgb(36,80,200)`、`outline-offset: -1px`、
+ * `border-radius: 0`，落在 `.ant-sender-input` 这个 textarea 上，也就是上面那条兜底环。第二轮修的时候
+ * 抑制清单是**按 antd 类名逐个列**的，`@ant-design/x` 的 `.ant-sender-input` 一个也对不上，于是漏了。
+ *
+ * 截图里那圈是橙色 `rgb(180,75,0)`（逐像素取样得到，正是已下线的 `#b44b00`），但现役令牌与 dev server
+ * 实际响应都已经是 `#2450c8`——那是雨爷浏览器里的**旧样式**，不是仓库里还有橙色。所以本组不再钉颜色
+ * （颜色由上面那条「橙色清零」守卫管），只钉**结构**：一个控件同一时刻只画一个环。
+ *
+ * 反证（把本轮改动回滚后本组应变红）：删掉 `[data-focus-ring='host']` 那条 → 第 1 条红；把任一处
+ * `data-focus-ring="host"` 摘掉 → 第 2 条红；`.sender:global(.ant-sender)` 改回单个 `.sender` → 第 3
+ * 条红；删掉 `:has(button:focus-visible)` 那三条 → 第 4 条红；删掉 `.ant-select:focus-within` → 第 5
+ * 条红；删掉交办页那两条抑制 → 第 6 条红。
+ */
+describe('一个控件同一时刻只画一个焦点环', () => {
+  it('「外层画环、内层是真控件」的结构统一挂 data-focus-ring="host"，内层兜底 outline 抑制', () => {
+    expect(
+      rule(
+        GLOBAL_CSS,
+        "[data-focus-ring='host'] :is(input, textarea, [contenteditable='true']):focus-visible",
+      ),
+    ).toContain('outline: none');
+  });
+
+  /*
+   * 抑制与画环是一对，缺后半截就是把焦点态做没了——键盘用户会不知道焦点在哪。所以每挂一处属性，都要
+   * 在同一棵子树里指出**谁**画那个环，两边一起钉。
+   */
+  it.each([
+    [
+      '顶栏搜索凹槽',
+      '../AppShell.tsx',
+      '../AppShell.module.css',
+      '.searchField:focus-within {',
+    ],
+    [
+      '交办页「交办对象」凹槽',
+      '../../features/work-dispatch/WorkDispatchPage.tsx',
+      '../../features/work-dispatch/WorkDispatchPage.module.css',
+      '.chipWell:focus-within {',
+    ],
+    [
+      'AI 助手页输入卡',
+      '../../pages/ChatPage.tsx',
+      '../../pages/ChatPage.module.css',
+      '.sender:global(.ant-sender):focus-within {',
+    ],
+  ])('%s：挂了 host，子树里也确实有人画环', (_name, tsx, css, selector) => {
+    expect(readSource(tsx)).toContain('data-focus-ring="host"');
+    expect(rule(readSource(css), selector)).toContain(
+      'var(--workbench-field-face-focus)',
+    );
+  });
+
+  it('AI 助手输入卡的规则要两个类才压得过 @ant-design/x 自己那条 .ant-sender', () => {
+    const css = readSource('../../pages/ChatPage.module.css');
+    expect(css).toContain('.sender:global(.ant-sender) {');
+    // 只写一个类时实机生效的是 antd-x 的 `1px solid rgb(0 0 0 / 10%)`，压在白面上只有 1.2:1。
+    expect(withoutComments(css)).not.toMatch(/(?:^|\})\s*\.sender\s*\{/);
+    expect(rule(css, '.sender:global(.ant-sender) {')).toContain(
+      'var(--workbench-field-face)',
+    );
+  });
+
+  it.each([
+    ['顶栏搜索凹槽', '../AppShell.module.css', '.searchField:focus-within:has(button:focus-visible) {'],
+    [
+      '交办页「交办对象」凹槽',
+      '../../features/work-dispatch/WorkDispatchPage.module.css',
+      '.chipWell:focus-within:has(button:focus-visible) {',
+    ],
+    [
+      'AI 助手页输入卡',
+      '../../pages/ChatPage.module.css',
+      '.sender:global(.ant-sender):focus-within:has(button:focus-visible) {',
+    ],
+  ])(
+    '%s：里面的按钮拿到焦点时凹槽那圈收回去，一次只留一个环',
+    (_name, path, selector) => {
+      /*
+       * 收回去的是**聚焦那圈**，退回非聚焦的可辨边界，不是退到没有边界；不支持 `:has()` 的浏览器整条
+       * 规则失效，退回的是「多一个环」而不是「一个环都没有」。
+       */
+      const declarations = rule(readSource(path), selector);
+      expect(declarations).toContain('var(--workbench-field-face)');
+      expect(declarations).not.toContain('var(--workbench-field-face-focus)');
+    },
+  );
+
+  it('Select 的焦点环压得过 antd 自带的 14% 淡蓝晕', () => {
+    /*
+     * antd 6 注入的那条特异度更高，实机量到的是 `0 0 0 2px rgb(47 107 255 / 14%)`——远不到 3:1；而
+     * `.ant-select-input` 的兜底 outline 又被抑制了，两下一叠等于键盘聚焦时看不见焦点。
+     */
+    expect(rule(GLOBAL_CSS, '.ant-select:focus-within,')).toContain(
+      'var(--workbench-field-face-focus) !important',
+    );
+  });
+
+  it('交办页两个输入框自己不再多画一圈', () => {
+    const css = readSource(
+      '../../features/work-dispatch/WorkDispatchPage.module.css',
+    );
+    // 凹槽已经画了环，里面的输入框聚焦时不再画第二圈。
+    expect(rule(css, '.chipInput:focus,')).toContain('box-shadow: none');
+    // 一句话输入框的环画在它自己身上，不再叠外面那圈 3px 兜底 outline。
+    expect(rule(css, '.briefInput:focus-visible,')).toContain('outline: none');
   });
 });

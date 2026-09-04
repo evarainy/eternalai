@@ -74,6 +74,16 @@
   box-shadow: var(--workbench-field-face-focus) !important;
 }
 
+/*
+ * 这个输入框的焦点环画在它**自己**身上（上面那条 2px 主题色内环），所以不需要再吃全局那条 3px 兜底
+ * outline——两者同色、一个内一个外，叠出来就是雨爷说的「两个框」。抑制掉的只是重复的那一圈，焦点态
+ * 本身没有变弱。
+ */
+.briefInput:focus-visible,
+.briefInput:global(.ant-input):focus-visible {
+  outline: none !important;
+}
+
 .briefBar {
   display: flex;
   flex-wrap: wrap;
@@ -278,6 +288,29 @@
 
 .chipWell:focus-within {
   box-shadow: var(--workbench-field-face-focus);
+}
+
+/*
+ * 每个芯片的「删除」按钮都在这个凹槽**里面**，它一拿到键盘焦点，`:focus-within` 会把整条凹槽一起点亮，屏幕上于是同时出现
+ * 两个环（凹槽一圈 + 按钮自己那圈）。这里在支持 `:has()` 的浏览器上把凹槽那圈收回去，一次只留一个环。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回**今天的
+ * 行为**（多一个环），而不是退到「一个环都没有」——后者会让键盘用户找不到焦点。
+ */
+.chipWell:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
+}
+
+/*
+ * 凹槽已经画了那一圈，里面这个输入框不再画第二圈。基态那条 `box-shadow: none !important` 挡不住聚焦
+ * 态——实机量到的是 `rgb(36,80,200) 0 0 0 2px inset` 仍然出现在 `<input>` 自己身上，于是「凹槽环 +
+ * 输入框环 + 兜底 outline」三个环叠在一起。兜底 outline 由 `.chipWell` 上的 `data-focus-ring="host"`
+ * 抑制，输入框自己这圈在这里抑制。
+ */
+.chipInput:focus,
+.chipInput:focus-visible,
+.chipInput:global(.ant-input):focus,
+.chipInput:global(.ant-input):focus-visible {
+  box-shadow: none !important;
 }
 
 .chip {

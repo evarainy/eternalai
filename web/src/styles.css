@@ -241,6 +241,24 @@ body::before {
 }
 
 /*
+ * 2026-09-04 第三次走查（雨爷截图 `C:.png`）：AI 助手页的输入框仍然是「外层蓝色圆角框 + 内层直角
+ * 框」两个环叠着。上面那串靠 antd 类名认「外层」的写法覆盖不全——`@ant-design/x` 的 `Sender` 用的是
+ * `.ant-sender` / `.ant-sender-input`，一个前缀也对不上，于是内层 textarea 照旧吃到那条 3px 兜底环。
+ * 实机 `getComputedStyle` 量到的就是它：`outline: 3px solid rgb(36,80,200)`、`outline-offset: -1px`、
+ * `border-radius: 0`，落在 28px 圆角的 `.ant-sender` 内侧 33px 处，与截图完全对得上。
+ *
+ * 所以改成不认类名、认**声明**：谁在外层画焦点环，谁就在那一层挂 `data-focus-ring="host"`，内层真控件
+ * 的兜底 outline 一律抑制。以后再出现同构的结构，挂个属性即可，不用回来改这张清单。
+ *
+ * 反过来的责任是硬的：**挂了属性的那棵子树里必须有一层画着焦点环**（顶栏是 `.searchField` 自己，
+ * 交办页是 `.chipWell` 自己，AI 助手页是 `.composer` 里的那张 `.sender` 卡），否则键盘用户会看不到
+ * 焦点落在哪。`controlAffordance.test.ts` 逐处钉住每个 host 与它对应的那条 `:focus-within` 环。
+ */
+[data-focus-ring='host'] :is(input, textarea, [contenteditable='true']):focus-visible {
+  outline: none !important;
+}
+
+/*
  * 带边框的输入类控件自己已经有 2px 主题色聚焦环（下面那条 `-focus`，实机测 6.5:1），再叠一圈 3px 的
  * 兜底 outline 就是同一个控件上套两个同色环。键盘可达性没有因此变差：焦点态仍然是一圈高对比的 2px
  * 主题色，只是不再画两遍。没有自定义焦点态的元素（链接、纯按钮）依旧走上面那条兜底规则。
@@ -270,6 +288,18 @@ body::before {
 .ant-picker-outlined:focus-within {
   border-color: transparent;
   box-shadow: var(--workbench-field-face-focus);
+}
+
+/*
+ * Select 得单拎出来。上面那条对它**没生效**：antd 6 自己注入的规则特异度更高，实机量到的焦点态是
+ * `0 0 0 2px rgb(47 107 255 / 14%)`——14% 的淡蓝晕，对相邻色远不到 SC 1.4.11 的 3:1；而它内层的
+ * `.ant-select-input` 又被上面那条抑制规则去掉了兜底 outline。两下一叠，**键盘 Tab 到下拉框时几乎看
+ * 不出焦点在哪**（2026-09-04 实机逐站点 Tab 走查测出来的，交办页「事项类型」就是）。这里显式压过
+ * antd 那条，换成与其他输入框同一枚 2px 主题色环（实算 6.1:1）。
+ */
+.ant-select:focus-within,
+.ant-select-focused {
+  box-shadow: var(--workbench-field-face-focus) !important;
 }
 
 /* 外层已经画了那道边界，内层不再叠第二层。 */

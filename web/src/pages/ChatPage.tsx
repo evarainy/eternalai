@@ -361,7 +361,11 @@ export default function ChatPage() {
             「一屏内看得见输入框」仍不靠估算高度，靠结构：`.transcript` 是唯一可伸缩可滚动的一格，
             `.composer` 是 `flex:none`，所以输入框放大只会挤压对话区，不会被顶出视口。
           */}
-          <form className={styles.composer} onSubmit={handleSubmit}>
+          <form
+            className={styles.composer}
+            data-focus-ring="host"
+            onSubmit={handleSubmit}
+          >
             <Sender
               autoSize={{ minRows: 3, maxRows: 6 }}
               className={styles.sender}

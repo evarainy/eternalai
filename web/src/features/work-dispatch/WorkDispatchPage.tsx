@@ -203,7 +203,7 @@ export default function WorkDispatchPage() {
 
           <div className={styles.field}>
             <label htmlFor="dispatch-target">交办对象</label>
-            <div className={styles.chipWell}>
+            <div className={styles.chipWell} data-focus-ring="host">
               {draft.targets.map((target) => (
                 <span className={styles.chip} key={target}>
                   {target}

@@ -278,6 +278,16 @@
   box-shadow: var(--workbench-field-face-focus);
 }
 
+/*
+ * 「搜索」按钮在这个凹槽**里面**，它一拿到键盘焦点，`:focus-within` 会把整条凹槽一起点亮，屏幕上于是同时出现
+ * 两个环（凹槽一圈 + 按钮自己那圈）。这里在支持 `:has()` 的浏览器上把凹槽那圈收回去，一次只留一个环。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回**今天的
+ * 行为**（多一个环），而不是退到「一个环都没有」——后者会让键盘用户找不到焦点。
+ */
+.searchField:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
+}
+
 .searchIcon {
   display: grid;
   flex: none;

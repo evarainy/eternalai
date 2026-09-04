@@ -375,7 +375,13 @@
  * 原来这里还有 `.composerLabel`（可见标签「办理请求」）与 `.composerHint`（底注「回答基于 OA 实时
  * 数据……」）两条规则，两处文字同轮删除，规则一并删掉，不留够不着的死样式。
  */
-.sender {
+/*
+ * 选择器要写成 `.sender:global(.ant-sender)`（两个类）才压得过 `@ant-design/x` 自己那条 `.ant-sender`。
+ * 只写 `.sender` 时实机量到的是 antd-x 的值在生效：`border: 1px solid rgb(0 0 0 / 10%)`、`radius 28px`
+ * ——那圈 10% 黑压在白面上约 `#e6e6e6`，对 `#fff` 只有 1.2:1，远不到 SC 1.4.11 的 3:1，静息态等于没有
+ * 边界。聚焦态那条是两个类，本来就压得过，所以之前只有聚焦时看得见框。
+ */
+.sender:global(.ant-sender) {
   padding: 20px;
   background: #fff;
   border: 0;
@@ -384,8 +390,19 @@
     0 8px 22px -14px rgb(16 26 58 / 45%);
 }
 
-.sender:focus-within {
+.sender:global(.ant-sender):focus-within {
   box-shadow: var(--workbench-field-face-focus),
+    0 8px 22px -14px rgb(16 26 58 / 45%);
+}
+
+/*
+ * 「发送」按钮在 `Sender` 的 footer 里，也就是在这张卡**里面**，它一拿到键盘焦点，`:focus-within` 会
+ * 把整张卡一起点亮，于是同时出现两个环。在支持 `:has()` 的浏览器上把卡这一圈收回去，一次只留一个。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回今天的
+ * 行为（多一个环），而不是退到「一个环都没有」。
+ */
+.sender:global(.ant-sender):focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face),
     0 8px 22px -14px rgb(16 26 58 / 45%);
 }
 
