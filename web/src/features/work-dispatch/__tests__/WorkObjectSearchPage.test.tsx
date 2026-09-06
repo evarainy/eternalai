@@ -200,7 +200,7 @@ describe('WorkObjectSearchPage', () => {
       await screen.findByText('没有匹配项。已在你有权查看的全部工作事项中检索。'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/下一步：检查标题关键词，或输入完整的来源编号、责任人/),
+      screen.getByText('下一步：换个标题关键词，或输入完整的来源编号、责任人。'),
     ).toBeInTheDocument();
     expect(
       screen.queryByText('结果过多，请缩小范围'),

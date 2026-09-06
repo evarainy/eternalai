@@ -7,34 +7,32 @@
   min-width: 0;
 }
 
+/*
+ * 玻璃硬约束：本页**一处 `backdrop-filter` 都不声明**（2026-09-04 起内容面板不买模糊）；`.hero` 与 `.scopeCard` 是坐落
+ * 在底图上的扁平玻璃卡，不自带模糊、不填固定色。
+ */
 .hero {
   overflow: hidden;
-  color: #fff;
-  background:
-    linear-gradient(118deg, rgb(19 69 57 / 99%), rgb(39 105 83 / 96%)),
-    repeating-linear-gradient(135deg, transparent 0 20px, rgb(255 255 255 / 5%) 20px 21px);
-  border: 0;
-  box-shadow: 0 16px 40px rgb(9 47 45 / 16%);
+  color: var(--workbench-text);
+  background: rgb(255 255 255 / 52%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
-.eyebrow {
-  color: #d3eee2;
-  font-size: var(--workbench-font-auxiliary);
-  font-weight: 700;
-}
-
+/* 标题收到 26px；层级靠字重与留白，不靠字号。正文仍是 19px。 */
 .title {
-  margin: 6px 0 8px !important;
-  color: #fff !important;
-  font-family: var(--workbench-font-heading);
-  font-size: clamp(34px, 4vw, 46px) !important;
-  letter-spacing: 0.02em;
+  margin: 0 0 8px !important;
+  color: var(--workbench-text) !important;
+  font-size: 26px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
 }
 
 .copy {
   max-width: 42em;
   margin: 0 !important;
-  color: #f3fbf7;
+  color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
 }
@@ -44,28 +42,46 @@
   min-width: 280px;
   gap: 6px;
   padding: 16px 18px;
-  color: #173f36;
-  background: #eef8f2;
-  border: 1px solid #c5dfd2;
-  border-radius: 8px;
+  color: var(--workbench-text);
+  background: rgb(255 255 255 / 62%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-card);
+  box-shadow: var(--workbench-sheen);
 }
 
 .scopeCard strong {
-  color: #173f36;
-  font-size: 21px;
+  color: var(--workbench-text);
+  font-size: var(--workbench-font-body);
+  font-weight: 700;
 }
 
 .scopeCard span {
-  color: #405c53;
+  color: var(--workbench-text-secondary);
   font-size: var(--workbench-font-auxiliary);
 }
 
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
 .results {
   min-width: 0;
   overflow: hidden;
-  background: var(--workbench-surface);
-  border: 1px solid var(--workbench-border);
-  border-radius: 10px;
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
 .resultsHeader {
@@ -74,13 +90,12 @@
   justify-content: space-between;
   gap: 24px;
   padding: 18px 20px;
-  background: #eeece3;
-  border-bottom: 1px solid var(--workbench-border);
+  background: rgb(22 29 46 / 3.5%);
+  box-shadow: inset 0 -1px 0 var(--workbench-hair);
 }
 
 .resultsHeader h2 {
   margin: 0 !important;
-  font-family: var(--workbench-font-heading);
 }
 
 .resultsHeader p {
@@ -114,7 +129,7 @@
 }
 
 .resultItem + .resultItem {
-  border-top: 1px solid var(--workbench-border);
+  box-shadow: inset 0 1px 0 var(--workbench-hair);
 }
 
 .resultBody {

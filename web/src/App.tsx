@@ -16,13 +16,13 @@ import {
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
 import { AppShell } from './app/AppShell';
-import { workbenchTheme } from './app/theme';
+import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
 import LoginPage from './pages/LoginPage';
 import AppsPage from './features/apps/AppsPage';
 import MessagesPage from './features/messages/MessagesPage';
-import WorkDispatchLandingPage from './features/work-dispatch/WorkDispatchLandingPage';
+import WorkDispatchPage from './features/work-dispatch/WorkDispatchPage';
 import WorkObjectSearchPage from './features/work-dispatch/WorkObjectSearchPage';
 import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
@@ -88,7 +88,11 @@ export function LoginRoute() {
 
 export default function App() {
   return (
-    <ConfigProvider locale={zhCN} theme={workbenchTheme}>
+    <ConfigProvider
+      button={WORKBENCH_BUTTON_CONFIG}
+      locale={zhCN}
+      theme={workbenchTheme}
+    >
       <AntApp>
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
@@ -102,7 +106,7 @@ export default function App() {
                   <Route path="/chat" element={<ChatPage />} />
                   <Route path="/search" element={<WorkObjectSearchPage />} />
                   <Route path="/work-objects" element={<WorkObjectsPage />} />
-                  <Route path="/work-dispatch" element={<WorkDispatchLandingPage />} />
+                  <Route path="/work-dispatch" element={<WorkDispatchPage />} />
                   <Route path="/apps" element={<AppsPage />} />
                   <Route path="/messages" element={<MessagesPage />} />
                   <Route path="/admin/registry" element={<RegistryPage />} />

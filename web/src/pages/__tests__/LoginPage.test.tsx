@@ -62,7 +62,7 @@ describe('LoginPage', () => {
   });
 
   it(
-    'uses password inputs and enters the requested protected route only after success',
+    'shows the account in the clear, masks the password, and enters the requested protected route only after success',
     async () => {
       let resolveLogin!: (value: { authenticated: boolean }) => void;
       authMocks.login.mockReturnValue(
@@ -75,9 +75,13 @@ describe('LoginPage', () => {
         value: 'cached private response',
       });
 
-      const loginId = screen.getByLabelText('OA 登录标识');
-      const password = screen.getByLabelText('OA 密码');
-      expect(loginId).toHaveAttribute('type', 'password');
+      /*
+       * 雨爷 2026-09-03 实机走查：账号框此前也用 `Input.Password`，输入的账号被打成圆点。账号改明文，
+       * **密码继续打码**——下面两条一起钉死，避免哪一条被单独改掉。
+       */
+      const loginId = screen.getByLabelText('账号');
+      const password = screen.getByLabelText('密码');
+      expect(loginId).toHaveAttribute('type', 'text');
       expect(password).toHaveAttribute('type', 'password');
 
       fireEvent.change(loginId, { target: { value: 'LOGIN_ID_SENTINEL' } });
@@ -90,8 +94,8 @@ describe('LoginPage', () => {
           userpassword: 'PASSWORD_SENTINEL',
         });
       });
-      expect(screen.getByLabelText('OA 登录标识')).toHaveValue('');
-      expect(screen.getByLabelText('OA 密码')).toHaveValue('');
+      expect(screen.getByLabelText('账号')).toHaveValue('');
+      expect(screen.getByLabelText('密码')).toHaveValue('');
       expect(useAuthStore.getState().status).toBe('unauthenticated');
       act(() => resolveLogin({ authenticated: true }));
       expect(await screen.findByText('受保护目标')).toBeInTheDocument();
@@ -114,8 +118,8 @@ describe('LoginPage', () => {
       new ApiError(401, 'authentication_failed', 'backend detail must stay hidden'),
     );
     const { client } = renderLogin();
-    const loginId = screen.getByLabelText('OA 登录标识');
-    const password = screen.getByLabelText('OA 密码');
+    const loginId = screen.getByLabelText('账号');
+    const password = screen.getByLabelText('密码');
 
     fireEvent.change(loginId, { target: { value: 'LOGIN_ID_SENTINEL' } });
     fireEvent.change(password, { target: { value: 'PASSWORD_SENTINEL' } });
@@ -126,8 +130,8 @@ describe('LoginPage', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/backend detail|authentication_failed/i)).not.toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByLabelText('OA 登录标识')).toHaveValue('');
-      expect(screen.getByLabelText('OA 密码')).toHaveValue('');
+      expect(screen.getByLabelText('账号')).toHaveValue('');
+      expect(screen.getByLabelText('密码')).toHaveValue('');
     });
     expect(useAuthStore.getState().status).toBe('unauthenticated');
     expect(client.getQueryCache().getAll()).toHaveLength(0);
@@ -144,14 +148,54 @@ describe('LoginPage', () => {
     expect(observableState).not.toContain('PASSWORD_SENTINEL');
   });
 
+  /*
+   * 登录页挂在 `ProtectedRoute` 之外、不经过 `AppShell`，玻璃换皮曾整个漏掉它。下面钉死它自己那一屏
+   * 的形态：品牌标识 + 欢迎语 + 一句副标题，照定稿画板 `Login.dc.html`；标签去掉 OA 前缀（雨爷
+   * 2026-09-03 明确要求，优先于画板上的「OA 账号」「OA 密码」）；不出现 2026-09-02 已全站移除的内线
+   * 电话字样。
+   */
+  it('renders the decided login-card copy without the OA prefix or the removed hotline line', () => {
+    renderLogin();
+
+    expect(screen.getByRole('heading', { level: 1, name: '欢迎回来' })).toBeInTheDocument();
+    expect(screen.getByText('EternalAI')).toBeInTheDocument();
+    expect(screen.getByText('办事工作台')).toBeInTheDocument();
+    expect(screen.getByText('OA 里要你办的事，都在这儿。')).toBeInTheDocument();
+    expect(screen.queryByLabelText('OA 登录标识')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('OA 密码')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('内线');
+    expect(document.body.textContent).not.toContain('8012');
+  });
+
+  it('draws the brand mark as an inline stroke SVG instead of a text glyph', () => {
+    const { container } = renderLogin();
+
+    const icon = container.querySelector('svg');
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute('stroke')).toBe('currentColor');
+    expect(icon?.getAttribute('fill')).toBe('none');
+    expect(icon?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('asks for the account and the password in plain words', async () => {
+    authMocks.login.mockResolvedValue({ authenticated: false });
+    renderLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: /登\s*录/ }));
+
+    expect(await screen.findByText('请输入账号。')).toBeInTheDocument();
+    expect(screen.getByText('请输入密码。')).toBeInTheDocument();
+    expect(authMocks.login).not.toHaveBeenCalled();
+  });
+
   it('does not authenticate when the generated client returns authenticated false', async () => {
     authMocks.login.mockResolvedValue({ authenticated: false });
     renderLogin();
 
-    fireEvent.change(screen.getByLabelText('OA 登录标识'), {
+    fireEvent.change(screen.getByLabelText('账号'), {
       target: { value: 'LOGIN_ID_SENTINEL' },
     });
-    fireEvent.change(screen.getByLabelText('OA 密码'), {
+    fireEvent.change(screen.getByLabelText('密码'), {
       target: { value: 'PASSWORD_SENTINEL' },
     });
     fireEvent.click(screen.getByRole('button', { name: /登\s*录/ }));

@@ -57,7 +57,7 @@ describe('application authentication boundary', () => {
       render(<App />);
 
       expect(
-        await screen.findByRole('heading', { name: '登录 EternalAI' }),
+        await screen.findByRole('heading', { name: '欢迎回来' }),
       ).toBeInTheDocument();
       expect(screen.queryByText('Registry 管理')).not.toBeInTheDocument();
     },
@@ -69,16 +69,16 @@ describe('application authentication boundary', () => {
     render(<App />);
 
     expect(
-      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+      await screen.findByRole('heading', { name: '欢迎回来' }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { name: '把要办的事说清楚' }),
+      screen.queryByRole('heading', { level: 1, name: 'AI 助手' }),
     ).not.toBeInTheDocument();
 
     act(() => useAuthStore.getState().markAuthenticated());
 
     expect(
-      await screen.findByRole('heading', { name: '把要办的事说清楚' }),
+      await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
     ).toBeInTheDocument();
     expect(window.location.pathname).toBe('/chat');
   });
@@ -117,7 +117,7 @@ describe('application authentication boundary', () => {
 
     expect(await screen.findByText('受保护目标')).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { name: '登录 EternalAI' }),
+      screen.queryByRole('heading', { name: '欢迎回来' }),
     ).not.toBeInTheDocument();
   });
 
@@ -139,7 +139,7 @@ describe('application authentication boundary', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: '登录 EternalAI' }),
+      await screen.findByRole('heading', { name: '欢迎回来' }),
     ).toBeInTheDocument();
 
     act(() => useAuthStore.getState().markAuthenticated());
@@ -172,7 +172,9 @@ describe('application authentication boundary', () => {
     window.history.pushState({}, '', '/');
     render(<App />);
 
-    fireEvent.click(screen.getByRole('button', { name: '退出登录（本地）' }));
+    // 2026-09-02 定稿把「退出登录」从左导航底部移进顶栏头像的用户菜单（画板 `TopPops.dc.html`）。
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
 
     expect(useAuthStore.getState().status).toBe('unauthenticated');
   });
@@ -183,7 +185,7 @@ describe('application authentication boundary', () => {
     render(<App />);
 
     expect(
-      await screen.findByRole('heading', { name: '把要办的事说清楚' }),
+      await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
     ).toBeInTheDocument();
     expect(window.location.pathname).toBe('/chat');
     expect(screen.queryByRole('link', { name: /EternalAI/ })).not.toBeInTheDocument();
@@ -205,11 +207,14 @@ describe('application authentication boundary', () => {
     expect(screen.queryByText('开始新工作', { selector: 'strong' })).toBeNull();
   });
 
+  /*
+   * 落地页返修后是「一句标题 + 一句原因 + 一句下一步 + 一排按钮」，不再是三个 `region` 分段，所以这里
+   * 钉的是**为什么为空这句话真的显示出来了**（2026-08-27「空状态统一规范」的实质），而不是原来的分段
+   * 结构。
+   */
   it.each([
-    ['/work-dispatch', '任务交办'],
-    ['/apps', '软件中心'],
-    ['/messages', '消息'],
-  ])('mounts the %s landing page inside the shell', async (path, heading) => {
+    ['/messages', '消息', '消息功能还没有开发，这里收不到也发不出消息。'],
+  ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
     render(<App />);
@@ -217,9 +222,31 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
     ).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText('暂无数据')).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
+  });
+
+  /*
+   * 任务交办与软件中心不再是占位页：前者是九类字段的交办草稿表单，后者是业务系统卡片列表。这里只钉
+   * 「路由挂的是那一页、且仍在同一个外壳里」，页面自身的合同各由自己的测试文件承担。
+   */
+  it('mounts the dispatch draft form at /work-dispatch instead of a placeholder', async () => {
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    window.history.pushState({}, '', '/work-dispatch');
+    render(<App />);
+
     expect(
-      screen.getByRole('region', { name: '这个页面现在做不了什么' }),
+      await screen.findByRole('heading', { level: 1, name: '任务交办' }),
     ).toBeInTheDocument();
+    expect(screen.getByText('这是 AI 生成的草稿，尚未发布')).toBeInTheDocument();
+    expect(screen.getByLabelText('截止时间')).toHaveAttribute(
+      'type',
+      'datetime-local',
+    );
+    expect(
+      screen.queryByText('任务交办还没有开发，这里派不了活，也存不了草稿。'),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });
 });

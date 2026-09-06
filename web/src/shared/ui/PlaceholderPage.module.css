@@ -1,61 +1,105 @@
+/*
+ * 未开发页面的统一外观，形态照 `_scratch/design/glass/Empty.dc.html`：一块**居中的紧凑玻璃卡**，
+ * 不撑满整屏，避免整页只有说明文字造成的大面积空洞。
+ *
+ * 玻璃硬约束：`.page` 是本页的内容面板，按「正文区不做半透明」垫 86% 白，并且**不买模糊**
+ * （2026-09-04 起，理由见该规则上方）；里面的图标底座与动作按钮同样不叠模糊，只用低不透明度白 +
+ * 边缘高光。
+ *
+ * 字号：正文仍是 19px（`--workbench-font-body`），只把标题层级往下收——层级靠字重与留白拉开，
+ * 不靠把标题放大。
+ */
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
 .page {
   display: grid;
-  max-width: 52em;
-  gap: 24px;
+  max-width: 620px;
+  margin: 24px auto;
+  justify-items: center;
+  padding: 44px 40px 40px;
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+  text-align: center;
+}
+
+.mark {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  place-items: center;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 24px;
+  box-shadow: var(--workbench-chip-edge);
 }
 
 .title {
-  margin: 0;
-  font-family: var(--workbench-font-heading);
-  font-size: 28px;
-  line-height: 1.3;
+  margin: 20px 0 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
-.section {
-  display: grid;
-  gap: 10px;
-  padding: 20px 22px;
-  background: var(--workbench-surface);
-  border: 1px solid var(--workbench-border);
-  border-radius: 10px;
+.reason {
+  max-width: 34em;
+  margin: 12px 0 0;
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
 }
 
-.sectionTitle {
+.nextStep {
+  max-width: 34em;
+  margin: 8px 0 0;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-body);
+  line-height: var(--workbench-line-height);
+}
+
+.actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+/*
+ * 动作按钮＝玻璃芯片：不填固定色，颜色由底图透出；点击目标不小于 44×44。
+ *
+ * 2026-09-04：它是 `<Link>` 不是 `.ant-btn`，全局那条按钮规则够不着，可辨边界与主题色投影在这里
+ * 自己写一遍（WCAG 2.2 SC 1.4.11：投影不能替代边界的 3:1）。
+ */
+.action {
+  display: inline-flex;
+  min-height: 52px;
   align-items: center;
-  gap: 10px;
-  margin: 0;
-  font-family: var(--workbench-font-heading);
-  font-size: 21px;
-  line-height: 1.3;
-}
-
-.sectionIcon {
-  flex: none;
-  font-size: 20px;
-}
-
-.text {
-  max-width: 40em;
-  margin: 0;
+  padding: 0 26px;
+  color: var(--workbench-text);
+  background-image: var(--workbench-chip-fill-strong);
+  border-radius: 999px;
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge-strong),
+    var(--workbench-control-glow);
   font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
+  font-weight: 700;
+  text-decoration: none;
 }
 
-.list {
-  display: grid;
-  max-width: 40em;
-  gap: 10px;
-  margin: 0;
-  padding-left: 22px;
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
-}
-
-.list a {
-  display: inline-block;
-  min-height: var(--workbench-target-size);
-  padding: 8px 4px;
+.nextStep a {
   color: var(--workbench-primary);
   font-weight: 650;
 }

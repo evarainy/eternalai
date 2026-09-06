@@ -1,106 +1,235 @@
+/*
+ * 玻璃硬约束在本文件里的落点：只有 `.sessionRail`（定高的会话左栏）声明 `backdrop-filter`。
+ * 2026-09-04 起承载正文的 `.conversation` 不再买模糊（理由见该规则上方），只垫 86% 白；加上外壳的
+ * 左导航与顶栏，AI 助手页整屏共 3 层——该页不渲染悬浮入口与浮动面板。
+ *
+ * 2026-09-04 雨爷实机走查：「AI 助手页面字体、页面排版也过大，一个页面里无法显示输入框，丑陋且低效」。
+ * 本文件因此照定稿画板 `Chat.dc.html` 逐项收敛：左栏 252px / 圆角 26 / padding 18 12；右侧面板正文区
+ * padding 34 36、欢迎图标 60px、欢迎标题 32px（画板 28px，2026-09-04 雨爷裁定此处不受闭集约束）、说明 17px、提示卡两列 padding 16 18 圆角 20（主问句
+ * 17px、副说明 14px）、输入区 padding 0 36 30、输入卡 padding 16 圆角 22、占位 17px、发送按钮 40px。
+ *
+ * 「一屏内必须看得见输入框」不靠估算高度，靠**结构**保证：`.page` 吃满外壳留给内容的高度，
+ * `.transcript` 是**唯一**可伸缩且可滚动的一格（`flex:1;min-height:0;overflow-y:auto`），`.composer`
+ * 是 `flex:none`。于是无论对话多长、视口多矮，输入框都留在视口内，滚动只发生在对话区里。
+ */
 .page {
-  width: min(100%, 1040px);
-  margin: 0 auto;
-  color: var(--chat-color-text);
+  display: grid;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  gap: 16px;
+  grid-template-columns: 252px minmax(0, 1fr);
 }
 
-.pageHeader {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 32px;
-  padding: 24px 8px 28px;
+/* ---------- 左栏「我问过的」 ---------- */
+.sessionRail {
+  display: grid;
+  align-content: start;
+  min-height: 0;
+  gap: 8px;
+  padding: 18px 12px;
+  overflow-y: auto;
+  background: var(--workbench-glass-fill-raised);
+  backdrop-filter: blur(26px) saturate(180%);
+  border: 1px solid var(--workbench-edge);
+  border-radius: 26px;
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
 }
 
-.eyebrow {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--chat-color-primary);
+/*
+ * 画板 `.btn`：44px 高的胶囊，不是 52px 的大按钮。
+ *
+ * 2026-09-04：这里原来只有 `--workbench-chip-edge-strong` 那一圈白内边，在近白的左栏上等于没有边界。
+ * 按 WCAG 2.2 SC 1.4.11 补 `--workbench-control-ring`（1px 可辨边界；2026-09-04 起是主题色实色，
+ * 大面玻璃上实算 4.81:1——上一轮这里正是全站渲染层最低的 3.14:1）并叠主题色投影，与全站
+ * `.ant-btn-default` 同一套；玻璃本体仍不填鲜艳色。
+ */
+.newSessionButton {
+  min-height: 44px;
+  background-image: var(--workbench-chip-fill-strong);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge-strong),
+    var(--workbench-control-glow);
+  color: var(--workbench-text);
   font-size: var(--workbench-font-auxiliary);
   font-weight: 700;
-  letter-spacing: 0.16em;
 }
 
-.title {
-  margin: 0 !important;
-  font-size: clamp(30px, 4vw, 46px) !important;
-  letter-spacing: -0.04em;
+/* 画板把「我问过的」画成 `.cap`：14px、说明色、不加粗——它是分组名，不是标题层级。 */
+.railTitle {
+  margin: 12px 0 0;
+  padding: 0 8px;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  font-weight: 400;
+  line-height: 1.35;
 }
 
-.subtitle {
-  max-width: 40em;
-  margin: 12px 0 0 !important;
-  color: var(--chat-color-text-secondary);
-  font-size: var(--workbench-font-body);
-  line-height: var(--workbench-line-height);
-}
-
-.sessionTag {
-  flex: none;
+.railText {
   margin: 0;
-  padding: 6px 12px;
-  color: var(--chat-color-primary);
-  background: var(--chat-color-primary-soft);
-  border-radius: 999px;
-  font-weight: 600;
+  padding: 0 8px;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.6;
 }
 
+/* 画板的会话行：padding 12 14、圆角 16、标题 17px。 */
+.sessionRail :global(.ant-conversations-item) {
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  font-size: 17px;
+}
+
+.main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* 标题不占版面，只留给读屏软件定位本页；所在页由左导航高亮表明。 */
+.pageTitle {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- 内容面板 ---------- */
+/*
+ * 2026-09-04：**这块承载正文的面板不再声明 `backdrop-filter`。**
+ *
+ * 雨爷实机走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」根因是结构性的——底图是
+ * `background: ... fixed`，而这些内容面板跟着文档流滚动，于是每滚一帧，面板背后的底图相对它就位移
+ * 一次，浏览器必须重新采样并重新模糊整块面板区域。交办页是全站最长的一页（实测 scrollHeight 1048 >
+ * 视口 800），所以卡在这一页最明显。
+ *
+ * 这同时也是 2026-09-02 视觉裁决本来就写着的：「承载正文的面板不得做成半透明，须垫足够不透明的底；
+ * 正文一律不靠玻璃承载。」模糊只留给**不随内容滚动**的大面：左导航（sticky）、顶栏、悬浮入口、
+ * 浮动窗、登录卡。
+ *
+ * 底色一个字没改，仍是画板 `.solid` 的 86% 白（`--workbench-panel-fill`）：底图本身是低频的柔和径向
+ * 渐变，blur(20px) 对它几乎是恒等变换，实机逐像素比对面板内取样点前后完全一致（见自审结论）。
+ */
 .conversation {
   display: flex;
-  min-height: min(620px, calc(100vh - 340px));
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--chat-color-bg);
-  border: 1px solid var(--chat-color-border);
-  border-radius: 24px;
-  box-shadow: var(--chat-shadow);
-}
-
-.transcript {
-  display: flex;
-  min-height: 380px;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
-  padding: 32px;
-  background:
-    radial-gradient(circle at 12% 8%, var(--chat-color-primary-soft), transparent 34%),
-    var(--chat-color-bg-soft);
+  overflow: hidden;
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-edge);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-lift), var(--workbench-sheen);
+}
+
+/* 唯一可滚动的一格：它让位，输入框才永远在视口内。 */
+.transcript {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 34px 36px;
 }
 
 .emptyState {
-  width: min(100%, 520px);
-  margin: auto;
-  padding: 48px 24px;
-  text-align: center;
+  display: grid;
+  width: 100%;
+  align-content: start;
 }
 
-.emptyState :global(.ant-typography) {
-  margin-bottom: 10px;
-}
-
-.emptyState p {
-  color: var(--chat-color-text-secondary);
-  line-height: var(--workbench-line-height);
-}
-
-.emptyMark {
-  display: inline-grid;
-  width: 54px;
-  height: 54px;
-  margin-bottom: 20px;
+.welcome :global(.ant-welcome-icon) {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  flex: none;
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill);
+  border-radius: 20px;
+  box-shadow: var(--workbench-chip-edge);
   place-items: center;
-  color: var(--chat-color-primary);
-  background: var(--chat-color-primary-soft);
-  border: 1px solid var(--chat-color-primary);
-  border-radius: 18px 18px 18px 5px;
-  font-size: 24px;
-  font-weight: 800;
+}
+
+/*
+ * 欢迎语是本页唯一的展示级标题（display scale），**不受画板正文字号闭集约束**。
+ *
+ * 雨爷 2026-09-04 裁定：「`/chat` 欢迎语 28px 不要被限制死，要美观好看。」这解除的是上一轮登记的
+ * 那条冲突——`theme.test.ts` 的 `CANVAS_FONT_SIZES`（14/15/16/17/18/19/21/34）是从画板**共用样式表**
+ * 抽的，漏掉了画板里的**内联覆盖**，`Chat.dc.html` 的欢迎标题内联值本来就是 28px。闭集该管的是正文、
+ * 辅助与说明三档，管不到这一处，所以断言收窄到它该管的范围，而不是把这里改回闭集成员。
+ *
+ * 现值 32px：60px 图标领起的一行 hero，28px 压不住那枚图标；32px 之上再大就开始跟提示卡抢分量。
+ * 「一屏可见输入框」不受影响——那条是**结构**保证的（见文件头），`.transcript` 是唯一可伸缩的一格，
+ * 标题变大只会挤压对话区，不会把输入框顶出视口。**本条只解除 `/chat` 欢迎语这一处，其余页面字号仍
+ * 照搬画板。**
+ */
+.welcome :global(.ant-welcome-title) {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.welcome :global(.ant-welcome-description) {
+  margin-top: 8px;
+  color: var(--workbench-text-secondary);
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+.prompts {
+  margin-top: 28px;
+}
+
+/* 画板把「可以这样问我」画成 `.aux`：16px、不加粗——它领起四张卡，不是一级标题。 */
+.prompts :global(.ant-prompts-title) {
+  margin-bottom: 12px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 400;
+}
+
+/* 画板是两列等宽卡片，不是竖着排成一长条。 */
+.prompts :global(.ant-prompts-list) {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.prompts :global(.ant-prompts-item) {
+  min-height: 0;
+  padding: 16px 18px;
+  background: rgb(255 255 255 / 78%);
+  border: 0;
+  border-radius: 20px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 90%),
+    0 8px 20px -12px rgb(16 26 58 / 40%);
+}
+
+.prompts :global(.ant-prompts-label) {
+  color: var(--workbench-text);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.prompts :global(.ant-prompts-desc) {
+  margin-top: 4px;
+  color: var(--workbench-text-caption);
+  font-size: var(--workbench-font-caption);
+  line-height: 1.5;
 }
 
 .messageList {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -120,23 +249,28 @@
 
 .message {
   width: fit-content;
-  max-width: min(76%, 680px);
-  padding: 16px 18px;
-  background: var(--chat-color-bg);
-  border: 1px solid var(--chat-color-border);
-  border-radius: 18px 18px 18px 5px;
+  max-width: 90%;
+  padding: 12px 16px;
+  font-size: 17px;
+  line-height: 1.65;
+  background: rgb(255 255 255 / 94%);
+  border-radius: 20px 20px 20px 6px;
+  box-shadow: 0 6px 16px -10px rgb(16 26 58 / 38%),
+    inset 0 0 0 1px rgb(255 255 255 / 90%);
 }
 
+/* 用户气泡也不填固定色：只是把玻璃提亮一档。 */
 .userMessage {
-  color: var(--chat-color-on-primary);
-  background: var(--chat-color-primary);
-  border-color: var(--chat-color-primary);
-  border-radius: 18px 18px 5px;
+  background: none;
+  background-image: var(--workbench-chip-fill-strong);
+  border-radius: 20px 20px 6px;
+  box-shadow: var(--workbench-chip-edge-strong);
+  color: var(--workbench-text);
 }
 
 .confirmation {
-  border-width: 2px;
-  border-color: var(--chat-color-warning);
+  box-shadow: 0 6px 16px -10px rgb(16 26 58 / 38%),
+    inset 0 0 0 2px rgb(140 74 0 / 40%);
 }
 
 .clarification,
@@ -177,8 +311,8 @@
 }
 
 .statusLabel {
-  color: var(--chat-color-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-caption);
 }
 
 .messageText {
@@ -203,60 +337,102 @@
 
 .pendingNotice {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 10px;
-  margin-top: 20px;
-  color: var(--chat-color-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+  margin-top: 16px;
+  color: var(--workbench-text-secondary);
+  font-size: var(--workbench-font-caption);
 }
 
 .pendingDot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   background: var(--chat-color-primary);
   border-radius: 50%;
   animation: pulse 1.2s ease-in-out infinite;
 }
 
-.composer {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 20px 24px 24px;
-  background: var(--chat-color-bg);
-  border-top: 1px solid var(--chat-color-border);
+.failureNotice {
+  max-width: 40em;
+  flex: none;
+  margin: 16px 0 0;
+  color: var(--workbench-error);
+  font-size: var(--workbench-font-caption);
+  line-height: var(--workbench-line-height);
 }
 
-.composerHeading,
+/* `flex:none`：它不参与伸缩，所以永远在视口内。画板的 `padding:0 36px 30px`。 */
+.composer {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 36px 30px;
+}
+
 .composerActions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  margin-top: 12px;
 }
 
-.composerLabel {
-  font-weight: 650;
+/*
+ * 输入卡。画板是实心白（`padding:16;border-radius:22;background:#fff`），但那圈 90% 白的内边在近白
+ * 面板上等于没有边界——雨爷 2026-09-04 走查第 4 条说的「输入框过小」连带的就是这个「看不出能输入」。
+ *
+ * 返修两处：padding 16→20 把卡本身放大（起始行数 1→3 在 `ChatPage.tsx` 的 `autoSize` 里），
+ * 边界换成 `--workbench-field-face`（1px 深墨边，近白面上实算 ≈4.1:1，满足 WCAG 2.2 SC 1.4.11），
+ * 聚焦换 2px 主题色。字号仍是画板的 17px——**不放大字号**，放大的是框。
+ *
+ * 原来这里还有 `.composerLabel`（可见标签「办理请求」）与 `.composerHint`（底注「回答基于 OA 实时
+ * 数据……」）两条规则，两处文字同轮删除，规则一并删掉，不留够不着的死样式。
+ */
+/*
+ * 选择器要写成 `.sender:global(.ant-sender)`（两个类）才压得过 `@ant-design/x` 自己那条 `.ant-sender`。
+ * 只写 `.sender` 时实机量到的是 antd-x 的值在生效：`border: 1px solid rgb(0 0 0 / 10%)`、`radius 28px`
+ * ——那圈 10% 黑压在白面上约 `#e6e6e6`，对 `#fff` 只有 1.2:1，远不到 SC 1.4.11 的 3:1，静息态等于没有
+ * 边界。聚焦态那条是两个类，本来就压得过，所以之前只有聚焦时看得见框。
+ */
+.sender:global(.ant-sender) {
+  padding: 20px;
+  background: #fff;
+  border: 0;
+  border-radius: 22px;
+  box-shadow: var(--workbench-field-face),
+    0 8px 22px -14px rgb(16 26 58 / 45%);
 }
 
-.composerHint,
-.safetyHint {
-  color: var(--chat-color-text-secondary);
-  font-size: var(--workbench-font-auxiliary);
+.sender:global(.ant-sender):focus-within {
+  box-shadow: var(--workbench-field-face-focus),
+    0 8px 22px -14px rgb(16 26 58 / 45%);
 }
 
-.composer :global(.ant-input) {
-  padding: 12px 14px;
-  border-radius: 12px;
-  line-height: var(--workbench-line-height);
-  resize: none;
+/*
+ * 「发送」按钮在 `Sender` 的 footer 里，也就是在这张卡**里面**，它一拿到键盘焦点，`:focus-within` 会
+ * 把整张卡一起点亮，于是同时出现两个环。在支持 `:has()` 的浏览器上把卡这一圈收回去，一次只留一个。
+ * 写成「按钮聚焦时撤销」而不是「只在输入框聚焦时才画」，是为了让不支持 `:has()` 的浏览器退回今天的
+ * 行为（多一个环），而不是退到「一个环都没有」。
+ */
+.sender:global(.ant-sender):focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face),
+    0 8px 22px -14px rgb(16 26 58 / 45%);
+}
+
+.sender :global(.ant-sender-input) {
+  font-size: 17px;
+  line-height: 1.5;
 }
 
 .composerActions :global(.ant-btn) {
-  min-height: var(--workbench-target-size);
-  padding-inline: 20px;
-  border-radius: 10px;
-  font-weight: 650;
+  height: 40px;
+  min-height: 40px;
+  margin-left: auto;
+  padding-inline: 18px;
+  border-radius: 999px;
+  font-size: var(--workbench-font-auxiliary);
+  font-weight: 700;
 }
 
 @keyframes pulse {
@@ -272,54 +448,23 @@
   }
 }
 
-@media (max-width: 767px) {
-  .pageHeader {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 16px;
-    padding: 8px 0 20px;
-  }
-
-  .conversation {
-    min-height: 480px;
-    border-radius: 18px;
-  }
-
-  .transcript {
-    min-height: 260px;
-    padding: 20px 16px;
-  }
-
-  .emptyState {
-    padding: 36px 8px;
-  }
-
-  .message {
-    max-width: 90%;
-  }
-
-  .composer {
-    padding: 16px;
-  }
-
-  .composerHeading,
-  .composerActions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .composerActions :global(.ant-btn) {
-    width: 100%;
+@media (max-width: 1099px) {
+  .page {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (min-width: 768px) and (max-width: 1099px) {
-  .page {
-    width: min(100%, 860px);
+@media (max-width: 767px) {
+  .transcript {
+    padding: 20px 16px;
   }
 
-  .message {
-    max-width: 84%;
+  .prompts :global(.ant-prompts-list) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer {
+    padding: 0 16px 16px;
   }
 }
 

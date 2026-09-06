@@ -2,25 +2,172 @@
   box-sizing: border-box;
 }
 
+/*
+ * 2026-09-02「视觉方向改为 iOS 26 玻璃拟态」：暖纸色系（#f4f1e8 / #fffdf8 / #e7e3d8）与衬线标题
+ * 字族一并弃用。玻璃只用在大面（左导航 / 顶栏 / 内容面板 / 浮动窗 / 悬浮按钮）；按钮、芯片、图标
+ * 底座、选中态一律不自带模糊，只用低不透明度白加边缘高光。
+ */
 :root {
-  --workbench-bg: #f4f1e8;
-  --workbench-surface: #fffdf8;
-  --workbench-border: #c9c7bd;
-  --workbench-text: #17231d;
-  --workbench-text-secondary: #46544c;
-  --workbench-primary: #1f4f8a;
-  --workbench-focus: #b44b00;
+  --workbench-text: #161d2e;
+  --workbench-text-secondary: #454e66;
+  --workbench-text-caption: #4f5872;
+  --workbench-primary: #2450c8;
+  /*
+   * 2026-09-04：焦点环原来是 `#b44b00`——暖纸色系被弃用时漏掉的一处橙色。玻璃换血把
+   * `background` / `surface` / `primary` 都换了，唯独它没换，于是每个输入框一聚焦就弹一圈橙。
+   * 按 2026-09-02 裁决，`colorPrimary` 保留为语义强调色（链接、焦点环、语义提示），焦点环正是
+   * 它该用的地方。实算（`theme.test.ts` 有守卫）：#2450c8 对读物面 #ebf2ff 是 6.11:1、对最深
+   * 底图上的玻璃合成底 #c4d9fe 是 4.81:1，都过 SC 1.4.11 的 3:1。
+   */
+  --workbench-focus: var(--workbench-primary);
+  --workbench-success: #0b5c2b;
+  --workbench-warning: #8c4a00;
+  --workbench-error: #a8231c;
+
+  /* 玻璃材质。半透明面 + 边缘高光；模糊由具体的大面自己声明，不写进这些变量。 */
+  --workbench-panel-fill: rgb(255 255 255 / 86%);
+  --workbench-glass-fill: rgb(255 255 255 / 58%);
+  --workbench-glass-fill-raised: rgb(255 255 255 / 66%);
+  --workbench-edge: rgb(255 255 255 / 78%);
+  --workbench-hair: rgb(22 29 46 / 10%);
+  --workbench-border: rgb(22 29 46 / 14%);
+  --workbench-sheen: inset 0 1px 0 rgb(255 255 255 / 92%),
+    inset 0 -1px 0 rgb(255 255 255 / 32%);
+  --workbench-lift: 0 12px 38px -14px rgb(16 26 58 / 36%),
+    0 3px 10px -3px rgb(16 26 58 / 14%);
+
+  /* 小元件的玻璃：低不透明度白 + 边缘高光，不带模糊、不带固定填充色。 */
+  --workbench-chip-fill: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 46%),
+      rgb(255 255 255 / 6%) 55%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 22%), rgb(255 255 255 / 10%));
+  --workbench-chip-edge: inset 0 1px 0 rgb(255 255 255 / 94%),
+    inset 0 0 0 1px rgb(255 255 255 / 55%), inset 0 -1px 1px rgb(22 29 46 / 5%),
+    0 4px 12px -9px rgb(16 26 58 / 28%);
+  --workbench-chip-fill-strong: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 66%),
+      rgb(255 255 255 / 14%) 55%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 34%), rgb(255 255 255 / 18%));
+  --workbench-chip-edge-strong: inset 0 1px 0 rgb(255 255 255 / 100%),
+    inset 0 0 0 1.5px rgb(255 255 255 / 85%), inset 0 -1px 2px rgb(22 29 46 / 7%),
+    0 6px 16px -9px rgb(16 26 58 / 42%);
+  /* 凹槽：搜索框、输入框这类「可以往里写」的控件。 */
+  --workbench-well-fill: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 12%),
+      rgb(255 255 255 / 32%) 70%
+    ),
+    linear-gradient(155deg, rgb(255 255 255 / 22%), rgb(255 255 255 / 14%));
+  --workbench-well-edge: inset 0 3px 6px rgb(16 26 58 / 20%),
+    inset 0 0 0 1.5px rgb(255 255 255 / 70%), 0 1px 0 rgb(255 255 255 / 55%);
+
+  /*
+   * 2026-09-04 可辨控件边界（WCAG 2.2 SC 1.4.11 Non-text Contrast）。
+   *
+   * 原来的按钮与输入框只有 `--workbench-chip-edge` / `--workbench-well-edge` 那一圈**白色**内边：在
+   * 近白的内容面板上它与相邻色几乎没有对比，于是雨爷 2026-09-04 走查看到的是「所有按钮都是纯白色，
+   * 搭配白色背景区分度不明显」。SC 1.4.11 的原文是：边界若承担「让用户识别这里存在一个可操作控件」
+   * 的职责，该边界与相邻色必须 ≥3:1；**阴影可以增加可见性，但不能替代这条 3:1**。所以这里同时给两样：
+   *
+   * - `--workbench-control-edge` / `-primary`：按钮边框。**2026-09-04 雨爷放宽了 2026-09-02 那条
+   *   「按钮、图标、导航选中态不得带固定填充色」——原话是「按钮边框可以做填充色（与主题同色）」。**
+   *   放宽的范围按字面取：**只有边框上实色，玻璃本体照旧不填**。所以这两枚从半透明发丝边
+   *   （58% 深墨 / 78% 蓝，合成后 4.03 与 4.19:1）换成 `--workbench-primary` 本色 `#2450c8`，
+   *   不再半透明——内容面板上实算 **6.11:1**、大面玻璃上 **4.81:1**，比原来厚一倍余量。
+   *   上一轮渲染层最低的两处（「新对话」3.14、「打开」3.23，都落在大面玻璃上）就是被半透明拖低的。
+   * - `--workbench-control-glow`：主题色投影，取调研区间 `y 0~3 / blur 2~8 / spread 0 / opacity 20~26%`。
+   *
+   * 玻璃本体仍**不填鲜艳色**：主题色只出现在边框、投影与文字上；小元件仍不加
+   * `backdrop-filter`（模糊层预算 ≤6）。
+   *
+   * 分三层用，三层结构不变，只是边框强度提升：主动作 = `-primary` 一组（**2px** 实色边 + 蓝字 +
+   * 更重的主题色投影）；次动作 = 无后缀一组（**1px** 实色边 + 墨字 + 轻投影）；文字按钮无边无影，
+   * 只有文字色。两者同色，靠**线宽 + 字色 + 投影**分层，不靠边框颜色分层。
+   */
+  --workbench-control-edge: var(--workbench-primary);
+  --workbench-control-edge-primary: var(--workbench-primary);
+  --workbench-control-glow: 0 2px 6px rgb(36 80 200 / 22%);
+  --workbench-control-glow-strong: 0 3px 8px rgb(36 80 200 / 26%);
+  /* `border: 0` 的自绘控件用这两条：第一段就是那道可辨边界，必须排在白色高光之前才不会被盖掉。 */
+  --workbench-control-ring: inset 0 0 0 1px var(--workbench-control-edge);
+  --workbench-control-ring-primary: inset 0 0 0 2px
+    var(--workbench-control-edge-primary);
+  /*
+   * 输入框边界**不跟着按钮走**：轻底色 + 1px 深墨发丝边，聚焦换 2px 主题色（调研 §4 的推荐次序）。
+   * 2026-09-04 雨爷放宽的是「按钮边框」，不是输入框；把输入框也刷成主题色实色会让静息态的表单看起来
+   * 全都处于聚焦态，反而分不出焦点落在哪。所以这里单列一枚 `--workbench-field-edge`，与按钮那两枚
+   * 解耦，各自的 3:1 由 `controlAffordance.test.ts` 分别钉住。
+   */
+  --workbench-field-edge: rgb(22 29 46 / 58%);
+  --workbench-field-fill: rgb(22 29 46 / 6%);
+  --workbench-field-face: inset 0 0 0 1px var(--workbench-field-edge),
+    inset 0 2px 4px rgb(16 26 58 / 10%);
+  --workbench-field-face-focus: inset 0 0 0 2px var(--workbench-primary),
+    inset 0 2px 4px rgb(16 26 58 / 10%);
+
+  /*
+   * 三套底图。玻璃是靠底图透出来的，所以外壳之外的页面（登录页）也需要一层真实的底，否则半透明的
+   * 按钮与卡片会退化成一片近白、看不出是可以按的。默认预设画在 `body` 上；用户选中的预设由 AppShell
+   * 画在外壳根节点上盖住它。
+   */
+  --workbench-ground-a:
+    radial-gradient(780px 580px at 6% 4%, rgb(88 136 255 / 52%), transparent 62%),
+    radial-gradient(700px 540px at 94% 2%, rgb(96 198 255 / 46%), transparent 60%),
+    radial-gradient(760px 640px at 78% 92%, rgb(178 146 255 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 10% 96%, rgb(112 230 206 / 38%), transparent 62%),
+    linear-gradient(160deg, #eef2fc 0%, #e5ebf8 55%, #e9effb 100%);
+  --workbench-ground-b:
+    radial-gradient(780px 580px at 8% 6%, rgb(255 186 124 / 54%), transparent 62%),
+    radial-gradient(700px 540px at 92% 4%, rgb(255 152 182 / 46%), transparent 60%),
+    radial-gradient(760px 640px at 76% 92%, rgb(190 152 255 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 10% 96%, rgb(255 214 140 / 40%), transparent 62%),
+    linear-gradient(160deg, #fcf2ea 0%, #f8eef2 55%, #f6f0fb 100%);
+  --workbench-ground-c:
+    radial-gradient(780px 580px at 6% 8%, rgb(112 214 186 / 52%), transparent 62%),
+    radial-gradient(700px 540px at 94% 4%, rgb(126 196 255 / 44%), transparent 60%),
+    radial-gradient(760px 640px at 78% 90%, rgb(196 228 142 / 44%), transparent 62%),
+    radial-gradient(640px 540px at 12% 94%, rgb(146 206 255 / 36%), transparent 62%),
+    linear-gradient(160deg, #eef7f2 0%, #e8f1f4 55%, #eef5ee 100%);
+
+  --workbench-radius-panel: 24px;
+  --workbench-radius-card: 18px;
+  --workbench-radius-control: 15px;
+
   --workbench-font-body: 19px;
   --workbench-font-auxiliary: 16px;
-  --workbench-line-height: 1.4;
+  --workbench-font-caption: 14px;
+  --workbench-line-height: 1.45;
   --workbench-target-size: 44px;
-  --workbench-font-body-family: 'Noto Sans CJK SC', 'Source Han Sans SC', 'Microsoft YaHei', sans-serif;
-  --workbench-font-heading: 'STZhongsong', 'Noto Serif CJK SC', 'Source Han Serif SC', 'Microsoft YaHei', serif;
+  --workbench-font-body-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', sans-serif;
+
+  /*
+   * 运行时结果卡（`components/RuntimeViews.module.css`）与 AI 助手页共用的一组语义变量。
+   * 原先由 `ChatPage` 用 antd token 逐个注入到内联 style 上；玻璃方向下颜色由底图透出，注入那一层
+   * 只会把 antd 的默认色重新写死，因此改为在这里一次性绑到工作台令牌上。
+   */
+  --chat-color-bg: var(--workbench-panel-fill);
+  --chat-color-bg-soft: rgb(255 255 255 / 55%);
+  --chat-color-border: var(--workbench-hair);
+  --chat-color-primary: var(--workbench-primary);
+  --chat-color-primary-soft: rgb(47 107 255 / 12%);
+  --chat-color-on-primary: var(--workbench-text);
+  --chat-color-success: var(--workbench-success);
+  --chat-color-warning: var(--workbench-warning);
+  --chat-color-error: var(--workbench-error);
+  --chat-color-neutral: var(--workbench-text-caption);
+  --chat-color-text: var(--workbench-text);
+  --chat-color-text-secondary: var(--workbench-text-secondary);
+  --chat-shadow: var(--workbench-lift);
 }
 
 html {
   color: var(--workbench-text);
-  background: var(--workbench-bg);
+  background: #eef2fc;
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
 }
@@ -29,10 +176,72 @@ body {
   margin: 0;
   padding: 0;
   color: var(--workbench-text);
-  background: var(--workbench-bg);
   font-family: var(--workbench-font-body-family);
   font-size: var(--workbench-font-body);
   line-height: var(--workbench-line-height);
+}
+
+/*
+ * 底图画在一层**自身 `position: fixed`** 的伪元素上，不再用 `background-attachment: fixed`。
+ *
+ * 2026-09-04 雨爷走查：「任务交办页面卡顿明显，特别是页面向下滑动时。」我按「模糊面随滚动重采样」
+ * 去改内容面板，实测**没有任何改善**（交办页滚动帧时中位数 33.3ms → 33.3ms）。逐项对照实验才定位到
+ * 真凶是这一行：
+ *
+ * | 变体（1280×800 无头 Chromium，交办页来回滚 3×147 帧） | 帧时中位 | p95 | >33ms 帧 |
+ * |---|---|---|---|
+ * | 不滚动（对照） | 16.6ms | 16.8 | 0 |
+ * | 现状 | 33.3ms | 50.9 | 328 |
+ * | 只去掉全部 `backdrop-filter` | 33.3ms | 50.3 | 366 |
+ * | 只把 `background-attachment` 改成 `scroll` | 16.6ms | 16.9 | 0 |
+ * | 改成 `position: fixed` 的底图层 | 16.6ms | 16.8 | 0 |
+ *
+ * `background-attachment: fixed` 让背景相对视口固定、相对元素滚动，浏览器因此**无法把滚动交给合成器**，
+ * 每一帧都要重画整屏背景。换成一层自己 `position: fixed` 的伪元素后，这层进独立合成层、滚动时一动
+ * 不动，观感完全一样（底图本来就相对视口固定），帧时回到 60fps。
+ *
+ * `z-index: -1`：`html` 有不透明底色 `#eef2fc`，所以这层画在画布底色之上、所有内容之下；`body` 与
+ * `.shell` 都不创建层叠上下文，负 z-index 因此落在根层叠上下文的同一层，按树序叠放，不会盖住内容。
+ *
+ * ---------------------------------------------------------------------------------------------
+ * **2026-09-04 第二次复核（雨爷第三次走查仍反馈「还有些卡顿」）。上面那张表少控制了一个变量：
+ * 光栅路径。补测后结论要改口径——不是「上面的表错了」，是它只在软件光栅下成立。**
+ *
+ * 上面所有数字都跑在 `--disable-gpu` 的**软件光栅**下。加 `--enable-gpu-rasterization` 重跑同一段
+ * 脚本，同一台机器、同一个页面：
+ *
+ * | 光栅路径 | 现状 | 去掉全部 `backdrop-filter` |
+ * |---|---|---|
+ * | 软件（`--disable-gpu`） | 中位 22.1~24.4ms，>33ms 帧 19~149 | 中位 **16.7ms，>33ms 帧 0**（三次复跑全为 0） |
+ * | GPU（`--enable-gpu-rasterization`） | 中位 **16.6ms，>33ms 帧 0** | 中位 16.6ms，>33ms 帧 0 |
+ *
+ * 也就是说：**`background-attachment` 修掉之后，剩下的滚动开销 100% 是 `backdrop-filter`，而这笔
+ * 开销只存在于软件光栅路径上；GPU 光栅下它是免费的。** GPU 下另加 4× CPU 节流、并改用真实滚轮事件
+ * 走输入管线（不是脚本改 `scrollTop`），仍是平的 16.6ms、0 掉帧、0 longtask——**在 GPU 路径上复现
+ * 不出任何卡顿**。
+ *
+ * 软件光栅下逐层拆：去掉 `.sidebar`（224×768）或 `.topbar`（1008×72）**任一层**的模糊，>33ms 帧都
+ * 归零（16.8~17.1ms，各复跑两次）；去掉 `.floatingEntry`（121×58，`position: fixed`）没有改善。
+ * 是阈值效应不是线性叠加，两层几何上并不重叠（实机量过 bounding box）。
+ *
+ * **不改观感的优化全部试过，全部落在噪声带里或更差**，所以本轮一行 CSS 都没改（base 自身复跑
+ * 中位 21.8~24.4ms、>33ms 帧 19~149，噪声带就有这么宽，比下面这些候选的差值大）：
+ * `contain: paint`、`contain: layout paint`、`transform: translateZ(0)`、`isolation: isolate`、
+ * `will-change: backdrop-filter` 均在噪声内；`.topbar` 改 `sticky`（30.3ms）或 `fixed`（24.2~25.8ms）、
+ * 内容区自滚而外壳不动（24.6ms）**都更差**；`.sidebar` 由 `sticky` 改 `fixed` 一度看着能修好，
+ * 复核发现是**布局被打乱**造成的假象（`scrollHeight` 从 1048 变成 1620），把内容钉回第二列、布局
+ * 恢复原样后与 base 完全一致（22.4 vs 22.0）。
+ *
+ * **真正有效的只有两条，都要改定稿画板，因此不擅自做：** 降模糊半径（`blur16` 中位 18.9ms）或砍掉
+ * 一层大面玻璃。画板 `_scratch/design/glass/*.dc.html` 写死的就是 `blur(32/26/24)`，与现役实现一致。
+ */
+body::before {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  background: var(--workbench-ground-a);
+  inset: 0;
+  pointer-events: none;
 }
 
 #root {
@@ -40,13 +249,105 @@ body {
 }
 
 ::placeholder {
-  color: #59665f !important;
+  color: var(--workbench-text-caption) !important;
   opacity: 1;
 }
 
+/*
+ * 键盘焦点的兜底环。链接、纯按钮这些没有自定义焦点态的元素全靠它，**不许删**；`outline-offset`
+ * 取正值，环画在元素外沿而不是内缩。
+ */
 :where(a, button, input, textarea, summary, [tabindex]):focus-visible {
   outline: 3px solid var(--workbench-focus) !important;
   outline-offset: 3px;
+}
+
+/*
+ * antd 的输入类组件是「外层容器画圆角与可见边框、内层才是真正的 `<input>`」。上面那条兜底规则命中的
+ * 是**内层**，于是焦点环出现在可见边框内侧、圆角也对不上——雨爷 2026-09-04 走查说的「点击输入框后
+ * 周边会显示比视觉上输入框小一圈的边框」就是它，再叠上那个橙色，就是他说的「十分难看」。
+ *
+ * 修法两步：内层的 outline 抑制掉；焦点态改画在**承担可见边框的那一层**。判别靠 antd 自己的变体类：
+ * 外层容器带 `-outlined`，内层 `<input>` 只有裸 `.ant-input`（实机 DOM 核对过），所以下面这组选择器
+ * 天然只命中外层，不会误伤内层。
+ *
+ * 写法与已有的三处 `:focus-within` 统一到同一对令牌——顶栏搜索框 `.searchField`、AI 助手输入卡
+ * `.sender`、交办页 `.briefInput` / `.chipWell` 用的都是：非聚焦 `--workbench-field-face`（1px 可辨
+ * 边界，近白面上实算 ≈4.1:1），聚焦 `--workbench-field-face-focus`（2px 主题色）。
+ */
+.ant-input-affix-wrapper > input.ant-input:focus-visible,
+.ant-select-input:focus-visible,
+.ant-input-number-input:focus-visible,
+.ant-picker-input > input:focus-visible {
+  outline: none !important;
+}
+
+/*
+ * 2026-09-04 第三次走查（雨爷截图 `C:.png`）：AI 助手页的输入框仍然是「外层蓝色圆角框 + 内层直角
+ * 框」两个环叠着。上面那串靠 antd 类名认「外层」的写法覆盖不全——`@ant-design/x` 的 `Sender` 用的是
+ * `.ant-sender` / `.ant-sender-input`，一个前缀也对不上，于是内层 textarea 照旧吃到那条 3px 兜底环。
+ * 实机 `getComputedStyle` 量到的就是它：`outline: 3px solid rgb(36,80,200)`、`outline-offset: -1px`、
+ * `border-radius: 0`，落在 28px 圆角的 `.ant-sender` 内侧 33px 处，与截图完全对得上。
+ *
+ * 所以改成不认类名、认**声明**：谁在外层画焦点环，谁就在那一层挂 `data-focus-ring="host"`，内层真控件
+ * 的兜底 outline 一律抑制。以后再出现同构的结构，挂个属性即可，不用回来改这张清单。
+ *
+ * 反过来的责任是硬的：**挂了属性的那棵子树里必须有一层画着焦点环**（顶栏是 `.searchField` 自己，
+ * 交办页是 `.chipWell` 自己，AI 助手页是 `.composer` 里的那张 `.sender` 卡），否则键盘用户会看不到
+ * 焦点落在哪。`controlAffordance.test.ts` 逐处钉住每个 host 与它对应的那条 `:focus-within` 环。
+ */
+[data-focus-ring='host'] :is(input, textarea, [contenteditable='true']):focus-visible {
+  outline: none !important;
+}
+
+/*
+ * 带边框的输入类控件自己已经有 2px 主题色聚焦环（下面那条 `-focus`，实机测 6.5:1），再叠一圈 3px 的
+ * 兜底 outline 就是同一个控件上套两个同色环。键盘可达性没有因此变差：焦点态仍然是一圈高对比的 2px
+ * 主题色，只是不再画两遍。没有自定义焦点态的元素（链接、纯按钮）依旧走上面那条兜底规则。
+ */
+.ant-input-outlined:focus-visible,
+.ant-input-affix-wrapper-outlined:focus-visible,
+.ant-input-number-outlined:focus-visible,
+.ant-picker-outlined:focus-visible {
+  outline: none !important;
+}
+
+.ant-input-outlined,
+.ant-input-affix-wrapper-outlined,
+.ant-input-number-outlined,
+.ant-select-outlined,
+.ant-picker-outlined {
+  border-color: transparent;
+  box-shadow: var(--workbench-field-face);
+}
+
+.ant-input-outlined:focus,
+.ant-input-outlined-focused,
+.ant-input-affix-wrapper-outlined:focus-within,
+.ant-input-number-outlined:focus-within,
+.ant-select-outlined:focus-within,
+.ant-picker-outlined-focused,
+.ant-picker-outlined:focus-within {
+  border-color: transparent;
+  box-shadow: var(--workbench-field-face-focus);
+}
+
+/*
+ * Select 得单拎出来。上面那条对它**没生效**：antd 6 自己注入的规则特异度更高，实机量到的焦点态是
+ * `0 0 0 2px rgb(47 107 255 / 14%)`——14% 的淡蓝晕，对相邻色远不到 SC 1.4.11 的 3:1；而它内层的
+ * `.ant-select-input` 又被上面那条抑制规则去掉了兜底 outline。两下一叠，**键盘 Tab 到下拉框时几乎看
+ * 不出焦点在哪**（2026-09-04 实机逐站点 Tab 走查测出来的，交办页「事项类型」就是）。这里显式压过
+ * antd 那条，换成与其他输入框同一枚 2px 主题色环（实算 6.1:1）。
+ */
+.ant-select:focus-within,
+.ant-select-focused {
+  box-shadow: var(--workbench-field-face-focus) !important;
+}
+
+/* 外层已经画了那道边界，内层不再叠第二层。 */
+.ant-input-affix-wrapper > .ant-input,
+.ant-input-number-outlined .ant-input-number-input {
+  box-shadow: none;
 }
 
 .ant-btn,
@@ -70,4 +371,58 @@ body {
 .ant-table-filter-dropdown .ant-dropdown-menu-item {
   min-width: var(--workbench-target-size);
   min-height: var(--workbench-target-size);
+}
+
+/*
+ * 2026-09-02 玻璃硬约束第 4 条：按钮不得带固定填充色，颜色由底图透出。antd 6 的实心主按钮默认是一块
+ * 纯蓝，这里统一换成「提亮一档的玻璃 + 深色字」——主次之分靠亮度和字重，不靠填色。
+ *
+ * 例外只留给语义：`ant-btn-dangerous` 保留 antd 的危险色，`ant-btn-link` / `ant-btn-text` 保持无底。
+ *
+ * 2026-09-04 补第二层（雨爷走查第 5 条：「所有右侧页面内的按钮都是纯白色，搭配白色背景区分度不明显」）。
+ * 原来这两条只有 `--workbench-chip-edge` 那一圈**白色**内边，在近白的内容面板上等于没有边界。WCAG 2.2
+ * SC 1.4.11 的原文是：边界若承担「让用户识别这里存在一个可操作控件」的职责，该边界与相邻色必须 ≥3:1，
+ * 且**阴影可以增加可见性但不能替代这条 3:1**——所以这里两样都给，不是只加投影。
+ *
+ * 三层分工（全站同一套，各页不再自定义）：
+ * - 主动作 `.ant-btn-primary`：蓝字 + 蓝色高光内边 + 更重的主题色投影（2026-09-02 裁决允许的
+ *   `.btn.go` 语言）。
+ * - 次动作 `.ant-btn-default`：可辨边界 + 轻主题色投影。
+ * - 文字按钮 `.ant-btn-link` / `.ant-btn-text`：无边框无投影，只有文字色（见下方那条）。
+ *
+ * 玻璃本体仍**不填鲜艳色**（2026-09-02 裁决）：主题色只出现在边框与投影上；按钮仍不加
+ * `backdrop-filter`（模糊层预算 ≤6）。
+ */
+.ant-btn-default:not(.ant-btn-dangerous),
+.ant-btn-primary:not(.ant-btn-dangerous) {
+  color: var(--workbench-text);
+  background-color: transparent;
+  background-image: var(--workbench-chip-fill);
+  border-color: transparent;
+  box-shadow: var(--workbench-control-ring), var(--workbench-chip-edge),
+    var(--workbench-control-glow);
+}
+
+.ant-btn-primary:not(.ant-btn-dangerous) {
+  color: var(--workbench-primary);
+  background-image: var(--workbench-chip-fill-strong);
+  box-shadow: var(--workbench-control-ring-primary),
+    var(--workbench-chip-edge-strong), var(--workbench-control-glow-strong);
+  font-weight: 700;
+}
+
+/* 文字按钮：无边框、无投影，只靠文字色。 */
+.ant-btn-link:not(.ant-btn-dangerous),
+.ant-btn-text:not(.ant-btn-dangerous) {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ant-btn-link:not(.ant-btn-dangerous) {
+  color: var(--workbench-primary);
+}
+
+.ant-btn-default:not(.ant-btn-dangerous):disabled,
+.ant-btn-primary:not(.ant-btn-dangerous):disabled {
+  color: var(--workbench-text-caption);
 }
