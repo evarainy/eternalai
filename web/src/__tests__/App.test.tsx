@@ -421,7 +421,7 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: '任务交办' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('这是 AI 生成的草稿，尚未发布')).toBeInTheDocument();
+    expect(screen.getByText('草稿尚未发布')).toBeInTheDocument();
     expect(screen.getByLabelText('截止时间')).toHaveAttribute(
       'type',
       'datetime-local',

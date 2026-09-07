@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialBindingView } from '../../../generated/credential-bindings/credential-bindings.schemas';
 import AppsPage from '../AppsPage';
 
@@ -73,10 +73,11 @@ function binding(overrides: Partial<CredentialBindingView> = {}): CredentialBind
   };
 }
 
-function renderPage() {
+function renderPage(registryItems: unknown[] = []) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
   });
+  client.setQueryData(['admin', 'registry'], { items: registryItems });
   return render(
     <ConfigProvider>
       <AntApp>
@@ -104,6 +105,8 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('AppsPage business systems', () => {
   it('opens the OA system in a new window through the deployment-configured deep link', async () => {
     renderPage();
@@ -122,6 +125,10 @@ describe('AppsPage business systems', () => {
       await screen.findByText(/OA 地址没配好/),
     ).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /打开/ })).not.toBeInTheDocument();
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('OA 地址没配好，这里打不开，请找管理员配一下。');
+    expect(notice.querySelector('svg')).not.toBeNull();
+    expect(notice.textContent?.match(/[。！？]/g)).toHaveLength(1);
   });
 
   /*
@@ -193,12 +200,52 @@ describe('AppsPage business systems', () => {
     await waitFor(() =>
       expect(screen.getByTestId('oa-status')).toHaveTextContent('读不到'),
     );
-    expect(screen.getByText(/这不等于没绑上/)).toBeInTheDocument();
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('读不到 OA 的绑定状态，这不等于没绑上；请刷新本页，还是取不到就找管理员。');
+    expect(notice.querySelector('svg')).not.toBeNull();
+    expect(notice.textContent?.match(/[。！？]/g)).toHaveLength(1);
     expect(screen.queryByText('已绑定')).not.toBeInTheDocument();
   });
 });
 
 describe('AppsPage backend gaps', () => {
+  it('locks ordered sections and one neutral next-step sentence per empty surface', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('oa-status')).toHaveTextContent('已绑定'));
+    expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent))
+      .toEqual(['业务系统', '单位软件', '我的功能']);
+    for (const text of [
+      '财务系统、公文交换平台、督查督办系统还没有接进来，请照原来的方式打开。',
+      '单位发布的软件还没有接进来，这里暂时不能显示；要装什么软件，先找信息中心。',
+      '你自己的功能还没有接进来，这里暂时不能显示；要查 OA 待办和消息，请到「AI 助手」里直接问。',
+    ]) {
+      const note = screen.getByText(text);
+      expect(note).toBeVisible();
+      expect(note.querySelector('svg')).not.toBeNull();
+      expect(note.textContent?.match(/[。！？]/g)).toHaveLength(1);
+    }
+  });
+
+  // The real user-list contract does not exist. These are admin-cache values, NOT an invented user DTO.
+  it.each([
+    ['draft', '1.2'], ['active', 'release-next'], ['disabled', ''], ['deprecated', '0.3'],
+    ['future-status', 'future-version'], [null, null],
+  ])('keeps status %s and version %s unavailable without borrowing admin data', async (status, version) => {
+    const fetch = vi.spyOn(globalThis, 'fetch');
+    renderPage([{ name: '合成管理条目', status, version }]);
+    await waitFor(() => expect(screen.getByTestId('oa-status')).toHaveTextContent('已绑定'));
+    for (const name of ['单位软件', '我的功能']) {
+      const section = screen.getByRole('heading', { name }).closest('section')!;
+      expect(section).toHaveTextContent('暂时不能显示');
+      expect(within(section).queryByRole('article')).toBeNull();
+      expect(within(section).queryByRole('button')).toBeNull();
+      expect(section.querySelector('svg')).not.toBeNull();
+      expect(section.textContent).not.toMatch(/已发布|已装上|v1\.2|v0\.3|future-status|future-version|合成管理条目/);
+    }
+    expect(apiMocks.getBinding).toHaveBeenCalledExactlyOnceWith('oa');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   /*
    * 承重断言：后端只有 OA 一个真实来源，所以整页**只能有一张卡**。谁把画板上那三张示意卡照抄进来
    * （连同它们编出来的「要先绑账号 / 未开通」），卡片数就变成 4 → 变红。
@@ -230,7 +277,7 @@ describe('AppsPage backend gaps', () => {
     renderPage();
     await screen.findByTestId('oa-status');
 
-    const note = screen.getByText(/还没有接进来。下一步/);
+    const note = screen.getByText(/财务系统、公文交换平台、督查督办系统还没有接进来/);
     for (const system of SYSTEMS_WITHOUT_A_DATA_SOURCE) {
       expect(note).toHaveTextContent(system);
     }
@@ -270,16 +317,28 @@ describe('AppsPage backend gaps', () => {
 });
 
 describe('AppsPage vocabulary', () => {
-  it('keeps internal object names out of the user-facing copy', async () => {
-    renderPage();
-    await screen.findByTestId('oa-status');
-
-    const text = document.body.textContent ?? '';
-    expect(text.length).toBeGreaterThan(0);
-    for (const term of FORBIDDEN_INTERNAL_TERMS) {
-      expect(text).not.toContain(term);
-    }
-  });
+  it.each(['bound', 'unbound', 'loading', 'error'] as const)(
+    'keeps internal terms out of text and accessible names in %s and its dialog', async (state) => {
+      if (state === 'unbound') apiMocks.getBinding.mockResolvedValue(binding({ bound: false }));
+      if (state === 'loading') apiMocks.getBinding.mockReturnValue(new Promise(() => {}));
+      if (state === 'error') apiMocks.getBinding.mockRejectedValue(new Error('Capability input_schema'));
+      renderPage();
+      const expected = { bound: '已绑定', unbound: '要先绑账号', loading: '正在读取', error: '读不到' };
+      await waitFor(() => expect(screen.getByTestId('oa-status')).toHaveTextContent(expected[state]));
+      expect(screen.getByTestId('oa-status').querySelector('svg')).not.toBeNull();
+      const checkCopy = () => {
+        const text = [document.body.textContent, ...Array.from(
+          document.body.querySelectorAll('[aria-label], [title]'),
+          (node) => `${node.getAttribute('aria-label') ?? ''} ${node.getAttribute('title') ?? ''}`,
+        )].join(' ');
+        for (const term of FORBIDDEN_INTERNAL_TERMS) expect(text).not.toContain(term);
+      };
+      checkCopy();
+      fireEvent.click(screen.getByRole('button', { name: /新建应用/ }));
+      await waitFor(() => expect(screen.getByRole('dialog', { name: '新建应用' })).toBeVisible());
+      checkCopy();
+    },
+  );
 
   it('draws its icons as inline stroke SVG instead of text glyphs', async () => {
     const { container } = renderPage();

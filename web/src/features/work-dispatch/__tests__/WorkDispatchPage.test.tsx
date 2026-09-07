@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../../app/theme';
 import { DRAFT_STORAGE_KEY, parseDraft } from '../dispatchDraft';
 import WorkDispatchPage from '../WorkDispatchPage';
@@ -44,7 +44,29 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('WorkDispatchPage form', () => {
+  it('locks the single-entry section order and visible structured labels', () => {
+    const { container } = renderPage();
+    const brief = screen.getByRole('textbox', { name: '用一句话说明要交办的事' });
+    expect(brief).toHaveAttribute('aria-label', '用一句话说明要交办的事');
+    expect(container.querySelector('label[for="dispatch-brief"]')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.getAllByRole('heading', { level: 2 }).map((node) => node.textContent))
+      .toEqual(['基本信息', '交办范围与时限', '办理要求与回执']);
+    const ordered = container.querySelectorAll('h2, label, [id$="-label"]');
+    expect(Array.from(ordered, (node) => node.textContent?.trim())).toEqual([
+      '基本信息', '类型', '标题', '交办范围与时限', '责任人 / 责任部门',
+      '截止时间', '可见范围', '交办对象（已解析并去重）', '办理要求与回执',
+      '办理要求与交付物', '附件', '回执要求', '提醒策略（可多选，各提醒一次）',
+    ]);
+    for (const node of ordered) {
+      expect(node).toBeVisible();
+    }
+    expect(brief.compareDocumentPosition(ordered[0]!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
   /*
    * 2026-08-27 §七 要求交办的九类字段在**发布前**固定展示。这里逐项钉死，缺一项就红；同时钉死三个
    * 分组标题，防止九项被摊成一列长表单。
@@ -66,7 +88,7 @@ describe('WorkDispatchPage form', () => {
     expect(screen.getByLabelText('责任人 / 责任部门')).toBeInTheDocument();
     expect(screen.getByLabelText('截止时间')).toBeInTheDocument();
     expect(screen.getByLabelText('可见范围')).toBeInTheDocument();
-    expect(screen.getByLabelText('交办对象')).toBeInTheDocument();
+    expect(screen.getByLabelText('交办对象（已解析并去重）')).toBeInTheDocument();
     expect(screen.getByLabelText('办理要求与交付物')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: '附件' })).toBeInTheDocument();
     expect(screen.getByLabelText('回执要求')).toBeInTheDocument();
@@ -79,7 +101,7 @@ describe('WorkDispatchPage form', () => {
   it('keeps the amber unpublished-draft banner visible', () => {
     renderPage();
 
-    expect(screen.getByText('这是 AI 生成的草稿，尚未发布')).toBeInTheDocument();
+    expect(screen.getByText('草稿尚未发布')).toBeInTheDocument();
     expect(
       screen.getByText('逐项核对无误后，点右下角「发布」才会下发'),
     ).toBeInTheDocument();
@@ -140,7 +162,7 @@ describe('WorkDispatchPage form', () => {
 
     expect(screen.getByText('还没有交办对象。')).toBeInTheDocument();
 
-    const targetInput = screen.getByLabelText('交办对象');
+    const targetInput = screen.getByLabelText('交办对象（已解析并去重）');
     for (const target of ['办公室', '财务科', '办公室']) {
       fireEvent.change(targetInput, { target: { value: target } });
       fireEvent.click(screen.getByRole('button', { name: '添加' }));
@@ -176,7 +198,7 @@ describe('WorkDispatchPage form', () => {
     expect(screen.getByRole('button', { name: /添加附件/ })).toBeDisabled();
     expect(
       screen.getByText(
-        'Word / PDF / 图片，单个不超过 20 MB。附件还传不上去。',
+        'Word / PDF / 图片，单个不超过 20 MB；附件还传不上去，可先存草稿。',
       ),
     ).toBeInTheDocument();
 
@@ -297,6 +319,56 @@ describe('WorkDispatchPage form', () => {
     expect(screen.getByLabelText('标题')).toHaveValue('');
   });
 
+  it('keeps attachments empty and unavailable with an accessible next step', () => {
+    renderPage();
+    const attachments = screen.getByRole('group', { name: '附件' });
+    expect(attachments).toHaveAccessibleDescription(
+      'Word / PDF / 图片，单个不超过 20 MB；附件还传不上去，可先存草稿。',
+    );
+    expect(within(attachments).getAllByRole('button')).toHaveLength(1);
+    expect(within(attachments).getByRole('button', { name: /添加附件/ })).toBeDisabled();
+    expect(attachments.textContent?.trim()).toBe('添加附件');
+    expect(attachments.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.getByText(/Word \/ PDF/).querySelector('svg')).not.toBeNull();
+    expect(screen.queryByText(/这是 AI 生成/)).toBeNull();
+  });
+
+  it('reports storage refusal without claiming a saved or published result', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('synthetic storage refusal');
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    expect(screen.getByRole('status')).toHaveTextContent('草稿没存上。先把要点抄到别处。');
+    expect(screen.getByRole('status').querySelector('svg')).not.toBeNull();
+    expect(window.localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+    expect(screen.queryByText(/草稿存在这台电脑上/)).toBeNull();
+  });
+
+  it('round-trips only decided choices and literal deduplicated targets through the page', () => {
+    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
+      kind: '未知类型', dueAt: '2026-09-07T16:30',
+      targets: [' 办公室 ', '办公室', '', 42, '财务科'],
+      reminders: ['提前 7 天', '提前 7 天', '未知提醒'],
+    }));
+    renderPage();
+    expect(screen.getByText('通知')).toBeVisible();
+    expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-07T16:30');
+    const group = screen.getByRole('group', { name: '提醒策略（可多选，各提醒一次）' });
+    expect(within(group).getAllByRole('button').map((node) => node.textContent))
+      .toEqual(['提前 7 天', '提前 3 天', '提前 1 天', '逾期当天']);
+    for (const button of within(group).getAllByRole('button')) {
+      fireEvent.click(button);
+    }
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY)!);
+    expect(stored).toMatchObject({
+      kind: '通知', dueAt: '2026-09-07T16:30', targets: ['办公室', '财务科'],
+      reminders: ['提前 3 天', '提前 1 天', '逾期当天'],
+    });
+  });
+
   it('draws its icons as inline stroke SVGs instead of text glyphs', () => {
     const { container } = renderPage();
 
@@ -310,10 +382,26 @@ describe('WorkDispatchPage form', () => {
   it('keeps internal object names out of the user-facing copy', () => {
     renderPage();
 
-    const text = document.body.textContent ?? '';
-    expect(text.length).toBeGreaterThan(0);
-    for (const term of FORBIDDEN_INTERNAL_TERMS) {
-      expect(text).not.toContain(term);
-    }
+    const checkCopy = () => {
+      const text = [document.body.textContent, ...Array.from(
+        document.body.querySelectorAll('[aria-label], [title]'),
+        (node) => `${node.getAttribute('aria-label') ?? ''} ${node.getAttribute('title') ?? ''}`,
+      )].join(' ');
+      expect(text.length).toBeGreaterThan(0);
+      for (const term of FORBIDDEN_INTERNAL_TERMS) expect(text).not.toContain(term);
+    };
+    checkCopy();
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    checkCopy();
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成草稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '发布' }));
+    checkCopy();
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    checkCopy();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('synthetic storage refusal');
+    });
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    checkCopy();
   });
 });

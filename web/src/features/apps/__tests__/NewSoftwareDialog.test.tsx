@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewSoftwareDialog } from '../NewSoftwareDialog';
 import {
   EMPTY_NEW_SOFTWARE_DRAFT,
@@ -9,6 +11,10 @@ import {
   loadNewSoftwareDraft,
   parseNewSoftwareDraft,
 } from '../newSoftwareDraft';
+
+function readSource(relativePath: string): string {
+  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url).href), 'utf8');
+}
 
 /** 2026-08-27 §九：前台不得出现这些内部对象名。 */
 const FORBIDDEN_INTERNAL_TERMS = [
@@ -53,21 +59,43 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('NewSoftwareDialog form', () => {
-  it('lays out every field the finalized canvas asks for', () => {
+  it('uses the shared field boundary and one focus host at the canvas input size', () => {
     renderDialog();
+    const css = readSource('../AppsPage.module.css');
+    const field = /\.field :global\(\.ant-input\),[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(field).toContain('var(--workbench-field-face)');
+    expect(field).toContain('font-size: 17px');
+    const focus = /\.field :global\(\.ant-input\):focus,[^{]*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(focus).toContain('var(--workbench-field-face-focus)');
+    const well = /\.chipWell\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(well).toContain('var(--workbench-field-face)');
+    const wellFocus = /\.chipWell:focus-within\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(wellFocus).toContain('var(--workbench-field-face-focus)');
+    expect(screen.getByLabelText('谁能在软件中心看见它').parentElement)
+      .toHaveAttribute('data-focus-ring', 'host');
+    expect(css).toMatch(/\.field \.chipInput:global\(\.ant-input\):focus\s*\{[^}]*box-shadow: none !important/);
+  });
+
+  it('lays out every field the finalized canvas asks for', async () => {
+    renderDialog();
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
 
     for (const label of CANVAS_FIELD_LABELS) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByText(label)).toBeVisible();
+      expect(screen.getByLabelText(label)).toHaveAccessibleName(label);
     }
   });
 
   /*
-   * 「嵌在工作台里面」不是随手置灰的：OA 实测响应带 `X-Frame-Options: SAMEORIGIN`，嵌不进来。界面
-   * 必须把这个理由写出来，不能只给一个点不动的按钮。
+   * 「嵌在工作台里面」须逐系统核验后才可用；OA 的禁嵌证据不能外推到其余系统。界面
+   * 只给一句可执行的下一步，不把响应头技术名搬进用户说明。
    */
-  it('disables the embedded open mode and says why, in the page itself', () => {
+  it('disables the embedded open mode and says why, in the page itself', async () => {
     renderDialog();
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
 
     const embedded = screen.getByRole('radio', { name: '嵌在工作台里面' });
     expect(embedded).toBeDisabled();
@@ -76,7 +104,36 @@ describe('NewSoftwareDialog form', () => {
       'aria-checked',
       'true',
     );
-    expect(screen.getByText(/X-Frame-Options: SAMEORIGIN/)).toBeInTheDocument();
+    expect(screen.getByText('嵌入方式还没逐个系统核验，请先开新窗口，不会关掉工作台这一页。')).toBeVisible();
+    expect(screen.queryByText(/X-Frame-Options|SAMEORIGIN/)).toBeNull();
+  });
+
+  it('restores all nine fields and saves only supported choices through the dialog', () => {
+    window.localStorage.setItem(NEW_SOFTWARE_DRAFT_KEY, JSON.stringify({
+      source: 'unknown-source', name: '合成软件', summary: '合成用途',
+      address: 'https://software.synthetic.invalid', owner: '合成科室',
+      openMode: 'embedded', binding: 'unknown-binding', risk: 'unknown-risk',
+      visibleTo: [' 办公室 ', '办公室', '', 42, '财务科'],
+    }));
+    renderDialog();
+    const sources = screen.getByRole('radiogroup', { name: '这个软件是哪儿来的？' });
+    expect(within(sources).getAllByRole('radio')).toHaveLength(2);
+    expect(screen.getByRole('radio', { name: /接入单位已有的系统/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '要绑' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '只能查，不改' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('叫什么名字')).toHaveValue('合成软件');
+    expect(screen.getByLabelText('一句话说明是干什么的')).toHaveValue('合成用途');
+    expect(screen.getByLabelText('访问地址')).toHaveValue('https://software.synthetic.invalid');
+    expect(screen.getByLabelText('归哪个科室管 / 找谁')).toHaveValue('合成科室');
+    expect(screen.getAllByText('办公室')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio', { name: /装单位发布的软件/ }));
+    fireEvent.click(screen.getByRole('button', { name: '删除可见范围 财务科' }));
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    expect(JSON.parse(window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY)!)).toEqual({
+      source: 'published_software', name: '合成软件', summary: '合成用途',
+      address: 'https://software.synthetic.invalid', owner: '合成科室',
+      openMode: 'new_window', binding: 'required', risk: 'read_only', visibleTo: ['办公室'],
+    });
   });
 
   it('lets the user switch the two choices that are genuinely theirs to make', () => {
@@ -111,12 +168,20 @@ describe('NewSoftwareDialog draft-only outcome', () => {
    * 2026-09-02 裁决「界面先行、后端不做」。这里钉死**没有提交路径**：审核按钮不可用，界面写明提交
    * 审核后才对他人可见。谁给它接上一个未经裁决的端点，这条就变红。
    */
-  it('cannot submit for review and says so instead of pretending it published', () => {
+  it('cannot submit for review and says so instead of pretending it published', async () => {
     renderDialog();
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
 
     expect(screen.getByRole('button', { name: '提交审核' })).toBeDisabled();
     expect(screen.getByText(/提交审核后才对他人可见/)).toBeInTheDocument();
-    expect(screen.getByText(/建好先是草稿，只有你自己看得见/)).toBeInTheDocument();
+    expect(screen.getByText(
+      '提交审核功能还没有接进来，当前只能存这台电脑上的草稿；提交审核后才对他人可见。',
+    )).toBeVisible();
+    const explanations = Array.from(screen.getByRole('dialog').querySelectorAll('p, b, span'))
+      .filter((node) => node.children.length === 0 && /草稿|审核/.test(node.textContent ?? '')
+        && node.closest('button') === null);
+    expect(explanations).toHaveLength(1);
+    expect(explanations[0]!.parentElement?.parentElement?.querySelector('svg')).not.toBeNull();
   });
 
   it('refuses to save a nameless draft and says what is missing', () => {
@@ -156,11 +221,25 @@ describe('NewSoftwareDialog draft-only outcome', () => {
   it('keeps internal object names out of the dialog copy', () => {
     renderDialog();
 
-    const text = document.body.textContent ?? '';
-    expect(text.length).toBeGreaterThan(0);
-    for (const term of FORBIDDEN_INTERNAL_TERMS) {
-      expect(text).not.toContain(term);
-    }
+    const checkCopy = () => {
+      const text = [document.body.textContent, ...Array.from(
+        document.body.querySelectorAll('[aria-label], [title]'),
+        (node) => `${node.getAttribute('aria-label') ?? ''} ${node.getAttribute('title') ?? ''}`,
+      )].join(' ');
+      expect(text.length).toBeGreaterThan(0);
+      for (const term of FORBIDDEN_INTERNAL_TERMS) expect(text).not.toContain(term);
+    };
+    checkCopy();
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    checkCopy();
+    typeInto(screen.getByLabelText('叫什么名字'), '合成软件');
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    checkCopy();
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('Capability storage refusal');
+    });
+    fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+    checkCopy();
   });
 
   it('closes without saving anything when the user cancels', () => {
