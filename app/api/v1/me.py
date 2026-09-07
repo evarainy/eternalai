@@ -31,7 +31,14 @@ from app.ports.user_profile import (
 
 AVATAR_PATH: Literal["/api/v1/me/avatar"] = "/api/v1/me/avatar"
 
-_AVATAR_CACHE_CONTROL = "private, max-age=300"
+# Both routes answer at a constant URL, so a stored copy carries no user in its
+# cache key, and there is no server-side logout that could evict one.  On a
+# shared workstation that is a real window: the next person to sign in could be
+# served the previous person's identity or photo out of the browser cache
+# without a single request leaving the machine.  ``no-store`` closes it without
+# depending on ``Vary: Cookie`` being honoured -- the session cookie does not
+# necessarily change when the person at the keyboard does.
+_NO_STORE = "no-store"
 _PROFILE_UNAVAILABLE_DETAIL = {
     "code": "user_profile_unavailable",
     "message": "User profile reading is unavailable.",
@@ -92,8 +99,10 @@ def make_router(
 
     @router.get("", response_model=MeResponse)
     async def read_me(
+        response: Response,
         principal: Principal = Depends(require_principal),
     ) -> MeResponse:
+        response.headers["Cache-Control"] = _NO_STORE
         port = configured()
         snapshot = await _read_snapshot(port, principal.ai_user_id)
         org = (
@@ -128,7 +137,7 @@ def make_router(
             content=avatar.content,
             media_type=avatar.media_type,
             headers={
-                "Cache-Control": _AVATAR_CACHE_CONTROL,
+                "Cache-Control": _NO_STORE,
                 "Content-Disposition": "inline",
                 "X-Content-Type-Options": "nosniff",
             },

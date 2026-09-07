@@ -294,8 +294,59 @@ def test_avatar_is_served_with_our_own_media_type_and_hardening_headers() -> Non
     assert response.content == ALICE_IMAGE
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["cache-control"] == "private, max-age=300"
+    assert response.headers["cache-control"] == "no-store"
     assert response.headers["content-disposition"] == "inline"
+
+
+# Directive names that would let a stored copy be reused; the value part of
+# ``max-age=0`` is irrelevant here, only the name is checked.
+CACHEABLE_DIRECTIVES = frozenset(
+    {
+        "max-age",
+        "s-maxage",
+        "public",
+        "private",
+        "immutable",
+        "stale-while-revalidate",
+        "stale-if-error",
+    }
+)
+
+
+@pytest.mark.parametrize("path", [ME_PATH, AVATAR_PATH])
+def test_identity_answers_are_never_stored_by_the_browser(path: str) -> None:
+    """Neither route may leave a copy behind on a shared workstation.
+
+    Both URLs are constants, so a cache entry has no user in its key, and there
+    is no server-side logout that could evict one: A signs out, B signs in
+    within the freshness window and the browser answers B with A's photo.
+    ``Vary: Cookie`` would not close this -- the session cookie need not change
+    between the two people -- so the answer is ``no-store``.
+
+    This assertion is the only gate on that header.  Relax it back to any
+    cacheable value (``private, max-age=300`` included) and nothing else in the
+    suite goes red.
+    """
+    profile = StubUserProfile(
+        {ALICE_ID: ok_snapshot(ALICE_DEPARTMENT)},
+        avatars={ALICE_ID: UserAvatar(media_type="image/png", content=ALICE_IMAGE)},
+    )
+
+    response = build_client(profile).get(path, cookies=auth_cookies())
+
+    assert response.status_code == 200
+    header = response.headers.get("cache-control")
+    assert header is not None, f"{path} left the browser free to cache the answer"
+    directives = {
+        part.strip().casefold().split("=", 1)[0]
+        for part in header.split(",")
+        if part.strip()
+    }
+    assert "no-store" in directives, header
+    assert directives & CACHEABLE_DIRECTIVES == set(), header
+    # No re-use key was smuggled in through a validator either.
+    assert "etag" not in {key.casefold() for key in response.headers}
+    assert "last-modified" not in {key.casefold() for key in response.headers}
 
 
 def test_missing_avatar_is_a_uniform_404() -> None:
