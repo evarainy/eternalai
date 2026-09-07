@@ -26,6 +26,7 @@ import { BLUR_LAYER_BUDGET } from '../theme';
 
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
+  readMe: vi.fn(),
   getWorkObject: vi.fn(),
   listWorkObjects: vi.fn(),
   setHandlingMark: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
   bindPasswordApiV1CredentialBindingsTargetSystemPut: apiMocks.bindPassword,
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
   unbindPasswordApiV1CredentialBindingsTargetSystemDelete: apiMocks.unbindPassword,
+}));
+
+vi.mock('../../generated/me/me', () => ({
+  readMeApiV1MeGet: apiMocks.readMe,
 }));
 
 vi.mock('../../generated/work-objects/work-objects', () => ({
@@ -148,6 +153,14 @@ function shellElement(): HTMLElement {
 }
 
 beforeEach(() => {
+  apiMocks.readMe.mockReset();
+  apiMocks.readMe.mockResolvedValue({
+    authenticated: true,
+    display_name: '甲用户',
+    org: { department_name: '部门乙', department_id: '22' },
+    org_status: 'ok',
+    avatar_path: '/api/v1/me/avatar',
+  });
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
   apiMocks.listWorkObjects.mockReset();
@@ -304,8 +317,8 @@ describe('per-screen blur-layer budget', () => {
    * 风格」，另外两个是本轮改过的面，这里逐个钉死。
    */
   it.each([
-    ['用户菜单', '用户菜单，暂时取不到你的照片'],
-    ['系统状态', '系统状态，暂无需要处理的项'],
+    ['用户菜单', 'topbar-avatar'],
+    ['系统状态', 'topbar-system-status'],
   ])('adds no blur layer when the %s popover is open', async (region, trigger) => {
     renderScreen('/work-objects');
     await waitFor(() =>
@@ -313,7 +326,7 @@ describe('per-screen blur-layer budget', () => {
     );
     const before = describeBlurLayers(shellElement());
 
-    fireEvent.click(await screen.findByRole('button', { name: trigger }));
+    fireEvent.click(await screen.findByTestId(trigger));
     expect(screen.getByRole('region', { name: region })).toBeInTheDocument();
 
     const after = describeBlurLayers(shellElement());

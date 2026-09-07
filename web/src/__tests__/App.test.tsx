@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App, {
@@ -7,17 +7,36 @@ import App, {
   LoginRoute,
   ProtectedRoute,
 } from '../App';
+import { ApiError } from '../api/mutator';
+import type { MeResponse } from '../generated/me/me.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
 
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
+  readMe: vi.fn(),
 }));
 
 vi.mock('../generated/credential-bindings/credential-bindings', () => ({
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
 }));
+
+vi.mock('../generated/me/me', () => ({
+  readMeApiV1MeGet: apiMocks.readMe,
+}));
+
+const DISPLAY_NAME = '甲用户';
+
+function meResponse(): MeResponse {
+  return {
+    authenticated: true,
+    display_name: DISPLAY_NAME,
+    org: { department_name: '部门乙', department_id: '22' },
+    org_status: 'ok',
+    avatar_path: '/api/v1/me/avatar',
+  };
+}
 
 function LocationProbe() {
   const location = useLocation();
@@ -38,6 +57,8 @@ describe('application authentication boundary', () => {
       transcript: [],
     });
     useNavigationStore.setState({ collapsed: false });
+    apiMocks.readMe.mockReset();
+    apiMocks.readMe.mockResolvedValue(meResponse());
     apiMocks.getBinding.mockReset();
     apiMocks.getBinding.mockResolvedValue({
       bound: true,
@@ -48,6 +69,167 @@ describe('application authentication boundary', () => {
     });
     window.localStorage.clear();
     window.history.pushState({}, '', '/health');
+  });
+
+  /*
+   * 刷新页面时前端还不知道自己登不登录着——会话票据在一个 httpOnly cookie 里，JS 读不到。这一组钉的
+   * 就是「先问后端，再决定」：确认返回前既不放行也不踢到登录页，确认失败也不把「连不上后端」翻译成
+   * 「你没登录」。
+   */
+  describe('start-up session confirmation', () => {
+    beforeEach(() => {
+      useAuthStore.setState({ generation: 0, status: 'unknown' });
+    });
+
+    it('neither renders protected content nor redirects while the answer is pending', () => {
+      apiMocks.readMe.mockReturnValue(new Promise(() => {}));
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={['/admin/example']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<div>登录页</div>} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/admin/example" element={<div>受保护内容</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(screen.getByTestId('boot-gate')).toBeInTheDocument();
+      expect(screen.queryByText('受保护内容')).not.toBeInTheDocument();
+      expect(screen.queryByText('登录页')).not.toBeInTheDocument();
+      // 确认进行中一个字都不写：没有 spinner 文案，也没有「正在加载」。
+      expect(screen.getByTestId('boot-gate').textContent).toBe('');
+    });
+
+    it('does not flash the login form for a session that is still valid', async () => {
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter
+            initialEntries={[{ pathname: '/login', state: { from: '/chat' } }]}
+          >
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<LoginRoute />} />
+              <Route path="/chat" element={<div>受保护目标</div>} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(screen.queryByRole('heading', { name: '欢迎回来' })).not.toBeInTheDocument();
+      expect(await screen.findByText('受保护目标')).toBeInTheDocument();
+    });
+
+    it('restores the session from the backend answer rather than from stored state', async () => {
+      const setItem = vi.spyOn(Storage.prototype, 'setItem');
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter initialEntries={['/admin/example']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<div>登录页</div>} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/admin/example" element={<div>受保护内容</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByText('受保护内容')).toBeInTheDocument();
+      expect(useAuthStore.getState().status).toBe('authenticated');
+      // 客户端不保存任何身份断言：唯一被保存的是浏览器里那份读不到也伪造不了的 cookie。
+      for (const [key, value] of setItem.mock.calls) {
+        expect(`${key}${String(value)}`).not.toContain(DISPLAY_NAME);
+        expect(`${key}${String(value)}`).not.toContain('authenticated');
+      }
+      setItem.mockRestore();
+    });
+
+    it('sends the user to login when the backend says the session is gone', async () => {
+      apiMocks.readMe.mockImplementation(async () => {
+        useAuthStore.getState().markUnauthenticated(0);
+        throw new ApiError(401, 'authentication_required', 'Authentication is required.');
+      });
+      render(
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <MemoryRouter initialEntries={['/admin/example']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<div>登录页</div>} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/admin/example" element={<div>受保护内容</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      expect(await screen.findByText('登录页')).toBeInTheDocument();
+      expect(screen.queryByText('受保护内容')).not.toBeInTheDocument();
+    });
+
+    it('stays put when the backend cannot be reached instead of asking for the password again', async () => {
+      apiMocks.readMe.mockRejectedValue(new TypeError('Failed to fetch'));
+      render(
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <MemoryRouter initialEntries={['/admin/example']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route path="/login" element={<div>登录页</div>} />
+              <Route element={<ProtectedRoute />}>
+                <Route path="/admin/example" element={<div>受保护内容</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      /*
+       * 把「连不上后端」翻译成「你没登录」会在每次网络抖动时把用户推到登录页，训练他们在异常状态下
+       * 反复输入密码——那是钓鱼形状的习惯。
+       */
+      expect(await screen.findByTestId('boot-gate-unreachable')).toBeInTheDocument();
+      expect(screen.queryByText('登录页')).not.toBeInTheDocument();
+      expect(screen.queryByText('受保护内容')).not.toBeInTheDocument();
+      expect(useAuthStore.getState().status).toBe('unknown');
+    });
+
+    it('offers one line and one retry button when the backend is unreachable', async () => {
+      apiMocks.readMe.mockRejectedValue(new TypeError('Failed to fetch'));
+      render(
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <MemoryRouter initialEntries={['/admin/example']}>
+            <AuthenticationEffects />
+            <Routes>
+              <Route element={<ProtectedRoute />}>
+                <Route path="/admin/example" element={<div>受保护内容</div>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      const gate = await screen.findByTestId('boot-gate-unreachable');
+      expect(gate).toHaveTextContent('连不上服务器');
+      // 一行加一个按钮，不解释原因、不给排查步骤、不给联系方式。
+      expect(within(gate).getAllByRole('button')).toHaveLength(1);
+      expect(gate.textContent).toBe('连不上服务器重试');
+
+      apiMocks.readMe.mockResolvedValue(meResponse());
+      fireEvent.click(within(gate).getByRole('button', { name: '重试' }));
+
+      expect(await screen.findByText('受保护内容')).toBeInTheDocument();
+    });
   });
 
   it(

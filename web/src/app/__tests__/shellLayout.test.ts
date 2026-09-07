@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  IDENTITY_UNAVAILABLE_LINES,
+  IDENTITY_FALLBACK_LINES,
   LAYOUT_BASELINE_WIDTH,
   MINIMUM_TARGET_SIZE,
   SHELL_COLUMN_GAP,
@@ -14,6 +14,7 @@ import {
   TOPBAR_IDENTITY_WIDTH,
   TOPBAR_SEARCH_MIN_WIDTH,
   TOPBAR_SEARCH_WIDTH,
+  USER_MENU_WIDTH,
   collapsedNavigationTargetWidth,
   singleLineTextWidth,
   topbarAvailableWidth,
@@ -64,10 +65,15 @@ describe('AppShell 1280px layout budget', () => {
     );
   });
 
-  it('keeps every fail-closed identity line on a single line of its slot', () => {
-    expect(IDENTITY_UNAVAILABLE_LINES.length).toBeGreaterThan(0);
-    for (const line of IDENTITY_UNAVAILABLE_LINES) {
+  it('keeps every fail-closed identity line on a single line of the user menu', () => {
+    /*
+     * 这几行不再出现在顶栏——姓名来自签名票据，顶栏最坏也只少一个部门，此时只显示姓名。它们只用在
+     * 268px 的用户菜单里，那一格比顶栏这一格宽，所以按顶栏宽度核算是更严的下界。
+     */
+    expect(IDENTITY_FALLBACK_LINES.length).toBeGreaterThan(0);
+    for (const line of IDENTITY_FALLBACK_LINES) {
       expect(singleLineTextWidth(line)).toBeLessThanOrEqual(TOPBAR_IDENTITY_WIDTH);
+      expect(singleLineTextWidth(line)).toBeLessThanOrEqual(USER_MENU_WIDTH);
     }
   });
 

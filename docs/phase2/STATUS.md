@@ -1,30 +1,16 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-ASTRA-001`（C 档；开发助手规则与 skills 收敛，A/B/C 自审采用 high / medium / 无自审门禁；独立 Monitor → Opus 与项目红线保留）。
-- 当前实现基线 task_id：`P2-FE-VISUAL-REFACTOR-001`；上一治理棒 `P2-GOV-SYNC-054`。返修经过用 Git 追溯；本治理棒未重跑生产测试，以下数字保留原实测日期。
-
-## 已登记验证基线
-
-| 检查 | 原实测结果 | 来源日期 / task_id |
-|---|---|---|
-| 全量 pytest | 2595 passed, 108 warnings, 0 skipped, 0 failed；未用 `--ignore=` | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
-| 后端定向 pytest（contracts/runtime/api） | 429 passed, 81 warnings, 0 failed | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
-| 前端 `pnpm --dir web test` | 453 passed, 31 文件, 0 failed, 0 skipped | 2026-09-04 / `P2-FE-VISUAL-REFACTOR-001` |
-| Golden | 32/32 passed；negative 20/20、positive 12/12；0 skipped、0 failed | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
-| `tests/architecture/` | 112 passed | 2026-09-04 / `P2-FE-VISUAL-REFACTOR-001` |
-
-## 必达链与阻塞
-
-- 必达五项：OA 只读纵切、Work Object + 最小工作台、后台轮询已完成；低风险写入未完成；Golden 部分完成（`P2-GOLDEN-001` 已完成）。
-- 唯一剩余必达链：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。前者 **BLOCKED** 于 OA 审批提交协议结构，输入未到不开棒、不猜协议。
-- Golden 只覆盖 Runtime 观察边界；工作台/隔离/审计由 API 与单元层验证。范围裁决见 `docs/phase2/DECISIONS.md`。
-
-## 当前实现与机会层指针
-
-- Task 从可信 `Principal` / `PrincipalOrgContext` 固化非空 tenant_id，缺失/空白租户在 SQL 写入前失败；Admin Task/event/关联 Binding 按 Task 租户列过滤，关闭逐 Task Trace 查询放大。升级前 Task 的 tenant_id 保持 NULL 并对 Admin fail-closed；Trace reader 与孤立动作 Trace 的租户合同不变。
-- `P2-TASK-TENANT-COLUMN-001` 的合成 migration 往返验证保留行数与 task_id 集合；该棒开工时连接库 tasks=0、distinct task_id=0 属 **2026-09-01 历史实测**，本棒未查询数据库；更早的 115/115 也不作当前事实或回填依据。
-- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。现有 tasks 切片不覆盖真实组织身份来源、sessions、identity binding、目录镜像；剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 仍 BLOCKED 于唯一主负责人可信来源。
-- 前端已完成导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及模糊层数量/落点守卫；1280×800 输入框可见。字体跟随已批准画板，聊天问候语独立；不再采用已废止的正文 19px / 辅助 16px 下限。
-- 已处理 fixed 背景滚动开销、焦点环归属和按钮/输入框边界；2026-09-04 剩余光栅对照中 GPU 路径未复现卡顿，软件光栅开销归于画板规定的大面模糊。本棒不新增性能结论。
-- 前端后继 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 并列，依赖已完成的视觉棒。AppShell 手写 CSS module 的 antd Layout/Menu 欠债保留；顶栏部门/姓名/头像仍缺真实数据源，依赖 `P2-USER-PROFILE-READ-001`，头像取图三项未知仍待输入。
-- 机会层 task_id、依赖、BLOCKED 条件和活欠债只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 ID 不等于排期，不重排必达链。
+- 当前基线 task_id：`P2-USER-PROFILE-READ-001`（后端身份读取端点与前端消费，A 档：新增 `app/ports/user_profile.py` 契约与 `GET /api/v1/me`、`GET /api/v1/me/avatar` 两个**零参数**端点（无 path、无 query、无 body，因此一个用户在请求里根本表达不出另一个用户）。姓名取自服务端 HMAC 签名的会话票据（`Principal.display_name`），**不依赖 OA 可达**；部门取自后端代持用户自身 OA Session 读到的 `orginfo`，用标准库 `html.parser` 有界解析（输入 8192 / 锚点 16 / 标签 64，部门锚点必须恰好一条，否则 fail-closed），原始 HTML 一个字节都不进响应。头像走后端代理，`messagerurl` 当 SSRF 输入做六步校验 + 图片 MIME 白名单，校验不过时传输层零调用；前端只看到常量路径 `/api/v1/me/avatar`。未认证一律 401，OA 侧任何失败都不改变 `authenticated`，只体现在闭集 `org_status`（`ok`/`unbound`/`expired`/`unavailable`/`unparsable`）。前端 `authStore` 增加第三态 `unknown` 并以其为初值，启动时向 `GET /api/v1/me` 确认一次会话；确认返回前 `ProtectedRoute` 与 `LoginRoute` 都渲染零文案的 `BootGate`，既不放行也不重定向，恢复登录态以**后端确认**为准且前端不做任何持久化；连不上后端时停在 `unknown` 并只出一行「连不上服务器」加一个「重试」按钮，不把网络抖动翻译成「你没登录」。顶栏「部门 / 姓名」、用户菜单、AI 助手页问候语三处消费真实数据，取不到部门时顶栏只显示姓名、一个字的提示都不加。职务按雨爷 2026-09-04 裁决**留位 + 如实说明**（OA 落盘字段里没有职务，不编造）。同棒补齐两处门禁覆盖：新增 `api_no_infra_imports` 架构守卫，并把有界解析的五个上界数值本身钉死——原有 `test_oversized_*` 一族拿被测常量自己构造输入，常量被放宽时会跟着放宽。方案 §6.2 的 11 条变异反证 + 1 条守卫接线反证已逐条实测，全部变红）
+- 上一棒基线 task_id：`P2-FE-VISUAL-REFACTOR-001`（前端视觉棒，B 档：工作台视觉改为玻璃拟态、`theme.ts` 令牌换血并补三套可切换底图，模糊层预算做成在真实渲染结果上逐元素计数的可执行检查，装 `@ant-design/x` 重做 AI 助手页，顶栏头像改为用户菜单；2026-09-04 实机走查后返修五轮，含废止「正文 19px / 辅助 ≥16px」下限口径、按 WCAG 2.2 SC 1.4.11 统一按钮与输入框的可辨边界、定位并修掉交办页因 `background-attachment: fixed` 导致的滚动卡顿）
+- pytest：`2798 passed, 143 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-07 `P2-USER-PROFILE-READ-001` 实测复核）
+- 当前实现基线后端定向 pytest：`460 passed, 116 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-07 `P2-USER-PROFILE-READ-001` 实测复核）
+- 当前实现基线前端 `pnpm --dir web test`：`471 passed, 0 failed, 0 skipped`（32 个测试文件；2026-09-07 `P2-USER-PROFILE-READ-001` 实测复核）
+- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；2026-09-07 `P2-USER-PROFILE-READ-001` 实测复核）
+- `tests/architecture/`：`112 passed`（含本棒新增的 `api_no_infra_imports` 规则；2026-09-07 `P2-USER-PROFILE-READ-001` 实测复核）
+- 必达主链指针：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。`P2-LOW-RISK-WRITE-001` 当前 **BLOCKED** 于 OA 审批提交协议结构，输入到位前不开棒；这是 P2 收口的唯一真实卡点。
+- 组织目录集成链的后继指针：`P2-TENANT-IDENTITY-001`；`P2-TASK-TENANT-COLUMN-001` 只完成 `tasks` 切片，真实组织身份来源、sessions、identity binding、组织目录镜像等剩余 scope 仍须独立授权。当前连接库开工实测 `tasks=0`、distinct `task_id=0`；此前 115/115 只保留为历史快照，不冒充当前实测或回填来源。方案 A 未猜值、未回填、未删旧记录，升级前 Task 保持 `tenant_id=NULL` 并继续对 Admin fail-closed 不可见。`P2-INTERNAL-WO-SCOPE-001` 仍 BLOCKED 于唯一主负责人可信来源缺失。必达主链仍 BLOCKED，见上一行；其他独立机会层任务不因本棒重排。
+- 当前实现基线摘要：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 两个零参数端点落地——身份只来自服务端 HMAC 签名的会话票据，请求的 path / query / body 里表达不出另一个用户，未认证一律 401 且处理函数一行都不跑。部门取自后端代持用户自身 OA Session 读到的 `orginfo`，用标准库 `html.parser` 有界解析（输入 8192 / 锚点 16 / 标签 64，部门锚点必须恰好一条），五个上界数值本身已被钉死断言看守；原始 HTML 一个字节不进响应。头像走后端代理，上游 `messagerurl` 当 SSRF 输入做六步校验加图片 MIME 白名单，校验不过时真实传输层 `opener` 调用计数为 0；浏览器只拿到常量路径。两个端点的响应均为 `Cache-Control: no-store`——URL 是常量、服务端没有登出端点，可缓存的身份或照片会在共用工位上被下一个登录者取到，该头由 `test_identity_answers_are_never_stored_by_the_browser` 单独看守。OA 侧任何失败都不改变 `authenticated`，只体现在闭集 `org_status`；部门或职务取不到时后端与前端都如实留空，不编造默认值。前端 `authStore` 以第三态 `unknown` 为初值且零持久化，启动时向 `GET /api/v1/me` 确认一次会话，确认返回前既不放行也不重定向，刷新恢复登录态以后端确认为准。
+- P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
+- 剩余必达链只含 `P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`；Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md`。
+- 前端界面链指针：`P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001`（两者并列，均依赖已完成的 `P2-FE-VISUAL-REFACTOR-001`）。`P2-FE-NAV-SHELL-001` 已完成导航骨架、顶栏元素、浮动面板与三个落地页；`P2-FE-VISUAL-REFACTOR-001` 已完成玻璃拟态视觉、`theme.ts` 令牌换血、底图切换、`@ant-design/x` 的 AI 助手页与可执行的模糊层预算检查，本链无棒间前置阻塞。AppShell 骨架仍为手写 CSS module，未改用 antd Layout / Menu 承载，该半条欠债收窄保留，见 `docs/phase2/PHASE2_PLAN.md`。顶栏「部门 / 姓名」与头像、以及「刷新掉登录态」已由 `P2-USER-PROFILE-READ-001` 闭合：姓名与部门、头像代理来自 `GET /api/v1/me` 与 `GET /api/v1/me/avatar`，启动时向后端确认一次会话。**职务一栏仍无数据源**（OA 落盘字段里没有职务），按裁决留位并如实说明；头像取图的三项未知仍未取得，当前以白名单准入绕过而非实证。两项与另外四条本棒新增欠债（多部门 `orginfo` 形态、`isMobx` 取值、目录快照未作交叉校验、`sex`/`workcode`/`requestParams` 未消费）见 `docs/phase2/PHASE2_PLAN.md` 活欠债。该链属机会层，不改变必达主链的 BLOCKED 状态。
+- 机会层任务、依赖与 BLOCKED 条件只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 task_id 不等于排期。

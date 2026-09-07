@@ -449,6 +449,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_checks={},
         health_timeout_seconds=settings.health_timeout_seconds,
+        user_profile=None,
     )
     application = object()
     monkeypatch.setattr(

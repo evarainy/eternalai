@@ -27,6 +27,10 @@ _DEFAULT_LLM_TOP_K = 20
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 5.0
 _MAX_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_OA_TIMEOUT_SECONDS = 30.0
+_DEFAULT_OA_USER_PROFILE_PATH = "/api/hrm/resource/getResourceBaseTitle"
+# Identity is read on every page load, so it gets a tighter ceiling than the
+# capability reads: a slow OA must not stretch the first paint.
+_DEFAULT_OA_PROFILE_TIMEOUT_SECONDS = 3.0
 _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS = 600
 _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS = 3600
 _DEFAULT_CREDENTIAL_POLL_WORK_START_HOUR = 8
@@ -175,6 +179,11 @@ class ProductionSettings:
     oa_system_messages_bizstate: str | None = None
     oa_system_messages_select_state: str | None = None
     oa_message_center_page_size: int = 20
+    # Both identity settings carry defaults on purpose: create_production_app
+    # is fail-fast, and an existing deployment must keep starting without
+    # having to learn two new environment variables first.
+    oa_user_profile_path: str = _DEFAULT_OA_USER_PROFILE_PATH
+    oa_profile_timeout_seconds: float = _DEFAULT_OA_PROFILE_TIMEOUT_SECONDS
     credential_poll_interval_seconds: int = _DEFAULT_CREDENTIAL_POLL_INTERVAL_SECONDS
     credential_poll_maximum_backoff_seconds: int = (
         _DEFAULT_CREDENTIAL_POLL_MAXIMUM_BACKOFF_SECONDS
@@ -414,6 +423,23 @@ class ProductionSettings:
                 20,
                 maximum=1_000,
             ),
+            oa_user_profile_path=_oa_path_with_default(
+                source,
+                "OA_USER_PROFILE_PATH",
+                _DEFAULT_OA_USER_PROFILE_PATH,
+            ),
+            oa_profile_timeout_seconds=_positive_float(
+                source,
+                "OA_PROFILE_TIMEOUT_S",
+                min(
+                    _positive_float(
+                        source,
+                        "OA_TIMEOUT_S",
+                        _DEFAULT_OA_TIMEOUT_SECONDS,
+                    ),
+                    _DEFAULT_OA_PROFILE_TIMEOUT_SECONDS,
+                ),
+            ),
             credential_poll_interval_seconds=_bounded_positive_int(
                 source,
                 "CREDENTIAL_POLL_INTERVAL_S",
@@ -643,6 +669,31 @@ def _oa_capability_path(
         if mode == "live":
             raise RuntimeError(f"{name} is required for live mode")
         return None
+    value = raw.strip()
+    parsed = urlsplit(value)
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or parsed.scheme
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or any(part == ".." for part in parsed.path.split("/"))
+    ):
+        raise RuntimeError(f"{name} must be a relative path on the OA host")
+    return value
+
+
+def _oa_path_with_default(
+    source: Mapping[str, str],
+    name: str,
+    default: str,
+) -> str:
+    """Validate an override the same way as a live path, but never require it."""
+
+    raw = source.get(name)
+    if raw is None or not raw.strip():
+        return default
     value = raw.strip()
     parsed = urlsplit(value)
     if (

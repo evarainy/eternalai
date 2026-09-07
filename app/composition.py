@@ -37,6 +37,10 @@ from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.oa.adapter import OAReadAdapter
+from app.infra.adapters.oa.profile import (
+    LiveOAProfileTransport,
+    OAUserProfileAdapter,
+)
 from app.infra.adapters.oa.provider import (
     LiveOAReadProvider,
     ReplayOAReadProvider,
@@ -90,6 +94,7 @@ from app.ports.llm_provider import LLMProviderPort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
+from app.ports.user_profile import UserProfilePort
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
 
@@ -110,6 +115,7 @@ class ProductionComponents:
     session_cookie_ttl_seconds: int
     health_timeout_seconds: float
     health_checks: Mapping[str, HealthCheck]
+    user_profile: UserProfilePort
 
 
 def build_credential_store(
@@ -174,6 +180,34 @@ def build_session_binder(
     """Build the Principal-bound conversation-session binder."""
 
     return PrincipalSessionBinder(binding_key=binding_key)
+
+
+def build_user_profile_port(
+    *,
+    settings: ProductionSettings,
+    credential_store: CredentialStorePort,
+) -> UserProfilePort:
+    """Build the OA-backed identity reader for every adapter mode.
+
+    Unlike the capability adapters this has no Contract Pack and no mock
+    variant: it reads the caller's own name/department/photo with the caller's
+    own OA Session. Wiring it in every mode keeps ``GET /api/v1/me`` answering
+    ``authenticated`` from the signed ticket even where OA cannot be reached —
+    an unreachable OA then shows up as ``org_status``, not as a 503 that would
+    strand the whole workbench behind its start-up session check.
+    """
+
+    return OAUserProfileAdapter(
+        secret_provider=CredentialStoreSecretProvider(
+            credential_store=credential_store,
+        ),
+        transport=LiveOAProfileTransport(
+            base_url=settings.oa_base_url,
+            profile_path=settings.oa_user_profile_path,
+            timeout_seconds=settings.oa_profile_timeout_seconds,
+        ),
+        base_url=settings.oa_base_url,
+    )
 
 
 def build_oa_read_adapter(
@@ -527,6 +561,10 @@ def build_production_components(
         store=credential_store,
         verifier=resolved_binding_verifier,
     )
+    user_profile = build_user_profile_port(
+        settings=settings,
+        credential_store=credential_store,
+    )
     session_factory_for_background = make_urllib_session_factory(
         base_url=settings.oa_base_url,
         timeout_seconds=settings.oa_timeout_seconds,
@@ -598,6 +636,7 @@ def build_production_components(
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_timeout_seconds=settings.health_timeout_seconds,
         health_checks=resolved_health_checks,
+        user_profile=user_profile,
     )
 
 
@@ -612,6 +651,7 @@ __all__ = (
     "build_runtime",
     "build_session_binder",
     "build_session_token_port",
+    "build_user_profile_port",
     "build_trace_port",
     "build_trace_query",
 )
