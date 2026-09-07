@@ -1,13 +1,13 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-DECISIONS-055`（C 档；09-04 / 09-06 / 09-07 裁决落盘并全量复扫；连同既有开发助手治理条目共 11 条，本棒承担 A 类同步）。
-- 当前实现基线 task_id：`P2-FE-PAGE-CONTRACT-001`（B 档；串行单 lane，承担 A 类同步）。本棒交付既有交办页、软件中心与新建表单的合同守卫、空态收口与命名守卫；页面主体由 `P2-FE-VISUAL-REFACTOR-001` 建成。候选待 PR 集成，未合并。
+- 当前实现基线 task_id：`P2-TRACE-CONTRACT-HARDENING-001`（A 档；串行单 lane，承担 A 类同步）。本棒收口三条活欠债：孤立动作 Trace 的租户断言改用非默认租户获得判别力、`TracePersistedEvent` 凭证形状校验补常驻负向测试（含 `event_id`）、顶层凭证形状模式由位置切片改为具名选取并新增守卫；六条反证全部实跑，语义未变。未跑 Golden（未触及其覆盖边界）。
 
 ## 已登记验证基线
 
-以下后端、Golden、architecture 三行来源于 **2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`** 的实测复核；本棒未重跑这三项全量检查，不将旧数字标为当前实测。前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。
+以下 pytest、architecture 两行来源于 **2026-09-08 / `P2-TRACE-CONTRACT-HARDENING-001`** 的实测复核；Golden 行来源于 2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`，本棒未跑，保留原来源标注；前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。
 
-- pytest：`2832 passed, 143 warnings`（较进入本棒的 2798 增加 34；0 skipped，0 failed；未使用 `--ignore=`）
+- pytest：`2874 passed, 143 warnings`（较进入本棒的 2832 增加 42；0 skipped，0 failed；未使用 `--ignore=`）
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；新增 GT-034/035，既有 32 题与冻结集合不变）
 - `tests/architecture/`：`112 passed`（含 `api_no_infra_imports` 规则）
 - 后端定向 pytest：`312 passed, 3 warnings, 0 failed`（`tests/runtime/`、`tests/knowledge/`、`tests/infra/llm/`）；Golden 定向 `451 passed`，最终意图与会话记忆定向分别 `20 passed`、`8 passed`。

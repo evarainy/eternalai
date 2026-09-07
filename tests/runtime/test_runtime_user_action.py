@@ -53,6 +53,7 @@ _START_MESSAGE = "start structured action"
 _WORKFLOW_ID = "oa.workflow.structured-action"
 _PREVIEW_ID = "oa.structured.preview"
 _EXECUTE_ID = "oa.structured.execute"
+_NON_DEFAULT_TENANT_ID = "tenant-action-scoped"
 
 
 class RecordingTrace:
@@ -249,12 +250,12 @@ class Harness:
     waiting: Any
 
 
-def _principal(user_id: str = "user-action") -> Principal:
+def _principal(user_id: str = "user-action", *, tenant_id: str = "default") -> Principal:
     return Principal(
         ai_user_id=user_id,
         display_name="Structured Action User",
         roles=("user",),
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id=tenant_id),
     )
 
 
@@ -308,6 +309,7 @@ async def _build_harness(
     confirmed_result: ExecutionResult | None = None,
     engine_type: type[CountingWorkflowEngine] = CountingWorkflowEngine,
     expected_start_status: str = "waiting_user",
+    tenant_id: str = "default",
 ) -> Harness:
     definition = definition or _single_definition()
     gate = gate if with_gate else None
@@ -387,7 +389,7 @@ async def _build_harness(
         workflow_engine=engine,
         human_gate_port=gate,
     )
-    principal = _principal()
+    principal = _principal(tenant_id=tenant_id)
     waiting = await runtime.handle_user_message(
         channel="mock",
         principal=principal,
@@ -1259,8 +1261,14 @@ def test_second_structured_confirmation_uses_fresh_claim_and_succeeds() -> None:
 
 
 def test_user_action_trace_records_inbound_before_outcome() -> None:
+    # Build the harness (and dispatch) under a non-default tenant end-to-end so
+    # the tenant_id half of the assertion below has discriminating power: if the
+    # write path ever hardcoded tenant_id="default", this would fail even though
+    # ai_user_id still matches. (Overriding only the dispatch-time principal's
+    # tenant is not equivalent: it desyncs from the tenant the human gate request
+    # was created under and trips its own tenant-isolation check instead.)
     async def exercise() -> tuple[Harness, Any]:
-        harness = await _build_harness()
+        harness = await _build_harness(tenant_id=_NON_DEFAULT_TENANT_ID)
         response = await _dispatch(harness)
         return harness, response
 
@@ -1275,5 +1283,5 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
     assert action_events[0]["trace_id"] == action_events[1]["trace_id"]
     assert action_events[0]["task_id"] == action_events[1]["task_id"]
     assert {(event["tenant_id"], event["ai_user_id"]) for event in action_events} == {
-        ("default", harness.principal.ai_user_id)
+        (_NON_DEFAULT_TENANT_ID, harness.principal.ai_user_id)
     }
