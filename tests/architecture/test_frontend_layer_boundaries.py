@@ -126,6 +126,101 @@ def test_page_context_sensitive_value_rules_match_backend_sanitizer() -> None:
     assert frontend_patterns == backend_patterns
 
 
+_FLAT_LEGACY_DIRECTORIES: tuple[str, ...] = ("components", "pages")
+
+# Grandfathered inventory of every .ts/.tsx file that already existed in the two
+# flat legacy directories (web/src/components/, web/src/pages/) at the time this
+# guard was introduced (P2-FE-DIR-GUARD-001, 2026-09-08). Paths are POSIX-style,
+# relative to web/src/. This is a literal frozenset, not a derived/rglob-based
+# exception list: renaming or deleting one of these files without also editing
+# this set makes the guard fail (see the existence assertion in the test below),
+# forcing the removal to happen in the same commit rather than silently drifting.
+_GRANDFATHERED_FLAT_FILES: frozenset[str] = frozenset(
+    {
+        "components/ConfirmCard.tsx",
+        "components/OACredentialBindingCard.tsx",
+        "components/RecordsList.tsx",
+        "components/RoleSelector.tsx",
+        "components/__tests__/OACredentialBindingCard.test.tsx",
+        "components/__tests__/RoleSelector.test.tsx",
+        "pages/ChatPage.tsx",
+        "pages/HealthPage.tsx",
+        "pages/LoginPage.tsx",
+        "pages/WorkObjectsPage.tsx",
+        "pages/chatGreeting.ts",
+        "pages/loginNavigation.ts",
+        "pages/__tests__/ChatPage.test.tsx",
+        "pages/__tests__/HealthPage.test.tsx",
+        "pages/__tests__/LoginPage.test.tsx",
+        "pages/__tests__/WorkObjectsPage.test.tsx",
+        "pages/__tests__/loginNavigation.test.ts",
+        "pages/admin/BindingsPage.tsx",
+        "pages/admin/RegistryPage.tsx",
+        "pages/admin/TasksPage.tsx",
+        "pages/admin/registryValidation.ts",
+        "pages/admin/__tests__/BindingsPage.test.tsx",
+        "pages/admin/__tests__/RegistryPage.test.tsx",
+        "pages/admin/__tests__/TasksPage.test.tsx",
+    }
+)
+
+
+def _find_new_flat_directory_files(web_src: Path) -> list[str]:
+    """Return grandfather-list violations in the flat legacy directories.
+
+    Decision anchor: DECISIONS.md 2026-08-27 "八、前端目录、状态与 API 边界"
+    bans new *page code* from landing in the flat web/src/components/ /
+    web/src/pages/ directories (new features must go to web/src/features/<name>/,
+    old code stays in place). A file-name heuristic such as "basename ends with
+    Page.tsx" was considered and rejected: it has an explicit bypass (a new
+    routed page named e.g. Dashboard.tsx would slip past undetected), and a
+    guard that can be dodged by naming is worse than no guard — it manufactures
+    false confidence.
+
+    This function instead implements a **strictly stricter** rule than the
+    decision's literal wording: any .ts/.tsx file appearing anywhere under
+    these two flat directories that is not in `_GRANDFATHERED_FLAT_FILES` is a
+    violation, full stop — no attempt is made to classify "is this a page" at
+    all. Three reasons, in order of weight:
+
+    1. Fully decidable: no heuristic, no naming-based bypass surface.
+    2. The same decision paragraph already commits to the migration direction
+       "old code stays put, new feature work goes to features/<name>/" — these
+       two directories are the stranded legacy pool that direction is
+       retiring, so freezing their membership matches where the codebase is
+       headed anyway.
+    3. The grandfather list is itself the escape hatch: a genuinely justified
+       new file in one of these directories requires the change author to add
+       a literal line to `_GRANDFATHERED_FLAT_FILES`, which shows up in the
+       diff for review — that is exactly how a grandfather clause is meant to
+       work.
+
+    Because this bans *any* new file rather than only new *page* code, it is
+    stricter than the decision's literal text (which only names page code).
+    That gap is a deliberate trade for decidability, not a misreading of the
+    decision; if GOV-SYNC judges it overly strict (e.g. wants to allow new
+    non-page shared components into web/src/components/), it can be narrowed
+    in a follow-up without needing to touch DECISIONS.md's substance.
+    """
+    violations: list[str] = []
+    for directory_name in _FLAT_LEGACY_DIRECTORIES:
+        directory = web_src / directory_name
+        for source_file in _typescript_files(directory):
+            relative = source_file.relative_to(web_src).as_posix()
+            if relative not in _GRANDFATHERED_FLAT_FILES:
+                violations.append(relative)
+    return sorted(violations)
+
+
+def test_new_files_may_not_land_in_flat_components_or_pages_directories() -> None:
+    for entry in _GRANDFATHERED_FLAT_FILES:
+        assert (WEB_SRC / entry).is_file(), (
+            f"grandfathered entry {entry!r} no longer exists on disk; remove it "
+            "from _GRANDFATHERED_FLAT_FILES in the same commit that moved/deleted it"
+        )
+    assert _find_new_flat_directory_files(WEB_SRC) == []
+
+
 def test_frontend_layer_guard_detects_each_forbidden_direction(tmp_path: Path) -> None:
     web_src = tmp_path / "web" / "src"
     contracts = web_src / "contracts"
@@ -156,3 +251,32 @@ def test_frontend_layer_guard_detects_each_forbidden_direction(tmp_path: Path) -
     assert any(item.startswith("contracts_rendering_dependency:") for item in violations)
     assert any(item.startswith("shared_feature_dependency:") for item in violations)
     assert any(item.startswith("cross_feature_dependency:") for item in violations)
+
+
+def test_flat_directory_guard_flags_ungrandfathered_new_file_regardless_of_name(
+    tmp_path: Path,
+) -> None:
+    """Synthetic proof the rule is "any new file", not a page-name heuristic.
+
+    Uses a file name that would defeat a `*Page.tsx`-suffix heuristic
+    (`Dashboard.tsx`, no "Page" suffix) to demonstrate the guard still catches
+    it, and also proves a grandfathered entry is exempt while a same-directory
+    sibling that is not on the list is not.
+    """
+    web_src = tmp_path / "web" / "src"
+    components = web_src / "components"
+    pages = web_src / "pages"
+    components.mkdir(parents=True)
+    pages.mkdir(parents=True)
+
+    (components / "Existing.tsx").write_text("export {};\n", encoding="utf-8")
+    (pages / "Dashboard.tsx").write_text("export {};\n", encoding="utf-8")
+
+    original = _GRANDFATHERED_FLAT_FILES
+    try:
+        globals()["_GRANDFATHERED_FLAT_FILES"] = frozenset({"components/Existing.tsx"})
+        violations = _find_new_flat_directory_files(web_src)
+    finally:
+        globals()["_GRANDFATHERED_FLAT_FILES"] = original
+
+    assert violations == ["pages/Dashboard.tsx"]
