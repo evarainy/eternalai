@@ -458,6 +458,82 @@ def test_router_injects_complete_long_contract_outside_text_truncation_path() ->
     assert "schema-example-must-not-enter" not in prompt
 
 
+@pytest.mark.parametrize("match", ["none", "capability"])
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "upper",
+        "title",
+        "leading-space",
+        "trailing-space",
+        "surrounding-spaces",
+        "surrounding-tabs",
+        "surrounding-unicode-space",
+        "internal-space",
+        "internal-tab",
+        "internal-unicode-space",
+    ],
+)
+def test_router_rejects_nonliteral_match_values(match: str, variant: str) -> None:
+    invalid_match = {
+        "upper": match.upper(),
+        "title": match.title(),
+        "leading-space": f" {match}",
+        "trailing-space": f"{match} ",
+        "surrounding-spaces": f" {match} ",
+        "surrounding-tabs": f"\t{match}\t",
+        "surrounding-unicode-space": f"\u2003{match}\u00a0",
+        "internal-space": f"{match[0]} {match[1:]}",
+        "internal-tab": f"{match[0]}\t{match[1:]}",
+        "internal-unicode-space": f"{match[0]}\u2003{match[1:]}",
+    }[variant]
+    payload = {"match": invalid_match}
+    if match == "capability":
+        payload["capability_id"] = "oa.list_pending_workflows"
+    llm_provider = MockLLMProvider()
+    llm_provider.register("request", LLMCompletionResponse(content=json.dumps(payload)))
+    router = IntentRouter(llm_provider, JSONStructuredOutputProvider(), "qwen-test")
+
+    result = asyncio.run(router.parse("request"))
+
+    assert result.failure_reason == "schema_invalid"
+    assert result.structured_output_error_code == "validation_error"
+    assert result.match is None
+    assert result.capability_ref is None
+
+
+@pytest.mark.parametrize("match", ["none", "capability"])
+@pytest.mark.parametrize(
+    "json_form",
+    ["compact", "external-whitespace", "unicode-key", "unicode-value", "unicode-both"],
+)
+def test_router_accepts_legal_match_json_forms(match: str, json_form: str) -> None:
+    payload = {"match": match}
+    if match == "capability":
+        payload["capability_id"] = "oa.list_pending_workflows"
+    raw_response = json.dumps(payload, separators=(",", ":"))
+    if json_form == "external-whitespace":
+        raw_response = " \t\r\n" + raw_response.replace(":", " \t:\r\n ") + "\r\n\t "
+    if json_form in {"unicode-key", "unicode-both"}:
+        raw_response = raw_response.replace('"match"', r'"\u006datch"')
+    if json_form in {"unicode-value", "unicode-both"}:
+        escaped_match = r"\u006eone" if match == "none" else r"\u0063apability"
+        raw_response = raw_response.replace(f'"{match}"', f'"{escaped_match}"')
+    llm_provider = MockLLMProvider()
+    llm_provider.register("request", LLMCompletionResponse(content=raw_response))
+    router = IntentRouter(llm_provider, JSONStructuredOutputProvider(), "qwen-test")
+
+    result = asyncio.run(router.parse("request"))
+
+    assert result.failure_reason is None
+    assert result.structured_output_error_code is None
+    assert result.match == match
+    if match == "none":
+        assert result.capability_ref is None
+    else:
+        assert result.capability_ref == CapabilityRef(capability_id="oa.list_pending_workflows")
+
+
 def test_router_preserves_only_safe_pydantic_validation_diagnostics(caplog: Any) -> None:
     canary = "must-not-enter-trace-log-or-response"
     llm_provider = MockLLMProvider()
