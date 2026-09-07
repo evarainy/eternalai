@@ -13,7 +13,7 @@ from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
@@ -88,7 +88,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -102,7 +102,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -123,7 +123,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -136,7 +136,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -149,7 +149,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -182,12 +182,12 @@ def _make_runtime(
     trace_port = SpyTracePort()
     structured_output = MockStructuredOutputProvider()
     if malformed:
-        structured_output.register_malformed(message, CapabilityRef)
+        structured_output.register_malformed(message, IntentOutput)
     else:
         structured_output.register(
             message,
-            CapabilityRef,
-            CapabilityRef(capability_id="trace.cap"),
+            IntentOutput,
+            MatchedIntent(match="capability", capability_id="trace.cap"),
         )
     gateway = SpyGateway(
         gateway_result or ExecutionResult(status="completed", trace_id="trace-gateway")

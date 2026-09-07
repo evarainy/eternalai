@@ -1,0 +1,108 @@
+{
+  "golden_task_id": "GT-034",
+  "title": "非空能力目录下不相干请求不得硬套 OA 待办",
+  "category": "negative",
+  "given": {
+    "ai_user_id": "user_employee_001",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.list_pending_workflows",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "workflows"
+          ],
+          "properties": {
+            "workflows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "input_schema_digest": "digest_oa_list_pending_input",
+        "output_schema_digest": "d0d8250db9e5b57f97051692bfe43669a34be015bb1683095804705de0be2307",
+        "status": "active"
+      }
+    ],
+    "mock_oa_state": "should_not_be_called",
+    "intent_output": {
+      "match": "none"
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "给我讲一个关于月亮的故事",
+    "arguments": {}
+  },
+  "then_response": {
+    "status": "no_capability_found",
+    "envelope": {
+      "message_contains": [
+        "暂未接入",
+        "能力"
+      ],
+      "ui.component_type": "operator_handback_card",
+      "ui.action": "none"
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "no_capability_found",
+      "response_envelope_created"
+    ],
+    "event_details": [
+      {
+        "event_type": "intent_parsed",
+        "status": "ok",
+        "attributes": {
+          "result": "valid",
+          "match": "none"
+        }
+      },
+      {
+        "event_type": "no_capability_found",
+        "error_code": "capability_not_found",
+        "attributes": {
+          "reason": "no_matching_capability"
+        }
+      }
+    ]
+  },
+  "then_forbidden": [
+    "mock_adapter_was_called",
+    "response_data_not_null",
+    "trace_contains_token"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none",
+    "expected_error_code": "capability_not_found"
+  },
+  "adapter_assertion": {
+    "must_be_called": false,
+    "must_not_be_called": true
+  }
+}

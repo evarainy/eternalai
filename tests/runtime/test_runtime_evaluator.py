@@ -26,7 +26,7 @@ from app.ports.capability_gateway import (
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult, WorkflowRunStatus
@@ -141,7 +141,7 @@ class Trace:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -155,7 +155,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -186,7 +186,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.finalizations.append(
             {
@@ -267,12 +267,13 @@ def _runtime(
     gateway = Gateway(result)
     structured_output = MockStructuredOutputProvider()
     if malformed_intent:
-        structured_output.register_malformed(MESSAGE, CapabilityRef)
+        structured_output.register_malformed(MESSAGE, IntentOutput)
     else:
         structured_output.register(
             MESSAGE,
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id="synthetic.evaluate",
                 arguments={},
                 capability_type=cast(Any, capability_type),
@@ -360,9 +361,7 @@ def test_main_chain_records_one_distinct_evaluation_for_every_terminal_status(
     assert envelope.status == expected_envelope_status
     assert task_store.status_updates[-1] == (expected_task_status, error_code)
     assert len(events) == 1
-    assert events[0]["status"] == (
-        "ok" if expected_evaluation_result == "passed" else "failed"
-    )
+    assert events[0]["status"] == ("ok" if expected_evaluation_result == "passed" else "failed")
     assert events[0]["error_code"] == error_code
     assert events[0]["attributes"] == {
         "rule_id": "terminal_status_v1",
@@ -492,9 +491,7 @@ def test_workflow_waiting_has_no_evaluation_then_resume_records_exact_terminal(
     assert task_store.status_updates[-1] == (expected_task_status, error_code)
     assert len(events) == 1
     assert events[0]["task_id"] == waiting.task_id
-    assert events[0]["status"] == (
-        "ok" if expected_evaluation_result == "passed" else "failed"
-    )
+    assert events[0]["status"] == ("ok" if expected_evaluation_result == "passed" else "failed")
     assert events[0]["error_code"] == error_code
     assert events[0]["attributes"] == {
         "rule_id": "terminal_status_v1",
@@ -526,8 +523,9 @@ def test_workflow_resume_waiting_again_still_has_no_evaluation() -> None:
     assert trace.finalizations == []
 
 
-def test_execution_data_and_evaluator_exception_text_never_enter_evaluation_trace_or_state(
-) -> None:
+def test_execution_data_and_evaluator_exception_text_never_enter_evaluation_trace_or_state() -> (
+    None
+):
     sensitive = "Bearer evaluator-sensitive-token-123"
     evaluator = RecordingEvaluator()
     runtime, task_store, trace, _gateway = _runtime(

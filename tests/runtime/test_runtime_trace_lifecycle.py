@@ -16,7 +16,7 @@ from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
@@ -113,12 +113,12 @@ class ResultGateway:
 def _provider(message: str, *, malformed: bool = False) -> MockStructuredOutputProvider:
     provider = MockStructuredOutputProvider()
     if malformed:
-        provider.register_malformed(message, CapabilityRef)
+        provider.register_malformed(message, IntentOutput)
     else:
         provider.register(
             message,
-            CapabilityRef,
-            CapabilityRef(capability_id="oa.workflow_status.get", arguments={}),
+            IntentOutput,
+            MatchedIntent(match="capability", capability_id="oa.workflow_status.get", arguments={}),
         )
     return provider
 

@@ -95,7 +95,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.events.append(
             {
@@ -156,6 +156,7 @@ class MemoryAwareLLMProvider:
         return LLMCompletionResponse(
             content=json.dumps(
                 {
+                    "match": "capability",
                     "capability_id": capability_id,
                     "arguments": arguments,
                     "target_system": None,
@@ -304,9 +305,7 @@ def test_non_successful_turns_leave_no_success_memory(status: str) -> None:
 
     asyncio.run(_handle(runtime))
 
-    assert memory.recall(
-        SessionMemoryKey("default", "session-1", "user-1")
-    ) == ()
+    assert memory.recall(SessionMemoryKey("default", "session-1", "user-1")) == ()
     assert memory.entry_count == 0
 
 

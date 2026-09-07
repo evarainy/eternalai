@@ -14,7 +14,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 from app.ports.response_envelope import ResponseEnvelope
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
@@ -76,8 +76,8 @@ def _run(
     structured_output = MockStructuredOutputProvider()
     structured_output.register(
         message,
-        CapabilityRef,
-        CapabilityRef(capability_id=selector),
+        IntentOutput,
+        MatchedIntent(match="capability", capability_id=selector),
     )
     runtime = RuntimeImpl(
         task_store=task_store,
@@ -138,7 +138,7 @@ def test_knowledge_never_authorizes_disabled_or_missing_selector(
         step for step in trace.steps if step["event_type"] == "no_capability_found"
     )
     assert no_capability["error_code"] == "capability_not_found"
-    assert "Admin Lite > Registry" in envelope.message
+    assert "Admin Lite > Registry" not in envelope.message
     knowledge_prompt = llm_provider.calls[0]["messages"][1].content
     assert selector not in knowledge_prompt
 
@@ -197,10 +197,10 @@ def test_no_capability_guidance_lists_only_active_registry_capabilities() -> Non
         "capability_not_found",
     )
     assert "oa.active.query" in envelope.message
-    assert "query/oa/active" in envelope.message
+    assert "query/oa/active" not in envelope.message
     assert "oa.disabled.query" not in envelope.message
     assert "oa.active.query" in envelope.fallback_text
-    assert "query/oa/active" in envelope.fallback_text
+    assert "query/oa/active" not in envelope.fallback_text
     assert "oa.disabled.query" not in envelope.fallback_text
     assert gateway.calls == []
     assert registry.list_calls[-1] == {
@@ -270,8 +270,8 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
     for message in ("first request", "second request", "third request"):
         structured_output.register(
             message,
-            CapabilityRef,
-            CapabilityRef(capability_id="oa.missing.query"),
+            IntentOutput,
+            MatchedIntent(match="capability", capability_id="oa.missing.query"),
         )
     runtime = RuntimeImpl(
         task_store=RecordingTaskStore(),

@@ -20,7 +20,7 @@ from app.ports.identity_mapping import IdentityCheckResult
 from app.ports.policy_guard import PolicyDecision
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import (
@@ -295,8 +295,8 @@ def _structured_output(
     provider = MockStructuredOutputProvider()
     provider.register(
         message,
-        CapabilityRef,
-        CapabilityRef(capability_id=capability_id, arguments=arguments or {}),
+        IntentOutput,
+        MatchedIntent(match="capability", capability_id=capability_id, arguments=arguments or {}),
     )
     return provider
 

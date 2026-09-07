@@ -39,7 +39,7 @@ _PRE_GOLDEN_001_FROZEN: tuple[str, ...] = (
     "GT-026",
 )
 # 已运行、未冻结，显式登记。
-_UNFROZEN_GT_IDS: tuple[str, ...] = ("GT-027", "GT-028")
+_UNFROZEN_GT_IDS: tuple[str, ...] = ("GT-027", "GT-028", "GT-034", "GT-035")
 
 
 @pytest.mark.parametrize("gt_id", GT_IDS)
@@ -52,6 +52,12 @@ def test_golden_task_fixture_is_judged_without_masking_failures(gt_id: str) -> N
         assert result.reasons
     if result.status in {"skipped", "not_applicable"}:
         assert result.reasons
+
+
+@pytest.mark.parametrize("gt_id", ("GT-001", "GT-008", "GT-013", "GT-014", "GT-034", "GT-035"))
+def test_no_match_and_supported_request_goldens_pass(gt_id: str) -> None:
+    result = evaluate_golden_task(gt_id)
+    assert result.status == "passed", result.reasons
 
 
 def test_frozen_and_append_only_goldens_all_pass() -> None:

@@ -16,7 +16,7 @@ from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import CapabilityRef, IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
@@ -200,8 +200,8 @@ def _runtime_for_message() -> tuple[
     structured_output = MockStructuredOutputProvider()
     structured_output.register(
         "test message",
-        CapabilityRef,
-        CapabilityRef(capability_id="test.cap"),
+        IntentOutput,
+        MatchedIntent(match="capability", capability_id="test.cap"),
     )
     gateway = SpyGateway(ExecutionResult(status="completed", trace_id="gw-trace"))
     runtime = RuntimeImpl(

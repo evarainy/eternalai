@@ -17,7 +17,7 @@ from app.ports.structured_output import (
 _SAFE_ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _SAFE_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}")
 _SAFE_CAPABILITY_REF_PATHS = frozenset(
-    {"capability_id", "arguments", "target_system", "capability_type"}
+    {"match", "capability_id", "arguments", "target_system", "capability_type"}
 )
 
 
@@ -82,11 +82,12 @@ def _validation_diagnostics(
         include_input=False,
     )
     location = errors[0]["loc"] if errors else ()
+    if location and location[0] in {"capability", "none"}:
+        location = location[1:]
     first_segment = location[0] if location else None
     error_path = (
         f"$.{first_segment}"
-        if isinstance(first_segment, str)
-        and first_segment in _SAFE_CAPABILITY_REF_PATHS
+        if isinstance(first_segment, str) and first_segment in _SAFE_CAPABILITY_REF_PATHS
         else "$"
     )
     raw_error_type = errors[0]["type"] if errors else None
@@ -109,8 +110,7 @@ def _bounded_argument_keys(arguments: Any) -> list[str]:
         return []
     keys = sorted(key for key in arguments if isinstance(key, str))
     return [
-        key if _SAFE_ARGUMENT_KEY.fullmatch(key) is not None else "[REDACTED]"
-        for key in keys[:32]
+        key if _SAFE_ARGUMENT_KEY.fullmatch(key) is not None else "[REDACTED]" for key in keys[:32]
     ]
 
 

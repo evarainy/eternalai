@@ -84,10 +84,7 @@ POLICY_TEMPLATE_ITEMS = (
     KnowledgeItem(
         category="policy_template",
         keywords=("设备", "巡检", "制度"),
-        content=(
-            "制度模板：设备巡检按登记、复核与归档描述；"
-            "该模板只提供事实参考，不授权执行。"
-        ),
+        content=("制度模板：设备巡检按登记、复核与归档描述；该模板只提供事实参考，不授权执行。"),
     ),
 )
 
@@ -112,10 +109,7 @@ class BasicKnowledge:
         return tuple(
             sanitize_knowledge_text(item.content)
             for item in _STATIC_ITEMS
-            if any(
-                _keyword_matches(keyword, normalized_message)
-                for keyword in item.keywords
-            )
+            if any(_keyword_matches(keyword, normalized_message) for keyword in item.keywords)
         )
 
     def capability_input_contracts(
@@ -139,15 +133,14 @@ class BasicKnowledge:
         self,
         capabilities: Sequence[CapabilitySpec],
     ) -> tuple[str, str]:
-        """Describe only active capabilities and the Admin Lite configuration path."""
+        """Briefly tell the user what is unavailable and what is available."""
         active = sorted(
             (item for item in capabilities if item.status == "active"),
             key=lambda item: _safe_capability_id(item.capability_id),
         )
         if active:
             summaries = [
-                _active_capability_summary(item)
-                for item in active[:_MAX_GUIDANCE_CAPABILITIES]
+                _active_capability_summary(item) for item in active[:_MAX_GUIDANCE_CAPABILITIES]
             ]
             suffix = "" if len(active) <= _MAX_GUIDANCE_CAPABILITIES else " 等"
             overview = f"当前可用能力：{'、'.join(summaries)}{suffix}。"
@@ -156,12 +149,8 @@ class BasicKnowledge:
             overview = "当前没有已启用能力。"
             fallback_overview = "No active capabilities are currently registered."
         return (
-            "暂未接入该能力。"
-            f"{overview}请前往 Admin Lite > Registry 配置入口新增或启用能力；"
-            "系统不会自动创建或执行未注册能力。",
-            "No capability found. "
-            f"{fallback_overview} Configure it in Admin Lite > Registry; "
-            "the system will not create or execute an unregistered capability.",
+            f"暂未接入该能力。{overview}",
+            f"No capability found. {fallback_overview}",
         )
 
 
@@ -225,8 +214,10 @@ def _capability_input_contract(
 
 def _active_capability_summary(capability: CapabilitySpec) -> str:
     capability_id = _safe_capability_id(capability.capability_id)
-    target_system = capability.target_system or "none"
-    return f"{capability_id}（{capability.type}/{target_system}/{capability.status}）"
+    return {
+        "oa.list_pending_workflows": "OA 待办",
+        "oa.list_system_messages": "OA 系统消息",
+    }.get(capability_id, capability_id)
 
 
 def _safe_capability_id(value: str) -> str:
@@ -245,11 +236,7 @@ def _safe_argument_keys(values: Sequence[object]) -> list[str] | None:
     if any(not isinstance(value, str) for value in values):
         return None
     normalized = [value.strip() for value in values if isinstance(value, str)]
-    if any(
-        not value
-        or _SAFE_ARGUMENT_KEY.fullmatch(value) is None
-        for value in normalized
-    ):
+    if any(not value or _SAFE_ARGUMENT_KEY.fullmatch(value) is None for value in normalized):
         return None
     return sorted(normalized)
 

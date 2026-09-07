@@ -58,10 +58,7 @@ def test_static_content_covers_required_categories_and_keyword_boundaries() -> N
     assert all("设备巡检" not in item for item in matched)
     assert unmatched == ()
     assert knowledge.context_items("roadmap automation", ()) == ()
-    assert any(
-        "Mock 系统说明" in item
-        for item in knowledge.context_items("查询 OA 待办", ())
-    )
+    assert any("Mock 系统说明" in item for item in knowledge.context_items("查询 OA 待办", ()))
 
 
 def test_capability_contracts_follow_each_registry_snapshot() -> None:
@@ -200,8 +197,7 @@ def test_structured_contract_preserves_all_multi_and_long_argument_keys() -> Non
 def test_contract_payload_is_count_bounded_without_partial_contracts() -> None:
     knowledge = BasicKnowledge()
     capabilities = tuple(
-        _capability(f"oa.contract-{index}")
-        for index in range(MAX_CAPABILITY_CONTRACTS + 2)
+        _capability(f"oa.contract-{index}") for index in range(MAX_CAPABILITY_CONTRACTS + 2)
     )
     oversized_key = "x" * MAX_CAPABILITY_CONTRACT_LENGTH
 
@@ -234,9 +230,9 @@ def test_sensitive_items_and_unsafe_capability_ids_fail_closed_as_whole_values()
         "host=192.168.10.20",
     )
 
-    assert [sanitize_knowledge_text(item) for item in sensitive_items] == [
-        "[REDACTED]"
-    ] * len(sensitive_items)
+    assert [sanitize_knowledge_text(item) for item in sensitive_items] == ["[REDACTED]"] * len(
+        sensitive_items
+    )
     contracts = BasicKnowledge().capability_input_contracts(
         (_capability("token=synthetic-unsafe-id"),)
     )
@@ -253,10 +249,10 @@ def test_no_capability_guidance_filters_to_active_registry_entries() -> None:
     message, fallback = BasicKnowledge().no_capability_guidance((disabled, active))
 
     assert "oa.active.query" in message
-    assert "query/oa/active" in message
+    assert "query/oa/active" not in message
     assert "oa.disabled.query" not in message
     assert "oa.active.query" in fallback
-    assert "query/oa/active" in fallback
+    assert "query/oa/active" not in fallback
     assert "oa.disabled.query" not in fallback
-    assert "Admin Lite > Registry" in message
-    assert "will not create or execute" in fallback
+    assert "Admin Lite > Registry" not in message
+    assert "Configure" not in fallback

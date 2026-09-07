@@ -45,6 +45,8 @@ GT_IDS = [
     "GT-031",
     "GT-032",
     "GT-033",
+    "GT-034",
+    "GT-035",
 ]
 
 CHANGED_OUTPUT_SCHEMA_GT_IDS = (

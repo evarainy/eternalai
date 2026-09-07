@@ -111,6 +111,7 @@ class FakeOAHttpSession:
 class FakeLLMResponse:
     def __init__(self) -> None:
         content = {
+            "match": "capability",
             "capability_id": _CAPABILITY_ID,
             "arguments": {},
             "target_system": "oa",
