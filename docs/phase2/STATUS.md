@@ -1,16 +1,30 @@
 # Phase 2 当前状态
 
-- 当前基线 task_id：`P2-FE-VISUAL-REFACTOR-001`（前端视觉棒，B 档：工作台视觉由暖纸色改为 iOS 26 玻璃拟态，`theme.ts` 令牌换血并补三套可切换底图（`bgA`/`bgB`/`bgC`，`appearanceStore` 持久化），玻璃材质只落在左导航 / 顶栏 / 内容面板 / 浮动窗 / 悬浮按钮五类大面；把「单屏 `backdrop-filter` 元素不超过 6 个」的模糊层预算做成在真实渲染结果上逐元素计数的可执行检查（`web/src/test/blurLayers.ts` + `web/src/app/__tests__/blurBudget.test.tsx`，同时覆盖 antd / `@ant-design/x` 运行时注入的样式）；装 `@ant-design/x` 并据此重做 AI 助手页的会话左栏 / 欢迎语 / 提示词卡 / 输入框；顶栏头像改为用户菜单并把「退出登录（本地）」从左导航底部移入；顶栏系统状态面板补出「正在读取」与「读不到」的分态；2026-09-04 雨爷实机走查后返修三轮：顶栏用户菜单与系统状态改为画板的 268px / 384px 弹出层并把状态改用颜色区分、顶栏搜索按画板重做、浮动 AI 面板按 `FloatingAI.dc.html` 收敛到 420×600 并把说明文字砍到只剩画板那几项、AI 助手页按 `Chat.dc.html` 重做版式并以「`transcript` 是唯一可伸缩可滚动格、`composer` 为 `flex:none`」的结构保证 1280×800 一屏可见输入框；同时按雨爷推翻的事实前提废止「正文 19px / 辅助 ≥16px」下限口径，把各页为守该下限做的字号上调全部改回定稿画板实测值，并把 `theme.test.ts` 的下限断言换成「等值 + 画板字号闭集成员」；返修第四轮再做五条：顶栏加回可见搜索按钮并与凹槽垂直居中、交办页放大草稿输入框并删掉解析说明、软件中心卡片与按钮提升可辨性、AI 助手页放大输入框并把空态标题从一句说明改为不带称呼的问候语，以及按 WCAG 2.2 SC 1.4.11 把全站按钮与输入框统一到「可辨边界（≥3:1）+ 主题色投影」三层语言、焦点环从暖纸色系遗留的橙色 `#b44b00` 改为主题色并移到承担可见边框的那一层；同轮定位并修掉交办页滚动卡顿——真因是 `background-attachment: fixed` 让浏览器无法把滚动交给合成器，换成 `position: fixed` 的底图层后滚动帧时中位数 33.3ms→16.6ms、超 33ms 的帧 328→0，并按 2026-09-02「正文不靠玻璃承载」把六块内容面板的 `backdrop-filter` 去掉、在 `blurBudget.test.tsx` 增加两条模糊**落点**守卫；顶栏系统状态触发器按画板 `TopPops.dc.html` 改用与面板共用一份色值的彩色圆点；返修第五轮再补三项——根除输入框内层焦点环（改「认声明」`data-focus-ring="host"`，不再逐个认 antd 类名，并覆盖 `@ant-design/x` 的 `ant-sender` 与顶栏搜索栏）；按雨爷放宽的裁决把按钮边框从半透明发丝边改为**主题色实色**，渲染层最低对比度 3.14:1→4.74:1、多数 6.2~6.6:1，输入框边界单列 `--workbench-field-edge` 与按钮解耦；`/chat` 欢迎语字号解除画板闭集限制（28→32px），闭集断言适用面收窄到正文/辅助/说明三档、让出的那块由 `ChatPage.test.tsx` 两条新断言接住。交办页剩余滚动开销经**光栅路径对照实测**定性：GPU 光栅下复现不出卡顿（16.6ms / 0 掉帧，含 4× CPU 节流与真实滚轮事件），软件光栅下的剩余开销 100% 来自画板规定的两层大面 `backdrop-filter`；所有不改观感的优化实测均在噪声带内或更差，故本轮未改一行 CSS）
-- 上一棒基线 task_id：`P2-GOV-SYNC-054`（治理同步棒，C 档零代码改动：落盘 OA 用户信息接口的脱敏结构与四条边界、把「意图路由缺『都不匹配』出口」落为事实确认并据此扩大 `P2-RUNTIME-NO-CAPABILITY-COPY-001` 的范围、统一 `pinned` 措辞冲突；给五项无主工作分配 task_id（`P2-USER-PROFILE-READ-001` / `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` / `P2-FE-DIR-GUARD-001`，模糊层预算确认归 `P2-FE-VISUAL-REFACTOR-001`），清掉现役 DAG 三行已完成过期项，把四条界面输入欠债从三列表归位到六列活欠债表，并登记同源监理补审欠账）
-- pytest：`2595 passed, 108 warnings`（0 skipped，0 failed；未使用 `--ignore=`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
-- 当前实现基线后端定向 pytest：`429 passed, 81 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
-- 当前实现基线前端 `pnpm --dir web test`：`453 passed, 0 failed, 0 skipped`（31 个测试文件；2026-09-04 `P2-FE-VISUAL-REFACTOR-001` 返修第五轮实测复核）
-- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12；2026-09-01 `P2-TASK-TENANT-COLUMN-001` 实测复核）
-- `tests/architecture/`：`112 passed`（2026-09-04 `P2-FE-VISUAL-REFACTOR-001` 返修第五轮实测复核）
-- 必达主链指针：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。`P2-LOW-RISK-WRITE-001` 当前 **BLOCKED** 于 OA 审批提交协议结构，输入到位前不开棒；这是 P2 收口的唯一真实卡点。
-- 组织目录集成链的后继指针：`P2-TENANT-IDENTITY-001`；`P2-TASK-TENANT-COLUMN-001` 只完成 `tasks` 切片，真实组织身份来源、sessions、identity binding、组织目录镜像等剩余 scope 仍须独立授权。当前连接库开工实测 `tasks=0`、distinct `task_id=0`；此前 115/115 只保留为历史快照，不冒充当前实测或回填来源。方案 A 未猜值、未回填、未删旧记录，升级前 Task 保持 `tenant_id=NULL` 并继续对 Admin fail-closed 不可见。`P2-INTERNAL-WO-SCOPE-001` 仍 BLOCKED 于唯一主负责人可信来源缺失。必达主链仍 BLOCKED，见上一行；其他独立机会层任务不因本棒重排。
-- 当前实现基线摘要：新 Task 从既有 `Principal` / `PrincipalOrgContext` 固化非空 `tenant_id`，缺失或空白租户在写入 SQL 前显式失败；Task Store 与 Admin Task / event / 对应 Binding 读取直接按可信 Task 租户列收窄，不再以逐 Task Trace 查询证明租户，列表查询放大已关闭。migration 对三条合成升级前 Task 完成 upgrade → downgrade → upgrade 往返，行数与 task_id 集合不变、升级后租户均为 NULL、downgrade 后行仍在；空合成集被测试主动拒绝，不能平凡通过。Trace reader 与孤立动作 Trace 的既有租户合同不变。
-- P2 必达五项进度：①OA 只读纵切 ✅ ②Work Object + 最小工作台 ✅ ③后台轮询 ✅ ④低风险写入 ⬜ ⑤Golden ◐（`P2-GOLDEN-001` 已完成，仍需 `P2-GOLDEN-002`）
-- 剩余必达链只含 `P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`；Golden 只覆盖 Runtime 观察边界，工作台/隔离/审计归 API 与单元层，见 `docs/phase2/DECISIONS.md`。
-- 前端界面链指针：`P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001`（两者并列，均依赖已完成的 `P2-FE-VISUAL-REFACTOR-001`）。`P2-FE-NAV-SHELL-001` 已完成导航骨架、顶栏元素、浮动面板与三个落地页；`P2-FE-VISUAL-REFACTOR-001` 已完成玻璃拟态视觉、`theme.ts` 令牌换血、底图切换、`@ant-design/x` 的 AI 助手页与可执行的模糊层预算检查，本链无棒间前置阻塞。AppShell 骨架仍为手写 CSS module，未改用 antd Layout / Menu 承载，该半条欠债收窄保留，见 `docs/phase2/PHASE2_PLAN.md`。顶栏「部门 / 姓名」与头像仍无数据源，只有 fail-closed 说明，真正实现依赖后端身份读取端点 `P2-USER-PROFILE-READ-001`（A 档，接口结构已落盘，头像取图三项未知仍须先取得），见 `docs/phase2/PHASE2_PLAN.md` 活欠债。该链属机会层，不改变必达主链的 BLOCKED 状态。
-- 机会层任务、依赖与 BLOCKED 条件只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 task_id 不等于排期。
+- 当前治理基线 task_id：`P2-GOV-SYNC-ASTRA-001`（C 档；开发助手规则与 skills 收敛，A/B/C 自审采用 high / medium / 无自审门禁；独立 Monitor → Opus 与项目红线保留）。
+- 当前实现基线 task_id：`P2-FE-VISUAL-REFACTOR-001`；上一治理棒 `P2-GOV-SYNC-054`。返修经过用 Git 追溯；本治理棒未重跑生产测试，以下数字保留原实测日期。
+
+## 已登记验证基线
+
+| 检查 | 原实测结果 | 来源日期 / task_id |
+|---|---|---|
+| 全量 pytest | 2595 passed, 108 warnings, 0 skipped, 0 failed；未用 `--ignore=` | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
+| 后端定向 pytest（contracts/runtime/api） | 429 passed, 81 warnings, 0 failed | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
+| 前端 `pnpm --dir web test` | 453 passed, 31 文件, 0 failed, 0 skipped | 2026-09-04 / `P2-FE-VISUAL-REFACTOR-001` |
+| Golden | 32/32 passed；negative 20/20、positive 12/12；0 skipped、0 failed | 2026-09-01 / `P2-TASK-TENANT-COLUMN-001` |
+| `tests/architecture/` | 112 passed | 2026-09-04 / `P2-FE-VISUAL-REFACTOR-001` |
+
+## 必达链与阻塞
+
+- 必达五项：OA 只读纵切、Work Object + 最小工作台、后台轮询已完成；低风险写入未完成；Golden 部分完成（`P2-GOLDEN-001` 已完成）。
+- 唯一剩余必达链：`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002`。前者 **BLOCKED** 于 OA 审批提交协议结构，输入未到不开棒、不猜协议。
+- Golden 只覆盖 Runtime 观察边界；工作台/隔离/审计由 API 与单元层验证。范围裁决见 `docs/phase2/DECISIONS.md`。
+
+## 当前实现与机会层指针
+
+- Task 从可信 `Principal` / `PrincipalOrgContext` 固化非空 tenant_id，缺失/空白租户在 SQL 写入前失败；Admin Task/event/关联 Binding 按 Task 租户列过滤，关闭逐 Task Trace 查询放大。升级前 Task 的 tenant_id 保持 NULL 并对 Admin fail-closed；Trace reader 与孤立动作 Trace 的租户合同不变。
+- `P2-TASK-TENANT-COLUMN-001` 的合成 migration 往返验证保留行数与 task_id 集合；该棒开工时连接库 tasks=0、distinct task_id=0 属 **2026-09-01 历史实测**，本棒未查询数据库；更早的 115/115 也不作当前事实或回填依据。
+- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。现有 tasks 切片不覆盖真实组织身份来源、sessions、identity binding、目录镜像；剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 仍 BLOCKED 于唯一主负责人可信来源。
+- 前端已完成导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及模糊层数量/落点守卫；1280×800 输入框可见。字体跟随已批准画板，聊天问候语独立；不再采用已废止的正文 19px / 辅助 16px 下限。
+- 已处理 fixed 背景滚动开销、焦点环归属和按钮/输入框边界；2026-09-04 剩余光栅对照中 GPU 路径未复现卡顿，软件光栅开销归于画板规定的大面模糊。本棒不新增性能结论。
+- 前端后继 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 并列，依赖已完成的视觉棒。AppShell 手写 CSS module 的 antd Layout/Menu 欠债保留；顶栏部门/姓名/头像仍缺真实数据源，依赖 `P2-USER-PROFILE-READ-001`，头像取图三项未知仍待输入。
+- 机会层 task_id、依赖、BLOCKED 条件和活欠债只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG；分配 ID 不等于排期，不重排必达链。
