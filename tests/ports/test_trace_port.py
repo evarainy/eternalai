@@ -14,6 +14,9 @@ from pydantic import ValidationError
 
 from app.ports.capability_gateway import ErrorCode
 from app.ports.trace import (
+    _CREDENTIAL_VALUE_PATTERNS,
+    _LONG_DIGIT_RUN_PATTERN,
+    _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS,
     TRACE_QUERY_LIMIT,
     SanitizerHookFn,
     TraceEvent,
@@ -268,6 +271,17 @@ def test_trace_event_accepts_opaque_hex_identifier_with_long_digit_run() -> None
     assert event.trace_id == "d5517cf65cfc4226b797700109160937"
 
 
+def test_top_level_credential_patterns_exclude_only_long_digit_run() -> None:
+    # Pins the exact membership of the top-level pattern selection so that
+    # inserting, removing, or reordering entries in _CREDENTIAL_VALUE_PATTERNS
+    # without updating _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS turns this red.
+    assert _LONG_DIGIT_RUN_PATTERN not in _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS
+    assert set(_TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS) == set(_CREDENTIAL_VALUE_PATTERNS) - {
+        _LONG_DIGIT_RUN_PATTERN
+    }
+    assert len(_TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS) == len(_CREDENTIAL_VALUE_PATTERNS) - 1
+
+
 def test_trace_event_defines_no_plaintext_credential_slots() -> None:
     forbidden = {
         "password",
@@ -348,6 +362,62 @@ def test_trace_persisted_event_defines_exact_read_fields() -> None:
             **event.model_dump(),
             internal_column="must-not-pass",
         )
+
+
+@pytest.mark.parametrize("field", ["tenant_id", "ai_user_id"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_trace_persisted_event_rejects_blank_trusted_owner(field: str, value: str) -> None:
+    payload = {
+        "event_id": "event-safe",
+        "trace_id": "trace-safe",
+        "task_id": "task-safe",
+        "session_id": "session-safe",
+        "tenant_id": "tenant-safe",
+        "ai_user_id": "user-safe",
+        "event_type": "task_created",
+        "status": "ok",
+        "created_at": datetime.now(UTC),
+        field: value,
+    }
+
+    with pytest.raises(ValidationError):
+        TracePersistedEvent.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("event_id", "access_token=synthetic-secret"),
+        ("trace_id", "access_token=synthetic-secret"),
+        ("task_id", "Bearer synthetic-secret"),
+        ("session_id", "cookie=synthetic-secret"),
+        ("tenant_id", "password=synthetic-secret"),
+        ("ai_user_id", "api_key=synthetic-secret"),
+        ("capability_id", "client_secret=synthetic-secret"),
+    ],
+)
+def test_trace_persisted_event_rejects_credential_shaped_top_level_identifiers(
+    field: str,
+    value: str,
+) -> None:
+    # event_id is covered here specifically because it is a field
+    # TraceEvent does not have: the read-side model's own credential-shape
+    # validator has no dedicated coverage without this case.
+    payload = {
+        "event_id": "event-safe",
+        "trace_id": "trace-safe",
+        "task_id": "task-safe",
+        "session_id": "session-safe",
+        "tenant_id": "tenant-safe",
+        "ai_user_id": "user-safe",
+        "event_type": "task_created",
+        "status": "ok",
+        "created_at": datetime.now(UTC),
+        field: value,
+    }
+
+    with pytest.raises(ValidationError):
+        TracePersistedEvent.model_validate(payload)
 
 
 def test_trace_query_port_defines_only_bounded_read_methods() -> None:

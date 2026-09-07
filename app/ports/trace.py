@@ -95,20 +95,36 @@ _CREDENTIAL_KEYS = frozenset(
         "rsa_code",
     }
 )
-_CREDENTIAL_VALUE_PATTERNS = (
-    re.compile(r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)"),
-    re.compile(r"bearer\s+\S+", re.IGNORECASE),
-    re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@", re.IGNORECASE),
-    re.compile(
-        r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
-        r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
-        r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key|"
-        r"loginid|userpassword|oa[\s_-]?userid|userid)"
-        r"\s*[:=]\s*\S+",
-        re.IGNORECASE,
-    ),
+# Named individually (rather than selected by tuple position) so that
+# _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS below stays correct if a future pattern
+# is inserted anywhere in _CREDENTIAL_VALUE_PATTERNS: a positional slice would
+# silently change which patterns apply to top-level identifiers.
+_LONG_DIGIT_RUN_PATTERN = re.compile(r"(?<!\d)(?:\d{17}[\dXx]|\d{15})(?!\d)")
+_BEARER_TOKEN_PATTERN = re.compile(r"bearer\s+\S+", re.IGNORECASE)
+_CREDENTIAL_URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/@]+@", re.IGNORECASE)
+_KEY_VALUE_CREDENTIAL_PATTERN = re.compile(
+    r"(?:authorization|session(?:[\s_-]?id)?|access[\s_-]?token|"
+    r"refresh[\s_-]?token|set[\s_-]?cookie|cookie|password|passwd|"
+    r"api[\s_-]?key|secret|client[\s_-]?secret|private[\s_-]?key|"
+    r"loginid|userpassword|oa[\s_-]?userid|userid)"
+    r"\s*[:=]\s*\S+",
+    re.IGNORECASE,
 )
-_TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS = _CREDENTIAL_VALUE_PATTERNS[1:]
+
+_CREDENTIAL_VALUE_PATTERNS = (
+    _LONG_DIGIT_RUN_PATTERN,
+    _BEARER_TOKEN_PATTERN,
+    _CREDENTIAL_URL_PATTERN,
+    _KEY_VALUE_CREDENTIAL_PATTERN,
+)
+# Excludes _LONG_DIGIT_RUN_PATTERN: a bare 15/17-digit run is not credential-
+# shaped enough to reject top-level identifiers (uuid hex may contain a long
+# digit run; see test_trace_event_accepts_opaque_hex_identifier_with_long_digit_run).
+_TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS = (
+    _BEARER_TOKEN_PATTERN,
+    _CREDENTIAL_URL_PATTERN,
+    _KEY_VALUE_CREDENTIAL_PATTERN,
+)
 
 
 def redact_trace_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
