@@ -218,17 +218,17 @@ class LiveOAReadProvider:
         opener_factory: Callable[[], OpenerDirector] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self._base_url, self._allowed_origin = _validate_base_url(base_url)
-        self._message_center_endpoint_path = _validate_endpoint_path(
+        self._base_url, self._allowed_origin = validate_base_url(base_url)
+        self._message_center_endpoint_path = validate_endpoint_path(
             message_center_endpoint_path
         )
-        self._pending_workflows_split_page_key_path = _validate_endpoint_path(
+        self._pending_workflows_split_page_key_path = validate_endpoint_path(
             pending_workflows_split_page_key_path
         )
-        self._pending_workflows_counts_path = _validate_endpoint_path(
+        self._pending_workflows_counts_path = validate_endpoint_path(
             pending_workflows_counts_path
         )
-        self._pending_workflows_datas_path = _validate_endpoint_path(
+        self._pending_workflows_datas_path = validate_endpoint_path(
             pending_workflows_datas_path
         )
         self._pending_workflows_split_form = _build_pending_workflows_split_form(
@@ -433,7 +433,7 @@ class LiveOAReadProvider:
                 raise OALiveRequestError("OA credential expiry is invalid")
             if ttl_status == "expired":
                 raise OALiveIdentityExpired("OA Session has expired")
-            cookie_header = _build_cookie_header(credential.cookies)
+            cookie_header = build_cookie_header(credential.cookies)
             opener = self._opener_factory()
 
             split_payload = await self._request_form_payload(
@@ -596,7 +596,7 @@ class LiveOAReadProvider:
                 raise OALiveRequestError("OA credential expiry is invalid")
             if ttl_status == "expired":
                 raise OALiveIdentityExpired("OA Session has expired")
-            cookie_header = _build_cookie_header(credential.cookies)
+            cookie_header = build_cookie_header(credential.cookies)
             opener = self._opener_factory()
 
             # Inferred pending P2-OA-INTRANET-SMOKE-001: feed each response's
@@ -719,7 +719,7 @@ class LiveOAReadProvider:
     def _build_isolated_opener(self) -> OpenerDirector:
         return build_opener(
             ProxyHandler({}),
-            _SameOriginRedirectHandler(self._allowed_origin),
+            SameOriginRedirectHandler(self._allowed_origin),
         )
 
     def _normalize_system_message_link(self, value: str) -> str:
@@ -735,7 +735,7 @@ class LiveOAReadProvider:
                 or parsed.hostname is None
                 or parsed.username is not None
                 or parsed.password is not None
-                or _origin_tuple(parsed) != self._allowed_origin
+                or origin_tuple(parsed) != self._allowed_origin
             ):
                 raise ValueError("OA system-message link is not same-origin")
             relative = parsed.path or "/"
@@ -879,7 +879,7 @@ class LiveOAReadProvider:
     ) -> dict[str, Any]:
         with opener.open(request, timeout=self._timeout_seconds) as response:
             status_code = int(response.getcode())
-            _raise_for_http_status(status_code)
+            raise_for_http_status(status_code)
             raw = response.read(self._max_response_bytes + 1)
         if len(raw) > self._max_response_bytes:
             raise ValueError("OA response exceeds the size limit")
@@ -889,7 +889,7 @@ class LiveOAReadProvider:
         return {str(key): value for key, value in payload.items()}
 
 
-class _SameOriginRedirectHandler(HTTPRedirectHandler):
+class SameOriginRedirectHandler(HTTPRedirectHandler):
     """Allow same-origin redirects while stopping Cookie-bearing cross-host hops."""
 
     def __init__(self, allowed_origin: tuple[str, str, int]) -> None:
@@ -905,7 +905,7 @@ class _SameOriginRedirectHandler(HTTPRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> Request | None:
-        if _origin_tuple(urlsplit(newurl)) != self._allowed_origin:
+        if origin_tuple(urlsplit(newurl)) != self._allowed_origin:
             return None
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -968,7 +968,7 @@ def _load_json(path: Path) -> Any:
         raise OAContractPackError("Contract Pack file cannot be loaded") from None
 
 
-def _validate_base_url(base_url: str) -> tuple[str, tuple[str, str, int]]:
+def validate_base_url(base_url: str) -> tuple[str, tuple[str, str, int]]:
     parsed = urlsplit(base_url.strip())
     if (
         parsed.scheme.lower() not in {"http", "https"}
@@ -980,12 +980,12 @@ def _validate_base_url(base_url: str) -> tuple[str, tuple[str, str, int]]:
         or parsed.path not in {"", "/"}
     ):
         raise ValueError("OA base URL must be an HTTP(S) origin without credentials")
-    origin = _origin_tuple(parsed)
+    origin = origin_tuple(parsed)
     normalized = f"{parsed.scheme.lower()}://{parsed.netloc.rstrip('/')}"
     return normalized, origin
 
 
-def _validate_endpoint_path(endpoint_path: str) -> str:
+def validate_endpoint_path(endpoint_path: str) -> str:
     parsed = urlsplit(endpoint_path)
     if (
         not endpoint_path.startswith("/")
@@ -1000,7 +1000,7 @@ def _validate_endpoint_path(endpoint_path: str) -> str:
     return parsed.path
 
 
-def _origin_tuple(parsed: Any) -> tuple[str, str, int]:
+def origin_tuple(parsed: Any) -> tuple[str, str, int]:
     scheme = parsed.scheme.lower()
     hostname = (parsed.hostname or "").lower()
     default_port = 443 if scheme == "https" else 80
@@ -1023,7 +1023,7 @@ def _credential_ttl_status(
     return "active"
 
 
-def _build_cookie_header(cookies: Mapping[str, SecretStr]) -> str:
+def build_cookie_header(cookies: Mapping[str, SecretStr]) -> str:
     if not cookies:
         raise OALiveRequestError("OA credential has no Session cookies")
     pairs: list[str] = []
@@ -1140,7 +1140,7 @@ def report_oa_structural_drift(report: OAStructuralDriftReport) -> None:
     )
 
 
-def _raise_for_http_status(status_code: int) -> None:
+def raise_for_http_status(status_code: int) -> None:
     if 200 <= status_code < 300:
         return
     if status_code == 401:
@@ -1468,5 +1468,11 @@ __all__ = (
     "OAReadProvider",
     "OAStructuralDriftReporter",
     "ReplayOAReadProvider",
+    "SameOriginRedirectHandler",
+    "build_cookie_header",
+    "origin_tuple",
+    "raise_for_http_status",
     "report_oa_structural_drift",
+    "validate_base_url",
+    "validate_endpoint_path",
 )

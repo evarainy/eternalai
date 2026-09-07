@@ -20,14 +20,16 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PageContextDeclaration } from '../../contracts/pageContext';
 import type { CredentialBindingView } from '../../generated/credential-bindings/credential-bindings.schemas';
+import type { MeResponse } from '../../generated/me/me.schemas';
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAppearanceStore } from '../../stores/appearanceStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { AppShell } from '../AppShell';
 import {
-  IDENTITY_UNAVAILABLE_NEXT_STEP,
-  IDENTITY_UNAVAILABLE_STATEMENT,
+  DEPARTMENT_UNAVAILABLE_LINE,
+  JOB_TITLE_UNAVAILABLE_LINE,
+  NAME_UNAVAILABLE_LINE,
 } from '../shellLayout';
 import { workbenchTheme } from '../theme';
 import { usePageContextRegistration } from '../usePageContextRegistration';
@@ -45,11 +47,30 @@ function readSource(relativePath: string): string {
 
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
+  readMe: vi.fn(),
 }));
 
 vi.mock('../../generated/credential-bindings/credential-bindings', () => ({
   getBindingApiV1CredentialBindingsTargetSystemGet: apiMocks.getBinding,
 }));
+
+vi.mock('../../generated/me/me', () => ({
+  readMeApiV1MeGet: apiMocks.readMe,
+}));
+
+const DISPLAY_NAME = '甲用户';
+const DEPARTMENT_NAME = '部门乙';
+
+function meResponse(overrides: Partial<MeResponse> = {}): MeResponse {
+  return {
+    authenticated: true,
+    display_name: DISPLAY_NAME,
+    org: { department_name: DEPARTMENT_NAME, department_id: '22' },
+    org_status: 'ok',
+    avatar_path: '/api/v1/me/avatar',
+    ...overrides,
+  };
+}
 
 function binding(
   overrides: Partial<CredentialBindingView> = {},
@@ -163,6 +184,8 @@ function shellElement(): HTMLElement {
 function resetStores(): void {
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
+  apiMocks.readMe.mockReset();
+  apiMocks.readMe.mockResolvedValue(meResponse());
   window.localStorage.clear();
   useNavigationStore.setState({ collapsed: false });
   useAppearanceStore.setState({ background: 'bgA' });
@@ -437,37 +460,99 @@ describe('AppShell topbar', () => {
     expect(screen.queryByText('搜索工作事项', { selector: 'strong' })).toBeNull();
   });
 
-  it('states that the department and name cannot be read, on the single line the slot has', () => {
+  it('shows the real department and name on the single line the slot has', async () => {
     renderShell();
 
-    /*
-     * 画板上这一格只有一行（`办公室 / 王××`）。返修把顶栏压回一行：如实说明取不到留在顶栏，下一步
-     * 移进头像点开的用户菜单（见下一条），两句合起来仍满足 2026-08-27 的「说明 + 下一步」。
-     */
-    const identity = screen.getByTestId('topbar-identity');
-    expect(identity).toHaveTextContent(IDENTITY_UNAVAILABLE_STATEMENT);
-    expect(identity).not.toHaveTextContent(IDENTITY_UNAVAILABLE_NEXT_STEP);
-    expect(identity.textContent?.trim().length ?? 0).toBeGreaterThan(0);
-    expect(identity.textContent).not.toMatch(/[A-Za-z0-9]/);
-    expect(identity.textContent).not.toContain('/');
-    expect(within(identity).queryByRole('button')).not.toBeInTheDocument();
+    // 画板上这一格只有一行（`办公室 / 王××`）。姓名来自服务端签名的会话票据，部门来自 OA。
+    const identity = await screen.findByText(`${DEPARTMENT_NAME} / ${DISPLAY_NAME}`);
+    expect(identity).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('topbar-identity')).queryByRole('button'),
+    ).not.toBeInTheDocument();
   });
 
-  it('turns the avatar into the user menu trigger without inventing a photo or an initial', () => {
+  it('drops to the name alone when the department cannot be read, and says nothing else', async () => {
+    apiMocks.readMe.mockResolvedValue(
+      meResponse({ org: null, org_status: 'unparsable', avatar_path: null }),
+    );
+    renderShell();
+
+    const identity = screen.getByTestId('topbar-identity');
+    await waitFor(() => expect(identity).toHaveTextContent(DISPLAY_NAME));
+    // 顶栏这一格取不到部门时不加一个字的提示——说明留给用户菜单。
+    expect(identity.textContent).toBe(DISPLAY_NAME);
+    expect(identity.textContent).not.toContain('/');
+    expect(identity.textContent).not.toContain('取不到');
+  });
+
+  it('renders nothing in the identity slot before the backend has answered', () => {
+    apiMocks.readMe.mockReturnValue(new Promise(() => {}));
+    renderShell();
+
+    // 确认还没回来时不写占位、不写「读取中」，也不写一个假名字。
+    expect(screen.getByTestId('topbar-identity').textContent).toBe('');
+  });
+
+  it('shows the proxied photo and falls back to the surname when it cannot be loaded', async () => {
     renderShell();
 
     const avatar = screen.getByTestId('topbar-avatar');
     expect(avatar.tagName).toBe('BUTTON');
-    expect(avatar).toHaveAccessibleName('用户菜单，暂时取不到你的照片');
     expect(avatar).toHaveAttribute('aria-expanded', 'false');
-    expect(avatar.textContent).not.toMatch(/[一-龥A-Za-z]/);
 
-    fireEvent.click(avatar);
+    const image = await screen.findByTestId('topbar-avatar-image');
+    // 前端只看到常量路径；OA 主机地址与照片相对路径都留在后端。
+    expect(image).toHaveAttribute('src', '/api/v1/me/avatar');
+    expect(avatar).toHaveAccessibleName(`用户菜单：${DISPLAY_NAME}`);
 
-    expect(avatar).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.error(image);
+
+    expect(screen.queryByTestId('topbar-avatar-image')).not.toBeInTheDocument();
+    expect(screen.getByTestId('topbar-avatar-initial')).toHaveTextContent(
+      DISPLAY_NAME.slice(0, 1),
+    );
+  });
+
+  it('shows the surname instead of an empty slot when there is no photo at all', async () => {
+    apiMocks.readMe.mockResolvedValue(meResponse({ avatar_path: null }));
+    renderShell();
+
+    expect(
+      await screen.findByTestId('topbar-avatar-initial'),
+    ).toHaveTextContent(DISPLAY_NAME.slice(0, 1));
+    expect(screen.queryByTestId('topbar-avatar-image')).not.toBeInTheDocument();
+  });
+
+  it('keeps a place for the job title and says it cannot be read instead of inventing one', async () => {
+    renderShell();
+
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
     const menu = screen.getByRole('region', { name: '用户菜单' });
-    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_STATEMENT)).toBeInTheDocument();
-    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_NEXT_STEP)).toBeInTheDocument();
+    expect(await within(menu).findByText(DISPLAY_NAME)).toBeInTheDocument();
+    /*
+     * 画板这一行写的是「办公室 · 主任科员」。部门有数据源，职务没有（OA 的用户信息接口里没有这个
+     * 字段），雨爷 2026-09-04 裁定留位 + 如实说明。
+     */
+    expect(within(menu).getByTestId('user-menu-meta')).toHaveTextContent(
+      `${DEPARTMENT_NAME} · ${JOB_TITLE_UNAVAILABLE_LINE}`,
+    );
+    expect(menu.textContent).not.toContain('主任科员');
+  });
+
+  it('states each missing identity field on its own line in the user menu', async () => {
+    apiMocks.readMe.mockResolvedValue(
+      meResponse({ display_name: '', org: null, org_status: 'unavailable' }),
+    );
+    renderShell();
+
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+
+    const menu = screen.getByRole('region', { name: '用户菜单' });
+    expect(await within(menu).findByText(NAME_UNAVAILABLE_LINE)).toBeInTheDocument();
+    expect(within(menu).getByTestId('user-menu-meta')).toHaveTextContent(
+      `${DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`,
+    );
   });
 
   it('carries logout in the user menu instead of the sidebar and keeps the help entry honest', () => {
@@ -703,8 +788,8 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
       expect(within(menu).getByText(label)).toBeInTheDocument();
     }
     expect(await within(menu).findByText('OA 已绑')).toBeInTheDocument();
-    // 姓名 / 部门 / 职务没有数据源：如实说明，不得出现任何像姓名的占位值。
-    expect(within(menu).getByText(IDENTITY_UNAVAILABLE_STATEMENT)).toBeInTheDocument();
+    // 姓名与部门来自后端；职务没有数据源，不得出现画板上那个编出来的职务。
+    expect(within(menu).getByText(DISPLAY_NAME)).toBeInTheDocument();
     expect(menu.textContent).not.toMatch(/王|张三|李四|主任科员/);
   });
 

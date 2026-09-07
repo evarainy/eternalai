@@ -12,9 +12,11 @@ import { useNavigationStore } from '../stores/navigationStore';
 import { Icon } from '../shared/ui/Icon';
 import type { IconName } from '../shared/ui/Icon';
 import { AIDock } from './AIDock';
+import { useCurrentIdentity } from './identity';
 import {
-  IDENTITY_UNAVAILABLE_NEXT_STEP,
-  IDENTITY_UNAVAILABLE_STATEMENT,
+  DEPARTMENT_UNAVAILABLE_LINE,
+  JOB_TITLE_UNAVAILABLE_LINE,
+  NAME_UNAVAILABLE_LINE,
   SIDEBAR_COLLAPSED_PADDING,
   SIDEBAR_COLLAPSED_WIDTH,
   SIDEBAR_EXPANDED_WIDTH,
@@ -339,6 +341,25 @@ export function AppShell() {
   const popoverRef = useRef<HTMLElement | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
 
+  const identity = useCurrentIdentity();
+  const [avatarBroken, setAvatarBroken] = useState(false);
+
+  useEffect(() => {
+    setAvatarBroken(false);
+  }, [identity.avatarPath]);
+
+  const avatarSource =
+    identity.avatarPath !== null && !avatarBroken ? identity.avatarPath : null;
+  const surname = identity.displayName?.trim().slice(0, 1) || null;
+  const avatarLabel =
+    identity.displayName === null ? '用户菜单' : `用户菜单：${identity.displayName}`;
+  const identityLine =
+    identity.displayName === null
+      ? null
+      : identity.departmentName === null
+        ? identity.displayName
+        : `${identity.departmentName} / ${identity.displayName}`;
+
   const isAIAssistantPage = location.pathname === AI_ASSISTANT_PATH;
   const initialSearchValue =
     location.pathname === '/search'
@@ -515,12 +536,19 @@ export function AppShell() {
             />
           </div>
 
+          {/*
+            2026-09-02 裁决：这一格显示「部门 / 姓名」。姓名来自服务端签名的会话票据，只要还登录着
+            就一定有；部门来自 OA，取不到就只显示姓名，**一个字的提示都不加**（说明与下一步由用户
+            菜单承担）。启动确认还没回来时这一格是空的，不写任何占位。
+          */}
           <div
             className={styles.identity}
             data-slot="identity"
             data-testid="topbar-identity"
           >
-            <span className={styles.identityLine}>{IDENTITY_UNAVAILABLE_STATEMENT}</span>
+            {identityLine === null ? null : (
+              <span className={styles.identityLine}>{identityLine}</span>
+            )}
           </div>
 
           <button
@@ -586,14 +614,37 @@ export function AppShell() {
 
           <button
             aria-expanded={openPanel === 'user'}
-            aria-label="用户菜单，暂时取不到你的照片"
+            aria-label={avatarLabel}
             className={styles.avatarButton}
             data-slot="avatar"
             data-testid="topbar-avatar"
             onClick={() => togglePanel('user')}
             type="button"
           >
-            <Icon name="user" size={24} />
+            {/*
+              头像走后端代理：`src` 永远是常量 `/api/v1/me/avatar`，OA 主机地址与照片相对路径
+              （都属人员信息）不出后端。取不到照片就退回姓氏首字，再取不到姓名才用线框图标。
+            */}
+            {avatarSource === null ? (
+              surname === null ? (
+                <Icon name="user" size={24} />
+              ) : (
+                <span
+                  className={styles.avatarInitial}
+                  data-testid="topbar-avatar-initial"
+                >
+                  {surname}
+                </span>
+              )
+            ) : (
+              <img
+                alt=""
+                className={styles.avatarImage}
+                data-testid="topbar-avatar-image"
+                onError={() => setAvatarBroken(true)}
+                src={avatarSource}
+              />
+            )}
           </button>
         </header>
 
@@ -646,14 +697,32 @@ export function AppShell() {
               <>
                 <div className={styles.userHead}>
                   <span className={styles.userAvatar}>
-                    <Icon name="user" size={30} />
+                    {avatarSource === null ? (
+                      surname === null ? (
+                        <Icon name="user" size={30} />
+                      ) : (
+                        <span className={styles.avatarInitial}>{surname}</span>
+                      )
+                    ) : (
+                      <img
+                        alt=""
+                        className={styles.avatarImage}
+                        onError={() => setAvatarBroken(true)}
+                        src={avatarSource}
+                      />
+                    )}
                   </span>
                   <div className={styles.userWho}>
                     <span className={styles.userName}>
-                      {IDENTITY_UNAVAILABLE_STATEMENT}
+                      {identity.displayName ?? NAME_UNAVAILABLE_LINE}
                     </span>
-                    <span className={styles.userMeta}>
-                      {IDENTITY_UNAVAILABLE_NEXT_STEP}
+                    {/*
+                      画板这一行写的是「办公室 · 主任科员」。部门有数据源，职务**没有**——OA 的用户
+                      信息接口落盘字段里就没有职务字段。雨爷 2026-09-04 裁定「留位 + 如实说明，
+                      不得编造」，所以位置留着，写的是取不到。
+                    */}
+                    <span className={styles.userMeta} data-testid="user-menu-meta">
+                      {`${identity.departmentName ?? DEPARTMENT_UNAVAILABLE_LINE} · ${JOB_TITLE_UNAVAILABLE_LINE}`}
                     </span>
                   </div>
                 </div>

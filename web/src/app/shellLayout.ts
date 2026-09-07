@@ -92,20 +92,29 @@ export function singleLineTextWidth(text: string): number {
 }
 
 /**
- * 顶栏「部门 / 姓名」的 fail-closed 文案。
+ * 身份取不到时的 fail-closed 文案。
  *
- * 后端当前没有「当前用户身份」读取接口（`LoginResponse` 只有 `authenticated`），前端拿不到部门与
- * 姓名。按 2026-08-27「低数字素养用户的界面硬约束」，这里如实说明取不到，不显示空位、不显示登录
- * 标识、不显示假名。
+ * `P2-USER-PROFILE-READ-001` 之后姓名来自服务端签名的会话票据，**只要还登录着就一定有**，所以顶栏
+ * 那一格几乎不会再整句缺失——最坏也只是少一个部门，此时顶栏只显示姓名，**一个字的提示都不加**。
+ * 下面这几行只用在用户菜单里，一处一行。
  *
- * 顶栏这一格照画板只占**一行**，因此只放 `IDENTITY_UNAVAILABLE_STATEMENT`；下一步
- * （`IDENTITY_UNAVAILABLE_NEXT_STEP`）放在头像点开的用户菜单里，两句合起来仍然满足「说明 + 下一步」。
- * 两行都必须在 `TOPBAR_IDENTITY_WIDTH` 内单行放下。
+ * 职务是另一回事：OA 的用户信息接口落盘字段里**根本没有职务**（`DECISIONS.md` 2026-09-02）。
+ * 雨爷 2026-09-04 裁定「留位 + 如实说明，不得编造」，所以位置留着，写的是取不到，不是画板上的
+ * 「主任科员」。
  */
-export const IDENTITY_UNAVAILABLE_STATEMENT = '暂时取不到部门和姓名';
-export const IDENTITY_UNAVAILABLE_NEXT_STEP = '请刷新或重新登录';
+export const NAME_UNAVAILABLE_LINE = '暂时取不到姓名';
+export const DEPARTMENT_UNAVAILABLE_LINE = '部门暂时取不到';
+export const JOB_TITLE_UNAVAILABLE_LINE = '职务暂时取不到';
 
-export const IDENTITY_UNAVAILABLE_LINES = [
-  IDENTITY_UNAVAILABLE_STATEMENT,
-  IDENTITY_UNAVAILABLE_NEXT_STEP,
+/** 启动确认连不上后端时的唯一一行字与唯一一个动作。不解释原因、不给排查步骤。 */
+export const BACKEND_UNREACHABLE_LINE = '连不上服务器';
+export const BACKEND_UNREACHABLE_RETRY = '重试';
+
+/** 用户菜单里这几行都要在 268px 的弹层内单行放下。 */
+export const USER_MENU_WIDTH = 268;
+
+export const IDENTITY_FALLBACK_LINES = [
+  NAME_UNAVAILABLE_LINE,
+  DEPARTMENT_UNAVAILABLE_LINE,
+  JOB_TITLE_UNAVAILABLE_LINE,
 ] as const;

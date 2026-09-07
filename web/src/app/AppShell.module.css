@@ -460,6 +460,21 @@
   font-size: 22px;
 }
 
+/* 头像照片与姓氏首字回退：两者都填满同一个圆形位，切换时尺寸不跳。 */
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.avatarInitial {
+  color: var(--workbench-text);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .avatarButton[aria-expanded='true'] {
   background-image: var(--workbench-chip-fill-strong);
   box-shadow: var(--workbench-chip-edge-strong);
@@ -814,7 +829,7 @@
   gap: 3px;
 }
 
-/* 姓名与「部门 · 职务」都没有数据源，这一格放的是 fail-closed 文案，字号按辅助档而不是姓名档。 */
+/* 姓名有数据源（签名票据），职务没有；字号按辅助档而不是姓名档，与画板一致。 */
 .userName {
   color: var(--workbench-text);
   font-size: var(--workbench-font-auxiliary);

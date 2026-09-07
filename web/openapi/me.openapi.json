@@ -1,0 +1,134 @@
+{
+  "components": {
+    "schemas": {
+      "MeOrg": {
+        "additionalProperties": false,
+        "description": "Plain-text organization labels; never raw markup, never an upstream id.",
+        "properties": {
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id"
+          },
+          "department_name": {
+            "title": "Department Name",
+            "type": "string"
+          },
+          "unit_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Id"
+          },
+          "unit_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit Name"
+          }
+        },
+        "required": [
+          "department_name"
+        ],
+        "title": "MeOrg",
+        "type": "object"
+      },
+      "MeResponse": {
+        "additionalProperties": false,
+        "description": "A 200 always means authenticated; ``org`` may still be absent.",
+        "properties": {
+          "authenticated": {
+            "const": true,
+            "default": true,
+            "title": "Authenticated",
+            "type": "boolean"
+          },
+          "avatar_path": {
+            "anyOf": [
+              {
+                "const": "/api/v1/me/avatar",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Path"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "org": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeOrg"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "org_status": {
+            "enum": [
+              "ok",
+              "unbound",
+              "expired",
+              "unavailable",
+              "unparsable"
+            ],
+            "title": "Org Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "org_status"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/me": {
+      "get": {
+        "operationId": "read_me_api_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Me"
+      }
+    }
+  }
+}

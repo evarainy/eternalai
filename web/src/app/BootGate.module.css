@@ -1,0 +1,58 @@
+/*
+ * 启动确认期间的占位。局域网内这一步只有几十毫秒，所以**确认进行中一个字都不写**——没有 spinner
+ * 文案、没有「正在加载」、没有进度说明，只留顶栏与左导航的空框，让页面看起来是直接出来的。
+ * 只有在后端真的连不上时才出一行字加一个按钮。
+ */
+
+.gate {
+  display: grid;
+  min-height: 100vh;
+  padding: 16px;
+  gap: 16px;
+  grid-template-columns: 224px minmax(0, 1fr);
+  grid-template-rows: 64px minmax(0, 1fr);
+}
+
+.sidebarFrame {
+  border-radius: 18px;
+  background: var(--workbench-glass-fill, rgba(255, 255, 255, 0.38));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  grid-row: 1 / span 2;
+}
+
+.topbarFrame {
+  border-radius: 18px;
+  background: var(--workbench-glass-fill, rgba(255, 255, 255, 0.38));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.stageFrame {
+  border-radius: 18px;
+  background: var(--workbench-panel-fill, rgba(255, 255, 255, 0.86));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+}
+
+.unreachable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+}
+
+.unreachableLine {
+  color: var(--workbench-ink, #1f2933);
+  font-size: 17px;
+}
+
+.retry {
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  min-height: 44px;
+}

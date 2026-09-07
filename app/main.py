@@ -21,6 +21,7 @@ from app.api.v1.csrf import (
 )
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
+from app.api.v1.me import make_router as make_me_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
@@ -33,6 +34,7 @@ from app.ports.auth import (
     SessionTokenPort,
 )
 from app.ports.runtime import RuntimePort
+from app.ports.user_profile import UserProfilePort
 
 _EMPTY_CSRF_ALLOWED_ORIGINS: frozenset[str] = frozenset()
 
@@ -43,6 +45,7 @@ def create_app(
     work_object_service: WorkObjectService | None = None,
     credential_binding_service: CredentialBindingService | None = None,
     *,
+    user_profile: UserProfilePort | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
     session_binder: Callable[[Principal, str], str] | None = None,
@@ -100,6 +103,10 @@ def create_app(
         prefix="/api/v1/work-objects",
     )
     application.include_router(
+        make_me_router(user_profile, csrf_protected_principal),
+        prefix="/api/v1/me",
+    )
+    application.include_router(
         make_credential_binding_router(
             credential_binding_service,
             csrf_protected_principal,
@@ -128,6 +135,7 @@ def create_production_app(
         admin_registry_service=components.admin_registry_service,
         work_object_service=components.work_object_service,
         credential_binding_service=components.credential_binding_service,
+        user_profile=components.user_profile,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
         session_binder=components.session_binder.bind,

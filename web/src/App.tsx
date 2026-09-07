@@ -16,6 +16,8 @@ import {
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
 import { AppShell } from './app/AppShell';
+import { BootGate } from './app/BootGate';
+import { useIdentityBootstrap } from './app/identity';
 import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
@@ -48,6 +50,9 @@ export function AuthenticationEffects() {
   const status = useAuthStore((state) => state.status);
   const activeQueryClient = useQueryClient();
 
+  // 刷新后向后端确认一次会话。恢复登录态以**后端确认**为准，不看任何客户端保存的状态。
+  useIdentityBootstrap();
+
   useEffect(() => {
     if (status === 'unauthenticated') {
       activeQueryClient.clear();
@@ -61,6 +66,11 @@ export function AuthenticationEffects() {
 export function ProtectedRoute() {
   const status = useAuthStore((state) => state.status);
   const location = useLocation();
+
+  // 还没问过后端时既不放行也不重定向——放行等于自称已登录，重定向就是刷新掉登录态那个 bug。
+  if (status === 'unknown') {
+    return <BootGate />;
+  }
 
   if (status !== 'authenticated') {
     return (
@@ -78,6 +88,11 @@ export function ProtectedRoute() {
 export function LoginRoute() {
   const status = useAuthStore((state) => state.status);
   const location = useLocation();
+
+  // 否则已登录用户刷新时会先闪一下登录表单。
+  if (status === 'unknown') {
+    return <BootGate />;
+  }
 
   return status === 'authenticated' ? (
     <Navigate replace to={getReturnPath(location.state)} />
