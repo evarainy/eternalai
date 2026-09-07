@@ -14,6 +14,9 @@ from pydantic import ValidationError
 
 from app.ports.capability_gateway import ErrorCode
 from app.ports.trace import (
+    _CREDENTIAL_VALUE_PATTERNS,
+    _LONG_DIGIT_RUN_PATTERN,
+    _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS,
     TRACE_QUERY_LIMIT,
     SanitizerHookFn,
     TraceEvent,
@@ -22,9 +25,6 @@ from app.ports.trace import (
     TracePersistedEvent,
     TracePort,
     TraceQueryPort,
-    _CREDENTIAL_VALUE_PATTERNS,
-    _LONG_DIGIT_RUN_PATTERN,
-    _TOP_LEVEL_CREDENTIAL_VALUE_PATTERNS,
 )
 
 EXPECTED_TRACE_EVENT_TYPE_VALUES = (
