@@ -1,0 +1,149 @@
+{
+  "golden_task_id": "GT-035",
+  "title": "口语化 OA 待办请求仍正确匹配能力",
+  "category": "positive",
+  "given": {
+    "ai_user_id": "user_employee_001",
+    "roles": [
+      "employee"
+    ],
+    "identity_mappings": [
+      {
+        "target_system": "oa",
+        "binding_id": "bind_oa_001",
+        "status": "active",
+        "binding_scope": "default"
+      }
+    ],
+    "registered_capabilities": [
+      {
+        "capability_id": "oa.list_pending_workflows",
+        "target_system": "oa",
+        "type": "query",
+        "risk_level": "low",
+        "execution_identity": "user_delegated",
+        "binding_required": true,
+        "input_schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "workflows"
+          ],
+          "properties": {
+            "workflows": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "input_schema_digest": "digest_oa_list_pending_input",
+        "output_schema_digest": "d0d8250db9e5b57f97051692bfe43669a34be015bb1683095804705de0be2307",
+        "status": "active"
+      }
+    ],
+    "mock_oa_state": {
+      "pending_workflows": [
+        {
+          "message_id": "OA-MSG-2026-0001",
+          "title": "办公用品采购审批",
+          "content": "办公用品采购审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-07 09:30",
+          "business_state": "1",
+          "link": "/spa/workflow/index.html#/req/0001",
+          "mobile_link": "/spa/workflow/mobile.html#/req/0001"
+        },
+        {
+          "message_id": "OA-MSG-2026-0002",
+          "title": "差旅报销审批",
+          "content": "差旅报销审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-06 11:00",
+          "business_state": "1",
+          "link": "/spa/workflow/index.html#/req/0002",
+          "mobile_link": null
+        },
+        {
+          "message_id": "OA-MSG-2026-0003",
+          "title": "过期合同审批",
+          "content": "过期合同审批待办",
+          "source_name": "流程待办",
+          "occurred_at": "2026-05-05 08:15",
+          "business_state": "2",
+          "link": null,
+          "mobile_link": null
+        }
+      ]
+    },
+    "intent_output": {
+      "match": "capability",
+      "capability_id": "oa.list_pending_workflows",
+      "arguments": {},
+      "target_system": "oa",
+      "capability_type": "query"
+    }
+  },
+  "when": {
+    "channel": "web",
+    "message": "我这边还有啥没批的",
+    "arguments": {}
+  },
+  "then_response": {
+    "status": "completed",
+    "envelope": {
+      "message_contains": [
+        "OA",
+        "待办"
+      ],
+      "ui.component_type": "none",
+      "data.workflows.length": 3
+    }
+  },
+  "then_trace": {
+    "event_sequence": [
+      "task_created",
+      "intent_parsed",
+      "capability_selected",
+      "identity_check",
+      "policy_checked",
+      "gateway_pre_recorded",
+      "adapter_called",
+      "gateway_post_recorded",
+      "response_envelope_created",
+      "task_completed"
+    ],
+    "event_details": [
+      {
+        "event_type": "intent_parsed",
+        "status": "ok"
+      },
+      {
+        "event_type": "capability_selected",
+        "capability_id": "oa.list_pending_workflows"
+      }
+    ]
+  },
+  "then_forbidden": [
+    "trace_contains_token",
+    "response_contains_internal_url"
+  ],
+  "mock_failure_injection": {
+    "enabled": false,
+    "mode": "none"
+  },
+  "adapter_assertion": {
+    "must_be_called": true,
+    "must_not_be_called": false
+  }
+}

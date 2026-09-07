@@ -22,10 +22,8 @@ from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.execution_fabric.mock_adapters.u8.mock_u8_adapter import MockU8Adapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.human_gate.in_memory import InMemoryHumanGate
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
-from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
-    MockStructuredOutputProvider,
-)
 from app.ports.adapter import AdapterPort, AdapterResult, MockErrorMode
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import RequestChannel, RequestOrgContext
@@ -44,11 +42,11 @@ from app.ports.identity_mapping import (
     IdentityCheckResult,
     TargetSystem,
 )
+from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision, PolicyDecisionValue
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskRecord
 from app.ports.work_object_handling import WorkObjectHandlingSelector
-from app.runtime.models import CapabilityRef
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import (
     WorkflowCondition,
@@ -708,8 +706,8 @@ async def _run_fixture(
         capability_registry=capability_registry,
         gateway=gateway,
         trace_port=trace_port,
-        llm_provider=MockLLMProvider(),
-        structured_output=_structured_output_for_fixture(fixture),
+        llm_provider=_llm_for_fixture(fixture),
+        structured_output=JSONStructuredOutputProvider(),
         intent_model="golden-task-intent-model",
         workflow_engine=workflow_engine,
         human_gate_port=human_gate_port,
@@ -910,34 +908,35 @@ def _build_workflow_input_ref(raw: Any) -> WorkflowInputRef:
     )
 
 
-def _structured_output_for_fixture(fixture: dict[str, Any]) -> MockStructuredOutputProvider:
-    provider = MockStructuredOutputProvider()
+def _llm_for_fixture(fixture: dict[str, Any]) -> MockLLMProvider:
+    """Supply synthetic model output; validate it through the real JSON parser."""
+    provider = MockLLMProvider()
     given = cast(dict[str, Any], fixture["given"])
     when = cast(dict[str, Any], fixture["when"])
     capabilities = cast(Sequence[dict[str, Any]], given["registered_capabilities"])
     message = str(when["message"])
-    if not capabilities:
-        provider.register_malformed(message, CapabilityRef)
-        return provider
-    selector = cast(
-        dict[str, Any],
-        given.get("capability_selector") or capabilities[0],
-    )
+    if "intent_output" in given:
+        content = json.dumps(given["intent_output"], ensure_ascii=False)
+    elif not capabilities:
+        content = "malformed synthetic intent"
+    else:
+        selector = cast(
+            dict[str, Any],
+            given.get("capability_selector") or capabilities[0],
+        )
+        content = json.dumps(
+            {
+                "match": "capability",
+                "capability_id": str(selector["capability_id"]),
+                "arguments": when.get("arguments", {}),
+                "target_system": selector.get("target_system"),
+                "capability_type": selector.get("capability_type"),
+            },
+            ensure_ascii=False,
+        )
     provider.register(
         message,
-        CapabilityRef,
-        CapabilityRef(
-            capability_id=str(selector["capability_id"]),
-            arguments=cast(dict[str, Any], when.get("arguments", {})),
-            target_system=cast(
-                CapabilityTargetSystem | None,
-                selector.get("target_system"),
-            ),
-            capability_type=cast(
-                CapabilityType | None,
-                selector.get("capability_type"),
-            ),
-        ),
+        LLMCompletionResponse(content=content, model_used="golden-task-intent-model"),
     )
     return provider
 

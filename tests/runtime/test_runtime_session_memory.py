@@ -101,7 +101,6 @@ class RecordingTracePort:
             {
                 "event_type": event_type,
                 "status": status,
-                "match": "capability",
                 "capability_id": capability_id,
                 "error_code": error_code,
                 "attributes": attributes,

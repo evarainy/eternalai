@@ -53,7 +53,7 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
     llm_provider.register(
         "查 OA\n待办",
         LLMCompletionResponse(
-            content='{"capability_id":"pending-workflows"}',
+            content='{"match":"capability","capability_id":"pending-workflows"}',
             trace_metadata={"provider_request_id": "request-1"},
         ),
     )
@@ -102,7 +102,7 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
     assert llm_call["messages"][-1].content == "查 OA\n待办"
     assert structured_output.calls == [
         {
-            "raw_response": '{"capability_id":"pending-workflows"}',
+            "raw_response": '{"match":"capability","capability_id":"pending-workflows"}',
             "schema_type": IntentOutput,
             "trace_metadata": {
                 "trace_id": "trace-1",
@@ -189,9 +189,9 @@ def test_router_preserves_safe_structured_output_error_code_without_raw_content(
 @pytest.mark.parametrize(
     "parsed",
     [
-        {"capability_id": "", "arguments": {}},
-        {"capability_id": "   ", "arguments": {}},
-        {"capability_id": "intent", "target_system": "unknown"},
+        {"match": "capability", "capability_id": "", "arguments": {}},
+        {"match": "capability", "capability_id": "   ", "arguments": {}},
+        {"match": "capability", "capability_id": "intent", "target_system": "unknown"},
     ],
 )
 def test_router_classifies_invalid_pydantic_results_without_raw_content(
@@ -239,7 +239,7 @@ def test_router_adds_only_structured_success_summaries_when_memory_exists() -> N
     llm_provider = MockLLMProvider()
     llm_provider.register(
         "repeat",
-        LLMCompletionResponse(content='{"capability_id":"oa.previous.query"}'),
+        LLMCompletionResponse(content='{"match":"capability","capability_id":"oa.previous.query"}'),
     )
     structured_output = RecordingStructuredOutput(
         StructuredOutputResult(

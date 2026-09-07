@@ -1,17 +1,18 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-ASTRA-001`（C 档；开发助手规则与 skills 收敛，A/B/C 自审采用 high / medium / 无自审门禁；独立 Monitor → Opus 与项目红线保留）。
-- 当前实现基线 task_id：`P2-USER-PROFILE-READ-001`（后端身份读取与前端消费）。本治理棒未重跑生产测试；以下沿用 main 已登记的来源日期与实测值，历史经过用 Git 追溯。
+- 当前实现基线 task_id：`P2-RUNTIME-NO-CAPABILITY-COPY-001`（A 档；串行单 lane，承担 A 类同步）。合法无匹配出口与终端用户短文案已实现并本地验证；当前为任务分支候选，独立监理由主窗口安排，尚未运行 Opus、push、PR 或 merge。
 
 ## 已登记验证基线
 
-以下结果均来源于 **2026-09-07 / `P2-USER-PROFILE-READ-001`** 的实测复核。
+以下结果均来源于 **2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`** 的实测复核。
 
-- pytest：`2798 passed, 143 warnings`（0 skipped，0 failed；未使用 `--ignore=`）
-- Golden Gate：`32/32 passed, 0 skipped, 0 failed`（negative 20/20，positive 12/12）
+- pytest：`2832 passed, 143 warnings`（较进入本棒的 2798 增加 34；0 skipped，0 failed；未使用 `--ignore=`）
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；新增 GT-034/035，既有 32 题与冻结集合不变）
 - `tests/architecture/`：`112 passed`（含 `api_no_infra_imports` 规则）
-- 后端定向 pytest：`460 passed, 116 warnings, 0 failed`（`tests/contracts/`、`tests/runtime/`、`tests/api/`）
+- 后端定向 pytest：`312 passed, 3 warnings, 0 failed`（`tests/runtime/`、`tests/knowledge/`、`tests/infra/llm/`）；Golden 定向 `451 passed`，最终意图与会话记忆定向分别 `20 passed`、`8 passed`。
 - 前端 `pnpm --dir web test`：`471 passed, 0 failed, 0 skipped`（32 个测试文件）
+- ruff、mypy（112 个源文件）、依赖检查（53 项，零新增）与 20 个改动测试文件的弱测试检查均通过；四类变异均断言变红，恢复后同组测试全绿。
 
 ## 必达链与阻塞
 
@@ -21,6 +22,7 @@
 
 ## 当前实现摘要
 
+- 意图输出必须显式给出 `match`；`none` 为合法无匹配，进入 `no_capability_found` 且 reason 为 `no_matching_capability`，`capability` 仍要求有效能力 ID。漏字段与矛盾组合保持 `schema_invalid`；无匹配文案保留「暂未接入」「能力」，只说明当前可用能力。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定。聊天回退后继为 `P2-RUNTIME-DIRECT-ANSWER-001`，本棒不新增终态。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。
 - 部门：后端代持用户自身 OA Session 读取 `orginfo`，以标准库 `html.parser` 有界解析（输入 8192 / 锚点 16 / 标签 64，部门锚点必须恰好一条）；原始 HTML 不进响应。OA 失败不改变 `authenticated`，只体现在闭集 `org_status`（`ok` / `unbound` / `expired` / `unavailable` / `unparsable`）。
 - 头像：后端代理对 `messagerurl` 做六步 URL 校验与图片 MIME 白名单检查，拒绝时传输层零调用；前端只见常量路径。两个身份端点均返回 `Cache-Control: no-store`。
