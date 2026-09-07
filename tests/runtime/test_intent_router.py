@@ -23,7 +23,7 @@ from app.runtime.intent_router import (
     IntentRouter,
     _bound_generated_knowledge,
 )
-from app.runtime.models import CapabilityRef
+from app.runtime.models import CapabilityRef, IntentOutput, MatchedIntent
 from tests.runtime.registry_fakes import active_capability
 
 
@@ -60,6 +60,7 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
     structured_output = RecordingStructuredOutput(
         StructuredOutputResult(
             parsed={
+                "match": "capability",
                 "capability_id": "pending-workflows",
                 "arguments": {},
                 "target_system": "oa",
@@ -102,7 +103,7 @@ def test_router_normalizes_input_and_uses_both_frozen_boundaries() -> None:
     assert structured_output.calls == [
         {
             "raw_response": '{"capability_id":"pending-workflows"}',
-            "schema_type": CapabilityRef,
+            "schema_type": IntentOutput,
             "trace_metadata": {
                 "trace_id": "trace-1",
                 "task_id": "task-1",
@@ -132,7 +133,9 @@ def test_router_fails_closed_before_structured_output_on_llm_failure(
     llm_provider = MockLLMProvider()
     llm_provider.register("request", completion)
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="must-not-run"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="must-not-run")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
 
@@ -174,11 +177,13 @@ def test_router_preserves_safe_structured_output_error_code_without_raw_content(
     result = asyncio.run(router.parse("raw-json"))
 
     assert result.capability_ref is None
-    assert result.failure_reason == "structured_output_error"
+    assert result.failure_reason == (
+        "schema_invalid" if error_code == "validation_error" else "structured_output_error"
+    )
     assert result.structured_output_error_code == error_code
     assert canary not in repr(result)
     assert len(structured_output.calls) == 1
-    assert structured_output.calls[0]["schema_type"] is CapabilityRef
+    assert structured_output.calls[0]["schema_type"] is IntentOutput
 
 
 @pytest.mark.parametrize(
@@ -207,7 +212,9 @@ def test_router_classifies_invalid_pydantic_results_without_raw_content(
 def test_router_rejects_blank_input_without_calling_either_boundary() -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="must-not-run"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="must-not-run")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
 
@@ -235,16 +242,16 @@ def test_router_adds_only_structured_success_summaries_when_memory_exists() -> N
         LLMCompletionResponse(content='{"capability_id":"oa.previous.query"}'),
     )
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.previous.query"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="oa.previous.query")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
 
     result = asyncio.run(
         router.parse(
             "repeat",
-            memory_summaries=(
-                SessionMemorySummary(capability_id="oa.previous.query"),
-            ),
+            memory_summaries=(SessionMemorySummary(capability_id="oa.previous.query"),),
         )
     )
 
@@ -252,8 +259,7 @@ def test_router_adds_only_structured_success_summaries_when_memory_exists() -> N
     messages = llm_provider.calls[0]["messages"]
     assert [message.role for message in messages] == ["system", "system", "user"]
     assert messages[1].content.endswith(
-        '{"session_memory":[{"capability_id":"oa.previous.query",'
-        '"terminal_status":"completed"}]}'
+        '{"session_memory":[{"capability_id":"oa.previous.query","terminal_status":"completed"}]}'
     )
     assert "repeat" not in messages[1].content
 
@@ -278,12 +284,12 @@ def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
 def test_router_injects_at_most_eight_registry_derived_capabilities() -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="oa.safe.query")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
-    capabilities = tuple(
-        active_capability(f"oa.item-{index}") for index in range(10)
-    )
+    capabilities = tuple(active_capability(f"oa.item-{index}") for index in range(10))
 
     result = asyncio.run(router.parse("request", capabilities=capabilities))
 
@@ -296,16 +302,15 @@ def test_router_injects_at_most_eight_registry_derived_capabilities() -> None:
     assert len(injected) == 8
     assert injected[0]["capability_id"] == "oa.item-0"
     assert injected[7]["capability_id"] == "oa.item-7"
-    assert all(
-        item["capability_id"] not in {"oa.item-8", "oa.item-9"}
-        for item in injected
-    )
+    assert all(item["capability_id"] not in {"oa.item-8", "oa.item-9"} for item in injected)
 
 
 def test_router_keeps_knowledge_and_memory_in_independent_system_messages() -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="oa.safe.query")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
 
@@ -313,9 +318,7 @@ def test_router_keeps_knowledge_and_memory_in_independent_system_messages() -> N
         router.parse(
             "待办 repeat",
             capabilities=(active_capability("oa.safe.query"),),
-            memory_summaries=(
-                SessionMemorySummary(capability_id="oa.previous.query"),
-            ),
+            memory_summaries=(SessionMemorySummary(capability_id="oa.previous.query"),),
         )
     )
 
@@ -340,7 +343,9 @@ def test_router_keeps_knowledge_and_memory_in_independent_system_messages() -> N
 def test_router_has_no_registry_free_text_prompt_entry() -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="oa.safe.query")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
     free_text_markers = (
@@ -371,7 +376,9 @@ def test_router_has_no_registry_free_text_prompt_entry() -> None:
 def test_router_prompt_requires_empty_arguments_for_zero_argument_capability() -> None:
     llm_provider = MockLLMProvider()
     structured_output = RecordingStructuredOutput(
-        StructuredOutputResult(parsed=CapabilityRef(capability_id="oa.safe.query"))
+        StructuredOutputResult(
+            parsed=MatchedIntent(match="capability", capability_id="oa.safe.query")
+        )
     )
     router = IntentRouter(llm_provider, structured_output, "qwen-test")
     capability = active_capability("oa.list_pending_workflows").model_copy(
@@ -427,7 +434,7 @@ def test_router_injects_complete_long_contract_outside_text_truncation_path() ->
         llm_provider,
         RecordingStructuredOutput(
             StructuredOutputResult(
-                parsed=CapabilityRef(capability_id=capability.capability_id)
+                parsed=MatchedIntent(match="capability", capability_id=capability.capability_id)
             )
         ),
         "qwen-test",
@@ -459,6 +466,7 @@ def test_router_preserves_only_safe_pydantic_validation_diagnostics(caplog: Any)
         LLMCompletionResponse(
             content=json.dumps(
                 {
+                    "match": "capability",
                     "capability_id": "oa.safe.query",
                     "arguments": {"user": canary},
                     "target_system": "oa",
@@ -477,7 +485,7 @@ def test_router_preserves_only_safe_pydantic_validation_diagnostics(caplog: Any)
     result = asyncio.run(router.parse("invalid intent"))
 
     assert result.capability_ref is None
-    assert result.failure_reason == "structured_output_error"
+    assert result.failure_reason == "schema_invalid"
     assert result.structured_output_error_code == "validation_error"
     assert result.validation_error_path == "$"
     assert result.validation_error_type == "extra_forbidden"

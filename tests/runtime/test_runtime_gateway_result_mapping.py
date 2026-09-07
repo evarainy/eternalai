@@ -20,7 +20,7 @@ from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
@@ -103,7 +103,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -117,7 +117,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -137,7 +137,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -150,7 +150,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.record_gateway_call_count += 1
 
@@ -163,7 +163,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -233,8 +233,10 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "mapped message",
-            CapabilityRef,
-            CapabilityRef(capability_id="mapped.cap", arguments={"key": "value"}),
+            IntentOutput,
+            MatchedIntent(
+                match="capability", capability_id="mapped.cap", arguments={"key": "value"}
+            ),
         )
         gateway = SpyGateway(result)
         runtime = RuntimeImpl(
@@ -262,9 +264,7 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
 
 
 def test_denied_result_maps_to_failed_task_blocked_envelope_and_single_gateway_call() -> None:
-    result, task_store, gateway = _run_mapping(
-        ExecutionResult(status="denied", trace_id="tr1")
-    )
+    result, task_store, gateway = _run_mapping(ExecutionResult(status="denied", trace_id="tr1"))
 
     assert task_store.status_updates[-1][1] == "failed"
     assert isinstance(result, ResponseEnvelope)
@@ -289,9 +289,7 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     trace_port = SpyTracePort()
     registry = StaticCapabilityRegistry(capability_id)
     adapter = AdapterSentinel()
-    policy_guard = MinimalPolicyGuard(
-        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS
-    )
+    policy_guard = MinimalPolicyGuard(admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS)
     gateway = CountingGateway(
         CapabilityGateway(
             adapter=adapter,
@@ -303,8 +301,8 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     structured_output = MockStructuredOutputProvider()
     structured_output.register(
         message,
-        CapabilityRef,
-        CapabilityRef(capability_id=capability_id, arguments={}),
+        IntentOutput,
+        MatchedIntent(match="capability", capability_id=capability_id, arguments={}),
     )
     runtime = RuntimeImpl(
         task_store=task_store,
@@ -355,8 +353,9 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     )
 
 
-def test_binding_required_result_maps_to_failed_task_blocked_envelope_with_operator_handback(
-) -> None:
+def test_binding_required_result_maps_to_failed_task_blocked_envelope_with_operator_handback() -> (
+    None
+):
     result, task_store, _gateway = _run_mapping(
         ExecutionResult(
             status="binding_required",
@@ -384,9 +383,7 @@ def test_timeout_result_maps_to_failed_task_failed_envelope_and_preserves_trace_
 
 
 def test_failed_result_maps_to_failed_task_failed_envelope() -> None:
-    result, task_store, _gateway = _run_mapping(
-        ExecutionResult(status="failed", trace_id="tr4")
-    )
+    result, task_store, _gateway = _run_mapping(ExecutionResult(status="failed", trace_id="tr4"))
 
     assert task_store.status_updates[-1][1] == "failed"
     assert isinstance(result, ResponseEnvelope)

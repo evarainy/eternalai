@@ -254,7 +254,10 @@ class RuntimeImpl:
             memory_summaries=self._session_memory.recall(memory_key),
         )
         capability_ref = intent_result.capability_ref
-        parse_ok = capability_ref is not None
+        parse_ok = intent_result.failure_reason is None and (
+            intent_result.match == "none"
+            or (intent_result.match == "capability" and capability_ref is not None)
+        )
 
         await self._trace_port.record_step(
             trace_id,
@@ -264,7 +267,9 @@ class RuntimeImpl:
             ai_user_id=memory_key.ai_user_id,
             event_type="intent_parsed",
             status="ok" if parse_ok else "failed",
-            attributes=_intent_trace_attributes(
+            attributes={"result": "valid", "match": "none"}
+            if parse_ok and intent_result.match == "none"
+            else _intent_trace_attributes(
                 capability_ref,
                 intent_result.failure_reason,
                 intent_result.structured_output_error_code,
@@ -273,6 +278,16 @@ class RuntimeImpl:
                 intent_result.argument_keys,
             ),
         )
+
+        if parse_ok and intent_result.match == "none":
+            return await self._finish_no_capability_found(
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                reason="no_matching_capability",
+                memory_key=memory_key,
+            )
 
         if not parse_ok or capability_ref is None:
             # With no active capability at all, the honest answer is that the

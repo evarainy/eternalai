@@ -25,7 +25,7 @@ from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ConfirmCard, ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef, ConfirmCardPayload
+from app.runtime.models import CapabilityRef, ConfirmCardPayload, IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl, _confirm_card_payload
 from app.version_binding import immutable_request_digest
 from tests.runtime.principal_fakes import runtime_principal
@@ -110,7 +110,7 @@ class SpyTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -124,7 +124,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -145,7 +145,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -158,7 +158,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -171,7 +171,7 @@ class SpyTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -216,12 +216,13 @@ def _run_runtime(
         message = f"message for {capability_id}"
         structured_output = MockStructuredOutputProvider()
         if malformed:
-            structured_output.register_malformed(message, CapabilityRef)
+            structured_output.register_malformed(message, IntentOutput)
         else:
             structured_output.register(
                 message,
-                CapabilityRef,
-                CapabilityRef(
+                IntentOutput,
+                MatchedIntent(
+                    match="capability",
                     capability_id=capability_id,
                     arguments=arguments or {},
                 ),
@@ -327,8 +328,8 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             message,
-            CapabilityRef,
-            CapabilityRef(capability_id=capability_id),
+            IntentOutput,
+            MatchedIntent(match="capability", capability_id=capability_id),
         )
         registry = StaticCapabilityRegistry(
             active_capability(
@@ -474,21 +475,17 @@ def test_confirm_card_payload_contract_has_exact_keys() -> None:
     }
 
     assert list(ConfirmCardPayload.model_fields) == expected_keys
-    assert all(
-        ConfirmCardPayload.model_fields[key].is_required() for key in expected_keys
-    )
+    assert all(ConfirmCardPayload.model_fields[key].is_required() for key in expected_keys)
     schema = ConfirmCardPayload.model_json_schema()
     assert schema["required"] == expected_keys
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["displayed_argument_values"][
-        "additionalProperties"
-    ] == {"type": "string"}
+    assert schema["properties"]["displayed_argument_values"]["additionalProperties"] == {
+        "type": "string"
+    }
 
     for target_system in ("oa", "u8", "hikvision_ivms"):
         assert (
-            ConfirmCardPayload(
-                **{**valid_payload, "target_system": target_system}
-            ).target_system
+            ConfirmCardPayload(**{**valid_payload, "target_system": target_system}).target_system
             == target_system
         )
 
@@ -531,9 +528,7 @@ def test_confirm_payload_wire_and_request_digest_are_compatible() -> None:
         preview=actual_preview,
         binding_manifest_digest="b" * 64,
     )
-    assert actual_digest == (
-        "71cc6da1ed8c890727d2920ee761823ad57d77e63f66338ed0a1df16ea251234"
-    )
+    assert actual_digest == ("71cc6da1ed8c890727d2920ee761823ad57d77e63f66338ed0a1df16ea251234")
     assert actual_digest == immutable_request_digest(
         task_id="task-sdui-schema",
         action_digest="a" * 64,

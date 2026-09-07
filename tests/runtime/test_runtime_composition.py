@@ -50,7 +50,7 @@ from app.memory import SessionMemory
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
@@ -76,9 +76,7 @@ class RecordingTaskStore:
     async def update_status(
         self, task_id: str, status: str, error_code: str | None = None
     ) -> TaskRecord:
-        return self.created[-1].model_copy(
-            update={"status": status, "error_code": error_code}
-        )
+        return self.created[-1].model_copy(update={"status": status, "error_code": error_code})
 
     async def append_event(self, task_id: str, event: Any) -> None:
         return None
@@ -132,7 +130,7 @@ class DeterministicStructuredOutput:
     ) -> StructuredOutputResult:
         self.trace_metadata.append(dict(trace_metadata or {}))
         return StructuredOutputResult(
-            parsed=CapabilityRef(capability_id="synthetic.query", arguments={})
+            parsed=MatchedIntent(match="capability", capability_id="synthetic.query", arguments={})
         )
 
 
@@ -165,7 +163,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append({"event_type": event_type})
 
@@ -181,7 +179,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append({"event_type": "gateway_pre_recorded"})
 
@@ -337,14 +335,16 @@ def test_golden_trace_double_matches_real_writer_semantic_sequence() -> None:
     asyncio.run(_record_representative_semantic_sequence(golden_trace))
     asyncio.run(_record_representative_semantic_sequence(real_writer))
 
-    assert [step["event_type"] for step in golden_trace.steps] == [
-        event["event_type"] for event in logger.events
-    ] == [
-        "task_created",
-        "gateway_pre_recorded",
-        "response_envelope_created",
-        "task_completed",
-    ]
+    assert (
+        [step["event_type"] for step in golden_trace.steps]
+        == [event["event_type"] for event in logger.events]
+        == [
+            "task_created",
+            "gateway_pre_recorded",
+            "response_envelope_created",
+            "task_completed",
+        ]
+    )
 
 
 def test_trace_selector_uses_noop_only_for_explicit_testing_or_mock(
@@ -416,9 +416,7 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     assert isinstance(gateway._adapters["oa"], MockOAAdapter)
     assert isinstance(components.runtime._trace_port, PostgreSQLTraceWriter)
     assert isinstance(components.credential_polling_job_queue, InMemoryJobQueue)
-    assert set(components.credential_polling_job_queue._handlers) == {
-        CREDENTIAL_POLLING_TASK_TYPE
-    }
+    assert set(components.credential_polling_job_queue._handlers) == {CREDENTIAL_POLLING_TASK_TYPE}
     assert (
         components.credential_polling_scheduler._job_queue
         is components.credential_polling_job_queue
@@ -503,10 +501,7 @@ def test_production_composition_rejects_incomplete_gateway_wiring(
 
 def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
     contract_pack_dir = (
-        Path(__file__).parents[1]
-        / "contract_packs"
-        / "oa"
-        / "ecology9-pending-workflows-v3"
+        Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-pending-workflows-v3"
     )
     settings = replace(
         ProductionSettings.from_environment(),
@@ -576,64 +571,32 @@ def test_oa_read_adapter_mode_builds_configured_provider(
     provider_type: type[ReplayOAReadProvider] | type[LiveOAReadProvider],
 ) -> None:
     contract_pack_dir = (
-        Path(__file__).parents[1]
-        / "contract_packs"
-        / "oa"
-        / "ecology9-pending-workflows-v3"
+        Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-pending-workflows-v3"
     )
     system_message_contract_pack_dir = (
-        Path(__file__).parents[1]
-        / "contract_packs"
-        / "oa"
-        / "ecology9-system-messages-v1"
+        Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-system-messages-v1"
     )
     settings = replace(
         ProductionSettings.from_environment(),
         oa_read_adapter_mode=cast(Any, mode),
         oa_read_contract_pack_dir=contract_pack_dir,
-        oa_pending_workflows_contract_pack_dir=(
-            contract_pack_dir if mode == "live" else None
-        ),
+        oa_pending_workflows_contract_pack_dir=(contract_pack_dir if mode == "live" else None),
         oa_system_messages_contract_pack_dir=(
             system_message_contract_pack_dir if mode == "live" else None
         ),
-        oa_message_center_path=(
-            "/api/message-center/list" if mode == "live" else None
-        ),
-        oa_pending_workflows_split_page_key_path=(
-            "/api/table/split" if mode == "live" else None
-        ),
-        oa_pending_workflows_counts_path=(
-            "/api/table/counts" if mode == "live" else None
-        ),
-        oa_pending_workflows_datas_path=(
-            "/api/table/datas" if mode == "live" else None
-        ),
-        oa_pending_workflows_actiontype=(
-            "synthetic-action" if mode == "live" else None
-        ),
-        oa_pending_workflows_hide_no_data_tab=(
-            "synthetic-hide" if mode == "live" else None
-        ),
-        oa_pending_workflows_method=(
-            "synthetic-method" if mode == "live" else None
-        ),
-        oa_pending_workflows_offical_type=(
-            "synthetic-offical-type" if mode == "live" else None
-        ),
-        oa_pending_workflows_view_scope=(
-            "synthetic-view-scope" if mode == "live" else None
-        ),
-        oa_pending_workflows_sort_params=(
-            "synthetic-sort" if mode == "live" else None
-        ),
+        oa_message_center_path=("/api/message-center/list" if mode == "live" else None),
+        oa_pending_workflows_split_page_key_path=("/api/table/split" if mode == "live" else None),
+        oa_pending_workflows_counts_path=("/api/table/counts" if mode == "live" else None),
+        oa_pending_workflows_datas_path=("/api/table/datas" if mode == "live" else None),
+        oa_pending_workflows_actiontype=("synthetic-action" if mode == "live" else None),
+        oa_pending_workflows_hide_no_data_tab=("synthetic-hide" if mode == "live" else None),
+        oa_pending_workflows_method=("synthetic-method" if mode == "live" else None),
+        oa_pending_workflows_offical_type=("synthetic-offical-type" if mode == "live" else None),
+        oa_pending_workflows_view_scope=("synthetic-view-scope" if mode == "live" else None),
+        oa_pending_workflows_sort_params=("synthetic-sort" if mode == "live" else None),
         oa_system_messages_category_id=("202" if mode == "live" else None),
-        oa_system_messages_bizstate=(
-            "system-business-state" if mode == "live" else None
-        ),
-        oa_system_messages_select_state=(
-            "system-selection-state" if mode == "live" else None
-        ),
+        oa_system_messages_bizstate=("system-business-state" if mode == "live" else None),
+        oa_system_messages_select_state=("system-selection-state" if mode == "live" else None),
     )
 
     adapter = build_oa_read_adapter(
@@ -672,25 +635,17 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
     override: str,
 ) -> None:
     contract_pack_dir = (
-        Path(__file__).parents[1]
-        / "contract_packs"
-        / "oa"
-        / "ecology9-pending-workflows-v3"
+        Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-pending-workflows-v3"
     )
     system_message_contract_pack_dir = (
-        Path(__file__).parents[1]
-        / "contract_packs"
-        / "oa"
-        / "ecology9-system-messages-v1"
+        Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-system-messages-v1"
     )
     settings = replace(
         ProductionSettings.from_environment(),
         oa_read_adapter_mode="live",
         oa_read_contract_pack_dir=contract_pack_dir,
         oa_pending_workflows_contract_pack_dir=contract_pack_dir,
-        oa_system_messages_contract_pack_dir=(
-            system_message_contract_pack_dir
-        ),
+        oa_system_messages_contract_pack_dir=(system_message_contract_pack_dir),
         oa_message_center_path="/api/message-center/list",
         oa_pending_workflows_split_page_key_path="/api/table/split",
         oa_pending_workflows_counts_path="/api/table/counts",

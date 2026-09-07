@@ -27,7 +27,7 @@ from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
@@ -94,7 +94,7 @@ class RecordingTracePort:
         trace_id: str,
         task_id: str,
         session_id: str,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         return None
 
@@ -108,7 +108,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -132,7 +132,7 @@ class RecordingTracePort:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -302,12 +302,13 @@ def _run_runtime(
     message = f"select {selector}"
     if isinstance(structured_output, MockStructuredOutputProvider):
         if malformed_intent:
-            structured_output.register_malformed(message, CapabilityRef)
+            structured_output.register_malformed(message, IntentOutput)
         else:
             structured_output.register(
                 message,
-                CapabilityRef,
-                CapabilityRef(
+                IntentOutput,
+                MatchedIntent(
+                    match="capability",
                     capability_id=selector,
                     arguments={"request": "value"},
                     target_system=target_system,
@@ -411,7 +412,7 @@ def test_exact_inactive_capability_fails_closed_without_tag_fallback(
         {"target_system": None, "type": None, "status": "active"},
     ]
     assert gateway.calls == []
-    assert "Admin Lite > Registry" in envelope.message
+    assert "Admin Lite > Registry" not in envelope.message
     assert capability.capability_id not in envelope.message
     assert [step["event_type"] for step in trace.steps] == [
         "task_created",
@@ -658,7 +659,7 @@ def test_intent_validation_trace_has_only_safe_diagnostics_and_no_rejected_value
 ) -> None:
     canary = "must-not-enter-trace-log-or-response"
     raw_intent = (
-        '{"capability_id":"oa.safe","arguments":{"user":"'
+        '{"match":"capability","capability_id":"oa.safe","arguments":{"user":"'
         + canary
         + '"},"target_system":"oa","capability_type":"query","'
         + canary
@@ -680,7 +681,7 @@ def test_intent_validation_trace_has_only_safe_diagnostics_and_no_rejected_value
     intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     assert intent_event["attributes"] == {
         "result": "invalid",
-        "reason": "structured_output_error",
+        "reason": "schema_invalid",
         "structured_output_error_code": "validation_error",
         "error_path": "$",
         "error_type": "extra_forbidden",
@@ -723,7 +724,7 @@ def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_ada
         message,
         LLMCompletionResponse(
             content=(
-                '{"capability_id":"oa.list_pending_workflows",'
+                '{"match":"capability","capability_id":"oa.list_pending_workflows",'
                 f'"arguments":{{"user":"{canary}"}},'
                 '"target_system":"oa","capability_type":"query"}'
             )

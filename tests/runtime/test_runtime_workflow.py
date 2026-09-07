@@ -17,7 +17,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.version_binding import workflow_confirmation_action_digest
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowDefinition, WorkflowInputRef, WorkflowStep
@@ -134,7 +134,7 @@ class Trace:
         capability_id: str | None = None,
         error_code: str | None = None,
         attributes: dict[str, Any] | None = None,
-    **_owner: Any,
+        **_owner: Any,
     ) -> None:
         self.steps.append(
             {
@@ -257,8 +257,9 @@ def test_runtime_executes_registered_workflow_without_calling_workflow_as_adapte
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "check document",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 arguments={"document_no": "DOC-7"},
                 capability_type="workflow",
@@ -385,8 +386,9 @@ def test_runtime_maps_workflow_policy_terminal_to_existing_envelope(
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "policy terminal workflow",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 arguments={
                     "document_no": "DOC-7",
@@ -453,8 +455,9 @@ def test_registered_workflow_without_engine_uses_standard_failed_terminal() -> N
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "unconfigured workflow",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=workflow.capability_id,
                 arguments={},
                 capability_type="workflow",
@@ -573,8 +576,9 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "submit workflow",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 arguments={
                     "requester": "alice",
@@ -607,8 +611,9 @@ def test_runtime_confirm_message_resumes_only_for_original_session_and_user() ->
         confirm_message = f"确认 {waiting.task_id}"
         structured_output.register(
             confirm_message,
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id="oa.document.lookup",
                 arguments={"document_no": "DOC-7"},
                 capability_type="query",
@@ -730,8 +735,9 @@ def test_confirmation_prefixed_new_request_falls_through_to_intent_routing() -> 
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "submit leave",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 capability_type="workflow",
             ),
@@ -739,8 +745,9 @@ def test_confirmation_prefixed_new_request_falls_through_to_intent_routing() -> 
         follow_up = "确认 一下我的请假单状态"
         structured_output.register(
             follow_up,
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id="oa.leave.status",
                 capability_type="query",
             ),
@@ -838,8 +845,9 @@ def test_v1_confirmation_never_executes_drifted_or_disabled_capability(
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "approve with locked version",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 capability_type="workflow",
             ),
@@ -963,8 +971,9 @@ def test_concurrent_duplicate_confirmation_executes_current_request_once() -> No
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "approve concurrently",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 capability_type="workflow",
             ),
@@ -1036,8 +1045,9 @@ def test_non_workflow_task_locks_prompt_tool_and_policy_bindings() -> None:
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "lookup document",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=capability.capability_id,
                 arguments={"document_no": "DOC-1"},
                 capability_type="query",
@@ -1153,8 +1163,9 @@ def test_each_waiting_action_gets_a_fresh_action_bound_request() -> None:
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "run two confirmations",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 capability_type="workflow",
             ),
@@ -1288,8 +1299,9 @@ def test_runtime_preserves_workflow_terminal_error_without_reporting_completed(
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "run failing workflow",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 arguments={"secret_token": "private-marker-123"},
                 capability_type="workflow",
@@ -1391,8 +1403,9 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
         structured_output = MockStructuredOutputProvider()
         structured_output.register(
             "start resumable failure",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=definition.workflow_id,
                 arguments={"secret_token": "private-marker-123"},
                 capability_type="workflow",
@@ -1419,8 +1432,9 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
         confirm_message = f"确认 {waiting.task_id}"
         structured_output.register(
             confirm_message,
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id="oa.document.lookup",
                 arguments={"document_no": "DOC-9"},
                 capability_type="query",

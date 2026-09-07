@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 from app.contracts.sdui.models import ConfirmCardPayload as ConfirmCardPayload
 from app.ports.capability_registry import CapabilityTargetSystem, CapabilityType
@@ -22,3 +22,19 @@ class CapabilityRef(BaseModel):
     @classmethod
     def normalize_capability_id(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
+
+
+class MatchedIntent(CapabilityRef):
+    match: Literal["capability"]
+
+
+class UnmatchedIntent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    match: Literal["none"]
+
+
+class IntentOutput(
+    RootModel[Annotated[MatchedIntent | UnmatchedIntent, Field(discriminator="match")]]
+):
+    """Explicit LLM decision; missing or contradictory fields are invalid."""

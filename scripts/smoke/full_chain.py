@@ -138,6 +138,7 @@ class _ReplayOAHttpSession:
 class _ReplayLLMResponse:
     def __init__(self, capability_id: str) -> None:
         content = {
+            "match": "capability",
             "capability_id": capability_id,
             "arguments": {},
             "target_system": "oa",

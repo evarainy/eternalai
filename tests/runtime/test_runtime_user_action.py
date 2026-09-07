@@ -26,7 +26,7 @@ from app.ports.human_gate import (
     VersionBindingMismatchError,
     build_task_version_binding_manifest,
 )
-from app.runtime.models import CapabilityRef
+from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.response_projection import (
     ProjectionContractSnapshot,
     canonical_schema_digest,
@@ -368,8 +368,9 @@ async def _build_harness(
     structured_output = MockStructuredOutputProvider()
     structured_output.register(
         _START_MESSAGE,
-        CapabilityRef,
-        CapabilityRef(
+        IntentOutput,
+        MatchedIntent(
+            match="capability",
             capability_id=definition.workflow_id,
             capability_type="workflow",
         ),
@@ -1114,8 +1115,9 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         harness.runtime._claimed_pending_confirmations.add(claim_key)
         harness.structured_output.register(
             "replace pending",
-            CapabilityRef,
-            CapabilityRef(
+            IntentOutput,
+            MatchedIntent(
+                match="capability",
                 capability_id=_WORKFLOW_ID,
                 capability_type="workflow",
             ),
@@ -1272,6 +1274,6 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
     ]
     assert action_events[0]["trace_id"] == action_events[1]["trace_id"]
     assert action_events[0]["task_id"] == action_events[1]["task_id"]
-    assert {
-        (event["tenant_id"], event["ai_user_id"]) for event in action_events
-    } == {("default", harness.principal.ai_user_id)}
+    assert {(event["tenant_id"], event["ai_user_id"]) for event in action_events} == {
+        ("default", harness.principal.ai_user_id)
+    }
