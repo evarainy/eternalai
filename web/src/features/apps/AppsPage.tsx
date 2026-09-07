@@ -15,8 +15,8 @@ import styles from './AppsPage.module.css';
  * 软件中心，形态照定稿画板 `_scratch/design/glass/Apps.dc.html`。
  *
  * **只有一张卡是真的**：OA 办公系统。它的绑定状态取自 `credential-bindings` 的真实结果，「打开」走的是
- * 系统消息深链用的同一条 origin + 路径前缀校验（`oaWorkbenchNavigation`），新窗口打开；用户浏览器自带
- * OA 的会话 cookie，所以打开即已登录态，不需要新后端。
+ * 系统消息深链用的同一条 origin + 路径前缀校验（`oaWorkbenchNavigation`），新窗口打开；是否需要重新
+ * 登录取决于浏览器自身的 OA 会话，本页不承诺免登。
  *
  * 其余三个业务系统（财务、公文交换、督查督办）后端**没有任何数据源**：既没有它们的地址，也没有它们的
  * 绑定状态。按护栏「UI 决定要有什么功能，不决定数据可不可信」，这里**不摆**四张卡里三张写着编出来的
@@ -65,7 +65,7 @@ const STATUS_CLASS: Record<SystemStatus['kind'], string> = {
  * 区别只是措辞，能做的下一步完全一样。何况本入口的路径只来自已归一化的放行前缀表，`missing` 与
  * `untrusted` 两支实际走不到（见 `oaWorkbenchNavigation`），分三句等于为两个到不了的分支各写一段。
  */
-const OA_LINK_UNAVAILABLE = 'OA 地址没配好，这里打不开。下一步：找管理员配一下。';
+const OA_LINK_UNAVAILABLE = 'OA 地址没配好，这里打不开，请找管理员配一下。';
 
 export default function AppsPage() {
   const authGeneration = useAuthStore((state) => state.generation);
@@ -153,17 +153,20 @@ export default function AppsPage() {
                 </div>
               </article>
               <p className={`${styles.sectionNote} ${styles.gridNote}`}>
-                财务系统、公文交换平台、督查督办系统还没有接进来。下一步：这三个系统请照原来的方式打开。
+                <Icon name="help" size={14} />
+                财务系统、公文交换平台、督查督办系统还没有接进来，请照原来的方式打开。
               </p>
             </div>
             {navigation.kind === 'allowed' ? null : (
               <p className={styles.notice} role="status">
+                <Icon name="help" size={14} />
                 {OA_LINK_UNAVAILABLE}
               </p>
             )}
             {status.kind === 'unknown' ? (
               <p className={styles.notice} role="status">
-                读不到 OA 的绑定状态，这不等于没绑上。下一步：刷新本页；还是取不到就找管理员。
+                <Icon name="help" size={14} />
+                读不到 OA 的绑定状态，这不等于没绑上；请刷新本页，还是取不到就找管理员。
               </p>
             ) : null}
           </section>
@@ -174,7 +177,8 @@ export default function AppsPage() {
               <span className={styles.caption}>单位审核发布的，装上就能用</span>
             </div>
             <p className={styles.sectionNote}>
-              单位发布的软件还没有接进来，这里一个也装不了。下一步：要装什么软件，先找信息中心。
+              <Icon name="help" size={14} />
+              单位发布的软件还没有接进来，这里暂时不能显示；要装什么软件，先找信息中心。
             </p>
           </section>
 
@@ -184,7 +188,8 @@ export default function AppsPage() {
               <span className={styles.caption}>能替你做一件小事的东西</span>
             </div>
             <p className={styles.sectionNote}>
-              你自己的功能还没有接进来，这里看不到、也点不开。下一步：要查 OA 里的待办和消息，请到「AI 助手」里直接问。
+              <Icon name="help" size={14} />
+              你自己的功能还没有接进来，这里暂时不能显示；要查 OA 待办和消息，请到「AI 助手」里直接问。
             </p>
           </section>
         </div>

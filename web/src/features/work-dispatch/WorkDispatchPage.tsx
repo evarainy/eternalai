@@ -100,10 +100,8 @@ export default function WorkDispatchPage() {
         - 边框按 WCAG 2.2 SC 1.4.11 做成可辨边界（≥3:1），聚焦时换 2px 主题色，不是只加内阴影。
       */}
       <section className={styles.brief}>
-        <label className={styles.srOnly} htmlFor="dispatch-brief">
-          用一句话说明要交办的事
-        </label>
         <Input.TextArea
+          aria-label="用一句话说明要交办的事"
           autoSize={{ maxRows: 6, minRows: 3 }}
           className={styles.briefInput}
           id="dispatch-brief"
@@ -128,7 +126,7 @@ export default function WorkDispatchPage() {
           <span className={styles.draftMark}>
             <Icon name="alert" size={17} strokeWidth={1.9} />
           </span>
-          <b className={styles.draftTitle}>这是 AI 生成的草稿，尚未发布</b>
+          <b className={styles.draftTitle}>草稿尚未发布</b>
           <span className={styles.draftHint}>
             逐项核对无误后，点右下角「发布」才会下发
           </span>
@@ -202,7 +200,7 @@ export default function WorkDispatchPage() {
           </div>
 
           <div className={styles.field}>
-            <label htmlFor="dispatch-target">交办对象</label>
+            <label htmlFor="dispatch-target">交办对象（已解析并去重）</label>
             <div className={styles.chipWell} data-focus-ring="host">
               {draft.targets.map((target) => (
                 <span className={styles.chip} key={target}>
@@ -262,6 +260,7 @@ export default function WorkDispatchPage() {
                 附件
               </span>
               <div
+                aria-describedby="dispatch-attachment-help"
                 aria-labelledby="dispatch-attachment-label"
                 className={styles.attachmentWell}
                 role="group"
@@ -271,8 +270,9 @@ export default function WorkDispatchPage() {
                   添加附件
                 </Button>
               </div>
-              <p className={styles.caption}>
-                Word / PDF / 图片，单个不超过 20 MB。附件还传不上去。
+              <p className={styles.caption} id="dispatch-attachment-help">
+                <Icon name="help" size={14} />
+                Word / PDF / 图片，单个不超过 20 MB；附件还传不上去，可先存草稿。
               </p>
             </div>
             <div className={styles.field}>
@@ -340,6 +340,7 @@ export default function WorkDispatchPage() {
         </footer>
         {notice === null ? null : (
           <p className={styles.notice} role="status">
+            <Icon name={notice === SAVE_NOTICE ? 'check' : 'alert'} size={14} />
             {notice}
           </p>
         )}

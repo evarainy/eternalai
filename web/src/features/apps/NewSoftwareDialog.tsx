@@ -22,7 +22,7 @@ import styles from './AppsPage.module.css';
  * `localStorage`，「提交审核」在审核端点接进来之前不可用；界面上写明「提交审核后才对他人可见」，
  * 不让用户以为建完就上线了。
  *
- * 「嵌在工作台里面」默认禁用并写明原因：OA 实测响应带 `X-Frame-Options: SAMEORIGIN`，嵌不进来。
+ * 「嵌在工作台里面」默认禁用；各系统须先逐一核验，不能把 OA 的禁嵌证据外推到所有系统。
  */
 
 const SAVE_NOTICE = '草稿存在这台电脑上，换台电脑就没有了。';
@@ -73,8 +73,6 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
       title="新建应用"
       width={768}
     >
-      <p className={styles.caption}>先存草稿，提交审核通过后别人才看得到。</p>
-
       <fieldset className={styles.optionSet}>
         <legend className={styles.fieldLabel}>这个软件是哪儿来的？</legend>
         <div className={styles.optionGrid} role="radiogroup" aria-label="这个软件是哪儿来的？">
@@ -158,7 +156,7 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
             </button>
           </div>
           <p className={styles.caption}>
-            实测 OA 不允许被别的页面嵌进去（响应头 X-Frame-Options: SAMEORIGIN），所以只能开新窗口。开新窗口不会关掉工作台这一页。
+            嵌入方式还没逐个系统核验，请先开新窗口，不会关掉工作台这一页。
           </p>
         </div>
 
@@ -214,7 +212,7 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
 
         <div className={`${styles.field} ${styles.fieldWide}`}>
           <label htmlFor="new-software-visible">谁能在软件中心看见它</label>
-          <div className={styles.chipWell}>
+          <div className={styles.chipWell} data-focus-ring="host">
             {draft.visibleTo.map((scope) => (
               <span className={styles.chip} key={scope}>
                 {scope}
@@ -256,17 +254,13 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
           <Icon name="alert" size={18} strokeWidth={1.9} />
         </span>
         <div>
-          <b className={styles.warnTitle}>建好先是草稿，只有你自己看得见</b>
           <p className={styles.warnCopy}>
-            提交审核后才对他人可见。审核功能还没有接进来，现在只能存草稿。
+            提交审核功能还没有接进来，当前只能存这台电脑上的草稿；提交审核后才对他人可见。
           </p>
         </div>
       </div>
 
       <div className={styles.dialogFooter}>
-        <span className={styles.caption}>
-          存草稿只存在这台电脑上，也不会去试这个地址通不通。
-        </span>
         <div className={styles.dialogActions}>
           <Button onClick={onClose} type="text">
             取消

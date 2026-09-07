@@ -388,12 +388,16 @@
 
 .field :global(.ant-input),
 .field :global(.ant-input-affix-wrapper) {
-  background: rgb(255 255 255 / 62%) !important;
+  background: var(--workbench-field-fill) !important;
   border: 0 !important;
   border-radius: var(--workbench-radius-control) !important;
-  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
-    inset 0 0 0 1px rgb(22 29 46 / 11%) !important;
-  font-size: var(--workbench-font-body) !important;
+  box-shadow: var(--workbench-field-face) !important;
+  font-size: 17px !important;
+}
+
+.field :global(.ant-input):focus,
+.field :global(.ant-input-affix-wrapper-focused) {
+  box-shadow: var(--workbench-field-face-focus) !important;
 }
 
 .choiceRow {
@@ -442,9 +446,12 @@
   gap: 7px;
   padding: 6px 10px;
   border-radius: var(--workbench-radius-control);
-  background: rgb(255 255 255 / 62%);
-  box-shadow: inset 0 1px 2px rgb(16 26 58 / 5%),
-    inset 0 0 0 1px rgb(22 29 46 / 11%);
+  background: var(--workbench-field-fill);
+  box-shadow: var(--workbench-field-face);
+}
+
+.chipWell:focus-within {
+  box-shadow: var(--workbench-field-face-focus);
 }
 
 .chip {
@@ -471,12 +478,18 @@
   place-items: center;
 }
 
-.chipInput {
+.chipInput,
+.field .chipInput:global(.ant-input),
+.field .chipInput:global(.ant-input):focus {
   width: 12em;
   min-width: 8em;
   flex: 1;
   background: transparent !important;
   box-shadow: none !important;
+}
+
+.chipWell:focus-within:has(button:focus-visible) {
+  box-shadow: var(--workbench-field-face);
 }
 
 .chipAdd {
