@@ -7,7 +7,7 @@
 
 以下 pytest、architecture 两行来源于 **2026-09-08 / `P2-TRACE-CONTRACT-HARDENING-001`** 的实测复核；Golden 行来源于 2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`，本棒未跑，保留原来源标注；前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。
 
-- pytest：`2874 passed, 143 warnings`（较进入本棒的 2832 增加 42；0 skipped，0 failed；未使用 `--ignore=`）
+- pytest：`2874 passed, 143 warnings`（0 skipped，0 failed；未使用 `--ignore=`）。**本棒净增 12**——`pytest --collect-only` 实测 base `phase0/main` 收集 2862、candidate 收集 2874。此前登记的 2832 与 base 实测 2862 相差 30，属历史登记失真，非本棒引入，已登记欠债追查。
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；新增 GT-034/035，既有 32 题与冻结集合不变）
 - `tests/architecture/`：`112 passed`（含 `api_no_infra_imports` 规则）
 - 后端定向 pytest：`312 passed, 3 warnings, 0 failed`（`tests/runtime/`、`tests/knowledge/`、`tests/infra/llm/`）；Golden 定向 `451 passed`，最终意图与会话记忆定向分别 `20 passed`、`8 passed`。
