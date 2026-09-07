@@ -5,14 +5,14 @@
 
 ## 已登记验证基线
 
-以下后端、Golden、architecture 与前端全量历史基线来源于 **2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`** 的实测复核；本棒未重跑这些全量检查，不将旧数字标为当前实测。前端定向结果另列本棒来源。
+以下后端、Golden、architecture 三行来源于 **2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`** 的实测复核；本棒未重跑这三项全量检查，不将旧数字标为当前实测。前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。
 
 - pytest：`2832 passed, 143 warnings`（较进入本棒的 2798 增加 34；0 skipped，0 failed；未使用 `--ignore=`）
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；新增 GT-034/035，既有 32 题与冻结集合不变）
 - `tests/architecture/`：`112 passed`（含 `api_no_infra_imports` 规则）
 - 后端定向 pytest：`312 passed, 3 warnings, 0 failed`（`tests/runtime/`、`tests/knowledge/`、`tests/infra/llm/`）；Golden 定向 `451 passed`，最终意图与会话记忆定向分别 `20 passed`、`8 passed`。
-- 前端历史全量 `pnpm --dir web test`：`471 passed, 0 failed, 0 skipped`（32 个测试文件；来源：2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`，本棒未重跑）
-- 前端本棒定向（2026-09-07 / `P2-FE-PAGE-CONTRACT-001`）：交办完整目录 `29 passed`（2 个文件），软件中心完整目录 `45 passed`（2 个文件），模糊层预算 `19 passed`、控件边界 `38 passed`；合计 6 个文件、`131 passed`，均无过滤，0 failed、0 skipped。
+- 前端全量 `pnpm --dir web test`：`487 passed, 0 failed, 0 skipped`（32 个测试文件；较进入本棒的 471 增加 16，全部为本棒新增的形态与命名守卫断言；2026-09-08 / `P2-FE-PAGE-CONTRACT-001` 实测复核）
+- 前端本棒定向（2026-09-08 / `P2-FE-PAGE-CONTRACT-001`）：交办完整目录 `29 passed`（2 个文件），软件中心完整目录 `45 passed`（2 个文件），模糊层预算 `19 passed`、控件边界 `38 passed`；合计 6 个文件、`131 passed`，均无 `-t` 过滤，0 failed、0 skipped。37 条故障注入逐条实跑，均「断言变红 → 恢复字节后变绿」。
 - ruff、mypy（112 个源文件）、依赖检查（53 项，零新增）与 20 个改动测试文件的弱测试检查均通过；四类变异均断言变红，恢复后同组测试全绿。
 
 ## 必达链与阻塞
