@@ -1,7 +1,7 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-ASTRA-001`（C 档；开发助手规则与 skills 收敛，A/B/C 自审采用 high / medium / 无自审门禁；独立 Monitor → Opus 与项目红线保留）。
-- 当前实现基线 task_id：`P2-RUNTIME-NO-CAPABILITY-COPY-001`（A 档；串行单 lane，承担 A 类同步）。合法无匹配出口与终端用户短文案已实现并本地验证；当前为任务分支候选，独立监理由主窗口安排，尚未运行 Opus、push、PR 或 merge。
+- 当前治理基线 task_id：`P2-GOV-SYNC-DECISIONS-055`（C 档；09-04 / 09-06 / 09-07 裁决落盘并全量复扫；连同既有开发助手治理条目共 11 条，本棒承担 A 类同步）。
+- 当前实现基线 task_id：`P2-RUNTIME-NO-CAPABILITY-COPY-001`（A 档；串行单 lane，承担 A 类同步）。合法无匹配出口与终端用户短文案已实现并验证，已完成自审、独立监理取证及 Opus 评审并合并至 `phase0/main`；监理仅真实 vLLM 不可达项 BLOCKED，雨爷单次授权先合并、网络恢复后补 smoke，其余取证 PASS；授权边界见 `DECISIONS.md` 2026-09-07 对应裁决。
 
 ## 已登记验证基线
 
