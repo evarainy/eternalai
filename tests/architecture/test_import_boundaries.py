@@ -53,6 +53,16 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.ports",
             forbidden_imports=("app.infra",),
         ),
+        # P2-USER-PROFILE-READ-001 added the first api -> ports edge that has an
+        # infra implementation sitting right next to it (app/infra/adapters/oa/
+        # profile.py). The HTTP layer talking to a Protocol instead of that
+        # adapter was already the house style; this makes it a guard rather than
+        # a habit, at the moment the cost of writing it down is lowest.
+        BoundaryRule(
+            name="api_no_infra_imports",
+            source="app.api",
+            forbidden_imports=("app.infra",),
+        ),
         BoundaryRule(
             name="contracts_no_runtime_imports",
             source="app.contracts",

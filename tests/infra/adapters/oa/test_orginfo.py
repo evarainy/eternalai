@@ -160,6 +160,22 @@ def test_duplicate_onclick_attributes_fail_closed() -> None:
     assert parse_orginfo(fragment) is None
 
 
+def test_the_documented_bounds_are_pinned_to_their_values() -> None:
+    """Pin the numbers, not just the presence of a check.
+
+    Every other bound test builds its input from the constant it is testing, so
+    it stays green if the constant is widened — it proves the guard exists, not
+    that the guard is still tight. Widening ``MAX_ORGINFO_LENGTH`` to a
+    megabyte is a perfectly legal-looking edit that no other assertion here
+    would catch. These are the values the design fixed; changing one is a
+    deliberate act that has to change this line too.
+    """
+
+    assert MAX_ORGINFO_LENGTH == 8192
+    assert MAX_ANCHOR_COUNT == 16
+    assert MAX_LABEL_LENGTH == 64
+
+
 def test_oversized_input_is_rejected_before_parsing() -> None:
     padding = "x" * (MAX_ORGINFO_LENGTH + 1)
 

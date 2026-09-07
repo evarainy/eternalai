@@ -19,6 +19,8 @@ from pydantic import SecretStr
 
 from app.infra.adapters.oa.profile import (
     DEFAULT_MAX_AVATAR_BYTES,
+    DEFAULT_MAX_PROFILE_RESPONSE_BYTES,
+    MAX_AVATAR_PATH_LENGTH,
     LiveOAProfileTransport,
     OAUserProfileAdapter,
     allowed_avatar_media_type,
@@ -546,6 +548,19 @@ def test_avatar_requires_exactly_200(status_code: int) -> None:
     transport, _ = build_transport(response)
 
     assert asyncio.run(transport.fetch_avatar(credential(), AVATAR_PATH)) is None
+
+
+def test_the_documented_size_ceilings_are_pinned_to_their_values() -> None:
+    """Same reason as the orginfo bounds: pin the numbers themselves.
+
+    ``test_oversized_avatar_body_is_refused`` builds its body from
+    ``DEFAULT_MAX_AVATAR_BYTES``, so raising that constant carries the test
+    along with it and the ceiling quietly stops being a ceiling.
+    """
+
+    assert DEFAULT_MAX_AVATAR_BYTES == 2 * 1024 * 1024
+    assert DEFAULT_MAX_PROFILE_RESPONSE_BYTES == 256 * 1024
+    assert MAX_AVATAR_PATH_LENGTH == 256
 
 
 def test_oversized_avatar_body_is_refused() -> None:
