@@ -22,7 +22,8 @@ import {
 } from '../generated/runtime/runtime';
 import type { UIComponentTargetSystem } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
-import { greetingByHour } from './chatGreeting';
+import { useCurrentIdentity } from '../app/identity';
+import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
@@ -163,6 +164,7 @@ export default function ChatPage() {
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
+  const identity = useCurrentIdentity();
   const requestInFlight = useRef(false);
 
   const mutation = useMutation({
@@ -279,17 +281,17 @@ export default function ChatPage() {
             {transcript.length === 0 ? (
               <div className={styles.emptyState}>
                 {/*
-                  画板是「王主任，早上好」。姓名与职务当前没有后端读取端点（见顶栏同一处的
-                  fail-closed 文案），编一个名字就是造数据，所以只落**不带称呼**的问候；版式
-                  （60px 图标 + 大字标题 + 一句 17px 说明）照画板。原来标题位放的是
-                  「这里现在是空的，因为你还没有问过。」——把一句说明做成了全页最大字号的标题。
-                  那句实话没有删，收进了下面这行说明里。
+                  画板是「王主任，早上好」。姓名现在有数据源（`GET /api/v1/me` 的 display_name，
+                  来自服务端签名的会话票据），所以称呼落地；「主任」是职务，OA 没有这个字段，不编。
+                  取不到姓名时退回不带称呼的问候。版式（60px 图标 + 大字标题 + 一句 17px 说明）
+                  照画板。原来标题位放的是「这里现在是空的，因为你还没有问过。」——把一句说明做成了
+                  全页最大字号的标题。那句实话没有删，收进了下面这行说明里。
                 */}
                 <Welcome
                   className={styles.welcome}
                   variant="borderless"
                   icon={<Icon name="spark" size={26} strokeWidth={1.9} />}
-                  title={greetingByHour()}
+                  title={greetingWithName(identity.displayName)}
                   description="这里还没有对话。我能帮你查 OA 里的待办和系统消息，说人话就行。"
                 />
                 <Prompts

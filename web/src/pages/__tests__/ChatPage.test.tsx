@@ -22,12 +22,25 @@ import {
 import { useAIDockStore } from '../../stores/aiDockStore';
 import { useAuthStore } from '../../stores/authStore';
 import ChatPage from '../ChatPage';
-import { greetingByHour } from '../chatGreeting';
+import { greetingByHour, greetingWithName } from '../chatGreeting';
 
 const runtimeMock = vi.hoisted(() => ({
   action: vi.fn(),
   handle: vi.fn(),
 }));
+
+/*
+ * 身份读取在这一屏里只提供问候语里的称呼，走的是自己的合同测试。这里把它挡在 `fetch` 之外：本文件
+ * 大量用 `vi.stubGlobal('fetch', ...)` 断言 runtime 请求的**唯一一次**调用与参数，而一个 `Response`
+ * 实例的 body 只能读一次——放任 `/api/v1/me` 也走同一个替身，会把 runtime 那次请求的响应吃掉。
+ */
+const identityMock = vi.hoisted(() => ({ readMe: vi.fn() }));
+
+vi.mock('../../generated/me/me', () => ({
+  readMeApiV1MeGet: identityMock.readMe,
+}));
+
+const DISPLAY_NAME = '甲用户';
 
 vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
   const actual =
@@ -201,6 +214,14 @@ function storageText(storage: Storage): string {
 }
 
 beforeEach(() => {
+  identityMock.readMe.mockReset();
+  identityMock.readMe.mockResolvedValue({
+    authenticated: true,
+    display_name: DISPLAY_NAME,
+    org: { department_name: '部门乙', department_id: '22' },
+    org_status: 'ok',
+    avatar_path: '/api/v1/me/avatar',
+  });
   useAIDockStore.setState({
     contextNotice: null,
     draft: '',
@@ -1275,19 +1296,50 @@ describe('ChatPage assistant surfaces', () => {
   });
 
   /*
-   * 空态标题：画板是「王主任，早上好」，姓名与职务没有后端读取端点，只落不带称呼的问候。这条钉死
-   * **不许出现称呼**，也不许把一句说明重新做成最大字号的标题。
+   * 空态标题：画板是「王主任，早上好」。姓名现在有数据源（签名票据），所以称呼落地；「主任」是职务，
+   * OA 没有这个字段，这条钉死**不许出现职务**，也不许把一句说明重新做成最大字号的标题。
    */
-  it('greets without inventing a name and keeps the empty reason in the description', () => {
+  it('greets by the real name and keeps the empty reason in the description', async () => {
     renderChat();
 
+    await waitFor(() => {
+      const title = document.querySelector('.ant-welcome-title');
+      expect(title?.textContent).toContain(DISPLAY_NAME);
+    });
     const title = document.querySelector('.ant-welcome-title');
-    expect(title).not.toBeNull();
-    expect(['夜里好', '早上好', '中午好', '下午好', '晚上好']).toContain(
-      title?.textContent,
-    );
-    expect(title?.textContent).not.toMatch(/主任|王|先生|女士/);
+    expect(title?.textContent).toBe(greetingWithName(DISPLAY_NAME));
+    expect(title?.textContent).not.toMatch(/主任|科员|先生|女士/);
     expect(screen.getByText(/这里还没有对话。/)).toBeInTheDocument();
+  });
+
+  it('falls back to a greeting without a form of address when the name is missing', async () => {
+    identityMock.readMe.mockResolvedValue({
+      authenticated: true,
+      display_name: '',
+      org: null,
+      org_status: 'unavailable',
+      avatar_path: null,
+    });
+    renderChat();
+
+    await waitFor(() => {
+      const title = document.querySelector('.ant-welcome-title');
+      expect(['夜里好', '早上好', '中午好', '下午好', '晚上好']).toContain(
+        title?.textContent,
+      );
+    });
+    // 取不到姓名就不带称呼，不留空位、不写占位名。
+    expect(document.querySelector('.ant-welcome-title')?.textContent).not.toMatch(
+      /，|,/,
+    );
+  });
+
+  it('adds the form of address only when a name is actually available', () => {
+    expect(greetingWithName(null, new Date(2026, 8, 4, 8, 0, 0))).toBe('早上好');
+    expect(greetingWithName('   ', new Date(2026, 8, 4, 8, 0, 0))).toBe('早上好');
+    expect(greetingWithName(DISPLAY_NAME, new Date(2026, 8, 4, 8, 0, 0))).toBe(
+      `${DISPLAY_NAME}，早上好`,
+    );
   });
 
   it('maps every part of the day to a greeting without a form of address', () => {

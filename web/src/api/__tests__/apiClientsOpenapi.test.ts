@@ -104,6 +104,18 @@ const PROJECTS = [
     ],
   },
   {
+    project: 'me',
+    input: './openapi/me.openapi.json',
+    target: './src/generated/me/me.ts',
+    operations: [
+      {
+        path: '/api/v1/me',
+        method: 'get',
+        operationId: 'read_me_api_v1_me_get',
+      },
+    ],
+  },
+  {
     project: 'credentialBindings',
     input: './openapi/credential-bindings.openapi.json',
     target: './src/generated/credential-bindings/credential-bindings.ts',
@@ -137,6 +149,14 @@ const ADMIN_PROJECT = {
 } as const;
 
 const CLIENT_PROJECTS = [...PROJECTS, ADMIN_PROJECT] as const;
+
+function project(name: (typeof PROJECTS)[number]['project']) {
+  const found = PROJECTS.find((candidate) => candidate.project === name);
+  if (found === undefined) {
+    throw new Error(`Unknown OpenAPI project: ${name}`);
+  }
+  return found;
+}
 
 const EXPORT_SCRIPT = String.raw`
 from __future__ import annotations
@@ -284,7 +304,7 @@ function readOpenApi(path: string): OpenApiDocument {
 
 describe('FastAPI-derived Orval clients', () => {
   it(
-    're-exports five FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    're-exports six FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -297,8 +317,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(7);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(7);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(8);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(8);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),
@@ -338,9 +358,10 @@ describe('FastAPI-derived Orval clients', () => {
           }
         }
 
-        const authDocument = readOpenApi(resolve(temporaryWeb, PROJECTS[0].input));
+        const authProject = project('auth');
+        const authDocument = readOpenApi(resolve(temporaryWeb, authProject.input));
         const loginSchema =
-          authDocument.paths[PROJECTS[0].operations[0].path]?.post?.requestBody?.content?.[
+          authDocument.paths[authProject.operations[0].path]?.post?.requestBody?.content?.[
             'application/json'
           ]?.schema;
         expect(loginSchema?.properties?.loginid).toMatchObject({
@@ -352,11 +373,13 @@ describe('FastAPI-derived Orval clients', () => {
           writeOnly: true,
         });
 
+        const bindingProject = project('credentialBindings');
         const bindingDocument = readOpenApi(
-          resolve(temporaryWeb, PROJECTS[4].input),
+          resolve(temporaryWeb, bindingProject.input),
         );
         const bindingSchema =
-          bindingDocument.paths[PROJECTS[4].operations[1].path]?.put?.requestBody
+          bindingDocument.paths['/api/v1/credential-bindings/{target_system}']?.put
+            ?.requestBody
             ?.content?.['application/json']?.schema;
         expect(bindingSchema?.properties?.login_id).toMatchObject({
           format: 'password',
