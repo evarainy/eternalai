@@ -146,6 +146,112 @@ def test_reader_enforces_tenant_scope_for_same_trace_task_and_session() -> None:
     asyncio.run(exercise())
 
 
+def test_reader_hides_historical_null_owned_row_from_any_tenant_query() -> None:
+    """Historical rows with tenant_id/ai_user_id NULL (pre-backfill, unattributable)
+    must never surface through PostgreSQLTraceReader for any tenant, even one that
+    shares the same trace/task/session ids as the NULL row.
+
+    This is a direct reader-level assertion for the fail-closed property that was
+    previously only guaranteed indirectly by SQL `NULL = :tenant_id` semantics
+    (see PHASE2_PLAN.md active debt "缺少 reader 层『历史 NULL 归属行不可见』的直接断言").
+
+    The NULL row is inserted via raw SQL because the TracePersistedEvent/TraceEvent
+    port models require a non-empty tenant_id string; a NULL-owned row can only
+    exist as a historical artifact, matching how migration 20260901_090000 leaves
+    unattributable rows as (tenant_id=NULL, ai_user_id=NULL) under the
+    ck_trace_events_owner_pair check constraint.
+    """
+    _require_db()
+    suffix = uuid4().hex
+    trace_id = f"null-owner-trace-{suffix}"
+    task_id = f"null-owner-task-{suffix}"
+    session_id = f"null-owner-session-{suffix}"
+    null_event_id = f"{suffix}-null-owner"
+    owned_event_id = f"{suffix}-owned"
+    created_at = datetime(2026, 7, 23, tzinfo=UTC)
+
+    async def exercise() -> None:
+        engine = _make_engine()
+        try:
+            factory = _make_factory(engine)
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO trace_events"
+                        " (event_id, trace_id, task_id, session_id, tenant_id, ai_user_id,"
+                        " event_type, status,"
+                        " capability_id, error_code, attributes, created_at)"
+                        " VALUES"
+                        " (:event_id, :trace_id, :task_id, :session_id,"
+                        " :tenant_id, :ai_user_id,"
+                        " 'task_created', 'ok', NULL, NULL,"
+                        " CAST(:attributes AS JSONB), :created_at)"
+                    ),
+                    [
+                        {
+                            "event_id": null_event_id,
+                            "trace_id": trace_id,
+                            "task_id": task_id,
+                            "session_id": session_id,
+                            "tenant_id": None,
+                            "ai_user_id": None,
+                            "attributes": json.dumps({"order": "null-owner"}),
+                            "created_at": created_at,
+                        },
+                        {
+                            "event_id": owned_event_id,
+                            "trace_id": trace_id,
+                            "task_id": task_id,
+                            "session_id": session_id,
+                            "tenant_id": TENANT_ID,
+                            "ai_user_id": AI_USER_ID,
+                            "attributes": json.dumps({"order": "owned"}),
+                            "created_at": created_at + timedelta(seconds=1),
+                        },
+                    ],
+                )
+                await session.commit()
+
+            reader = PostgreSQLTraceReader(factory)
+            by_trace = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=TENANT_ID,
+                task_id=task_id,
+                session_id=session_id,
+            )
+            by_task = await reader.list_events_by_task(
+                task_id,
+                tenant_id=TENANT_ID,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            by_session = await reader.list_events_by_session(
+                session_id,
+                tenant_id=TENANT_ID,
+                trace_id=trace_id,
+                task_id=task_id,
+            )
+
+            assert [event.event_id for event in by_trace] == [owned_event_id]
+            assert [event.event_id for event in by_task] == [owned_event_id]
+            assert [event.event_id for event in by_session] == [owned_event_id]
+            assert all(
+                event.event_id != null_event_id for event in (*by_trace, *by_task, *by_session)
+            )
+
+            other_tenant_view = await reader.list_events_by_trace(
+                trace_id,
+                tenant_id=OTHER_TENANT_ID,
+                task_id=task_id,
+                session_id=session_id,
+            )
+            assert other_tenant_view == []
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise())
+
+
 def test_default_sanitizer_removes_plaintext_from_raw_database_row() -> None:
     _require_db()
     trace_id = f"redaction-{uuid4().hex}"
