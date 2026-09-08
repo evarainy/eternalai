@@ -80,6 +80,7 @@ from app.infra.persistence.task_store.postgresql import (
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory
 from app.ports.adapter import AdapterPort
@@ -224,31 +225,20 @@ def build_oa_read_adapter(
     if settings.oa_read_adapter_mode == "replay":
         contract_pack_dir = settings.oa_read_contract_pack_dir
         if contract_pack_dir is None or not contract_pack_dir.is_dir():
-            raise RuntimeError(
-                "OA_READ_CONTRACT_PACK_DIR must be an existing directory"
-            )
+            raise RuntimeError("OA_READ_CONTRACT_PACK_DIR must be an existing directory")
         return OAReadAdapter(ReplayOAReadProvider(contract_pack_dir))
     if settings.oa_read_adapter_mode == "live":
-        pending_contract_pack_dir = (
-            settings.oa_pending_workflows_contract_pack_dir
-        )
-        if (
-            pending_contract_pack_dir is None
-            or not pending_contract_pack_dir.is_dir()
-        ):
+        pending_contract_pack_dir = settings.oa_pending_workflows_contract_pack_dir
+        if pending_contract_pack_dir is None or not pending_contract_pack_dir.is_dir():
             raise RuntimeError(
                 "OA_PENDING_WORKFLOWS_CONTRACT_PACK_DIR must be an existing directory"
             )
-        system_message_contract_pack_dir = (
-            settings.oa_system_messages_contract_pack_dir
-        )
+        system_message_contract_pack_dir = settings.oa_system_messages_contract_pack_dir
         if (
             system_message_contract_pack_dir is None
             or not system_message_contract_pack_dir.is_dir()
         ):
-            raise RuntimeError(
-                "OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR must be an existing directory"
-            )
+            raise RuntimeError("OA_SYSTEM_MESSAGES_CONTRACT_PACK_DIR must be an existing directory")
         message_center_path = settings.oa_message_center_path
         if message_center_path is None:
             raise RuntimeError("OA_MESSAGE_CENTER_PATH is required for live mode")
@@ -256,9 +246,7 @@ def build_oa_read_adapter(
         pending_counts_path = settings.oa_pending_workflows_counts_path
         pending_datas_path = settings.oa_pending_workflows_datas_path
         pending_actiontype = settings.oa_pending_workflows_actiontype
-        pending_hide_no_data_tab = (
-            settings.oa_pending_workflows_hide_no_data_tab
-        )
+        pending_hide_no_data_tab = settings.oa_pending_workflows_hide_no_data_tab
         pending_method = settings.oa_pending_workflows_method
         pending_offical_type = settings.oa_pending_workflows_offical_type
         pending_view_scope = settings.oa_pending_workflows_view_scope
@@ -283,9 +271,7 @@ def build_oa_read_adapter(
                 system_select_state,
             )
         ):
-            raise RuntimeError(
-                "OA capability parameters are required for live mode"
-            )
+            raise RuntimeError("OA capability parameters are required for live mode")
         assert pending_split_path is not None
         assert pending_counts_path is not None
         assert pending_datas_path is not None
@@ -316,15 +302,11 @@ def build_oa_read_adapter(
                 system_messages_select_state=system_select_state,
                 timeout_seconds=settings.oa_timeout_seconds,
                 pending_workflows_contract_pack_dir=pending_contract_pack_dir,
-                system_messages_contract_pack_dir=(
-                    system_message_contract_pack_dir
-                ),
+                system_messages_contract_pack_dir=(system_message_contract_pack_dir),
                 drift_reporter=report_oa_structural_drift,
                 page_size=settings.oa_message_center_page_size,
             ),
-            secret_provider=CredentialStoreSecretProvider(
-                credential_store=credential_store
-            ),
+            secret_provider=CredentialStoreSecretProvider(credential_store=credential_store),
         )
     raise RuntimeError("OA_READ_ADAPTER_MODE is invalid")
 
@@ -332,17 +314,14 @@ def build_oa_read_adapter(
 def _require_safe_mock_oa_configuration(
     settings: ProductionSettings,
 ) -> None:
-    environment_name = (
-        settings.environment_name.strip().casefold() or "production"
-    )
+    environment_name = settings.environment_name.strip().casefold() or "production"
     if (
         settings.oa_read_adapter_mode == "mock"
         and environment_name != "testing"
         and not settings.phase0_mock_mode
     ):
         raise RuntimeError(
-            "OA_READ_ADAPTER_MODE=mock requires ENV=testing "
-            "or PHASE0_MOCK_MODE=true"
+            "OA_READ_ADAPTER_MODE=mock requires ENV=testing or PHASE0_MOCK_MODE=true"
         )
 
 
@@ -426,7 +405,9 @@ def build_runtime(
         structured_output=structured_output,
         intent_model=intent_model,
         response_builder=ResponseEnvelopeBuilder(),
-        workflow_engine=workflow_engine,
+        workflow_engine=(
+            WorkflowEngineAdapter(workflow_engine) if workflow_engine is not None else None
+        ),
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
         evaluator=evaluator or TerminalEvaluator(),
@@ -467,9 +448,7 @@ def build_production_components(
         encryption_key=settings.credential_encryption_key,
     )
     resolved_trace_port = (
-        PostgreSQLTraceWriter(session_factory)
-        if trace_port is None
-        else trace_port
+        PostgreSQLTraceWriter(session_factory) if trace_port is None else trace_port
     )
     trace_query = build_trace_query(session_factory=session_factory)
     resolved_identity_mapping = (
@@ -490,9 +469,7 @@ def build_production_components(
         trace_port=resolved_trace_port,
         adapters=resolved_adapters,
         human_gate_port=human_gate_port,
-        unbound_task_capability_ids=frozenset(
-            {OA_PENDING_WORKFLOWS_CAPABILITY_ID}
-        ),
+        unbound_task_capability_ids=frozenset({OA_PENDING_WORKFLOWS_CAPABILITY_ID}),
     )
     gateway.assert_production_wiring()
     production_llm = OpenAICompatibleLLMProvider(
@@ -513,9 +490,7 @@ def build_production_components(
         trace_port=resolved_trace_port,
         llm_provider=resolved_llm,
         structured_output=(
-            JSONStructuredOutputProvider()
-            if structured_output is None
-            else structured_output
+            JSONStructuredOutputProvider() if structured_output is None else structured_output
         ),
         intent_model=settings.llm_model,
         human_gate_port=human_gate_port,
@@ -536,8 +511,7 @@ def build_production_components(
     if resolved_binding_verifier is None:
         if not isinstance(resolved_authentication, OACredentialVerifier):
             raise RuntimeError(
-                "A custom authentication port requires a non-persisting "
-                "credential binding verifier"
+                "A custom authentication port requires a non-persisting credential binding verifier"
             )
         resolved_binding_verifier = resolved_authentication
     session_tokens = build_session_token_port(
