@@ -25,6 +25,7 @@ APP_ROOT = REPO_ROOT / "app"
 # Boundary rule definitions
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class BoundaryRule:
     name: str
@@ -41,9 +42,7 @@ class BoundaryRule:
     def __post_init__(self) -> None:
         # Auto-resolve source_path from source string (e.g. "app.ports" → app/ports/)
         if self.source_path == Path():
-            object.__setattr__(
-                self, "source_path", REPO_ROOT / self.source.replace(".", "/")
-            )
+            object.__setattr__(self, "source_path", REPO_ROOT / self.source.replace(".", "/"))
 
 
 def _boundary_rules() -> list[BoundaryRule]:
@@ -68,13 +67,22 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.contracts",
             forbidden_imports=("app.runtime",),
         ),
+        # P2-PORT-SEAM-001: RuntimeImpl must reach Workflow execution only
+        # through WorkflowEnginePort (app/ports/workflow_engine.py), not the
+        # concrete WorkflowEngine class. Import-path based, not a word list,
+        # per the same reasoning as P2-FE-DIR-GUARD-001: a name-matching guard
+        # can be dodged by renaming, an import-path guard cannot.
+        BoundaryRule(
+            name="runtime_no_workflow_engine_import",
+            source="app.runtime",
+            forbidden_imports=("app.workflow.engine",),
+        ),
         BoundaryRule(
             name="runtime_no_execution_fabric",
             source="app.runtime",
             forbidden_imports=("app.execution_fabric",),
             not_applicable_reason=(
-                "app/runtime/ does not exist yet; "
-                "runtime not implemented in Phase 0"
+                "app/runtime/ does not exist yet; runtime not implemented in Phase 0"
             ),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
@@ -120,8 +128,7 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.gateway",
             forbidden_imports=("app.runtime",),
             not_applicable_reason=(
-                "app/gateway/ does not exist yet; "
-                "gateway not implemented in Phase 0"
+                "app/gateway/ does not exist yet; gateway not implemented in Phase 0"
             ),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
@@ -141,8 +148,7 @@ def _boundary_rules() -> list[BoundaryRule]:
                 "app.ports.secret_provider",
             ),
             not_applicable_reason=(
-                "app/workflow/ does not exist yet; "
-                "workflow not implemented in Phase 0"
+                "app/workflow/ does not exist yet; workflow not implemented in Phase 0"
             ),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
@@ -155,8 +161,7 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.skill",
             forbidden_imports=("app.execution_fabric",),
             not_applicable_reason=(
-                "app/skill/ does not exist yet; "
-                "skill not implemented in Phase 0"
+                "app/skill/ does not exist yet; skill not implemented in Phase 0"
             ),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
@@ -169,35 +174,24 @@ def _boundary_rules() -> list[BoundaryRule]:
             source="app.admin_console",
             forbidden_imports=("app.execution_fabric.real_adapters",),
             not_applicable_reason=(
-                "app/admin_console/ does not exist yet; "
-                "admin console not implemented in Phase 0"
+                "app/admin_console/ does not exist yet; admin console not implemented in Phase 0"
             ),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
             activation_task_id="future admin console implementation task",
-            expiry_condition=(
-                "app/admin_console/ directory and modules exist"
-            ),
+            expiry_condition=("app/admin_console/ directory and modules exist"),
             evidence="app/admin_console/ directory absent from repo",
         ),
         BoundaryRule(
             name="real_adapters_no_runtime",
             source="app.execution_fabric.real_adapters",
             forbidden_imports=("app.runtime",),
-            not_applicable_reason=(
-                "app/execution_fabric/real_adapters/ does not exist yet"
-            ),
+            not_applicable_reason=("app/execution_fabric/real_adapters/ does not exist yet"),
             not_applicable_scope="waiting_dependency",
             blocked_by_task_id="none",
             activation_task_id="future real adapter implementation task",
-            expiry_condition=(
-                "app/execution_fabric/real_adapters/ "
-                "directory and modules exist"
-            ),
-            evidence=(
-                "app/execution_fabric/real_adapters/ "
-                "directory absent from repo"
-            ),
+            expiry_condition=("app/execution_fabric/real_adapters/ directory and modules exist"),
+            evidence=("app/execution_fabric/real_adapters/ directory absent from repo"),
         ),
     ]
 
@@ -206,9 +200,8 @@ def _boundary_rules() -> list[BoundaryRule]:
 # AST-based import scanner
 # ---------------------------------------------------------------------------
 
-def _file_package(
-    py_file: Path, source_root: Path, repo_root: Path = REPO_ROOT
-) -> list[str]:
+
+def _file_package(py_file: Path, source_root: Path, repo_root: Path = REPO_ROOT) -> list[str]:
     """Return the package components for *py_file*.
 
     Walks up from the file's directory counting ``__init__.py`` files
@@ -233,9 +226,7 @@ def _file_package(
     return parts
 
 
-def _collect_imports(
-    py_file: Path, source_root: Path, repo_root: Path = REPO_ROOT
-) -> list[str]:
+def _collect_imports(py_file: Path, source_root: Path, repo_root: Path = REPO_ROOT) -> list[str]:
     """Return all module paths imported by *py_file*, resolved to absolute."""
     source = py_file.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(py_file))
@@ -291,6 +282,7 @@ def _find_violations(
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestImportBoundaries:
     """Verify that each boundary rule is either enforced or not_applicable."""
 
@@ -341,16 +333,11 @@ class TestImportBoundaries:
         # consume that one Port contract directly. Every other Port remains
         # behind the Admin service, and infra dependencies remain forbidden.
         port_imports = {
-            module
-            for module in imports
-            if module == "app.ports" or module.startswith("app.ports.")
+            module for module in imports if module == "app.ports" or module.startswith("app.ports.")
         }
-        assert {".".join(module.split(".")[:3]) for module in port_imports} == {
-            "app.ports.auth"
-        }
+        assert {".".join(module.split(".")[:3]) for module in port_imports} == {"app.ports.auth"}
         assert not any(
-            module == "app.infra" or module.startswith("app.infra.")
-            for module in imports
+            module == "app.infra" or module.startswith("app.infra.") for module in imports
         )
 
     def test_auth_slice_does_not_depend_on_identity_mapping(self) -> None:
@@ -360,9 +347,7 @@ class TestImportBoundaries:
             *sorted((APP_ROOT / "infra" / "auth").glob("*.py")),
         ]
         imports = {
-            module
-            for auth_file in auth_files
-            for module in _collect_imports(auth_file, APP_ROOT)
+            module for auth_file in auth_files for module in _collect_imports(auth_file, APP_ROOT)
         }
 
         assert not any(
@@ -371,9 +356,7 @@ class TestImportBoundaries:
             for module in imports
         )
 
-    def test_not_applicable_rules_return_records(
-        self, rules: list[BoundaryRule]
-    ) -> None:
+    def test_not_applicable_rules_return_records(self, rules: list[BoundaryRule]) -> None:
         """Each not_applicable rule returns a complete record."""
         inactive = [r for r in rules if not self._is_applicable(r)]
         for rule in inactive:
@@ -446,18 +429,12 @@ class TestImportBoundaries:
             "nodes",
             "queue",
         }
-        assert {"workflow_id", "version", "steps"}.issubset(
-            WorkflowDefinition.__dataclass_fields__
-        )
-        assert {"step_id", "capability_id", "when"}.issubset(
-            WorkflowStep.__dataclass_fields__
-        )
+        assert {"workflow_id", "version", "steps"}.issubset(WorkflowDefinition.__dataclass_fields__)
+        assert {"step_id", "capability_id", "when"}.issubset(WorkflowStep.__dataclass_fields__)
         assert forbidden_fields.isdisjoint(WorkflowDefinition.__dataclass_fields__)
         assert forbidden_fields.isdisjoint(WorkflowStep.__dataclass_fields__)
 
-    def test_from_import_detected_in_temp_fixture(
-        self, tmp_path: Path
-    ) -> None:
+    def test_from_import_detected_in_temp_fixture(self, tmp_path: Path) -> None:
         """Negative validation: 'from app import infra' style is detected."""
         pkg_dir = tmp_path / "app" / "ports"
         pkg_dir.mkdir(parents=True)
@@ -481,9 +458,7 @@ class TestImportBoundaries:
         assert imported == "app.infra"
         assert forbidden == "app.infra"
 
-    def test_relative_import_detected_in_temp_fixture(
-        self, tmp_path: Path
-    ) -> None:
+    def test_relative_import_detected_in_temp_fixture(self, tmp_path: Path) -> None:
         """Negative validation: 'from ..infra import x' is detected."""
         # Create app/ports/bad.py under tmp_path as simulated repo root
         app_dir = tmp_path / "app"

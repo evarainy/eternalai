@@ -51,6 +51,7 @@ from app.ports.task_store import (
     TaskStorePort,
 )
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
+from app.ports.workflow_engine import WorkflowEnginePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef, ConfirmCardPayload
 from app.runtime.response_projection import (
@@ -62,7 +63,6 @@ from app.version_binding import (
     immutable_request_digest,
     merge_version_bindings,
 )
-from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult
 
 
@@ -111,7 +111,7 @@ class RuntimeImpl:
         structured_output: StructuredOutputPort,
         intent_model: str,
         response_builder: ResponseEnvelopeBuilder,
-        workflow_engine: WorkflowEngine | None = None,
+        workflow_engine: WorkflowEnginePort | None = None,
         session_memory: SessionMemory | None = None,
         semantic_knowledge: BasicKnowledge | None = None,
         evaluator: TerminalEvaluator | None = None,
