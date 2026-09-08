@@ -2610,3 +2610,63 @@ IP 段推断它对外可达**——主窗口曾据此推错一次。
 
 **影响面**：`web/src/pages/ChatPage.tsx`；`P2-FE-DISPATCH-FORM-001` 的草稿输入框；2026-08-27 §一 该行现址
 的适用面标注；`P2-GOV-SYNC-DECISIONS-055` 原拟登记的「placeholder 冲突待裁」欠债据本条**不再登记**。
+
+## 2026-09-08 — 裁决：`/api/v1/admin/tasks/{task_id}/events` 的存在性差异统一收敛为 `200 []`
+
+**决定**：雨爷 2026-09-08 选定方向 A——该端点取消 `404`，不存在的 `task_id` 与跨租户不可归属的 `task_id`
+返回完全一致的 `200 []`，调用方无法据响应区分两者。这是公共 API 契约变更：`web/openapi/admin.openapi.json`
+显式声明了该端点的 `404`，`tests/api/test_admin_evidence.py`、`web/src/api/__tests__/adminOpenapi.test.ts`、
+`web/src/pages/admin/__tests__/TasksPage.test.tsx` 等处依赖 `task_not_found` / `TaskNotFound`；按 `AGENTS.md`
+走了人工停点，由雨爷本次明确批准方向 A 后才可实施。
+
+**为什么**：现状下外租户 task 返回 `200 []`、不存在的 id 返回 `404`，两者可区分，构成弱存在性 oracle——可用
+于枚举他人租户下存在哪些 `task_id`。泄露面仅限「是否存在」、不含内容，但属真实信息泄露。收敛方向与
+2026-08-30 已裁的「集合查询返回安全空集合」同源，不新立原则，只是把该原则补用到这个端点。
+
+**适用面**：连带改动缺一不可——①`app/admin/registry.py::AdminRegistryService.list_task_events` 不再抛
+`AdminTaskNotFoundError`（或该异常不再映射为 404），须先确认该异常是否被其它端点复用，若复用只改本端点映射；
+②OpenAPI 移除该端点 `404` 响应声明，重新生成前端客户端（`generate:api`）并跑 `test:openapi` 确认生成物与规
+格一致；③前端 `TasksPage` 空状态文案须同时覆盖「任务不存在」与「任务还没产生记录」两种情况，按「一屏一个重
+点」只写一句，不铺开解释；④负向回归须证明「不存在的 id」与「跨租户不可归属的 id」两个请求的响应逐字节一致
+（状态码、body、相关响应头），并给反证：把跨租户授权谓词放宽后该断言应变红。不在本裁决范围：其它端点的存
+在性语义不随本条改变；`AdminTaskNotFoundError` 本身是否保留、trace 审计事件的语义是否也要统一，均未裁，须
+另行判断。
+
+**影响面**：`docs/phase2/PHASE2_PLAN.md` 活欠债表「`/tasks/{id}/events` 的跨租户存在性差异」一行由本裁决
+解除待裁状态、改写为待指派实现棒；`app/admin/registry.py`、`web/openapi/admin.openapi.json`、
+`web/src/generated/admin/**`、`web/src/pages/admin/TasksPage.tsx` 及对应测试。
+
+## 2026-09-08 — 裁决：内部任务派发的三轴授权模型
+
+**决定**：内部任务派发的完整授权模型定为三轴，缺一不可——①**谁能派**：仅部门负责人，判据是 `jobtitle`
+∈ `{75, 380, 1405, 1701, 1999}`（科长/大队长/监区长/主任×2），非负责人不能派任务；②**能派给谁**：负责人所
+在 `departmentid` 落在 30 个监区名单内 → 只能派本部门成员，否则（科室）→ 可派任何部门；③**能看见什么**：
+本部门的任务，加上自己作为发起人下发的任务（含派到外部门那些）。此前缺失的两项外部输入已全部到位，
+`P2-INTERNAL-WO-SCOPE-001` 的 BLOCKED 已解除。
+
+**为什么**：此前已实证 `managerid` 不能承担部门主负责人语义，`jobtitle` 数字 ID 是其替代判据；数据来自人员
+列表接口 `POST /api/ec/dev/table/datas`（非 `getResourceBaseTitle`——后者字段闭集里没有岗位），消费数字 ID、
+不消费 `jobtitlespan` 中文标签，符合 `AGENTS.md` 不变量「安全分流只依赖可真实校验的协议事实或配置值，不以
+自由文本承担安全开关」。监区判据同样取 `departmentid` 协议字段，而非岗位反推——大队长既可能是科室负责人也
+可能是监区负责人，不产生歧义。「派发不带来可见性」与 2026-08-27「同级部门之间无互相查看权」分属派发轴与查
+看轴，互不削弱：把任务派到别的部门不会让发起人获得该部门资料可见性，他能看见那条 Work Object 是因为他是
+发起人，不是因为他能看那个部门。
+
+**适用面**：三条限定必须原样保留，不得实现时松动——①负责人 allowlist（五个 `jobtitle` ID）已知不完整，须
+**fail-closed**：不在集合内一律不是负责人；漏判只会让真负责人当天反馈补录，误判则让非负责人拿到派发权，
+后者不可接受。大队长（`380`）经雨爷本次明确确认属负责人，全集由最早口述的三类扩为五个 ID。②监区名单（30
+个 `departmentid`）的默认方向是 **fail-open**：不在名单内 = 科室、可跨部门；新建监区若未加入该常量，会被
+当作科室、直接获得跨部门派发权，且不会有人察觉——漏登记监区是静默越权，漏登记科室只是发不出去、当事人当天
+就会反馈，两种漏法代价不对称。③部门类型不可判定时按最严处理（按监区，只能发本部门），不得因判不出类型而
+放行跨部门派发。两处 allowlist 均须落成代码常量 + 守卫测试，不得从数据库、配置文件或环境变量动态读取，改动
+必须显式改代码并出现在 diff 中；派发时须把类型判定结果与依据（部门 ID、判定为何种类型、命中哪条依据）写入
+Trace，使漏登记事后可审计。实现须落六类负向测试：非负责人派任务拒绝、监区负责人派给本部门外的人拒绝、科室
+负责人派给任意部门允许、派发不授予可见性（A 部门负责人派给 B 部门后不得因此看到 B 部门其他任务）、同级部门
+互不可见（2026-08-27 原有约束在查看轴上仍然有效）、部门类型不可判定按最严处理；每条负向断言都要有反证：放
+宽对应生产侧谓词后该断言必须变红。
+
+**影响面**：`P2-INTERNAL-WO-SCOPE-001` → `P2-INTERNAL-WO-DISPATCH-001` → `P2-INTERNAL-WO-ATTACHMENT-001`
+整条链；`app/ports/organization_directory.py` 的快照形态；`app/ports/auth.py::PrincipalOrgContext`（当前只
+有单值 `department_id`，无 `jobtitle`）；交办页「交办对象」与「可见范围」两个字段的实际可选集；
+`docs/phase2/PHASE2_PLAN.md` 现役 DAG 中 `P2-INTERNAL-WO-SCOPE-001` 一行的 BLOCKED 状态与活欠债表新增的
+监区名单 fail-open 风险登记。

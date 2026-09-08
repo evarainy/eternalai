@@ -1,15 +1,15 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-DECISIONS-055`（C 档；09-04 / 09-06 / 09-07 裁决落盘并全量复扫；连同既有开发助手治理条目共 11 条，本棒承担 A 类同步）。
-- 当前实现基线 task_id：`P2-TRACE-CONTRACT-HARDENING-001`（A 档；串行单 lane，承担 A 类同步）。本棒收口三条活欠债：孤立动作 Trace 的租户断言改用非默认租户获得判别力、`TracePersistedEvent` 凭证形状校验补常驻负向测试（含 `event_id`）、顶层凭证形状模式由位置切片改为具名选取并新增守卫；六条反证全部实跑，语义未变。未跑 Golden（未触及其覆盖边界）。
+- 当前治理基线 task_id：`P2-GOV-SYNC-056`（C 档；落盘 09-08 两条裁决——`/tasks/{id}/events` 存在性差异收敛方向 A、内部任务派发三轴授权模型；补齐 `P2-FE-DIR-GUARD-001` 与 `P2-AUDIT-READ-HARDENING-001` 两根并行棒此前未做的 A 类同步；登记 Opus 非阻断发现与监区名单 fail-open 风险共 5 条欠债；本棒承担 A 类同步）。
+- 当前实现基线 task_id：`P2-AUDIT-READ-HARDENING-001`（A 档；与 `P2-FE-DIR-GUARD-001` 为并行 lane，未做 A 类同步，由本次 `P2-GOV-SYNC-056` 补齐；Monitor PASS → Opus PASS → 合并三道审查齐全）。本棒交付两条活欠债中的第二条——reader 层「历史 NULL 归属行不可见」补齐 `list_events_by_trace` / `_by_task` / `_by_session` 三入口直接断言，反证为去掉租户谓词后断言变红（9 项中 2 项 failed）、恢复后 9/9 全绿。第一条（`/tasks/{id}/events` 跨租户存在性差异）经核实构成公共 API 契约变更，按人工停点上报雨爷，本棒未做；已由 2026-09-08 裁决方向 A 解除待裁状态，详见 `docs/phase2/DECISIONS.md`，待指派实现棒。
 
 ## 已登记验证基线
 
-以下 pytest、architecture 两行来源于 **2026-09-08 / `P2-TRACE-CONTRACT-HARDENING-001`** 的实测复核；Golden 行来源于 2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`，本棒未跑，保留原来源标注；前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。
+以下 pytest、`tests/architecture/` 两行来源于 **2026-09-08 / `P2-AUDIT-READ-HARDENING-001`** 的全量实测（该棒 PR 验证段：`uv run python scripts/check_dev_environment.py --start-full-tests` → `2877 passed, 0 failed, 0 skipped`；`uv run pytest tests/architecture/ -q` → `114 passed`）；本次 `P2-GOV-SYNC-056` 以 `uv run pytest --collect-only -q` 独立复核收集数与上述实测一致，未重跑全量。Golden 行来源于 2026-09-07 / `P2-RUNTIME-NO-CAPABILITY-COPY-001`，本棒未跑，保留原来源标注；前端两行来源为 **2026-09-08 / `P2-FE-PAGE-CONTRACT-001`** 的实测复核。「后端定向 pytest」与「ruff/mypy/依赖检查/四类变异」两行来源标注缺口已登记为活欠债，见 `PHASE2_PLAN.md`。
 
-- pytest：`2874 passed, 143 warnings`（0 skipped，0 failed；未使用 `--ignore=`）。**本棒净增 12**——`pytest --collect-only` 实测 base `phase0/main` 收集 2862、candidate 收集 2874。此前登记的 2832 与 base 实测 2862 相差 30，属历史登记失真，非本棒引入，已登记欠债追查。
+- pytest：`2877 passed, 0 failed, 0 skipped`（未使用 `--ignore=`）。较此前登记的 2874 净增 3：`P2-FE-DIR-GUARD-001` 新增 2 条 `tests/architecture/` 守卫测试 + `P2-AUDIT-READ-HARDENING-001` 新增 1 条 reader 层直接断言测试，两根并行棒此前未做 A 类同步，由本次 `P2-GOV-SYNC-056` 补齐登记。
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；新增 GT-034/035，既有 32 题与冻结集合不变）
-- `tests/architecture/`：`112 passed`（含 `api_no_infra_imports` 规则）
+- `tests/architecture/`：`114 passed`（含 `api_no_infra_imports` 规则及 `P2-FE-DIR-GUARD-001` 新增的扁平目录页面落点守卫 2 条）。较此前登记的 112 净增 2，来源同上。
 - 后端定向 pytest：`312 passed, 3 warnings, 0 failed`（`tests/runtime/`、`tests/knowledge/`、`tests/infra/llm/`）；Golden 定向 `451 passed`，最终意图与会话记忆定向分别 `20 passed`、`8 passed`。
 - 前端全量 `pnpm --dir web test`：`487 passed, 0 failed, 0 skipped`（32 个测试文件；较进入本棒的 471 增加 16，全部为本棒新增的形态与命名守卫断言；2026-09-08 / `P2-FE-PAGE-CONTRACT-001` 实测复核）
 - 前端本棒定向（2026-09-08 / `P2-FE-PAGE-CONTRACT-001`）：交办完整目录 `29 passed`（2 个文件），软件中心完整目录 `45 passed`（2 个文件），模糊层预算 `19 passed`、控件边界 `38 passed`；合计 6 个文件、`131 passed`，均无 `-t` 过滤，0 failed、0 skipped。37 条故障注入逐条实跑，均「断言变红 → 恢复字节后变绿」。
@@ -35,7 +35,7 @@
 
 ## 组织目录与前端机会层指针
 
-- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 仍 BLOCKED 于唯一主负责人可信来源。
+- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 的 BLOCKED 已由 2026-09-08「内部任务派发的三轴授权模型」裁决解除（唯一主负责人可信来源判据已定为 `jobtitle`），尚未开工交付，见 `PHASE2_PLAN.md` 现役 DAG。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
 - 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；本棒候选待 PR 集成，页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。后端合同到位后的前端接线后继不唯一，留待 GOV-SYNC 分配；不改变必达链的 BLOCKED 状态。
 - 已完成视觉：导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及可执行模糊层预算检查；字体跟随已批准画板，聊天问候语独立。历史返修过程留 Git。
