@@ -73,3 +73,25 @@ def test_downgrade_only_removes_directory_objects() -> None:
     assert recorder.calls[3][1] == ("organization_departments",)
     assert "downgrade discards" in (migration.__doc__ or "").casefold()
     assert "imported anew" in (migration.__doc__ or "").casefold()
+
+
+def test_job_title_migration_only_adds_nullable_text_and_drops_that_column() -> None:
+    path = REPO_ROOT / "alembic/versions/20260909_120000_membership_job_title.py"
+    spec = importlib.util.spec_from_file_location("membership_job_title_migration", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    recorder = OperationsRecorder()
+    migration.op = recorder
+    migration.upgrade()
+    migration.downgrade()
+    assert migration.down_revision == "20260901_120000"
+    assert [call[0] for call in recorder.calls] == ["add_column", "drop_column"]
+    assert recorder.calls[0][1][0] == "organization_user_memberships"
+    column = recorder.calls[0][1][1]
+    assert isinstance(column, sa.Column)
+    assert column.name == "job_title" and isinstance(column.type, sa.Text)
+    assert column.nullable is True
+    assert column.default is None and column.server_default is None
+    assert column.constraints == set()
+    assert recorder.calls[1][1] == ("organization_user_memberships", "job_title")

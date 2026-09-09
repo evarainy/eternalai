@@ -70,6 +70,7 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
     PostgreSQLTraceWriter,
 )
+from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
@@ -530,6 +531,7 @@ def build_production_components(
         store=PostgreSQLWorkObjectStore(session_factory),
         gateway=gateway,
         capability_registry=capability_registry,
+        organization_directory=PostgreSQLOrganizationDirectory(session_factory),
     )
     credential_binding_service = CredentialBindingService(
         store=credential_store,

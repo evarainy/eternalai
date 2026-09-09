@@ -56,6 +56,7 @@ def _snapshot(*, complete: bool = True) -> OrganizationDirectorySnapshot:
                         department_id="synthetic-leaf",
                         organization_id="synthetic-org",
                         subcompany_id="synthetic-subcompany",
+                        job_title="75",
                     ),
                 ),
             ),
@@ -147,7 +148,15 @@ def test_replaces_and_queries_complete_directory_snapshot() -> None:
                 "synthetic-root", "synthetic-child", "synthetic-leaf"
             ]
             assert memberships == list(_snapshot().memberships)
+            assert memberships[0].job_title == "75"
             assert await directory.get_department("synthetic-child") == _snapshot().departments[1]
+            snapshot = _snapshot()
+            revoked = snapshot.user_pages[0].model_copy(update={
+                "memberships": (snapshot.memberships[0].model_copy(update={"job_title": None}),),
+            })
+            await directory.replace_snapshot(snapshot.model_copy(update={"user_pages": (revoked,)}))
+            refreshed = await directory.list_user_memberships("synthetic-user")
+            assert len(refreshed) == 1 and refreshed[0].job_title is None
         finally:
             async with factory() as session:
                 await session.execute(text("DELETE FROM organization_user_memberships"))

@@ -68,6 +68,19 @@ def test_session_token_round_trip_rejects_tampering_and_expiry() -> None:
         tokens.verify(token)
 
 
+def test_directory_join_key_survives_session_without_mutable_authorization_fields() -> None:
+    principal = _principal().model_copy(update={
+        "org_ctx": PrincipalOrgContext(directory_user_id="synthetic-directory-user"),
+    })
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60)
+    restored = tokens.verify(tokens.issue(principal))
+    assert restored.org_ctx.directory_user_id == "synthetic-directory-user"
+    assert restored.org_ctx.department_id is None
+    assert restored.org_ctx.org_id is None
+    assert "job_title" not in PrincipalOrgContext.model_fields
+    assert "synthetic-directory-user" not in repr(restored)
+
+
 def test_principal_session_binding_is_continuous_and_cross_user_fail_closed() -> None:
     binder = PrincipalSessionBinder(binding_key=bytes(reversed(range(32))))
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class LoginCredential(BaseModel):
@@ -25,6 +25,8 @@ class PrincipalOrgContext(BaseModel):
     tenant_id: str = "default"
     org_id: str | None = None
     department_id: str | None = None
+    # Stable directory join key only; mutable authorization attributes stay in the mirror.
+    directory_user_id: str | None = Field(default=None, repr=False)
 
 
 class Principal(BaseModel):
