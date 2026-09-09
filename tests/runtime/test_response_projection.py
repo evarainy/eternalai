@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -11,6 +13,8 @@ from app.infra.adapters.oa.contracts import (
     OASystemMessageCollection,
 )
 from app.infra.sdui.credential_markers import has_credential_marker
+from app.ports import response_projection_contract as public_contract
+from app.runtime import response_projection as compatibility_module
 from app.runtime.response_projection import (
     ProjectionContractSnapshot,
     canonical_schema_digest,
@@ -18,6 +22,63 @@ from app.runtime.response_projection import (
     schema_has_credential_property,
 )
 from tests.runtime.registry_fakes import active_capability
+
+
+def test_snapshot_and_canonical_helpers_have_one_public_definition() -> None:
+    names = {"ProjectionContractSnapshot", "canonical_schema_digest", "canonical_schema_json"}
+    root = Path(__file__).resolve().parents[2]
+    definitions = {name: [] for name in names}
+    for path in (root / "app").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names:
+                definitions[node.name].append(path.relative_to(root).as_posix())
+    for name in names:
+        assert definitions[name] == ["app/ports/response_projection_contract.py"]
+        assert getattr(compatibility_module, name) is getattr(public_contract, name)
+        assert name in compatibility_module.__all__
+    schema = {
+        "type": "object",
+        "properties": {
+            "remark": {"type": "string", "description": "合成"},
+            "amount": {"type": "integer"},
+        },
+    }
+    canonical = (
+        '{"properties":{"amount":{"type":"integer"},'
+        '"remark":{"description":"合成","type":"string"}},"type":"object"}'
+    )
+    assert public_contract.canonical_schema_json(schema) == canonical
+    assert (
+        public_contract.canonical_schema_digest(schema)
+        == "722366098f728da8f5fac2319b8c8b9df95c4dc11d6fb435347eb6fb459a2d14"
+    )
+    capability = active_capability("oa.synthetic.snapshot", output_schema=schema)
+    snapshot = ProjectionContractSnapshot.from_capability(capability)
+    reordered = capability.model_copy(
+        update={
+            "output_schema": {
+                "properties": {
+                    "amount": {"type": "integer"},
+                    "remark": {"description": "合成", "type": "string"},
+                },
+                "type": "object",
+            }
+        },
+        deep=True,
+    )
+    assert snapshot.matches(reordered) is True
+    assert snapshot.load_output_schema() == schema
+    for update in (
+        {"capability_id": "oa.other"},
+        {"version": "different"},
+        {"output_schema_digest": "different"},
+        {"output_schema": {"type": "object", "properties": {"remark": {"type": "integer"}}}},
+    ):
+        assert snapshot.matches(capability.model_copy(update=update, deep=True)) is False
+    exported = snapshot.load_output_schema()
+    exported["properties"]["remark"]["type"] = "integer"
+    assert snapshot.load_output_schema() == schema
 
 
 def test_real_pending_contract_projects_nested_object_array() -> None:

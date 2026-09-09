@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,7 +36,9 @@ from app.infra.adapters.oa.provider import (
 )
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.oa import OACredentialVerifier
+from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
+from app.infra.human_gate.postgresql import PostgreSQLHumanGate
 from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.job_queue.in_memory import InMemoryJobQueue
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
@@ -44,9 +49,15 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
     PostgreSQLTraceWriter,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
+from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
+from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
 from app.knowledge import BasicKnowledge
 from app.main import create_app, create_production_app
 from app.memory import SessionMemory
+from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
@@ -60,6 +71,281 @@ from tests.auth_fakes import (
     make_session_binder,
 )
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
+
+
+@pytest.mark.parametrize("with_workflow", [False, True])
+def test_build_runtime_instantiates_agent_adapter_with_shared_workflow_port(
+    with_workflow: bool,
+) -> None:
+    from tests.runtime.test_runtime_orchestration import _harness
+
+    h = _harness(workflow=with_workflow)
+    orchestration = h.runtime._orchestration
+    assert isinstance(orchestration, AgentOrchestrationAdapter)
+    assert orchestration._capability_registry is h.registry
+    assert orchestration._gateway is h.gateway
+    assert orchestration._workflow_engine is h.runtime._workflow_engine
+    if with_workflow:
+        assert isinstance(orchestration._workflow_engine, WorkflowEngineAdapter)
+        assert orchestration._workflow_engine._engine is h.engine
+    else:
+        assert orchestration._workflow_engine is None
+
+
+def test_production_components_share_real_gateway_with_orchestration() -> None:
+    settings = replace(ProductionSettings.from_environment(), oa_read_adapter_mode="mock")
+    components = build_production_components(settings)
+    orchestration = components.runtime._orchestration
+    assert isinstance(orchestration, AgentOrchestrationAdapter)
+    assert orchestration._capability_registry is components.runtime._capability_registry
+    assert orchestration._gateway is components.work_object_service._gateway
+    gateway = orchestration._gateway
+    assert isinstance(gateway, CapabilityGateway)
+    assert isinstance(gateway._capability_registry, PostgreSQLCapabilityRegistry)
+    assert isinstance(gateway._identity_mapping, PostgreSQLOAIdentityMapping)
+    assert isinstance(gateway._policy_guard, MinimalPolicyGuard)
+    assert isinstance(gateway._trace_port, PostgreSQLTraceWriter)
+    assert isinstance(components.runtime._task_store, PostgreSQLTaskStore)
+    assert isinstance(components.runtime._human_gate_port, PostgreSQLHumanGate)
+    assert orchestration._workflow_engine is components.runtime._workflow_engine is None
+
+
+@pytest.fixture
+def orchestration_clean_database_url(migrated_database_url: str) -> str:
+    """Prove this entry test builds its tables using existing Alembic migrations.
+
+    The fixed, exclusively held test database is the only allowed target. No
+    schema definition or handwritten drop/create is used here.
+    """
+    from alembic.config import Config
+    from sqlalchemy import create_engine, inspect
+    from sqlalchemy.engine import make_url
+
+    from alembic import command
+    from app.db.config import normalize_database_url
+
+    url = make_url(normalize_database_url(migrated_database_url))
+    assert (url.host, url.port, url.database) == ("127.0.0.1", 15432, "eternalai_test")
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    config.set_main_option("script_location", str(Path(__file__).resolve().parents[2] / "alembic"))
+    command.downgrade(config, "base")
+    engine = create_engine(url)
+    try:
+        tables = inspect(engine).get_table_names()
+        assert set(tables) <= {"alembic_version"}
+        print("ORCHSEAM_CLEAN_DATABASE business_tables=0 target=127.0.0.1:15432/eternalai_test")
+    finally:
+        engine.dispose()
+    command.upgrade(config, "head")
+    return migrated_database_url
+
+
+def test_production_entry_request_reaches_agent_and_real_gateway_once(
+    orchestration_clean_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import text
+
+    from app.db.session import make_async_engine, make_async_session_factory
+    from app.event_loop import make_event_loop
+    from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
+        MockStructuredOutputProvider,
+    )
+    from app.runtime.models import IntentOutput
+    from tests.infra.orchestration.test_agent_adapter import _capability
+    from tests.runtime.test_runtime_user_action import _principal
+
+    user_id = f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
+    capability_id = f"oa.synthetic.orchestration.{uuid4().hex}"
+    session_id = f"seam-session-{uuid4().hex}"
+    capability = _capability(capability_id, type="query", displayable_argument_fields=[])
+    settings = replace(
+        ProductionSettings.from_environment(),
+        database_url=orchestration_clean_database_url,
+        oa_read_adapter_mode="mock",
+    )
+    assert settings.oa_read_adapter_mode == "mock"
+    structured = MockStructuredOutputProvider()
+    arguments = {"remark": "合成入口请求", "amount": 12}
+    structured.register(
+        "synthetic production entry",
+        IntentOutput,
+        MatchedIntent(
+            match="capability",
+            capability_id=capability_id,
+            arguments=arguments,
+            capability_type="query",
+        ),
+    )
+
+    class ExternalBusinessAdapter:
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
+
+        async def execute(
+            self, capability_id: str, arguments: Any, execution_context: Any
+        ) -> AdapterResult:
+            self.calls.append((capability_id, arguments, execution_context))
+            return AdapterResult(
+                status="success",
+                data={"result": "production-entry", "undeclared": "SYNTHETIC_DROP"},
+            )
+
+    external = ExternalBusinessAdapter()
+    components = build_production_components(
+        settings,
+        llm_provider=MockLLMProvider(),
+        structured_output=structured,
+        adapters={"oa": external},
+    )
+    runtime = components.runtime
+    orchestration = runtime._orchestration
+    gateway = orchestration._gateway
+    assert isinstance(orchestration, AgentOrchestrationAdapter)
+    assert gateway is components.work_object_service._gateway
+    assert isinstance(gateway, CapabilityGateway)
+    assert isinstance(gateway._policy_guard, MinimalPolicyGuard)
+    assert isinstance(gateway._identity_mapping, PostgreSQLOAIdentityMapping)
+    assert isinstance(runtime._capability_registry, PostgreSQLCapabilityRegistry)
+    assert isinstance(runtime._human_gate_port, PostgreSQLHumanGate)
+    assert isinstance(runtime._trace_port, PostgreSQLTraceWriter)
+    calls: dict[str, Any] = {}
+    for name in ("select_capability", "execute_capability", "build_response"):
+        original = getattr(orchestration, name)
+        spy = Mock(wraps=original) if name == "build_response" else AsyncMock(wraps=original)
+        monkeypatch.setattr(orchestration, name, spy)
+        calls[name] = spy
+    execute = AsyncMock(wraps=gateway.execute_capability)
+    policy = AsyncMock(wraps=gateway._policy_guard.decide)
+    identity = AsyncMock(wraps=gateway._identity_mapping.resolve_execution_identity)
+    monkeypatch.setattr(gateway, "execute_capability", execute)
+    monkeypatch.setattr(gateway._policy_guard, "decide", policy)
+    monkeypatch.setattr(gateway._identity_mapping, "resolve_execution_identity", identity)
+
+    async def exercise() -> None:
+        engine = make_async_engine(orchestration_clean_database_url)
+        factory = make_async_session_factory(engine)
+        task_id: str | None = None
+        try:
+            # Only synthetic opaque bytes and metadata are seeded. The real
+            # metadata-only identity adapter never decrypts or selects the bytes.
+            now = datetime.now(UTC)
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials"
+                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " expires_at, updated_at)"
+                        " VALUES (:user, :cipher, :nonce, :payload, :expires, :updated)"
+                    ),
+                    {
+                        "user": user_id,
+                        "cipher": "synthetic-metadata-only",
+                        "nonce": b"synthetic-nonce",
+                        "payload": b"synthetic-opaque-payload",
+                        "expires": now + timedelta(hours=1),
+                        "updated": now,
+                    },
+                )
+                await session.commit()
+            await runtime._capability_registry.create(capability)
+            response = await runtime.handle_user_message(
+                channel="web",
+                principal=_principal(user_id, tenant_id="synthetic-production-tenant"),
+                session_id=session_id,
+                message="synthetic production entry",
+                client_capabilities={},
+            )
+            task_id = response.task_id
+            assert response.status == "completed"
+            assert response.data == {"result": "production-entry"}
+            assert "SYNTHETIC_DROP" not in response.model_dump_json()
+            assert (
+                calls["select_capability"].await_count
+                == calls["execute_capability"].await_count
+                == 1
+            )
+            assert (
+                calls["build_response"].call_count
+                == execute.await_count
+                == policy.await_count
+                == identity.await_count
+                == 1
+            )
+            assert execute.await_args.args == (
+                response.task_id,
+                session_id,
+                user_id,
+                capability_id,
+                arguments,
+                calls["execute_capability"].await_args.kwargs["request_context"],
+            )
+            context = execute.await_args.args[-1]
+            assert (context.tenant_id, context.channel, context.request_id) == (
+                "synthetic-production-tenant",
+                "web",
+                response.trace_id,
+            )
+            assert policy.await_args.kwargs["ai_user_id"] == user_id
+            assert external.calls == [
+                (capability_id, arguments, {"credential_ref": f"oa-session-v1:{user_id}"})
+            ]
+            task = await runtime._task_store.get_task(task_id)
+            assert (task.status, task.error_code, task.ai_user_id, task.tenant_id) == (
+                "completed",
+                None,
+                user_id,
+                "synthetic-production-tenant",
+            )
+            events = await components.admin_registry_service._trace_query.list_events_by_task(
+                task_id,
+                tenant_id="synthetic-production-tenant",
+            )
+            event_types = [event.event_type for event in events]
+            assert (
+                event_types.count("task_completed") == event_types.count("evaluation_recorded") == 1
+            )
+            assert (
+                event_types.count("gateway_pre_recorded")
+                == event_types.count("adapter_called")
+                == 1
+            )
+            assert {(event.ai_user_id, event.tenant_id, event.session_id) for event in events} == {
+                (user_id, "synthetic-production-tenant", session_id),
+            }
+            binding = await runtime._human_gate_port.get_task_binding(task_id)
+            assert binding is not None
+            assert any(
+                item.resource_type == "tool" and item.resource_id == capability_id
+                for item in binding.bindings
+            )
+        finally:
+            # Remove only this test's synthetic rows using their unique owners.
+            async with factory() as session:
+                for statement, parameters in [
+                    ("DELETE FROM trace_events WHERE session_id = :id", {"id": session_id}),
+                    (
+                        "DELETE FROM task_events WHERE task_id IN"
+                        " (SELECT task_id FROM tasks WHERE session_id = :id)",
+                        {"id": session_id},
+                    ),
+                    (
+                        "DELETE FROM task_version_binding_manifests WHERE task_id IN"
+                        " (SELECT task_id FROM tasks WHERE session_id = :id)",
+                        {"id": session_id},
+                    ),
+                    ("DELETE FROM tasks WHERE session_id = :id", {"id": session_id}),
+                    ("DELETE FROM sessions WHERE session_id = :id", {"id": session_id}),
+                    ("DELETE FROM capabilities WHERE capability_id = :id", {"id": capability_id}),
+                    ("DELETE FROM oa_session_credentials WHERE ai_user_id = :id", {"id": user_id}),
+                ]:
+                    await session.execute(text(statement), parameters)
+                await session.commit()
+            await engine.dispose()
+            await runtime._task_store._session_factory.kw["bind"].dispose()
+
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        runner.run(exercise())
 
 
 class RecordingTaskStore:
@@ -389,7 +675,7 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     settings = ProductionSettings.from_environment()
 
     components = build_production_components(settings)
-    gateway = components.runtime._gateway
+    gateway = components.runtime._orchestration._gateway
 
     assert isinstance(components.runtime, RuntimeImpl)
     assert isinstance(components.admin_registry_service, AdminRegistryService)
@@ -515,7 +801,7 @@ def test_production_health_composition_uses_db_redis_and_vllm_checks() -> None:
         trace_port=NoopTraceWriter(),
     )
 
-    assert components.work_object_service._gateway is components.runtime._gateway
+    assert components.work_object_service._gateway is components.runtime._orchestration._gateway
     assert set(components.health_checks) == {"database", "redis", "vllm"}
     assert isinstance(components.health_checks["database"], partial)
     assert isinstance(components.health_checks["redis"], RedisHealthCheck)
@@ -626,8 +912,8 @@ def test_explicit_production_adapters_and_identity_mapping_take_priority() -> No
         identity_mapping=identity_mapping,
     )
 
-    assert components.runtime._gateway._adapters == adapters
-    assert components.runtime._gateway._identity_mapping is identity_mapping
+    assert components.runtime._orchestration._gateway._adapters == adapters
+    assert components.runtime._orchestration._gateway._identity_mapping is identity_mapping
 
 
 @pytest.mark.parametrize("override", ["identity_mapping", "adapters"])

@@ -12,6 +12,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -310,16 +311,24 @@ def _run_runtime(
 ) -> tuple[ResponseEnvelope, SpyTaskStore]:
     async def exercise_runtime() -> tuple[ResponseEnvelope, SpyTaskStore]:
         task_store = SpyTaskStore()
+        orchestration_registry = StaticCapabilityRegistry("u8.get_document_status")
+        orchestration_workflow = None
+        orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
             task_store=task_store,
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry("u8.get_document_status"),
-            gateway=gateway,
+            capability_registry=orchestration_registry,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=orchestration_registry,
+                gateway=gateway,
+                workflow_engine=orchestration_workflow,
+                response_builder=orchestration_builder,
+            ),
             trace_port=trace_port,
             llm_provider=MockLLMProvider(),
             structured_output=structured_output,
             intent_model="test-intent-model",
-            response_builder=ResponseEnvelopeBuilder(),
+            response_builder=orchestration_builder,
         )
         envelope = await runtime.handle_user_message(
             channel="web",

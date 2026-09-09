@@ -5,14 +5,20 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
+from app.infra.orchestration.agent_adapter import (
+    AgentOrchestrationAdapter,
+    _format_capability_response,
+)
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
-from app.ports.capability_gateway import ExecutionResult
+from app.ports.capability_gateway import CapabilityGatewayPort, ExecutionResult
+from app.ports.capability_registry import CapabilityRegistryPort
 from app.runtime.models import CapabilityRef
 from app.runtime.response_projection import ProjectionContractSnapshot
-from app.runtime.runtime import RuntimeImpl, _format_capability_response
+from app.runtime.runtime import RuntimeImpl
 from tests.runtime.registry_fakes import active_capability, runtime_output_schema
 
 PathPart = str | int
@@ -185,7 +191,12 @@ def _build_completed_envelope(
 ) -> Any:
     capability = active_capability(capability_id, output_schema=schema)
     runtime = RuntimeImpl.__new__(RuntimeImpl)
-    runtime._response_builder = ResponseEnvelopeBuilder()
+    runtime._orchestration = AgentOrchestrationAdapter(
+        capability_registry=Mock(spec=CapabilityRegistryPort),
+        gateway=Mock(spec=CapabilityGatewayPort),
+        workflow_engine=None,
+        response_builder=ResponseEnvelopeBuilder(),
+    )
     return runtime._build_envelope(
         "SYNTHETIC_RESPONSE_ID",
         "SYNTHETIC_TASK_ID",

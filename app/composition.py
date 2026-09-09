@@ -70,6 +70,7 @@ from app.infra.observability.postgresql_trace import (
     PostgreSQLTraceReader,
     PostgreSQLTraceWriter,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
@@ -396,19 +397,27 @@ def build_runtime(
     resolved_human_gate = human_gate_port
     if workflow_engine is not None and resolved_human_gate is not None:
         workflow_engine.configure_human_gate_port(resolved_human_gate)
+    resolved_workflow_port = (
+        WorkflowEngineAdapter(workflow_engine) if workflow_engine is not None else None
+    )
+    response_builder = ResponseEnvelopeBuilder()
+    orchestration = AgentOrchestrationAdapter(
+        capability_registry=capability_registry,
+        gateway=gateway,
+        workflow_engine=resolved_workflow_port,
+        response_builder=response_builder,
+    )
     return RuntimeImpl(
         task_store=task_store,
         session_store=session_store,
         capability_registry=capability_registry,
-        gateway=gateway,
+        orchestration=orchestration,
         trace_port=trace_port,
         llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model=intent_model,
-        response_builder=ResponseEnvelopeBuilder(),
-        workflow_engine=(
-            WorkflowEngineAdapter(workflow_engine) if workflow_engine is not None else None
-        ),
+        response_builder=response_builder,
+        workflow_engine=resolved_workflow_port,
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
         evaluator=evaluator or TerminalEvaluator(),

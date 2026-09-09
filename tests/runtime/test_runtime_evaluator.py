@@ -16,6 +16,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import (
     ErrorCode,
@@ -235,7 +236,14 @@ class WaitingWorkflow:
     async def execute(self, **kwargs: Any) -> WorkflowRunResult:
         return _workflow_result("waiting_confirm", "confirm_required")
 
-    async def resume(self, *, task_id: str, confirmed: bool) -> WorkflowRunResult:
+    async def resume(
+        self,
+        *,
+        task_id: str,
+        confirmed: bool,
+        expected_action_digest: str | None = None,
+    ) -> WorkflowRunResult:
+        assert expected_action_digest is None
         return _workflow_result(self.resume_status, self.resume_error_code)
 
 
@@ -279,17 +287,25 @@ def _runtime(
                 capability_type=cast(Any, capability_type),
             ),
         )
+    orchestration_registry = Registry(capability_type)
+    orchestration_workflow = cast(WorkflowEngine, workflow) if workflow is not None else None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=SessionStore(),
-        capability_registry=Registry(capability_type),
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace,
         llm_provider=MockLLMProvider(),
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
-        workflow_engine=cast(WorkflowEngine, workflow) if workflow is not None else None,
+        response_builder=orchestration_builder,
+        workflow_engine=orchestration_workflow,
         evaluator=evaluator,
     )
     return runtime, task_store, trace, gateway

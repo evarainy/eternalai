@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -199,18 +200,26 @@ def _build_runtime(
     memory = SessionMemory()
     llm_provider = MemoryAwareLLMProvider(first_arguments)
     trace_port = RecordingTracePort()
+    orchestration_registry = StaticCapabilityRegistry("oa.get_workflow_status")
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=RecordingTaskStore(),
         session_store=InMemorySessionStore(),
-        capability_registry=StaticCapabilityRegistry("oa.get_workflow_status"),
-        gateway=FixedGateway(
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=FixedGateway(
             result or ExecutionResult(status="completed", trace_id="gateway-trace")
+        ),
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
         ),
         trace_port=trace_port,
         llm_provider=llm_provider,
         structured_output=JsonStructuredOutput(),
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
         session_memory=memory,
     )
     return runtime, memory, llm_provider, trace_port

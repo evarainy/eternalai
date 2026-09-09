@@ -22,9 +22,14 @@ from app.evaluator import (
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.memory import SessionMemory, SessionMemoryKey
+from app.ports.agent_orchestration import (
+    AgentOrchestrationPort,
+    AgentResponseContext,
+    ConfirmationPreview,
+    OrchestrationContractError,
+)
 from app.ports.auth import Principal
 from app.ports.capability_gateway import (
-    CapabilityGatewayPort,
     ErrorCode,
     ExecutionResult,
     ExecutionStatus,
@@ -42,7 +47,8 @@ from app.ports.human_gate import (
     build_task_version_binding_manifest,
 )
 from app.ports.llm_provider import LLMProviderPort
-from app.ports.response_envelope import ResponseEnvelope, TargetSystem
+from app.ports.response_envelope import ResponseEnvelope
+from app.ports.response_projection_contract import ProjectionContractSnapshot
 from app.ports.runtime import UserActionOutcome
 from app.ports.structured_output import StructuredOutputErrorCode, StructuredOutputPort
 from app.ports.task_store import (
@@ -56,29 +62,11 @@ from app.ports.task_store import (
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
 from app.ports.workflow_engine import WorkflowEnginePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
-from app.runtime.models import CapabilityRef, ConfirmCardPayload
-from app.runtime.response_projection import (
-    ProjectionContractSnapshot,
-    project_response_data,
-)
+from app.runtime.models import CapabilityRef
 from app.version_binding import (
-    capability_version_bindings,
     immutable_request_digest,
     merge_version_bindings,
 )
-from app.workflow.models import WorkflowRunResult
-
-
-@dataclass(frozen=True)
-class _CapabilitySelection:
-    capability: CapabilitySpec
-    rule: Literal["exact_id", "unique_intent_tag"]
-
-
-@dataclass(frozen=True)
-class _NewTaskVersionBindings:
-    bindings: tuple[VersionBinding, ...]
-    projection_binding: VersionBinding
 
 
 @dataclass(frozen=True)
@@ -128,7 +116,7 @@ class RuntimeImpl:
         task_store: TaskStorePort,
         session_store: SessionStorePort,
         capability_registry: CapabilityRegistryPort,
-        gateway: CapabilityGatewayPort,
+        orchestration: AgentOrchestrationPort,
         trace_port: TracePort,
         llm_provider: LLMProviderPort,
         structured_output: StructuredOutputPort,
@@ -146,7 +134,7 @@ class RuntimeImpl:
         self._task_store = task_store
         self._session_store = session_store
         self._capability_registry = capability_registry
-        self._gateway = gateway
+        self._orchestration = orchestration
         self._trace_port = trace_port
         self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
         self._intent_router = IntentRouter(
@@ -348,7 +336,11 @@ class RuntimeImpl:
             )
 
         intent_selector = capability_ref.capability_id
-        selection = await self._select_capability(capability_ref)
+        selection = await self._orchestration.select_capability(
+            capability_id=capability_ref.capability_id,
+            target_system=capability_ref.target_system,
+            capability_type=capability_ref.capability_type,
+        )
         if selection is None:
             return await self._finish_no_capability_found(
                 response_id,
@@ -393,12 +385,14 @@ class RuntimeImpl:
             },
         )
         binding_manifest: TaskVersionBindingManifest | None = None
-        workflow_result: WorkflowRunResult | None = None
         if self._human_gate_port is not None and (
             selected_capability.type != "workflow" or self._workflow_engine is not None
         ):
             try:
-                resolved_bindings = await self._new_task_version_bindings(selected_capability)
+                resolved_bindings = await self._orchestration.resolve_task_version_bindings(
+                    capability=selected_capability,
+                    intent_version_binding=self._intent_version_binding,
+                )
                 binding_manifest = build_task_version_binding_manifest(
                     task_id=task_id,
                     bindings=resolved_bindings.bindings,
@@ -438,41 +432,21 @@ class RuntimeImpl:
             ),
         )
         try:
-            if selected_capability.type == "workflow":
-                if self._workflow_engine is None:
-                    exec_result = ExecutionResult(
-                        status="failed",
-                        error_code="internal_error",
-                        trace_id=trace_id,
-                    )
-                else:
-                    sid = session_id
-                    workflow_result = await self._workflow_engine.execute(
-                        workflow_id=selected_capability.capability_id,
-                        expected_version=selected_capability.version,
-                        workflow_capability=selected_capability,
-                        task_id=task_id,
-                        session_id=sid,
-                        ai_user_id=ai_user_id,
-                        initial_input=capability_ref.arguments,
-                        request_context=request_context,
-                    )
-                    exec_result = _workflow_execution_result(workflow_result)
-            else:
-                exec_result = await self._gateway.execute_capability(
-                    task_id,
-                    session_id,
-                    ai_user_id,
-                    capability_ref.capability_id,
-                    capability_ref.arguments,
-                    request_context,
-                )
+            exec_result = await self._orchestration.execute_capability(
+                task_id=task_id,
+                session_id=session_id,
+                ai_user_id=ai_user_id,
+                capability=selected_capability,
+                arguments=capability_ref.arguments,
+                request_context=request_context,
+            )
         except VersionBindingMismatchError:
             exec_result = ExecutionResult(
                 status="failed",
                 error_code="internal_error",
                 trace_id=trace_id,
             )
+        confirmation: ConfirmationPreview | None = None
         gate_request_id: str | None = None
         action_digest: str | None = None
         request_digest: str | None = None
@@ -490,20 +464,20 @@ class RuntimeImpl:
                     )
                 gate_request_id = response_id
                 gate_manifest_digest = binding_manifest.manifest_digest
-                if workflow_result is None or self._workflow_engine is None:
+                if self._workflow_engine is None:
                     raise VersionBindingMismatchError(
                         "Waiting Workflow has no immutable action digest"
                     )
                 action_digest = self._workflow_engine.pending_confirmation_action_digest(task_id)
-                preview = _confirm_card_payload(
-                    capability_ref,
-                    selected_capability,
-                    _target_system_for_capability(selected_capability.capability_id),
+                confirmation = self._orchestration.prepare_confirmation(
+                    capability_id=selected_capability.capability_id,
+                    arguments=capability_ref.arguments,
+                    capability=selected_capability,
                 )
                 request_digest = immutable_request_digest(
                     task_id=task_id,
                     action_digest=action_digest,
-                    preview=preview,
+                    preview=confirmation.to_payload(),
                     binding_manifest_digest=gate_manifest_digest,
                 )
                 await self._human_gate_port.create_request(
@@ -529,6 +503,7 @@ class RuntimeImpl:
                     trace_id=trace_id,
                 )
                 workflow_waiting = False
+                confirmation = None
         if workflow_waiting:
             replacement = _PendingWorkflow(
                 task_id=task_id,
@@ -560,7 +535,14 @@ class RuntimeImpl:
                     trace_id=trace_id,
                 )
                 workflow_waiting = False
+                confirmation = None
 
+        if exec_result.status == "waiting_user" and confirmation is None:
+            confirmation = self._orchestration.prepare_confirmation(
+                capability_id=selected_capability.capability_id,
+                arguments=capability_ref.arguments,
+                capability=selected_capability,
+            )
         envelope = self._build_envelope(
             response_id,
             task_id,
@@ -570,6 +552,7 @@ class RuntimeImpl:
             capability_ref,
             capability=selected_capability,
             projection_snapshot=projection_snapshot,
+            confirmation=confirmation,
         )
         await self._trace_port.record_step(
             trace_id,
@@ -1106,6 +1089,8 @@ class RuntimeImpl:
                 "The structured action was not accepted; nothing was executed.",
                 pending.trace_id,
             ), outcome
+        except OrchestrationContractError:
+            raise
         except Exception as exc:
             claim = self._claimed_pending_confirmations[
                 _pending_confirmation_claim_key(pending_key, pending)
@@ -1276,17 +1261,17 @@ class RuntimeImpl:
         if self._human_gate_port is not None:
             await self._record_confirmation_decision(pending, memory_key, "confirmed")
         if self._human_gate_port is None:
-            workflow_result = await self._workflow_engine.resume(
+            exec_result = await self._orchestration.resume_capability(
                 task_id=pending.task_id,
                 confirmed=True,
             )
         else:
-            workflow_result = await self._workflow_engine.resume(
+            exec_result = await self._orchestration.resume_capability(
                 task_id=pending.task_id,
                 confirmed=True,
                 expected_action_digest=pending.action_digest,
             )
-        exec_result = _workflow_execution_result(workflow_result)
+        confirmation: ConfirmationPreview | None = None
         requested_at = self._utc_clock()
         monotonic_deadline = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
         next_gate_request_id = pending.gate_request_id
@@ -1302,19 +1287,15 @@ class RuntimeImpl:
                 next_action_digest = self._workflow_engine.pending_confirmation_action_digest(
                     pending.task_id
                 )
-                next_capability_ref = CapabilityRef(
+                confirmation = self._orchestration.prepare_confirmation(
                     capability_id=pending.capability_id,
-                    capability_type="workflow",
-                )
-                next_preview = _confirm_card_payload(
-                    next_capability_ref,
-                    None,
-                    _target_system_for_capability(pending.capability_id),
+                    arguments={},
+                    capability=None,
                 )
                 next_request_digest = immutable_request_digest(
                     task_id=pending.task_id,
                     action_digest=next_action_digest,
-                    preview=next_preview,
+                    preview=confirmation.to_payload(),
                     binding_manifest_digest=pending.binding_manifest_digest,
                 )
                 await self._human_gate_port.create_request(
@@ -1358,6 +1339,12 @@ class RuntimeImpl:
             capability_id=pending.capability_id,
             capability_type="workflow",
         )
+        if exec_result.status == "waiting_user" and confirmation is None:
+            confirmation = self._orchestration.prepare_confirmation(
+                capability_id=pending.capability_id,
+                arguments={},
+                capability=None,
+            )
         envelope = self._build_envelope(
             response_id,
             pending.task_id,
@@ -1366,6 +1353,7 @@ class RuntimeImpl:
             pending.trace_id,
             capability_ref,
             projection_snapshot=pending.projection_snapshot,
+            confirmation=confirmation,
         )
         if exec_result.status == "waiting_user":
             next_pending = _PendingWorkflow(
@@ -1451,40 +1439,6 @@ class RuntimeImpl:
             )
         return envelope
 
-    async def _new_task_version_bindings(
-        self,
-        capability: CapabilitySpec,
-    ) -> _NewTaskVersionBindings:
-        if capability.type == "workflow":
-            if self._workflow_engine is None:
-                raise VersionBindingMismatchError(
-                    "Workflow version binding requires a configured engine"
-                )
-            workflow_bindings = await self._workflow_engine.version_bindings(
-                workflow_capability=capability,
-            )
-            resource_bindings = workflow_bindings.bindings
-            projection_binding = workflow_bindings.workflow_binding
-        else:
-            resource_bindings = capability_version_bindings(capability)
-            matching = tuple(
-                binding
-                for binding in resource_bindings
-                if binding.resource_type == "tool"
-                and binding.resource_id == capability.capability_id
-            )
-            if len(matching) != 1:
-                raise VersionBindingMismatchError(
-                    "Selected capability has no unique projection binding"
-                )
-            projection_binding = matching[0]
-        return _NewTaskVersionBindings(
-            bindings=merge_version_bindings(
-                (self._intent_version_binding,),
-                resource_bindings,
-            ),
-            projection_binding=projection_binding,
-        )
 
     async def _finish_version_binding_failure(
         self,
@@ -1548,43 +1502,6 @@ class RuntimeImpl:
         )
         return envelope
 
-    async def _select_capability(
-        self,
-        intent: CapabilityRef,
-    ) -> _CapabilitySelection | None:
-        selector = intent.capability_id
-        exact_match = await self._capability_registry.get(selector)
-        if exact_match is not None:
-            if exact_match.status == "active" and _matches_intent_constraints(
-                exact_match,
-                intent,
-            ):
-                return _CapabilitySelection(exact_match, "exact_id")
-            return None
-
-        normalized_selector = _normalize_intent_tag(selector)
-        if not normalized_selector:
-            return None
-        active_capabilities = await self._capability_registry.list(
-            target_system=intent.target_system,
-            type=intent.capability_type,
-            status="active",
-        )
-        matches = [
-            capability
-            for capability in active_capabilities
-            if capability.status == "active"
-            and _matches_intent_constraints(capability, intent)
-            and normalized_selector
-            in {
-                normalized_tag
-                for tag in capability.intent_tags
-                if (normalized_tag := _normalize_intent_tag(tag))
-            }
-        ]
-        if len(matches) != 1:
-            return None
-        return _CapabilitySelection(matches[0], "unique_intent_tag")
 
     async def _finish_intent_failure(
         self,
@@ -1765,100 +1682,19 @@ class RuntimeImpl:
         *,
         capability: CapabilitySpec | None = None,
         projection_snapshot: ProjectionContractSnapshot | None = None,
+        confirmation: ConfirmationPreview | None = None,
     ) -> ResponseEnvelope:
-        target_system = _target_system_for_capability(capability_ref.capability_id)
-        if exec_result.status == "completed":
-            data = project_response_data(
-                exec_result.data,
-                projection_snapshot.load_output_schema()
-                if projection_snapshot is not None
-                else None,
-            )
-            message = _format_capability_response(
-                capability_ref.capability_id,
-                data,
-            )
-            return self._response_builder.build_message(
-                response_id,
-                task_id,
-                session_id,
-                message,
-                "Operation completed.",
-                trace_id,
-                status="completed",
-                data=data,
-            )
-        if exec_result.status == "denied":
-            return self._response_builder.build_policy_denied(
-                response_id,
-                task_id,
-                session_id,
-                "无权限，操作被拒绝",
-                "Access denied.",
-                trace_id,
-            )
-        if exec_result.status == "binding_required":
-            if exec_result.error_code == "needs_binding_scope":
-                return self._response_builder.build_operator_handback(
-                    response_id,
-                    task_id,
-                    session_id,
-                    "请先选择明确的账套、设备域或资源范围后继续",
-                    "Binding scope required.",
-                    trace_id,
-                    target_system=target_system,
-                )
-            identity_message, identity_fallback = _identity_block_message(exec_result.error_code)
-            return self._response_builder.build_operator_handback_bind_required(
-                response_id,
-                task_id,
-                session_id,
-                identity_message,
-                identity_fallback,
-                trace_id,
-                target_system,
-                reason_code=exec_result.error_code or "identity_unbound",
-            )
-        if exec_result.status == "timeout":
-            return self._response_builder.build_failed(
-                response_id,
-                task_id,
-                session_id,
-                "操作超时，请重试",
-                "Gateway timeout.",
-                exec_result.trace_id or trace_id,
-            )
-        if exec_result.status == "failed":
-            return self._response_builder.build_failed(
-                response_id,
-                task_id,
-                session_id,
-                "操作失败",
-                "Operation failed.",
-                exec_result.trace_id or trace_id,
-            )
-        if exec_result.status == "no_capability_found":
-            return self._response_builder.build_no_capability_found(
-                response_id,
-                task_id,
-                session_id,
-                "暂未接入该能力",
-                "No capability found.",
-                trace_id,
-            )
-        return self._response_builder.build_confirm_card(
-            response_id,
-            task_id,
-            session_id,
-            "请确认提交操作",
-            "Please confirm.",
-            trace_id,
-            payload=_confirm_card_payload(
-                capability_ref,
-                capability,
-                target_system,
+        return self._orchestration.build_response(
+            context=AgentResponseContext(
+                response_id=response_id,
+                task_id=task_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                capability_id=capability_ref.capability_id,
             ),
-            target_system=target_system,
+            execution=exec_result,
+            projection=projection_snapshot,
+            confirmation=confirmation,
         )
 
 
@@ -1901,41 +1737,6 @@ def _map_exec_to_task_status(status: ExecutionStatus) -> TaskStatus:
     if status == "waiting_user":
         return "waiting_user"
     return "failed"
-
-
-def _workflow_execution_result(result: WorkflowRunResult) -> ExecutionResult:
-    if result.status == "completed":
-        return ExecutionResult(
-            status="completed",
-            data=result.output,
-            error_code=result.error_code,
-            trace_id=result.trace_id,
-        )
-    if result.status == "denied":
-        return ExecutionResult(
-            status="denied",
-            error_code=result.error_code,
-            trace_id=result.trace_id,
-        )
-    if result.status == "waiting_confirm":
-        return ExecutionResult(
-            status="waiting_user",
-            error_code=result.error_code,
-            trace_id=result.trace_id,
-        )
-    if result.status == "timeout":
-        return ExecutionResult(
-            status="timeout",
-            error_code=result.error_code,
-            trace_id=result.trace_id,
-        )
-    if result.status == "failed":
-        return ExecutionResult(
-            status="failed",
-            error_code=result.error_code,
-            trace_id=result.trace_id,
-        )
-    raise AssertionError("unsupported Workflow terminal status")
 
 
 def _is_explicit_workflow_confirmation(
@@ -1986,17 +1787,6 @@ def _pending_confirmation_claim_key(
     return (*pending_key, pending.gate_request_id or pending.response_id)
 
 
-def _identity_block_message(error_code: str | None) -> tuple[str, str]:
-    if error_code == "identity_expired":
-        return (
-            "账号绑定或上游会话已过期，请重新认证或重新绑定后继续",
-            "Identity binding or upstream session expired; reauthentication required.",
-        )
-    if error_code == "identity_revoked":
-        return "账号绑定已撤销，请重新绑定后继续", "Identity binding revoked."
-    return "需要绑定账号才能继续", "Identity binding required."
-
-
 def _terminal_event_for_exec_status(status: ExecutionStatus) -> TraceEventType | None:
     if status == "completed":
         return "task_completed"
@@ -2018,19 +1808,6 @@ def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-def _normalize_intent_tag(value: str) -> str:
-    return value.strip().casefold()
-
-
-def _matches_intent_constraints(
-    capability: CapabilitySpec,
-    intent: CapabilityRef,
-) -> bool:
-    if intent.target_system is not None and capability.target_system != intent.target_system:
-        return False
-    return intent.capability_type is None or capability.type == intent.capability_type
 
 
 def _intent_trace_attributes(
@@ -2085,176 +1862,6 @@ def _intent_failure_message(reason: IntentFailureReason) -> tuple[str, str]:
 
 def _intent_fingerprint(selector: str) -> str:
     return sha256(selector.encode("utf-8")).hexdigest()
-
-
-def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
-    if capability_id.startswith("oa."):
-        return "oa"
-    if capability_id.startswith("u8."):
-        return "u8"
-    if capability_id.startswith(("ivms.", "hikvision_ivms.")):
-        return "hikvision_ivms"
-    return None
-
-
-def _confirm_card_payload(
-    capability_ref: CapabilityRef,
-    capability: CapabilitySpec | None,
-    target_system: TargetSystem | None,
-) -> dict[str, Any]:
-    payload = ConfirmCardPayload(
-        capability_id=capability_ref.capability_id,
-        operation_summary=_operation_summary(capability),
-        target_system=target_system,
-        field_names=_confirm_field_names(capability_ref, capability),
-        displayed_argument_values=_displayed_argument_values(
-            capability_ref,
-            capability,
-        ),
-    )
-    return payload.model_dump()
-
-
-def _confirm_field_names(
-    capability_ref: CapabilityRef,
-    capability: CapabilitySpec | None,
-) -> list[str]:
-    if capability is None:
-        return []
-    properties = capability.input_schema.get("properties")
-    if not isinstance(properties, dict):
-        return []
-    return sorted(key for key in capability_ref.arguments if key in properties)
-
-
-def _displayed_argument_values(
-    capability_ref: CapabilityRef,
-    capability: CapabilitySpec | None,
-) -> dict[str, str]:
-    if capability is None:
-        return {}
-    properties = capability.input_schema.get("properties")
-    if not isinstance(properties, dict):
-        return {}
-
-    displayed: dict[str, str] = {}
-    for field_name in capability.displayable_argument_fields:
-        if field_name not in properties or field_name not in capability_ref.arguments:
-            continue
-        value = capability_ref.arguments[field_name]
-        if value is None or not isinstance(value, (str, int, float, bool)):
-            continue
-        rendered = str(value)
-        if len(rendered) <= 200:
-            displayed[field_name] = rendered
-    return displayed
-
-
-def _operation_summary(capability: CapabilitySpec | None) -> str:
-    if capability is None:
-        return ""
-    return f"{capability.name}：{capability.short_description}"
-
-
-def _completeness_note(data: dict[str, Any], noun: str) -> str:
-    """Report completeness only when the producer actually claims it.
-
-    A producer that omits ``is_complete`` makes no claim; calling the result
-    incomplete there would state a fact we do not have.
-    """
-
-    is_complete = data.get("is_complete")
-    if is_complete is True:
-        return "（结果完整）"
-    if is_complete is False:
-        return f"（结果不完整，可能还有更多{noun}）"
-    return ""
-
-
-def _format_capability_response(
-    capability_id: str,
-    data: dict[str, Any] | None,
-) -> str:
-    if not data:
-        return "操作完成"
-
-    if capability_id == "oa.list_pending_workflows":
-        workflows = data.get("workflows")
-        count = len(workflows) if isinstance(workflows, list) else 0
-        # Keep the conversational projection narrow: the dedicated to-do module
-        # proves completeness upstream, while only titles belong in plain text.
-        titles = _joined_scalar_values(workflows, ("title",))
-        prefix = f"OA待办共{count}条{_completeness_note(data, '待办')}"
-        return f"{prefix}: {titles}" if titles else prefix
-
-    if capability_id == "oa.list_system_messages":
-        messages = data.get("messages")
-        count = len(messages) if isinstance(messages, list) else 0
-        titles = _joined_scalar_values(messages, ("title",))
-        prefix = f"OA系统消息返回{count}条{_completeness_note(data, '消息')}"
-        return f"{prefix}: {titles}" if titles else prefix
-
-    if capability_id == "oa.get_workflow_status":
-        return _join_message_parts(
-            "OA流程状态",
-            data.get("workflow_id"),
-            data.get("current_step"),
-            data.get("approver"),
-        )
-
-    if capability_id == "u8.get_document_status":
-        return _join_message_parts(
-            "U8单据状态",
-            data.get("document_no"),
-            data.get("document_status"),
-            data.get("amount"),
-            data.get("currency"),
-        )
-
-    if capability_id == "u8.get_vendor_balance_summary":
-        return _join_message_parts(
-            "供应商余额",
-            data.get("vendor_id"),
-            data.get("vendor_name"),
-            data.get("balance"),
-            data.get("currency"),
-        )
-
-    if capability_id == "ivms.get_device_online_status":
-        online_text = "在线" if data.get("online") is True else "离线"
-        return _join_message_parts(
-            "设备状态",
-            data.get("device_id"),
-            online_text,
-            data.get("last_seen_at"),
-        )
-
-    if capability_id == "oa.submit_leave_request.confirmed_mock":
-        return _join_message_parts(
-            "已提交",
-            data.get("draft_id"),
-            data.get("workflow_id"),
-            data.get("submit_status"),
-        )
-
-    return "操作完成"
-
-
-def _join_message_parts(*parts: Any) -> str:
-    return " ".join(str(part) for part in parts if part is not None and part != "")
-
-
-def _joined_scalar_values(value: Any, keys: tuple[str, ...]) -> str:
-    values: list[str] = []
-    if isinstance(value, dict):
-        for key in keys:
-            item = value.get(key)
-            if item is not None and not isinstance(item, (dict, list)):
-                values.append(str(item))
-    elif isinstance(value, list):
-        for item in value:
-            values.append(_joined_scalar_values(item, keys))
-    return " ".join(item for item in values if item)
 
 
 __all__ = ("RuntimeImpl",)

@@ -9,6 +9,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
@@ -192,16 +193,24 @@ def _make_runtime(
     gateway = SpyGateway(
         gateway_result or ExecutionResult(status="completed", trace_id="trace-gateway")
     )
+    orchestration_registry = StaticCapabilityRegistry("trace.cap")
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=StaticCapabilityRegistry("trace.cap"),
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace_port,
         llm_provider=MockLLMProvider(),
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
     return runtime, task_store, trace_port, gateway
 

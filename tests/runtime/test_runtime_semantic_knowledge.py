@@ -11,6 +11,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 from app.ports.response_envelope import ResponseEnvelope
@@ -79,16 +80,24 @@ def _run(
         IntentOutput,
         MatchedIntent(match="capability", capability_id=selector),
     )
+    orchestration_registry = registry
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=registry,
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace,
         llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     envelope = asyncio.run(
@@ -273,16 +282,24 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
             IntentOutput,
             MatchedIntent(match="capability", capability_id="oa.missing.query"),
         )
+    orchestration_registry = registry
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=RecordingTaskStore(),
         session_store=ExistingSessionStore(),
-        capability_registry=registry,
-        gateway=RecordingGateway(),
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=RecordingGateway(),
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=RecordingTracePort(),
         llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     async def exercise() -> None:

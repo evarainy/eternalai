@@ -13,6 +13,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
@@ -239,16 +240,24 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
             ),
         )
         gateway = SpyGateway(result)
+        orchestration_registry = StaticCapabilityRegistry("mapped.cap")
+        orchestration_workflow = None
+        orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
             task_store=task_store,
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry("mapped.cap"),
-            gateway=gateway,
+            capability_registry=orchestration_registry,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=orchestration_registry,
+                gateway=gateway,
+                workflow_engine=orchestration_workflow,
+                response_builder=orchestration_builder,
+            ),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
             structured_output=structured_output,
             intent_model="test-intent-model",
-            response_builder=ResponseEnvelopeBuilder(),
+            response_builder=orchestration_builder,
         )
 
         envelope = await runtime.handle_user_message(
@@ -304,16 +313,24 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
         IntentOutput,
         MatchedIntent(match="capability", capability_id=capability_id, arguments={}),
     )
+    orchestration_registry = registry
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=registry,
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace_port,
         llm_provider=MockLLMProvider(),
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     session_tokens = StaticSessionTokens()

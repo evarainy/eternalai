@@ -11,6 +11,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus, RequestOrgContext
@@ -132,16 +133,24 @@ def _run_runtime(
     writer = NoopTraceWriter(logger=cast(Any, logger))
     task_store = MemoryTaskStore()
     message = "synthetic trace lifecycle request"
+    orchestration_registry = StaticCapabilityRegistry("oa.workflow_status.get")
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=writer,
         llm_provider=MockLLMProvider(),
         structured_output=_provider(message, malformed=malformed),
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
     envelope = asyncio.run(
         runtime.handle_user_message(
@@ -164,16 +173,24 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
     writer = NoopTraceWriter(logger=cast(Any, logger))
     task_store = MemoryTaskStore()
     message = "synthetic cross layer success"
+    orchestration_registry = StaticCapabilityRegistry("oa.workflow_status.get")
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=StaticCapabilityRegistry("oa.workflow_status.get"),
-        gateway=CapabilityGateway(adapter=SuccessfulAdapter(), trace_port=writer),
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=CapabilityGateway(adapter=SuccessfulAdapter(), trace_port=writer),
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=writer,
         llm_provider=MockLLMProvider(),
         structured_output=_provider(message),
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     envelope = asyncio.run(
