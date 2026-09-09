@@ -1,6 +1,8 @@
 # Local AI tool state
 .claude/settings.local.json
 .codex/
+.playwright-cli/
+.workbuddy/
 
 # ──────────────────────────────────────────────
 # Repository-local scratch/temp workspace
