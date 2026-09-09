@@ -231,6 +231,7 @@ beforeEach(() => {
     sessionContextMode: 'page',
     sessionId: null,
     transcript: [],
+    confirmationResults: {},
   });
 });
 
@@ -950,10 +951,11 @@ describe('ChatPage response projection', () => {
     );
 
     expect(
-      await screen.findByText('操作已受理，已进入本次执行流程。'),
+      (await screen.findAllByText('操作已受理，已进入本次执行流程。'))[0],
     ).toBeInTheDocument();
     expect(screen.getByText('采购申请审批')).toBeInTheDocument();
-    await waitFor(() => expect(confirmButton).toBeEnabled());
+    await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument());
+    expect(screen.getByText('提交 OA 审批同意操作')).toBeInTheDocument();
   });
 
   it('keeps action result business keys nested and projects only data.result', () => {
@@ -1487,5 +1489,113 @@ describe('/chat 欢迎语：展示级字号，不受正文闭集约束', () => {
     for (const size of sizes) {
       expect(CANVAS_FONT_SIZES).toContain(size);
     }
+  });
+});
+
+describe('confirmation terminal cards', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    runtimeMock.action.mockClear();
+    runtimeMock.handle.mockClear();
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+  });
+  it.each(['cancelled', 'confirmation_invalidated'] as const)(
+    'retires only the original card after %s and keeps a later card usable', async (status) => {
+      let resolveAction!: (value: Response) => void;
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(confirmEnvelope()))
+        .mockReturnValueOnce(new Promise<Response>((resolve) => { resolveAction = resolve; }))
+        .mockResolvedValueOnce(response(confirmEnvelope({ response_id: 'fresh-card' })))
+        .mockResolvedValueOnce(response(envelope({ data: { action_outcome: 'accepted', result: null } })));
+      vi.stubGlobal('fetch', fetchMock);
+      renderChat();
+      sendMessage('发起操作');
+      const oldCard = await screen.findByRole('region', { name: '操作提交前复核' });
+      const cancel = within(oldCard).getByRole('button', { name: '取消这项操作' });
+      const confirm = within(oldCard).getByRole('button', { name: '确认提交这项操作' });
+      fireEvent.click(cancel); fireEvent.click(cancel); fireEvent.click(confirm);
+      await waitFor(() => expect(runtimeMock.action).toHaveBeenCalledTimes(1));
+      expect(cancel).toBeDisabled(); expect(confirm).toBeDisabled();
+      expect(runtimeMock.action).toHaveBeenCalledWith({
+        channel: 'web', session_id: SESSION_A,
+        action: { action_type: 'cancel', response_id: 'response-confirm-1' },
+      });
+      sendMessage('发起新操作');
+      await waitFor(() => expect(screen.getAllByRole('region', { name: '操作提交前复核' })).toHaveLength(2));
+      const notice = status === 'cancelled' ? '已取消这项操作，本次未执行。'
+        : '此确认已失效，请重新发起。若此前已提交，请先核对业务状态，避免重复操作。';
+      act(() => resolveAction(response(envelope({ status, message: notice, data: { action_outcome: status, result: null } }))));
+      await waitFor(() => expect(within(oldCard).queryByRole('button')).not.toBeInTheDocument());
+      expect(within(oldCard).getByRole('status')).toHaveTextContent(notice);
+      expect(within(oldCard).getByText('提交 OA 审批同意操作')).toBeInTheDocument();
+      expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/v1/runtime/action');
+      expect(runtimeMock.handle).toHaveBeenCalledTimes(2);
+      const fresh = screen.getByRole('button', { name: '确认提交这项操作' });
+      expect(fresh).toBeEnabled(); fireEvent.click(fresh);
+      await waitFor(() => expect(runtimeMock.action).toHaveBeenCalledTimes(2));
+      expect(runtimeMock.action.mock.calls[1]?.[0].action).toEqual({ action_type: 'confirm', response_id: 'fresh-card', confirmed: true });
+      await waitFor(() => expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument());
+    },
+  );
+  it('does not claim cancellation when the network result is unknown', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(confirmEnvelope())).mockRejectedValueOnce(new TypeError('network failure')));
+    renderChat(); sendMessage('发起操作');
+    fireEvent.click(await screen.findByRole('button', { name: '取消这项操作' }));
+    await screen.findByText('网络异常');
+    expect(useAIDockStore.getState().confirmationResults).toEqual({});
+    expect(screen.getByRole('button', { name: '取消这项操作' })).toBeEnabled();
+    expect(screen.queryByText('已取消这项操作，本次未执行。')).not.toBeInTheDocument();
+  });
+});
+
+describe('confirmation response routing', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    runtimeMock.action.mockClear(); runtimeMock.handle.mockClear();
+    useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+    useAIDockStore.setState({ sessionId: SESSION_A, transcript: [projectResponse(confirmEnvelope())] });
+  });
+  it.each(['action', 'text'] as const)('ignores a late %s result after a new conversation starts', async (kind) => {
+    let resolveRequest!: (value: Response) => void;
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((resolve) => { resolveRequest = resolve; })));
+    renderChat();
+    if (kind === 'action') fireEvent.click(screen.getByRole('button', { name: '取消这项操作' }));
+    else sendMessage('确认 response-confirm-1');
+    await waitFor(() => expect(kind === 'action' ? runtimeMock.action : runtimeMock.handle).toHaveBeenCalledTimes(1));
+    vi.mocked(crypto.randomUUID).mockReturnValue('22222222-2222-4222-8222-222222222222');
+    fireEvent.click(screen.getByRole('button', { name: '新对话' }));
+    await act(async () => resolveRequest(response(envelope({ status: 'cancelled', data: { action_outcome: 'cancelled', result: null } }))));
+    expect(useAIDockStore.getState().sessionId).toBe('22222222-2222-4222-8222-222222222222');
+    expect(useAIDockStore.getState().transcript).toEqual([]);
+    expect(useAIDockStore.getState().confirmationResults).toEqual({});
+    expect(screen.queryByText('已取消')).not.toBeInTheDocument();
+  });
+  it.each(['确认 response-confirm-1', '确认'])(
+    'uses only an explicit local reference to retire a text confirmation: %s', async (message) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(envelope({ status: 'confirmation_invalidated', data: { action_outcome: 'confirmation_invalidated', result: null } }))));
+      renderChat(); sendMessage(message);
+      await screen.findByText('确认已失效');
+      expect(runtimeMock.action).not.toHaveBeenCalled();
+      expect(runtimeMock.handle).toHaveBeenCalledTimes(1);
+      expect(useAIDockStore.getState().confirmationResults).toEqual(
+        message === '确认' ? {} : { 'response-confirm-1': 'confirmation_invalidated' },
+      );
+      if (message === '确认') expect(screen.getByRole('button', { name: '确认提交这项操作' })).toBeEnabled();
+      else expect(screen.queryByRole('button', { name: '确认提交这项操作' })).not.toBeInTheDocument();
+    },
+  );
+  it('retires the accepted card while keeping its next waiting confirmation usable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response(confirmEnvelope({ response_id: 'next-round', data: { action_outcome: 'accepted', result: null } }))));
+    renderChat();
+    const old = screen.getByRole('region', { name: '操作提交前复核' });
+    fireEvent.click(within(old).getByRole('button', { name: '确认提交这项操作' }));
+    await waitFor(() => expect(screen.getAllByRole('region', { name: '操作提交前复核' })).toHaveLength(2));
+    expect(within(old).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认提交这项操作' })).toBeEnabled();
+    expect(useAIDockStore.getState().confirmationResults).toEqual({ 'response-confirm-1': 'accepted' });
+    expect(runtimeMock.handle).not.toHaveBeenCalled();
+    expect(runtimeMock.action).toHaveBeenCalledTimes(1);
   });
 });

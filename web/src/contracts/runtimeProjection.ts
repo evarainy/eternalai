@@ -15,6 +15,8 @@ declare const __ETERNALAI_OA_ALLOWED_PATH_PREFIXES__: string;
 const SUPPORTED_SCHEMA_VERSION = 'phase0.sdui.v1';
 const responseStatuses = new Set<ResponseEnvelopeStatus>([
   'completed',
+  'cancelled',
+  'confirmation_invalidated',
   'blocked',
   'waiting_user',
   'failed',
@@ -43,6 +45,8 @@ const confirmPayloadKeys = new Set([
 
 export type PresentationKind =
   | 'completed'
+  | 'cancelled'
+  | 'confirmation_invalidated'
   | 'clarification'
   | 'confirmation'
   | 'binding'
@@ -624,6 +628,12 @@ export function projectResponse(
   if (data.incompatible) {
     return incompatibleResponse();
   }
+  if (
+    (data.actionOutcome === 'cancelled' || data.actionOutcome === 'confirmation_invalidated') &&
+    status !== data.actionOutcome
+  ) {
+    return incompatibleResponse();
+  }
   const responseId =
     typeof value.response_id === 'string' && value.response_id.trim()
       ? value.response_id
@@ -638,6 +648,17 @@ export function projectResponse(
     actionOutcome: data.actionOutcome,
   };
 
+  if (status === 'cancelled' || status === 'confirmation_invalidated') {
+    if (
+      (action !== 'none' && action !== null) ||
+      value.ui.component_type !== 'none' ||
+      data.actionOutcome !== status ||
+      !isRecord(value.data) || value.data.result !== null
+    ) {
+      return incompatibleResponse();
+    }
+    return { ...base, records: null, presentationKind: status };
+  }
   if (status === 'completed' && (action === 'none' || action === null)) {
     return { ...base, presentationKind: 'completed' };
   }

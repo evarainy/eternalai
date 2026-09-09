@@ -5,6 +5,7 @@ import {
   parsePageContext,
 } from '../contracts/pageContext';
 import type { PageContextDeclaration } from '../contracts/pageContext';
+import type { UserActionOutcome } from '../contracts/userActionOutcome';
 import type { ProjectedResponse } from '../contracts/runtimeProjection';
 
 export type AIDockMode = 'closed' | 'drawer' | 'pinned';
@@ -27,6 +28,8 @@ interface AIDockState {
   sessionContextMode: AIDockSessionContextMode;
   sessionId: string | null;
   transcript: TranscriptEntry[];
+  confirmationResults: Record<string, UserActionOutcome>;
+  applyConfirmationResult: (sessionId: string, responseId: string | null, result: ProjectedResponse) => void;
   appendTranscript: (entry: TranscriptEntry) => void;
   clearSession: () => void;
   clearPageContext: (expectedSurfaceId?: string) => void;
@@ -83,6 +86,22 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
   sessionContextMode: 'page',
   sessionId: null,
   transcript: [],
+  confirmationResults: {},
+  applyConfirmationResult: (sessionId, responseId, result) =>
+    set((state) => {
+      if (state.sessionId !== sessionId) return state;
+      const outcome = result.actionOutcome;
+      const terminal = outcome !== null && outcome !== 'action_gate_unavailable';
+      const known = responseId !== null && state.transcript.some(
+        (entry) => entry.role === 'assistant' && entry.responseId === responseId && entry.confirm !== null,
+      );
+      return {
+        transcript: [...state.transcript, result],
+        confirmationResults: terminal && known
+          ? { ...state.confirmationResults, [responseId]: outcome }
+          : state.confirmationResults,
+      };
+    }),
   appendTranscript: (entry) =>
     set((state) => ({ transcript: [...state.transcript, entry] })),
   clearSession: () =>
@@ -95,6 +114,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
+      confirmationResults: {},
     }),
   clearPageContext: (expectedSurfaceId) =>
     set((state) => {
@@ -160,6 +180,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
             pageContextDeclaration: next,
             sessionId: null,
             transcript: [],
+            confirmationResults: {},
           };
         }
         return { contextNotice: null, pageContextDeclaration: next };
@@ -171,6 +192,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           pageContextDeclaration: next,
           sessionId: null,
           transcript: [],
+          confirmationResults: {},
         };
       }
       if (pageBindingChanged(previous, next)) {
@@ -180,6 +202,7 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
           pageContextDeclaration: next,
           sessionId: null,
           transcript: [],
+          confirmationResults: {},
         };
       }
       return { pageContextDeclaration: next };
@@ -202,5 +225,6 @@ export const useAIDockStore = create<AIDockState>((set, get) => ({
       sessionContextMode: 'general',
       sessionId: newSessionId(),
       transcript: [],
+      confirmationResults: {},
     })),
 }));

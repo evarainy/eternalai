@@ -20,7 +20,7 @@ import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
-import type { UIComponentTargetSystem } from '../generated/runtime/runtime.schemas';
+import type { UIComponentTargetSystem, UserAction } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useCurrentIdentity } from '../app/identity';
 import { greetingWithName } from './chatGreeting';
@@ -30,6 +30,8 @@ const { Text } = Typography;
 
 const presentationLabels: Record<PresentationKind, string> = {
   completed: '办理完成',
+  cancelled: '已取消',
+  confirmation_invalidated: '确认已失效',
   clarification: '需要补充范围',
   confirmation: '需要确认',
   binding: '需要账号绑定',
@@ -120,10 +122,12 @@ const RequestTextArea = forwardRef<TextAreaRef, RequestTextAreaProps>(
 
 function AssistantDetails({
   entry,
-  onConfirm,
+  onAction,
+  terminalNotice,
 }: {
   entry: ProjectedResponse;
-  onConfirm: (responseId: string) => Promise<void>;
+  onAction: (action: UserAction) => Promise<void>;
+  terminalNotice: string | null;
 }) {
   if (entry.presentationKind === 'clarification') {
     return (
@@ -150,7 +154,8 @@ function AssistantDetails({
         <ConfirmCard
           confirm={entry.confirm}
           responseId={entry.responseId}
-          onConfirm={onConfirm}
+          onAction={onAction}
+          terminalNotice={terminalNotice}
         />
       )}
       {entry.records === null ? null : <RecordsList records={entry.records} />}
@@ -164,29 +169,36 @@ export default function ChatPage() {
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
+  const confirmationResults = useAIDockStore((state) => state.confirmationResults);
+  const confirmationNotice = (responseId: string | null) => {
+    const outcome = responseId === null ? undefined : confirmationResults[responseId];
+    return outcome === undefined ? null : userActionOutcomeMessages[outcome];
+  };
   const identity = useCurrentIdentity();
   const requestInFlight = useRef(false);
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
+      const store = useAIDockStore.getState();
+      const sessionId = store.ensureSession();
+      const reference = /^(?:确认|confirm)\s+(\S+)$/i.exec(message)?.[1] ?? null;
       try {
-        const sessionId = useAIDockStore.getState().ensureSession();
-        return projectResponse(await handleApiV1RuntimeHandlePost({
+        const result = projectResponse(await handleApiV1RuntimeHandlePost({
           channel: 'web',
           session_id: sessionId,
           message,
           client_capabilities: {},
         }));
+        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
+        return result;
       } catch (error) {
         const projectedError = projectRequestError(error);
         if (projectedError === null) {
           throw error;
         }
+        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, projectedError);
         return projectedError;
       }
-    },
-    onSuccess: (projectedResponse) => {
-      appendTranscript(projectedResponse);
     },
     onSettled: () => {
       requestInFlight.current = false;
@@ -204,25 +216,21 @@ export default function ChatPage() {
     mutation.mutate(message);
   };
 
-  const submitConfirmation = async (responseId: string) => {
+  const submitConfirmation = async (action: UserAction) => {
+    const store = useAIDockStore.getState();
+    const sessionId = store.ensureSession();
+    if (store.confirmationResults[action.response_id] !== undefined) return;
     try {
-      const sessionId = useAIDockStore.getState().ensureSession();
       const projectedResponse = projectResponse(
         await handleActionApiV1RuntimeActionPost({
-          channel: 'web',
-          session_id: sessionId,
-          action: {
-            action_type: 'confirm',
-            response_id: responseId,
-            confirmed: true,
-          },
+          channel: 'web', session_id: sessionId, action,
         }),
       );
-      appendTranscript(projectedResponse);
+      useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedResponse);
     } catch (error) {
       const projectedError = projectRequestError(error);
       if (projectedError !== null) {
-        appendTranscript(projectedError);
+        useAIDockStore.getState().applyConfirmationResult(sessionId, action.response_id, projectedError);
       }
     }
   };
@@ -332,7 +340,8 @@ export default function ChatPage() {
                       {entry.role === 'assistant' ? (
                         <AssistantDetails
                           entry={entry}
-                          onConfirm={submitConfirmation}
+                          onAction={submitConfirmation}
+                          terminalNotice={confirmationNotice(entry.responseId)}
                         />
                       ) : null}
                     </article>

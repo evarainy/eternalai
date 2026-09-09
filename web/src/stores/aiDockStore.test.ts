@@ -35,6 +35,7 @@ describe('temporary AI Dock state', () => {
       sessionContextMode: 'page',
       sessionId: null,
       transcript: [],
+      confirmationResults: {},
     });
   });
 
@@ -241,4 +242,44 @@ describe('temporary AI Dock state', () => {
       '页面对象或筛选已切换',
     );
   });
+});
+
+describe('confirmation result ownership', () => {
+  const result = {
+    role: 'assistant' as const, text: '已取消', presentationKind: 'cancelled' as const,
+    responseId: 'result', confirm: null, records: null, actionOutcome: 'cancelled' as const,
+  };
+  const card = (responseId: string) => ({
+    ...result, responseId, actionOutcome: null, presentationKind: 'confirmation' as const,
+    confirm: { capabilityId: 'test', operationSummary: 'review', targetSystem: null,
+      fieldNames: [], displayedArgumentValues: {} },
+  });
+  beforeEach(() => useAIDockStore.getState().clearSession());
+  it('binds a result to the original card and ignores late results after session changes', () => {
+    useAIDockStore.setState({ sessionId: 'session-a', transcript: [card('old'), card('new')] });
+    useAIDockStore.getState().applyConfirmationResult('session-a', 'old', result);
+    expect(useAIDockStore.getState().confirmationResults).toEqual({ old: 'cancelled' });
+    expect(useAIDockStore.getState().transcript).toHaveLength(3);
+    useAIDockStore.setState({ sessionId: 'session-b' });
+    const before = useAIDockStore.getState();
+    useAIDockStore.getState().applyConfirmationResult('session-a', 'new', result);
+    expect(useAIDockStore.getState()).toBe(before);
+    expect(useAIDockStore.getState().confirmationResults).toEqual({ old: 'cancelled' });
+  });
+  it.each(['clear', 'new', 'scope', 'binding', 'restored'] as const)(
+    'clears card results on %s session reset', (kind) => {
+      useAIDockStore.getState().registerPageContext(validPageContext());
+      useAIDockStore.setState({ sessionId: 'session-a', transcript: [card('old')], confirmationResults: { old: 'cancelled' } });
+      if (kind === 'clear') useAIDockStore.getState().clearSession();
+      if (kind === 'new') useAIDockStore.getState().startNewSession();
+      if (kind === 'scope') useAIDockStore.getState().registerPageContext({ ...validPageContext(), organization_scope: { tenant_id: 'default', organization_id: 'org-2', department_id: 'dept-2' } });
+      if (kind === 'binding') useAIDockStore.getState().registerPageContext({ ...validPageContext(), work_object_refs: [{ work_object_id: 'other' }] });
+      if (kind === 'restored') {
+        useAIDockStore.getState().clearPageContext();
+        useAIDockStore.getState().registerPageContext(validPageContext());
+      }
+      expect(useAIDockStore.getState().confirmationResults).toEqual({});
+      expect(useAIDockStore.getState().transcript).toEqual([]);
+    },
+  );
 });
