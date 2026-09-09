@@ -60,7 +60,7 @@ const ASSIGNEE_ITEM: OAWorkObjectView = {
 const MATCH_CASES: Array<
   [string, string, OAWorkObjectView, string, string]
 > = [
-  ['/search?q=bUdGeT', 'bUdGeT', TITLE_ITEM, 'Quarterly Budget Review', '命中标题'],
+  ['/search?q=bUdGeT', 'budget', TITLE_ITEM, 'Quarterly Budget Review', '命中标题'],
   ['/search?q=%20oa-ref-002%20', 'oa-ref-002', SOURCE_REF_ITEM, '合同归档', '命中来源编号'],
   ['/search?q=%20li%20ming%20', 'li ming', ASSIGNEE_ITEM, '材料复核', '命中责任人'],
 ];
@@ -160,18 +160,56 @@ describe('WorkObjectSearchPage', () => {
   });
 
   it.each([
-    ['/search?q=oa-ref', 'OA-REF-002'],
-    ['/search?q=li', 'Li Ming'],
+    ['oa-ref', SOURCE_REF_ITEM, '命中来源编号'],
+    ['ming', ASSIGNEE_ITEM, '命中责任人'],
   ])(
     'does not use substring matching for source reference or assignee: %s',
-    async (entry, forbiddenText) => {
-      apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({ items: [] }));
-      renderPage(entry);
+    async (query, item, forbiddenTag) => {
+      // Return a title hit with a partial reference/assignee too: the page must
+      // keep the server result while declining the false exact-field label.
+      apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({
+        items: [{ ...item, source_title: `Title ${query}` }],
+      }));
+      const view = renderPage(`/search?q=${query}`);
+      expect(await screen.findByText(`Title ${query}`)).toBeInTheDocument();
+      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: query });
+      expect(screen.getByText('命中标题')).toBeInTheDocument();
+      expect(screen.queryByText(forbiddenTag)).not.toBeInTheDocument();
+      view.unmount();
 
-      expect(
-        await screen.findByText(/没有匹配项。已在你有权查看的全部工作事项中检索/),
-      ).toBeInTheDocument();
-      expect(screen.queryByText(forbiddenText)).not.toBeInTheDocument();
+      apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({ items: [] }));
+      renderPage(`/search?q=${query}`);
+      expect(await screen.findByText('找到 0 条')).toBeInTheDocument();
+      expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+      expect(apiMocks.listWorkObjects).toHaveBeenLastCalledWith({ q: query });
+    },
+  );
+
+  it('normalized query is sent and matched fields use the same contract', async () => {
+    const item = {
+      ...TITLE_ITEM,
+      source_title: 'Quarterly OA\u0085  REF Review',
+      source_ref: '\u3000OA\u00a0 REF\ufeff',
+      assignee_display_name: '\u3000OA\t  REF\u0085',
+    };
+    apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({ items: [item] }));
+    renderPage(`/search?${new URLSearchParams({ q: '\u3000OA\u00a0  ReF\u0085' })}`);
+    expect(await screen.findByText('找到 1 条')).toBeInTheDocument();
+    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'oa ref' });
+    expect(screen.getByText('关键词：oa ref')).toBeInTheDocument();
+    for (const label of ['命中标题', '命中来源编号', '命中责任人']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    expect(useAIDockStore.getState().pageContextDeclaration?.filters).toEqual([
+      { field: 'query', operator: 'equals', value: 'oa ref', source: 'visible_control' },
+    ]);
+  });
+
+  it.each(['', ' ', '\u3000', '\u00a0', '\u0085', '\ufeff'])(
+    'does not request data for normalized empty URL %j', (query) => {
+      renderPage(`/search?${new URLSearchParams({ q: query })}`);
+      expect(screen.getByText('等待搜索')).toBeInTheDocument();
+      expect(apiMocks.listWorkObjects).not.toHaveBeenCalled();
     },
   );
 

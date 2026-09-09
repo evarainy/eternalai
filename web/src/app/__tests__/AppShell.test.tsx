@@ -307,11 +307,11 @@ describe('AppShell and singleton AI Dock', () => {
     renderShell('/admin/tasks');
 
     fireEvent.change(screen.getByLabelText('搜索工作事项'), {
-      target: { value: '  OA-WF-001  ' },
+      target: { value: '\u3000 OA-WF-001\u0085  ReVIEW\ufeff' },
     });
     fireEvent.click(screen.getByRole('button', { name: /搜\s*索/ }));
 
-    expect(screen.getByText('搜索结果页 ?q=OA-WF-001')).toBeInTheDocument();
+    expect(screen.getByText('搜索结果页 ?q=oa-wf-001+review')).toBeInTheDocument();
     expect(screen.getByLabelText('搜索工作事项')).toHaveAttribute(
       'placeholder',
       '搜索工作事项、文件编号、责任人',

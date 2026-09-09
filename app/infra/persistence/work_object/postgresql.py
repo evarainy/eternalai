@@ -17,6 +17,10 @@ from app.ports.work_object import (
     WorkObjectRecord,
     WorkObjectStorePort,
 )
+from app.ports.work_object_search import (
+    SEARCH_WHITESPACE_PATTERN,
+    normalize_search_query,
+)
 
 _WORK_OBJECT_COLUMNS = (
     "work_object_id, state_authority, source_system, source_kind, source_ref, "
@@ -95,22 +99,23 @@ class PostgreSQLWorkObjectStore:
     ) -> list[WorkObjectRecord]:
         if not 1 <= limit <= WORK_OBJECT_LIST_FETCH_LIMIT:
             raise ValueError("Work Object list limit is outside the allowed range")
-        normalized_search_term = (
-            search_term.strip() if search_term is not None else None
-        )
+        normalized_search_term = normalize_search_query(search_term)
         search_clause = ""
         parameters: dict[str, object] = {
             "assignee_ai_user_id": assignee_ai_user_id,
             "limit": limit,
         }
         if normalized_search_term:
+            # Fixed SQL expressions only; all user input stays in bound parameters.
+            query = "LOWER(BTRIM(regexp_replace(:search_term, :ws_pattern, ' ', 'g')))"
+            title = "LOWER(BTRIM(regexp_replace(source_title, :ws_pattern, ' ', 'g')))"
+            reference = "LOWER(BTRIM(regexp_replace(source_ref, :ws_pattern, ' ', 'g')))"
+            assignee = "LOWER(BTRIM(regexp_replace(assignee_display_name, :ws_pattern, ' ', 'g')))"
             search_clause = (
-                "AND ("
-                "STRPOS(LOWER(source_title), LOWER(:search_term)) > 0 "
-                "OR LOWER(BTRIM(source_ref)) = LOWER(BTRIM(:search_term)) "
-                "OR LOWER(BTRIM(assignee_display_name)) "
-                "= LOWER(BTRIM(:search_term))) "
+                f"AND (STRPOS({title}, {query}) > 0 "
+                f"OR {reference} = {query} OR {assignee} = {query}) "
             )
+            parameters["ws_pattern"] = SEARCH_WHITESPACE_PATTERN
             parameters["search_term"] = normalized_search_term
         async with self._session_factory() as session:
             rows = (
