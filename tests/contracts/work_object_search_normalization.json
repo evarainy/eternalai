@@ -1,0 +1,371 @@
+{
+  "normalization": [
+    {
+      "id": "ws-0009",
+      "input": "\tOA\t\tREF\t",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-0009",
+      "input": "\t\t",
+      "expected": ""
+    },
+    {
+      "id": "ws-000a",
+      "input": "\nOA\n\nREF\n",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-000a",
+      "input": "\n\n",
+      "expected": ""
+    },
+    {
+      "id": "ws-000b",
+      "input": "\u000bOA\u000b\u000bREF\u000b",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-000b",
+      "input": "\u000b\u000b",
+      "expected": ""
+    },
+    {
+      "id": "ws-000c",
+      "input": "\fOA\f\fREF\f",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-000c",
+      "input": "\f\f",
+      "expected": ""
+    },
+    {
+      "id": "ws-000d",
+      "input": "\rOA\r\rREF\r",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-000d",
+      "input": "\r\r",
+      "expected": ""
+    },
+    {
+      "id": "ws-001c",
+      "input": "\u001cOA\u001c\u001cREF\u001c",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-001c",
+      "input": "\u001c\u001c",
+      "expected": ""
+    },
+    {
+      "id": "ws-001d",
+      "input": "\u001dOA\u001d\u001dREF\u001d",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-001d",
+      "input": "\u001d\u001d",
+      "expected": ""
+    },
+    {
+      "id": "ws-001e",
+      "input": "\u001eOA\u001e\u001eREF\u001e",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-001e",
+      "input": "\u001e\u001e",
+      "expected": ""
+    },
+    {
+      "id": "ws-001f",
+      "input": "\u001fOA\u001f\u001fREF\u001f",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-001f",
+      "input": "\u001f\u001f",
+      "expected": ""
+    },
+    {
+      "id": "ws-0020",
+      "input": " OA  REF ",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-0020",
+      "input": "  ",
+      "expected": ""
+    },
+    {
+      "id": "ws-0085",
+      "input": "\u0085OA\u0085\u0085REF\u0085",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-0085",
+      "input": "\u0085\u0085",
+      "expected": ""
+    },
+    {
+      "id": "ws-00a0",
+      "input": "\u00a0OA\u00a0\u00a0REF\u00a0",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-00a0",
+      "input": "\u00a0\u00a0",
+      "expected": ""
+    },
+    {
+      "id": "ws-1680",
+      "input": "\u1680OA\u1680\u1680REF\u1680",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-1680",
+      "input": "\u1680\u1680",
+      "expected": ""
+    },
+    {
+      "id": "ws-2000",
+      "input": "\u2000OA\u2000\u2000REF\u2000",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2000",
+      "input": "\u2000\u2000",
+      "expected": ""
+    },
+    {
+      "id": "ws-2001",
+      "input": "\u2001OA\u2001\u2001REF\u2001",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2001",
+      "input": "\u2001\u2001",
+      "expected": ""
+    },
+    {
+      "id": "ws-2002",
+      "input": "\u2002OA\u2002\u2002REF\u2002",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2002",
+      "input": "\u2002\u2002",
+      "expected": ""
+    },
+    {
+      "id": "ws-2003",
+      "input": "\u2003OA\u2003\u2003REF\u2003",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2003",
+      "input": "\u2003\u2003",
+      "expected": ""
+    },
+    {
+      "id": "ws-2004",
+      "input": "\u2004OA\u2004\u2004REF\u2004",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2004",
+      "input": "\u2004\u2004",
+      "expected": ""
+    },
+    {
+      "id": "ws-2005",
+      "input": "\u2005OA\u2005\u2005REF\u2005",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2005",
+      "input": "\u2005\u2005",
+      "expected": ""
+    },
+    {
+      "id": "ws-2006",
+      "input": "\u2006OA\u2006\u2006REF\u2006",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2006",
+      "input": "\u2006\u2006",
+      "expected": ""
+    },
+    {
+      "id": "ws-2007",
+      "input": "\u2007OA\u2007\u2007REF\u2007",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2007",
+      "input": "\u2007\u2007",
+      "expected": ""
+    },
+    {
+      "id": "ws-2008",
+      "input": "\u2008OA\u2008\u2008REF\u2008",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2008",
+      "input": "\u2008\u2008",
+      "expected": ""
+    },
+    {
+      "id": "ws-2009",
+      "input": "\u2009OA\u2009\u2009REF\u2009",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2009",
+      "input": "\u2009\u2009",
+      "expected": ""
+    },
+    {
+      "id": "ws-200a",
+      "input": "\u200aOA\u200a\u200aREF\u200a",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-200a",
+      "input": "\u200a\u200a",
+      "expected": ""
+    },
+    {
+      "id": "ws-2028",
+      "input": "\u2028OA\u2028\u2028REF\u2028",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2028",
+      "input": "\u2028\u2028",
+      "expected": ""
+    },
+    {
+      "id": "ws-2029",
+      "input": "\u2029OA\u2029\u2029REF\u2029",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-2029",
+      "input": "\u2029\u2029",
+      "expected": ""
+    },
+    {
+      "id": "ws-202f",
+      "input": "\u202fOA\u202f\u202fREF\u202f",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-202f",
+      "input": "\u202f\u202f",
+      "expected": ""
+    },
+    {
+      "id": "ws-205f",
+      "input": "\u205fOA\u205f\u205fREF\u205f",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-205f",
+      "input": "\u205f\u205f",
+      "expected": ""
+    },
+    {
+      "id": "ws-3000",
+      "input": "\u3000OA\u3000\u3000REF\u3000",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-3000",
+      "input": "\u3000\u3000",
+      "expected": ""
+    },
+    {
+      "id": "ws-feff",
+      "input": "\ufeffOA\ufeff\ufeffREF\ufeff",
+      "expected": "oa ref"
+    },
+    {
+      "id": "empty-feff",
+      "input": "\ufeff\ufeff",
+      "expected": ""
+    },
+    {
+      "id": "mixed",
+      "input": "\u3000 A\t \u00a0B\u0085",
+      "expected": "a b"
+    },
+    {
+      "id": "ascii",
+      "input": "BuDgEt",
+      "expected": "budget"
+    },
+    {
+      "id": "empty",
+      "input": "",
+      "expected": ""
+    },
+    {
+      "id": "none",
+      "input": null,
+      "expected": null
+    },
+    {
+      "id": "zero-width-not-space",
+      "input": "A\u200bB",
+      "expected": "a\u200bb"
+    },
+    {
+      "id": "mongolian-not-space",
+      "input": "A\u180eB",
+      "expected": "a\u180eb"
+    },
+    {
+      "id": "literal-wildcards",
+      "input": " 100%_READY ",
+      "expected": "100%_ready"
+    }
+  ],
+  "matching": [
+    {
+      "field": "title",
+      "input": " Quarterly\u3000 \tBudget REVIEW ",
+      "query": " BUDGET\u00a0review ",
+      "expected": true
+    },
+    {
+      "field": "reference",
+      "input": "\tOA-REF-002\u00a0",
+      "query": " oa-ref-002 ",
+      "expected": true
+    },
+    {
+      "field": "reference",
+      "input": "OA-REF-002",
+      "query": "oa-ref",
+      "expected": false
+    },
+    {
+      "field": "assignee",
+      "input": "Li\u0085  Ming",
+      "query": "li ming",
+      "expected": true
+    },
+    {
+      "field": "assignee",
+      "input": "Li Ming",
+      "query": "ming",
+      "expected": false
+    }
+  ]
+}

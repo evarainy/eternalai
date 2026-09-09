@@ -1,3 +1,4 @@
+import { normalizeSearchQuery, normalizeSearchValue } from '../../shared/query/workObjectSearchNormalization';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Card, Empty, Flex, Space, Tag, Typography } from 'antd';
@@ -15,10 +16,6 @@ import styles from './WorkObjectSearchPage.module.css';
 const { Paragraph, Title } = Typography;
 const EMPTY_ITEMS: WorkObjectListResponseItemsItem[] = [];
 
-function normalizedEqualityValue(value: string): string {
-  return value.trim().toLocaleLowerCase('zh-CN');
-}
-
 function matchedFields(
   item: WorkObjectListResponseItemsItem,
   term: string,
@@ -26,21 +23,21 @@ function matchedFields(
   if (term.length === 0) {
     return [];
   }
-  const normalizedTerm = normalizedEqualityValue(term);
+  const normalizedTerm = normalizeSearchValue(term);
   const fields: string[] = [];
   if (
     item.source_title !== null &&
-    item.source_title.toLocaleLowerCase('zh-CN').includes(normalizedTerm)
+    normalizeSearchValue(item.source_title).includes(normalizedTerm)
   ) {
     fields.push('标题');
   }
   if (
     item.source_ref !== null &&
-    normalizedEqualityValue(item.source_ref) === normalizedTerm
+    normalizeSearchValue(item.source_ref) === normalizedTerm
   ) {
     fields.push('来源编号');
   }
-  if (normalizedEqualityValue(item.assignee_display_name) === normalizedTerm) {
+  if (normalizeSearchValue(item.assignee_display_name) === normalizedTerm) {
     fields.push('责任人');
   }
   return fields;
@@ -87,7 +84,7 @@ export default function WorkObjectSearchPage() {
   const [searchParams] = useSearchParams();
   const authGeneration = useAuthStore((state) => state.generation);
   const rawTerm = searchParams.get('q');
-  const term = rawTerm?.trim() ?? '';
+  const term = normalizeSearchQuery(rawTerm) ?? '';
   const hasSearch = rawTerm !== null && term.length > 0;
 
   const listQuery = useQuery({

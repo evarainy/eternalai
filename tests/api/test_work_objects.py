@@ -41,6 +41,7 @@ from app.ports.work_object import (
     WorkObjectRecord,
 )
 from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
+from app.ports.work_object_search import normalize_search_query, normalize_search_value
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
@@ -117,9 +118,7 @@ class MemoryWorkObjectStore:
                 "limit": limit,
             }
         )
-        normalized_search_term = (
-            search_term.strip().lower() if search_term is not None else None
-        )
+        normalized_search_term = normalize_search_query(search_term)
         records = [
             record
             for record in self.records.values()
@@ -131,16 +130,13 @@ class MemoryWorkObjectStore:
                 for record in records
                 if (
                     record.source_title is not None
-                    and normalized_search_term in record.source_title.lower()
+                    and normalized_search_term in normalize_search_value(record.source_title)
                 )
                 or (
                     record.source_ref is not None
-                    and record.source_ref.strip().lower() == normalized_search_term
+                    and normalize_search_value(record.source_ref) == normalized_search_term
                 )
-                or (
-                    record.assignee_display_name.strip().lower()
-                    == normalized_search_term
-                )
+                or (normalize_search_value(record.assignee_display_name) == normalized_search_term)
             ]
         return records[:limit]
 
@@ -659,12 +655,12 @@ def test_list_returns_one_bounded_batch_with_explicit_overflow() -> None:
     assert len(response.json()["items"]) == 200
 
 
-def test_list_search_trims_query_and_only_returns_server_matches() -> None:
+def test_list_search_normalizes_query_before_store_call() -> None:
     records = [_record(index=1), _record(index=2)]
     store = MemoryWorkObjectStore(records)
     client = _client(store, RecordingGateway())
 
-    response = client.get("/api/v1/work-objects", params={"q": "  APPROVAL 2  "})
+    response = client.get("/api/v1/work-objects", params={"q": "\u3000 APPROVAL\u00a0  \t2\u0085"})
 
     assert response.status_code == 200
     assert [item["work_object_id"] for item in response.json()["items"]] == [
@@ -673,17 +669,18 @@ def test_list_search_trims_query_and_only_returns_server_matches() -> None:
     assert store.list_calls == [
         {
             "assignee_ai_user_id": "user-a",
-            "search_term": "APPROVAL 2",
+            "search_term": "approval 2",
             "limit": 201,
         }
     ]
 
 
-def test_list_whitespace_query_preserves_the_existing_list_behavior() -> None:
+@pytest.mark.parametrize("query", [None, "", "   ", "\u3000", "\u00a0", "\t", "\u0085", "\ufeff"])
+def test_list_whitespace_query_preserves_the_existing_list_behavior(query: str | None) -> None:
     store = MemoryWorkObjectStore([_record()])
     client = _client(store, RecordingGateway())
 
-    response = client.get("/api/v1/work-objects", params={"q": "   "})
+    response = client.get("/api/v1/work-objects", params={} if query is None else {"q": query})
 
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1

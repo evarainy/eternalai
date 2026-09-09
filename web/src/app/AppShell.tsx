@@ -1,3 +1,4 @@
+import { normalizeSearchQuery } from '../shared/query/workObjectSearchNormalization';
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -390,7 +391,7 @@ export function AppShell() {
         : { text: '暂无不正常', tone: 'ok' };
 
   const submitSearch = (value: string) => {
-    const term = value.trim();
+    const term = normalizeSearchQuery(value) ?? '';
     navigate({
       pathname: '/search',
       search: term.length === 0 ? '' : `?${new URLSearchParams({ q: term })}`,

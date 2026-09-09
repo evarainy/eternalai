@@ -42,6 +42,7 @@ from app.ports.work_object_handling import (
     project_handling_action,
 )
 from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
+from app.ports.work_object_search import normalize_search_query
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -313,10 +314,10 @@ def make_router(
         q: Annotated[str | None, Query()] = None,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectListResponse:
-        search_term = q.strip() if q is not None else None
+        search_term = normalize_search_query(q)
         return await configured().list_for_principal(
             principal,
-            search_term=search_term or None,
+            search_term=search_term,
         )
 
     @router.post("/sync", response_model=WorkObjectListResponse)
