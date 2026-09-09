@@ -50,6 +50,7 @@
 ## Git 与永久任务记录
 
 - 主分支 `phase0/main`；任务分支 `phase2/<task_id>`；commit 为 `phase2(<task_id>): <简述>`，merge 为 `merge phase2(<task_id>): <简述>`。
+- A 档棒将纯格式化改动与功能改动分开提交；本条不增加 CI 检查。
 - 集成只走任务分支普通 push → PR → required checks 最终全绿 → 获准的 PR 合并；不得本地合完直推主分支。验证、所需 Review、候选 freshness、分支保护与 required checks 均须满足；绿灯本身不是合并授权。每次合并后检查对应 merge SHA 的远端 GitHub Actions 结果。
 - 不建 per-task Task Record。PR body 合并前必须完整包含 `## Scope`、`## 验证结果`、`## 本棒新增欠债`。验证段逐条记录实际命令、最小充分原始结果、未执行项理由、候选 commit 与 CI run；欠债每条带 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
 - A 档验证段还须含 `### Opus 评审桥` JSON 摘要，字段闭集：`requested_model`、`observed_model`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。合规要求 `review_model_verified=true`、observed_model 等于现役锁定模型、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
