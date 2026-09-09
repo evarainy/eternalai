@@ -38,6 +38,8 @@ export const ActionResponseEnvelopeStatus = {
   waiting_user: 'waiting_user',
   failed: 'failed',
   no_capability_found: 'no_capability_found',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
 } as const;
 
 export type ActionResponseEnvelopeTraceSummary = string | null;
@@ -59,6 +61,19 @@ export interface ActionResponseEnvelope {
   trace_id: string;
   trace_summary?: ActionResponseEnvelopeTraceSummary;
   ui: ActionResponseEnvelopeUi;
+}
+
+export type CancelUserActionActionType = typeof CancelUserActionActionType[keyof typeof CancelUserActionActionType];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const CancelUserActionActionType = {
+  cancel: 'cancel',
+} as const;
+
+export interface CancelUserAction {
+  action_type: CancelUserActionActionType;
+  response_id: string;
 }
 
 export type ConfirmCardReasonCode = string | null;
@@ -86,6 +101,20 @@ export interface ConfirmCardPayload {
   field_names: string[];
   operation_summary: string;
   target_system: ConfirmCardPayloadTargetSystem;
+}
+
+export type ConfirmUserActionActionType = typeof ConfirmUserActionActionType[keyof typeof ConfirmUserActionActionType];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ConfirmUserActionActionType = {
+  confirm: 'confirm',
+} as const;
+
+export interface ConfirmUserAction {
+  action_type: ConfirmUserActionActionType;
+  confirmed: true;
+  response_id: string;
 }
 
 export interface HTTPValidationError {
@@ -117,6 +146,19 @@ export interface HandleRequest {
  */
 export interface ProjectedActionResult {[key: string]: unknown}
 
+export type RejectUserActionActionType = typeof RejectUserActionActionType[keyof typeof RejectUserActionActionType];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const RejectUserActionActionType = {
+  reject: 'reject',
+} as const;
+
+export interface RejectUserAction {
+  action_type: RejectUserActionActionType;
+  response_id: string;
+}
+
 export type ResponseEnvelopeDataAnyOf = { [key: string]: unknown };
 
 export type ResponseEnvelopeData = ResponseEnvelopeDataAnyOf | null;
@@ -131,6 +173,8 @@ export const ResponseEnvelopeStatus = {
   waiting_user: 'waiting_user',
   failed: 'failed',
   no_capability_found: 'no_capability_found',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
 } as const;
 
 export type ResponseEnvelopeTraceSummary = string | null;
@@ -177,11 +221,7 @@ export interface UIComponent {
   target_system?: UIComponentTargetSystem;
 }
 
-export interface UserAction {
-  action_type: 'confirm';
-  confirmed: true;
-  response_id: string;
-}
+export type UserAction = ConfirmUserAction | RejectUserAction | CancelUserAction;
 
 export type UserActionOutcome = typeof UserActionOutcome[keyof typeof UserActionOutcome];
 
@@ -197,6 +237,8 @@ export const UserActionOutcome = {
   action_already_claimed: 'action_already_claimed',
   action_stale: 'action_stale',
   action_version_conflict: 'action_version_conflict',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
 } as const;
 
 export type ValidationErrorCtx = { [key: string]: unknown };

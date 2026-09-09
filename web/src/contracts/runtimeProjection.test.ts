@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   projectConfirmCard,
+  projectResponse,
   projectRecords,
   type OaNavigationConfig,
 } from './runtimeProjection';
@@ -315,4 +316,31 @@ describe('partial record-list projection', () => {
     expect(records.incomplete).toBe(true);
     expect(records.incompleteReasons).toContain(reason);
   });
+});
+
+describe('confirmation terminal projection', () => {
+  it.each(['cancelled', 'confirmation_invalidated'] as const)(
+    'projects %s without confirmation controls and rejects contradictory UI/data', (status) => {
+      const candidate = {
+        schema_version: 'phase0.sdui.v1', response_id: 'terminal-result', status,
+        message: 'terminal message', fallback_text: 'terminal fallback',
+        ui: { component_type: 'none', action: 'none', payload: {} },
+        data: { action_outcome: status, result: null },
+      };
+      expect(projectResponse(candidate)).toMatchObject({
+        presentationKind: status, actionOutcome: status, confirm: null, records: null,
+      });
+      for (const altered of [
+        { ...candidate, status: 'completed' },
+        { ...candidate, status: 'waiting_user', ui: confirmCard() },
+        { ...candidate, ui: confirmCard() },
+        { ...candidate, ui: { ...candidate.ui, action: 'execute' } },
+        { ...candidate, data: { action_outcome: 'unknown', result: null } },
+        { ...candidate, data: { action_outcome: 'accepted', result: null } },
+        { ...candidate, data: { action_outcome: status, result: pendingWorkflows() } },
+      ]) {
+        expect(projectResponse(altered).presentationKind).toBe('incompatible');
+      }
+    },
+  );
 });

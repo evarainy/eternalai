@@ -11,6 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { UserActionOutcome as GeneratedOutcomes } from '../../generated/runtime/runtime.schemas';
+import { TaskStatus as GeneratedTaskStatuses } from '../../generated/admin/admin.schemas';
+import { USER_ACTION_OUTCOMES } from '../../contracts/userActionOutcome';
 
 interface OpenApiSchema {
   format?: string;
@@ -465,4 +468,35 @@ describe('FastAPI-derived Orval clients', () => {
     },
     120_000,
   );
+});
+
+it('keeps generated terminal contracts and the discriminated actions in sync', () => {
+  const runtime = JSON.parse(readFileSync(resolve(webRoot, 'openapi/runtime.openapi.json'), 'utf8'));
+  const admin = JSON.parse(readFileSync(resolve(webRoot, 'openapi/admin.openapi.json'), 'utf8'));
+  const trace = JSON.parse(readFileSync(resolve(webRoot, 'openapi/admin-trace.openapi.json'), 'utf8'));
+  expect(runtime.components.schemas.UserAction).toEqual({
+    discriminator: { propertyName: 'action_type', mapping: {
+      confirm: '#/components/schemas/ConfirmUserAction',
+      reject: '#/components/schemas/RejectUserAction',
+      cancel: '#/components/schemas/CancelUserAction',
+    } },
+    oneOf: [
+      { $ref: '#/components/schemas/ConfirmUserAction' },
+      { $ref: '#/components/schemas/RejectUserAction' },
+      { $ref: '#/components/schemas/CancelUserAction' },
+    ],
+  });
+  expect(runtime.components.schemas.ConfirmUserAction.required).toEqual(['action_type', 'response_id', 'confirmed']);
+  for (const name of ['RejectUserAction', 'CancelUserAction']) {
+    expect(runtime.components.schemas[name].required).toEqual(['action_type', 'response_id']);
+    expect(runtime.components.schemas[name].additionalProperties).toBe(false);
+    expect(runtime.components.schemas[name].properties).not.toHaveProperty('confirmed');
+  }
+  expect(runtime.components.schemas.UserActionOutcome.enum).toEqual(Object.values(GeneratedOutcomes));
+  expect(new Set(runtime.components.schemas.UserActionOutcome.enum)).toEqual(new Set(USER_ACTION_OUTCOMES));
+  expect(admin.components.schemas.TaskStatus.enum).toEqual(Object.values(GeneratedTaskStatuses));
+  expect(runtime.components.schemas.ResponseEnvelope.properties.status.enum).toContain('cancelled');
+  expect(runtime.components.schemas.ResponseEnvelope.properties.status.enum).toContain('confirmation_invalidated');
+  expect(trace.components.schemas.AdminTracePersistedView.properties.event_type.enum).toContain('task_cancelled');
+  expect(trace.components.schemas.AdminTracePersistedView.properties.event_type.enum).toContain('task_confirmation_invalidated');
 });

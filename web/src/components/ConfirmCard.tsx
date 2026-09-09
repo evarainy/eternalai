@@ -1,32 +1,37 @@
 import { useRef, useState } from 'react';
 import { Button } from 'antd';
+import type { UserAction } from '../generated/runtime/runtime.schemas';
 import type { ConfirmCardView } from '../contracts/runtimeProjection';
 import styles from './RuntimeViews.module.css';
 
 interface ConfirmCardProps {
   confirm: ConfirmCardView;
   responseId: string | null;
-  onConfirm: (responseId: string) => Promise<void>;
+  onAction: (action: UserAction) => Promise<void>;
+  terminalNotice: string | null;
 }
 
 export function ConfirmCard({
   confirm,
   responseId,
-  onConfirm,
+  onAction,
+  terminalNotice,
 }: ConfirmCardProps) {
   const actionInFlight = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const displayedEntries = Object.entries(confirm.displayedArgumentValues);
   const displayedNames = new Set(displayedEntries.map(([fieldName]) => fieldName));
 
-  const submitConfirmation = async () => {
-    if (responseId === null || actionInFlight.current) {
+  const submitConfirmation = async (actionType: 'confirm' | 'cancel') => {
+    if (responseId === null || terminalNotice !== null || actionInFlight.current) {
       return;
     }
     actionInFlight.current = true;
     setIsSubmitting(true);
     try {
-      await onConfirm(responseId);
+      await onAction(actionType === 'confirm'
+        ? { action_type: 'confirm', response_id: responseId, confirmed: true }
+        : { action_type: 'cancel', response_id: responseId });
     } finally {
       actionInFlight.current = false;
       setIsSubmitting(false);
@@ -73,16 +78,23 @@ export function ConfirmCard({
         </dl>
       </div>
 
-      {responseId === null ? null : (
+      {terminalNotice !== null ? <p role="status">{terminalNotice}</p> : responseId === null ? null : (
         <div className={styles.actionRow}>
           <Button
             type="primary"
             className={styles.minimumActionTarget}
             disabled={isSubmitting}
             loading={isSubmitting}
-            onClick={() => void submitConfirmation()}
+            onClick={() => void submitConfirmation('confirm')}
           >
             确认提交这项操作
+          </Button>
+          <Button
+            className={styles.minimumActionTarget}
+            disabled={isSubmitting}
+            onClick={() => void submitConfirmation('cancel')}
+          >
+            取消这项操作
           </Button>
         </div>
       )}

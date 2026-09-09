@@ -62,9 +62,9 @@ def test_confirm_card_payload_is_named_exact_pydantic_contract() -> None:
         "field_names",
         "displayed_argument_values",
     ]
-    assert schema["properties"]["displayed_argument_values"][
-        "additionalProperties"
-    ] == {"type": "string"}
+    assert schema["properties"]["displayed_argument_values"]["additionalProperties"] == {
+        "type": "string"
+    }
 
 
 def test_confirm_component_cannot_fall_back_to_generic_payload_branch() -> None:
@@ -74,8 +74,7 @@ def test_confirm_component_cannot_fall_back_to_generic_payload_branch() -> None:
         ResponseEnvelope.model_validate(_envelope_with_confirm_payload(payload))
 
     assert any(
-        error["type"] == "extra_forbidden"
-        and error["loc"][-2:] == ("payload", "unexpected")
+        error["type"] == "extra_forbidden" and error["loc"][-2:] == ("payload", "unexpected")
         for error in invalid_confirm.value.errors()
     )
 
@@ -83,12 +82,12 @@ def test_confirm_component_cannot_fall_back_to_generic_payload_branch() -> None:
 def test_runtime_openapi_wires_named_action_and_confirm_contracts() -> None:
     document = create_app().openapi()
     schemas = document["components"]["schemas"]
-    action_schema = document["paths"]["/api/v1/runtime/action"]["post"][
-        "responses"
-    ]["200"]["content"]["application/json"]["schema"]
-    handle_schema = document["paths"]["/api/v1/runtime/handle"]["post"][
-        "responses"
-    ]["200"]["content"]["application/json"]["schema"]
+    action_schema = document["paths"]["/api/v1/runtime/action"]["post"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    handle_schema = document["paths"]["/api/v1/runtime/handle"]["post"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
 
     assert action_schema == {"$ref": "#/components/schemas/ActionResponseEnvelope"}
     assert handle_schema == {"$ref": "#/components/schemas/ResponseEnvelope"}
@@ -121,9 +120,7 @@ def test_runtime_openapi_wires_named_action_and_confirm_contracts() -> None:
         "$ref": "#/components/schemas/ActionResponseData"
     }
     assert "data" in action_envelope["required"]
-    assert set(action_envelope["properties"]) == set(
-        schemas["ResponseEnvelope"]["properties"]
-    )
+    assert set(action_envelope["properties"]) == set(schemas["ResponseEnvelope"]["properties"])
 
     confirm_payload = schemas["ConfirmCardPayload"]
     assert confirm_payload["additionalProperties"] is False
@@ -141,9 +138,9 @@ def test_runtime_openapi_wires_named_action_and_confirm_contracts() -> None:
         "field_names",
         "displayed_argument_values",
     ]
-    assert confirm_payload["properties"]["displayed_argument_values"][
-        "additionalProperties"
-    ] == {"type": "string"}
+    assert confirm_payload["properties"]["displayed_argument_values"]["additionalProperties"] == {
+        "type": "string"
+    }
 
     confirm_schema = schemas["ConfirmCard"]
     assert confirm_schema["properties"]["payload"] == {
@@ -155,3 +152,38 @@ def test_runtime_openapi_wires_named_action_and_confirm_contracts() -> None:
     assert discriminator["discriminator"]["mapping"]["confirm_card"] == (
         "#/components/schemas/ConfirmCard"
     )
+
+
+def test_runtime_openapi_wires_exact_discriminated_user_actions() -> None:
+    schemas = create_app().openapi()["components"]["schemas"]
+    action = schemas["UserAction"]
+    assert action["discriminator"] == {
+        "propertyName": "action_type",
+        "mapping": {
+            "confirm": "#/components/schemas/ConfirmUserAction",
+            "reject": "#/components/schemas/RejectUserAction",
+            "cancel": "#/components/schemas/CancelUserAction",
+        },
+    }
+    assert action["oneOf"] == [
+        {"$ref": f"#/components/schemas/{name}UserAction"}
+        for name in ("Confirm", "Reject", "Cancel")
+    ]
+    for name in ("Confirm", "Reject", "Cancel"):
+        branch = schemas[f"{name}UserAction"]
+        expected = ["action_type", "response_id"] + (["confirmed"] if name == "Confirm" else [])
+        assert branch["required"] == expected
+        assert list(branch["properties"]) == expected
+        assert branch["additionalProperties"] is False
+    assert schemas["ActionRequest"]["properties"]["action"] == {
+        "$ref": "#/components/schemas/UserAction"
+    }
+    assert schemas["ResponseEnvelope"]["properties"]["status"]["enum"] == [
+        "completed",
+        "blocked",
+        "waiting_user",
+        "failed",
+        "no_capability_found",
+        "cancelled",
+        "confirmation_invalidated",
+    ]

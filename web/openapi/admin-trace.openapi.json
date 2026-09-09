@@ -80,7 +80,9 @@
               "task_failed",
               "evaluation_recorded",
               "admin_action",
-              "user_action"
+              "user_action",
+              "task_cancelled",
+              "task_confirmation_invalidated"
             ],
             "title": "Event Type",
             "type": "string"

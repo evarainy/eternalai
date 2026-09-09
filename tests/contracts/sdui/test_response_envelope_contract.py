@@ -6,13 +6,16 @@ from types import NoneType
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.contracts.sdui.models import (
     BindingRequiredCard,
+    CancelUserAction,
     ConfirmCard,
     ConfirmCardPayload,
+    ConfirmUserAction,
     OperatorHandbackCard,
+    RejectUserAction,
     ResponseEnvelope,
     ResponseEnvelopeStatus,
     TargetSystem,
@@ -58,11 +61,7 @@ def _missing_required_error_locations(error: ValidationError) -> set[tuple[str, 
 
 
 def _extra_forbidden_locations(error: ValidationError) -> set[tuple[str, ...]]:
-    return {
-        tuple(item["loc"])
-        for item in error.errors()
-        if item["type"] == "extra_forbidden"
-    }
+    return {tuple(item["loc"]) for item in error.errors() if item["type"] == "extra_forbidden"}
 
 
 def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
@@ -80,6 +79,8 @@ def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
         "waiting_user",
         "failed",
         "no_capability_found",
+        "cancelled",
+        "confirmation_invalidated",
     )
 
 
@@ -135,9 +136,7 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
 
     with pytest.raises(ValidationError) as missing_component_type:
         UIComponent()
-    assert _missing_required_error_locations(missing_component_type.value) == {
-        ("component_type",)
-    }
+    assert _missing_required_error_locations(missing_component_type.value) == {("component_type",)}
 
     with pytest.raises(ValidationError) as invalid_component:
         UIComponent(component_type="dynamic_widget")
@@ -192,6 +191,8 @@ def test_response_envelope_fields_types_defaults_and_required_shape_are_exact() 
         "waiting_user",
         "failed",
         "no_capability_found",
+        "cancelled",
+        "confirmation_invalidated",
     )
     assert hints["message"] is str
     assert hints["fallback_text"] is str
@@ -284,6 +285,8 @@ def test_response_envelope_json_schema_is_producible_for_static_schema_contract(
         "waiting_user",
         "failed",
         "no_capability_found",
+        "cancelled",
+        "confirmation_invalidated",
     ]
     assert set(required) == {
         "response_id",
@@ -353,10 +356,7 @@ def test_operator_handback_card_requires_bind_or_clarify_action_only() -> None:
     hints = get_type_hints(OperatorHandbackCard, include_extras=True)
     assert _literal_values(hints["component_type"]) == ("operator_handback_card",)
     assert _literal_values(hints["action"]) == ("bind_required", "clarify_scope")
-    assert (
-        OperatorHandbackCard.model_fields["component_type"].default
-        == "operator_handback_card"
-    )
+    assert OperatorHandbackCard.model_fields["component_type"].default == "operator_handback_card"
     assert OperatorHandbackCard.model_fields["action"].is_required()
 
     for valid_action in ("bind_required", "clarify_scope"):
@@ -381,10 +381,7 @@ def test_binding_required_card_only_allows_bind_required_action() -> None:
     hints = get_type_hints(BindingRequiredCard, include_extras=True)
     assert _literal_values(hints["component_type"]) == ("binding_required_card",)
     assert _literal_values(hints["action"]) == ("bind_required",)
-    assert (
-        BindingRequiredCard.model_fields["component_type"].default
-        == "binding_required_card"
-    )
+    assert BindingRequiredCard.model_fields["component_type"].default == "binding_required_card"
     assert BindingRequiredCard.model_fields["action"].is_required()
 
     card = BindingRequiredCard(action="bind_required")
@@ -401,20 +398,20 @@ def test_binding_required_card_only_allows_bind_required_action() -> None:
         assert invalid_card.value.errors()[0]["type"] == "literal_error"
 
 
-def test_user_action_is_minimal_confirm_return_structure_only() -> None:
-    assert inspect.isclass(UserAction)
-    assert UserAction.model_config["extra"] == "forbid"
-    assert list(UserAction.model_fields) == ["action_type", "response_id", "confirmed"]
+def test_confirm_user_action_retains_original_exact_contract() -> None:
+    assert inspect.isclass(ConfirmUserAction)
+    assert ConfirmUserAction.model_config["extra"] == "forbid"
+    assert list(ConfirmUserAction.model_fields) == ["action_type", "response_id", "confirmed"]
 
-    hints = get_type_hints(UserAction, include_extras=True)
+    hints = get_type_hints(ConfirmUserAction, include_extras=True)
     assert _literal_values(hints["action_type"]) == ("confirm",)
     assert hints["response_id"] is str
     assert _literal_values(hints["confirmed"]) == (True,)
-    assert UserAction.model_fields["action_type"].is_required()
-    assert UserAction.model_fields["response_id"].is_required()
-    assert UserAction.model_fields["confirmed"].is_required()
+    assert ConfirmUserAction.model_fields["action_type"].is_required()
+    assert ConfirmUserAction.model_fields["response_id"].is_required()
+    assert ConfirmUserAction.model_fields["confirmed"].is_required()
 
-    action = UserAction(
+    action = ConfirmUserAction(
         action_type="confirm",
         response_id="resp-001",
         confirmed=True,
@@ -424,7 +421,7 @@ def test_user_action_is_minimal_confirm_return_structure_only() -> None:
     assert action.confirmed is True
 
     with pytest.raises(ValidationError) as missing_required:
-        UserAction()
+        ConfirmUserAction()
     assert _missing_required_error_locations(missing_required.value) == {
         ("action_type",),
         ("response_id",),
@@ -433,7 +430,7 @@ def test_user_action_is_minimal_confirm_return_structure_only() -> None:
 
     for invalid_action in ("cancel", "deny"):
         with pytest.raises(ValidationError) as invalid_user_action:
-            UserAction(
+            ConfirmUserAction(
                 action_type=invalid_action,
                 response_id="resp-001",
                 confirmed=True,
@@ -441,7 +438,7 @@ def test_user_action_is_minimal_confirm_return_structure_only() -> None:
         assert invalid_user_action.value.errors()[0]["type"] == "literal_error"
 
     with pytest.raises(ValidationError) as invalid_confirmed:
-        UserAction(
+        ConfirmUserAction(
             action_type="confirm",
             response_id="resp-001",
             confirmed=False,
@@ -450,15 +447,49 @@ def test_user_action_is_minimal_confirm_return_structure_only() -> None:
 
     for forbidden_field in ("state_id", "step", "next_action", "extra"):
         with pytest.raises(ValidationError) as forbidden_extra:
-            UserAction(
+            ConfirmUserAction(
                 action_type="confirm",
                 response_id="resp-001",
                 confirmed=True,
                 **{forbidden_field: "blocked"},
             )
-        assert _extra_forbidden_locations(forbidden_extra.value) == {
-            (forbidden_field,)
-        }
+        assert _extra_forbidden_locations(forbidden_extra.value) == {(forbidden_field,)}
+
+
+@pytest.mark.parametrize(
+    "kind,model",
+    [("confirm", ConfirmUserAction), ("reject", RejectUserAction), ("cancel", CancelUserAction)],
+)
+def test_user_action_discriminator_has_exact_valid_shapes(kind: str, model: Any) -> None:
+    adapter = TypeAdapter(UserAction)
+    payload = {"action_type": kind, "response_id": "response-shape"}
+    if kind == "confirm":
+        payload["confirmed"] = True
+    value = adapter.validate_python(payload)
+    assert type(value) is model
+    assert value.model_dump() == payload
+    assert set(model.model_fields) == set(payload)
+    assert model.model_config["extra"] == "forbid"
+    assert all(field.is_required() for field in model.model_fields.values())
+    for key in payload:
+        with pytest.raises(ValidationError):
+            adapter.validate_python({name: item for name, item in payload.items() if name != key})
+    for extra in ("state_id", "step", "next_action", "extra", "role", "tenant", "arguments"):
+        with pytest.raises(ValidationError) as invalid:
+            adapter.validate_python({**payload, extra: "blocked"})
+        assert invalid.value.errors()[0]["type"] == "extra_forbidden"
+    with pytest.raises(ValidationError) as contradictory:
+        adapter.validate_python({**payload, "confirmed": False})
+    assert contradictory.value.errors()[0]["type"] == (
+        "literal_error" if kind == "confirm" else "extra_forbidden"
+    )
+    if kind != "confirm":
+        with pytest.raises(ValidationError) as invalid_true:
+            adapter.validate_python({**payload, "confirmed": True})
+        assert invalid_true.value.errors()[0]["type"] == "extra_forbidden"
+    with pytest.raises(ValidationError) as unknown:
+        adapter.validate_python({**payload, "action_type": "execute"})
+    assert unknown.value.errors()[0]["type"] == "union_tag_invalid"
 
 
 def test_port_response_envelope_module_is_reexport_facade() -> None:

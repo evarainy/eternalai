@@ -12,6 +12,8 @@ from app.ports.capability_gateway import ErrorCode
     ("business_status", "error_code", "expected_result", "expected_reason"),
     [
         ("completed", None, "passed", "business_completed"),
+        ("cancelled", None, "failed", "business_not_completed"),
+        ("confirmation_invalidated", "internal_error", "failed", "business_not_completed"),
         ("failed", "adapter_error", "failed", "business_not_completed"),
         ("denied", "policy_denied", "failed", "business_not_completed"),
         (

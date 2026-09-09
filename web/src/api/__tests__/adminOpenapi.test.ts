@@ -284,6 +284,8 @@ describe('Admin Registry curated OpenAPI', () => {
       'completed',
       'failed',
       'no_capability_found',
+      'cancelled',
+      'confirmation_invalidated',
     ]);
     expect(spec.components.schemas.TargetSystem.enum).toEqual(['oa', 'u8', 'hikvision_ivms']);
     expect(spec.components.schemas.ExecutionIdentity.enum).toEqual([

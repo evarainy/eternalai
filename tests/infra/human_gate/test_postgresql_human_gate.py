@@ -82,9 +82,7 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
             assert bound_results == [manifest, manifest]
             assert await gate.get_task_binding(task_id) == manifest
 
-            drifted = binding.model_copy(
-                update={"version": "2.0.0", "digest": "b" * 64}
-            )
+            drifted = binding.model_copy(update={"version": "2.0.0", "digest": "b" * 64})
             with pytest.raises(VersionBindingMismatchError):
                 await gate.assert_task_bindings(task_id, (drifted,))
 
@@ -134,12 +132,8 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
             with pytest.raises(HumanGateConflictError):
                 await gate.record_decision(wrong_session)
 
-            decision = wrong_actor.model_copy(
-                update={"decided_by_ai_user_id": "human-gate-user"}
-            )
-            wrong_tenant = decision.model_copy(
-                update={"decided_tenant_id": "tenant-2"}
-            )
+            decision = wrong_actor.model_copy(update={"decided_by_ai_user_id": "human-gate-user"})
+            wrong_tenant = decision.model_copy(update={"decided_tenant_id": "tenant-2"})
             with pytest.raises(HumanGateConflictError):
                 await gate.record_decision(wrong_tenant)
 
@@ -186,10 +180,7 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
                     {"task_id": task_id},
                 )
                 await session.execute(
-                    text(
-                        "DELETE FROM task_version_binding_manifests "
-                        "WHERE task_id = :task_id"
-                    ),
+                    text("DELETE FROM task_version_binding_manifests WHERE task_id = :task_id"),
                     {"task_id": task_id},
                 )
                 await session.execute(
@@ -200,3 +191,49 @@ def test_postgresql_human_gate_is_immutable_actor_bound_and_value_free() -> None
             await engine.dispose()
 
     asyncio.run(exercise())
+
+
+def test_rejected_decision_preserves_actor_and_expiry_binding(migrated_database_url: str) -> None:
+    from app.event_loop import make_event_loop
+    from tests.runtime.test_runtime_user_action import _build_harness, _pending
+
+    async def exercise() -> None:
+        engine = make_async_engine(migrated_database_url)
+        try:
+            factory = make_async_session_factory(engine)
+            gate = PostgreSQLHumanGate(factory)
+            harness = await _build_harness(
+                gate=gate, task_store_override=PostgreSQLTaskStore(factory)
+            )
+            pending = _pending(harness)
+            request = await gate.get_request(pending.gate_request_id)
+            assert request is not None
+            decision = HumanGateDecisionRecord(
+                request_id=request.request_id,
+                task_id=pending.task_id,
+                decided_by_ai_user_id=harness.principal.ai_user_id,
+                decided_session_id="session-action",
+                decided_tenant_id="default",
+                decision="rejected",
+                request_digest=pending.request_digest,
+                binding_manifest_digest=pending.binding_manifest_digest,
+                decided_at=request.expires_at,
+            )
+            for field, bad_value in (
+                ("decided_by_ai_user_id", "foreign-user"),
+                ("decided_session_id", "foreign-session"),
+                ("decided_tenant_id", "foreign-tenant"),
+                ("request_digest", "b" * 64),
+                ("binding_manifest_digest", "c" * 64),
+                ("decided_at", request.expires_at + timedelta(microseconds=1)),
+            ):
+                with pytest.raises(HumanGateConflictError):
+                    await gate.record_decision(decision.model_copy(update={field: bad_value}))
+                assert await gate.get_decision(request.request_id) is None
+            assert await gate.record_decision(decision) == decision
+            assert await PostgreSQLHumanGate(factory).record_decision(decision) == decision
+            assert await PostgreSQLHumanGate(factory).get_decision(request.request_id) == decision
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise(), loop_factory=make_event_loop)

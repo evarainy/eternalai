@@ -550,7 +550,9 @@
           "waiting_user",
           "completed",
           "failed",
-          "no_capability_found"
+          "no_capability_found",
+          "cancelled",
+          "confirmation_invalidated"
         ]
       },
       "TargetSystem": {

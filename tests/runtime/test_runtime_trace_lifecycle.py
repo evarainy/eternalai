@@ -270,3 +270,120 @@ def test_real_writer_structured_output_parse_failure_has_one_failed_terminal() -
     ]
     assert events[-1]["attributes"]["evaluation_result"] == "failed"
     assert task_store.status_updates[-1][1:] == ("failed", "internal_error")
+
+
+@pytest.mark.parametrize("kind", ["cancel", "reject", "expired"])
+def test_confirmation_terminal_persists_original_task_and_trace(
+    kind: str, migrated_database_url: str
+) -> None:
+    from datetime import timedelta
+
+    from app.db.session import make_async_engine, make_async_session_factory
+    from app.event_loop import make_event_loop
+    from app.infra.human_gate.postgresql import PostgreSQLHumanGate
+    from app.infra.observability.postgresql_trace import (
+        PostgreSQLTraceReader,
+        PostgreSQLTraceWriter,
+    )
+    from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+    from tests.runtime.test_runtime_user_action import (
+        _EXECUTE_ID,
+        _build_harness,
+        _pending,
+        _terminal_action,
+    )
+
+    async def exercise() -> None:
+        engine = make_async_engine(migrated_database_url)
+        try:
+            factory = make_async_session_factory(engine)
+            store = PostgreSQLTaskStore(factory)
+            gate = PostgreSQLHumanGate(factory)
+            harness = await _build_harness(
+                gate=gate, task_store_override=store, trace_override=PostgreSQLTraceWriter(factory)
+            )
+            pending = _pending(harness)
+            if kind == "expired":
+                harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(microseconds=1)
+            response = await _terminal_action(harness, "confirm" if kind == "expired" else kind)
+            expected = "confirmation_invalidated" if kind == "expired" else "cancelled"
+            assert response.status == expected
+            assert response.data == {"action_outcome": expected, "result": None}
+            # Fresh repository instances open independent database sessions for each read.
+            record = await PostgreSQLTaskStore(factory).get_task(pending.task_id)
+            assert record is not None
+            assert (
+                record.status,
+                record.trace_id,
+                record.ai_user_id,
+                record.session_id,
+                record.tenant_id,
+            ) == (
+                expected,
+                pending.trace_id,
+                harness.principal.ai_user_id,
+                "session-action",
+                "default",
+            )
+            expected_error = "confirm_required" if kind == "expired" else None
+            assert record.error_code == expected_error
+            decision = await PostgreSQLHumanGate(factory).get_decision(pending.gate_request_id)
+            if kind == "expired":
+                assert decision is None
+            else:
+                assert decision is not None
+                assert decision.decision == "rejected"
+                assert (
+                    decision.task_id,
+                    decision.decided_by_ai_user_id,
+                    decision.decided_session_id,
+                    decision.decided_tenant_id,
+                    decision.request_digest,
+                    decision.binding_manifest_digest,
+                ) == (
+                    pending.task_id,
+                    harness.principal.ai_user_id,
+                    "session-action",
+                    "default",
+                    pending.request_digest,
+                    pending.binding_manifest_digest,
+                )
+                # PostgreSQL really permits a byte-equivalent decision replay.
+                assert await gate.record_decision(decision) == decision
+            reader = PostgreSQLTraceReader(factory)
+            events = await reader.list_events_by_trace(pending.trace_id, tenant_id="default")
+            terminal = [
+                e
+                for e in events
+                if e.event_type in {"task_cancelled", "task_confirmation_invalidated"}
+            ]
+            evaluations = [e for e in events if e.event_type == "evaluation_recorded"]
+            assert len(terminal) == len(evaluations) == 1
+            assert terminal[0].event_type == (
+                "task_confirmation_invalidated" if kind == "expired" else "task_cancelled"
+            )
+            assert (
+                terminal[0].task_id,
+                terminal[0].trace_id,
+                terminal[0].tenant_id,
+                terminal[0].ai_user_id,
+                terminal[0].error_code,
+            ) == (
+                pending.task_id,
+                pending.trace_id,
+                "default",
+                harness.principal.ai_user_id,
+                expected_error,
+            )
+            assert evaluations[0].attributes["business_status"] == expected
+            assert evaluations[0].attributes["business_error_code"] == expected_error
+            again = await _terminal_action(harness, "confirm")
+            assert again.status == expected
+            after = await reader.list_events_by_trace(pending.trace_id, tenant_id="default")
+            assert [e.event_id for e in after] == [e.event_id for e in events]
+            assert harness.engine.resume_calls == 0
+            assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 0
+        finally:
+            await engine.dispose()
+
+    asyncio.run(exercise(), loop_factory=make_event_loop)

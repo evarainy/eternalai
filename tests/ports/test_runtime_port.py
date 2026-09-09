@@ -7,7 +7,7 @@ import inspect
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
 
-from app.contracts.sdui.models import UIComponent, UserAction
+from app.contracts.sdui.models import ConfirmUserAction, UIComponent, UserAction
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import RuntimePort, UserActionOutcome
@@ -101,6 +101,8 @@ def test_user_action_outcome_literal_values_are_closed() -> None:
         "action_already_claimed",
         "action_stale",
         "action_version_conflict",
+        "cancelled",
+        "confirmation_invalidated",
     )
 
 
@@ -159,7 +161,7 @@ def test_concrete_runtime_mock_accepts_structured_user_action() -> None:
                 org_ctx=PrincipalOrgContext(),
             ),
             "session-action",
-            UserAction(
+            ConfirmUserAction(
                 action_type="confirm",
                 response_id="response-action",
                 confirmed=True,

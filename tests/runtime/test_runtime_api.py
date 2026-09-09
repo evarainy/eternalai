@@ -376,3 +376,86 @@ def test_missing_principal_precedes_body_validation() -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"]["code"] == "authentication_required"
+
+
+@pytest.mark.parametrize("kind", ["cancel", "reject", "expired"])
+def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> None:
+    import asyncio
+    from datetime import timedelta
+
+    from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
+    from tests.runtime.test_runtime_user_action import _START_MESSAGE, _build_harness
+
+    harness = asyncio.run(_build_harness())
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+    binder = PrincipalSessionBinder(binding_key=bytes(reversed(range(32))))
+    client = TestClient(
+        create_app(
+            runtime=harness.runtime,
+            session_tokens=tokens,
+            session_binder=binder.bind,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    body = {
+        "channel": "web",
+        "session_id": "terminal-client-session",
+        "action": {"action_type": "cancel", "response_id": "unknown"},
+    }
+    assert (
+        client.post("/api/v1/runtime/action", json=body, headers=TEST_CSRF_HEADERS).status_code
+        == 401
+    )
+    client.cookies.set("eternalai_session", tokens.issue(harness.principal))
+    assert client.post("/api/v1/runtime/action", json=body).status_code == 403
+    waiting = client.post(
+        "/api/v1/runtime/handle",
+        json={
+            "channel": "web",
+            "session_id": "terminal-client-session",
+            "message": _START_MESSAGE,
+            "client_capabilities": {},
+        },
+        headers=TEST_CSRF_HEADERS,
+    )
+    assert waiting.status_code == 200
+    card = waiting.json()
+    assert card["status"] == "waiting_user"
+    body["session_id"] = card["session_id"]
+    body["action"] = {
+        "action_type": "confirm" if kind == "expired" else kind,
+        "response_id": card["response_id"],
+    }
+    if kind == "expired":
+        body["action"]["confirmed"] = True
+        pending = harness.runtime._pending_workflows[
+            (card["session_id"], harness.principal.ai_user_id)
+        ]
+        harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(microseconds=1)
+    invalid = {
+        **body,
+        "action": {"action_type": "cancel", "response_id": card["response_id"], "confirmed": True},
+    }
+    assert (
+        client.post("/api/v1/runtime/action", json=invalid, headers=TEST_CSRF_HEADERS).status_code
+        == 422
+    )
+    foreign = {
+        **body,
+        "session_id": binder.bind(
+            harness.principal.model_copy(update={"ai_user_id": "foreign-user"}), "peer"
+        ),
+    }
+    assert (
+        client.post("/api/v1/runtime/action", json=foreign, headers=TEST_CSRF_HEADERS).status_code
+        == 404
+    )
+    assert harness.engine.resume_calls == harness.gate.record_decision_calls == 0
+    response = client.post("/api/v1/runtime/action", json=body, headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 200
+    expected = "confirmation_invalidated" if kind == "expired" else "cancelled"
+    assert response.json()["status"] == expected
+    assert response.json()["data"] == {"action_outcome": expected, "result": None}
+    assert harness.engine.resume_calls == 0
+    assert harness.gate.record_decision_calls == (0 if kind == "expired" else 1)

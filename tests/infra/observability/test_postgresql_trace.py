@@ -49,7 +49,8 @@ def _make_factory(engine: Any) -> Any:
     return make_async_session_factory(engine)
 
 
-def test_all_21_trace_event_types_persist_and_read_back() -> None:
+@pytest.mark.usefixtures("migrated_database_url")
+def test_all_23_trace_event_types_persist_and_read_back() -> None:
     _require_db()
     trace_id = f"all-types-{uuid4().hex}"
     event_types = list(get_args(TraceEventType))
@@ -79,8 +80,8 @@ def test_all_21_trace_event_types_persist_and_read_back() -> None:
                 tenant_id=TENANT_ID,
             )
 
-            assert len(event_types) == 21
-            assert len(persisted) == 21
+            assert len(event_types) == 23
+            assert len(persisted) == 23
             assert {event.event_type for event in persisted} == set(event_types)
             assert {(event.tenant_id, event.ai_user_id) for event in persisted} == {
                 (TENANT_ID, AI_USER_ID)

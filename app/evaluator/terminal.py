@@ -14,6 +14,8 @@ TerminalBusinessStatus: TypeAlias = Literal[
     "binding_required",
     "timeout",
     "no_capability_found",
+    "cancelled",
+    "confirmation_invalidated",
 ]
 EvaluationResult: TypeAlias = Literal["passed", "failed", "error"]
 EvaluationReason: TypeAlias = Literal[

@@ -48,6 +48,8 @@ def test_task_record_uses_spec_8_6_2_fields_and_status_values() -> None:
         "completed",
         "failed",
         "no_capability_found",
+        "cancelled",
+        "confirmation_invalidated",
     }
 
 

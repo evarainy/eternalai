@@ -15,6 +15,8 @@ export const TaskStatus = {
   completed: 'completed',
   failed: 'failed',
   no_capability_found: 'no_capability_found',
+  cancelled: 'cancelled',
+  confirmation_invalidated: 'confirmation_invalidated',
 } as const;
 
 export type TargetSystem = typeof TargetSystem[keyof typeof TargetSystem];
