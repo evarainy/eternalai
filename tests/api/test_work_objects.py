@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.api.v1.work_objects import (
     OAWorkObjectView,
@@ -13,6 +14,9 @@ from app.api.v1.work_objects import (
     _resolve_handling_capability,
     _view_from_record,
 )
+from app.db.session import make_async_engine, make_async_session_factory
+from app.event_loop import make_event_loop
+from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
@@ -23,6 +27,11 @@ from app.ports.capability_registry import (
     CapabilityStatus,
 )
 from app.ports.credential_binding import BackgroundWorkObjectSyncError
+from app.ports.organization_directory import (
+    OrganizationDepartment,
+    OrganizationDirectoryPort,
+    OrganizationUserMembership,
+)
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     InternalWorkObjectRecord,
@@ -31,6 +40,7 @@ from app.ports.work_object import (
     WorkObjectHandlingMark,
     WorkObjectRecord,
 )
+from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
@@ -864,3 +874,159 @@ def test_work_object_routes_require_valid_authentication() -> None:
     client = TestClient(create_app())
 
     assert client.get("/api/v1/work-objects").status_code == 401
+
+
+def test_visibility_reads_current_directory_on_each_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memberships = [OrganizationUserMembership(
+        user_id="synthetic-directory-user", department_id="synthetic-first", job_title="75",
+    )]
+    lookups: list[str] = []
+    scopes: list[AuthorizedWorkObjectScope] = []
+
+    class Directory:
+        async def list_user_memberships(self, user_id: str) -> list[OrganizationUserMembership]:
+            lookups.append(user_id)
+            return list(memberships)
+
+        async def get_department(self, department_id: str) -> OrganizationDepartment:
+            return OrganizationDepartment(department_id=department_id, display_name="Synthetic")
+
+    def capture_scope(**kwargs: Any) -> AuthorizedWorkObjectScope:
+        scope = compute_visibility_scope(**kwargs)
+        scopes.append(scope)
+        return scope
+
+    monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", capture_scope)
+    service = WorkObjectService(
+        store=MemoryWorkObjectStore([_record()]), gateway=RecordingGateway(_success_result()),
+        capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
+        organization_directory=cast(OrganizationDirectoryPort, Directory()),
+    )
+    principal = Principal(
+        ai_user_id="user-a", display_name="Synthetic", roles=("admin",),
+        org_ctx=PrincipalOrgContext(
+            directory_user_id="synthetic-directory-user", department_id="stale-token-department",
+        ),
+    )
+
+    async def exercise() -> None:
+        first = await service.list_for_principal(principal)
+        assert len(first.items) == 1
+        memberships[0] = memberships[0].model_copy(update={
+            "department_id": "synthetic-second", "job_title": None,
+        })
+        assert await service.get_for_principal("work-user-a-1", principal) is not None
+        memberships.clear()
+        assert len((await service.list_for_principal(principal)).items) == 1
+
+    asyncio.run(exercise())
+    assert lookups == ["synthetic-directory-user"] * 3
+    assert [scope.principal_department_id for scope in scopes] == [
+        "synthetic-first", "synthetic-second", None,
+    ]
+    assert all(scope.principal_ai_user_id == "user-a" for scope in scopes)
+
+
+def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def inject_scope(**kwargs: Any) -> AuthorizedWorkObjectScope:
+        calls.append(kwargs)
+        return AuthorizedWorkObjectScope(
+            principal_ai_user_id="user-b", principal_department_id=None,
+        )
+
+    monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", inject_scope)
+    service = WorkObjectService(
+        store=MemoryWorkObjectStore([_record(), _record(owner="user-b")]),
+        gateway=RecordingGateway(_success_result()),
+        capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
+    )
+    principal = Principal(
+        ai_user_id="user-a", display_name="Synthetic", roles=("user",),
+        org_ctx=PrincipalOrgContext(),
+    )
+
+    async def exercise() -> None:
+        result = await service.list_for_principal(principal)
+        assert [item.work_object_id for item in result.items] == ["work-user-b-1"]
+        assert await service.get_for_principal("work-user-a-1", principal) is None
+        assert await service.get_for_principal("work-user-b-1", principal) is not None
+
+    asyncio.run(exercise())
+    assert calls == [{"principal_ai_user_id": "user-a", "principal_department_id": None}] * 3
+
+
+def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) -> None:
+    # Real persistence predicate: weakening production SQL must expose the seeded row.
+    async def exercise() -> None:
+        engine = make_async_engine(migrated_database_url)
+        factory = make_async_session_factory(engine)
+        store = PostgreSQLWorkObjectStore(factory)
+        owner = "synthetic-scope001-owner"
+        try:
+            await store.upsert_oa_pending_workflows(
+                assignee_ai_user_id=owner, assignee_display_name="Synthetic owner",
+                snapshots=[OAPendingWorkSnapshot(
+                    source_ref="synthetic-scope001-work", title="Synthetic private memo",
+                    status="OA_PENDING", received_at="2026-09-09", created_at="2026-09-09",
+                    workflow_type_id="synthetic-workflow",
+                )], fetched_at=NOW,
+            )
+            records = await store.list_for_assignee(owner)
+            assert len(records) == 1
+            service = WorkObjectService(
+                store=store, gateway=RecordingGateway(_success_result()),
+                capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
+            )
+            admin = Principal(
+                ai_user_id="synthetic-scope001-admin", display_name="Synthetic admin",
+                roles=("admin",), org_ctx=PrincipalOrgContext(),
+            )
+            record_id = records[0].work_object_id
+            assert await service.get_for_principal(record_id, admin) is None
+            assert (await service.list_for_principal(admin)).items == []
+            owner_principal = admin.model_copy(update={"ai_user_id": owner, "roles": ("user",)})
+            visible = await service.get_for_principal(record_id, owner_principal)
+            assert visible is not None and visible.work_object_id == record_id
+        finally:
+            async with factory() as session:
+                await session.execute(
+                    text("DELETE FROM work_objects WHERE assignee_ai_user_id = :owner"),
+                    {"owner": owner},
+                )
+                await session.commit()
+            await engine.dispose()
+
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        runner.run(exercise())
+
+
+def test_directory_failure_does_not_expose_join_key_or_return_success(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from fastapi import HTTPException
+
+    class FailedDirectory:
+        async def list_user_memberships(self, user_id: str) -> list[OrganizationUserMembership]:
+            raise RuntimeError(f"synthetic driver query parameter: {user_id}")
+
+    store = MemoryWorkObjectStore([_record()])
+    service = WorkObjectService(
+        store=store, gateway=RecordingGateway(_success_result()),
+        capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
+        organization_directory=cast(OrganizationDirectoryPort, FailedDirectory()),
+    )
+    principal = Principal(
+        ai_user_id="user-a", display_name="Synthetic", roles=("user",),
+        org_ctx=PrincipalOrgContext(directory_user_id="synthetic-private-join-key"),
+    )
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(service.list_for_principal(principal))
+    assert error.value.status_code == 503
+    assert error.value.detail == {"error_code": "organization_directory_unavailable"}
+    assert error.value.__suppress_context__ is True
+    assert "synthetic-private-join-key" not in str(error.value) + caplog.text
+    assert store.list_calls == []

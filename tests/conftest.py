@@ -72,6 +72,28 @@ def _load_missing_environment(path: Path) -> None:
 _load_missing_environment(_repository_env_path())
 
 
+@pytest.fixture(scope="module")
+def migrated_database_url() -> str:
+    """Prepare real DB tests with the existing Alembic upgrade-to-head path."""
+    from alembic.config import Config
+    from sqlalchemy.engine import make_url
+
+    from alembic import command
+    from app.db.config import normalize_database_url
+
+    database_url = os.environ.get("DATABASE_URL")
+    assert database_url, "DATABASE_URL must be set by the test runner environment"
+    url = make_url(normalize_database_url(database_url))
+    assert url.host == "127.0.0.1" and url.port == 15432, (
+        "DB tests require PostgreSQL at 127.0.0.1:15432"
+    )
+    repo_root = Path(__file__).resolve().parents[1]
+    config = Config(str(repo_root / "alembic.ini"))
+    config.set_main_option("script_location", str(repo_root / "alembic"))
+    command.upgrade(config, "head")
+    return database_url
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Install the test-only Runtime schema observer after test env setup."""
 

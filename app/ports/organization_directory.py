@@ -29,6 +29,7 @@ class OrganizationUserMembership(BaseModel):
     department_id: str
     organization_id: str | None = None
     subcompany_id: str | None = None
+    job_title: str | None = None
 
 
 class OrganizationDirectoryPage(BaseModel):

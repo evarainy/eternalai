@@ -18,6 +18,20 @@ from app.ports.organization_directory import (
 FETCHED_AT = datetime(2026, 8, 31, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("job_title", [None, "75", 380])
+def test_projects_raw_jobtitle_without_rendered_label(job_title: str | int | None) -> None:
+    page = _page(user_rows=[_user(jobtitle=job_title, jobtitlespan="<span>manager</span>")])
+    assert page.memberships[0].job_title == (str(job_title) if job_title is not None else None)
+    assert "jobtitlespan" not in page.model_dump_json()
+    assert "manager" not in page.model_dump_json()
+
+
+@pytest.mark.parametrize("job_title", [True, False, 75.0, [], {}, -1])
+def test_jobtitle_projection_rejects_non_id_json_values(job_title: object) -> None:
+    with pytest.raises(OrganizationDirectoryError, match="invalid organization directory row"):
+        _page(user_rows=[_user(jobtitle=job_title)])
+
+
 def _departments() -> list[dict[str, object]]:
     return [
         {"id": "dept-root", "pid": "", "name": "Synthetic root", "psubcompanyid": "sub-a"},

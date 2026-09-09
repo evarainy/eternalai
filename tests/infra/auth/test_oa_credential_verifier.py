@@ -356,6 +356,11 @@ def test_oa_fixture_proves_rsa_login_principal_and_encrypted_store_handoff() -> 
     assert principal.ai_user_id.startswith("usr_v1_")
     assert principal.roles == ("admin", "viewer")
     assert principal.display_name == "Synthetic User"
+    assert principal.org_ctx.directory_user_id == "123"
+    assert principal.org_ctx.department_id is None
+    assert principal.org_ctx.org_id is None
+    assert "job_title" not in type(principal.org_ctx).model_fields
+    assert "123" not in repr(principal.org_ctx)
     assert credential.loginid.get_secret_value() not in repr(principal)
     assert len(store.records) == 1
     assert store.reactivation_flags == [True]

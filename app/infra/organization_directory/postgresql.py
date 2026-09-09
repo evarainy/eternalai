@@ -53,8 +53,8 @@ class PostgreSQLOrganizationDirectory:
                             text(
                                 "INSERT INTO organization_user_memberships "
                                 "(user_id, department_id, organization_id, subcompany_id, "
-                                "fetched_at) VALUES (:user_id, :department_id, "
-                                ":organization_id, :subcompany_id, :fetched_at)"
+                                "job_title, fetched_at) VALUES (:user_id, :department_id, "
+                                ":organization_id, :subcompany_id, :job_title, :fetched_at)"
                             ),
                             {**membership.model_dump(), "fetched_at": snapshot.fetched_at},
                         )
@@ -122,7 +122,7 @@ class PostgreSQLOrganizationDirectory:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT user_id, department_id, organization_id, subcompany_id "
+                        "SELECT user_id, department_id, organization_id, subcompany_id, job_title "
                         "FROM organization_user_memberships WHERE user_id = :user_id "
                         "ORDER BY department_id"
                     ),

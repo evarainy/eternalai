@@ -104,6 +104,7 @@ def _membership(row: Mapping[str, Any]) -> OrganizationUserMembership:
         department_id=_required_text(row, "departmentid"),
         organization_id=_optional_text(row, "orgid"),
         subcompany_id=_optional_text(row, "subcompanyid1"),
+        job_title=_optional_job_title(row),
     )
 
 
@@ -112,6 +113,14 @@ def _required_text(row: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise OrganizationDirectoryError("invalid organization directory row")
     return value
+
+
+def _optional_job_title(row: Mapping[str, Any]) -> str | None:
+    value = row.get("jobtitle")
+    # OA IDs may be JSON integers or strings. Do not coerce booleans/floats.
+    if type(value) is int and value > 0:
+        return str(value)
+    return _optional_text(row, "jobtitle")
 
 
 def _optional_text(row: Mapping[str, Any], field: str) -> str | None:

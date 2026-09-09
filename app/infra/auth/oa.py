@@ -409,7 +409,7 @@ class OACredentialVerifier:
                 ai_user_id=ai_user_id,
                 display_name=display_name,
                 roles=roles,
-                org_ctx=PrincipalOrgContext(),
+                org_ctx=PrincipalOrgContext(directory_user_id=oa_user_id),
             )
         except Exception as error:
             failure_kind = _authentication_failure_kind(failure_stage, error)

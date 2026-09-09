@@ -26,6 +26,7 @@ from app.ports.credential_binding import (
     BackgroundWorkObjectSyncError,
     CredentialCountedFailureCode,
 )
+from app.ports.organization_directory import OrganizationDirectoryPort
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     WORK_OBJECT_LIST_FETCH_LIMIT,
@@ -40,6 +41,7 @@ from app.ports.work_object_handling import (
     WorkObjectHandlingAction,
     project_handling_action,
 )
+from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -133,12 +135,14 @@ class WorkObjectService:
         store: WorkObjectStorePort,
         gateway: CapabilityGatewayPort,
         capability_registry: CapabilityRegistryPort,
+        organization_directory: OrganizationDirectoryPort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
         self._gateway = gateway
         self._capability_registry = capability_registry
+        self._organization_directory = organization_directory
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: uuid4().hex)
 
@@ -148,8 +152,9 @@ class WorkObjectService:
         *,
         search_term: str | None = None,
     ) -> WorkObjectListResponse:
+        scope = await self._visibility_scope(principal)
         records = await self._store.list_for_assignee(
-            principal.ai_user_id,
+            scope.principal_ai_user_id,
             search_term=search_term,
             limit=WORK_OBJECT_LIST_FETCH_LIMIT,
         )
@@ -161,14 +166,39 @@ class WorkObjectService:
         work_object_id: str,
         principal: Principal,
     ) -> WorkObjectView | None:
+        scope = await self._visibility_scope(principal)
         record = await self._store.get_for_assignee(
             work_object_id,
-            principal.ai_user_id,
+            scope.principal_ai_user_id,
         )
         if record is None:
             return None
         capabilities = await self._capability_registry.list(status="active")
         return _view_from_record(record, capabilities)
+
+    async def _visibility_scope(self, principal: Principal) -> AuthorizedWorkObjectScope:
+        department_id = None
+        join_key = principal.org_ctx.directory_user_id
+        if self._organization_directory is not None and join_key:
+            try:
+                memberships = await self._organization_directory.list_user_memberships(join_key)
+                # No inferred primary department for zero or multiple memberships.
+                if len(memberships) == 1:
+                    department = await self._organization_directory.get_department(
+                        memberships[0].department_id
+                    )
+                    if department is not None:
+                        department_id = department.department_id
+            except Exception:
+                # Driver exception text may include query parameters (the join key).
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"error_code": "organization_directory_unavailable"},
+                ) from None
+        return compute_visibility_scope(
+            principal_ai_user_id=principal.ai_user_id,
+            principal_department_id=department_id,
+        )
 
     async def sync_for_principal(self, principal: Principal) -> WorkObjectListResponse:
         return await self._sync_for_principal(principal, background=False)
