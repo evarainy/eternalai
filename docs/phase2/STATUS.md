@@ -1,18 +1,18 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-058`（C 档；落盘 `P2-USER-ACTION-TERMINAL-001` 的 reject/cancel 终态与方案 C 裁决、两次自由文本/跨身份收窄口径，登记终端治理欠债、查询串与 vLLM 证据、Compose 默认模型不一致，排入 `P2-AGENT-ORCH-SEAM-001`）。
-- 当前实现基线 task_id：`P2-USER-ACTION-TERMINAL-001`（A 档；已合并）。后端 `3078 passed`、前端 `583 passed`、Golden `34/34`、`tests/architecture/` `116 passed`、mypy `117 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-09 实测，并经独立 Monitor 第 2 轮复核。
-- 当前实现后继指针：`P2-AGENT-ORCH-SEAM-001`（A 档；已排入、待施工；当前正在出方案，尚未开工；承接 `AgentOrchestrationPort` 编排接缝未实现欠债）。
+- 当前治理基线 task_id：`P2-GOV-SYNC-059`（C 档；同步 `P2-AGENT-ORCH-SEAM-001` 完成交付与本棒新增欠债，校正 collect-only / 跨身份口径，落盘 grok-cli 评审桥试验裁决）。
+- 当前实现基线 task_id：`P2-AGENT-ORCH-SEAM-001`（A 档；已合并）。后端 `3233 passed, 0 failed, 0 skipped`、前端 `583 passed`、Golden `34/34`、`tests/architecture/` `120 passed`、mypy `121 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-10 实测，并经独立 Monitor 第 1 轮复核。
+- 当前实现后继指针：未唯一确定；本棒不新增排期。已决专项后继仍见本文件的组织目录集成与聊天回退指针。
 
 ## 已登记验证基线
 
-以下每一条结果都带来源棒与日期：后端 `3078`、前端 `583`、Golden、`tests/architecture/`、mypy 与 Ruff 均来自 **2026-09-09 / `P2-USER-ACTION-TERMINAL-001`** 最终候选，并经独立 Monitor 第 2 轮复核；本治理棒未重跑。
+以下每一条结果都带来源棒与日期：后端 `3233`、前端 `583`、Golden、`tests/architecture/`、mypy 与 Ruff 均来自 **2026-09-10 / `P2-AGENT-ORCH-SEAM-001`** 最终候选，并经独立 Monitor 第 1 轮复核；本治理棒未重跑。
 
-- pytest：`3078 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-09 / `P2-USER-ACTION-TERMINAL-001` 最终候选，独立 Monitor 第 2 轮复核；本棒未重跑）。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-09 / `P2-USER-ACTION-TERMINAL-001` 最终候选，独立 Monitor 第 2 轮复核；本棒未重跑）。
-- `tests/architecture/`：`116 passed`（2026-09-09 / `P2-USER-ACTION-TERMINAL-001` 最终候选，独立 Monitor 第 2 轮复核；本棒未重跑）。
-- 前端全量 `pnpm --dir web test`：`583 passed`（2026-09-09 / `P2-USER-ACTION-TERMINAL-001` 最终候选，独立 Monitor 第 2 轮复核；本棒未重跑）。
-- mypy：`117 source files`；Ruff：通过（2026-09-09 / `P2-USER-ACTION-TERMINAL-001` 最终候选，独立 Monitor 第 2 轮复核；本棒未重跑）。
+- pytest：`3233 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
+- `tests/architecture/`：`120 passed`（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
+- 前端全量 `pnpm --dir web test`：`583 passed`（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
+- mypy：`121 source files`；Ruff：通过（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
 
 ## 必达链与阻塞
 
@@ -35,7 +35,7 @@
 ## 组织目录与前端机会层指针
 
 - 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 已合并交付岗位派发授权与可见性 scope，下一后继为 `P2-INTERNAL-WO-DISPATCH-001`；其两条非阻断欠债与监区名单 fail-open 风险保留，见 `PHASE2_PLAN.md`。
-- 编排接缝后继：`P2-AGENT-ORCH-SEAM-001` 已排入、待施工，当前正在出方案，尚未开工；本状态只传播已决指针，不写方案内容。
+- 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。本状态不把它与仍未实例化的 `WorkflowEngineAdapter` 欠债混同。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
 - 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；本棒候选待 PR 集成，页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。后端合同到位后的前端接线后继不唯一，留待 GOV-SYNC 分配；不改变必达链的 BLOCKED 状态。
 - 已完成视觉：导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及可执行模糊层预算检查；字体跟随已批准画板，聊天问候语独立。历史返修过程留 Git。
