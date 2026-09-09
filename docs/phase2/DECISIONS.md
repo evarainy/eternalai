@@ -2761,3 +2761,80 @@ Temporal、AWS Step Functions、Azure Durable Functions、Camunda 都持久化�
 
 **决定**：只约束 A 档棒将格式化改动与功能改动分开提交，不增加 CI 检查。这样保留 A 档候选的可审阅边界，
 但不把一次提交习惯扩成新的自动化门禁；条款正文唯一写入 `AGENTS.md`，本条只保留裁决与理由。
+
+## 2026-09-09 — 裁决：`P2-USER-ACTION-TERMINAL-001` 收口 reject/cancel 终态与确认上下文方案 C
+
+**决定**：`P2-USER-ACTION-TERMINAL-001` 承接受控 `UserAction` 合同对 reject / cancel 的扩展，
+并把这两类动作的决定记录、Task 终态、Trace 终结和显式失效语义作为同一条端到端合同闭合。
+负向路径继续 fail-closed；不得把尚未闭合的持久化、审计或跨身份行为写成已实现。
+
+确认卡上下文采用已批准的方案 C：短时效确认不增加持久化表或迁移；进程重启、上下文丢失、异常穿透和部分收尾失败
+都必须显式失败，不得伪装成成功或静默恢复。异常 claim / pending 生命周期由同一 task 收口；未来如改用持久化，
+另行设计 generation、CAS、恢复、留存和重复执行语义并重新取得授权。
+
+本条与 2026-09-09「确认卡不做持久化，把失败显式化」共同取代早先只承接 `confirm` 的施工边界；
+早先把 reject / cancel 留给 `P2-USER-ACTION-REJECT-001` 的 task_id 仍保留为历史路标，现役承接为
+`P2-USER-ACTION-TERMINAL-001`，不再独立开棒。
+
+## 2026-09-09 — 裁决：自由文本「裸确认」的口径（收窄计划 §3.3.4）
+
+### 一、起因
+
+执行方按「发现实质矛盾即停手」第二次停手，报告：
+
+- 计划 §3.3 第 4 条末句：「自由文本入口也改为共用退役原语，**保留确认文本必须显式绑定旧引用的规则**。」
+- 现役 `docs/phase2/DECISIONS.md`（2026-08-28「`P2-USER-ACTION-SEAM-001` 六项硬要求」第 6 条）：
+  「**既有自由文本确认入口保持可用，不得回归。**」同文件明确该六项继续有效。
+- 现役代码 `app/runtime/runtime.py::_is_explicit_workflow_confirmation` 对规范化后的
+  `确认` / `confirm` 直接返回 True；
+  `tests/runtime/test_runtime_workflow.py::test_each_waiting_action_gets_a_fresh_action_bound_request` 与
+  `tests/runtime/test_runtime_user_action.py::test_completed_action_preserves_the_text_resume_message_and_fallback`
+  都锁着裸确认可用。
+
+**执行方停手正确，冲突属实。**
+
+### 二、裁定（主窗口 2026-09-09）
+
+**计划那句话是主窗口起草时的措辞错误，予以收窄。裸「确认 / confirm」保留，不得回归。**
+
+「必须显式绑定旧引用」**不存在这条现役规则**——主窗口把「服务端对 captured pending 的
+**对象身份**绑定」误写成了「用户输入的文本必须携带 `response_id`」。
+按字面实现会回归一条受治理的现役合同，属实现棒无权做的合同变更。
+
+### 三、§3.3 第 4 条末句的替换文本
+
+> 自由文本入口也改为共用退役原语 `_retire_pending_confirmation`。
+> 其「绑定旧引用」指**服务端侧的 captured pending 对象身份绑定**：
+> 受理时捕获当前 `(session, user)` 的 pending 对象，claim 键由**该 captured 对象**构成
+> （与结构化入口同一 `_pending_confirmation_claim_key(key, pending)`），
+> 退役一律对 captured 对象做 CAS。
+> **不要求、也不得要求用户输入的确认文本携带任何引用。**
+
+### 具体要求
+
+1. **`_is_explicit_workflow_confirmation` 不改。** 裸 `确认` / `confirm` 继续成立。
+   上述两条现役测试**前后必须绿，不得改写为更弱形态**。
+2. 自由文本入口与结构化入口**共用同一套 pending / claim / 退役原语**——
+   这一条是本棒的核心，**原样保留**（交接第四条已认定
+   自由文本入口的 `finally: discard(claim_key)` 是绕过防重放的真实路径，必须一并修）。
+3. **异常穿透后，同一 session 的裸「确认」不得重放已退役的 pending。** 须有可执行反证。
+4. **无 pending 时的裸「确认」保持现役 fallback 行为不变**（走普通消息处理）。
+   SEAM 六项硬要求第 4 条「missing / stale / mismatch 一律 fail-closed，绝不跌回 Planner」
+   **只约束结构化按钮路径**，不约束自由文本兼容入口；**不要把它扩用到文本路径**。
+5. **跨身份不可区分（`裁决_20260909_跨身份不可区分的正确口径.md`）只适用于结构化路径**
+   ——裸文本不携带 `response_id`，无从枚举他人引用，不适用。
+6. 退役后若已发布**新的** pending，裸「确认」自然绑定到**当前**这个新 pending。
+   这是现役且正确的语义（用户确认的是他此刻看到的卡），**不视为重放**。
+
+### 四、附带确认（执行方日志末尾自提的一项）
+
+「`cleanup_complete=False` 时重放不得被解释为完整取消成功」——
+计划 §3.3 第 3 条已写明「cleanup 失败保留防重放标记，错误上报，不恢复 pending，
+不吞异常伪装完成」，**这就是现役要求，按它做并补断言即可，不是新增合同，不构成停点。**
+
+### 五、教训
+
+**计划里写「保留……的规则」时，必须先核实这条规则真的存在、且写清它约束的是哪一侧。**
+本次把「服务端对象身份绑定」误写成「用户文本携带引用」，
+两者施加对象不同（服务端 vs 用户），字面实现会直接回归一条受治理的兼容入口。
+判据：**这句话要求谁做什么？如果主语是用户，就要问「现役真让用户这么做过吗」。**
