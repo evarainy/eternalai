@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -960,13 +959,10 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
     assert calls == [{"principal_ai_user_id": "user-a", "principal_department_id": None}] * 3
 
 
-def test_admin_cannot_read_others_work_object_by_id() -> None:
+def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) -> None:
     # Real persistence predicate: weakening production SQL must expose the seeded row.
-    database_url = os.environ.get("DATABASE_URL")
-    assert database_url, "DATABASE_URL is required for the real owner-isolation regression"
-
     async def exercise() -> None:
-        engine = make_async_engine(database_url)
+        engine = make_async_engine(migrated_database_url)
         factory = make_async_session_factory(engine)
         store = PostgreSQLWorkObjectStore(factory)
         owner = "synthetic-scope001-owner"

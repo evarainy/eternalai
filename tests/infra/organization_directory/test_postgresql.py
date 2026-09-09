@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime
 
 import pytest
@@ -17,7 +16,6 @@ from app.ports.organization_directory import (
     OrganizationUserMembership,
 )
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
 FETCHED_AT = datetime(2026, 8, 31, tzinfo=UTC)
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -127,15 +125,9 @@ def _membership_boundary_snapshot() -> OrganizationDirectorySnapshot:
     )
 
 
-def _require_database_url() -> str:
-    if not DATABASE_URL:
-        raise AssertionError("DATABASE_URL must be set by the test runner environment")
-    return DATABASE_URL
-
-
-def test_replaces_and_queries_complete_directory_snapshot() -> None:
+def test_replaces_and_queries_complete_directory_snapshot(migrated_database_url: str) -> None:
     async def exercise() -> None:
-        engine = make_async_engine(_require_database_url())
+        engine = make_async_engine(migrated_database_url)
         factory = make_async_session_factory(engine)
         directory = PostgreSQLOrganizationDirectory(factory)
         try:
@@ -167,9 +159,11 @@ def test_replaces_and_queries_complete_directory_snapshot() -> None:
     asyncio.run(exercise())
 
 
-def test_list_user_memberships_returns_complete_set_across_organization_values() -> None:
+def test_list_user_memberships_returns_complete_set_across_organization_values(
+    migrated_database_url: str,
+) -> None:
     async def exercise() -> None:
-        engine = make_async_engine(_require_database_url())
+        engine = make_async_engine(migrated_database_url)
         factory = make_async_session_factory(engine)
         directory = PostgreSQLOrganizationDirectory(factory)
         try:
@@ -264,9 +258,11 @@ def test_cyclic_snapshot_is_rejected_before_database_use() -> None:
         asyncio.run(directory.replace_snapshot(cyclic))
 
 
-def test_query_fails_closed_if_stored_department_graph_contains_cycle() -> None:
+def test_query_fails_closed_if_stored_department_graph_contains_cycle(
+    migrated_database_url: str,
+) -> None:
     async def exercise() -> None:
-        engine = make_async_engine(_require_database_url())
+        engine = make_async_engine(migrated_database_url)
         factory = make_async_session_factory(engine)
         directory = PostgreSQLOrganizationDirectory(factory)
         try:
