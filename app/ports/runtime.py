@@ -18,6 +18,8 @@ type UserActionOutcome = Literal[
     "action_already_claimed",
     "action_stale",
     "action_version_conflict",
+    "cancelled",
+    "confirmation_invalidated",
 ]
 
 

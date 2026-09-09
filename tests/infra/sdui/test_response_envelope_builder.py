@@ -116,9 +116,7 @@ def test_build_confirm_card_action_confirm() -> None:
 
 
 def test_build_confirm_card_requires_keyword_payload() -> None:
-    parameter = inspect.signature(
-        ResponseEnvelopeBuilder.build_confirm_card
-    ).parameters["payload"]
+    parameter = inspect.signature(ResponseEnvelopeBuilder.build_confirm_card).parameters["payload"]
 
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
     assert parameter.default is inspect.Parameter.empty
@@ -392,3 +390,17 @@ def test_all_target_system_values_in_binding_required() -> None:
 def test_invalid_target_system_raises() -> None:
     with pytest.raises(ValidationError):
         BindingRequiredCard(action="bind_required", target_system="sap")
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "confirmation_invalidated"])
+def test_confirmation_terminals_keep_safe_two_key_data(terminal: str) -> None:
+    response = _builder().build_message(
+        *_message_args(),
+        status=terminal,
+        data={"action_outcome": terminal, "result": None},
+    )
+    assert response.status == terminal
+    assert response.data == {"action_outcome": terminal, "result": None}
+    assert response.ui.component_type == "none"
+    assert response.ui.action == "none"
+    assert response.trace_summary is None

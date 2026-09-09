@@ -156,3 +156,13 @@ def test_outcome_sync_guard_accepts_reordering() -> None:
     assert _assert_outcome_sequences_match(
         *_outcome_sequences(frontend_source, runtime_source)
     )
+
+
+@pytest.mark.parametrize("change", ["missing", "unknown"])
+def test_outcome_sync_guard_rejects_missing_or_unknown_literal(change: str) -> None:
+    complete = tuple(get_args(UserActionOutcome.__value__))
+    changed = complete[:-1] if change == "missing" else (*complete, "unknown_outcome")
+    with pytest.raises(AssertionError):
+        _assert_outcome_sequences_match(changed, complete)
+    with pytest.raises(AssertionError):
+        _assert_outcome_sequences_match(complete, changed)

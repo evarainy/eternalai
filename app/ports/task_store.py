@@ -14,6 +14,8 @@ TaskStatus: TypeAlias = Literal[
     "completed",
     "failed",
     "no_capability_found",
+    "cancelled",
+    "confirmation_invalidated",
 ]
 
 TASK_STORE_QUERY_LIMIT = 100

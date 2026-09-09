@@ -5,13 +5,18 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from app.composition import build_runtime
-from app.contracts.sdui.models import UserAction
+from app.contracts.sdui.models import (
+    CancelUserAction,
+    ConfirmUserAction,
+    RejectUserAction,
+    UserAction,
+)
 from app.infra.human_gate.in_memory import InMemoryHumanGate
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
@@ -260,7 +265,7 @@ def _principal(user_id: str = "user-action", *, tenant_id: str = "default") -> P
 
 
 def _action(response_id: str) -> UserAction:
-    return UserAction(
+    return ConfirmUserAction(
         action_type="confirm",
         response_id=response_id,
         confirmed=True,
@@ -310,6 +315,8 @@ async def _build_harness(
     engine_type: type[CountingWorkflowEngine] = CountingWorkflowEngine,
     expected_start_status: str = "waiting_user",
     tenant_id: str = "default",
+    task_store_override: Any = None,
+    trace_override: Any = None,
 ) -> Harness:
     definition = definition or _single_definition()
     gate = gate if with_gate else None
@@ -357,8 +364,8 @@ async def _build_harness(
     }
     gateway = gateway or Gateway(results)
     gateway.results.update(results)
-    task_store = TaskStore()
-    trace = RecordingTrace()
+    task_store = task_store_override or TaskStore()
+    trace = trace_override or RecordingTrace()
     engine = engine_type(
         definitions={definition.workflow_id: definition},
         capability_registry=registry,
@@ -505,14 +512,18 @@ def test_no_pending_and_cross_identity_are_indistinguishable_and_use_fresh_trace
     harness, wrong_user, wrong_session, own_missing, llm_calls = asyncio.run(exercise())
 
     for response in (wrong_user, wrong_session, own_missing):
-        assert _outcome(response) == "no_pending_action"
+        assert _outcome(response) == "confirmation_invalidated"
         assert response.data["result"] is None
     comparable = lambda value: value.model_dump(  # noqa: E731
         exclude={"response_id", "task_id", "session_id", "trace_id"}
     )
     assert comparable(wrong_user) == comparable(wrong_session) == comparable(own_missing)
     action_events = [event for event in harness.trace.steps if event["event_type"] == "user_action"]
-    inbound = [event for event in action_events if event["attributes"] == {"phase": "inbound"}]
+    inbound = [
+        event
+        for event in action_events
+        if event["attributes"] == {"phase": "inbound", "action_type": "confirm"}
+    ]
     assert len(inbound) == 3
     assert len({event["trace_id"] for event in inbound}) == 3
     assert len({event["task_id"] for event in inbound}) == 3
@@ -900,7 +911,7 @@ def test_stale_human_gate_conflict_has_no_result_or_adapter_call() -> None:
 
     harness, response, gateway_calls, llm_calls = asyncio.run(exercise())
 
-    assert _outcome(response) == "action_stale"
+    assert _outcome(response) == "confirmation_invalidated"
     assert response.data["result"] is None
     assert len(harness.gateway.calls) == gateway_calls
     assert harness.engine.resume_calls == 0
@@ -1053,14 +1064,22 @@ def test_exception_after_claim_cannot_replay_adapter_execution() -> None:
     async def exercise() -> tuple[Harness, Any, int]:
         harness = await _build_harness(gateway=RaisingExecutionGateway())
         llm_calls = len(harness.llm.calls)
-        with pytest.raises(RuntimeError, match="synthetic adapter exception"):
-            await _dispatch(harness)
+        first = await _dispatch(harness)
+        assert first.status == "confirmation_invalidated"
+        assert _outcome(first) == "confirmation_invalidated"
+        assert first.data["result"] is None
+        assert harness.runtime._task_store.status_updates[-1] == (
+            "confirmation_invalidated",
+            "internal_error",
+        )
+        assert not harness.runtime._pending_workflows
+        assert harness.waiting.task_id not in harness.engine._checkpoints
         replay = await _dispatch(harness)
         return harness, replay, llm_calls
 
     harness, replay, llm_calls = asyncio.run(exercise())
 
-    assert _outcome(replay) == "action_already_claimed"
+    assert _outcome(replay) == "confirmation_invalidated"
     assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
     assert harness.engine.resume_calls == 1
     assert harness.gate is not None
@@ -1093,7 +1112,7 @@ def test_publish_refuses_to_overwrite_a_newer_generation_without_any_claim() -> 
     harness, winner, loser, published = asyncio.run(exercise())
     key = ("session-action", harness.principal.ai_user_id)
 
-    assert harness.runtime._claimed_pending_confirmations == set()
+    assert harness.runtime._claimed_pending_confirmations == {}
     assert published is False
     assert harness.runtime._pending_workflows[key] is winner
     assert harness.runtime._pending_workflows[key] is not loser
@@ -1113,8 +1132,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         harness = await _build_harness()
         key = ("session-action", harness.principal.ai_user_id)
         original = _pending(harness)
-        claim_key = (*key, original.gate_request_id or original.response_id)
-        harness.runtime._claimed_pending_confirmations.add(claim_key)
+        assert harness.runtime._claim_confirmation(key, original, original.owner) is None
         harness.structured_output.register(
             "replace pending",
             IntentOutput,
@@ -1230,7 +1248,7 @@ def test_each_resume_pending_mutation_preserves_a_concurrent_winner(cas_site: st
     if cas_site == "version_pop":
         assert _outcome(response) == "action_version_conflict"
     elif cas_site == "stale_pop":
-        assert _outcome(response) == "action_stale"
+        assert _outcome(response) == "confirmation_invalidated"
     else:
         assert _outcome(response) == "accepted"
 
@@ -1238,7 +1256,16 @@ def test_each_resume_pending_mutation_preserves_a_concurrent_winner(cas_site: st
 def test_second_structured_confirmation_uses_fresh_claim_and_succeeds() -> None:
     async def exercise() -> tuple[Harness, Any, Any]:
         harness = await _build_harness(definition=_two_confirmation_definition())
+        old_pending = _pending(harness)
         first = await _dispatch(harness)
+        next_pending = _pending(harness)
+        assert next_pending.expires_at > old_pending.expires_at
+        assert next_pending.monotonic_deadline > old_pending.monotonic_deadline
+        assert next_pending.gate_request_id != old_pending.gate_request_id
+        assert _outcome(await _dispatch(harness)) == "action_already_claimed"
+        assert _pending(harness) is next_pending
+        assert harness.runtime._task_store.records[old_pending.task_id].status == "waiting_user"
+        assert old_pending.task_id in harness.engine._checkpoints
         second_response_id = first.response_id
         second = await harness.runtime.handle_user_action(
             channel="web",
@@ -1277,7 +1304,7 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
 
     assert _outcome(response) == "accepted"
     assert [event["attributes"] for event in action_events] == [
-        {"phase": "inbound"},
+        {"phase": "inbound", "action_type": "confirm"},
         {"phase": "outcome", "action_outcome": "accepted"},
     ]
     assert action_events[0]["trace_id"] == action_events[1]["trace_id"]
@@ -1285,3 +1312,469 @@ def test_user_action_trace_records_inbound_before_outcome() -> None:
     assert {(event["tenant_id"], event["ai_user_id"]) for event in action_events} == {
         (_NON_DEFAULT_TENANT_ID, harness.principal.ai_user_id)
     }
+
+
+async def _terminal_action(harness: Harness, kind: str, reference: str | None = None) -> Any:
+    model = {"confirm": ConfirmUserAction, "cancel": CancelUserAction, "reject": RejectUserAction}[
+        kind
+    ]
+    payload = {"action_type": kind, "response_id": reference or harness.waiting.response_id}
+    if kind == "confirm":
+        payload["confirmed"] = True
+    return await harness.runtime.handle_user_action(
+        channel="web",
+        principal=harness.principal,
+        session_id="session-action",
+        action=model(**payload),
+    )
+
+
+def _terminal_events(harness: Harness) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in harness.trace.steps
+        if event["task_id"] == harness.waiting.task_id
+        and event["event_type"]
+        in {"task_cancelled", "task_confirmation_invalidated", "evaluation_recorded"}
+    ]
+
+
+async def _start_again(harness: Harness) -> Any:
+    return await harness.runtime.handle_user_message(
+        channel="mock",
+        principal=harness.principal,
+        session_id="session-action",
+        message=_START_MESSAGE,
+        client_capabilities={},
+    )
+
+
+@pytest.mark.parametrize("kind", ["reject", "cancel"])
+def test_reject_and_cancel_finish_original_task_without_execution(kind: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        pending = _pending(harness)
+        calls = len(harness.llm.calls)
+        response = await _terminal_action(harness, kind)
+        assert response.status == "cancelled"
+        assert _outcome(response) == "cancelled"
+        assert response.data["result"] is None
+        assert response.ui.component_type == "none"
+        assert harness.runtime._task_store.records[pending.task_id].status == "cancelled"
+        assert harness.runtime._task_store.status_updates[-1] == ("cancelled", None)
+        assert harness.gate is not None
+        decision = await harness.gate.get_decision(pending.gate_request_id)
+        assert decision is not None
+        assert (
+            decision.decision,
+            decision.task_id,
+            decision.decided_by_ai_user_id,
+            decision.decided_session_id,
+            decision.decided_tenant_id,
+            decision.request_digest,
+            decision.binding_manifest_digest,
+        ) == (
+            "rejected",
+            pending.task_id,
+            harness.principal.ai_user_id,
+            "session-action",
+            harness.principal.org_ctx.tenant_id,
+            pending.request_digest,
+            pending.binding_manifest_digest,
+        )
+        assert harness.gate.record_decision_calls == 1
+        assert harness.engine.resume_calls == 0
+        assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 0
+        assert len(harness.llm.calls) == calls
+        assert not harness.runtime._pending_workflows
+        assert pending.task_id not in harness.engine._checkpoints
+        events = _terminal_events(harness)
+        assert [event["event_type"] for event in events] == [
+            "task_cancelled",
+            "evaluation_recorded",
+        ]
+        assert events[0]["status"] == "blocked"
+        assert events[1]["attributes"]["business_status"] == "cancelled"
+        replay = await _terminal_action(harness, "confirm")
+        assert _outcome(replay) == "cancelled"
+        assert _terminal_events(harness) == events
+        assert harness.gate.record_decision_calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_expired_confirmation_finishes_original_task() -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        pending = _pending(harness)
+        harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(microseconds=1)
+        response = await _dispatch(harness)
+        assert response.status == "confirmation_invalidated"
+        assert _outcome(response) == "confirmation_invalidated"
+        assert response.data["result"] is None
+        assert (
+            harness.runtime._task_store.records[pending.task_id].status
+            == "confirmation_invalidated"
+        )
+        assert harness.runtime._task_store.status_updates[-1] == (
+            "confirmation_invalidated",
+            "confirm_required",
+        )
+        assert harness.gate.record_decision_calls == 0
+        assert harness.engine.resume_calls == 0
+        assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 0
+        assert _terminal_events(harness)[0]["attributes"] == {"reason": "expired"}
+        assert "已失效" in response.message and "核对业务状态" in response.message
+
+    asyncio.run(exercise())
+
+
+def test_terminal_claim_blocks_resurrected_old_confirmation() -> None:
+    async def exercise() -> None:
+        harness = await _build_harness(gateway=RaisingExecutionGateway())
+        pending = _pending(harness)
+        checkpoint = harness.engine._checkpoints[pending.task_id]
+        request = await harness.gate.get_request(pending.gate_request_id)
+        harness.runtime._utc_clock = lambda: request.requested_at + timedelta(seconds=1)
+        await _dispatch(harness)
+        harness.runtime._pending_workflows[("session-action", harness.principal.ai_user_id)] = (
+            pending
+        )
+        harness.engine._checkpoints[pending.task_id] = checkpoint
+        response = await _dispatch(harness)
+        assert _outcome(response) == "confirmation_invalidated"
+        assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
+        assert harness.engine.resume_calls == harness.gate.record_decision_calls == 1
+        assert harness.runtime._claimed_pending_confirmations
+
+    asyncio.run(exercise())
+
+
+def test_exception_retirement_allows_new_workflow_in_same_session() -> None:
+    async def exercise() -> None:
+        harness = await _build_harness(gateway=RaisingExecutionGateway())
+        await _dispatch(harness)
+        response = await _start_again(harness)
+        assert response.status == "waiting_user"
+        assert response.task_id != harness.waiting.task_id
+        assert response.response_id != harness.waiting.response_id
+        pending = _pending(harness)
+        replay = await _dispatch(harness)
+        assert _outcome(replay) == "confirmation_invalidated"
+        assert _pending(harness) is pending
+        assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == 1
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("mode", ["exact", "after", "rollback", "new_message"])
+def test_pending_ttl_boundary_does_not_refresh_on_read_or_click(mode: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        pending = _pending(harness)
+        request = await harness.gate.get_request(pending.gate_request_id)
+        assert request.expires_at == pending.expires_at
+        assert (request.expires_at - request.requested_at).total_seconds() == 600
+        deadline = pending.monotonic_deadline
+        harness.runtime._monotonic_clock = lambda: deadline
+        harness.runtime._utc_clock = lambda: request.expires_at
+        if mode == "after" or mode == "new_message":
+            harness.runtime._utc_clock = lambda: request.expires_at + timedelta(microseconds=1)
+        if mode == "rollback":
+            harness.runtime._utc_clock = lambda: request.requested_at - timedelta(seconds=1)
+            harness.runtime._monotonic_clock = lambda: deadline + 0.001
+        response = await (_start_again(harness) if mode == "new_message" else _dispatch(harness))
+        assert pending.monotonic_deadline == deadline
+        assert pending.expires_at == request.expires_at
+        if mode == "exact":
+            assert response.status == "completed"
+            assert harness.engine.resume_calls == 1
+        elif mode == "new_message":
+            assert response.status == "waiting_user"
+            assert _pending(harness).task_id != pending.task_id
+            assert (
+                harness.runtime._task_store.records[pending.task_id].status
+                == "confirmation_invalidated"
+            )
+            assert harness.engine.resume_calls == 0
+        else:
+            assert response.status == "confirmation_invalidated"
+            assert harness.engine.resume_calls == harness.gate.record_decision_calls == 0
+
+    asyncio.run(exercise())
+
+
+def test_inflight_claim_is_not_released_by_pending_ttl() -> None:
+    async def exercise() -> None:
+        gateway = BlockingConfirmationGateway({}, blocked_capability_id=_EXECUTE_ID)
+        harness = await _build_harness(gateway=gateway)
+        pending = _pending(harness)
+        first = asyncio.create_task(_dispatch(harness))
+        await gateway.confirmation_entered.wait()
+        harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(seconds=1)
+        duplicate = await _dispatch(harness)
+        assert _outcome(duplicate) == "action_already_claimed"
+        assert _pending(harness) is pending
+        assert harness.runtime._task_store.records[pending.task_id].status == "waiting_user"
+        assert not _terminal_events(harness)
+        assert harness.engine.resume_calls == 1
+        gateway.release_confirmation.set()
+        assert (await first).status == "completed"
+        assert (await _start_again(harness)).status == "waiting_user"
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("own_pending", [False, True])
+def test_unknown_and_cross_identity_references_are_byte_identical(own_pending: bool) -> None:
+    async def exercise() -> None:
+        from app.api.v1.runtime import ActionResponseEnvelope
+
+        harness = await _build_harness()
+        other = await _build_harness(tenant_id="other-tenant")
+        foreign_pending = _pending(other)
+        # Install a foreign owner in the same runtime to prove lookup does not enumerate it.
+        harness.runtime._pending_workflows[("foreign-session", "foreign-user")] = foreign_pending
+        if not own_pending:
+            harness.runtime._pending_workflows.pop(("session-action", harness.principal.ai_user_id))
+        unknown = await _terminal_action(harness, "confirm", "nonexistent-reference")
+        foreign = await _terminal_action(harness, "confirm", other.waiting.response_id)
+        expected = "action_reference_mismatch" if own_pending else "confirmation_invalidated"
+        assert _outcome(unknown) == _outcome(foreign) == expected
+        excluded = {"response_id", "task_id", "session_id", "trace_id"}
+        # Fresh opaque routing IDs are checked separately; all remaining wire bytes must match.
+        assert (
+            ActionResponseEnvelope.model_validate(unknown.model_dump())
+            .model_dump_json(exclude=excluded)
+            .encode()
+            == ActionResponseEnvelope.model_validate(foreign.model_dump())
+            .model_dump_json(exclude=excluded)
+            .encode()
+        )
+        assert unknown.trace_id != foreign.trace_id
+        inbound = [
+            e
+            for e in harness.trace.steps
+            if e["event_type"] == "user_action" and e["attributes"]["phase"] == "inbound"
+        ]
+        assert len(inbound) == 2
+        assert len({e["trace_id"] for e in inbound}) == 2
+        assert {(e["tenant_id"], e["ai_user_id"], e["session_id"]) for e in inbound} == {
+            ("default", harness.principal.ai_user_id, "session-action")
+        }
+        assert (
+            harness.runtime._pending_workflows[("foreign-session", "foreign-user")]
+            is foreign_pending
+        )
+        assert harness.engine.resume_calls == harness.gate.record_decision_calls == 0
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("winner", ["confirm", "reject", "cancel"])
+def test_confirm_reject_cancel_race_has_one_winner(winner: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        pending = _pending(harness)
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = harness.gate.record_decision
+
+        async def blocked(decision: Any) -> Any:
+            entered.set()
+            await release.wait()
+            return await original(decision)
+
+        harness.gate.record_decision = blocked
+        first = asyncio.create_task(_terminal_action(harness, winner))
+        await entered.wait()
+        losers_pending = [
+            asyncio.create_task(_terminal_action(harness, kind))
+            for kind in {"confirm", "reject", "cancel"} - {winner}
+        ]
+        await asyncio.sleep(0)
+        release.set()
+        losers = await asyncio.gather(*losers_pending)
+        assert [_outcome(response) for response in losers] == ["action_already_claimed"] * 2
+        response = await first
+        assert harness.gate.record_decision_calls == 1
+        assert harness.engine.resume_calls == (1 if winner == "confirm" else 0)
+        assert [call[0] for call in harness.gateway.calls].count(_EXECUTE_ID) == (
+            1 if winner == "confirm" else 0
+        )
+        assert response.status == ("completed" if winner == "confirm" else "cancelled")
+        assert harness.runtime._task_store.records[pending.task_id].status == response.status
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("fault", ["binding", "cancelled"])
+def test_corrupt_binding_and_post_claim_cancellation_retire_safely(fault: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        pending = _pending(harness)
+
+        async def broken(*args: Any, **kwargs: Any) -> None:
+            if fault == "cancelled":
+                raise asyncio.CancelledError()
+            raise ValueError("synthetic-private-binding-marker")
+
+        harness.gate.assert_task_bindings = broken
+        if fault == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await _dispatch(harness)
+        else:
+            response = await _dispatch(harness)
+            assert _outcome(response) == "confirmation_invalidated"
+            _assert_envelope_omits(response, "synthetic-private-binding-marker")
+        assert not harness.runtime._pending_workflows
+        assert pending.task_id not in harness.engine._checkpoints
+        assert harness.runtime._task_store.status_updates[-1] == (
+            "confirmation_invalidated",
+            "internal_error",
+        )
+        assert _outcome(await _dispatch(harness)) == "confirmation_invalidated"
+        assert harness.engine.resume_calls == harness.gate.record_decision_calls == 0
+        assert "synthetic-private-binding-marker" not in str(harness.trace.steps)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("failure", ["task", "trace", "evaluation"])
+def test_terminal_store_or_trace_failure_never_reports_success(failure: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+
+        async def broken_update(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("synthetic terminal write failure")
+
+        original_step = harness.trace.record_step
+
+        async def broken_step(*args: Any, **kwargs: Any) -> Any:
+            if kwargs["event_type"] == (
+                "task_cancelled" if failure == "trace" else "evaluation_recorded"
+            ):
+                raise RuntimeError("synthetic terminal write failure")
+            return await original_step(*args, **kwargs)
+
+        if failure == "task":
+            harness.runtime._task_store.update_status = broken_update
+        else:
+            harness.trace.record_step = broken_step
+        with pytest.raises(RuntimeError, match="synthetic terminal write failure"):
+            await _terminal_action(harness, "cancel")
+        assert not harness.runtime._pending_workflows
+        claim = next(iter(harness.runtime._claimed_pending_confirmations.values()))
+        assert claim.state in {"cancelled", "confirmation_invalidated"}
+        assert claim.cleanup_complete is False
+        assert claim.pending is None
+        with pytest.raises(RuntimeError, match="Confirmation cleanup is incomplete"):
+            await _terminal_action(harness, "cancel")
+        assert claim.cleanup_complete is False
+        assert harness.engine.resume_calls == 0
+        assert harness.gate.record_decision_calls == 1
+
+    asyncio.run(exercise())
+
+
+def test_runtime_restart_invalidates_old_reference_without_resume() -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        original = harness.runtime
+        engine = CountingWorkflowEngine(
+            definitions={_WORKFLOW_ID: _single_definition()},
+            capability_registry=harness.registry,
+            gateway=harness.gateway,
+            task_store=original._task_store,
+            trace_port=harness.trace,
+        )
+        harness.runtime = RuntimeImpl(
+            task_store=original._task_store,
+            session_store=original._session_store,
+            capability_registry=harness.registry,
+            gateway=harness.gateway,
+            trace_port=harness.trace,
+            llm_provider=harness.llm,
+            structured_output=harness.structured_output,
+            intent_model="test-intent-model",
+            response_builder=original._response_builder,
+            workflow_engine=engine,
+            human_gate_port=harness.gate,
+        )
+        response = await _dispatch(harness)
+        assert _outcome(response) == "confirmation_invalidated"
+        assert response.status == "confirmation_invalidated"
+        assert response.data["result"] is None
+        assert response.trace_id != harness.waiting.trace_id
+        assert engine.resume_calls == harness.gate.record_decision_calls == 0
+        assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 0
+        assert original._task_store.records[harness.waiting.task_id].status == "waiting_user"
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("site", ["cancel", "exception", "expiry"])
+def test_retirement_and_expiry_preserve_concurrent_winner(site: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness(
+            gateway=RaisingExecutionGateway() if site == "exception" else None
+        )
+        pending = _pending(harness)
+        winner = _winner(pending, "terminal-cas")
+        key = ("session-action", harness.principal.ai_user_id)
+        checkpoint = harness.engine._checkpoints[pending.task_id]
+        original = harness.runtime._retire_pending_confirmation
+
+        async def raced(**kwargs: Any) -> Any:
+            harness.runtime._pending_workflows[key] = winner
+            return await original(**kwargs)
+
+        harness.runtime._retire_pending_confirmation = raced
+        if site == "expiry":
+            harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(seconds=1)
+        response = await _terminal_action(harness, "cancel" if site == "cancel" else "confirm")
+        assert response.status in {"cancelled", "confirmation_invalidated"}
+        assert harness.runtime._pending_workflows.get(key) is winner
+        assert harness.engine._checkpoints[pending.task_id] is checkpoint
+        assert harness.runtime._task_store.records[pending.task_id].status == "waiting_user"
+        assert not _terminal_events(harness)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("eviction", ["ttl", "capacity"])
+def test_terminal_claim_retention_is_bounded_without_replay(eviction: str) -> None:
+    async def exercise() -> None:
+        harness = await _build_harness()
+        harness.runtime._confirmation_claim_limit = 1
+        await _terminal_action(harness, "cancel")
+        old_reference = harness.waiting.response_id
+        old_key = next(iter(harness.runtime._claimed_pending_confirmations))
+        record = harness.runtime._claimed_pending_confirmations[old_key]
+        assert record.cleanup_complete is True
+        assert record.pending is None
+        if eviction == "ttl":
+            harness.runtime._monotonic_clock = lambda: record.retain_until + 1
+        next_card = await _start_again(harness)
+        current = _pending(harness)
+        assert (
+            await _terminal_action(harness, "cancel", next_card.response_id)
+        ).status == "cancelled"
+        assert old_key not in harness.runtime._claimed_pending_confirmations
+        assert len(harness.runtime._claimed_pending_confirmations) == 1
+        assert (
+            _outcome(await _terminal_action(harness, "confirm", old_reference))
+            == "confirmation_invalidated"
+        )
+        assert harness.engine.resume_calls == 0
+        # A failed cleanup is never a candidate for capacity or time eviction.
+        retained = next(iter(harness.runtime._claimed_pending_confirmations.values()))
+        retained.cleanup_complete = False
+        next_card = await _start_again(harness)
+        response = await _terminal_action(harness, "confirm", next_card.response_id)
+        assert _outcome(response) == "action_gate_unavailable"
+        assert len(harness.runtime._claimed_pending_confirmations) == 1
+        assert next(iter(harness.runtime._claimed_pending_confirmations.values())) is retained
+        assert harness.gate.record_decision_calls == 2
+        assert current.response_id != _pending(harness).response_id
+
+    asyncio.run(exercise())

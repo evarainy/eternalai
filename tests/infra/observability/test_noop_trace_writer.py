@@ -389,8 +389,8 @@ def test_trace_event_extra_field_raises_validation_error() -> None:
 
 
 def test_all_trace_event_type_values_construct_valid_events() -> None:
-    # 21 = prior 20-event contract + structured user_action trace.
-    assert len(get_args(TraceEventType)) == 21
+    # 23 = 20-event 合同 + structured user_action + task_cancelled / task_confirmation_invalidated.
+    assert len(get_args(TraceEventType)) == 23
     for event_type in get_args(TraceEventType):
         event = TraceEvent(
             trace_id="trace-1",

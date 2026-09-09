@@ -73,23 +73,29 @@ class Registry:
 class TaskStore:
     def __init__(self) -> None:
         self.created: list[TaskRecord] = []
+        self.records: dict[str, TaskRecord] = {}
         self.events: list[Any] = []
         self.statuses: list[str] = []
         self.status_updates: list[tuple[str, str | None]] = []
 
     async def create_task(self, record: TaskRecord) -> TaskRecord:
         self.created.append(record)
+        self.records[record.task_id] = record
         return record
 
     async def get_task(self, task_id: str) -> TaskRecord | None:
-        return self.created[0] if self.created else None
+        return self.records.get(task_id)
 
     async def update_status(
         self, task_id: str, status: str, error_code: str | None = None
     ) -> TaskRecord:
         self.statuses.append(status)
         self.status_updates.append((status, error_code))
-        return self.created[0].model_copy(update={"status": status, "error_code": error_code})
+        record = self.records[task_id].model_copy(
+            update={"status": status, "error_code": error_code}
+        )
+        self.records[task_id] = record
+        return record
 
     async def append_event(self, task_id: str, event: Any) -> None:
         self.events.append(event)
@@ -1482,3 +1488,136 @@ def test_failed_resume_clears_engine_checkpoint_and_runtime_pending() -> None:
     assert trace.finalizations[0]["error_code"] == "adapter_http_500"
     assert "private-marker-123" not in repr(trace.steps)
     assert "private-marker-123" not in repr(task_store.events)
+
+
+@pytest.mark.parametrize("with_gate", [False, True])
+def test_text_confirmation_exception_uses_same_retirement_guards(with_gate: bool) -> None:
+    from tests.runtime.test_runtime_user_action import (
+        _EXECUTE_ID,
+        RaisingExecutionGateway,
+        _build_harness,
+        _pending,
+        _start_again,
+    )
+
+    async def exercise() -> None:
+        harness = await _build_harness(gateway=RaisingExecutionGateway(), with_gate=with_gate)
+        pending = _pending(harness)
+
+        async def confirm_text() -> Any:
+            return await harness.runtime.handle_user_message(
+                channel="mock",
+                principal=harness.principal,
+                session_id="session-action",
+                message=f"确认 {harness.waiting.response_id}",
+                client_capabilities={},
+            )
+
+        response = await confirm_text()
+        assert response.status == "confirmation_invalidated"
+        assert not harness.runtime._pending_workflows
+        assert pending.task_id not in harness.engine._checkpoints
+        assert harness.runtime._claimed_pending_confirmations
+        replay = await confirm_text()
+        assert replay.status == "confirmation_invalidated"
+        assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 1
+        assert harness.engine.resume_calls == 1
+        assert (await _start_again(harness)).status == "waiting_user"
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("with_gate", [False, True])
+@pytest.mark.parametrize("message", ["确认", "confirm"])
+def test_bare_confirmation_after_exception_uses_fallback_and_new_pending(
+    with_gate: bool, message: str,
+) -> None:
+    from app.runtime.models import IntentOutput, UnmatchedIntent
+    from tests.runtime.test_runtime_user_action import (
+        _EXECUTE_ID,
+        RaisingExecutionGateway,
+        _build_harness,
+        _pending,
+        _start_again,
+    )
+
+    async def exercise() -> None:
+        harness = await _build_harness(gateway=RaisingExecutionGateway(), with_gate=with_gate)
+        captured = _pending(harness)
+        harness.structured_output.register(message, IntentOutput, UnmatchedIntent(match="none"))
+
+        async def confirm_text() -> Any:
+            return await harness.runtime.handle_user_message(
+                channel="mock", principal=harness.principal, session_id="session-action",
+                message=message, client_capabilities={},
+            )
+
+        first = await confirm_text()
+        assert first.status == "confirmation_invalidated"
+        assert not harness.runtime._pending_workflows
+        assert captured.task_id not in harness.engine._checkpoints
+        claims = dict(harness.runtime._claimed_pending_confirmations)
+        assert len(claims) == 1
+        llm_calls = len(harness.llm.calls)
+        replay = await confirm_text()
+        assert replay.task_id != captured.task_id
+        assert replay.status == "no_capability_found"
+        assert len(harness.llm.calls) > llm_calls
+        assert harness.runtime._claimed_pending_confirmations == claims
+        assert harness.engine.resume_calls == 1
+        if with_gate:
+            assert harness.gate.record_decision_calls == 1
+        else:
+            assert harness.gate is None
+        assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 1
+        assert (await _start_again(harness)).status == "waiting_user"
+        fresh = _pending(harness)
+        assert fresh is not captured
+        assert fresh.response_id != captured.response_id
+        assert (await confirm_text()).task_id == fresh.task_id
+        assert harness.engine.resume_calls == 2
+        assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 2
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("with_gate", [False, True])
+def test_bare_confirmation_claim_blocks_resurrected_pending(with_gate: bool) -> None:
+    from datetime import timedelta
+
+    from tests.runtime.test_runtime_user_action import (
+        _EXECUTE_ID,
+        RaisingExecutionGateway,
+        _build_harness,
+        _pending,
+    )
+
+    async def exercise() -> None:
+        harness = await _build_harness(gateway=RaisingExecutionGateway(), with_gate=with_gate)
+        captured = _pending(harness)
+        checkpoint = harness.engine._checkpoints[captured.task_id]
+        harness.runtime._utc_clock = lambda: captured.expires_at - timedelta(seconds=599)
+
+        async def confirm_text() -> Any:
+            return await harness.runtime.handle_user_message(
+                channel="mock", principal=harness.principal, session_id="session-action",
+                message="确认", client_capabilities={},
+            )
+
+        assert (await confirm_text()).status == "confirmation_invalidated"
+        key = ("session-action", harness.principal.ai_user_id)
+        assert key not in harness.runtime._pending_workflows
+        # Deliberately resurrect only captured state; the independent claim must win.
+        harness.runtime._pending_workflows[key] = captured
+        harness.engine._checkpoints[captured.task_id] = checkpoint
+        llm_calls = len(harness.llm.calls)
+        await confirm_text()
+        assert [c[0] for c in harness.gateway.calls].count(_EXECUTE_ID) == 1
+        assert harness.engine.resume_calls == 1
+        assert len(harness.llm.calls) == llm_calls
+        if with_gate:
+            assert harness.gate.record_decision_calls == 1
+        else:
+            assert harness.gate is None
+
+    asyncio.run(exercise())

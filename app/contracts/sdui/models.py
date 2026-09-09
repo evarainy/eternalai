@@ -21,6 +21,8 @@ ResponseEnvelopeStatus: TypeAlias = Literal[
     "waiting_user",
     "failed",
     "no_capability_found",
+    "cancelled",
+    "confirmation_invalidated",
 ]
 
 
@@ -86,9 +88,29 @@ class ResponseEnvelope(BaseModel):
     trace_summary: str | None = None
 
 
-class UserAction(BaseModel):
+class ConfirmUserAction(BaseModel):
     model_config = {"extra": "forbid"}
 
     action_type: Literal["confirm"]
     response_id: str
     confirmed: Literal[True]
+
+
+class RejectUserAction(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    action_type: Literal["reject"]
+    response_id: str
+
+
+class CancelUserAction(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    action_type: Literal["cancel"]
+    response_id: str
+
+
+type UserAction = Annotated[
+    ConfirmUserAction | RejectUserAction | CancelUserAction,
+    Field(discriminator="action_type"),
+]
