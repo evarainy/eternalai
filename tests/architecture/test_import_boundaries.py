@@ -78,6 +78,21 @@ def _boundary_rules() -> list[BoundaryRule]:
             forbidden_imports=("app.workflow.engine",),
         ),
         BoundaryRule(
+            name="runtime_no_agent_orchestration_adapter_import",
+            source="app.runtime",
+            forbidden_imports=("app.infra.orchestration",),
+        ),
+        BoundaryRule(
+            name="agent_orchestration_adapter_no_runtime_impl_import",
+            source="app.infra.orchestration",
+            forbidden_imports=("app.runtime.runtime",),
+        ),
+        BoundaryRule(
+            name="ports_no_runtime_imports",
+            source="app.ports",
+            forbidden_imports=("app.runtime",),
+        ),
+        BoundaryRule(
             name="runtime_no_execution_fabric",
             source="app.runtime",
             forbidden_imports=("app.execution_fabric",),
@@ -281,6 +296,62 @@ def _find_violations(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "forbidden", "bad_import"),
+    [
+        (
+            "runtime_no_agent_orchestration_adapter_import",
+            "app.runtime",
+            "app.infra.orchestration",
+            "app.infra.orchestration.agent_adapter",
+        ),
+        (
+            "agent_orchestration_adapter_no_runtime_impl_import",
+            "app.infra.orchestration",
+            "app.runtime.runtime",
+            "app.runtime.runtime",
+        ),
+        ("ports_no_runtime_imports", "app.ports", "app.runtime", "app.runtime.response_projection"),
+        (
+            "ports_no_infra_imports",
+            "app.ports",
+            "app.infra",
+            "app.infra.sdui.response_envelope_builder",
+        ),
+    ],
+)
+def test_agent_rules_are_active_and_reject_each_static_violation(
+    tmp_path: Path,
+    name: str,
+    source: str,
+    forbidden: str,
+    bad_import: str,
+) -> None:
+    matches = [rule for rule in _boundary_rules() if rule.name == name]
+    assert len(matches) == 1
+    rule = matches[0]
+    assert rule.source == source
+    assert rule.source_path == REPO_ROOT / source.replace(".", "/")
+    assert rule.source_path.is_dir()
+    assert rule.forbidden_imports == (forbidden,)
+    assert _find_violations(rule) == []
+    package = tmp_path / source.replace(".", "/")
+    package.mkdir(parents=True)
+    fixture = package / "synthetic.py"
+    fixture.write_text(
+        "from app.ports.capability_registry import CapabilitySpec\n", encoding="utf-8"
+    )
+    fixture_rule = BoundaryRule(
+        name=name,
+        source=source,
+        source_path=package,
+        forbidden_imports=(forbidden,),
+    )
+    assert _find_violations(fixture_rule, repo_root=tmp_path) == []
+    fixture.write_text(f"import {bad_import}\n", encoding="utf-8")
+    assert _find_violations(fixture_rule, repo_root=tmp_path) == [(fixture, bad_import, forbidden)]
 
 
 class TestImportBoundaries:

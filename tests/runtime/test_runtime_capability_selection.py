@@ -14,6 +14,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -318,16 +319,24 @@ def _run_runtime(
     llm_provider = MockLLMProvider()
     if llm_completion is not None:
         llm_provider.register(message, llm_completion)
+    orchestration_registry = registry
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=registry,
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace_port,
         llm_provider=llm_provider,
         structured_output=structured_output,
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     async def exercise() -> ResponseEnvelope:
@@ -730,16 +739,24 @@ def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_ada
             )
         ),
     )
+    orchestration_registry = registry
+    orchestration_workflow = None
+    orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
         task_store=task_store,
         session_store=ExistingSessionStore(),
-        capability_registry=registry,
-        gateway=gateway,
+        capability_registry=orchestration_registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=orchestration_registry,
+            gateway=gateway,
+            workflow_engine=orchestration_workflow,
+            response_builder=orchestration_builder,
+        ),
         trace_port=trace,
         llm_provider=llm_provider,
         structured_output=JSONStructuredOutputProvider(),
         intent_model="test-intent-model",
-        response_builder=ResponseEnvelopeBuilder(),
+        response_builder=orchestration_builder,
     )
 
     envelope = asyncio.run(

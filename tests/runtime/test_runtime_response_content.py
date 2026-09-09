@@ -20,13 +20,14 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter, _confirm_card_payload
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ConfirmCard, ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
-from app.runtime.models import CapabilityRef, ConfirmCardPayload, IntentOutput, MatchedIntent
-from app.runtime.runtime import RuntimeImpl, _confirm_card_payload
+from app.runtime.models import ConfirmCardPayload, IntentOutput, MatchedIntent
+from app.runtime.runtime import RuntimeImpl
 from app.version_binding import immutable_request_digest
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import (
@@ -227,22 +228,30 @@ def _run_runtime(
                     arguments=arguments or {},
                 ),
             )
+        orchestration_registry = StaticCapabilityRegistry(
+            capability
+            or active_capability(
+                capability_id,
+                output_schema=_output_schema_for(capability_id),
+            )
+        )
+        orchestration_workflow = None
+        orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
-            capability_registry=StaticCapabilityRegistry(
-                capability
-                or active_capability(
-                    capability_id,
-                    output_schema=_output_schema_for(capability_id),
-                )
+            capability_registry=orchestration_registry,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=orchestration_registry,
+                gateway=SpyGateway(gateway_result),
+                workflow_engine=orchestration_workflow,
+                response_builder=orchestration_builder,
             ),
-            gateway=SpyGateway(gateway_result),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
             structured_output=structured_output,
             intent_model="test-intent-model",
-            response_builder=ResponseEnvelopeBuilder(),
+            response_builder=orchestration_builder,
         )
         return await runtime.handle_user_message(
             channel="web",
@@ -341,16 +350,24 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
             adapter=OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)),
             capability_registry=registry,
         )
+        orchestration_registry = registry
+        orchestration_workflow = None
+        orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
-            capability_registry=registry,
-            gateway=gateway,
+            capability_registry=orchestration_registry,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=orchestration_registry,
+                gateway=gateway,
+                workflow_engine=orchestration_workflow,
+                response_builder=orchestration_builder,
+            ),
             trace_port=SpyTracePort(),
             llm_provider=MockLLMProvider(),
             structured_output=structured_output,
             intent_model="test-intent-model",
-            response_builder=ResponseEnvelopeBuilder(),
+            response_builder=orchestration_builder,
         )
         return await runtime.handle_user_message(
             channel="web",
@@ -515,7 +532,8 @@ def test_confirm_payload_wire_and_request_digest_are_compatible() -> None:
         "displayed_argument_values": {},
     }
     actual_preview = _confirm_card_payload(
-        CapabilityRef(capability_id="oa.synthetic.approve"),
+        "oa.synthetic.approve",
+        {},
         None,
         None,
     )

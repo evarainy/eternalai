@@ -6,6 +6,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -13,9 +14,10 @@ from app.infra.adapters.oa.contracts import (
     OAPendingWorkflowCollection,
     OASystemMessageCollection,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
-from app.ports.capability_gateway import ExecutionResult
-from app.ports.capability_registry import CapabilitySpec
+from app.ports.capability_gateway import CapabilityGatewayPort, ExecutionResult
+from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.runtime.models import CapabilityRef
 from app.runtime.response_projection import (
     ProjectionContractSnapshot,
@@ -128,7 +130,12 @@ def _sentinel_owner() -> CapabilitySpec:
 
 def _build_completed_envelope(capability: CapabilitySpec) -> Any:
     runtime = RuntimeImpl.__new__(RuntimeImpl)
-    runtime._response_builder = ResponseEnvelopeBuilder()
+    runtime._orchestration = AgentOrchestrationAdapter(
+        capability_registry=Mock(spec=CapabilityRegistryPort),
+        gateway=Mock(spec=CapabilityGatewayPort),
+        workflow_engine=None,
+        response_builder=ResponseEnvelopeBuilder(),
+    )
     return runtime._build_envelope(
         "SYNTHETIC_RESPONSE_ID",
         "SYNTHETIC_TASK_ID",

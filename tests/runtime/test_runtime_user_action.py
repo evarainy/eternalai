@@ -22,6 +22,7 @@ from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.capability_registry import CapabilitySpec
@@ -1687,17 +1688,25 @@ def test_runtime_restart_invalidates_old_reference_without_resume() -> None:
             task_store=original._task_store,
             trace_port=harness.trace,
         )
+        orchestration_registry = harness.registry
+        orchestration_workflow = engine
+        orchestration_builder = original._response_builder
         harness.runtime = RuntimeImpl(
             task_store=original._task_store,
             session_store=original._session_store,
-            capability_registry=harness.registry,
-            gateway=harness.gateway,
+            capability_registry=orchestration_registry,
+            orchestration=AgentOrchestrationAdapter(
+                capability_registry=orchestration_registry,
+                gateway=harness.gateway,
+                workflow_engine=orchestration_workflow,
+                response_builder=orchestration_builder,
+            ),
             trace_port=harness.trace,
             llm_provider=harness.llm,
             structured_output=harness.structured_output,
             intent_model="test-intent-model",
-            response_builder=original._response_builder,
-            workflow_engine=engine,
+            response_builder=orchestration_builder,
+            workflow_engine=orchestration_workflow,
             human_gate_port=harness.gate,
         )
         response = await _dispatch(harness)
