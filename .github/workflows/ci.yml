@@ -47,10 +47,12 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install
 
       - name: Install dependencies
-        run: uv sync
+        run: |
+          uv sync --locked
+          uv run --locked python --version
 
       # ── Lint ─────────────────────────────────────────────────
       - name: Ruff check
@@ -101,10 +103,12 @@ jobs:
           enable-cache: true
 
       - name: Set up Python for OpenAPI drift test
-        run: uv python install 3.12
+        run: uv python install
 
       - name: Install backend dependencies for OpenAPI drift test
-        run: uv sync --frozen
+        run: |
+          uv sync --frozen
+          uv run --frozen python --version
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
