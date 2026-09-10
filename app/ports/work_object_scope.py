@@ -14,11 +14,40 @@ from pydantic import BaseModel, ConfigDict
 from app.ports.organization_directory import OrganizationDepartment, OrganizationUserMembership
 
 _DEPARTMENT_HEAD_JOBTITLE_IDS: frozenset[str] = frozenset({"75", "380", "1405", "1701", "1999"})
-_PRISON_AREA_DEPARTMENT_IDS: frozenset[str] = frozenset({
-    "572", "575", "580", "585", "588", "589", "590", "591", "592", "593",
-    "594", "595", "596", "597", "598", "599", "600", "601", "602", "603",
-    "604", "605", "606", "607", "608", "619", "622", "1419", "1420", "1923",
-})
+_PRISON_AREA_DEPARTMENT_IDS: frozenset[str] = frozenset(
+    {
+        "572",
+        "575",
+        "580",
+        "585",
+        "588",
+        "589",
+        "590",
+        "591",
+        "592",
+        "593",
+        "594",
+        "595",
+        "596",
+        "597",
+        "598",
+        "599",
+        "600",
+        "601",
+        "602",
+        "603",
+        "604",
+        "605",
+        "606",
+        "607",
+        "608",
+        "619",
+        "622",
+        "1419",
+        "1420",
+        "1923",
+    }
+)
 
 
 class DispatchAuthorizationDecision(BaseModel):
@@ -96,7 +125,9 @@ class AuthorizedWorkObjectScope(BaseModel):
 
 
 def compute_visibility_scope(
-    *, principal_ai_user_id: str, principal_department_id: str | None,
+    *,
+    principal_ai_user_id: str,
+    principal_department_id: str | None,
 ) -> AuthorizedWorkObjectScope:
     """No subtree inheritance or authority derived from dispatch history.
 

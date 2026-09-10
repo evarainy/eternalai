@@ -51,9 +51,7 @@ class PostgreSQLWorkObjectStore:
             for snapshot in snapshots:
                 await session.execute(
                     text(
-                        "INSERT INTO work_objects ("
-                        + _WORK_OBJECT_COLUMNS
-                        + ") VALUES ("
+                        "INSERT INTO work_objects (" + _WORK_OBJECT_COLUMNS + ") VALUES ("
                         ":work_object_id, 'external_snapshot', 'oa', "
                         "'pending_workflow', :source_ref, "
                         ":assignee_ai_user_id, :assignee_display_name, NULL, "
@@ -121,9 +119,7 @@ class PostgreSQLWorkObjectStore:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT "
-                        + _WORK_OBJECT_COLUMNS
-                        + " FROM work_objects "
+                        "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
                         "WHERE assignee_ai_user_id = :assignee_ai_user_id "
                         + search_clause
                         + "LIMIT :limit"
@@ -142,9 +138,7 @@ class PostgreSQLWorkObjectStore:
             row = (
                 await session.execute(
                     text(
-                        "SELECT "
-                        + _WORK_OBJECT_COLUMNS
-                        + " FROM work_objects "
+                        "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
                         "WHERE work_object_id = :work_object_id "
                         "AND assignee_ai_user_id = :assignee_ai_user_id"
                     ),
@@ -175,8 +169,7 @@ class PostgreSQLWorkObjectStore:
                         "WHERE work_object_id = :work_object_id "
                         "AND assignee_ai_user_id = :assignee_ai_user_id "
                         "AND state_authority = 'external_snapshot' "
-                        "RETURNING "
-                        + _WORK_OBJECT_COLUMNS
+                        "RETURNING " + _WORK_OBJECT_COLUMNS
                     ),
                     {
                         "handling_mark": mark,

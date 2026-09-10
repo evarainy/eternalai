@@ -74,9 +74,7 @@ class _WorkObjectViewBase(BaseModel):
                     "handling_capability_id is required for capability handling actions"
                 )
         elif self.handling_capability_id is not None:
-            raise ValueError(
-                "handling_capability_id must be null for non-capability actions"
-            )
+            raise ValueError("handling_capability_id must be null for non-capability actions")
         return self
 
 
@@ -361,8 +359,7 @@ def _list_response(
     limit_exceeded = len(records) > WORK_OBJECT_LIST_LIMIT
     return WorkObjectListResponse(
         items=[
-            _view_from_record(record, capabilities)
-            for record in records[:WORK_OBJECT_LIST_LIMIT]
+            _view_from_record(record, capabilities) for record in records[:WORK_OBJECT_LIST_LIMIT]
         ],
         limit=WORK_OBJECT_LIST_LIMIT,
         limit_exceeded=limit_exceeded,
@@ -385,8 +382,7 @@ def _view_from_record(
     )
     handling_capability_id = (
         handling_capability.capability_id
-        if handling_capability is not None
-        and handling_action in {"ai_draft", "self_serve"}
+        if handling_capability is not None and handling_action in {"ai_draft", "self_serve"}
         else None
     )
     view_payload = record.model_dump(
@@ -419,8 +415,7 @@ def _resolve_handling_capability(
         and any(
             selector.source_system == record.source_system
             and selector.source_kind == record.source_kind
-            and selector.source_workflow_type_id
-            == record.source_workflow_type_id
+            and selector.source_workflow_type_id == record.source_workflow_type_id
             for selector in capability.handles_work_objects
         )
     ]
@@ -480,9 +475,7 @@ def _raise_background_sync_failure(error_code: ErrorCode | None) -> NoReturn:
         "adapter_missing_required_field": "invalid_response",
         "adapter_empty_response": "invalid_response",
     }
-    failure_code = (
-        countable_errors.get(error_code) if error_code is not None else None
-    )
+    failure_code = countable_errors.get(error_code) if error_code is not None else None
     raise BackgroundWorkObjectSyncError(
         authentication_denied=False,
         failure_code=failure_code,

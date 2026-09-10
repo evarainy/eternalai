@@ -57,8 +57,7 @@ NOW = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
 class MemoryWorkObjectStore:
     def __init__(self, records: list[WorkObjectRecord] | None = None) -> None:
         self.records = {
-            (record.assignee_ai_user_id, record.source_ref): record
-            for record in records or []
+            (record.assignee_ai_user_id, record.source_ref): record for record in records or []
         }
         self.upsert_calls = 0
         self.list_calls: list[dict[str, object]] = []
@@ -337,9 +336,7 @@ def test_online_sync_uses_trusted_principal_and_is_idempotent() -> None:
     assert first.json()["items"][0]["handling_action"] == "go_source_system"
     assert first.json()["items"][0]["handling_capability_id"] is None
     assert first.json()["items"][0]["state_authority"] == "external_snapshot"
-    assert first.json()["items"][0]["source_fetched_at"] == NOW.isoformat().replace(
-        "+00:00", "Z"
-    )
+    assert first.json()["items"][0]["source_fetched_at"] == NOW.isoformat().replace("+00:00", "Z")
     assert "assignee_ai_user_id" not in first.json()["items"][0]
     call = gateway.calls[0]
     assert call["ai_user_id"] == "user-a"
@@ -641,10 +638,7 @@ def test_semantically_invalid_gateway_text_fails_before_any_write(
 
 
 def test_list_returns_one_bounded_batch_with_explicit_overflow() -> None:
-    records = [
-        _record(source_ref=f"oa-todo-{index}", index=index)
-        for index in range(1, 202)
-    ]
+    records = [_record(source_ref=f"oa-todo-{index}", index=index) for index in range(1, 202)]
     client = _client(MemoryWorkObjectStore(records), RecordingGateway())
 
     response = client.get("/api/v1/work-objects")
@@ -663,9 +657,7 @@ def test_list_search_normalizes_query_before_store_call() -> None:
     response = client.get("/api/v1/work-objects", params={"q": "\u3000 APPROVAL\u00a0  \t2\u0085"})
 
     assert response.status_code == 200
-    assert [item["work_object_id"] for item in response.json()["items"]] == [
-        "work-user-a-2"
-    ]
+    assert [item["work_object_id"] for item in response.json()["items"]] == ["work-user-a-2"]
     assert store.list_calls == [
         {
             "assignee_ai_user_id": "user-a",
@@ -688,10 +680,7 @@ def test_list_whitespace_query_preserves_the_existing_list_behavior(query: str |
 
 
 def test_list_search_reports_overflow_after_filtering() -> None:
-    records = [
-        _record(source_ref=f"oa-todo-{index}", index=index)
-        for index in range(1, 202)
-    ]
+    records = [_record(source_ref=f"oa-todo-{index}", index=index) for index in range(1, 202)]
     client = _client(MemoryWorkObjectStore(records), RecordingGateway())
 
     response = client.get("/api/v1/work-objects", params={"q": "pending approval"})
@@ -768,10 +757,13 @@ def test_resolver_is_exact_active_and_fail_closed_on_ambiguity(
     )
 
     assert _resolve_handling_capability(record=record, capabilities=[]) is None
-    assert _resolve_handling_capability(
-        record=record,
-        capabilities=[first, inactive, concrete],
-    ) is first
+    assert (
+        _resolve_handling_capability(
+            record=record,
+            capabilities=[first, inactive, concrete],
+        )
+        is first
+    )
 
     with caplog.at_level("WARNING"):
         ambiguous = _resolve_handling_capability(
@@ -823,10 +815,13 @@ def test_none_workflow_type_matches_only_none_selector() -> None:
         source_workflow_type_id="specific",
     )
 
-    assert _resolve_handling_capability(
-        record=record,
-        capabilities=[none_selector, concrete_selector],
-    ) is none_selector
+    assert (
+        _resolve_handling_capability(
+            record=record,
+            capabilities=[none_selector, concrete_selector],
+        )
+        is none_selector
+    )
 
 
 @pytest.mark.parametrize("handling_action", ["go_source_system", "view_only"])
@@ -876,9 +871,13 @@ def test_work_object_routes_require_valid_authentication() -> None:
 def test_visibility_reads_current_directory_on_each_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    memberships = [OrganizationUserMembership(
-        user_id="synthetic-directory-user", department_id="synthetic-first", job_title="75",
-    )]
+    memberships = [
+        OrganizationUserMembership(
+            user_id="synthetic-directory-user",
+            department_id="synthetic-first",
+            job_title="75",
+        )
+    ]
     lookups: list[str] = []
     scopes: list[AuthorizedWorkObjectScope] = []
 
@@ -897,23 +896,30 @@ def test_visibility_reads_current_directory_on_each_request(
 
     monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", capture_scope)
     service = WorkObjectService(
-        store=MemoryWorkObjectStore([_record()]), gateway=RecordingGateway(_success_result()),
+        store=MemoryWorkObjectStore([_record()]),
+        gateway=RecordingGateway(_success_result()),
         capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
         organization_directory=cast(OrganizationDirectoryPort, Directory()),
     )
     principal = Principal(
-        ai_user_id="user-a", display_name="Synthetic", roles=("admin",),
+        ai_user_id="user-a",
+        display_name="Synthetic",
+        roles=("admin",),
         org_ctx=PrincipalOrgContext(
-            directory_user_id="synthetic-directory-user", department_id="stale-token-department",
+            directory_user_id="synthetic-directory-user",
+            department_id="stale-token-department",
         ),
     )
 
     async def exercise() -> None:
         first = await service.list_for_principal(principal)
         assert len(first.items) == 1
-        memberships[0] = memberships[0].model_copy(update={
-            "department_id": "synthetic-second", "job_title": None,
-        })
+        memberships[0] = memberships[0].model_copy(
+            update={
+                "department_id": "synthetic-second",
+                "job_title": None,
+            }
+        )
         assert await service.get_for_principal("work-user-a-1", principal) is not None
         memberships.clear()
         assert len((await service.list_for_principal(principal)).items) == 1
@@ -921,7 +927,9 @@ def test_visibility_reads_current_directory_on_each_request(
     asyncio.run(exercise())
     assert lookups == ["synthetic-directory-user"] * 3
     assert [scope.principal_department_id for scope in scopes] == [
-        "synthetic-first", "synthetic-second", None,
+        "synthetic-first",
+        "synthetic-second",
+        None,
     ]
     assert all(scope.principal_ai_user_id == "user-a" for scope in scopes)
 
@@ -932,7 +940,8 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
     def inject_scope(**kwargs: Any) -> AuthorizedWorkObjectScope:
         calls.append(kwargs)
         return AuthorizedWorkObjectScope(
-            principal_ai_user_id="user-b", principal_department_id=None,
+            principal_ai_user_id="user-b",
+            principal_department_id=None,
         )
 
     monkeypatch.setattr("app.api.v1.work_objects.compute_visibility_scope", inject_scope)
@@ -942,7 +951,9 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
         capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
     )
     principal = Principal(
-        ai_user_id="user-a", display_name="Synthetic", roles=("user",),
+        ai_user_id="user-a",
+        display_name="Synthetic",
+        roles=("user",),
         org_ctx=PrincipalOrgContext(),
     )
 
@@ -965,22 +976,32 @@ def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) 
         owner = "synthetic-scope001-owner"
         try:
             await store.upsert_oa_pending_workflows(
-                assignee_ai_user_id=owner, assignee_display_name="Synthetic owner",
-                snapshots=[OAPendingWorkSnapshot(
-                    source_ref="synthetic-scope001-work", title="Synthetic private memo",
-                    status="OA_PENDING", received_at="2026-09-09", created_at="2026-09-09",
-                    workflow_type_id="synthetic-workflow",
-                )], fetched_at=NOW,
+                assignee_ai_user_id=owner,
+                assignee_display_name="Synthetic owner",
+                snapshots=[
+                    OAPendingWorkSnapshot(
+                        source_ref="synthetic-scope001-work",
+                        title="Synthetic private memo",
+                        status="OA_PENDING",
+                        received_at="2026-09-09",
+                        created_at="2026-09-09",
+                        workflow_type_id="synthetic-workflow",
+                    )
+                ],
+                fetched_at=NOW,
             )
             records = await store.list_for_assignee(owner)
             assert len(records) == 1
             service = WorkObjectService(
-                store=store, gateway=RecordingGateway(_success_result()),
+                store=store,
+                gateway=RecordingGateway(_success_result()),
                 capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
             )
             admin = Principal(
-                ai_user_id="synthetic-scope001-admin", display_name="Synthetic admin",
-                roles=("admin",), org_ctx=PrincipalOrgContext(),
+                ai_user_id="synthetic-scope001-admin",
+                display_name="Synthetic admin",
+                roles=("admin",),
+                org_ctx=PrincipalOrgContext(),
             )
             record_id = records[0].work_object_id
             assert await service.get_for_principal(record_id, admin) is None
@@ -1012,12 +1033,15 @@ def test_directory_failure_does_not_expose_join_key_or_return_success(
 
     store = MemoryWorkObjectStore([_record()])
     service = WorkObjectService(
-        store=store, gateway=RecordingGateway(_success_result()),
+        store=store,
+        gateway=RecordingGateway(_success_result()),
         capability_registry=cast(CapabilityRegistryPort, StaticCapabilityRegistry()),
         organization_directory=cast(OrganizationDirectoryPort, FailedDirectory()),
     )
     principal = Principal(
-        ai_user_id="user-a", display_name="Synthetic", roles=("user",),
+        ai_user_id="user-a",
+        display_name="Synthetic",
+        roles=("user",),
         org_ctx=PrincipalOrgContext(directory_user_id="synthetic-private-join-key"),
     )
     with pytest.raises(HTTPException) as error:

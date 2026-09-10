@@ -444,9 +444,7 @@ def test_work_object_sync_counts_only_explicit_external_failures(
 ) -> None:
     store = FakeBindingStore()
 
-    asyncio.run(
-        _service_with_work_objects(store, FailingWorkObjects(failure)).run_due()
-    )
+    asyncio.run(_service_with_work_objects(store, FailingWorkObjects(failure)).run_due())
 
     assert store.terminal == expected_terminal
     assert store.counted_failures == expected_counted

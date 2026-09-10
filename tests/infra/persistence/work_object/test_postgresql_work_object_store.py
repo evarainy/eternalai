@@ -161,10 +161,7 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
             assert refreshed.handling_mark == "handled_elsewhere"
             assert refreshed.handling_marked_at == first_fetch + timedelta(minutes=1)
 
-            assert (
-                await store.get_for_assignee(refreshed.work_object_id, user_b)
-                is None
-            )
+            assert await store.get_for_assignee(refreshed.work_object_id, user_b) is None
             assert (
                 await store.set_handling_mark_for_assignee(
                     refreshed.work_object_id,
@@ -187,19 +184,15 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
                 statement for statement in list_statements if "STRPOS" in statement.upper()
             ]
             assert search_statements
+            assert all("assignee_ai_user_id" in statement for statement in search_statements)
             assert all(
-                "assignee_ai_user_id" in statement for statement in search_statements
-            )
-            assert all(
-                "tenant-b-only-todo" not in statement.lower()
-                for statement in search_statements
+                "tenant-b-only-todo" not in statement.lower() for statement in search_statements
             )
         finally:
             async with factory() as session:
                 await session.execute(
                     text(
-                        "DELETE FROM work_objects "
-                        "WHERE assignee_ai_user_id IN (:user_a, :user_b)"
+                        "DELETE FROM work_objects WHERE assignee_ai_user_id IN (:user_a, :user_b)"
                     ),
                     {"user_a": user_a, "user_b": user_b},
                 )
@@ -285,9 +278,7 @@ def test_postgresql_search_matches_approved_fields_and_literal_wildcards() -> No
                 return {item.source_ref for item in response.items}
 
             assert await refs(tenant_a_principal, "bUdGeT") == {"TITLE-001"}
-            assert await refs(tenant_a_principal, " oa-ref-002 ") == {
-                " OA-REF-002 "
-            }
+            assert await refs(tenant_a_principal, " oa-ref-002 ") == {" OA-REF-002 "}
             assert await refs(tenant_a_principal, " li ming ") == {
                 "TITLE-001",
                 " OA-REF-002 ",
@@ -298,15 +289,12 @@ def test_postgresql_search_matches_approved_fields_and_literal_wildcards() -> No
             assert await refs(tenant_a_principal, "oa-ref") == set()
             assert await refs(tenant_a_principal, "ming") == set()
             assert await refs(tenant_a_principal, "tenant-b-only") == set()
-            assert await refs(tenant_b_principal, "tenant-b-only") == {
-                "TENANT-B-ONLY"
-            }
+            assert await refs(tenant_b_principal, "tenant-b-only") == {"TENANT-B-ONLY"}
         finally:
             async with factory() as session:
                 await session.execute(
                     text(
-                        "DELETE FROM work_objects "
-                        "WHERE assignee_ai_user_id IN (:user_a, :user_b)"
+                        "DELETE FROM work_objects WHERE assignee_ai_user_id IN (:user_a, :user_b)"
                     ),
                     {"user_a": user_a, "user_b": user_b},
                 )
