@@ -1,20 +1,18 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-060`（C 档；`P2-COMPOSE-LLM-DEFAULT-001` 已合并交付，关闭 Compose LLM 默认欠债并登记空串配置启动失败事实，部分解封真实 vLLM 冒烟证据并重登记完整 OA 全链路欠债，记录附带空默认审计结论）。
-- 当前实现基线 task_id：`P2-AGENT-ORCH-SEAM-001`（A 档；已合并）。后端 `3233 passed, 0 failed, 0 skipped`、前端 `583 passed`、Golden `34/34`、`tests/architecture/` `120 passed`、mypy `121 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-10 实测，并经独立 Monitor 第 1 轮复核。
-- 当前实现后继指针：未唯一确定；本棒不新增排期。已决专项后继仍见本文件的组织目录集成与聊天回退指针。
+- 当前治理基线 task_id：`P2-GOV-SYNC-061`（C 档；同步 `P2-INTERNAL-WO-DISPATCH-001` 的合并交付、验证基线、已关闭欠债与仍未完成归属，落盘 2026-09-10 access violation 裁决，并更新评审桥模型选择规则）。
+- 当前实现基线 task_id：`P2-INTERNAL-WO-DISPATCH-001`（A 档；已合并）。后端 `3337 passed, 0 failed, 0 skipped`、前端 `585 passed`、Golden `34/34`、`tests/architecture/` `122 passed`、mypy `121 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-10 实测，经独立 Monitor 三轮复核，最终 `VERDICT=PASS`。
+- 当前实现后继指针：未唯一确定；组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期、前端交办接线与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
 
 ## 已登记验证基线
 
-以下每一条结果都带来源棒与日期：后端 `3233`、前端 `583`、Golden、`tests/architecture/`、mypy 与 Ruff 均来自 **2026-09-10 / `P2-AGENT-ORCH-SEAM-001`** 最终候选，并经独立 Monitor 第 1 轮复核；本治理棒未重跑。
+以下每一条结果都带来源棒与日期：后端 `3337`、前端 `585`、Golden、`tests/architecture/`、mypy 与 Ruff 均来自 **2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001`** 最终候选，并经独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本治理棒未重跑。Monitor 第 1 轮在 Python 3.14.5 下出现一条前端失败，第 2 轮在 Python 3.12 下通过；当前数字按 3.12 / CI 口径记录，解释器差异另列活欠债。
 
-本次 Compose 棒只改运行配置默认值，未改生产代码或测试；按 B 档仅跑定向配置测试（`73 passed`），未触发全量，因此以上测试基线数字不变；`73 passed` 不是新的全量基线。
-
-- pytest：`3233 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
-- `tests/architecture/`：`120 passed`（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
-- 前端全量 `pnpm --dir web test`：`583 passed`（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
-- mypy：`121 source files`；Ruff：通过（2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
+- pytest：`3337 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001` 最终候选，独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本棒未重跑）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001` 最终候选，独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本棒未重跑）。
+- `tests/architecture/`：`122 passed`（2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001` 最终候选，独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本棒未重跑）。
+- 前端全量 `pnpm --dir web test`：`585 passed`（2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001` 最终候选，独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本棒未重跑）。
+- mypy：`121 source files`；Ruff：通过（2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001` 最终候选，独立 Monitor 三轮复核，最终 `VERDICT=PASS`；本棒未重跑）。
 
 ## 必达链与阻塞
 
@@ -36,10 +34,10 @@
 
 ## 组织目录与前端机会层指针
 
-- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 已合并交付岗位派发授权与可见性 scope，下一后继为 `P2-INTERNAL-WO-DISPATCH-001`；其两条非阻断欠债与监区名单 fail-open 风险保留，见 `PHASE2_PLAN.md`。
+- 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 与 `P2-INTERNAL-WO-DISPATCH-001` 已分别合并交付岗位派发授权、可见性 scope 及首次派发写端点；生命周期、前端接线、显示名语义、多 membership 与监区名单 fail-open 风险仍保留，见 `PHASE2_PLAN.md`。
 - 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。本状态不把它与仍未实例化的 `WorkflowEngineAdapter` 欠债混同。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
-- 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；本棒候选待 PR 集成，页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。后端合同到位后的前端接线后继不唯一，留待 GOV-SYNC 分配；不改变必达链的 BLOCKED 状态。
+- 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，但前端选择、发布接线、终态、草稿持久化与显示名语义后继不唯一，留待 GOV-SYNC 绑定；不改变必达链的 BLOCKED 状态。
 - 已完成视觉：导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及可执行模糊层预算检查；字体跟随已批准画板，聊天问候语独立。历史返修过程留 Git。
 - 剩余缺口：AppShell 手写 CSS module 的 antd Layout/Menu 欠债、职务来源、头像取图三项未知仍保留；用户身份读取棒另登记多部门 `orginfo` 形态、`isMobx` 取值、目录快照交叉校验、`sex` / `workcode` / `requestParams` 未消费等活欠债。
 - 机会层 task_id、依赖、BLOCKED 条件和活欠债只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG 与欠债表；分配 ID 不等于排期，不重排必达链。
