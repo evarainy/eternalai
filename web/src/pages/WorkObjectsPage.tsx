@@ -848,7 +848,7 @@ export default function WorkObjectsPage() {
                 {detailQuery.data.source_title}
               </Descriptions.Item>
               <Descriptions.Item label="责任人">
-                {detailQuery.data.assignee_display_name}
+                {detailQuery.data.assignee_display_name ?? '暂未提供'}
               </Descriptions.Item>
               <Descriptions.Item label="时限">
                 {detailQuery.data.due_at

@@ -1,6 +1,148 @@
 {
   "components": {
     "schemas": {
+      "DepartmentDispatchTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "department_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Department Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "department",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "department_id"
+        ],
+        "title": "DepartmentDispatchTarget",
+        "type": "object"
+      },
+      "DispatchWorkObjectsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "kind": {
+            "enum": [
+              "通知",
+              "督办令",
+              "工作任务",
+              "提醒"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "receipt_requirement": {
+            "maxLength": 2000,
+            "title": "Receipt Requirement",
+            "type": "string"
+          },
+          "reminder_choices": {
+            "items": {
+              "enum": [
+                "提前 7 天",
+                "提前 3 天",
+                "提前 1 天",
+                "逾期当天"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Reminder Choices",
+            "type": "array"
+          },
+          "requirement": {
+            "maxLength": 10000,
+            "title": "Requirement",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "department": "#/components/schemas/DepartmentDispatchTarget",
+                  "user": "#/components/schemas/UserDispatchTarget"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/UserDispatchTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/DepartmentDispatchTarget"
+                }
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "requirement",
+          "receipt_requirement",
+          "due_at",
+          "reminder_choices",
+          "targets"
+        ],
+        "title": "DispatchWorkObjectsRequest",
+        "type": "object"
+      },
+      "DispatchWorkObjectsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_count": {
+            "title": "Created Count",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InternalWorkObjectView"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "created_count",
+          "replayed"
+        ],
+        "title": "DispatchWorkObjectsResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -18,13 +160,30 @@
         "additionalProperties": false,
         "properties": {
           "assignee_display_name": {
-            "title": "Assignee Display Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Display Name"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
           },
           "due_at": {
             "anyOf": [
               {
-                "format": "date-time",
                 "type": "string"
               },
               {
@@ -72,7 +231,6 @@
           "handling_marked_at": {
             "anyOf": [
               {
-                "format": "date-time",
                 "type": "string"
               },
               {
@@ -80,6 +238,99 @@
               }
             ],
             "title": "Handling Marked At"
+          },
+          "initiator_ai_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initiator Ai User Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "通知",
+                  "督办令",
+                  "工作任务",
+                  "提醒"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "owner_department_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Department Id"
+          },
+          "receipt_requirement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Requirement"
+          },
+          "reminder_choices": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "提前 7 天",
+                    "提前 3 天",
+                    "提前 1 天",
+                    "逾期当天"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reminder Choices"
+          },
+          "reminder_delivery": {
+            "anyOf": [
+              {
+                "const": "not_enabled",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reminder Delivery"
+          },
+          "requirement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requirement"
           },
           "source_created_at": {
             "title": "Source Created At",
@@ -122,6 +373,36 @@
             "title": "State Authority",
             "type": "string"
           },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "department_pending"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "target_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "user",
+                  "department"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kind"
+          },
           "task_record_id": {
             "anyOf": [
               {
@@ -133,6 +414,39 @@
             ],
             "title": "Task Record Id"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
           "work_object_id": {
             "title": "Work Object Id",
             "type": "string"
@@ -140,13 +454,13 @@
         },
         "required": [
           "work_object_id",
-          "assignee_display_name",
           "due_at",
           "handling_mark",
           "handling_marked_at",
           "task_record_id",
           "handling_action",
           "handling_capability_id",
+          "assignee_display_name",
           "state_authority",
           "source_system",
           "source_kind",
@@ -156,7 +470,20 @@
           "source_received_at",
           "source_created_at",
           "source_workflow_type_id",
-          "source_fetched_at"
+          "source_fetched_at",
+          "title",
+          "requirement",
+          "receipt_requirement",
+          "owner_department_id",
+          "initiator_ai_user_id",
+          "kind",
+          "target_kind",
+          "status",
+          "reminder_choices",
+          "reminder_delivery",
+          "version",
+          "created_at",
+          "updated_at"
         ],
         "title": "InternalWorkObjectView",
         "type": "object"
@@ -290,13 +617,13 @@
         },
         "required": [
           "work_object_id",
-          "assignee_display_name",
           "due_at",
           "handling_mark",
           "handling_marked_at",
           "task_record_id",
           "handling_action",
           "handling_capability_id",
+          "assignee_display_name",
           "state_authority",
           "source_system",
           "source_kind",
@@ -327,6 +654,35 @@
           "mark"
         ],
         "title": "SetHandlingMarkRequest",
+        "type": "object"
+      },
+      "UserDispatchTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "department_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Department Id",
+            "type": "string"
+          },
+          "directory_user_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Directory User Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "user",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "directory_user_id",
+          "department_id"
+        ],
+        "title": "UserDispatchTarget",
         "type": "object"
       },
       "ValidationError": {
@@ -367,6 +723,38 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkObjectError": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/WorkObjectErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "WorkObjectError",
+        "type": "object"
+      },
+      "WorkObjectErrorDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "WorkObjectErrorDetail",
         "type": "object"
       },
       "WorkObjectListResponse": {
@@ -459,9 +847,117 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "List Work Objects"
+      }
+    },
+    "/api/v1/work-objects/dispatch": {
+      "post": {
+        "operationId": "dispatch_work_objects_api_v1_work_objects_dispatch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchWorkObjectsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchWorkObjectsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchWorkObjectsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Dispatch Work Objects"
       }
     },
     "/api/v1/work-objects/sync": {
@@ -531,6 +1027,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "summary": "Get Work Object"

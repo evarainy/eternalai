@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIDock } from '../../../app/AIDock';
 import type {
+  InternalWorkObjectView,
   OAWorkObjectView,
   WorkObjectListResponse,
 } from '../../../generated/work-objects/work-objects.schemas';
@@ -96,6 +97,42 @@ function renderPage(
 }
 
 describe('WorkObjectSearchPage', () => {
+  it('renders an unavailable assignee name without crashing on an internal search result', async () => {
+    const item: InternalWorkObjectView = {
+      ...TITLE_ITEM,
+      work_object_id: 'internal-null-name',
+      state_authority: 'internal',
+      source_system: 'eternalai',
+      source_kind: 'manual_dispatch',
+      source_ref: null,
+      source_title: null,
+      source_status: null,
+      source_received_at: null,
+      source_created_at: null,
+      source_workflow_type_id: null,
+      source_fetched_at: null,
+      assignee_display_name: null,
+      handling_action: 'view_only',
+      title: 'Synthetic dispatch',
+      requirement: '',
+      receipt_requirement: '',
+      owner_department_id: 'synthetic-department',
+      initiator_ai_user_id: 'synthetic-initiator',
+      kind: '工作任务',
+      target_kind: 'user',
+      status: 'assigned',
+      reminder_choices: [],
+      reminder_delivery: 'not_enabled',
+      version: 1,
+      created_at: '2026-09-10T12:00:00.000000Z',
+      updated_at: '2026-09-10T12:00:00.000000Z',
+    };
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [item] }));
+    renderPage('/search?q=synthetic');
+    expect(await screen.findByText('责任人：暂未提供')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
