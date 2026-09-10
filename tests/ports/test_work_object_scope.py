@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+from pydantic import ValidationError
 
 from app.ports.organization_directory import OrganizationDepartment, OrganizationUserMembership
 from app.ports.work_object_scope import (
@@ -79,6 +80,7 @@ def test_dispatch_decision_carries_no_visibility_field() -> None:
 
 def test_visibility_scope_signature_excludes_dispatch_history() -> None:
     assert set(inspect.signature(compute_visibility_scope).parameters) == {
+        "principal_tenant_id",
         "principal_ai_user_id",
         "principal_department_id",
     }
@@ -86,14 +88,17 @@ def test_visibility_scope_signature_excludes_dispatch_history() -> None:
 
 def test_visibility_scope_does_not_inherit_department_subtree() -> None:
     assert set(AuthorizedWorkObjectScope.model_fields) == {
+        "principal_tenant_id",
         "principal_ai_user_id",
         "principal_department_id",
     }
     scope = compute_visibility_scope(
+        principal_tenant_id="tenant-dispatch-a",
         principal_ai_user_id="synthetic-principal",
         principal_department_id="synthetic-child",
     )
     assert scope.model_dump() == {
+        "principal_tenant_id": "tenant-dispatch-a",
         "principal_ai_user_id": "synthetic-principal",
         "principal_department_id": "synthetic-child",
     }
@@ -155,3 +160,37 @@ def test_trace_attributes_exclude_join_key_and_job_title(department_id: str) -> 
     }
     assert "synthetic-directory-user" not in repr(decision)
     assert "75" not in repr(decision.trace_attributes)
+
+
+def test_undeterminable_department_allows_only_same_department() -> None:
+    same = _decision(
+        department_id="synthetic-unresolved", target="synthetic-unresolved", resolved=False
+    )
+    other = _decision(
+        department_id="synthetic-unresolved", target="synthetic-other", resolved=False
+    )
+    assert same.decision == "allow" and same.reason_code is None
+    assert other.decision == "deny" and other.reason_code == "cross_department_dispatch_denied"
+    for decision in (same, other):
+        assert decision.dispatcher_department_type == "prison_area"
+        assert decision.matched_rule == "department_unresolved"
+
+
+def test_decision_reason_and_rule_are_closed() -> None:
+    valid = _decision().model_dump()
+    for field in ("reason_code", "matched_rule"):
+        with pytest.raises(ValidationError) as error:
+            DispatchAuthorizationDecision.model_validate({**valid, field: "synthetic-unknown"})
+        assert error.value.errors()[0]["loc"] == (field,)
+        assert error.value.errors()[0]["type"] == "literal_error"
+    for reason in (
+        None,
+        "directory_membership_missing",
+        "not_department_head",
+        "cross_department_dispatch_denied",
+    ):
+        for rule in ("department_unresolved", "prison_area_id", "resolved_non_prison_id"):
+            decision = DispatchAuthorizationDecision.model_validate(
+                {**valid, "reason_code": reason, "matched_rule": rule}
+            )
+            assert decision.reason_code == reason and decision.matched_rule == rule

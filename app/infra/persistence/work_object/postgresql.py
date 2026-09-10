@@ -4,25 +4,30 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ports.work_object import (
+    DISPATCH_RECORD_FIELDS,
     WORK_OBJECT_LIST_FETCH_LIMIT,
+    DispatchReceipt,
+    InternalWorkObjectRecord,
     OAPendingWorkSnapshot,
     WorkObjectHandlingMark,
     WorkObjectRecord,
     WorkObjectStorePort,
 )
+from app.ports.work_object_scope import AuthorizedWorkObjectScope
 from app.ports.work_object_search import (
     SEARCH_WHITESPACE_PATTERN,
     normalize_search_query,
 )
 
-_WORK_OBJECT_COLUMNS = (
+_OA_INSERT_COLUMNS = (
     "work_object_id, state_authority, source_system, source_kind, source_ref, "
     "assignee_ai_user_id, assignee_display_name, due_at, source_title, "
     "source_status, source_received_at, source_created_at, "
@@ -30,6 +35,7 @@ _WORK_OBJECT_COLUMNS = (
     "handling_marked_by_ai_user_id, handling_marked_at, task_record_id, "
     "created_at, updated_at"
 )
+_WORK_OBJECT_COLUMNS = _OA_INSERT_COLUMNS + ", " + ", ".join(DISPATCH_RECORD_FIELDS)
 _WORK_OBJECT_RECORD_ADAPTER: TypeAdapter[WorkObjectRecord] = TypeAdapter(WorkObjectRecord)
 
 
@@ -51,7 +57,7 @@ class PostgreSQLWorkObjectStore:
             for snapshot in snapshots:
                 await session.execute(
                     text(
-                        "INSERT INTO work_objects (" + _WORK_OBJECT_COLUMNS + ") VALUES ("
+                        "INSERT INTO work_objects (" + _OA_INSERT_COLUMNS + ") VALUES ("
                         ":work_object_id, 'external_snapshot', 'oa', "
                         "'pending_workflow', :source_ref, "
                         ":assignee_ai_user_id, :assignee_display_name, NULL, "
@@ -88,9 +94,9 @@ class PostgreSQLWorkObjectStore:
                 )
             await session.commit()
 
-    async def list_for_assignee(
+    async def list_for_scope(
         self,
-        assignee_ai_user_id: str,
+        scope: AuthorizedWorkObjectScope,
         *,
         search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
@@ -99,14 +105,16 @@ class PostgreSQLWorkObjectStore:
             raise ValueError("Work Object list limit is outside the allowed range")
         normalized_search_term = normalize_search_query(search_term)
         search_clause = ""
-        parameters: dict[str, object] = {
-            "assignee_ai_user_id": assignee_ai_user_id,
-            "limit": limit,
-        }
+        visibility, parameters = _visibility_predicate(scope)
+        parameters["limit"] = limit
         if normalized_search_term:
             # Fixed SQL expressions only; all user input stays in bound parameters.
             query = "LOWER(BTRIM(regexp_replace(:search_term, :ws_pattern, ' ', 'g')))"
-            title = "LOWER(BTRIM(regexp_replace(source_title, :ws_pattern, ' ', 'g')))"
+            title = (
+                "LOWER(BTRIM(regexp_replace(CASE WHEN state_authority = 'internal' "
+                "AND source_kind = 'manual_dispatch' THEN title ELSE source_title END, "
+                ":ws_pattern, ' ', 'g')))"
+            )
             reference = "LOWER(BTRIM(regexp_replace(source_ref, :ws_pattern, ' ', 'g')))"
             assignee = "LOWER(BTRIM(regexp_replace(assignee_display_name, :ws_pattern, ' ', 'g')))"
             search_clause = (
@@ -120,40 +128,37 @@ class PostgreSQLWorkObjectStore:
                 await session.execute(
                     text(
                         "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
-                        "WHERE assignee_ai_user_id = :assignee_ai_user_id "
-                        + search_clause
-                        + "LIMIT :limit"
+                        "WHERE " + visibility + " " + search_clause + "LIMIT :limit"
                     ),
                     parameters,
                 )
             ).fetchall()
         return [_record_from_row(row) for row in rows]
 
-    async def get_for_assignee(
+    async def get_for_scope(
         self,
         work_object_id: str,
-        assignee_ai_user_id: str,
+        scope: AuthorizedWorkObjectScope,
     ) -> WorkObjectRecord | None:
+        visibility, parameters = _visibility_predicate(scope)
+        parameters["work_object_id"] = work_object_id
         async with self._session_factory() as session:
             row = (
                 await session.execute(
                     text(
                         "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
                         "WHERE work_object_id = :work_object_id "
-                        "AND assignee_ai_user_id = :assignee_ai_user_id"
+                        "AND " + visibility
                     ),
-                    {
-                        "work_object_id": work_object_id,
-                        "assignee_ai_user_id": assignee_ai_user_id,
-                    },
+                    parameters,
                 )
             ).fetchone()
         return None if row is None else _record_from_row(row)
 
-    async def set_handling_mark_for_assignee(
+    async def set_handling_mark_for_scope(
         self,
         work_object_id: str,
-        assignee_ai_user_id: str,
+        scope: AuthorizedWorkObjectScope,
         mark: WorkObjectHandlingMark,
         *,
         marked_at: datetime,
@@ -173,7 +178,7 @@ class PostgreSQLWorkObjectStore:
                     ),
                     {
                         "handling_mark": mark,
-                        "assignee_ai_user_id": assignee_ai_user_id,
+                        "assignee_ai_user_id": scope.principal_ai_user_id,
                         "marked_at": marked_at,
                         "work_object_id": work_object_id,
                     },
@@ -183,10 +188,130 @@ class PostgreSQLWorkObjectStore:
                 await session.commit()
         return None if row is None else _record_from_row(row)
 
+    async def get_dispatch_receipt(
+        self,
+        *,
+        tenant_id: str,
+        initiator_ai_user_id: str,
+        idempotency_key: UUID,
+    ) -> DispatchReceipt | None:
+        async with self._session_factory() as session:
+            row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM work_object_dispatch_receipts "
+                            "WHERE tenant_id = :tenant_id "
+                            "AND initiator_ai_user_id = "
+                            ":initiator_ai_user_id AND operation = 'dispatch' "
+                            "AND idempotency_key = :idempotency_key"
+                        ),
+                        {
+                            "tenant_id": tenant_id,
+                            "initiator_ai_user_id": initiator_ai_user_id,
+                            "idempotency_key": idempotency_key,
+                        },
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return None if row is None else DispatchReceipt.model_validate(dict(row))
+
+    async def create_internal_dispatch(
+        self,
+        *,
+        records: list[InternalWorkObjectRecord],
+        receipt: DispatchReceipt,
+    ) -> tuple[DispatchReceipt, bool]:
+        async with self._session_factory() as session:
+            async with session.begin():
+                inserted = (
+                    await session.execute(
+                        text(
+                            "INSERT INTO work_object_dispatch_receipts "
+                            "(tenant_id, initiator_ai_user_id, operation, idempotency_key, "
+                            "request_fingerprint, result, "
+                            "authorization_summary, created_at) VALUES "
+                            "(:tenant_id, :initiator_ai_user_id, :operation, :idempotency_key, "
+                            ":request_fingerprint, :result, :authorization_summary, :created_at) "
+                            "ON CONFLICT (tenant_id, initiator_ai_user_id, "
+                            "operation, idempotency_key) "
+                            "DO NOTHING RETURNING idempotency_key"
+                        ).bindparams(
+                            bindparam("result", type_=JSONB),
+                            bindparam("authorization_summary", type_=JSONB),
+                        ),
+                        receipt.model_dump(),
+                    )
+                ).scalar_one_or_none()
+                if inserted is None:
+                    winner = (
+                        (
+                            await session.execute(
+                                text(
+                                    "SELECT * FROM "
+                                    "work_object_dispatch_receipts WHERE tenant_id = :tenant_id "
+                                    "AND initiator_ai_user_id = "
+                                    ":initiator_ai_user_id AND operation = 'dispatch' "
+                                    "AND idempotency_key = :idempotency_key"
+                                ),
+                                receipt.model_dump(),
+                            )
+                        )
+                        .mappings()
+                        .one()
+                    )
+                    return DispatchReceipt.model_validate(dict(winner)), False
+                for record in records:
+                    values = record.model_dump()
+                    columns = _WORK_OBJECT_COLUMNS.split(", ")
+                    await session.execute(
+                        text(
+                            "INSERT INTO work_objects ("
+                            + _WORK_OBJECT_COLUMNS
+                            + ") VALUES ("
+                            + ", ".join(":" + name for name in columns)
+                            + ")"
+                        ).bindparams(
+                            bindparam(
+                                "reminder_choices",
+                                type_=JSONB,
+                            )
+                        ),
+                        values,
+                    )
+        return receipt, True
+
+
+def _visibility_predicate(scope: AuthorizedWorkObjectScope) -> tuple[str, dict[str, object]]:
+    return (
+        """(
+      (state_authority = 'external_snapshot' AND assignee_ai_user_id = :principal_ai_user_id)
+      OR (state_authority = 'internal' AND source_kind <> 'manual_dispatch'
+          AND version IS NULL AND assignee_ai_user_id = :principal_ai_user_id)
+      OR (state_authority = 'internal' AND source_kind = 'manual_dispatch'
+          AND tenant_id = :principal_tenant_id AND version IS NOT NULL
+          AND owner_department_id IS NOT NULL AND initiator_ai_user_id IS NOT NULL
+          AND ((CAST(:principal_department_id AS TEXT) IS NOT NULL
+                AND owner_department_id = :principal_department_id)
+               OR initiator_ai_user_id = :principal_ai_user_id))
+    )""",
+        {
+            "principal_tenant_id": scope.principal_tenant_id,
+            "principal_ai_user_id": scope.principal_ai_user_id,
+            "principal_department_id": scope.principal_department_id,
+        },
+    )
+
 
 def _record_from_row(row: Any) -> WorkObjectRecord:
+    values = dict(row._mapping)
+    if values["state_authority"] == "external_snapshot":
+        for name in DISPATCH_RECORD_FIELDS:
+            values.pop(name)
     return _WORK_OBJECT_RECORD_ADAPTER.validate_python(
-        dict(row._mapping),
+        values,
         strict=True,
     )
 

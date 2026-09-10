@@ -58,6 +58,19 @@ const OTHER_USER_WORK_OBJECT: OAWorkObjectView = {
 };
 
 const INTERNAL_WORK_OBJECT: InternalWorkObjectView = {
+  title: null,
+  requirement: null,
+  receipt_requirement: null,
+  owner_department_id: null,
+  initiator_ai_user_id: null,
+  kind: null,
+  target_kind: null,
+  status: null,
+  reminder_choices: null,
+  reminder_delivery: null,
+  version: null,
+  created_at: null,
+  updated_at: null,
   assignee_display_name: '内部任务责任人',
   due_at: null,
   handling_mark: null,
@@ -66,7 +79,7 @@ const INTERNAL_WORK_OBJECT: InternalWorkObjectView = {
   handling_capability_id: null,
   source_created_at: null,
   source_fetched_at: null,
-  source_kind: 'manual_dispatch',
+  source_kind: 'internal_task',
   source_received_at: null,
   source_ref: null,
   source_status: null,

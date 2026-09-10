@@ -39,9 +39,9 @@ from app.ports.job_queue import JobStatus
 from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     OAPendingWorkSnapshot,
-    WorkObjectHandlingMark,
-    WorkObjectRecord,
 )
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
+from tests.api.test_work_objects import MemoryWorkObjectStore
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 NOW = datetime(2026, 8, 21, 2, 0, tzinfo=UTC)
@@ -284,7 +284,7 @@ class CanaryGateway:
         )
 
 
-class CanaryWorkObjectStore:
+class CanaryWorkObjectStore(MemoryWorkObjectStore):
     async def upsert_oa_pending_workflows(
         self,
         *,
@@ -293,38 +293,7 @@ class CanaryWorkObjectStore:
         snapshots: list[OAPendingWorkSnapshot],
         fetched_at: datetime,
     ) -> None:
-        del assignee_ai_user_id, assignee_display_name, fetched_at
         assert snapshots == []
-
-    async def list_for_assignee(
-        self,
-        assignee_ai_user_id: str,
-        *,
-        search_term: str | None = None,
-        limit: int = 201,
-    ) -> list[WorkObjectRecord]:
-        del limit, search_term
-        assert assignee_ai_user_id == PRINCIPAL.ai_user_id
-        return []
-
-    async def get_for_assignee(
-        self,
-        work_object_id: str,
-        assignee_ai_user_id: str,
-    ) -> WorkObjectRecord | None:
-        del work_object_id, assignee_ai_user_id
-        return None
-
-    async def set_handling_mark_for_assignee(
-        self,
-        work_object_id: str,
-        assignee_ai_user_id: str,
-        mark: WorkObjectHandlingMark,
-        *,
-        marked_at: datetime,
-    ) -> WorkObjectRecord | None:
-        del work_object_id, assignee_ai_user_id, mark, marked_at
-        return None
 
 
 def _service(
@@ -629,3 +598,55 @@ def test_scheduler_enqueues_job_queue_and_logs_only_fixed_failure(
 
     assert "credential_polling_tick_failed" in caplog.text
     assert "PASSWORD-CANARY" not in caplog.text
+
+
+def test_committed_sync_is_not_classified_as_directory_failure(dispatch_db, monkeypatch) -> None:
+    from tests.api.test_work_object_dispatch import run
+    from tests.api.test_work_objects import RecordingGateway, _success_result
+
+    db = dispatch_db
+    db.service._gateway = RecordingGateway(_success_result())
+    reads = []
+
+    async def unavailable(_key):
+        reads.append(_key)
+        raise RuntimeError("synthetic directory unavailable")
+
+    monkeypatch.setattr(db.directory, "list_user_memberships", unavailable)
+    principal = PRINCIPAL.model_copy(
+        update={
+            "org_ctx": PrincipalOrgContext(
+                tenant_id="tenant-dispatch-a",
+                directory_user_id="synthetic-polling-user",
+            )
+        }
+    )
+
+    class Acquirer:
+        async def acquire(self, _candidate):
+            return principal
+
+    binding_store = FakeBindingStore()
+    polling = CredentialPollingService(
+        binding_store=binding_store,
+        acquirer=Acquirer(),
+        work_objects=db.service,
+        policy=CredentialPollingPolicy(
+            interval_seconds=600,
+            maximum_backoff_seconds=3600,
+            work_start_hour=8,
+            work_end_hour=18,
+            timezone_name="Asia/Shanghai",
+            global_concurrency=1,
+            scheduler_tick_seconds=60,
+        ),
+        clock=lambda: NOW,
+    )
+    assert run(polling.run_due()) == 1
+    assert binding_store.successes == 1
+    assert binding_store.counted_failures == 0 and binding_store.non_counted_failures == 0
+    assert binding_store.terminal == [] and reads == []
+    rows = db.rows("work_objects")
+    assert len(rows) == 1
+    assert rows[0]["assignee_ai_user_id"] == PRINCIPAL.ai_user_id
+    assert rows[0]["source_ref"] == "oa-todo-1"

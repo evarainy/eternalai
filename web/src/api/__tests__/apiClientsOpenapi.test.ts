@@ -10,7 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ApiError, customInstance } from '../mutator';
 import { UserActionOutcome as GeneratedOutcomes } from '../../generated/runtime/runtime.schemas';
 import { TaskStatus as GeneratedTaskStatuses } from '../../generated/admin/admin.schemas';
 import { USER_ACTION_OUTCOMES } from '../../contracts/userActionOutcome';
@@ -87,6 +88,11 @@ const PROJECTS = [
         path: '/api/v1/work-objects',
         method: 'get',
         operationId: 'list_work_objects_api_v1_work_objects_get',
+      },
+      {
+        path: '/api/v1/work-objects/dispatch',
+        method: 'post',
+        operationId: 'dispatch_work_objects_api_v1_work_objects_dispatch_post',
       },
       {
         path: '/api/v1/work-objects/sync',
@@ -267,6 +273,61 @@ for target in targets:
 const webRoot = process.cwd();
 const repositoryRoot = resolve(webRoot, '..');
 const mutatorPath = './src/api/mutator.ts';
+
+it('classifies the actual Work Object directory failure by its backend code', async () => {
+  const script = EXPORT_SCRIPT.split('output_dir = Path(sys.argv[1])')[0] + String.raw`
+from fastapi.testclient import TestClient
+from app.api.v1.work_objects import WorkObjectService
+from app.ports.auth import Principal, PrincipalOrgContext
+from tests.api.test_work_objects import MemoryWorkObjectStore, RecordingGateway
+from tests.auth_fakes import StaticSessionTokens, auth_cookies, make_session_binder
+from tests.runtime.registry_fakes import StaticCapabilityRegistry
+
+class FailedDirectory:
+    async def list_user_memberships(self, user_id):
+        raise RuntimeError("synthetic directory unavailable")
+
+tokens = StaticSessionTokens(roles=("user",))
+tokens.principal = Principal(
+    ai_user_id="ai-synthetic", display_name="Synthetic", roles=("user",),
+    org_ctx=PrincipalOrgContext(tenant_id="tenant-dispatch-a", directory_user_id="synthetic-key"),
+)
+service = WorkObjectService(
+    store=MemoryWorkObjectStore(), gateway=RecordingGateway(),
+    capability_registry=StaticCapabilityRegistry(), organization_directory=FailedDirectory(),
+)
+with TestClient(create_app(
+    work_object_service=service, session_tokens=tokens, session_binder=make_session_binder(),
+    session_cookie_ttl_seconds=3600, csrf_allowed_origins=("https://testserver",),
+), base_url="https://testserver") as client:
+    client.cookies.update(auth_cookies())
+    response = client.get("/api/v1/work-objects")
+    print(json.dumps({"status": response.status_code, "body": response.json()}))
+`;
+  const result = spawnSync(process.platform === 'win32' ? 'uv.exe' : 'uv',
+    ['run', 'python', '-c', script],
+    { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const response: { status: number; body: unknown } = JSON.parse(result.stdout);
+  expect(response.status).toBe(503);
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response.body), {
+    status: response.status,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await expect(customInstance({ url: '/api/v1/work-objects', method: 'GET' })).rejects.toEqual(
+      expect.objectContaining<ApiError>({
+        name: 'ApiError', status: 503, code: 'organization_directory_unavailable',
+        message: 'Organization directory is unavailable.',
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 function run(command: string, args: string[], cwd: string): void {
   const result = spawnSync(command, args, {

@@ -5,6 +5,8 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  DispatchWorkObjectsRequest,
+  DispatchWorkObjectsResponse,
   GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200,
   ListWorkObjectsApiV1WorkObjectsGetParams,
   SetHandlingMarkRequest,
@@ -25,6 +27,20 @@ export const listWorkObjectsApiV1WorkObjectsGet = (
       return customInstance<WorkObjectListResponse>(
       {url: `/api/v1/work-objects`, method: 'GET',
         params
+    },
+      );
+    }
+
+/**
+ * @summary Dispatch Work Objects
+ */
+export const dispatchWorkObjectsApiV1WorkObjectsDispatchPost = (
+    dispatchWorkObjectsRequest: DispatchWorkObjectsRequest,
+ ) => {
+      return customInstance<DispatchWorkObjectsResponse | DispatchWorkObjectsResponse>(
+      {url: `/api/v1/work-objects/dispatch`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: dispatchWorkObjectsRequest
     },
       );
     }
@@ -69,6 +85,7 @@ export const setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPa
     }
 
 export type ListWorkObjectsApiV1WorkObjectsGetResult = NonNullable<Awaited<ReturnType<typeof listWorkObjectsApiV1WorkObjectsGet>>>
+export type DispatchWorkObjectsApiV1WorkObjectsDispatchPostResult = NonNullable<Awaited<ReturnType<typeof dispatchWorkObjectsApiV1WorkObjectsDispatchPost>>>
 export type SyncWorkObjectsApiV1WorkObjectsSyncPostResult = NonNullable<Awaited<ReturnType<typeof syncWorkObjectsApiV1WorkObjectsSyncPost>>>
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGetResult = NonNullable<Awaited<ReturnType<typeof getWorkObjectApiV1WorkObjectsWorkObjectIdGet>>>
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatchResult = NonNullable<Awaited<ReturnType<typeof setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch>>>

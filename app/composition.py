@@ -541,6 +541,7 @@ def build_production_components(
         gateway=gateway,
         capability_registry=capability_registry,
         organization_directory=PostgreSQLOrganizationDirectory(session_factory),
+        trace_port=resolved_trace_port,
     )
     credential_binding_service = CredentialBindingService(
         store=credential_store,

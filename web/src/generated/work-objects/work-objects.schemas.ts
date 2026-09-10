@@ -4,9 +4,79 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+export interface DepartmentDispatchTarget {
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  department_id: string;
+  kind: 'department';
+}
+
+export type DispatchWorkObjectsRequestDueAt = string | null;
+
+export type DispatchWorkObjectsRequestKind = typeof DispatchWorkObjectsRequestKind[keyof typeof DispatchWorkObjectsRequestKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchWorkObjectsRequestKind = {
+  通知: '通知',
+  督办令: '督办令',
+  工作任务: '工作任务',
+  提醒: '提醒',
+} as const;
+
+export type DispatchWorkObjectsRequestReminderChoicesItem = typeof DispatchWorkObjectsRequestReminderChoicesItem[keyof typeof DispatchWorkObjectsRequestReminderChoicesItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchWorkObjectsRequestReminderChoicesItem = {
+  提前_7_天: '提前 7 天',
+  提前_3_天: '提前 3 天',
+  提前_1_天: '提前 1 天',
+  逾期当天: '逾期当天',
+} as const;
+
+export type DispatchWorkObjectsRequestTargetsItem = UserDispatchTarget | DepartmentDispatchTarget;
+
+export interface DispatchWorkObjectsRequest {
+  due_at: DispatchWorkObjectsRequestDueAt;
+  kind: DispatchWorkObjectsRequestKind;
+  /** @maxLength 2000 */
+  receipt_requirement: string;
+  /** @maxItems 4 */
+  reminder_choices: DispatchWorkObjectsRequestReminderChoicesItem[];
+  /** @maxLength 10000 */
+  requirement: string;
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  targets: DispatchWorkObjectsRequestTargetsItem[];
+  /**
+   * @minLength 1
+   * @maxLength 200
+   */
+  title: string;
+}
+
+export interface DispatchWorkObjectsResponse {
+  created_count: number;
+  /**
+   * @minItems 1
+   * @maxItems 100
+   */
+  items: InternalWorkObjectView[];
+  replayed: boolean;
+}
+
 export interface HTTPValidationError {
   detail?: ValidationError[];
 }
+
+export type InternalWorkObjectViewAssigneeDisplayName = string | null;
+
+export type InternalWorkObjectViewCreatedAt = string | null;
 
 export type InternalWorkObjectViewDueAt = string | null;
 
@@ -27,15 +97,58 @@ export type InternalWorkObjectViewHandlingMark = 'pending_sync_confirmation' | '
 
 export type InternalWorkObjectViewHandlingMarkedAt = string | null;
 
+export type InternalWorkObjectViewInitiatorAiUserId = string | null;
+
+export type InternalWorkObjectViewKind = '通知' | '督办令' | '工作任务' | '提醒' | null;
+
+export type InternalWorkObjectViewOwnerDepartmentId = string | null;
+
+export type InternalWorkObjectViewReceiptRequirement = string | null;
+
+export type InternalWorkObjectViewReminderChoicesAnyOfItem = typeof InternalWorkObjectViewReminderChoicesAnyOfItem[keyof typeof InternalWorkObjectViewReminderChoicesAnyOfItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const InternalWorkObjectViewReminderChoicesAnyOfItem = {
+  提前_7_天: '提前 7 天',
+  提前_3_天: '提前 3 天',
+  提前_1_天: '提前 1 天',
+  逾期当天: '逾期当天',
+} as const;
+
+export type InternalWorkObjectViewReminderChoices = InternalWorkObjectViewReminderChoicesAnyOfItem[] | null;
+
+export type InternalWorkObjectViewReminderDelivery = 'not_enabled' | null;
+
+export type InternalWorkObjectViewRequirement = string | null;
+
+export type InternalWorkObjectViewStatus = 'assigned' | 'department_pending' | null;
+
+export type InternalWorkObjectViewTargetKind = 'user' | 'department' | null;
+
 export type InternalWorkObjectViewTaskRecordId = string | null;
 
+export type InternalWorkObjectViewTitle = string | null;
+
+export type InternalWorkObjectViewUpdatedAt = string | null;
+
+export type InternalWorkObjectViewVersion = number | null;
+
 export interface InternalWorkObjectView {
-  assignee_display_name: string;
+  assignee_display_name: InternalWorkObjectViewAssigneeDisplayName;
+  created_at: InternalWorkObjectViewCreatedAt;
   due_at: InternalWorkObjectViewDueAt;
   handling_action: InternalWorkObjectViewHandlingAction;
   handling_capability_id: InternalWorkObjectViewHandlingCapabilityId;
   handling_mark: InternalWorkObjectViewHandlingMark;
   handling_marked_at: InternalWorkObjectViewHandlingMarkedAt;
+  initiator_ai_user_id: InternalWorkObjectViewInitiatorAiUserId;
+  kind: InternalWorkObjectViewKind;
+  owner_department_id: InternalWorkObjectViewOwnerDepartmentId;
+  receipt_requirement: InternalWorkObjectViewReceiptRequirement;
+  reminder_choices: InternalWorkObjectViewReminderChoices;
+  reminder_delivery: InternalWorkObjectViewReminderDelivery;
+  requirement: InternalWorkObjectViewRequirement;
   source_created_at: null;
   source_fetched_at: null;
   source_kind: string;
@@ -46,7 +159,12 @@ export interface InternalWorkObjectView {
   source_title: null;
   source_workflow_type_id: null;
   state_authority: 'internal';
+  status: InternalWorkObjectViewStatus;
+  target_kind: InternalWorkObjectViewTargetKind;
   task_record_id: InternalWorkObjectViewTaskRecordId;
+  title: InternalWorkObjectViewTitle;
+  updated_at: InternalWorkObjectViewUpdatedAt;
+  version: InternalWorkObjectViewVersion;
   work_object_id: string;
 }
 
@@ -105,6 +223,20 @@ export interface SetHandlingMarkRequest {
   mark: SetHandlingMarkRequestMark;
 }
 
+export interface UserDispatchTarget {
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  department_id: string;
+  /**
+   * @minLength 1
+   * @maxLength 128
+   */
+  directory_user_id: string;
+  kind: 'user';
+}
+
 export type ValidationErrorCtx = { [key: string]: unknown };
 
 export type ValidationErrorLocItem = string | number;
@@ -115,6 +247,15 @@ export interface ValidationError {
   loc: ValidationErrorLocItem[];
   msg: string;
   type: string;
+}
+
+export interface WorkObjectError {
+  detail: WorkObjectErrorDetail;
+}
+
+export interface WorkObjectErrorDetail {
+  code: string;
+  message: string;
 }
 
 export type WorkObjectListResponseItemsItem = OAWorkObjectView | InternalWorkObjectView;

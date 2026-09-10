@@ -37,7 +37,10 @@ function matchedFields(
   ) {
     fields.push('来源编号');
   }
-  if (normalizeSearchValue(item.assignee_display_name) === normalizedTerm) {
+  if (
+    item.assignee_display_name !== null &&
+    normalizeSearchValue(item.assignee_display_name) === normalizedTerm
+  ) {
     fields.push('责任人');
   }
   return fields;
@@ -237,7 +240,7 @@ export default function WorkObjectSearchPage() {
                     </div>
                   </div>
                   <div className={styles.resultMeta}>
-                    <span>责任人：{item.assignee_display_name}</span>
+                    <span>责任人：{item.assignee_display_name ?? '暂未提供'}</span>
                     <span>
                       来源：{item.source_system.toUpperCase()}
                       {item.source_ref === null ? '' : ` · ${item.source_ref}`}
