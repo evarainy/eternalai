@@ -9,7 +9,7 @@
 - 每根 write lane 只有一个 Goal 和 Scope；新 scope 开新 lane。A/B 档独占 worktree/branch；C 档可在主工作树编辑，但集成仍走任务分支 PR。开棒声明 **档位、串行或并行、是否承担 A 类同步**。
 - 在授权范围内完成实现、相关验证、修复和交付准备；不因等合并授权而提前停止这些工作。常规可逆实现选择自行处理，重大未决选择、扩域或红线才提问。执行中收到补充要求或问题时，保留原目标与已完成工作。
 - 按问题定位入口与相关合同，不默认通读仓库或历史长文。Skills 按实际任务选择；其新增停点或扩大范围要求不能覆盖本文件。检查通过后，仅因新改动、失败或具体未决风险扩大或重跑验证。
-- 子智能体用于可独立完成的有界任务，明确责任与只读/写入范围；小改动不固定派发。独立 Monitor 与 Opus 的职责不得由普通子智能体结论替代。
+- 子智能体用于可独立完成的有界任务，明确责任与只读/写入范围；小改动不固定派发。独立 Monitor 与静态评审桥的职责不得由普通子智能体结论替代。
 
 ## 项目不变量与红线
 
@@ -29,7 +29,7 @@
 
 | 档 | 实际触碰面 | 提示词 / worktree | 自审 effort | 独立审查 |
 |---|---|---|---|---|
-| A | 安全边界（认证、CSRF、脱敏、会话/租户/用户隔离）、`app/ports/` 契约、DB schema、凭证语义、Golden fixture 或 `FROZEN_GT_IDS` | 启动 + 监理；独占 | `high` | Monitor PASS → Opus PASS，必须串行 |
+| A | 安全边界（认证、CSRF、脱敏、会话/租户/用户隔离）、`app/ports/` 契约、DB schema、凭证语义、Golden fixture 或 `FROZEN_GT_IDS` | 启动 + 监理；独占 | `high` | Monitor PASS → 静态评审桥 PASS，必须串行 |
 | B | 其余生产代码与运行配置 | 启动一份；独占 | `medium` | 无固定独立审查 |
 | C | 仅说明文档、开发助手规则/skills、仅测试、仅 `_scratch/`；实际改变 A/B 合同时按上档 | 口头交代即可；可用主工作树 | 无自审门禁 | 无例行抽查；有具体疑点再有界取证 |
 
@@ -39,13 +39,13 @@
 
 ### A 档独立证据
 
-顺序为实现棒 `high` 自审 → 独立 Monitor PASS → Opus 桥 → 合并；Monitor FAIL 时不得先跑 Opus。分工单位是**具体事实能否静态判定**，不是主题名。
+顺序为实现棒 `high` 自审 → 独立 Monitor PASS → 静态评审桥 PASS → 合并；Monitor FAIL 时不得先跑静态评审桥。分工单位是**具体事实能否静态判定**，不是主题名。
 
 - Monitor 执行五类取证：变异与故障注入、真实授权路径的攻击矩阵、fixture 合法取值充分性、真实依赖保真度、实测数字复核。禁止改写未经批准的 Golden fixture / `FROZEN_GT_IDS`；改用临时用例或书面推演，并标明未经执行验证。
-- Opus 无 shell，只判静态事实：合同完整性、类型层可达性、scope 与 diff、显式授权判断完整性、文件落点和直接 import、声明缺失、跨文件一致性。上述静态项不重复列入 Monitor 必做项；动态越权、门禁接线、动态 import / registry 解析不交给 Opus。
+- 静态评审桥无 shell，只判静态事实：合同完整性、类型层可达性、scope 与 diff、显式授权判断完整性、文件落点和直接 import、声明缺失、跨文件一致性。上述静态项不重复列入 Monitor 必做项；动态越权、门禁接线、动态 import / registry 解析不交给静态评审桥。
 - 生成监理任务时才读 `docs/phase2/MONITOR_PROMPT_TEMPLATE.md`，其中维护具体操作、负向形态与输出格式。必需证据取不到即停手报告，不以推演或工具失败冒充 PASS。
 - 同一 task_id 最多发出三份监理提示词；中止或未产出结论也计轮次，覆盖/改名/修订不减计。第三轮仍非 PASS 即停手交雨爷裁决，不开第四轮。
-- 合并前核对 Monitor PASS 文件与 Opus 合规摘要均绑定最终候选 head；head 改动后旧结论失效，须重评。Opus 模型与 effort 采用现役锁定配置，不因开发助手换模型而更改。
+- 合并前核对 Monitor PASS 文件与静态评审桥合规摘要均绑定最终候选 head；head 改动后旧结论失效，须重评。评审桥现役模型与 effort 配置由主窗口维护，PR 摘要中以 `observed_model` 如实记录。
 
 ## Git 与永久任务记录
 
@@ -53,7 +53,7 @@
 - A 档棒将纯格式化改动与功能改动分开提交；本条不增加 CI 检查。
 - 集成只走任务分支普通 push → PR → required checks 最终全绿 → 获准的 PR 合并；不得本地合完直推主分支。验证、所需 Review、候选 freshness、分支保护与 required checks 均须满足；绿灯本身不是合并授权。每次合并后检查对应 merge SHA 的远端 GitHub Actions 结果。
 - 不建 per-task Task Record。PR body 合并前必须完整包含 `## Scope`、`## 验证结果`、`## 本棒新增欠债`。验证段逐条记录实际命令、最小充分原始结果、未执行项理由、候选 commit 与 CI run；欠债每条带 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
-- A 档验证段还须含 `### Opus 评审桥` JSON 摘要，字段闭集：`requested_model`、`observed_model`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。合规要求 `review_model_verified=true`、observed_model 等于现役锁定模型、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
+- A 档验证段还须含 `### Opus 评审桥` 或 `### grok 评审桥` JSON 摘要，字段闭集：`requested_model`、`observed_model`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。合规要求 `review_model_verified=true`、PR 摘要如实记录实际 `observed_model`、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
 - Owner 已登记待办：为主分支保护开启 **Do not allow bypassing the above settings**；无专项授权不得代改。
 
 ## 状态同步
