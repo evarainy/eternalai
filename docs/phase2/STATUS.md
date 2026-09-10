@@ -1,12 +1,14 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-059`（C 档；同步 `P2-AGENT-ORCH-SEAM-001` 完成交付与本棒新增欠债，校正 collect-only / 跨身份口径，落盘 grok-cli 评审桥试验裁决）。
+- 当前治理基线 task_id：`P2-GOV-SYNC-060`（C 档；`P2-COMPOSE-LLM-DEFAULT-001` 已合并交付，关闭 Compose LLM 默认欠债并登记空串配置启动失败事实，部分解封真实 vLLM 冒烟证据并重登记完整 OA 全链路欠债，记录附带空默认审计结论）。
 - 当前实现基线 task_id：`P2-AGENT-ORCH-SEAM-001`（A 档；已合并）。后端 `3233 passed, 0 failed, 0 skipped`、前端 `583 passed`、Golden `34/34`、`tests/architecture/` `120 passed`、mypy `121 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-10 实测，并经独立 Monitor 第 1 轮复核。
 - 当前实现后继指针：未唯一确定；本棒不新增排期。已决专项后继仍见本文件的组织目录集成与聊天回退指针。
 
 ## 已登记验证基线
 
 以下每一条结果都带来源棒与日期：后端 `3233`、前端 `583`、Golden、`tests/architecture/`、mypy 与 Ruff 均来自 **2026-09-10 / `P2-AGENT-ORCH-SEAM-001`** 最终候选，并经独立 Monitor 第 1 轮复核；本治理棒未重跑。
+
+本次 Compose 棒只改运行配置默认值，未改生产代码或测试；按 B 档仅跑定向配置测试（`73 passed`），未触发全量，因此以上测试基线数字不变；`73 passed` 不是新的全量基线。
 
 - pytest：`3233 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-10 / `P2-AGENT-ORCH-SEAM-001` 最终候选，独立 Monitor 第 1 轮复核；本棒未重跑）。
@@ -23,7 +25,7 @@
 ## 当前实现摘要
 
 - 页面合同：既有交办结构与控件闭集、附件禁用及可执行空态、本机草稿失败反馈、软件中心三块顺序、状态/版本整块留位、新建表单九字段与单句审核告知、可访问名称及多状态命名守卫已收口；软件弹窗恢复共享字段边界与单焦点宿主。真实发布、附件上传、服务端草稿、软件登记审核和用户侧列表接口仍未接入。可信选择合同、截止时间时区与序列化两项欠债见 `PHASE2_PLAN.md`。
-- 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：真实 vLLM TCP 端口可达但 HTTP 响应未建立，在线模型列表与真实语义冒烟仍待外部复核；不得通过修改仓库 URL 或配置规避，证据与欠债见 `PHASE2_PLAN.md`。
+- 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
 - 意图输出必须显式给出 `match`；`none` 为合法无匹配，进入 `no_capability_found` 且 reason 为 `no_matching_capability`，`capability` 仍要求有效能力 ID。漏字段与矛盾组合保持 `schema_invalid`；无匹配文案保留「暂未接入」「能力」，只说明当前可用能力。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定。聊天回退后继为 `P2-RUNTIME-DIRECT-ANSWER-001`，本棒不新增终态。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。
 - 部门：后端代持用户自身 OA Session 读取 `orginfo`，以标准库 `html.parser` 有界解析（输入 8192 / 锚点 16 / 标签 64，部门锚点必须恰好一条）；原始 HTML 不进响应。OA 失败不改变 `authenticated`，只体现在闭集 `org_status`（`ok` / `unbound` / `expired` / `unavailable` / `unparsable`）。
