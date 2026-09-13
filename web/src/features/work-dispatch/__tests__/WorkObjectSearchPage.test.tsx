@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIDock } from '../../../app/AIDock';
@@ -97,7 +97,7 @@ function renderPage(
 }
 
 describe('WorkObjectSearchPage', () => {
-  it('renders an unavailable assignee name without crashing on an internal search result', async () => {
+  it('renders distinct internal titles and their title matches alongside external results with an unavailable assignee', async () => {
     const item: InternalWorkObjectView = {
       ...TITLE_ITEM,
       work_object_id: 'internal-null-name',
@@ -127,9 +127,40 @@ describe('WorkObjectSearchPage', () => {
       created_at: '2026-09-10T12:00:00.000000Z',
       updated_at: '2026-09-10T12:00:00.000000Z',
     };
-    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [item] }));
-    renderPage('/search?q=synthetic');
-    expect(await screen.findByText('责任人：暂未提供')).toBeInTheDocument();
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [
+      item,
+      { ...item, work_object_id: 'internal-second', title: 'Second Synthetic task' },
+      { ...TITLE_ITEM, source_title: 'External Synthetic review' },
+    ] }));
+    renderPage('/search?q=%20sYnThEtIc%20');
+    expect(await screen.findByText('找到 3 条')).toBeInTheDocument();
+    const results = screen.getAllByRole('listitem');
+    for (const title of [
+      'Synthetic dispatch', 'Second Synthetic task', 'External Synthetic review',
+    ]) {
+      expect(screen.getByText(title)).toBeInTheDocument();
+    }
+    expect(results).toHaveLength(3);
+    for (const result of results) {
+      expect(within(result).getByText('命中标题')).toBeInTheDocument();
+    }
+    expect(screen.getAllByText('责任人：暂未提供')).toHaveLength(2);
+    expect(screen.queryByText('内部工作事项')).not.toBeInTheDocument();
+    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'synthetic' });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it.each([null, undefined])('keeps the fallback and omits title matches for an unavailable source title: %s', async (sourceTitle) => {
+    // Simulate an incomplete response at the transport boundary.
+    apiMocks.listWorkObjects.mockResolvedValueOnce({
+      ...listResponse(),
+      items: [{ ...TITLE_ITEM, source_title: sourceTitle }],
+    });
+    renderPage('/search?q=oa-title-001');
+
+    expect(await screen.findByText('内部工作事项')).toBeInTheDocument();
+    expect(screen.getByText('命中来源编号')).toBeInTheDocument();
+    expect(screen.queryByText('命中标题')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

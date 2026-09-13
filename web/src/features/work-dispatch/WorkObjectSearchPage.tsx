@@ -16,6 +16,10 @@ import styles from './WorkObjectSearchPage.module.css';
 const { Paragraph, Title } = Typography;
 const EMPTY_ITEMS: WorkObjectListResponseItemsItem[] = [];
 
+function workObjectTitle(item: WorkObjectListResponseItemsItem) {
+  return item.state_authority === 'internal' ? item.title : item.source_title;
+}
+
 function matchedFields(
   item: WorkObjectListResponseItemsItem,
   term: string,
@@ -25,9 +29,10 @@ function matchedFields(
   }
   const normalizedTerm = normalizeSearchValue(term);
   const fields: string[] = [];
+  const title = workObjectTitle(item);
   if (
-    item.source_title !== null &&
-    normalizeSearchValue(item.source_title).includes(normalizedTerm)
+    title != null &&
+    normalizeSearchValue(title).includes(normalizedTerm)
   ) {
     fields.push('标题');
   }
@@ -232,7 +237,7 @@ export default function WorkObjectSearchPage() {
               >
                 <div className={styles.resultBody}>
                   <div className={styles.resultHeading}>
-                    <strong>{item.source_title ?? '内部工作事项'}</strong>
+                    <strong>{workObjectTitle(item) ?? '内部工作事项'}</strong>
                     <div className={styles.matchTags} aria-label="匹配字段">
                       {matchedFields(item, term).map((field) => (
                         <Tag color="blue" key={field}>命中{field}</Tag>
