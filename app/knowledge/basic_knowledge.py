@@ -12,6 +12,7 @@ from app.ports.capability_registry import CapabilitySpec
 KnowledgeCategory: TypeAlias = Literal[
     "enterprise_term",
     "mock_system",
+    "oa_system",
     "policy_template",
 ]
 
@@ -72,6 +73,25 @@ MOCK_SYSTEM_ITEMS = (
     ),
 )
 
+LIVE_SYSTEM_ITEMS = (
+    KnowledgeItem(
+        category="oa_system",
+        keywords=("oa",),
+        content="OA 系统说明：当前 OA 读取能力使用 live 模式，请求配置的 OA 业务系统。",
+    ),
+)
+
+REPLAY_SYSTEM_ITEMS = (
+    KnowledgeItem(
+        category="oa_system",
+        keywords=("oa", "replay", "回放"),
+        content=(
+            "OA 系统说明：当前 OA 读取能力使用 replay 模式，"
+            "从本地合同包回放响应，不代表实时业务数据。"
+        ),
+    ),
+)
+
 POLICY_TEMPLATE_ITEMS = (
     KnowledgeItem(
         category="policy_template",
@@ -95,9 +115,7 @@ _STATIC_ITEMS = ENTERPRISE_TERM_ITEMS + MOCK_SYSTEM_ITEMS + POLICY_TEMPLATE_ITEM
 class BasicKnowledge:
     """Build deterministic request context without owning mutable knowledge state."""
 
-    @property
-    def static_items(self) -> tuple[KnowledgeItem, ...]:
-        return _STATIC_ITEMS
+    static_items: tuple[KnowledgeItem, ...] = _STATIC_ITEMS
 
     def context_items(
         self,
@@ -108,7 +126,7 @@ class BasicKnowledge:
         normalized_message = _normalize_for_match(message)
         return tuple(
             sanitize_knowledge_text(item.content)
-            for item in _STATIC_ITEMS
+            for item in self.static_items
             if any(_keyword_matches(keyword, normalized_message) for keyword in item.keywords)
         )
 

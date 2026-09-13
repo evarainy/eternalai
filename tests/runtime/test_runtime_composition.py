@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -59,6 +60,7 @@ from app.main import create_app, create_production_app
 from app.memory import SessionMemory
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import MatchedIntent
@@ -845,24 +847,14 @@ def test_explicit_phase0_flag_allows_production_mock_adapter() -> None:
     assert isinstance(adapter, MockOAAdapter)
 
 
-@pytest.mark.parametrize(
-    ("mode", "provider_type"),
-    [
-        ("replay", ReplayOAReadProvider),
-        ("live", LiveOAReadProvider),
-    ],
-)
-def test_oa_read_adapter_mode_builds_configured_provider(
-    mode: str,
-    provider_type: type[ReplayOAReadProvider] | type[LiveOAReadProvider],
-) -> None:
+def _oa_mode_settings(mode: str) -> ProductionSettings:
     contract_pack_dir = (
         Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-pending-workflows-v3"
     )
     system_message_contract_pack_dir = (
         Path(__file__).parents[1] / "contract_packs" / "oa" / "ecology9-system-messages-v1"
     )
-    settings = replace(
+    return replace(
         ProductionSettings.from_environment(),
         oa_read_adapter_mode=cast(Any, mode),
         oa_read_contract_pack_dir=contract_pack_dir,
@@ -885,8 +877,19 @@ def test_oa_read_adapter_mode_builds_configured_provider(
         oa_system_messages_select_state=("system-selection-state" if mode == "live" else None),
     )
 
+@pytest.mark.parametrize(
+    ("mode", "provider_type"),
+    [
+        ("replay", ReplayOAReadProvider),
+        ("live", LiveOAReadProvider),
+    ],
+)
+def test_oa_read_adapter_mode_builds_configured_provider(
+    mode: str,
+    provider_type: type[ReplayOAReadProvider] | type[LiveOAReadProvider],
+) -> None:
     adapter = build_oa_read_adapter(
-        settings=settings,
+        settings=_oa_mode_settings(mode),
         credential_store=cast(Any, object()),
     )
 
@@ -894,6 +897,60 @@ def test_oa_read_adapter_mode_builds_configured_provider(
     assert isinstance(adapter._provider, provider_type)
     if mode == "live":
         assert adapter._provider._drift_reporter is report_oa_structural_drift
+
+
+@pytest.mark.parametrize("mode", ["mock", "live", "replay"])
+@pytest.mark.parametrize("message", ["查询 OA 待办", "roadmap automation"])
+def test_production_model_context_matches_oa_adapter_mode(mode: str, message: str) -> None:
+    llm_provider = MockLLMProvider()
+    llm_provider.register(message, LLMCompletionResponse(content='{"match":"none"}'))
+    components = build_production_components(
+        _oa_mode_settings(mode),
+        llm_provider=llm_provider,
+    )
+    runtime = components.runtime
+    adapter = runtime._orchestration._gateway._adapters["oa"]
+    if mode == "mock":
+        assert isinstance(adapter, MockOAAdapter)
+    else:
+        assert isinstance(adapter, OAReadAdapter)
+        assert isinstance(
+            adapter._provider,
+            LiveOAReadProvider if mode == "live" else ReplayOAReadProvider,
+        )
+
+    result = asyncio.run(runtime._intent_router.parse(message))
+
+    assert result.match == "none"
+    assert result.failure_reason is None
+    assert len(llm_provider.calls) == 1
+    messages = llm_provider.calls[0]["messages"]
+    assert messages[-1].role == "user"
+    assert messages[-1].content == message
+    if message == "roadmap automation":
+        assert [item.role for item in messages] == ["system", "user"]
+        return
+
+    assert [item.role for item in messages] == ["system", "system", "user"]
+    payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
+    knowledge = payload["semantic_system_knowledge"]
+    assert "企业术语：待办是等待当前用户处理的流程事项，不代表已经完成。" in knowledge
+    prompt = "\n".join(item.content for item in messages)
+    if mode == "mock":
+        assert "Mock 系统说明" in prompt
+        assert "只返回合成数据" in prompt
+        assert "live 模式" not in prompt
+        assert "replay 模式" not in prompt
+    else:
+        assert "Mock 系统说明" not in prompt
+        assert "只返回合成数据" not in prompt
+        if mode == "live":
+            assert "live 模式，请求配置的 OA 业务系统" in prompt
+            assert "replay 模式" not in prompt
+        else:
+            assert "replay 模式" in prompt
+            assert "从本地合同包回放响应，不代表实时业务数据" in prompt
+            assert "live 模式" not in prompt
 
 
 def test_explicit_production_adapters_and_identity_mapping_take_priority() -> None:
