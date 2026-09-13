@@ -140,16 +140,8 @@ def _boundary_rules() -> list[BoundaryRule]:
         ),
         BoundaryRule(
             name="gateway_no_runtime",
-            source="app.gateway",
+            source="app.infra.gateway",
             forbidden_imports=("app.runtime",),
-            not_applicable_reason=(
-                "app/gateway/ does not exist yet; gateway not implemented in Phase 0"
-            ),
-            not_applicable_scope="waiting_dependency",
-            blocked_by_task_id="none",
-            activation_task_id="future gateway implementation task",
-            expiry_condition="app/gateway/ directory and modules exist",
-            evidence="app/gateway/ directory absent from repo",
         ),
         BoundaryRule(
             name="workflow_executes_only_through_gateway_boundary",
@@ -199,14 +191,8 @@ def _boundary_rules() -> list[BoundaryRule]:
         ),
         BoundaryRule(
             name="real_adapters_no_runtime",
-            source="app.execution_fabric.real_adapters",
+            source="app.infra.adapters",
             forbidden_imports=("app.runtime",),
-            not_applicable_reason=("app/execution_fabric/real_adapters/ does not exist yet"),
-            not_applicable_scope="waiting_dependency",
-            blocked_by_task_id="none",
-            activation_task_id="future real adapter implementation task",
-            expiry_condition=("app/execution_fabric/real_adapters/ directory and modules exist"),
-            evidence=("app/execution_fabric/real_adapters/ directory absent from repo"),
         ),
     ]
 
@@ -352,6 +338,42 @@ def test_agent_rules_are_active_and_reject_each_static_violation(
     assert _find_violations(fixture_rule, repo_root=tmp_path) == []
     fixture.write_text(f"import {bad_import}\n", encoding="utf-8")
     assert _find_violations(fixture_rule, repo_root=tmp_path) == [(fixture, bad_import, forbidden)]
+
+
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        ("gateway_no_runtime", "app.infra.gateway"),
+        ("real_adapters_no_runtime", "app.infra.adapters"),
+    ],
+)
+def test_gateway_and_adapter_rules_are_active_and_reject_runtime_imports(
+    tmp_path: Path, name: str, source: str
+) -> None:
+    matches = [rule for rule in _boundary_rules() if rule.name == name]
+    assert len(matches) == 1
+    rule = matches[0]
+    assert rule.source == source
+    assert rule.source_path == REPO_ROOT / source.replace(".", "/")
+    assert TestImportBoundaries()._is_applicable(rule)
+    assert rule.forbidden_imports == ("app.runtime",)
+    assert _find_violations(rule) == []
+
+    package = tmp_path / source.replace(".", "/")
+    package.mkdir(parents=True)
+    fixture = package / "synthetic.py"
+    fixture_rule = BoundaryRule(
+        name=rule.name,
+        source=rule.source,
+        source_path=package,
+        forbidden_imports=rule.forbidden_imports,
+    )
+    fixture.write_text("from app.ports.adapter import AdapterPort\n", encoding="utf-8")
+    assert _find_violations(fixture_rule, repo_root=tmp_path) == []
+    fixture.write_text("import app.runtime.runtime\n", encoding="utf-8")
+    assert _find_violations(fixture_rule, repo_root=tmp_path) == [
+        (fixture, "app.runtime.runtime", "app.runtime")
+    ]
 
 
 class TestImportBoundaries:
