@@ -1,8 +1,8 @@
 # Phase 2 当前状态
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-061`（C 档；同步 `P2-INTERNAL-WO-DISPATCH-001` 的合并交付、验证基线、已关闭欠债与仍未完成归属，落盘 2026-09-10 access violation 裁决，并更新评审桥模型选择规则）。
+- 当前治理基线 task_id：`P2-GOV-SYNC-062`（C 档；落盘 2026-09-10 / 2026-09-14 已批裁决、登记组织目录与前端交办接线后继，并关闭工作树 Python 版本漂移欠债）。
 - 当前实现基线 task_id：`P2-INTERNAL-WO-DISPATCH-001`（A 档；已合并）。后端 `3337 passed, 0 failed, 0 skipped`、前端 `585 passed`、Golden `34/34`、`tests/architecture/` `122 passed`、mypy `121 source files`、Ruff 通过；以上均来自该棒最终候选的 2026-09-10 实测，经独立 Monitor 三轮复核，最终 `VERDICT=PASS`。
-- 当前实现后继指针：未唯一确定；组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期、前端交办接线与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
+- 当前实现后继指针：`P2-ORGDIR-PERSON-SYNC-001`（出方案中），其后为 `P2-FE-DISPATCH-WIRING-001`；组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
 
 ## 已登记验证基线
 
@@ -37,7 +37,7 @@
 - 组织目录集成后继：`P2-TENANT-IDENTITY-001`。`P2-TASK-TENANT-COLUMN-001` 只完成可信租户 `tasks` 切片；真实组织身份来源、sessions、identity binding、目录镜像的剩余 scope 须独立授权。`P2-INTERNAL-WO-SCOPE-001` 与 `P2-INTERNAL-WO-DISPATCH-001` 已分别合并交付岗位派发授权、可见性 scope 及首次派发写端点；生命周期、前端接线、显示名语义、多 membership 与监区名单 fail-open 风险仍保留，见 `PHASE2_PLAN.md`。
 - 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。本状态不把它与仍未实例化的 `WorkflowEngineAdapter` 欠债混同。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
-- 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，但前端选择、发布接线、终态、草稿持久化与显示名语义后继不唯一，留待 GOV-SYNC 绑定；不改变必达链的 BLOCKED 状态。
+- 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，前端选择、发布接线、终态、草稿持久化与显示名语义由 `P2-FE-DISPATCH-WIRING-001` 承接；不改变必达链的 BLOCKED 状态。
 - 已完成视觉：导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及可执行模糊层预算检查；字体跟随已批准画板，聊天问候语独立。历史返修过程留 Git。
 - 剩余缺口：AppShell 手写 CSS module 的 antd Layout/Menu 欠债、职务来源、头像取图三项未知仍保留；用户身份读取棒另登记多部门 `orginfo` 形态、`isMobx` 取值、目录快照交叉校验、`sex` / `workcode` / `requestParams` 未消费等活欠债。
 - 机会层 task_id、依赖、BLOCKED 条件和活欠债只见 `docs/phase2/PHASE2_PLAN.md` 的现役 DAG 与欠债表；分配 ID 不等于排期，不重排必达链。
