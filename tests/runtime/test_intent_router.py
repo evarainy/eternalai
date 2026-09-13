@@ -10,6 +10,7 @@ import pytest
 
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
+from app.knowledge import BasicKnowledge
 from app.memory import SessionMemorySummary
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.structured_output import (
@@ -279,6 +280,24 @@ def test_router_truncates_knowledge_to_exact_item_and_length_limits() -> None:
     assert bounded[0].startswith("item-0:")
     assert bounded[7].startswith("item-7:")
     assert all("item-8:" not in item and "item-9:" not in item for item in bounded)
+
+
+def test_router_preserves_explicit_empty_knowledge_and_capability_contracts() -> None:
+    llm_provider = MockLLMProvider()
+    router = IntentRouter(
+        llm_provider,
+        JSONStructuredOutputProvider(),
+        "qwen-test",
+        semantic_knowledge=BasicKnowledge(static_items=()),
+    )
+
+    asyncio.run(router.parse("OA mock", capabilities=(active_capability("oa.safe.query"),)))
+
+    messages = llm_provider.calls[0]["messages"]
+    payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
+    assert payload["semantic_system_knowledge"] == []
+    assert payload["capability_input_contracts"][0]["capability_id"] == "oa.safe.query"
+    assert "Mock 系统说明" not in messages[1].content
 
 
 def test_router_injects_at_most_eight_registry_derived_capabilities() -> None:

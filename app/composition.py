@@ -84,6 +84,13 @@ from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
 from app.knowledge import BasicKnowledge
+from app.knowledge.basic_knowledge import (
+    ENTERPRISE_TERM_ITEMS,
+    LIVE_SYSTEM_ITEMS,
+    MOCK_SYSTEM_ITEMS,
+    POLICY_TEMPLATE_ITEMS,
+    REPLAY_SYSTEM_ITEMS,
+)
 from app.memory import SessionMemory
 from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
@@ -503,6 +510,15 @@ def build_production_components(
             JSONStructuredOutputProvider() if structured_output is None else structured_output
         ),
         intent_model=settings.llm_model,
+        semantic_knowledge=BasicKnowledge(
+            static_items=ENTERPRISE_TERM_ITEMS
+            + {
+                "mock": MOCK_SYSTEM_ITEMS,
+                "live": LIVE_SYSTEM_ITEMS,
+                "replay": REPLAY_SYSTEM_ITEMS,
+            }[settings.oa_read_adapter_mode]
+            + POLICY_TEMPLATE_ITEMS,
+        ),
         human_gate_port=human_gate_port,
     )
     resolved_authentication = (

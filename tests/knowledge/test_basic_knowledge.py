@@ -9,6 +9,7 @@ from app.knowledge import BasicKnowledge, sanitize_knowledge_text
 from app.knowledge.basic_knowledge import (
     MAX_CAPABILITY_CONTRACT_LENGTH,
     MAX_CAPABILITY_CONTRACTS,
+    KnowledgeItem,
 )
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 
@@ -59,6 +60,18 @@ def test_static_content_covers_required_categories_and_keyword_boundaries() -> N
     assert unmatched == ()
     assert knowledge.context_items("roadmap automation", ()) == ()
     assert any("Mock 系统说明" in item for item in knowledge.context_items("查询 OA 待办", ()))
+
+
+def test_explicit_static_items_replace_defaults_and_preserve_keyword_matching() -> None:
+    item = KnowledgeItem("oa_system", ("oa",), "OA 自定义系统事实。")
+    knowledge = BasicKnowledge(static_items=(item,))
+
+    assert knowledge.static_items == (item,)
+    assert knowledge.context_items("查询 OA", ()) == ("OA 自定义系统事实。",)
+    assert knowledge.context_items("roadmap automation", ()) == ()
+    assert knowledge.context_items("报销审批", ()) == ()
+    assert BasicKnowledge(static_items=()).context_items("OA mock 报销审批", ()) == ()
+    assert any("Mock 系统说明" in text for text in BasicKnowledge().context_items("OA", ()))
 
 
 def test_capability_contracts_follow_each_registry_snapshot() -> None:
