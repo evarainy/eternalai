@@ -1,3 +1,5 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import * as timeModule from '../dispatchTime';
 import { useLayoutEffect } from 'react';
 import { useAuthStore } from '../../../stores/authStore';
 import { useDraftSession } from '../../../stores/sessionDraftStore';
@@ -5,7 +7,7 @@ import * as draftModule from '../dispatchDraft';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, within, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../../app/theme';
@@ -32,24 +34,25 @@ const FORBIDDEN_INTERNAL_TERMS = [
   'Work Object',
 ];
 
-function renderPage() {
+function renderPage(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
-    <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
+    <QueryClientProvider client={client}><ConfigProvider button={WORKBENCH_BUTTON_CONFIG} theme={{ token: { motion: false } }}>
       <AntApp>
         <MemoryRouter>
           <WorkDispatchPage />
         </MemoryRouter>
       </AntApp>
-    </ConfigProvider>,
+    </ConfigProvider></QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.stubGlobal('fetch', vi.fn(directoryFetch));
   useAuthStore.getState().markAuthenticated();
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('WorkDispatchPage form', () => {
   it('locks the single-entry section order and visible structured labels', () => {
@@ -63,7 +66,7 @@ describe('WorkDispatchPage form', () => {
     const ordered = container.querySelectorAll('h2, label, [id$="-label"]');
     expect(Array.from(ordered, (node) => node.textContent?.trim())).toEqual([
       '基本信息', '类型', '标题', '交办范围与时限', '责任人 / 责任部门',
-      '截止时间', '可见范围', '交办对象（已解析并去重）', '办理要求与回执',
+      '截止时间', '可见范围', '交办对象（目录选择）', '办理要求与回执',
       '办理要求与交付物', '附件', '回执要求', '提醒策略（可多选，各提醒一次）',
     ]);
     for (const node of ordered) {
@@ -93,7 +96,7 @@ describe('WorkDispatchPage form', () => {
     expect(screen.getByLabelText('责任人 / 责任部门')).toBeInTheDocument();
     expect(screen.getByLabelText('截止时间')).toBeInTheDocument();
     expect(screen.getByLabelText('可见范围')).toBeInTheDocument();
-    expect(screen.getByLabelText('交办对象（已解析并去重）')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toBeInTheDocument();
     expect(screen.getByLabelText('办理要求与交付物')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: '附件' })).toBeInTheDocument();
     expect(screen.getByLabelText('回执要求')).toBeInTheDocument();
@@ -103,12 +106,12 @@ describe('WorkDispatchPage form', () => {
   });
 
   /* 琥珀提示条是硬要求：草稿在点「发布」之前不下发，这一条必须常驻可见。 */
-  it('keeps the amber unpublished-draft banner visible', () => {
+  it('keeps the amber neutral-content banner visible', () => {
     renderPage();
 
-    expect(screen.getByText('草稿尚未发布')).toBeInTheDocument();
+    expect(screen.getByText('交办内容')).toBeInTheDocument();
     expect(
-      screen.getByText('逐项核对无误后，点右下角「发布」才会下发。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。'),
+      screen.getByText('刷新前如已点过发布：结果待确认，请先到工作事项核对。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。'),
     ).toBeInTheDocument();
   });
 
@@ -145,6 +148,7 @@ describe('WorkDispatchPage form', () => {
   it('preselects the last three reminder steps and lets each one be toggled', () => {
     renderPage();
 
+    fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-09-11T01:30' } });
     const reminders = screen.getByRole('group', {
       name: '提醒策略（可多选，各提醒一次）',
     });
@@ -162,26 +166,15 @@ describe('WorkDispatchPage form', () => {
     expect(pressed('逾期当天')).toBe('false');
   });
 
-  it('deduplicates dispatch targets and counts only what was really added', () => {
+  it('deduplicates directory tuples and counts only selected targets', async () => {
     renderPage();
-
     expect(screen.getByText('还没有交办对象。')).toBeInTheDocument();
-
-    const targetInput = screen.getByLabelText('交办对象（已解析并去重）');
-    for (const target of ['办公室', '财务科', '办公室']) {
-      fireEvent.change(targetInput, { target: { value: target } });
-      fireEvent.click(screen.getByRole('button', { name: '添加' }));
-    }
-
-    expect(screen.getByText('已添加交办对象 2 个，重复添加的会自动去掉。')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        '发布后，2 个交办对象的工作事项中各生成一条；发布前对方不可见。',
-      ),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '删除交办对象 财务科' }));
-    expect(screen.getByText('已添加交办对象 1 个，重复添加的会自动去掉。')).toBeInTheDocument();
+    const button = await screen.findByRole('button', { name: '选择 办公室' });
+    fireEvent.click(button); fireEvent.click(button);
+    expect(screen.getByText('已选择交办对象 1 个，同一对象只保留一次；最多 100 个。')).toBeInTheDocument();
+    expect(screen.getByText('发布后，1 个交办对象的工作事项中各生成一条；发布前对方不可见。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '移除交办对象 办公室' }));
+    expect(screen.getByText('还没有交办对象。')).toBeInTheDocument();
   });
 
   /*
@@ -207,19 +200,9 @@ describe('WorkDispatchPage form', () => {
       ),
     ).toBeInTheDocument();
 
-    // 删掉的是常驻说明，不是如实告知：这一句现在必须由「发布」当场给出。
-    expect(
-      screen.queryByText(
-        '下发还没有接进来，点「发布」发不出去；「存草稿」只存这台电脑。',
-      ),
-    ).toBeNull();
-    fireEvent.change(screen.getByLabelText('标题'), {
-      target: { value: '报送第三季度政务信息' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '发布' }));
-    expect(screen.getByRole('status')).toHaveTextContent(
-      '下发还没有接进来，现在发不出去。',
-    );
+    expect(screen.getByText(/仅记录提醒设置，自动提醒尚未启用/)).toBeVisible();
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+    expect(posts()).toHaveLength(0);
   });
 
   /*
@@ -250,23 +233,15 @@ describe('WorkDispatchPage form', () => {
     expect(css).not.toContain('inset 0 0 0 1px rgb(22 29 46 / 11%)');
   });
 
-  it('answers the publish button with the real outcome, never with a fake success', () => {
-    renderPage();
-
+  it('answers publish with a verified receipt and blocks empty titles', async () => {
+    renderPage(); await selectDepartment();
     fireEvent.click(screen.getByRole('button', { name: '发布' }));
-    expect(screen.getByRole('status')).toHaveTextContent(
-      '还没有填标题。先把标题填上。',
-    );
-
-    fireEvent.change(screen.getByLabelText('标题'), {
-      target: { value: '报送第三季度政务信息' },
-    });
+    expect(screen.getByRole('alert')).toHaveTextContent('请核对标题与字段长度');
+    expect(posts()).toHaveLength(0);
+    fireEvent.change(screen.getByLabelText('标题'), { target: { value: '报送第三季度政务信息' } });
     fireEvent.click(screen.getByRole('button', { name: '发布' }));
-
-    const notice = screen.getByRole('status');
-    expect(notice).toHaveTextContent('下发还没有接进来，现在发不出去。');
-    expect(notice.textContent).not.toContain('已发布');
-    expect(notice.textContent).not.toContain('发送成功');
+    expect(await screen.findByRole('status')).toHaveTextContent('已发布，共1条。');
+    expect(posts()).toHaveLength(1);
   });
 
   it('saves_only_for_the_current_session_and_restores_after_route_return', () => {
@@ -278,7 +253,7 @@ describe('WorkDispatchPage form', () => {
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      '草稿已暂存；刷新、关闭页面或退出登录后会丢失。',
+      '草稿已暂存；刷新、关闭页面或退出登录后会丢失。交办对象下次需重新选择。',
     );
 
     expect(window.localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
@@ -301,7 +276,8 @@ describe('WorkDispatchPage form', () => {
     expect(screen.getByLabelText('标题')).toHaveValue('值班表报送');
     expect(screen.getByLabelText('类型')).toHaveAccessibleName('类型');
     expect(screen.getByText('督办令')).toBeInTheDocument();
-    expect(screen.getByText('已添加交办对象 1 个，重复添加的会自动去掉。')).toBeInTheDocument();
+    expect(screen.getByText(/旧内容待重新确认/)).toHaveTextContent('办公室');
+    expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
     const reminders = screen.getByRole('group', {
       name: '提醒策略（可多选，各提醒一次）',
     });
@@ -344,7 +320,7 @@ describe('WorkDispatchPage form', () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成草稿' } });
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-    expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存；刷新、关闭页面或退出登录后会丢失。');
+    expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存；刷新、关闭页面或退出登录后会丢失。交办对象下次需重新选择。');
     expect(loadDraft(token()).title).toBe('合成草稿');
     expect(screen.getByRole('status').querySelector('svg')).not.toBeNull();
     expect(window.localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
@@ -444,13 +420,12 @@ it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on
     }, [current]);
     return <WorkDispatchPage />;
   }
-  render(<Host />);
+  render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><Host /></MemoryRouter></QueryClientProvider>);
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'private-A' } });
-  fireEvent.change(screen.getByLabelText('交办对象（已解析并去重）'), { target: { value: 'chip-A' } });
-  fireEvent.click(screen.getByRole('button', { name: '添加' }));
+  fireEvent.change(screen.getByLabelText('办理要求与交付物'), { target: { value: 'chip-A' } });
   fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-  fireEvent.change(screen.getByLabelText('交办对象（已解析并去重）'), { target: { value: 'pending-A' } });
   expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存');
+  fireEvent.change(screen.getByLabelText('回执要求'), { target: { value: 'pending-A' } });
   act(() => {
     if (transition === 'batched') useAuthStore.getState().markUnauthenticated();
     if (transition === 'pagehide' || transition === 'pageshow') window.dispatchEvent(new PageTransitionEvent(transition, { persisted: true }));
@@ -461,7 +436,7 @@ it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on
     expect(value).not.toMatch(/private-A|chip-A|pending-A|草稿已暂存/);
   }
   expect(screen.getByLabelText('标题')).toHaveValue('');
-  expect(screen.getByLabelText('交办对象（已解析并去重）')).toHaveValue('');
+  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toBeEmptyDOMElement();
   expect(screen.queryByRole('button', { name: '删除交办对象 chip-A' })).toBeNull();
   expect(screen.queryByRole('status')).toBeNull();
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'B' } });
@@ -474,8 +449,8 @@ it('reports_failed_session_save_without_claiming_success', () => {
   renderPage();
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'synthetic' } });
   fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-  expect(screen.getByRole('status')).toHaveTextContent('草稿没存上，请确认登录状态后重试。');
-  expect(screen.getByRole('status').textContent).not.toMatch(/已暂存|已发布|已审核/);
+  expect(screen.getByRole('alert')).toHaveTextContent('草稿没存上，请确认登录状态后重试。');
+  expect(screen.getByRole('alert').textContent).not.toMatch(/已暂存|已发布|已审核/);
 });
 
 it('restores_only_the_last_explicit_snapshot_after_unmount', () => {
@@ -487,4 +462,351 @@ it('restores_only_the_last_explicit_snapshot_after_unmount', () => {
   renderPage();
   expect(screen.getByLabelText('标题')).toHaveValue('saved');
   expect(screen.queryByRole('status')).toBeNull();
+});
+
+const department = { kind: 'department' as const, department_id: 'd1', department_display_name: '办公室' };
+const person = { kind: 'user' as const, department_id: 'd1', department_display_name: '办公室', directory_user_id: 'u1', display_name: '同名' };
+function options(items: unknown[], kind = 'department', extra = {}) {
+  return { kind, items, snapshot_version: 1, unselectable_count: 0, next_cursor: null, has_more: false, ...extra };
+}
+function response(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }); }
+function receipt(count = 1, replayed = false) {
+  return { created_count: count, replayed, items: Array.from({ length: count }, (_, i) => ({ work_object_id: `internal-${i}`, state_authority: 'internal', handling_action: 'view_only' })) };
+}
+function directoryFetch(url: string, init?: RequestInit): Promise<Response> {
+  if (init?.method === 'POST') return Promise.resolve(response(receipt(JSON.parse(String(init.body)).targets.length)));
+  return Promise.resolve(response(url.includes('kind=user') ? options([person], 'user') : options([department])));
+}
+function posts() { return vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST'); }
+async function selectDepartment() { fireEvent.click(await screen.findByRole('button', { name: '选择 办公室' })); }
+async function ready() {
+  renderPage(); await selectDepartment();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成交办' } });
+}
+function publish() { fireEvent.click(screen.getByRole('button', { name: '发布' })); }
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((r) => { resolve = r; }); return { resolve, promise }; }
+
+it('C1 selects_names_after_department and omits undefined parameters', async () => {
+  renderPage();
+  await screen.findByRole('button', { name: '选择 办公室' });
+  expect(vi.mocked(fetch).mock.calls[0]![0]).toBe('/api/v1/work-objects/dispatch-options?kind=department&limit=50');
+  expect(screen.queryByText(/同名/)).toBeNull(); expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '查看 办公室 人员' }));
+  fireEvent.click(await screen.findByRole('button', { name: '选择 同名（办公室，目录编号 u1）' }));
+  expect(vi.mocked(fetch).mock.calls[1]![0]).toBe('/api/v1/work-objects/dispatch-options?kind=user&department_id=d1&limit=50');
+  expect(screen.getByLabelText('责任人 / 责任部门')).toHaveValue('同名（办公室，目录编号 u1）');
+  expect(posts()).toHaveLength(0);
+});
+it('C2 keeps_same_name_targets_distinct and deduplicates exact tuples', async () => {
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).includes('kind=user')
+    ? Promise.resolve(response(options([person, { ...person, directory_user_id: 'u2' }], 'user')))
+    : directoryFetch(String(url), init));
+  await ready();
+  fireEvent.click(screen.getByRole('button', { name: '查看 办公室 人员' }));
+  for (const id of ['u1', 'u2', 'u1']) fireEvent.click(await screen.findByRole('button', { name: `选择 同名（办公室，目录编号 ${id}）` }));
+  publish(); await screen.findByRole('status');
+  expect(JSON.parse(String(posts()[0]![1]!.body)).targets).toEqual([
+    { kind: 'department', department_id: 'd1' },
+    { kind: 'user', department_id: 'd1', directory_user_id: 'u1' },
+    { kind: 'user', department_id: 'd1', directory_user_id: 'u2' },
+  ]);
+});
+it('C3 shows_unselectable_count_without_fabricating_people across pages', async () => {
+  vi.mocked(fetch).mockImplementation((url, init) => String(url).includes('kind=user')
+    ? Promise.resolve(response(options(String(url).includes('cursor=') ? [] : [person], 'user', { unselectable_count: 2, ...(String(url).includes('cursor=') ? {} : { has_more: true, next_cursor: 'opaque+/=' }) })))
+    : directoryFetch(String(url), init));
+  renderPage(); fireEvent.click(await screen.findByRole('button', { name: '查看 办公室 人员' }));
+  fireEvent.click(await screen.findByRole('button', { name: '下一页' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '下一页' })).toBeNull());
+  expect(screen.getByText(/有人员暂不可选/)).toHaveTextContent('（2 人）');
+  expect(screen.getAllByRole('button', { name: /^选择 同名/ })).toHaveLength(1);
+  expect(String(vi.mocked(fetch).mock.calls[2]![0])).toContain('cursor=opaque%2B%2F%3D');
+  expect(posts()).toHaveLength(0);
+});
+it('C4 reloads_snapshot_and_rejects_late_pages', async () => {
+  const late = deferred<Response>(); let count = 0;
+  vi.mocked(fetch).mockImplementation((url, init) => {
+    if (String(url).includes('kind=user')) return late.promise;
+    count++;
+    return init?.method === 'POST' ? directoryFetch(String(url), init) : Promise.resolve(response(options([department], 'department', { snapshot_version: count === 1 ? 1 : 2 })));
+  });
+  await ready();
+  fireEvent.click(screen.getByRole('button', { name: '查看 办公室 人员' }));
+  fireEvent.click(screen.getByRole('button', { name: '返回部门首页' }));
+  await screen.findByText(/目录已更新/);
+  expect(screen.getByLabelText('责任人 / 责任部门')).toHaveValue('办公室（待核对）');
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+  await act(async () => late.resolve(response(options([person], 'user'))));
+  expect(screen.queryByRole('button', { name: /^选择 同名/ })).toBeNull();
+  expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '选择 办公室' }));
+  expect(screen.getByRole('button', { name: '发布' })).toBeEnabled();
+});
+it('C5 blocks_new_publish_on_directory_failure without automatic retry', async () => {
+  await ready();
+  vi.mocked(fetch).mockResolvedValue(response({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }, 503));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('目录已过期');
+  expect(screen.getByLabelText('标题')).toHaveValue('合成交办');
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2); expect(posts()).toHaveLength(0);
+});
+it('C6 requires_legacy_intent_confirmation and sends seven canonical fields', async () => {
+  saveDraft(parseDraft({ title: '\u0085合成标题\u001c', requirement: '\u001c要求\u0085', receipt: ' 回执 ', assignee: '旧责任', visibility: '旧可见', targets: ['旧对象'] }), token());
+  renderPage(); await selectDepartment();
+  expect(screen.getByLabelText('责任人 / 责任部门')).toHaveAttribute('readonly');
+  expect(screen.getByLabelText('可见范围')).toHaveAttribute('readonly');
+  expect(screen.getByText(/旧内容待重新确认/)).toHaveTextContent('旧责任；可见范围 旧可见；对象 旧对象');
+  publish(); expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('checkbox'));
+  publish(); await screen.findByRole('status');
+  expect(JSON.parse(String(posts()[0]![1]!.body))).toEqual({ kind: '通知', title: '合成标题', requirement: '要求', receipt_requirement: '回执', due_at: null, reminder_choices: [], targets: [{ kind: 'department', department_id: 'd1' }] });
+});
+it.each(['title', 'requirement', 'receipt'] as const)('C6 blocks overlong %s while preserving content', async (field) => {
+  await ready();
+  const names = { title: '标题', requirement: '办理要求与交付物', receipt: '回执要求' };
+  const limits = { title: 200, requirement: 10000, receipt: 2000 };
+  fireEvent.change(screen.getByLabelText(names[field]), { target: { value: '字'.repeat(limits[field] + 1) } });
+  publish(); expect(screen.getByRole('alert')).toHaveTextContent('请核对标题与字段长度'); expect(posts()).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText(names[field]), { target: { value: '字'.repeat(limits[field]) } });
+  publish(); expect(await screen.findByRole('status')).toHaveTextContent('已发布，共1条');
+});
+it.each([
+  { kind: 'user' }, { items: [{ ...department, kind: 'user' }] }, { items: [{ ...department, department_id: '' }] },
+  { items: [{ ...department, department_display_name: null }] }, { snapshot_version: 0 }, { snapshot_version: 1.5 },
+  { unselectable_count: -1 }, { unselectable_count: 1 }, { next_cursor: '' }, { has_more: true },
+  { items: Array.from({ length: 51 }, () => department) },
+])('C7 validates_candidate_response_shape %j', async (bad) => {
+  vi.mocked(fetch).mockResolvedValue(response(options([department], 'department', bad)));
+  renderPage(); expect(await screen.findByRole('alert')).toHaveTextContent('目录读取失败');
+  expect(screen.queryByRole('button', { name: /^选择 / })).toBeNull();
+  expect(screen.getByRole('button', { name: '发布' })).toBeDisabled(); expect(posts()).toHaveLength(0);
+});
+it('P2 freezes_and_retries_same_submission and prevents duplicate pending sends', async () => {
+  const pending = deferred<Response>(); await ready();
+  vi.mocked(fetch).mockImplementationOnce(() => pending.promise);
+  publish(); publish();
+  expect(posts()).toHaveLength(1); expect(screen.getByLabelText('标题')).toBeDisabled();
+  await act(async () => pending.resolve(new Response('not json')));
+  expect(screen.getByRole('alert')).toHaveTextContent('结果待确认');
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '重试原请求' }));
+  await screen.findByRole('status');
+  expect(posts()[1]![1]).toEqual(posts()[0]![1]);
+});
+it.each([
+  {}, { created_count: 0 }, { replayed: 'true' }, { items: [] },
+  { items: [{ work_object_id: '', state_authority: 'internal', handling_action: 'view_only' }] },
+  { items: [{ work_object_id: 'x', state_authority: 'external_snapshot', handling_action: 'view_only' }] },
+  { items: [{ work_object_id: 'x', state_authority: 'internal', handling_action: 'self_serve' }] },
+])('P3 accepts_only_usable_receipts %j', async (bad) => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response(Object.keys(bad).length ? { ...receipt(), ...bad } : {}));
+  publish(); expect(await screen.findByRole('alert')).toHaveTextContent('结果待确认');
+  expect(screen.queryByRole('status')).toBeNull(); expect(posts()).toHaveLength(1);
+});
+it('P3 confirms replay and requires explicit new intent after success', async () => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response(receipt(1, true)));
+  publish(); expect(await screen.findByRole('status')).toHaveTextContent('已确认原提交，共1条');
+  publish(); expect(posts()).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: '新建交办' }));
+  expect(screen.getByLabelText('标题')).toBeEnabled(); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+});
+it.each(['success', 'error'])('P4 discards_old_identity_results %s', async (kind) => {
+  const client = new QueryClient(); const oldGeneration = useAuthStore.getState().generation;
+  client.setQueryData(['work-objects', oldGeneration], { items: [] });
+  renderPage(client); await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'old-content' } });
+  const pending = deferred<Response>(); vi.mocked(fetch).mockImplementationOnce(() => pending.promise); publish();
+  act(() => useAuthStore.getState().markAuthenticated());
+  await act(async () => pending.resolve(kind === 'success' ? response(receipt()) : response({ detail: { code: 'dispatch_target_not_found', message: 'private' } }, 404)));
+  expect(screen.getByLabelText('标题')).toHaveValue('');
+  expect(screen.queryByRole('status')).toBeNull(); expect(screen.queryByText(/先前提交/)).toBeNull();
+  expect(screen.getByRole('group', { name: '交办对象（目录选择）' })).toBeEmptyDOMElement();
+  expect(client.getQueryState(['work-objects', oldGeneration])?.isInvalidated).toBe(false);
+});
+it('P5 saves content without selected targets or submission state', async () => {
+  await ready(); fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(screen.getByRole('status')).toHaveTextContent('交办对象下次需重新选择');
+  expect(loadDraft(token()).targets).toEqual([]);
+  expect(JSON.stringify(loadDraft(token()))).not.toMatch(/department_id|directory_user_id|Idempotency|replayed|internal-0/);
+  expect(localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+});
+it('P6 refresh_leaves_result_unconfirmed without an automatic POST', async () => {
+  const first = renderPage(); await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'synthetic' } });
+  vi.mocked(fetch).mockRejectedValueOnce(new Error('offline')); publish(); await screen.findByRole('alert'); first.unmount();
+  vi.mocked(fetch).mockClear(); renderPage(); await screen.findByRole('button', { name: '选择 办公室' });
+  expect(screen.getByText(/刷新前如已点过发布：结果待确认/)).toBeVisible();
+  expect(screen.getByRole('link', { name: '核对工作事项' })).toHaveAttribute('href', '/work-objects');
+  expect(posts()).toHaveLength(0); expect(screen.queryByRole('status')).toBeNull();
+});
+it('P7 rejection_does_not_erase_prior_uncertainty', async () => {
+  await ready(); vi.mocked(fetch).mockRejectedValueOnce(new Error('offline')); publish(); await screen.findByRole('alert');
+  vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'dispatch_target_membership_ambiguous', message: 'synthetic' } }, 403));
+  fireEvent.click(screen.getByRole('button', { name: '重试原请求' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('本次整批未获准'));
+  expect(screen.getByRole('alert')).toHaveTextContent('先前提交结果待确认');
+  expect(posts()[1]![1]).toEqual(posts()[0]![1]); expect(screen.getByLabelText('标题')).toBeDisabled(); expect(posts()).toHaveLength(2);
+});
+it('P8 refreshes_work_objects_after_confirmed_publish for only current generation', async () => {
+  const client = new QueryClient(); const generation = useAuthStore.getState().generation;
+  client.setQueryData(['work-objects', generation], { items: [] });
+  client.setQueryData(['work-objects', generation, 'search', 'q'], { items: [] });
+  client.setQueryData(['work-objects', generation + 1], { items: ['other'] });
+  renderPage(client); await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'synthetic' } }); publish();
+  await screen.findByRole('status');
+  expect(client.getQueryState(['work-objects', generation])?.isInvalidated).toBe(true);
+  expect(client.getQueryState(['work-objects', generation, 'search', 'q'])?.isInvalidated).toBe(true);
+  expect(client.getQueryState(['work-objects', generation + 1])?.isInvalidated).toBe(false);
+  expect(posts()).toHaveLength(1);
+});
+it('P9 edits_after_definite_rejection', async () => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'dispatch_target_not_found', message: 'synthetic' } }, 404));
+  publish(); await screen.findAllByRole('alert'); expect(screen.getByLabelText('标题')).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: '改正后标题' } }); publish(); await screen.findByRole('status');
+  expect(posts()[0]![1]!.headers).not.toEqual(posts()[1]![1]!.headers);
+  expect(JSON.parse(String(posts()[1]![1]!.body)).title).toBe('改正后标题');
+});
+it('P9 retries_after_directory_recovery with original frozen body', async () => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'organization_directory_stale', message: 'synthetic' } }, 503));
+  publish(); await screen.findAllByRole('alert');
+  expect(screen.getByRole('button', { name: '重试原请求' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' })); await screen.findByRole('button', { name: '选择 办公室' });
+  expect(posts()).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: '重试原请求' })); await screen.findByRole('status');
+  expect(posts()[0]![1]).toEqual(posts()[1]![1]);
+});
+it('T2 posts_time_and_empty_reminders and does not restore cancelled reminders', async () => {
+  vi.spyOn(timeModule, 'browserZone').mockReturnValue('Asia/Tokyo'); await ready();
+  fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-09-11T01:30' } });
+  expect(screen.getByText('Asia/Tokyo UTC+09:00')).toBeVisible();
+  publish(); await screen.findByRole('status'); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe('2026-09-10T16:30:00Z');
+  fireEvent.click(screen.getByRole('button', { name: '新建交办' })); await selectDepartment();
+  fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '' } });
+  for (const button of within(screen.getByRole('group', { name: /提醒策略/ })).getAllByRole('button')) expect(button).toBeDisabled();
+  publish(); await screen.findByRole('status'); expect(JSON.parse(String(posts()[1]![1]!.body))).toMatchObject({ due_at: null, reminder_choices: [] });
+  fireEvent.click(screen.getByRole('button', { name: '新建交办' }));
+  fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-10-01T10:00' } });
+  for (const button of within(screen.getByRole('group', { name: /提醒策略/ })).getAllByRole('button')) expect(button).toHaveAttribute('aria-pressed', 'false');
+});
+it('T3 requires_legacy_timezone_confirmation', async () => {
+  vi.spyOn(timeModule, 'browserZone').mockReturnValue('Asia/Tokyo');
+  saveDraft(parseDraft({ title: 'legacy', dueAt: '2026-09-11T01:30' }), token());
+  renderPage(); await selectDepartment(); publish(); expect(posts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '确认旧截止时间与时区' })); publish();
+  await screen.findByRole('status'); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe('2026-09-10T16:30:00Z');
+});
+it('T3 converts saved content to another browser zone without changing instant', async () => {
+  vi.spyOn(timeModule, 'browserZone').mockReturnValue('Asia/Shanghai');
+  saveDraft(parseDraft({ title: 'saved', dueAt: '2026-09-11T01:30', dueInstant: '2026-09-10T16:30:00Z', dueZone: 'Asia/Tokyo', dueOffset: 'UTC+09:00' }), token());
+  renderPage(); await selectDepartment(); expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-11T00:30');
+  fireEvent.change(screen.getByLabelText('办理要求与交付物'), { target: { value: '正文修改' } }); publish();
+  await screen.findByRole('status'); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe('2026-09-10T16:30:00Z');
+});
+it.each(['2026-11-01T05:30:00Z', '2026-11-01T06:30:00Z'])('T5 blocks_dst_until_explicit_choice %s', async (instant) => {
+  vi.spyOn(timeModule, 'browserZone').mockReturnValue('America/New_York'); await ready();
+  fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-03-08T02:30' } });
+  expect(screen.getByRole('alert')).toHaveTextContent('该日期时间不存在'); publish(); expect(posts()).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText('截止时间'), { target: { value: '2026-11-01T01:30' } });
+  expect(screen.getByLabelText('选择截止时间偏移')).toHaveValue(''); publish(); expect(posts()).toHaveLength(0);
+  expect(screen.getByText('America/New_York UTC-04:00 / UTC-05:00')).toBeVisible();
+  fireEvent.change(screen.getByLabelText('选择截止时间偏移'), { target: { value: instant } }); publish();
+  await screen.findByRole('status'); expect(JSON.parse(String(posts()[0]![1]!.body)).due_at).toBe(instant);
+});
+
+it.each([
+  [403, 'directory_scope_denied', '当前身份暂不能'], [403, 'directory_membership_missing', '未找到您的部门'],
+  [403, 'directory_membership_ambiguous', '您有多个部门'], [403, 'not_department_head', '没有任务派发权限'],
+  [403, 'cross_department_dispatch_denied', '不在可派发范围'], [404, 'dispatch_target_not_found', '部分对象已无法确认'],
+  [409, 'organization_directory_snapshot_changed', '目录已更新'], [422, 'dispatch_options_request_invalid', '目录查询信息有误'],
+  [503, 'organization_directory_missing', '目录尚未完成首次同步'], [503, 'organization_directory_stale', '目录已过期'],
+  [503, 'organization_directory_unavailable', '部门和人员目录暂时不可用'], [503, 'work_object_unavailable', '工作事项服务尚未配置'],
+  [500, 'unknown', '目录读取失败'],
+] as const)('E2 consumes GET fetch error %s %s', async (status, code, text) => {
+  renderPage(); await selectDepartment();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '保留正文' } });
+  vi.mocked(fetch).mockImplementation(() => Promise.resolve(response({ detail: { code, message: 'private-response-must-not-be-rendered' } }, status)));
+  fireEvent.click(screen.getByRole('button', { name: '重新读取目录' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(text));
+  expect(screen.getByLabelText('标题')).toHaveValue('保留正文'); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+  expect(document.body.textContent).not.toContain('private-response'); expect(posts()).toHaveLength(0);
+});
+it.each([
+  [403, 'csrf_validation_failed', '页面校验未通过'], [403, 'directory_membership_missing', '未找到您的部门'],
+  [403, 'directory_membership_ambiguous', '您有多个部门'], [403, 'not_department_head', '没有任务派发权限'],
+  [403, 'dispatch_target_membership_ambiguous', '本次整批未获准'], [403, 'cross_department_dispatch_denied', '不在可派发范围'],
+  [404, 'dispatch_target_not_found', '部分对象已无法确认'], [409, 'idempotency_key_reused', '提交标识与内容不一致'],
+  [422, 'idempotency_key_invalid', '提交标识有误'], [422, 'dispatch_request_invalid', '交办信息有误'],
+  [503, 'organization_directory_missing', '目录尚未完成首次同步'], [503, 'organization_directory_stale', '目录已过期'],
+  [503, 'organization_directory_unavailable', '部门和人员目录暂时不可用'], [503, 'work_object_unavailable', '工作事项服务尚未配置'],
+  [503, 'work_object_audit_unavailable', '提交记录暂无法确认'], [503, 'work_object_dispatch_failed', '结果待确认'],
+  [500, 'unknown', '结果待确认'],
+] as const)('E2 consumes POST fetch error %s %s', async (status, code, text) => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code, message: 'private-response-must-not-be-rendered' } }, status)); publish();
+  await waitFor(() => expect(screen.getAllByRole('alert').some((node) => node.textContent?.includes(text))).toBe(true));
+  expect(screen.getByLabelText('标题')).toHaveValue('合成交办'); expect(screen.queryByRole('status')).toBeNull();
+  expect(document.body.textContent).not.toContain('private-response'); expect(posts()).toHaveLength(1);
+  if (code.startsWith('idempotency_')) expect(screen.queryByRole('button', { name: '重试原请求' })).toBeNull();
+});
+it.each(['GET', 'POST'])('E2 consumes 401 through existing authentication transport %s', async (method) => {
+  await ready(); vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'authentication_required', message: 'private' } }, 401));
+  if (method === 'GET') fireEvent.click(screen.getByRole('button', { name: '重新读取目录' })); else publish();
+  await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+  expect(screen.queryByLabelText('标题')).toBeNull(); expect(document.body.textContent).not.toContain('private');
+  expect(posts()).toHaveLength(method === 'POST' ? 1 : 0);
+});
+it('C4 restarts opaque cursor chain after snapshot conflict', async () => {
+  vi.mocked(fetch).mockResolvedValueOnce(response(options([department], 'department', { has_more: true, next_cursor: 'old-cursor' })));
+  await ready();
+  vi.mocked(fetch).mockResolvedValueOnce(response({ detail: { code: 'organization_directory_snapshot_changed', message: 'synthetic' } }, 409));
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3));
+  expect(String(vi.mocked(fetch).mock.calls[1]![0])).toContain('cursor=old-cursor');
+  expect(String(vi.mocked(fetch).mock.calls[2]![0])).toBe('/api/v1/work-objects/dispatch-options?kind=department&limit=50');
+  expect(screen.getByLabelText('责任人 / 责任部门')).toHaveValue('办公室（待核对）'); expect(posts()).toHaveLength(0);
+});
+it('C7 fails closed on malformed user candidates at page boundary', async () => {
+  for (const bad of [{ display_name: null }, { directory_user_id: '' }, { department_id: 'd2' }, { unselectable_count: 0.5 }]) {
+    vi.mocked(fetch).mockResolvedValueOnce(response(options([{ ...person, ...bad }], 'user', 'unselectable_count' in bad ? bad : {})));
+    await expect(readOptionsForTest()).rejects.toThrow('invalid_dispatch_options');
+  }
+});
+async function readOptionsForTest() { const api = await import('../dispatchApi'); return api.readOptions({ kind: 'user', department_id: 'd1' }); }
+
+it('C2 refuses the 101st selected target while allowing exactly 100', async () => {
+  vi.mocked(fetch).mockImplementation((url, init) => {
+    if (init?.method === 'POST') return directoryFetch(String(url), init);
+    const cursor = String(url).includes('cursor=');
+    return Promise.resolve(response(options(Array.from({ length: 50 }, (_, i) => ({ ...department, department_id: `d${i + (cursor ? 50 : 0)}`, department_display_name: `部门${i + (cursor ? 50 : 0)}` })), 'department', cursor ? {} : { has_more: true, next_cursor: 'second' })));
+  });
+  renderPage(); fireEvent.click(await screen.findByText('下一页'));
+  await waitFor(() => expect(document.querySelector('button[aria-label="选择 部门99"]')).toBeInTheDocument());
+  const candidates = document.querySelectorAll('button[aria-label^="选择 部门"]');
+  expect(candidates).toHaveLength(100);
+  act(() => { for (const button of candidates) button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+  expect(screen.getByText('已选择交办对象 100 个，同一对象只保留一次；最多 100 个。')).toBeVisible();
+  vi.mocked(fetch).mockResolvedValueOnce(response(options([{ ...department, department_id: 'd100', department_display_name: '第101个部门' }])));
+  fireEvent.click(screen.getByText('重新读取目录'));
+  await screen.findByText('第101个部门');
+  expect(document.querySelector('button[aria-label="选择 第101个部门"]')).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '100个对象' } }); fireEvent.click(screen.getByText('发布'));
+  expect(await screen.findByRole('status')).toHaveTextContent('已发布，共100条');
+  expect(JSON.parse(String(posts()[0]![1]!.body)).targets).toHaveLength(100);
+});
+it('P8 preserves confirmed publication when active list refresh fails', async () => {
+  const { QueryObserver } = await import('@tanstack/react-query');
+  const { listWorkObjectsApiV1WorkObjectsGet } = await import('../../../generated/work-objects/work-objects');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const generation = useAuthStore.getState().generation;
+  const key = ['work-objects', generation];
+  client.setQueryData(key, { items: [] });
+  const observer = new QueryObserver(client, { queryKey: key, queryFn: () => listWorkObjectsApiV1WorkObjectsGet(), staleTime: Infinity });
+  const unsubscribe = observer.subscribe(() => {});
+  try {
+    renderPage(client); await selectDepartment(); fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成发布' } });
+    vi.mocked(fetch).mockImplementation((url, init) => init?.method === 'POST' ? directoryFetch(String(url), init)
+      : Promise.resolve(response({ detail: { code: 'organization_directory_unavailable', message: 'synthetic' } }, 503)));
+    publish(); await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已发布，共1条。列表刷新失败'));
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === '/api/v1/work-objects')).toBe(true);
+    expect(posts()).toHaveLength(1); expect(screen.getByRole('button', { name: '发布' })).toBeDisabled();
+  } finally { unsubscribe(); }
 });

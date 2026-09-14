@@ -315,7 +315,9 @@
 
 .chip {
   display: inline-flex;
-  height: 34px;
+  min-height: 34px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 6px;
   padding: 0 6px 0 12px;
@@ -327,6 +329,7 @@
 }
 
 .chipRemove {
+  flex-shrink: 0;
   display: grid;
   width: var(--workbench-target-size);
   height: var(--workbench-target-size);
@@ -467,3 +470,25 @@
   font-size: var(--workbench-font-caption);
   line-height: var(--workbench-line-height);
 }
+.directory {
+  min-width: 0;
+  padding: 12px 0;
+}
+
+.directoryActions, .optionList li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.optionList {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.optionList li > span { flex: 1 1 160px; }
+.legacy { overflow-wrap: anywhere; }

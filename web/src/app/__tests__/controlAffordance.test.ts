@@ -409,6 +409,7 @@ describe('一个控件同一时刻只画一个焦点环', () => {
   /*
    * 抑制与画环是一对，缺后半截就是把焦点态做没了——键盘用户会不知道焦点在哪。所以每挂一处属性，都要
    * 在同一棵子树里指出**谁**画那个环，两边一起钉。
+   * 交办对象按获批接线方案改为目录选择组，已无自由文本输入；移除按钮沿用按钮焦点环，不挂输入抑制标记。
    */
   it.each([
     [
@@ -416,21 +417,27 @@ describe('一个控件同一时刻只画一个焦点环', () => {
       '../AppShell.tsx',
       '../AppShell.module.css',
       '.searchField:focus-within {',
+      'data-focus-ring="host"',
     ],
     [
       '交办页「交办对象」凹槽',
       '../../features/work-dispatch/WorkDispatchPage.tsx',
       '../../features/work-dispatch/WorkDispatchPage.module.css',
       '.chipWell:focus-within {',
+      'aria-labelledby="dispatch-target-label" role="group"',
     ],
     [
       'AI 助手页输入卡',
       '../../pages/ChatPage.tsx',
       '../../pages/ChatPage.module.css',
       '.sender:global(.ant-sender):focus-within {',
+      'data-focus-ring="host"',
     ],
-  ])('%s：挂了 host，子树里也确实有人画环', (_name, tsx, css, selector) => {
-    expect(readSource(tsx)).toContain('data-focus-ring="host"');
+  ])('%s：焦点标记符合当前控件结构，子树里也确实有人画环', (_name, tsx, css, selector, structure) => {
+    expect(readSource(tsx)).toContain(structure);
+    if (structure === 'aria-labelledby="dispatch-target-label" role="group"') {
+      expect(readSource(tsx)).not.toContain('data-focus-ring="host"');
+    }
     expect(rule(readSource(css), selector)).toContain(
       'var(--workbench-field-face-focus)',
     );

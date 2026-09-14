@@ -144,7 +144,11 @@ describe('WorkObjectSearchPage', () => {
     for (const result of results) {
       expect(within(result).getByText('命中标题')).toBeInTheDocument();
     }
-    expect(screen.getAllByText('责任人：暂未提供')).toHaveLength(2);
+    expect(screen.getAllByText('未提供显示名')).toHaveLength(2);
+    for (const result of results.slice(0, 2)) {
+      expect(result.querySelector('[data-assignee-value]')).toBeNull();
+      expect(within(result).queryByText('命中责任人')).toBeNull();
+    }
     expect(screen.queryByText('内部工作事项')).not.toBeInTheDocument();
     expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'synthetic' });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -158,7 +162,7 @@ describe('WorkObjectSearchPage', () => {
     });
     renderPage('/search?q=oa-title-001');
 
-    expect(await screen.findByText('内部工作事项')).toBeInTheDocument();
+    expect(await screen.findByText('未提供标题')).toBeInTheDocument();
     expect(screen.getByText('命中来源编号')).toBeInTheDocument();
     expect(screen.queryByText('命中标题')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
