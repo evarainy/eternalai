@@ -97,6 +97,7 @@ from app.knowledge.basic_knowledge import (
     REPLAY_SYSTEM_ITEMS,
 )
 from app.memory import SessionMemory
+from app.organization_directory_policy import check_dispatch_department_policy
 from app.organization_directory_sync import (
     OrganizationDirectoryScheduler,
     OrganizationDirectorySyncService,
@@ -683,7 +684,14 @@ def build_production_components(
         health_timeout_seconds=settings.health_timeout_seconds,
         health_checks=resolved_health_checks,
         organization_directory_scheduler=directory_scheduler,
-        diagnostic_checks={"organization_directory": directory_sync_service.diagnostic},
+        diagnostic_checks={
+            "organization_directory": directory_sync_service.diagnostic,
+            "organization_directory_dispatch_policy": partial(
+                check_dispatch_department_policy,
+                organization_directory,
+                max_age_s=settings.organization_directory_max_age_s,
+            ),
+        },
         user_profile=user_profile,
     )
 

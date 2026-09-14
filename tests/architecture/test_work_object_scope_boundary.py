@@ -63,6 +63,14 @@ def test_scope_allowlists_are_exact_module_level_frozenset_literals() -> None:
         assert ast.literal_eval(literal) == values
         assert len(literal.elts) == len(values)
 
+    expression = assignments["_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS"]
+    assert isinstance(expression, ast.Call)
+    assert isinstance(expression.func, ast.Name) and expression.func.id == "frozenset"
+    assert expression.args == [] and expression.keywords == []
+    from app.ports import work_object_scope as policy
+    assert policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS == frozenset()
+    assert not (policy._CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS & policy._PRISON_AREA_DEPARTMENT_IDS)
+
 
 def test_scope_module_has_no_environment_configuration_or_io_dependencies() -> None:
     tree = ast.parse(PORT_PATH.read_text(encoding="utf-8"))

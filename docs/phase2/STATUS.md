@@ -9,6 +9,13 @@
 
 ### 当前前端候选（2026-09-14）
 
+### 已合入主干的后端候选（2026-09-14）
+
+- `P2-AUDIT-DEPT-DEFAULT-001`：已按显式跨部门允许集合收窄派发授权；后端 `3533 passed, 0 failed, 0 skipped`，Golden `34/34 passed`，架构 `124 passed`，mypy `127 source files`，Ruff 通过；定向 `348 passed`、迁移回归与 policy 定向 `11 passed`、生产变异 `19/19` 被捕获，十个改动测试文件弱测试检查通过。该候选已由本次主干合入带入当前任务分支。
+- 其独立 Monitor 结论为 r2 PASS；本前端棒未重跑后端 pytest、数据库或 Golden。
+
+### 草稿隔离待审候选
+
 - `P2-FE-DISPATCH-WIRING-001`：前端全量覆盖 `776 passed`（组件 415、单元 358、OpenAPI 3；最终覆盖无失败/跳过）。组件来自全量入口的逐文件独立进程阶段；获准更新旧交互静态断言后，完整单元与 OpenAPI 阶段通过，未重复运行不受影响的组件。初次失败与超时单跑复核保留在 PR 证据中，不将初次全量命令写成 exit=0。
 - lint / typecheck / build 通过；九个改动测试的弱测试检查通过。29 项生产变异反证均指定断言红、恢复原哈希；r1 再核对当前生产哈希一致。构建的既有 chunk 体积告警仍保留，不改阈值换绿。
 - Chromium 合成页面已核对桌面 1440、窄屏 390、纽约 DST 双偏移显式选择及发布网络 body/回执；此为前端合成接线，真实 OA Source、首同步与生产端到端验收未完成。
@@ -41,7 +48,7 @@
 
 ## 组织目录与前端机会层指针
 
-- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已合并姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；候选只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 仍承接更广泛的可信组织身份来源、sessions 与 identity binding，本棒单目录仅服务 default 租户。生命周期、生产目录前置、多 membership 与监区名单风险仍见 `PHASE2_PLAN.md`。
+- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已合并交付姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；既有验收只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 仍承接更广泛的可信组织身份来源、sessions 与 identity binding，本棒单目录仅服务 default 租户。生命周期、前端接线、显示名语义、多 membership 与监区名单风险仍见 `PHASE2_PLAN.md`。
 - 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。本状态不把它与仍未实例化的 `WorkflowEngineAdapter` 欠债混同。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
 - 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，前端选择、发布接线、结果呈现与显示名语义已由 `P2-FE-DISPATCH-WIRING-001` 形成本地候选；服务端草稿与解析义务保留待 GOV-SYNC 裁定，不改变必达链的 BLOCKED 状态。

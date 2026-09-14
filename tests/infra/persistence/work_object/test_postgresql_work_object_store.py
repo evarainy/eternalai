@@ -554,16 +554,21 @@ def test_no_job_keeps_only_existing_visibility(dispatch_db) -> None:
     } == {"work-ai-sender-1"}
 
 
-def test_internal_scope_consumes_department_and_initiator_before_limit(dispatch_db) -> None:
+def test_internal_scope_consumes_department_and_initiator_before_limit(
+    dispatch_db, monkeypatch
+) -> None:
+    from app.ports import work_object_scope as policy
     from tests.api.test_work_object_dispatch import (
         assert_created,
+        cross_department_body,
         insert_synthetic_row,
         manual_row,
         run,
     )
 
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    assert_created(db, db.post())
+    assert_created(db, db.post(cross_department_body()))
     base = manual_row(db)
     # Insert unrelated rows before visible rows so a pre-filter LIMIT loses valid results.
     for index in range(205):
@@ -628,17 +633,22 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(dispatch_
     assert len(rows) == 201
 
 
-def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(dispatch_db) -> None:
+def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(
+    dispatch_db, monkeypatch
+) -> None:
+    from app.ports import work_object_scope as policy
     from tests.api.test_work_object_dispatch import (
         assert_created,
+        cross_department_body,
         insert_synthetic_row,
         manual_row,
         run,
     )
     from tests.api.test_work_objects import _record
 
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
-    created = assert_created(db, db.post())
+    created = assert_created(db, db.post(cross_department_body()))
     oa = _record(owner="ai-private-owner").model_dump()
     insert_synthetic_row(db, oa)
     legacy = {
@@ -800,9 +810,11 @@ def test_dispatch_concurrent_idempotency_and_restart_replay(dispatch_db, monkeyp
     assert db.counts() == (1, 1)
 
 
-def test_dispatch_batch_failure_rolls_back_objects_and_receipt(dispatch_db) -> None:
+def test_dispatch_batch_failure_rolls_back_objects_and_receipt(dispatch_db, monkeypatch) -> None:
+    from app.ports import work_object_scope as policy
     from tests.api.test_work_object_dispatch import assert_error, request_body
 
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     inserts = 0
 

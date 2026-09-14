@@ -8,6 +8,7 @@ import json
 import pytest
 
 from app.api.v1 import work_objects as api
+from app.ports import work_object_scope as policy
 from tests.api.test_work_object_dispatch import assert_error, expire_directory, request_body
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 
@@ -57,6 +58,7 @@ def name(db, user, value="Synthetic person"):
 def test_dispatch_permission_precedes_target_existence(
     dispatch_db, monkeypatch, role, department, job, kind
 ):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     db.actor("synthetic-matrix-actor", department, job)
     db.membership("synthetic-own-target", department)
@@ -198,6 +200,7 @@ def test_dispatch_prerequisite_errors_do_not_expose_targets(
 
 
 def test_office_and_prison_options_match_dispatch_rules(dispatch_db, monkeypatch):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     name(db, "recipient")
     original = api.compute_dispatch_authorization
@@ -257,7 +260,8 @@ def test_other_tenant_and_forged_scope_cannot_read_directory(dispatch_db, monkey
     assert len(reads) == 1
 
 
-def test_global_membership_ambiguity_and_missing_names_are_unselectable(dispatch_db):
+def test_global_membership_ambiguity_and_missing_names_are_unselectable(dispatch_db, monkeypatch):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     name(db, "recipient", "Synthetic same")
     db.membership("synthetic-same", "office-b")
@@ -290,7 +294,8 @@ def test_global_membership_ambiguity_and_missing_names_are_unselectable(dispatch
     )
 
 
-def test_cursor_pages_are_stable_and_version_bound(dispatch_db):
+def test_cursor_pages_are_stable_and_version_bound(dispatch_db, monkeypatch):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     for index in range(101):
         user = f"synthetic-page-{index:03}"
@@ -347,7 +352,8 @@ def test_error_dto_is_closed_and_never_echoes_input(dispatch_db, query):
     }
 
 
-def test_no_job_actor_denied_but_no_job_target_selectable(dispatch_db):
+def test_no_job_actor_denied_but_no_job_target_selectable(dispatch_db, monkeypatch):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     name(db, "recipient")
     assert [
@@ -408,6 +414,7 @@ def test_authentication_precedes_parameter_validation(dispatch_db):
 def test_remaining_error_paths_match_exact_wire_contract(
     dispatch_db, monkeypatch, case, code, status_code, message
 ):
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     from tests.api.test_work_object_dispatch import expire_directory
 
     db = dispatch_db
@@ -463,3 +470,58 @@ def test_unconfigured_service_precedes_invalid_parameters(dispatch_db):
         }
     }
     assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("department", ["office-a", "572"])
+def test_unlisted_actor_options_match_post_authorization(dispatch_db, department):
+    db = dispatch_db
+    db.actor("synthetic-unlisted-head", department, "75")
+    db.membership("synthetic-local", department)
+    name(db, "synthetic-local")
+    body = options(db, "kind=department&limit=1").json()
+    assert [item["department_id"] for item in body["items"]] == [department]
+    assert body["has_more"] is False and body["next_cursor"] is None
+    own = options(db, "kind=user&department_id=" + department)
+    assert own.status_code == 200
+    assert "synthetic-local" in {item["directory_user_id"] for item in own.json()["items"]}
+    for target in ("office-b", "synthetic-absent"):
+        get = options(db, "kind=user&department_id=" + target)
+        post = db.post(request_body(targets=[{"kind": "department", "department_id": target}]))
+        for response in (get, post):
+            assert_error(response, 403, "cross_department_dispatch_denied")
+            assert response.json() == {
+                "detail": {
+                    "code": "cross_department_dispatch_denied",
+                    "message": "Work Object operation is not permitted.",
+                }
+            }
+        assert db.counts() == (0, 0)
+
+
+def test_policy_narrowing_rechecks_existing_cursor_and_post(dispatch_db, monkeypatch):
+    db = dispatch_db
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
+    first = options(db, "kind=department&limit=1").json()
+    assert first["items"][0]["department_id"] == "572"
+    cursor = first["next_cursor"]
+    assert cursor is not None
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
+    page = options(db, "kind=department&limit=1&cursor=" + cursor).json()
+    assert page["snapshot_version"] == first["snapshot_version"]
+    assert [item["department_id"] for item in page["items"]] == ["office-a"]
+    assert page["has_more"] is False
+    assert_error(
+        options(db, "kind=user&department_id=office-b"), 403, "cross_department_dispatch_denied"
+    )
+    assert_error(
+        db.post(request_body(targets=[{"kind": "department", "department_id": "office-b"}])),
+        403,
+        "cross_department_dispatch_denied",
+    )
+    assert db.counts() == (0, 0)
+    db.execute("UPDATE organization_directory_sync_state SET snapshot_version=snapshot_version+1")
+    assert_error(
+        options(db, "kind=department&limit=1&cursor=" + cursor),
+        409,
+        "organization_directory_snapshot_changed",
+    )
