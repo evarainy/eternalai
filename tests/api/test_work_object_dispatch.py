@@ -1012,7 +1012,7 @@ def test_dispatch_canonical_order_and_mixed_errors_are_deterministic(dispatch_db
         {"kind": "department", "department_id": "575"},
     ]
     for order in (targets, list(reversed(targets))):
-        assert_error(db.post(request_body(targets=order)), 404, "dispatch_target_not_found")
+        assert_error(db.post(request_body(targets=order)), 403, "cross_department_dispatch_denied")
     assert_error(
         db.post(request_body(targets=targets[1:])), 403, "cross_department_dispatch_denied"
     )

@@ -864,6 +864,15 @@ class WorkObjectService:
             self._recheck_dispatch(fresh)
             return response.model_copy(update={"replayed": True})
 
+        # Authorize the entire requested batch before exposing target existence
+        # or membership errors, including targets that cannot be resolved.
+        for target in body.targets:
+            target_decision = self._decision(membership, department, target.department_id)
+            if target_decision.decision != "allow":
+                await self._deny_dispatch(
+                    principal, target_decision, "cross_department_dispatch_denied", None
+                )
+
         resolved: list[tuple[UserDispatchTarget | DepartmentDispatchTarget, str, str | None]] = []
         missing = False
         ambiguous = False
@@ -905,12 +914,6 @@ class WorkObjectService:
             await self._deny_dispatch(
                 principal, decision, "dispatch_target_membership_ambiguous", None
             )
-        for _, owner_department_id, _ in resolved:
-            target_decision = self._decision(membership, department, owner_department_id)
-            if target_decision.decision != "allow":
-                await self._deny_dispatch(
-                    principal, target_decision, "cross_department_dispatch_denied", None
-                )
         await self._audit_dispatch(principal, decision, None, required=True)
         now = self._clock().astimezone(UTC)
         records = [

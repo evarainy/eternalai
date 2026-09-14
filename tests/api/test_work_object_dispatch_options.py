@@ -8,7 +8,7 @@ import json
 import pytest
 
 from app.api.v1 import work_objects as api
-from tests.api.test_work_object_dispatch import assert_error, request_body
+from tests.api.test_work_object_dispatch import assert_error, expire_directory, request_body
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 
 
@@ -47,6 +47,154 @@ def name(db, user, value="Synthetic person"):
         name=value,
         user=user,
     )
+
+
+@pytest.mark.parametrize(
+    "role,department,job",
+    [("office", "office-a", "75"), ("prison", "572", "75"), ("nonhead", "office-a", None)],
+)
+@pytest.mark.parametrize("kind", ["department", "user"])
+def test_dispatch_permission_precedes_target_existence(
+    dispatch_db, monkeypatch, role, department, job, kind
+):
+    db = dispatch_db
+    db.actor("synthetic-matrix-actor", department, job)
+    db.membership("synthetic-own-target", department)
+    name(db, "synthetic-own-target")
+    name(db, "recipient")
+    real = api.compute_dispatch_authorization
+    calls = []
+
+    def observed(**kwargs):
+        calls.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(api, "compute_dispatch_authorization", observed)
+    response = options(db)
+    if role == "nonhead":
+        assert_error(response, 403, "not_department_head")
+    else:
+        assert response.status_code == 200
+        expected = {"office-a", "office-b", "office-c", "572", "575"}
+        assert {item["department_id"] for item in response.json()["items"]} == (
+            expected if role == "office" else {department}
+        )
+        assert {call["target_department_id"] for call in calls[1:]} == expected
+
+    denied_bodies = []
+    for target, user in (
+        (department, "synthetic-own-target"),
+        ("office-b", "recipient"),
+        ("synthetic-nonexistent", "synthetic-absent-user"),
+    ):
+        before = db.counts()
+        get = options(db, "kind=user&department_id=" + target)
+        assert db.counts() == before
+        payload = {"kind": kind, "department_id": target}
+        if kind == "user":
+            payload["directory_user_id"] = user
+        post = db.post(request_body(targets=[payload]))
+        if role == "nonhead":
+            for result in (get, post):
+                assert_error(result, 403, "not_department_head")
+            assert get.json() == post.json()
+        elif role == "prison" and target != department:
+            for result in (get, post):
+                assert_error(result, 403, "cross_department_dispatch_denied")
+                denied_bodies.append(result.json())
+        elif target == "synthetic-nonexistent":
+            for result in (get, post):
+                assert_error(result, 404, "dispatch_target_not_found")
+            assert get.json() == post.json()
+        else:
+            assert get.status_code == 200, get.text
+            assert user in {item["directory_user_id"] for item in get.json()["items"]}
+            assert post.status_code == 201, post.text
+            assert post.json()["created_count"] == 1
+            assert post.json()["items"][0]["owner_department_id"] == target
+        assert db.counts() == (
+            (before[0] + 1, before[1] + 1) if post.status_code == 201 else before
+        )
+    if role == "prison":
+        assert denied_bodies == [{"detail": {
+            "code": "cross_department_dispatch_denied",
+            "message": "Work Object operation is not permitted.",
+        }}] * 4
+    assert all(call["dispatcher_membership"].user_id == "synthetic-matrix-actor" for call in calls)
+    assert all(call["dispatcher_department"].department_id == department for call in calls)
+
+
+@pytest.mark.parametrize("target_state", ["present", "missing", "ambiguous"])
+def test_denied_batch_hides_target_membership_and_other_missing_targets(dispatch_db, target_state):
+    db = dispatch_db
+    db.actor("synthetic-prison-head", "572", "75")
+    user = "synthetic-absent-user" if target_state == "missing" else "recipient"
+    if target_state == "ambiguous":
+        db.membership("recipient", "office-c")
+    cross = {"kind": "user", "directory_user_id": user, "department_id": "office-b"}
+    own_missing = {
+        "kind": "user", "directory_user_id": "synthetic-missing-own", "department_id": "572",
+    }
+    for targets in ([cross], [own_missing, cross], [cross, own_missing]):
+        response = db.post(request_body(targets=targets))
+        assert_error(response, 403, "cross_department_dispatch_denied")
+        assert response.json() == {"detail": {
+            "code": "cross_department_dispatch_denied",
+            "message": "Work Object operation is not permitted.",
+        }}
+        assert db.counts() == (0, 0)
+    assert {event["attributes"]["reason_code"] for event in db.rows("trace_events")} == {
+        "cross_department_dispatch_denied"
+    }
+
+
+@pytest.mark.parametrize(
+    "state,code,status",
+    [
+        ("actor-missing", "directory_membership_missing", 403),
+        ("actor-ambiguous", "directory_membership_ambiguous", 403),
+        ("directory-missing", "organization_directory_missing", 503),
+        ("directory-stale", "organization_directory_stale", 503),
+        ("directory-unavailable", "organization_directory_unavailable", 503),
+    ],
+)
+def test_dispatch_prerequisite_errors_do_not_expose_targets(
+    dispatch_db, monkeypatch, state, code, status
+):
+    db = dispatch_db
+    if state == "actor-missing":
+        db.tokens.principal = db.tokens.principal.model_copy(update={
+            "org_ctx": db.tokens.principal.org_ctx.model_copy(update={
+                "directory_user_id": "synthetic-absent-actor",
+            }),
+        })
+    elif state == "actor-ambiguous":
+        db.membership("sender", "office-c", "75")
+    elif state == "directory-missing":
+        db.execute(
+            "UPDATE organization_directory_sync_state SET snapshot_version=0, "
+            "source_fetched_at=NULL, last_success_at=NULL, last_attempt_started_at=NULL, "
+            "last_attempt_finished_at=NULL, last_attempt_status='never', last_error_code=NULL"
+        )
+    elif state == "directory-stale":
+        expire_directory(db)
+    else:
+        async def unavailable():
+            raise RuntimeError("synthetic directory failure")
+
+        monkeypatch.setattr(db.directory, "read_view", unavailable)
+    responses = [options(db)]
+    for target in ("office-a", "office-b", "synthetic-nonexistent"):
+        responses.append(options(db, "kind=user&department_id=" + target))
+        for kind in ("department", "user"):
+            payload = {"kind": kind, "department_id": target}
+            if kind == "user":
+                payload["directory_user_id"] = "recipient"
+            responses.append(db.post(request_body(targets=[payload])))
+    for response in responses:
+        assert_error(response, status, code)
+        assert response.json() == responses[0].json()
+    assert db.counts() == (0, 0)
 
 
 def test_office_and_prison_options_match_dispatch_rules(dispatch_db, monkeypatch):

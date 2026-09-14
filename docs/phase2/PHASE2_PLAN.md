@@ -409,7 +409,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-AGENT-ORCH-SEAM-001` | P2-PORT-SEAM-001 | **A** | **已完成并合并至 `phase0/main`**：`AgentOrchestrationPort`、`AgentOrchestrationAdapter` 与 Runtime 生产接线已交付；Workflow 生产引擎仍按独立活债处理 |
 | `P2-INTERNAL-WO-DISPATCH-001` | P2-INTERNAL-WO-SCOPE-001、P2-PAGE-CONTEXT-CONTRACT-001（均已完成） | **A** | **已完成并合并至 `phase0/main`**：可信部门/发起人字段消费、首次派发写端点、后台同步错误分类、前后端公开合同及对应回归已交付；生命周期、前端完整发布/草稿接线、显示名、多 membership 与监区名单 fail-open 风险按活债保留 |
 | `P2-INTERNAL-WO-ATTACHMENT-001` | P2-INTERNAL-WO-DISPATCH-001 | **A** | 是：方案限额矛盾须先裁 |
-| `P2-ORGDIR-PERSON-SYNC-001` | P2-OA-ORGANIZATION-DIRECTORY-001（已完成） | **A** | 本地实现候选与定向/全量/Golden/架构验证完成，待独立 Monitor、grok 评审及集成；生产 Source 仍由 G2 承接。已决后继 `P2-FE-DISPATCH-WIRING-001`；合同见 `docs/phase2/DECISIONS.md` 2026-09-14 |
+| `P2-ORGDIR-PERSON-SYNC-001` | P2-OA-ORGANIZATION-DIRECTORY-001（已完成） | **A** | 本地候选已按当次人工裁决修复派发存在性探测并补齐指定验证，不开第四轮 Monitor，待 grok 评审及集成；生产 Source 仍由 G2 承接。已决后继 `P2-FE-DISPATCH-WIRING-001`；合同见 `docs/phase2/DECISIONS.md` 2026-09-14 |
 | `P2-FE-DISPATCH-WIRING-001` | P2-ORGDIR-PERSON-SYNC-001、P2-INTERNAL-WO-DISPATCH-001（均为前置） | 待方案定档 | 否；承接人员/部门、对象与可见范围选择、截止时间时区、草稿解析、发布/草稿恢复、显示名语义及内部事项 `view_only` 呈现；裁决见 `docs/phase2/DECISIONS.md` 2026-09-10 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001、P2-TASK-TENANT-COLUMN-001（均已完成） | **A** | `tasks` 切片完成后仍待真实组织身份来源、sessions、identity binding、组织目录等剩余 scope 的独立授权与实现；第二租户硬前置 |
 | `P2-FEEDBACK-LOOP-001` | 无 | **A（预判）** | 是：获批 Scope 未定义；机会层 |

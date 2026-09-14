@@ -1,14 +1,14 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；同步 2026-09-14 已合并的四根审计修复棒、组织目录方案进度与新环境欠债，并纠正审计 #17 的 Workflow 接缝事实）。
-- 当前实现候选 task_id：`P2-ORGDIR-PERSON-SYNC-001`（A 档、串行，承担 A 类同步；本地候选待独立 Monitor 与 grok 评审，未 push/合并）。2026-09-14 实测后端 `3445 passed, 0 failed, 0 skipped`、Golden `34/34`、架构 `124 passed`、mypy `126 source files`、Ruff 通过。上一已合并功能基线为 `P2-INTERNAL-WO-DISPATCH-001`，四根审计修复棒与 `P2-TEST-MONOTONIC-DEADLINE-001` 已合并。
+- 当前实现候选 task_id：`P2-ORGDIR-PERSON-SYNC-001`（A 档、串行，承担 A 类同步；本地候选已按当次裁决修复派发存在性探测并补齐验证，待 grok 评审，未 push/合并）。2026-09-14 实测后端 `3459 passed, 0 failed, 0 skipped`、Golden `34/34`、架构 `124 passed`、mypy `126 source files`、Ruff 通过。上一已合并功能基线为 `P2-INTERNAL-WO-DISPATCH-001`，四根审计修复棒与 `P2-TEST-MONOTONIC-DEADLINE-001` 已合并。
 - 当前实现后继指针：`P2-FE-DISPATCH-WIRING-001`；组织目录候选须先完成独立审查与集成。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
 
 ## 已登记验证基线
 
-后端、Golden、架构、mypy 与 Ruff 采用 **2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`** 最终整体实现的本机实测；独立 Monitor/grok 尚未执行，不能视作合并或生产验收。前端全量沿用下列已合并棒的历史结果；本棒另做生成客户端的定向验证。
+后端、Golden、架构、mypy 与 Ruff 采用 **2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`** 最终整体实现的本机实测；独立 Monitor 三轮后已按当次人工裁决完成扩域修复与指定验证补齐，不开第四轮；grok 尚待执行，不能视作独立 Monitor PASS、合并或生产验收。前端全量沿用下列已合并棒的历史结果；本棒另做生成客户端的定向验证。
 
-- pytest：`3445 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 后台全量最终 exit=0）。
+- pytest：`3459 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 后台全量最终 exit=0）。
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`）。
 - `tests/architecture/`：`124 passed`（2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 独立架构命令；P4 observer authoritative PASS）。
 - 前端全量 `pnpm --dir web test`：`585 passed`（`P2-AUDIT-VITE-001` 复测；本棒未重跑）。
