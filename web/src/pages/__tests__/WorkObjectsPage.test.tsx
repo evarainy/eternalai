@@ -485,9 +485,40 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByText(/oa_sync_failed: OA 暂时不可用/)).toBeInTheDocument();
     expect(screen.getByText(/当前步骤 待办/)).toBeInTheDocument();
     expect(screen.getByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
-    expect(screen.getByText('分页只整理已取得的部分，不代表 OA 里的全部事项。')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '服务端最多返回前 200 条：有截止时间的优先，截止越早越靠前；截止时间相同或均未设置时，按首次入库时间从新到旧选取。本页筛选、排序和分页仅整理已取得的事项，不代表全部事项。',
+      ),
+    ).toBeInTheDocument();
     expect(container.querySelector('.ant-pagination')).toBeInTheDocument();
     expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('discloses bounded selection without claiming complete results', async () => {
+    apiMocks.listWorkObjects.mockResolvedValueOnce(
+      listResponse({ limit_exceeded: true }),
+    );
+    apiMocks.syncWorkObjects.mockResolvedValueOnce(
+      listResponse({ limit_exceeded: true }),
+    );
+
+    const { unmount } = renderPage();
+
+    expect(await screen.findByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '服务端最多返回前 200 条：有截止时间的优先，截止越早越靠前；截止时间相同或均未设置时，按首次入库时间从新到旧选取。本页筛选、排序和分页仅整理已取得的事项，不代表全部事项。',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/OA 里的全部事项/)).not.toBeInTheDocument();
+    unmount();
+
+    renderPage();
+
+    expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
+    expect(
+      screen.queryByText('事项超过首版展示上限 200 条'),
+    ).not.toBeInTheDocument();
   });
 
   it('routes an expired OA identity to the existing reauthentication state', async () => {

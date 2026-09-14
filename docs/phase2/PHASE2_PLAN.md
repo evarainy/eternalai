@@ -75,6 +75,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | item | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
+| 本棒 D-6 有限替换及旧债归档待 GOV-SYNC 登记 | 实现 lane 不承担 B 类治理；已批例外需要与现役决定/摘要/旧债一致，方案不能代替永久载体 | `P2-AUDIT-LIST-ORDER-001` 最终实现、验证和可引用 PR；具体 GOV-SYNC 批次尚未分配 | 待主控/GOV-SYNC 分配本批治理 task_id，不新造编号 | §3.5 全文、ARCHITECTURE D-6 例外指针及旧债真实状态完成登记，保留分页等原债；各条以实际实现证据而非方案关闭 | 已批方案 §2.2/§3.5；`AGENTS.md::状态同步`；本棒 PR body |
 | FE-G1：发布头的机器可消费声明不足 | feature 薄包装已补唯一 UUID，但 OpenAPI/生成函数仍无 Idempotency-Key 参数入口，不放宽服务端验证 | 无技术前置；公共合同修改不在本棒授权范围 | 待 GOV-SYNC 分配 | 正式声明并生成可用头参数，真实缺失/重复/合法头与 schema 再生一致检查通过 | `web/src/features/work-dispatch/dispatchApi.ts::postDispatch`；`web/src/generated/work-objects/work-objects.ts::dispatchWorkObjectsApiV1WorkObjectsDispatchPost`；本棒 P1 接线反证 |
 | FE-G2：跨刷新未决发布不能恢复同次请求 | 按已决范围只保留页内 key/body；刷新后仅提示结果待确认，列表人工核对不能精确消歧，重新发布可能重复 | 后继需稳定身份绑定与恢复合同，尚无已登记前置 task_id | 待 GOV-SYNC 分配 | 获批恢复合同可核验同一可信身份原 key/body 且不重复创建，其他身份不可读取/补发；结果真实，具名接线与隔离验收通过 | `docs/phase2/DECISIONS.md` 2026-09-10 第5项；`web/src/features/work-dispatch/__tests__/WorkDispatchPage.test.tsx` P6；本棒 P6 反证 |
 | 上线前真实跨部门允许名单待提供 | 初始空集合已经主控批准；生产目录尚无真实 Source、派发本就不可用是主控裁定背景，合成允许正例不代表真实跨部门可用 | 待雨爷提供上线前真实允许名单（人工输入，无对应已分配 task_id） | 待 GOV-SYNC 绑定上线前名单登记/验收后继 | 雨爷确认精确名单，经对应授权在代码常量与守卫同值登记，验证获准跨部、未获准同部与跨部拒绝；若最终名单确认为空，验证同部成功与全部跨部拒绝。初始空集合实现通过不关闭本债 | `P2-AUDIT-DEPT-DEFAULT-001` 已批方案 §3.2 / §7.1；`app/ports/work_object_scope.py::_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS`；`tests/architecture/test_work_object_scope_boundary.py` |

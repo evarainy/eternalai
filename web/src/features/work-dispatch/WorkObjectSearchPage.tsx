@@ -204,7 +204,7 @@ export default function WorkObjectSearchPage() {
           showIcon
           type="warning"
           title="结果过多，请缩小范围"
-          description="当前仅展示 200 条；结果未排序，具体 200 条可能变化。"
+          description="当前仅展示前 200 条：有截止时间的优先，截止越早越靠前；截止时间相同或均未设置时，按首次入库时间从新到旧选取。请缩小搜索范围。"
         />
       ) : null}
 

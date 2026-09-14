@@ -4,7 +4,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import cast
 from uuid import uuid4
 
@@ -50,6 +50,24 @@ def _snapshot(
         created_at="2026-08-17",
         workflow_type_id="workflow-1",
     )
+
+
+_STABLE_LIST_ORDER_BY = (
+    "ORDER BY due_at ASC NULLS LAST, created_at DESC NULLS LAST, "
+    'work_object_id COLLATE "C" ASC'
+)
+
+
+def _collapsed_sql(statement: str) -> str:
+    return " ".join(statement.split())
+
+
+def _assert_list_sql_orders_before_limit(statement: str) -> None:
+    collapsed = _collapsed_sql(statement)
+    assert _STABLE_LIST_ORDER_BY in collapsed
+    upper = collapsed.upper()
+    assert upper.index("WHERE") < collapsed.index(_STABLE_LIST_ORDER_BY)
+    assert collapsed.index(_STABLE_LIST_ORDER_BY) < upper.index("LIMIT")
 
 
 def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> None:
@@ -181,7 +199,8 @@ def test_postgresql_store_is_idempotent_user_isolated_and_preserves_marks() -> N
                 and "LIMIT" in statement.upper()
             ]
             assert list_statements
-            assert all("ORDER BY" not in statement.upper() for statement in list_statements)
+            for statement in list_statements:
+                _assert_list_sql_orders_before_limit(statement)
             search_statements = [
                 statement for statement in list_statements if "STRPOS" in statement.upper()
             ]
@@ -440,7 +459,9 @@ def test_postgresql_search_applies_match_before_limit() -> None:
             assert response.limit_exceeded is False
             sql = statements[-1]
             assert "assignee_ai_user_id =" in sql and "tenant_id =" in sql
-            assert sql.upper().index("STRPOS") < sql.upper().index("LIMIT")
+            _assert_list_sql_orders_before_limit(sql)
+            upper = sql.upper()
+            assert upper.index("STRPOS") < upper.index("ORDER BY") < upper.index("LIMIT")
 
     asyncio.run(exercise())
 
@@ -910,3 +931,503 @@ def test_dispatch_trace_failure_recovers_concurrent_receipt(
     assert [
         record.getMessage() for record in caplog.records if record.name == "app.api.v1.work_objects"
     ] == ["work_object_audit_unavailable"]
+
+
+_PLUS8 = timezone(timedelta(hours=8))
+_DUE_EARLY = datetime(2026, 1, 1, tzinfo=UTC)
+_DUE_LATE = datetime(2026, 6, 1, tzinfo=UTC)
+_CREATED_OLDEST = datetime(2025, 6, 1, 12, tzinfo=UTC)
+_CREATED_OLD = datetime(2026, 1, 10, 12, tzinfo=UTC)
+_CREATED_MID = datetime(2026, 4, 1, 12, tzinfo=UTC)
+_CREATED_NEW = datetime(2026, 8, 1, 12, tzinfo=UTC)
+_KEY_ORDER = (
+    "due-early",
+    "due-new",
+    "due-old",
+    "offset-east",
+    "offset-utc",
+    "null-new",
+    "A",
+    "a",
+    "中",
+)
+_KEY_SPECS = (
+    ("due-early", _DUE_EARLY, _CREATED_OLD, "oa"),
+    ("due-new", _DUE_LATE, _CREATED_NEW, "manual"),
+    ("due-old", _DUE_LATE, _CREATED_MID, "legacy"),
+    ("offset-east", datetime(2026, 6, 1, 8, tzinfo=_PLUS8), _CREATED_OLD, "oa"),
+    ("offset-utc", _DUE_LATE, _CREATED_OLD, "oa"),
+    ("null-new", None, _CREATED_NEW, "manual"),
+    ("A", None, _CREATED_OLD, "oa"),
+    ("a", None, _CREATED_OLD, "legacy"),
+    ("中", None, _CREATED_OLD, "manual"),
+)
+
+
+def _row_ids(rows) -> list[str]:
+    return [row.work_object_id for row in rows]
+
+
+def _prepare_sorter(db):
+    from tests.api.test_work_object_dispatch import manual_row, request_body, run
+
+    response = db.post(
+        request_body(targets=[{"kind": "department", "department_id": "office-a"}])
+    )
+    assert response.status_code == 201, response.text
+    created_id = response.json()["items"][0]["work_object_id"]
+    db.actor("sorter", "office-c", None)
+    scope = AuthorizedWorkObjectScope(
+        principal_tenant_id="default",
+        principal_ai_user_id="ai-sorter",
+        principal_department_id="office-c",
+    )
+    assert _row_ids(run(db.store.list_for_scope(scope))) == []
+    return created_id, scope, manual_row(db)
+
+
+def _insert_sorted_row(
+    db,
+    base: dict,
+    *,
+    item_id: str,
+    due_at: datetime | None,
+    created_at: datetime,
+    kind: str,
+    **extra: object,
+) -> None:
+    from tests.api.test_work_object_dispatch import insert_synthetic_row
+    from tests.api.test_work_objects import _record
+
+    if kind == "manual":
+        row = {
+            **base,
+            "work_object_id": item_id,
+            "owner_department_id": extra.get("owner_department_id", "office-c"),
+            "initiator_ai_user_id": extra.get("initiator_ai_user_id", "ai-neighbor"),
+            "due_at": due_at,
+            "created_at": created_at,
+            "updated_at": extra.get("updated_at", created_at),
+            "title": extra.get("title", "Manual " + item_id),
+        }
+        insert_synthetic_row(db, row)
+        return
+    row = _record(owner="ai-sorter", source_ref="oa-" + item_id, index=1).model_dump()
+    row.update(
+        {
+            "work_object_id": item_id,
+            "due_at": due_at,
+            "created_at": created_at,
+            "updated_at": extra.get("updated_at", created_at),
+            "assignee_ai_user_id": extra.get("assignee_ai_user_id", "ai-sorter"),
+            "assignee_display_name": extra.get("assignee_display_name", "Sorter"),
+            "source_title": extra.get("source_title", "OA " + item_id),
+            "source_ref": extra.get("source_ref", "oa-" + item_id),
+            "source_status": extra.get("source_status", "OA_PENDING"),
+            "source_fetched_at": extra.get("source_fetched_at", created_at),
+        }
+    )
+    if kind == "legacy":
+        row.update(
+            {
+                "state_authority": "internal",
+                "source_system": "eternalai",
+                "source_kind": "internal_task",
+            }
+        )
+        for field in (
+            "source_ref",
+            "source_title",
+            "source_status",
+            "source_received_at",
+            "source_created_at",
+            "source_workflow_type_id",
+            "source_fetched_at",
+        ):
+            row[field] = None
+    insert_synthetic_row(db, row)
+
+
+def _capture_list_sql(db) -> list[str]:
+    statements: list[str] = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _many) -> None:
+        collapsed = _collapsed_sql(statement)
+        if (
+            collapsed.lstrip().upper().startswith("SELECT")
+            and "FROM work_objects" in collapsed
+            and "LIMIT" in collapsed.upper()
+        ):
+            statements.append(statement)
+
+    event.listen(db.engine.sync_engine, "before_cursor_execute", capture)
+    return statements
+
+
+def _service_list(db, *, search_term: str | None = None):
+    from tests.api.test_work_object_dispatch import run
+
+    response = run(
+        db.service.list_for_principal(db.tokens.principal, search_term=search_term)
+    )
+    return [item.work_object_id for item in response.items], response.limit_exceeded
+
+
+def test_bounded_list_orders_mixed_authorities_before_limit(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    statements = _capture_list_sql(db)
+    _seed_id, scope, base = _prepare_sorter(db)
+    kinds = ("oa", "manual", "legacy")
+    for index in range(199, -1, -1):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"fill-{index:03d}",
+            due_at=None,
+            created_at=_CREATED_OLDEST,
+            kind=kinds[index % 3],
+        )
+    for item_id, due_at, created_at, kind in reversed(_KEY_SPECS):
+        _insert_sorted_row(
+            db, base, item_id=item_id, due_at=due_at, created_at=created_at, kind=kind
+        )
+    expected = list(_KEY_ORDER) + [f"fill-{index:03d}" for index in range(192)]
+    store_ids = _row_ids(run(db.store.list_for_scope(scope)))
+    service_ids, overflow = _service_list(db)
+    assert store_ids == expected
+    assert store_ids[0] == "due-early"
+    assert service_ids == expected[:200]
+    assert overflow is True
+    assert statements
+    for statement in statements:
+        _assert_list_sql_orders_before_limit(statement)
+
+
+def test_bounded_list_ties_use_created_at_and_c_collated_id(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    statements = _capture_list_sql(db)
+    _seed_id, scope, base = _prepare_sorter(db)
+    for item_id, due_at, created_at, kind in reversed(_KEY_SPECS):
+        _insert_sorted_row(
+            db, base, item_id=item_id, due_at=due_at, created_at=created_at, kind=kind
+        )
+    assert _row_ids(run(db.store.list_for_scope(scope))) == list(_KEY_ORDER)
+
+    for index in range(198, -1, -1):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"early-{index:03d}",
+            due_at=datetime(2025, 1, 1, tzinfo=UTC),
+            created_at=_CREATED_OLD,
+            kind="manual",
+        )
+    _insert_sorted_row(
+        db,
+        base,
+        item_id="tie-out",
+        due_at=datetime(2025, 6, 1, tzinfo=UTC),
+        created_at=_CREATED_NEW,
+        kind="oa",
+    )
+    _insert_sorted_row(
+        db,
+        base,
+        item_id="tie-in",
+        due_at=datetime(2025, 6, 1, tzinfo=UTC),
+        created_at=_CREATED_NEW,
+        kind="oa",
+    )
+    expected = [f"early-{index:03d}" for index in range(199)] + ["tie-in", "tie-out"]
+    store_ids = _row_ids(run(db.store.list_for_scope(scope)))
+    service_ids, overflow = _service_list(db)
+    assert store_ids == expected
+    assert "tie-in" in store_ids
+    assert store_ids[199] == "tie-in"
+    assert store_ids[200] == "tie-out"
+    assert service_ids == expected[:200]
+    assert "tie-out" not in service_ids
+    assert overflow is True
+    list_sql = " ".join(_collapsed_sql(sql) for sql in statements)
+    assert _STABLE_LIST_ORDER_BY in list_sql
+    assert 'COLLATE "C"' in list_sql
+    assert "NULLS LAST" in list_sql
+
+
+@pytest.mark.parametrize("count", [0, 1, 199, 200, 201, 205])
+def test_bounded_list_limit_and_overflow_edges(dispatch_db, count: int) -> None:
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    _seed_id, scope, base = _prepare_sorter(db)
+    expected = [f"row-{index:03d}" for index in range(count)]
+    for index in range(count - 1, -1, -1):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=expected[index],
+            due_at=None,
+            created_at=_CREATED_NEW - timedelta(seconds=index),
+            kind="oa",
+        )
+    for limit in (1, 200, 201):
+        assert _row_ids(run(db.store.list_for_scope(scope, limit=limit))) == expected[
+            : min(count, limit)
+        ]
+    service_ids, overflow = _service_list(db)
+    assert service_ids == expected[: min(count, 200)]
+    assert overflow is (count >= 201)
+    payload = db.client.get("/api/v1/work-objects").json()
+    assert [item["work_object_id"] for item in payload["items"]] == expected[
+        : min(count, 200)
+    ]
+    assert payload["limit"] == 200
+    assert payload["limit_exceeded"] is (count >= 201)
+    if count in {201, 205}:
+        assert len(payload["items"]) == 200
+
+
+def test_search_orders_matching_subset_before_limit(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    statements = _capture_list_sql(db)
+    _seed_id, scope, base = _prepare_sorter(db)
+    for index in range(205):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"miss-{index:03d}",
+            due_at=_DUE_EARLY,
+            created_at=_CREATED_OLD,
+            kind="oa",
+            source_title="Unrelated",
+            assignee_display_name="Other Person",
+            source_ref=f"MISS-{index:03d}",
+        )
+    for index in range(205):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"hit-{index:03d}",
+            due_at=_DUE_LATE,
+            created_at=_CREATED_OLD,
+            kind="oa",
+            source_title="Needle 100%_ready item",
+            assignee_display_name="Li Ming",
+            source_ref="OA-REF-EQ" if index == 0 else f"HIT-{index:03d}",
+        )
+    _insert_sorted_row(
+        db,
+        base,
+        item_id="late-hit",
+        due_at=_DUE_LATE,
+        created_at=_CREATED_NEW,
+        kind="oa",
+        source_title="Needle 100%_ready late",
+        assignee_display_name="Li Ming",
+        source_ref="LATE-HIT",
+    )
+    matching = ["late-hit"] + [f"hit-{index:03d}" for index in range(205)]
+    for query in (
+        "needle",
+        "\u3000NEEDLE\u00a0",
+        "%_",
+        " li ming ",
+    ):
+        store_ids = _row_ids(run(db.store.list_for_scope(scope, search_term=query)))
+        service_ids, overflow = _service_list(db, search_term=query)
+        assert store_ids == matching[:201]
+        assert store_ids[0] == "late-hit"
+        assert service_ids == matching[:200]
+        assert overflow is True
+    assert _row_ids(run(db.store.list_for_scope(scope, search_term=" OA-REF-EQ "))) == [
+        "hit-000"
+    ]
+    assert _row_ids(run(db.store.list_for_scope(scope, search_term="100X_ready"))) == []
+    search_sql = [sql for sql in statements if "STRPOS" in sql.upper()]
+    assert search_sql
+    for statement in search_sql:
+        _assert_list_sql_orders_before_limit(statement)
+        upper = statement.upper()
+        assert upper.index("STRPOS") < upper.index("ORDER BY") < upper.index("LIMIT")
+
+
+def test_ordering_preserves_scope_before_limit(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import insert_synthetic_row, run
+    from tests.api.test_work_objects import _record
+
+    db = dispatch_db
+    _seed_id, scope, base = _prepare_sorter(db)
+    hidden_due = datetime(2025, 1, 1, tzinfo=UTC)
+    for index in range(205):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"hid-dept-{index:03d}",
+            due_at=hidden_due,
+            created_at=_CREATED_NEW,
+            kind="manual",
+            owner_department_id="office-a",
+            initiator_ai_user_id="ai-neighbor",
+        )
+    other_oa = _record(owner="ai-other", source_ref="other-oa", index=1).model_dump()
+    other_oa.update(
+        {
+            "work_object_id": "hid-oa",
+            "due_at": hidden_due,
+            "created_at": _CREATED_NEW,
+            "updated_at": _CREATED_NEW,
+        }
+    )
+    insert_synthetic_row(db, other_oa)
+    other_legacy = {
+        **other_oa,
+        "work_object_id": "hid-legacy",
+        "state_authority": "internal",
+        "source_system": "eternalai",
+        "source_kind": "internal_task",
+    }
+    for field in (
+        "source_ref",
+        "source_title",
+        "source_status",
+        "source_received_at",
+        "source_created_at",
+        "source_workflow_type_id",
+        "source_fetched_at",
+    ):
+        other_legacy[field] = None
+    insert_synthetic_row(db, other_legacy)
+    insert_synthetic_row(
+        db,
+        {
+            **base,
+            "work_object_id": "hid-tenant",
+            "tenant_id": "synthetic-other",
+            "owner_department_id": "office-c",
+            "initiator_ai_user_id": "ai-sorter",
+            "due_at": hidden_due,
+            "created_at": _CREATED_NEW,
+            "updated_at": _CREATED_NEW,
+        },
+    )
+    visible = (
+        ("vis-legacy", None, _CREATED_NEW, "legacy"),
+        ("vis-self", _DUE_LATE, _CREATED_OLD, "manual"),
+        ("vis-dept", _DUE_LATE, _CREATED_NEW, "manual"),
+        ("vis-oa", _DUE_EARLY, _CREATED_OLD, "oa"),
+    )
+    for item_id, due_at, created_at, kind in visible:
+        extras: dict[str, object] = {}
+        if item_id == "vis-self":
+            extras = {
+                "owner_department_id": "office-a",
+                "initiator_ai_user_id": "ai-sorter",
+            }
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=item_id,
+            due_at=due_at,
+            created_at=created_at,
+            kind=kind,
+            **extras,
+        )
+    expected = ["vis-oa", "vis-dept", "vis-self", "vis-legacy"]
+    store_ids = _row_ids(run(db.store.list_for_scope(scope)))
+    service_ids, overflow = _service_list(db)
+    hidden = {
+        "hid-oa",
+        "hid-legacy",
+        "hid-tenant",
+        _seed_id,
+        *[f"hid-dept-{index:03d}" for index in range(205)],
+    }
+    assert store_ids == expected
+    assert set(store_ids).isdisjoint(hidden)
+    assert service_ids == expected
+    assert overflow is False
+
+
+def test_non_sort_updates_preserve_order_and_new_rows_reselect(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    _seed_id, scope, base = _prepare_sorter(db)
+    for index in range(201):
+        _insert_sorted_row(
+            db,
+            base,
+            item_id=f"row-{index:03d}",
+            due_at=None,
+            created_at=_CREATED_NEW - timedelta(seconds=index),
+            kind="oa",
+            source_title="Stable title",
+            source_ref=f"OA-STABLE-{index:03d}",
+        )
+    original = [f"row-{index:03d}" for index in range(201)]
+    first = _row_ids(run(db.store.list_for_scope(scope)))
+    second = _row_ids(run(db.store.list_for_scope(scope)))
+    assert first == second == original
+    run(
+        db.store.upsert_oa_pending_workflows(
+            assignee_ai_user_id="ai-sorter",
+            assignee_display_name="Sorter renamed",
+            snapshots=[
+                _snapshot(
+                    source_ref="OA-STABLE-000",
+                    title="Refreshed title",
+                    status="OA_STILL_PENDING",
+                )
+            ],
+            fetched_at=_CREATED_NEW + timedelta(days=1),
+        )
+    )
+    marked = run(
+        db.store.set_handling_mark_for_scope(
+            "row-000",
+            scope,
+            "handled_elsewhere",
+            marked_at=_CREATED_NEW + timedelta(hours=2),
+        )
+    )
+    assert marked is not None
+    assert _row_ids(run(db.store.list_for_scope(scope))) == original
+    _insert_sorted_row(
+        db,
+        base,
+        item_id="row-new",
+        due_at=None,
+        created_at=_CREATED_NEW + timedelta(seconds=1),
+        kind="oa",
+        source_ref="OA-STABLE-NEW",
+    )
+    after_insert = _row_ids(run(db.store.list_for_scope(scope)))
+    assert after_insert[0] == "row-new"
+    assert after_insert[1:201] == original[:200]
+    assert "row-200" not in after_insert
+    db.execute(
+        "UPDATE work_objects SET due_at=:due, updated_at=:updated "
+        "WHERE work_object_id=:item_id",
+        due=_DUE_EARLY,
+        updated=_CREATED_NEW + timedelta(days=2),
+        item_id="row-199",
+    )
+    after_due = _row_ids(run(db.store.list_for_scope(scope)))
+    assert after_due[0] == "row-199"
+    assert after_due[1] == "row-new"
+    assert "row-198" in after_due
+    titled = _row_ids(
+        run(db.store.list_for_scope(scope, search_term="Refreshed title"))
+    )
+    assert titled == ["row-000"]
+    still_old = _row_ids(
+        run(db.store.list_for_scope(scope, search_term="Stable title"))
+    )
+    assert still_old[0] == "row-199"
+    assert "row-000" not in still_old
