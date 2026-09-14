@@ -1,3 +1,7 @@
+import { renderHook } from '@testing-library/react';
+import { useDraftSession } from '../stores/sessionDraftStore';
+import { loadDraft, saveDraft, parseDraft } from '../features/work-dispatch/dispatchDraft';
+import { loadNewSoftwareDraft, saveNewSoftwareDraft, parseNewSoftwareDraft } from '../features/apps/newSoftwareDraft';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -7,7 +11,7 @@ import App, {
   LoginRoute,
   ProtectedRoute,
 } from '../App';
-import { ApiError } from '../api/mutator';
+import { ApiError, customInstance } from '../api/mutator';
 import type { MeResponse } from '../generated/me/me.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
@@ -349,16 +353,54 @@ describe('application authentication boundary', () => {
     expect(useAIDockStore.getState().transcript).toHaveLength(0);
   });
 
-  it('performs local logout through the application shell', async () => {
+  it('clears_both_drafts_through_shell_logout_and_reauthentication', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', '/');
     render(<App />);
 
+    const a = draftToken();
+    saveDraft(parseDraft({ title: 'A-private' }), a);
+    saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'A-private' }), a);
     // 2026-09-02 定稿把「退出登录」从左导航底部移进顶栏头像的用户菜单（画板 `TopPops.dc.html`）。
     fireEvent.click(screen.getByTestId('topbar-avatar'));
     fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
 
     expect(useAuthStore.getState().status).toBe('unauthenticated');
+    expect(loadDraft(a).title).toBe('');
+    expect(loadNewSoftwareDraft(a).name).toBe('');
+    act(() => useAuthStore.getState().markAuthenticated());
+    const b = draftToken();
+    expect(loadDraft(b).title).toBe('');
+    expect(loadNewSoftwareDraft(b).name).toBe('');
+    fireEvent.click(screen.getByRole('link', { name: '任务交办' }));
+    expect(await screen.findByLabelText('标题')).toHaveValue('');
+  });
+
+  it('clears_drafts_through_a_current_generation_fetch_401', async () => {
+    useAuthStore.getState().markAuthenticated();
+    window.history.pushState({}, '', '/work-dispatch');
+    const mounted = render(<App />);
+    const a = draftToken();
+    expect(saveDraft(parseDraft({ title: 'A-private' }), a)).toBe(true);
+    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'A-private' }), a)).toBe(true);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 401 } as Response);
+    try {
+      await act(async () => {
+        await expect(customInstance({ url: '/api/v1/me', method: 'GET' })).rejects.toMatchObject({ code: 'authentication_required', status: 401 });
+      });
+      expect(window.location.pathname).toBe('/login');
+      expect(useAuthStore.getState().status).toBe('unauthenticated');
+      expect(loadDraft(a).title).toBe('');
+      expect(loadNewSoftwareDraft(a).name).toBe('');
+      expect(screen.queryByLabelText('标题')).toBeNull();
+      act(() => useAuthStore.getState().markAuthenticated());
+      const b = draftToken();
+      expect(loadDraft(b).title).toBe('');
+      expect(loadNewSoftwareDraft(b).name).toBe('');
+    } finally {
+      mounted.unmount();
+      fetchSpy.mockRestore();
+    }
   });
 
   it('sends the bare root to the AI assistant route and keeps one shell for every authenticated route', async () => {
@@ -432,3 +474,5 @@ describe('application authentication boundary', () => {
     expect(screen.getByRole('navigation', { name: '工作区' })).toBeInTheDocument();
   });
 });
+
+function draftToken() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }

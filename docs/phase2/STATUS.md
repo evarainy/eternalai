@@ -2,9 +2,17 @@
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；同步 2026-09-14 已合并的四根审计修复棒、组织目录方案进度与新环境欠债，并纠正审计 #17 的 Workflow 接缝事实）。
 - 当前实现基线 task_id：`P2-INTERNAL-WO-DISPATCH-001`（A 档；已合并）。后端 `3337 passed, 0 failed, 0 skipped`、Golden `34/34`、mypy `121 source files`、Ruff 通过；这些基线均来自该棒最终候选的 2026-09-10 实测，经独立 Monitor 三轮复核，最终 `VERDICT=PASS`。`P2-AUDIT-TITLE-001`、`P2-AUDIT-GUARDS-001`、`P2-AUDIT-KNOWLEDGE-001`、`P2-AUDIT-VITE-001` 四根审计修复棒已合并，新增验证来源见下方。
-- 当前实现后继指针：`P2-ORGDIR-PERSON-SYNC-001` 方案已通过自审与 grok 两轮评审，等待雨爷对 schema 与新增读端点合同的专项授权；其后为 `P2-FE-DISPATCH-WIRING-001`。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
+- 当前实现后继指针：`P2-ORGDIR-PERSON-SYNC-001` 已于 2026-09-14 获得 schema 与新增读端点合同的专项授权，其实现进度由该棒同步；`P2-AUDIT-DRAFT-ISOLATION-001` 草稿隔离候选待审，两棒均须先于 `P2-FE-DISPATCH-WIRING-001` 合并。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
 
 ## 已登记验证基线
+
+### 草稿隔离待审候选
+
+- `P2-AUDIT-DRAFT-ISOLATION-001`（A 档；2026-09-14）：两类草稿改为当前认证会话内存快照，启动仅移除两固定旧键且不读取旧值；刷新、退出、有效 401、认证换代与页面生命周期失效后不恢复。当前为本地候选，待独立 Monitor 与 grok 评审桥，尚未 push 或合并；不替换下方已合并基线。
+- 2026-09-14 / r2 前端全量 `638 passed`（组件 333、单元 302、OpenAPI 3），BindingsPage 独立两次均 `13 passed`；r1 的 lint、build、Golden `34/34`、九个新改测试弱测试检查通过，初轮最终 typecheck 通过。后端沿用同日 r1 的 `3346 passed, 1 failed`，唯一失败为已登记的 `InMemoryHumanGate` 幂等语义用例，按续派裁定以 CI 为准继续；r2 未运行后端或连接测试库的测试，不将该结果写成后端全绿。
+- 已决后继为 `P2-FE-DISPATCH-WIRING-001`：本棒须先合并，后继开工前按获批方案修订旧本机恢复/C6/P5，消费捕获会话 token 的内存接口；组织目录棒的现役前置保留。服务端草稿、发布与审核义务继续记原欠债。本棒与组织目录棒共享两份状态文档，集成时须核对各自候选事实；不据此重排 DAG。
+
+### 已合并来源
 
 以下每一条结果都带来源棒与日期：后端 `3337`、Golden、mypy 与 Ruff 均来自 **2026-09-10 / `P2-INTERNAL-WO-DISPATCH-001`** 最终候选，并经独立 Monitor 三轮复核，最终 `VERDICT=PASS`；`tests/architecture/` 与前端结果分别采用本批审计修复棒的实测来源；本治理棒未重跑。解释器获取欠债另列活欠债。
 
@@ -22,7 +30,7 @@
 
 ## 当前实现摘要
 
-- 页面合同：既有交办结构与控件闭集、附件禁用及可执行空态、本机草稿失败反馈、软件中心三块顺序、状态/版本整块留位、新建表单九字段与单句审核告知、可访问名称及多状态命名守卫已收口；软件弹窗恢复共享字段边界与单焦点宿主。真实发布、附件上传、服务端草稿、软件登记审核和用户侧列表接口仍未接入。可信选择合同、截止时间时区与序列化两项欠债见 `PHASE2_PLAN.md`。
+- 页面合同：既有交办结构与控件闭集、附件禁用及可执行空态、草稿失败反馈、软件中心三块顺序、状态/版本整块留位、新建表单九字段与单句审核告知、可访问名称及多状态命名守卫已收口；软件弹窗恢复共享字段边界与单焦点宿主。草稿隔离待审候选将两类本机持久草稿改为会话内存，状态见上方；真实发布、附件上传、服务端草稿、软件登记审核和用户侧列表接口仍未接入。可信选择合同、截止时间时区与序列化两项欠债见 `PHASE2_PLAN.md`。
 - 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
 - 意图输出必须显式给出 `match`；`none` 为合法无匹配，进入 `no_capability_found` 且 reason 为 `no_matching_capability`，`capability` 仍要求有效能力 ID。漏字段与矛盾组合保持 `schema_invalid`；无匹配文案保留「暂未接入」「能力」，只说明当前可用能力。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定。聊天回退后继为 `P2-RUNTIME-DIRECT-ANSWER-001`，本棒不新增终态。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。
