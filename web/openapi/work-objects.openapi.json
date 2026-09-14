@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "DepartmentDispatchOption": {
+        "additionalProperties": false,
+        "properties": {
+          "department_display_name": {
+            "title": "Department Display Name",
+            "type": "string"
+          },
+          "department_id": {
+            "title": "Department Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "department",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "department_id",
+          "department_display_name"
+        ],
+        "title": "DepartmentDispatchOption",
+        "type": "object"
+      },
       "DepartmentDispatchTarget": {
         "additionalProperties": false,
         "properties": {
@@ -21,6 +46,71 @@
           "department_id"
         ],
         "title": "DepartmentDispatchTarget",
+        "type": "object"
+      },
+      "DispatchOptionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DepartmentDispatchOption"
+                },
+                "type": "array"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/UserDispatchOption"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Items"
+          },
+          "kind": {
+            "enum": [
+              "department",
+              "user"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "snapshot_version": {
+            "minimum": 1.0,
+            "title": "Snapshot Version",
+            "type": "integer"
+          },
+          "unselectable_count": {
+            "minimum": 0.0,
+            "title": "Unselectable Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "items",
+          "next_cursor",
+          "has_more",
+          "snapshot_version",
+          "unselectable_count"
+        ],
+        "title": "DispatchOptionsResponse",
         "type": "object"
       },
       "DispatchWorkObjectsRequest": {
@@ -656,6 +746,41 @@
         "title": "SetHandlingMarkRequest",
         "type": "object"
       },
+      "UserDispatchOption": {
+        "additionalProperties": false,
+        "properties": {
+          "department_display_name": {
+            "title": "Department Display Name",
+            "type": "string"
+          },
+          "department_id": {
+            "title": "Department Id",
+            "type": "string"
+          },
+          "directory_user_id": {
+            "title": "Directory User Id",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "kind": {
+            "const": "user",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "directory_user_id",
+          "display_name",
+          "department_id",
+          "department_display_name"
+        ],
+        "title": "UserDispatchOption",
+        "type": "object"
+      },
       "UserDispatchTarget": {
         "additionalProperties": false,
         "properties": {
@@ -958,6 +1083,129 @@
           }
         },
         "summary": "Dispatch Work Objects"
+      }
+    },
+    "/api/v1/work-objects/dispatch-options": {
+      "get": {
+        "operationId": "list_dispatch_options_api_v1_work_objects_dispatch_options_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "department",
+                "user"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "department_id",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 2048,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DispatchOptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkObjectError"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Dispatch Options"
       }
     },
     "/api/v1/work-objects/sync": {

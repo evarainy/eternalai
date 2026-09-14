@@ -7,9 +7,11 @@ from app.infra.organization_directory.importer import (
 )
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
 from app.infra.organization_directory.reader import read_directory_snapshot
+from app.infra.organization_directory.sync_state import PostgreSQLOrganizationDirectorySync
 
 __all__ = (
     "PostgreSQLOrganizationDirectory",
+    "PostgreSQLOrganizationDirectorySync",
     "build_directory_departments",
     "build_directory_page",
     "build_directory_snapshot",

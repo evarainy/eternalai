@@ -197,6 +197,8 @@ class ProductionSettings:
     credential_poll_scheduler_tick_seconds: int = (
         _DEFAULT_CREDENTIAL_POLL_SCHEDULER_TICK_SECONDS
     )
+    organization_directory_max_age_s: int = 172800
+    organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
 
     @classmethod
@@ -330,6 +332,8 @@ class ProductionSettings:
                 maximum=_MAX_HEALTH_TIMEOUT_SECONDS,
                 minimum_inclusive=False,
             ),
+            organization_directory_max_age_s=_directory_max_age(source),
+            organization_directory_sync_source_ai_user_id=_directory_source_user(source),
             csrf_allowed_origins=csrf_allowed_origins,
             oa_read_adapter_mode=oa_read_adapter_mode,
             oa_read_contract_pack_dir=oa_read_contract_pack_dir,
@@ -861,3 +865,21 @@ def _base64_key(
 
 
 __all__ = ("OAReadAdapterMode", "ProductionSettings", "RedisConnectionURL")
+
+
+def _directory_max_age(source: Mapping[str, str]) -> int:
+    import re
+
+    raw = source.get("ORGANIZATION_DIRECTORY_MAX_AGE_S", "172800")
+    if re.fullmatch(r"[1-9][0-9]{0,5}", raw) is None or not 86400 <= int(raw) <= 604800:
+        raise ValueError("ORGANIZATION_DIRECTORY_MAX_AGE_S must be an integer in 86400..604800")
+    return int(raw)
+
+
+def _directory_source_user(source: Mapping[str, str]) -> str | None:
+    raw = source.get("ORGANIZATION_DIRECTORY_SYNC_SOURCE_AI_USER_ID")
+    if raw is not None and (not raw.strip() or raw != raw.strip()):
+        raise ValueError(
+            "ORGANIZATION_DIRECTORY_SYNC_SOURCE_AI_USER_ID must be a nonblank identifier"
+        )
+    return raw

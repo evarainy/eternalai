@@ -18,6 +18,62 @@ from app.ports.organization_directory import (
 FETCHED_AT = datetime(2026, 8, 31, tzinfo=UTC)
 
 
+def test_projects_only_raw_lastname() -> None:
+    page = _page(user_rows=[_user(lastname="  Synthetic person  ", lastnamespan="Other")])
+    assert page.memberships[0].display_name == "Synthetic person"
+    assert "Synthetic person" not in repr(page)
+
+
+@pytest.mark.parametrize("name", [None, "", "   ", "\u2003"])
+def test_missing_name_preserves_membership_and_count(name: object) -> None:
+    page = _page(user_rows=[_user(lastname=name)])
+    snapshot = build_directory_snapshot(
+        departments=build_directory_departments(_departments()), user_pages=[page],
+        authoritative_user_count_before=1, authoritative_user_count_after=1,
+        fetched_at=FETCHED_AT,
+    )
+    assert snapshot.is_complete is True
+    assert snapshot.returned_user_count == 1
+    assert [(m.user_id, m.display_name) for m in snapshot.memberships] == [("user-a", None)]
+
+
+@pytest.mark.parametrize("name", [1, True, {}, "<Synthetic>", "Synthetic\x00", "x" * 201])
+def test_invalid_name_rejects_whole_page_without_values(name: object) -> None:
+    with pytest.raises(OrganizationDirectoryError) as error:
+        _page(user_rows=[_user(id="valid", lastname="Synthetic good"), _user(lastname=name)])
+    assert str(error.value) == "invalid organization directory name"
+    for valid in ("x", "x" * 200):
+        assert _page(user_rows=[_user(lastname=valid)]).memberships[0].display_name == valid
+
+
+@pytest.mark.parametrize("value", [0, "0", None, ""])
+def test_zero_jobtitle_normalizes_to_absent_and_bad_values_reject_batch(value: object) -> None:
+    page = _page(user_rows=[_user(jobtitle=value)])
+    assert len(page.memberships) == 1
+    assert page.memberships[0].job_title is None
+    for invalid in (-1, 0.0, 75.0, False, True, {}, [], "bad", "01", "+1", " 1", "1 "):
+        with pytest.raises(OrganizationDirectoryError, match="invalid organization directory row"):
+            _page(user_rows=[_user(id="good", jobtitle=75), _user(jobtitle=invalid)])
+    for valid in (75, "75"):
+        assert _page(user_rows=[_user(jobtitle=valid)]).memberships[0].job_title == "75"
+
+
+def test_conflicting_names_for_one_user_reject_snapshot() -> None:
+    def snapshot(other: str):
+        return build_directory_snapshot(
+            departments=build_directory_departments(_departments()),
+            user_pages=[_page(user_rows=[
+                _user(lastname="Synthetic one"),
+                _user(departmentid="dept-root", lastname=other),
+            ])],
+            authoritative_user_count_before=2, authoritative_user_count_after=2,
+            fetched_at=FETCHED_AT,
+        )
+    assert len(snapshot("Synthetic one").memberships) == 2
+    with pytest.raises(OrganizationDirectoryError, match="inconsistent organization memberships"):
+        snapshot("Synthetic two")
+
+
 @pytest.mark.parametrize("job_title", [None, "75", 380])
 def test_projects_raw_jobtitle_without_rendered_label(job_title: str | int | None) -> None:
     page = _page(user_rows=[_user(jobtitle=job_title, jobtitlespan="<span>manager</span>")])

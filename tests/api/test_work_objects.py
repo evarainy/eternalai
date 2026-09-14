@@ -955,6 +955,24 @@ def test_visibility_reads_current_directory_on_each_request(
     scopes: list[AuthorizedWorkObjectScope] = []
 
     class Directory:
+        async def read_view(self):
+            from app.ports.organization_directory import OrganizationDirectoryReadView
+            now = datetime.now(UTC)
+            lookups.append("synthetic-directory-user")
+            return OrganizationDirectoryReadView(
+                snapshot_version=len(lookups),
+                source_fetched_at=now,
+                last_success_at=now,
+                observed_at=now,
+                departments=tuple(
+                    OrganizationDepartment(
+                        department_id=member.department_id, display_name="Synthetic"
+                    )
+                    for member in memberships
+                ),
+                memberships=tuple(memberships),
+            )
+
         async def list_user_memberships(self, user_id: str) -> list[OrganizationUserMembership]:
             lookups.append(user_id)
             return list(memberships)
@@ -1076,7 +1094,7 @@ def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) 
             )
             records = await store.list_for_scope(
                 AuthorizedWorkObjectScope(
-                    principal_tenant_id="tenant-dispatch-a",
+                    principal_tenant_id="default",
                     principal_ai_user_id=owner,
                     principal_department_id=None,
                 )
@@ -1118,6 +1136,9 @@ def test_directory_failure_does_not_expose_join_key_or_return_success(
     from fastapi import HTTPException
 
     class FailedDirectory:
+        async def read_view(self):
+            raise RuntimeError("synthetic-private-join-key")
+
         async def list_user_memberships(self, user_id: str) -> list[OrganizationUserMembership]:
             raise RuntimeError(f"synthetic driver query parameter: {user_id}")
 
@@ -1170,6 +1191,84 @@ def test_department_and_initiator_scope_reaches_real_store(dispatch_db) -> None:
     assert db.client.get("/api/v1/work-objects/" + unrelated["work_object_id"]).status_code == 404
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, missing):
+    from tests.api.test_work_object_dispatch import assert_created, expire_directory, request_body
+    db = dispatch_db
+    own = assert_created(db, db.post())["work_object_id"]
+    db.actor("synthetic-other-sender", "office-c", "75")
+    result = db.post(request_body(targets=[{"kind": "department", "department_id": "office-a"}]))
+    assert result.status_code == 201
+    departmental = result.json()["items"][0]["work_object_id"]
+    db.actor("sender", "office-a", None)
+    assert {
+        item["work_object_id"] for item in db.client.get("/api/v1/work-objects").json()["items"]
+    } == {own, departmental}
+    if missing:
+        db.execute(
+            "UPDATE organization_directory_sync_state SET snapshot_version=0,"
+            "source_fetched_at=NULL,"
+            "last_success_at=NULL,last_attempt_started_at=NULL,last_attempt_finished_at=NULL,"
+            "last_attempt_status='never',last_error_code=NULL"
+        )
+    else:
+        expire_directory(db)
+    for suffix in ("", "?q=Synthetic"):
+        response = db.client.get("/api/v1/work-objects"+suffix)
+        assert response.status_code == 200
+        assert [item["work_object_id"] for item in response.json()["items"]] == [own]
+    assert db.client.get("/api/v1/work-objects/"+own).status_code == 200
+    assert db.client.get("/api/v1/work-objects/"+departmental).status_code == 404
+    from tests.auth_fakes import TEST_CSRF_HEADERS
+    db.service._gateway = RecordingGateway(_success_result())
+    synced = db.client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert synced.status_code == 200
+    assert any(item["source_ref"] == "oa-todo-1" for item in synced.json()["items"])
+    assert own in {item["work_object_id"] for item in synced.json()["items"]}
+    assert departmental not in {item["work_object_id"] for item in synced.json()["items"]}
+
+
+def test_expiry_before_read_response_requeries_self_scope(dispatch_db, monkeypatch):
+    from tests.api.test_work_object_dispatch import assert_created, request_body
+    db = dispatch_db
+    own = assert_created(db, db.post())["work_object_id"]
+    db.actor("synthetic-other-sender", "office-c", "75")
+    result = db.post(request_body(targets=[{"kind": "department", "department_id": "office-a"}]))
+    assert result.status_code == 201
+    db.actor("sender", "office-a", None)
+    ticks = [0.0]
+    db.service._monotonic = lambda: ticks[0]
+    calls = []
+    original = db.store.list_for_scope
+    async def delayed(scope, **kwargs):
+        calls.append((scope, kwargs))
+        records = await original(scope, **kwargs)
+        ticks[0] = 172801.0
+        return records
+    monkeypatch.setattr(db.store, "list_for_scope", delayed)
+    response = db.client.get("/api/v1/work-objects?q=Synthetic")
+    assert response.status_code == 200
+    assert [item["work_object_id"] for item in response.json()["items"]] == [own]
+    assert [scope.principal_department_id for scope, _ in calls] == ["office-a", None]
+    assert calls[0][1] == calls[1][1]
+    original_get = db.store.get_for_scope
+    detail_calls = []
+    async def delayed_get(identity, scope):
+        detail_calls.append(scope.principal_department_id)
+        record = await original_get(identity, scope)
+        ticks[0] = 172801.0
+        return record
+    monkeypatch.setattr(db.store, "get_for_scope", delayed_get)
+    ticks[0] = 0.0
+    assert db.client.get("/api/v1/work-objects/"+own).status_code == 200
+    assert detail_calls == ["office-a", None]
+    ticks[0] = 0.0
+    detail_calls.clear()
+    departmental = result.json()["items"][0]["work_object_id"]
+    assert db.client.get("/api/v1/work-objects/"+departmental).status_code == 404
+    assert detail_calls == ["office-a", None]
+
+
 def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(dispatch_db) -> None:
     from uuid import uuid4
 
@@ -1189,7 +1288,7 @@ def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(disp
     )
     assert response.status_code == 201
     scope = AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id="ai-sender",
         principal_department_id="office-a",
     )
@@ -1200,7 +1299,7 @@ def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(disp
     )
     receipt = run(
         db.store.get_dispatch_receipt(
-            tenant_id="tenant-dispatch-a",
+            tenant_id="default",
             initiator_ai_user_id="ai-sender",
             idempotency_key=key,
         )
@@ -1302,7 +1401,7 @@ def test_handling_mark_uses_scope_actor_and_preserves_oa_only_write(
     before = {row["work_object_id"]: row for row in db.rows("work_objects")}
     assert all(row["handling_mark"] is None for row in before.values())
     scope = AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id="ai-other",
         principal_department_id=None,
     )
@@ -1331,10 +1430,10 @@ def test_directory_failure_has_consistent_error_contract(
 
     db = dispatch_db
 
-    async def failed(_key):
+    async def failed():
         raise RuntimeError("SYNTHETIC-DIRECTORY-FAILURE")
 
-    monkeypatch.setattr(db.directory, "list_user_memberships", failed)
+    monkeypatch.setattr(db.directory, "read_view", failed)
     response = db.post() if method == "post" else db.client.get("/api/v1/work-objects" + path)
     assert_error(response, 503, "organization_directory_unavailable")
     assert "error_code" not in response.text

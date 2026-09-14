@@ -28,6 +28,7 @@ from app.api.v1.work_objects import make_router as make_work_object_router
 from app.composition import build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
     AuthenticationPort,
     Principal,
@@ -55,14 +56,20 @@ def create_app(
     health_checks: dict[str, HealthCheck] | None = None,
     health_timeout_seconds: float = 5.0,
     credential_polling_scheduler: CredentialPollingScheduler | None = None,
+    organization_directory_scheduler: OrganizationDirectoryScheduler | None = None,
+    diagnostic_checks: dict[str, HealthCheck] | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         if credential_polling_scheduler is not None:
             await credential_polling_scheduler.start()
+        if organization_directory_scheduler is not None:
+            await organization_directory_scheduler.start()
         try:
             yield
         finally:
+            if organization_directory_scheduler is not None:
+                await organization_directory_scheduler.stop()
             if credential_polling_scheduler is not None:
                 await credential_polling_scheduler.stop()
 
@@ -77,6 +84,7 @@ def create_app(
         make_health_router(
             health_checks,
             timeout_seconds=health_timeout_seconds,
+            diagnostic_checks=diagnostic_checks,
         ),
         prefix="/api/v1",
     )
@@ -145,6 +153,8 @@ def create_production_app(
         health_checks=dict(components.health_checks),
         health_timeout_seconds=components.health_timeout_seconds,
         credential_polling_scheduler=components.credential_polling_scheduler,
+        organization_directory_scheduler=components.organization_directory_scheduler,
+        diagnostic_checks=dict(components.diagnostic_checks),
     )
 
 

@@ -927,7 +927,8 @@ def test_stale_human_gate_conflict_has_no_result_or_adapter_call() -> None:
 
 def test_existing_human_gate_decision_maps_to_already_claimed() -> None:
     async def exercise() -> tuple[Harness, Any, int, int]:
-        harness = await _build_harness()
+        now = datetime.now(UTC)
+        harness = await _build_harness(utc_clock=lambda: now)
         assert harness.gate is not None
         pending = _pending(harness)
         request = await harness.gate.get_request(harness.waiting.response_id)
@@ -942,13 +943,14 @@ def test_existing_human_gate_decision_maps_to_already_claimed() -> None:
                 decision="confirmed",
                 request_digest=request.request_digest,
                 binding_manifest_digest=request.binding_manifest_digest,
-                decided_at=datetime.now(UTC),
+                decided_at=now,
             )
         )
         harness.gate.record_decision_calls = 0
         assert pending.gate_request_id == request.request_id
         gateway_calls = len(harness.gateway.calls)
         llm_calls = len(harness.llm.calls)
+        now += timedelta(microseconds=1)
         response = await _dispatch(harness)
         return harness, response, gateway_calls, llm_calls
 

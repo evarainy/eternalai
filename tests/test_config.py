@@ -32,6 +32,24 @@ def _environment() -> dict[str, str]:
     }
 
 
+def test_directory_policy_defaults_and_invalid_bounds() -> None:
+    defaults = ProductionSettings.from_environment(_environment())
+    assert defaults.organization_directory_max_age_s == 172800
+    assert defaults.organization_directory_sync_source_ai_user_id is None
+    for valid in ("86400", "604800"):
+        source = {**_environment(), "ORGANIZATION_DIRECTORY_MAX_AGE_S": valid,
+                  "ORGANIZATION_DIRECTORY_SYNC_SOURCE_AI_USER_ID": "synthetic-directory-owner"}
+        settings = ProductionSettings.from_environment(source)
+        assert settings.organization_directory_max_age_s == int(valid)
+        assert settings.organization_directory_sync_source_ai_user_id == "synthetic-directory-owner"
+        assert "synthetic-directory-owner" not in repr(settings)
+    for invalid in ("86399", "604801", "0", "-1", " 86400", "86400.0", "+86400", "086400", ""):
+        with pytest.raises(ValueError, match="ORGANIZATION_DIRECTORY_MAX_AGE_S"):
+            ProductionSettings.from_environment(
+                {**_environment(), "ORGANIZATION_DIRECTORY_MAX_AGE_S": invalid}
+            )
+
+
 def _live_environment(tmp_path: Path) -> dict[str, str]:
     environment = _environment()
     environment.update(
