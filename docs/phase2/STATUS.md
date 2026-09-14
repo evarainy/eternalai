@@ -16,6 +16,9 @@
 ### 已合并后端与草稿来源
 
 - 后端、Golden、架构、mypy 与 Ruff 沿用 **2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`** 已合并证据：pytest `3459 passed, 0 failed, 0 skipped`，Golden `34/34`（negative 21/21、positive 13/13），架构 `124 passed`，mypy `126 source files`，Ruff 通过。本前端棒未重跑后端 pytest、数据库或 Golden。
+- pytest：`3459 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 后台全量最终 exit=0）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`）。
+- `tests/architecture/`：`124 passed`（2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 独立架构命令；P4 observer authoritative PASS）。
 - `P2-AUDIT-DRAFT-ISOLATION-001` 已合并：草稿仅在当前认证会话内存暂存，同代 SPA 往返可恢复；刷新、退出、有效 401、认证换代与页面生命周期失效后不恢复。本棒沿用捕获 session token 的接口，不恢复 localStorage 或无归属旧草稿。
 
 ## 必达链与阻塞
