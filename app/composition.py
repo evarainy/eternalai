@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from typing import Any
 
@@ -72,6 +73,10 @@ from app.infra.observability.postgresql_trace import (
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDirectory
+from app.infra.organization_directory.reader import read_directory_snapshot
+from app.infra.organization_directory.source_binding import BoundOrganizationDirectorySourceFactory
+from app.infra.organization_directory.sync_state import PostgreSQLOrganizationDirectorySync
+from app.infra.organization_directory.validation import InvalidDirectorySnapshot
 from app.infra.persistence.capability_registry.repository import (
     PostgreSQLCapabilityRegistry,
 )
@@ -92,6 +97,10 @@ from app.knowledge.basic_knowledge import (
     REPLAY_SYSTEM_ITEMS,
 )
 from app.memory import SessionMemory
+from app.organization_directory_sync import (
+    OrganizationDirectoryScheduler,
+    OrganizationDirectorySyncService,
+)
 from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
@@ -101,6 +110,11 @@ from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
 from app.ports.job_queue import JobQueuePort
 from app.ports.llm_provider import LLMProviderPort
+from app.ports.organization_directory import (
+    OrganizationDirectorySnapshot,
+    OrganizationDirectorySourcePort,
+)
+from app.ports.organization_directory_sync import DirectorySourceError
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
@@ -126,6 +140,8 @@ class ProductionComponents:
     health_timeout_seconds: float
     health_checks: Mapping[str, HealthCheck]
     user_profile: UserProfilePort
+    organization_directory_scheduler: OrganizationDirectoryScheduler
+    diagnostic_checks: Mapping[str, HealthCheck]
 
 
 def build_credential_store(
@@ -552,11 +568,39 @@ def build_production_components(
         trace_port=resolved_trace_port,
         trace_query=trace_query,
     )
+    directory_source_factory = BoundOrganizationDirectorySourceFactory(
+        ai_user_id=settings.organization_directory_sync_source_ai_user_id,
+        polling_store=credential_store,
+        acquirer=OAPasswordCredentialAcquirer(
+            session_factory=make_urllib_session_factory(
+                base_url=settings.oa_base_url, timeout_seconds=settings.oa_timeout_seconds,
+            ),
+            authentication=resolved_authentication, binding_store=credential_store,
+        ),
+        credential_store=credential_store, transport_factory=None,
+    )
+    organization_directory = PostgreSQLOrganizationDirectory(session_factory)
+    directory_sync_state = PostgreSQLOrganizationDirectorySync(session_factory)
+
+    async def directory_reader(
+        source: OrganizationDirectorySourcePort, fetched_at: datetime,
+    ) -> OrganizationDirectorySnapshot:
+        try:
+            return await read_directory_snapshot(source=source, fetched_at=fetched_at)
+        except InvalidDirectorySnapshot:
+            raise DirectorySourceError("snapshot_invalid") from None
+
+    directory_sync_service = OrganizationDirectorySyncService(
+        store=directory_sync_state, reader=directory_reader, source_opener=directory_source_factory,
+        max_age_s=settings.organization_directory_max_age_s,
+    )
+    directory_scheduler = OrganizationDirectoryScheduler(directory_sync_service)
     work_object_service = WorkObjectService(
         store=PostgreSQLWorkObjectStore(session_factory),
         gateway=gateway,
         capability_registry=capability_registry,
-        organization_directory=PostgreSQLOrganizationDirectory(session_factory),
+        organization_directory=organization_directory,
+        directory_max_age_s=settings.organization_directory_max_age_s,
         trace_port=resolved_trace_port,
     )
     credential_binding_service = CredentialBindingService(
@@ -638,6 +682,8 @@ def build_production_components(
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_timeout_seconds=settings.health_timeout_seconds,
         health_checks=resolved_health_checks,
+        organization_directory_scheduler=directory_scheduler,
+        diagnostic_checks={"organization_directory": directory_sync_service.diagnostic},
         user_profile=user_profile,
     )
 

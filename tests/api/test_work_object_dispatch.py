@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic.config import Config
@@ -31,7 +31,6 @@ from app.infra.organization_directory.postgresql import PostgreSQLOrganizationDi
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
-from app.ports.organization_directory import OrganizationUserMembership
 from app.ports.work_object_scope import DispatchAuthorizationDecision
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
@@ -43,7 +42,7 @@ from tests.auth_fakes import (
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 NOW = datetime(2026, 9, 10, 12, tzinfo=UTC)
-TENANT = "tenant-dispatch-a"
+TENANT = "default"
 ROOT = Path(__file__).resolve().parents[2]
 INTERNAL_KEYS = {
     "work_object_id",
@@ -110,6 +109,13 @@ class DispatchHarness:
             clock=lambda: NOW,
         )
         self.tokens = StaticSessionTokens(roles=("user",))
+        self.execute(
+            "WITH moment AS (SELECT clock_timestamp() AS now) "
+            "UPDATE organization_directory_sync_state SET snapshot_version=1, "
+            "source_fetched_at=moment.now,last_success_at=moment.now,"
+            "last_attempt_started_at=moment.now,last_attempt_finished_at=moment.now,"
+            "last_attempt_status='succeeded',last_error_code=NULL FROM moment WHERE singleton_id=1"
+        )
         self.actor("sender", "office-a", "75")
         self.client = TestClient(
             create_app(
@@ -241,6 +247,142 @@ def request_body(**updates: Any) -> dict[str, Any]:
         ],
         **updates,
     }
+
+
+def expire_directory(db):
+    db.execute(
+        "UPDATE organization_directory_sync_state SET "
+        "source_fetched_at=source_fetched_at-interval '3 days',"
+        "last_success_at=last_success_at-interval '3 days',"
+        "last_attempt_started_at=last_attempt_started_at-interval '3 days',"
+        "last_attempt_finished_at=last_attempt_finished_at-interval '3 days'"
+    )
+
+
+def test_stale_directory_blocks_initial_dispatch_and_receipt_replay(dispatch_db):
+    db = dispatch_db
+    key = str(uuid4())
+    assert_created(db, db.post(key=key))
+    assert db.post(key=key).status_code == 200
+    expire_directory(db)
+    for current in (key, str(uuid4())):
+        assert_error(db.post(key=current), 503, "organization_directory_stale")
+        assert db.counts() == (1, 1)
+
+
+def test_expiry_during_request_blocks_publication(dispatch_db, monkeypatch):
+    db = dispatch_db
+    ticks = [0.0]
+    db.service._monotonic = lambda: ticks[0]
+    original = db.trace.record_event
+    async def slow_audit(event):
+        await original(event)
+        ticks[0] = 172801.0
+    monkeypatch.setattr(db.trace, "record_event", slow_audit)
+    assert_error(db.post(), 503, "organization_directory_stale")
+    assert db.counts() == (0, 0)
+
+
+def test_request_uses_one_directory_generation_for_all_targets(dispatch_db, monkeypatch):
+    db = dispatch_db
+    reads = []
+    original_read = db.directory.read_view
+    async def read():
+        reads.append(True)
+        return await original_read()
+    monkeypatch.setattr(db.directory, "read_view", read)
+    original_audit = db.trace.record_event
+    async def revoke_after_decision(event):
+        await original_audit(event)
+        db.membership("sender", "office-a", None)
+    monkeypatch.setattr(db.trace, "record_event", revoke_after_decision)
+    result = db.post(request_body(targets=[
+        *request_body()["targets"], {"kind": "department", "department_id": "office-c"},
+    ]))
+    assert result.status_code == 201
+    assert len(reads) == 1
+    assert db.counts() == (2, 1)
+    assert_error(db.post(), 403, "not_department_head")
+    assert len(reads) == 2
+
+
+@pytest.mark.parametrize("zero", [0, "0", None])
+@pytest.mark.parametrize("actor_department", ["office-a", "572"])
+def test_zero_jobtitle_imported_to_pg_denies_dispatch_and_replay(
+    dispatch_db, zero, actor_department
+):
+    from app.infra.organization_directory.importer import (
+        build_directory_page,
+        build_directory_snapshot,
+    )
+    from tests.infra.organization_directory.test_sync_state import snapshot
+    db = dispatch_db
+    db.actor("zero-actor", actor_department, "75")
+    db.membership("zero-target", actor_department)
+    same_department = request_body(
+        targets=[{"kind": "user", "directory_user_id": "zero-target",
+                  "department_id": actor_department}]
+    )
+    key = str(uuid4())
+    assert_created(db, db.post(same_department, key=key))
+    async def import_zero():
+        base = await snapshot(db)
+        rows = [
+            {"id": member.user_id, "departmentid": member.department_id,
+             "jobtitle": zero if member.user_id == "zero-actor" else member.job_title,
+             "lastname": "Synthetic person"}
+            for member in base.memberships
+        ]
+        if zero is None:
+            for row in rows:
+                if row["id"] == "zero-actor":
+                    row.pop("jobtitle")
+        page = build_directory_page(current_page=1, next_page=None, is_end=True, user_rows=rows)
+        imported = build_directory_snapshot(
+            departments=base.departments,
+            user_pages=[page],
+            authoritative_user_count_before=len(rows),
+            authoritative_user_count_after=len(rows),
+            fetched_at=base.fetched_at,
+        )
+        assert imported.is_complete and imported.returned_user_count == len(rows)
+        await db.directory.replace_snapshot(imported)
+    run(import_zero())
+    with db.sql.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT job_title FROM organization_user_memberships "
+                     "WHERE user_id='zero-actor'")
+            ).scalar_one()
+            is None
+        )
+    for current in (key, str(uuid4())):
+        assert_error(db.post(same_department, key=current), 403, "not_department_head")
+    assert_error(db.post(), 403, "not_department_head")
+    for query in ("kind=department", "kind=user&department_id=" + actor_department,
+                  "kind=user&department_id=office-b"):
+        assert_error(db.client.get("/api/v1/work-objects/dispatch-options?"+query),
+                     403, "not_department_head")
+    assert db.counts() == (1, 1)
+
+
+def test_other_tenant_cannot_use_global_directory_for_authorization(dispatch_db, monkeypatch):
+    db = dispatch_db
+    assert_created(db, db.post())
+    db.actor("sender", "office-a", "75", tenant="synthetic-other")
+    async def forbidden():
+        pytest.fail("nondefault identity read the shared directory")
+    monkeypatch.setattr(db.directory, "read_view", forbidden)
+    assert_error(db.post(), 503, "organization_directory_unavailable")
+    response = db.client.get("/api/v1/work-objects")
+    assert response.status_code == 200 and response.json()["items"] == []
+    assert db.counts() == (1, 1)
+    from tests.api.test_work_objects import RecordingGateway, _success_result
+    db.service._gateway = RecordingGateway(_success_result())
+    synced = db.client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert synced.status_code == 200
+    own_oa = next(item for item in synced.json()["items"] if item["source_ref"] == "oa-todo-1")
+    assert db.client.get("/api/v1/work-objects/"+own_oa["work_object_id"]).status_code == 200
 
 
 def assert_error(response, status: int, code: str) -> None:
@@ -395,7 +537,7 @@ def test_dispatch_resolves_both_actor_and_target_server_side(dispatch_db):
     assert (row["owner_department_id"], row["initiator_ai_user_id"], row["tenant_id"]) == (
         "office-b",
         "ai-sender",
-        "tenant-dispatch-a",
+        "default",
     )
 
 
@@ -414,14 +556,21 @@ def test_dispatch_missing_or_ambiguous_actor_denies_and_alerts(
         db.membership("sender", "office-c", "75")
     else:
 
-        async def wrong(_key):
-            return [
-                OrganizationUserMembership(
-                    user_id="wrong-user", department_id="office-a", job_title="75"
-                )
-            ]
+        original = db.directory.read_view
+        async def wrong():
+            view = await original()
+            return view.model_copy(
+                update={
+                    "memberships": tuple(
+                        member.model_copy(update={"user_id": "wrong-user"})
+                        if member.user_id == "sender"
+                        else member
+                        for member in view.memberships
+                    )
+                }
+            )
 
-        monkeypatch.setattr(db.directory, "list_user_memberships", wrong)
+        monkeypatch.setattr(db.directory, "read_view", wrong)
     code = (
         "directory_membership_ambiguous" if case == "ambiguous" else "directory_membership_missing"
     )
@@ -478,7 +627,7 @@ def test_office_head_creates_visible_objects_for_verified_targets(dispatch_db, j
     assert {item["work_object_id"] for item in items} == {
         row["work_object_id"] for row in db.rows("work_objects")
     }
-    assert {row["tenant_id"] for row in db.rows("work_objects")} == {"tenant-dispatch-a"}
+    assert {row["tenant_id"] for row in db.rows("work_objects")} == {"default"}
     assert {row["initiator_ai_user_id"] for row in db.rows("work_objects")} == {"ai-sender"}
     assert {row["owner_department_id"] for row in db.rows("work_objects")} == {
         "office-b",
@@ -490,10 +639,12 @@ def test_unresolved_actor_department_keeps_same_department_user_dispatch(dispatc
     db = dispatch_db
     db.membership("local-recipient", "office-a")
 
-    async def unresolved(_key):
-        return None
+    original = db.directory.read_view
+    async def unresolved():
+        view = await original()
+        return view.model_copy(update={"departments": ()})
 
-    monkeypatch.setattr(db.directory, "get_department", unresolved)
+    monkeypatch.setattr(db.directory, "read_view", unresolved)
     assert_created(
         db,
         db.post(
@@ -557,18 +708,20 @@ def test_idempotency_fingerprint_dedupe_and_owner_scope(dispatch_db):
     ] == [first]
     assert_error(db.post(request_body(title="changed"), key=key), 409, "idempotency_key_reused")
     db.actor("sender", "office-a", "75", tenant="tenant-dispatch-b")
-    second = assert_created(db, db.post(key=key))
-    assert second["work_object_id"] != first["work_object_id"]
+    assert_error(db.post(key=key), 503, "organization_directory_unavailable")
+    assert db.counts() == (1, 1)
+    assert run(db.store.get_dispatch_receipt(
+        tenant_id="tenant-dispatch-b", initiator_ai_user_id="ai-sender", idempotency_key=UUID(key),
+    )) is None
     db.actor("another-sender", "office-a", "75")
     third = assert_created(db, db.post(key=key))
-    assert third["work_object_id"] not in {first["work_object_id"], second["work_object_id"]}
+    assert third["work_object_id"] != first["work_object_id"]
     assert {
         (row["tenant_id"], row["initiator_ai_user_id"])
         for row in db.rows("work_object_dispatch_receipts")
     } == {
-        ("tenant-dispatch-a", "ai-sender"),
-        ("tenant-dispatch-b", "ai-sender"),
-        ("tenant-dispatch-a", "ai-another-sender"),
+        ("default", "ai-sender"),
+        ("default", "ai-another-sender"),
     }
 
 
@@ -584,7 +737,7 @@ def test_dispatch_authorization_trace_is_safe_and_precedes_write(dispatch_db, mo
     monkeypatch.setattr(db.store, "create_internal_dispatch", require_persisted_trace)
     assert_created(db, db.post())
     trace = db.rows("trace_events")[0]
-    assert trace["tenant_id"] == "tenant-dispatch-a" and trace["ai_user_id"] == "ai-sender"
+    assert trace["tenant_id"] == "default" and trace["ai_user_id"] == "ai-sender"
     assert trace["event_type"] == "user_action" and trace["status"] == "ok"
     assert trace["error_code"] is None and trace["capability_id"] is None
     assert trace["attributes"] == {
@@ -652,7 +805,7 @@ def test_dispatch_deny_trace_and_replay_failure_policy(dispatch_db, monkeypatch,
     assert len(traces) == 1
     trace = traces[0]
     assert trace["error_code"] is None
-    assert trace["tenant_id"] == "tenant-dispatch-a"
+    assert trace["tenant_id"] == "default"
     unresolved = reason in {"directory_membership_missing", "directory_membership_ambiguous"}
     prison = reason == "cross_department_dispatch_denied"
     assert trace["attributes"] == {

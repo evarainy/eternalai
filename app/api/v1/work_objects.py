@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import re
+import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, NoReturn, TypeAlias
@@ -26,6 +28,12 @@ from pydantic import (
 )
 
 from app.api.v1.auth import PrincipalDependency
+from app.organization_directory_access import (
+    DEFAULT_MAX_AGE_S,
+    DirectoryAccessError,
+    FreshDirectoryView,
+    read_fresh_directory_view,
+)
 from app.ports.auth import Principal
 from app.ports.capability_gateway import CapabilityGatewayPort, ErrorCode
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
@@ -309,6 +317,132 @@ class SetHandlingMarkRequest(BaseModel):
     mark: WorkObjectHandlingMark
 
 
+class DepartmentDispatchOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["department"]
+    department_id: str
+    department_display_name: str
+
+
+class UserDispatchOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["user"]
+    directory_user_id: str
+    display_name: str = Field(repr=False)
+    department_id: str
+    department_display_name: str
+
+
+class DispatchOptionsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["department", "user"]
+    items: list[DepartmentDispatchOption] | list[UserDispatchOption] = Field(repr=False)
+    next_cursor: str | None
+    has_more: bool
+    snapshot_version: int = Field(ge=1)
+    unselectable_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> DispatchOptionsResponse:
+        if any(item.kind != self.kind for item in self.items):
+            raise ValueError("inconsistent dispatch options")
+        if self.has_more != (self.next_cursor is not None):
+            raise ValueError("inconsistent dispatch pagination")
+        return self
+
+
+class _OptionsCursor(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    v: int = Field(ge=1, le=1)
+    snapshot_version: int = Field(ge=1)
+    kind: Literal["department", "user"]
+    department_id: str | None
+    after_id: str = Field(min_length=1, max_length=2048)
+
+
+class _OptionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["department", "user"]
+    department_id: str | None
+    limit: int
+    cursor: _OptionsCursor | None
+
+
+_OPTIONS_ERRORS: dict[str, tuple[int, str]] = {
+    "authentication_required": (401, "Valid authentication is required."),
+    "directory_scope_denied": (403, "Directory access is not permitted for this identity."),
+    "directory_membership_missing": (403, "Work Object operation is not permitted."),
+    "directory_membership_ambiguous": (403, "Work Object operation is not permitted."),
+    "not_department_head": (403, "Work Object operation is not permitted."),
+    "cross_department_dispatch_denied": (403, "Work Object operation is not permitted."),
+    "dispatch_target_not_found": (404, "Dispatch target was not found."),
+    "organization_directory_snapshot_changed": (
+        409, "Organization directory has changed; reload the selection."
+    ),
+    "dispatch_options_request_invalid": (422, "Dispatch options request is invalid."),
+    "organization_directory_missing": (
+        503, "Organization directory has not completed its first successful synchronization."
+    ),
+    "organization_directory_stale": (
+        503, "Organization directory is stale; directory-dependent authorization is unavailable."
+    ),
+    "organization_directory_unavailable": (503, "Organization directory is unavailable."),
+    "work_object_unavailable": (503, "Work Object provider is not configured."),
+}
+
+
+def _options_error(code: str) -> NoReturn:
+    http_status, message = _OPTIONS_ERRORS[code]
+    raise HTTPException(http_status, detail={"code": code, "message": message})
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError
+        result[key] = value
+    return result
+
+
+def _options_request(request: Request) -> _OptionsRequest:
+    pairs = request.query_params.multi_items()
+    try:
+        values = _unique_json_object(pairs)
+        if set(values) - {"kind", "department_id", "limit", "cursor"}:
+            raise ValueError
+        kind = values.get("kind")
+        department = values.get("department_id")
+        if kind not in {"department", "user"}:
+            raise ValueError
+        if kind == "department" and "department_id" in values:
+            raise ValueError
+        if kind == "user" and (
+            department is None or not department.strip() or len(department) > 128
+        ):
+            raise ValueError
+        raw_limit = values.get("limit", "50")
+        if re.fullmatch(r"[1-9][0-9]{0,2}", raw_limit) is None:
+            raise ValueError
+        limit = int(raw_limit)
+        if not 1 <= limit <= 100:
+            raise ValueError
+        cursor = None
+        if "cursor" in values:
+            raw = values["cursor"]
+            if not 1 <= len(raw) <= 2048 or re.fullmatch(r"[A-Za-z0-9_-]+", raw) is None:
+                raise ValueError
+            decoded = base64.b64decode(raw + "=" * (-len(raw) % 4), altchars=b"-_", validate=True)
+            cursor = _OptionsCursor.model_validate(json.loads(
+                decoded.decode("utf-8"), object_pairs_hook=_unique_json_object,
+            ))
+            if cursor.kind != kind or cursor.department_id != department:
+                raise ValueError
+        return _OptionsRequest(kind=kind, department_id=department, limit=limit, cursor=cursor)
+    except Exception:
+        _options_error("dispatch_options_request_invalid")
+
+
 class WorkObjectService:
     """Application service that keeps transport and persistence behind Ports."""
 
@@ -322,7 +456,11 @@ class WorkObjectService:
         trace_port: TracePort | None = None,
         clock: Callable[[], datetime] | None = None,
         id_factory: Callable[[], str] | None = None,
+        directory_max_age_s: int = DEFAULT_MAX_AGE_S,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._directory_max_age_s = directory_max_age_s
+        self._monotonic = monotonic
         self._store = store
         self._gateway = gateway
         self._capability_registry = capability_registry
@@ -337,60 +475,171 @@ class WorkObjectService:
         *,
         search_term: str | None = None,
     ) -> WorkObjectListResponse:
-        scope = await self._visibility_scope(principal)
-        records = await self._store.list_for_scope(
-            scope,
-            search_term=search_term,
-            limit=WORK_OBJECT_LIST_FETCH_LIMIT,
-        )
-        capabilities = await self._projection_capabilities(records)
-        return _list_response(records, capabilities)
+        scope, fresh = await self._visibility_context(principal)
+        while True:
+            records = await self._store.list_for_scope(
+                scope, search_term=search_term, limit=WORK_OBJECT_LIST_FETCH_LIMIT,
+            )
+            capabilities = await self._projection_capabilities(records)
+            if fresh is None or not self._read_expired(fresh):
+                return _list_response(records, capabilities)
+            scope = self._scope(principal)
+            fresh = None
 
     async def get_for_principal(
-        self,
-        work_object_id: str,
-        principal: Principal,
+        self, work_object_id: str, principal: Principal,
     ) -> WorkObjectView | None:
-        scope = await self._visibility_scope(principal)
-        record = await self._store.get_for_scope(
-            work_object_id,
-            scope,
-        )
-        if record is None:
-            return None
-        capabilities = await self._projection_capabilities([record])
-        return _view_from_record(record, capabilities)
+        scope, fresh = await self._visibility_context(principal)
+        while True:
+            record = await self._store.get_for_scope(work_object_id, scope)
+            capabilities = (
+                await self._projection_capabilities([record]) if record is not None else []
+            )
+            if fresh is None or not self._read_expired(fresh):
+                return None if record is None else _view_from_record(record, capabilities)
+            scope = self._scope(principal)
+            fresh = None
 
-    async def _visibility_scope(self, principal: Principal) -> AuthorizedWorkObjectScope:
-        department_id = None
-        join_key = principal.org_ctx.directory_user_id
-        if self._organization_directory is not None and join_key:
-            try:
-                memberships = await self._organization_directory.list_user_memberships(join_key)
-                # No inferred primary department for zero or multiple memberships.
-                if len(memberships) == 1 and memberships[0].user_id == join_key:
-                    department = await self._organization_directory.get_department(
-                        memberships[0].department_id
-                    )
-                    if (
-                        department is not None
-                        and department.department_id == memberships[0].department_id
-                    ):
-                        department_id = department.department_id
-            except Exception:
-                # Driver exception text may include query parameters (the join key).
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={
-                        "code": "organization_directory_unavailable",
-                        "message": "Organization directory is unavailable.",
-                    },
-                ) from None
+    @staticmethod
+    def _scope(principal: Principal, department_id: str | None = None) -> AuthorizedWorkObjectScope:
         return compute_visibility_scope(
             principal_tenant_id=principal.org_ctx.tenant_id,
             principal_ai_user_id=principal.ai_user_id,
             principal_department_id=department_id,
         )
+
+    @staticmethod
+    def _read_expired(fresh: FreshDirectoryView) -> bool:
+        try:
+            fresh.recheck()
+            return False
+        except DirectoryAccessError as exc:
+            if exc.code in {"organization_directory_missing", "organization_directory_stale"}:
+                return True
+            _raise_dispatch_error(503, exc.code)
+
+    async def _visibility_context(
+        self, principal: Principal,
+    ) -> tuple[AuthorizedWorkObjectScope, FreshDirectoryView | None]:
+        join = principal.org_ctx.directory_user_id
+        if (
+            self._organization_directory is None
+            or not join
+            or principal.org_ctx.tenant_id != "default"
+        ):
+            return self._scope(principal), None
+        try:
+            fresh = await read_fresh_directory_view(
+                self._organization_directory, max_age_s=self._directory_max_age_s,
+                monotonic=self._monotonic,
+            )
+        except DirectoryAccessError as exc:
+            if exc.code in {"organization_directory_missing", "organization_directory_stale"}:
+                return self._scope(principal), None
+            _raise_dispatch_error(503, exc.code)
+        memberships = fresh.memberships.get(join, [])
+        department = memberships[0].department_id if len(memberships) == 1 else None
+        if department not in fresh.departments:
+            department = None
+        return self._scope(principal, department), fresh if department is not None else None
+
+    async def _visibility_scope(self, principal: Principal) -> AuthorizedWorkObjectScope:
+        scope, _ = await self._visibility_context(principal)
+        return scope
+
+    async def _dispatch_view(self, principal: Principal) -> FreshDirectoryView:
+        if principal.org_ctx.tenant_id != "default" or self._organization_directory is None:
+            _raise_dispatch_error(503, "organization_directory_unavailable")
+        try:
+            return await read_fresh_directory_view(
+                self._organization_directory, max_age_s=self._directory_max_age_s,
+                monotonic=self._monotonic,
+            )
+        except DirectoryAccessError as exc:
+            _raise_dispatch_error(503, exc.code)
+
+    async def list_dispatch_options(
+        self, principal: Principal, query: _OptionsRequest,
+    ) -> DispatchOptionsResponse:
+        if principal.org_ctx.tenant_id != "default":
+            _options_error("directory_scope_denied")
+        fresh = await self._dispatch_view(principal)
+        join = principal.org_ctx.directory_user_id
+        members = fresh.memberships.get(join, []) if join else []
+        if not members:
+            _LOGGER.warning("directory_membership_missing")
+            _options_error("directory_membership_missing")
+        if len(members) != 1:
+            _LOGGER.warning("directory_membership_ambiguous")
+            _options_error("directory_membership_ambiguous")
+        actor = members[0]
+        department = fresh.departments.get(actor.department_id)
+        actor_decision = self._decision(actor, department, actor.department_id)
+        if actor_decision.decision != "allow":
+            _options_error(actor_decision.reason_code or "not_department_head")
+        items: list[DepartmentDispatchOption] | list[UserDispatchOption]
+        unselectable = 0
+        if query.kind == "department":
+            items = [
+                DepartmentDispatchOption(kind="department", department_id=item.department_id,
+                                         department_display_name=item.display_name)
+                for item in sorted(fresh.departments.values(), key=lambda item: item.department_id)
+                if self._decision(actor, department, item.department_id).decision == "allow"
+            ]
+            ids = [item.department_id for item in items]
+        else:
+            target = query.department_id or ""
+            if self._decision(actor, department, target).decision != "allow":
+                _options_error("cross_department_dispatch_denied")
+            target_department = fresh.departments.get(target)
+            if target_department is None:
+                _options_error("dispatch_target_not_found")
+            users: list[UserDispatchOption] = []
+            for user, memberships in sorted(fresh.memberships.items()):
+                relevant = [member for member in memberships if member.department_id == target]
+                if not relevant:
+                    continue
+                if len(memberships) != 1 or relevant[0].display_name is None:
+                    unselectable += 1
+                    continue
+                users.append(UserDispatchOption(
+                    kind="user", directory_user_id=user, display_name=relevant[0].display_name,
+                    department_id=target, department_display_name=target_department.display_name,
+                ))
+            items = users
+            ids = [item.directory_user_id for item in users]
+        after = query.cursor.after_id if query.cursor is not None else None
+        if (
+            query.cursor is not None
+            and query.cursor.snapshot_version != fresh.view.snapshot_version
+        ):
+            _options_error("organization_directory_snapshot_changed")
+        positions = [
+            index for index, identity in enumerate(ids) if after is None or identity > after
+        ]
+        selected = positions[:query.limit]
+        more = len(positions) > query.limit
+        cursor = None
+        if more:
+            payload = _OptionsCursor(v=1, snapshot_version=fresh.view.snapshot_version,
+                                     kind=query.kind, department_id=query.department_id,
+                                     after_id=ids[selected[-1]])
+            cursor = (
+                base64.urlsafe_b64encode(payload.model_dump_json().encode()).decode().rstrip("=")
+            )
+        self._recheck_dispatch(fresh)
+        return DispatchOptionsResponse.model_validate({
+            "kind": query.kind, "items": [items[index] for index in selected],
+            "next_cursor": cursor, "has_more": more,
+            "snapshot_version": fresh.view.snapshot_version, "unselectable_count": unselectable,
+        })
+
+    @staticmethod
+    def _recheck_dispatch(fresh: FreshDirectoryView) -> None:
+        try:
+            fresh.recheck()
+        except DirectoryAccessError as exc:
+            _raise_dispatch_error(503, exc.code)
 
     async def sync_for_principal(self, principal: Principal) -> WorkObjectListResponse:
         await self._sync_snapshots_for_principal(principal, background=False)
@@ -514,6 +763,7 @@ class WorkObjectService:
         body: DispatchWorkObjectsRequest,
         key: UUID,
     ) -> DispatchWorkObjectsResponse:
+        fresh = await self._dispatch_view(principal)
         fingerprint = hashlib.sha256(body.canonical_bytes()).hexdigest()
         try:
             receipt = await self._store.get_dispatch_receipt(
@@ -524,7 +774,9 @@ class WorkObjectService:
         except Exception:
             _raise_dispatch_error(503, "work_object_dispatch_failed")
         try:
-            return await self._dispatch_resolved(principal, body, key, fingerprint, receipt)
+            return await self._dispatch_resolved(
+                principal, body, key, fingerprint, receipt, fresh=fresh
+            )
         except _DispatchAuditUnavailable:
             # Another request may have committed after our initial receipt lookup.
             try:
@@ -543,6 +795,7 @@ class WorkObjectService:
                     fingerprint,
                     winner,
                     audit_already_failed=True,
+                    fresh=fresh,
                 )
             _raise_dispatch_error(503, "work_object_audit_unavailable")
         except HTTPException:
@@ -559,24 +812,14 @@ class WorkObjectService:
         receipt: DispatchReceipt | None,
         *,
         audit_already_failed: bool = False,
+        fresh: FreshDirectoryView,
     ) -> DispatchWorkObjectsResponse:
-        directory = self._organization_directory
-        if directory is None:
-            _raise_dispatch_error(503, "organization_directory_unavailable")
         join_key = principal.org_ctx.directory_user_id
-        try:
-            memberships = await directory.list_user_memberships(join_key) if join_key else []
-            membership = memberships[0] if len(memberships) == 1 else None
-            if membership is not None and (
-                membership.user_id != join_key
-                or not membership.department_id.strip(SEARCH_WHITESPACE)
-            ):
-                membership = None
-            department = (
-                await directory.get_department(membership.department_id) if membership else None
-            )
-        except Exception:
-            _raise_dispatch_error(503, "organization_directory_unavailable")
+        memberships = fresh.memberships.get(join_key, []) if join_key else []
+        membership = memberships[0] if len(memberships) == 1 else None
+        if membership is not None and not membership.department_id.strip(SEARCH_WHITESPACE):
+            membership = None
+        department = fresh.departments.get(membership.department_id) if membership else None
         decision = self._decision(
             membership, department, membership.department_id if membership else ""
         )
@@ -600,7 +843,7 @@ class WorkObjectService:
             if receipt.request_fingerprint != fingerprint:
                 _raise_dispatch_error(409, "idempotency_key_reused")
             response = DispatchWorkObjectsResponse.model_validate(receipt.result)
-            scope = await self._visibility_scope(principal)
+            scope = self._scope(principal, membership.department_id if membership else None)
             for item in response.items:
                 target_decision = self._decision(
                     membership, department, item.owner_department_id or ""
@@ -618,6 +861,7 @@ class WorkObjectService:
                     )
             if not audit_already_failed:
                 await self._audit_dispatch(principal, decision, None, required=False)
+            self._recheck_dispatch(fresh)
             return response.model_copy(update={"replayed": True})
 
         resolved: list[tuple[UserDispatchTarget | DepartmentDispatchTarget, str, str | None]] = []
@@ -626,9 +870,7 @@ class WorkObjectService:
         try:
             for target in body.targets:
                 if isinstance(target, UserDispatchTarget):
-                    target_memberships = await directory.list_user_memberships(
-                        target.directory_user_id
-                    )
+                    target_memberships = fresh.memberships.get(target.directory_user_id, [])
                     matching = [
                         item
                         for item in target_memberships
@@ -641,7 +883,7 @@ class WorkObjectService:
                         resolved.append((target, matching[0].department_id, None))
                     ambiguous = ambiguous or len(target_memberships) >= 2
                 else:
-                    target_department = await directory.get_department(target.department_id)
+                    target_department = fresh.departments.get(target.department_id)
                     if (
                         target_department is None
                         or target_department.department_id != target.department_id
@@ -726,12 +968,14 @@ class WorkObjectService:
             authorization_summary=_dispatch_attributes(decision, None),
             created_at=now,
         )
+        self._recheck_dispatch(fresh)
         winner, created = await self._store.create_internal_dispatch(
             records=records, receipt=candidate
         )
         if created:
+            self._recheck_dispatch(fresh)
             return response
-        return await self._dispatch_resolved(principal, body, key, fingerprint, winner)
+        return await self._dispatch_resolved(principal, body, key, fingerprint, winner, fresh=fresh)
 
     def _decision(
         self,
@@ -807,8 +1051,18 @@ def make_router(
             original = super().get_route_handler()
 
             async def handle(request: Request) -> Response:
+                options = request.method == "GET" and request.url.path.endswith(
+                    "/work-objects/dispatch-options"
+                )
                 try:
-                    return await original(request)
+                    response = await original(request)
+                    if options:
+                        response.headers["Cache-Control"] = "no-store"
+                    return response
+                except HTTPException as exc:
+                    if options:
+                        exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
+                    raise
                 except RequestValidationError:
                     if request.method == "POST" and request.url.path.endswith(
                         "/work-objects/dispatch"
@@ -875,6 +1129,30 @@ def make_router(
         result = await configured().dispatch_for_principal(principal, body, key)
         response.status_code = 200 if result.replayed else 201
         return result
+
+    @router.get(
+        "/dispatch-options",
+        response_model=DispatchOptionsResponse,
+        operation_id="list_dispatch_options_api_v1_work_objects_dispatch_options_get",
+        responses={code: {"model": WorkObjectError} for code in (401, 403, 404, 409, 422, 503)},
+        openapi_extra={"parameters": [
+            {"name": "kind", "in": "query", "required": True,
+             "schema": {"type": "string", "enum": ["department", "user"]}},
+            {"name": "department_id", "in": "query", "required": False,
+             "schema": {"type": "string", "minLength": 1, "maxLength": 128}},
+            {"name": "limit", "in": "query", "required": False,
+             "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 100}},
+            {"name": "cursor", "in": "query", "required": False,
+             "schema": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        ]},
+    )
+    async def list_dispatch_options(
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> DispatchOptionsResponse:
+        active = configured()
+        query = _options_request(request)
+        return await active.list_dispatch_options(principal, query)
 
     @router.get(
         "/{work_object_id}",
@@ -1095,6 +1373,7 @@ class WorkObjectError(BaseModel):
 
 def _raise_dispatch_error(http_status: int, code: str) -> NoReturn:
     messages = {
+        **{code: value[1] for code, value in _OPTIONS_ERRORS.items()},
         "organization_directory_unavailable": "Organization directory is unavailable.",
         "work_object_dispatch_failed": "Dispatch could not be completed; retry with the same key.",
         "work_object_audit_unavailable": "Dispatch audit is unavailable; retry with the same key.",
@@ -1109,7 +1388,7 @@ def _raise_dispatch_error(http_status: int, code: str) -> NoReturn:
             "code": code,
             "message": messages.get(code, "Work Object operation is not permitted."),
         },
-    )
+    ) from None
 
 
 def _dispatch_attributes(

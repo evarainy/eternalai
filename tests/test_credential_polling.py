@@ -608,15 +608,15 @@ def test_committed_sync_is_not_classified_as_directory_failure(dispatch_db, monk
     db.service._gateway = RecordingGateway(_success_result())
     reads = []
 
-    async def unavailable(_key):
-        reads.append(_key)
+    async def unavailable():
+        reads.append(True)
         raise RuntimeError("synthetic directory unavailable")
 
-    monkeypatch.setattr(db.directory, "list_user_memberships", unavailable)
+    monkeypatch.setattr(db.directory, "read_view", unavailable)
     principal = PRINCIPAL.model_copy(
         update={
             "org_ctx": PrincipalOrgContext(
-                tenant_id="tenant-dispatch-a",
+                tenant_id="default",
                 directory_user_id="synthetic-polling-user",
             )
         }

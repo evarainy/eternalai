@@ -65,6 +65,7 @@ from app.ports.structured_output import StructuredOutputResult
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import MatchedIntent
 from app.runtime.runtime import RuntimeImpl
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
@@ -714,6 +715,64 @@ def test_production_components_have_no_optional_dependency_gaps() -> None:
     assert components.health_timeout_seconds == settings.health_timeout_seconds
 
 
+def test_production_directory_scheduler_and_diagnostics_are_wired(
+    monkeypatch, caplog, dispatch_db,
+) -> None:
+    from tests.api.test_work_object_dispatch import run
+    db = dispatch_db
+    settings = replace(ProductionSettings.from_environment(),
+                       organization_directory_sync_source_ai_user_id="synthetic-configured-owner")
+    monkeypatch.setattr("app.composition.make_async_session_factory", lambda **_kwargs: db.factory)
+    components = build_production_components(settings)
+    scheduler = components.organization_directory_scheduler
+    sync = scheduler._service
+    assert sync._store._session_factory is db.factory
+    assert components.work_object_service._organization_directory._session_factory is db.factory
+    assert set(components.diagnostic_checks) == {"organization_directory"}
+    assert "organization_directory" not in components.health_checks
+    factory = sync._source_opener
+    assert factory._ai_user_id == "synthetic-configured-owner"
+    assert factory._transport_factory is None
+    forbidden = AsyncMock(side_effect=AssertionError("source without transport read credentials"))
+    monkeypatch.setattr(factory._acquirer, "acquire", forbidden)
+    monkeypatch.setattr(factory._credential_store, "load", forbidden)
+    db.execute(
+        "UPDATE organization_directory_sync_state SET snapshot_version=0,source_fetched_at=NULL,"
+        "last_success_at=NULL,last_attempt_started_at=NULL,last_attempt_finished_at=NULL,"
+        "last_attempt_status='never',last_error_code=NULL"
+    )
+    calls = []
+    async def start():
+        calls.append("start")
+        await sync.run_due()
+    async def stop():
+        calls.append("stop")
+    monkeypatch.setattr(scheduler, "start", start)
+    monkeypatch.setattr(scheduler, "stop", stop)
+    async def healthy():
+        return True
+    safe_components = replace(components, credential_polling_scheduler=None,
+                              health_checks={"database": healthy})
+    monkeypatch.setattr("app.main.build_production_components", lambda _settings: safe_components)
+    from app.event_loop import make_event_loop
+
+    with TestClient(
+        create_production_app(settings), backend_options={"loop_factory": make_event_loop}
+    ) as client:
+        response = client.get("/api/v1/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok", "checks": {
+            "database": "ok", "organization_directory": "failed",
+        }}
+    assert calls == ["start", "stop"]
+    assert forbidden.await_count == 0
+    state = run(sync._store.read_status())
+    assert state.last_error_code == "source_unconfigured"
+    assert state.snapshot_version == 0
+    assert "organization_directory_sync_failed code=source_unconfigured" in caplog.text
+    assert "synthetic-configured-owner" not in caplog.text
+
+
 def test_production_app_warns_when_session_cookie_secure_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -729,6 +788,8 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         work_object_service=None,
         credential_binding_service=None,
         credential_polling_scheduler=None,
+        organization_directory_scheduler=None,
+        diagnostic_checks={},
         authentication=None,
         session_tokens=None,
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
