@@ -237,7 +237,7 @@ export default function WorkObjectSearchPage() {
               >
                 <div className={styles.resultBody}>
                   <div className={styles.resultHeading}>
-                    <strong>{workObjectTitle(item) ?? '内部工作事项'}</strong>
+                    {workObjectTitle(item) == null ? <span>未提供标题</span> : <strong>{workObjectTitle(item)}</strong>}
                     <div className={styles.matchTags} aria-label="匹配字段">
                       {matchedFields(item, term).map((field) => (
                         <Tag color="blue" key={field}>命中{field}</Tag>
@@ -245,7 +245,7 @@ export default function WorkObjectSearchPage() {
                     </div>
                   </div>
                   <div className={styles.resultMeta}>
-                    <span>责任人：{item.assignee_display_name ?? '暂未提供'}</span>
+                    {item.assignee_display_name === null ? <span>未提供显示名</span> : <span data-assignee-value>责任人：{item.assignee_display_name}</span>}
                     <span>
                       来源：{item.source_system.toUpperCase()}
                       {item.source_ref === null ? '' : ` · ${item.source_ref}`}

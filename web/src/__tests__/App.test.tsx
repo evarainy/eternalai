@@ -463,7 +463,9 @@ describe('application authentication boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: '任务交办' }),
     ).toBeInTheDocument();
-    expect(screen.getByText('草稿尚未发布')).toBeInTheDocument();
+    expect(
+      screen.getByText('刷新前如已点过发布：结果待确认，请先到工作事项核对。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。'),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText('截止时间')).toHaveAttribute(
       'type',
       'datetime-local',

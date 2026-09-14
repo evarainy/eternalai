@@ -78,3 +78,10 @@ it('preserves_closed_choices_and_deduplication', () => {
   (defaults.reminders as string[]).push('pollution');
   expect(parseDraft(null)).toEqual(EMPTY_DRAFT);
 });
+
+it('P5 keeps_content_without_submission_state and retains legacy intent for confirmation', () => {
+  const parsed = parseDraft({ title: 'synthetic', assignee: 'old-owner', visibility: 'old-visibility', targets: ['old-target'], dueAt: '2026-09-11T01:30', dueInstant: '2026-09-10T16:30:00Z', dueZone: 'Asia/Tokyo', dueOffset: 'UTC+09:00', key: 'private-key', body: {}, receipt: 'text', selected: ['private-person'] });
+  expect(parsed).toMatchObject({ assignee: 'old-owner', visibility: 'old-visibility', targets: ['old-target'], dueInstant: '2026-09-10T16:30:00Z', dueZone: 'Asia/Tokyo', dueOffset: 'UTC+09:00' });
+  expect(Object.keys(parsed).sort()).toEqual(['assignee', 'brief', 'dueAt', 'dueInstant', 'dueOffset', 'dueZone', 'kind', 'receipt', 'reminders', 'requirement', 'targets', 'title', 'visibility']);
+  expect(parseDraft({ dueInstant: 'bad' })).not.toHaveProperty('dueInstant');
+});

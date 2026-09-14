@@ -149,7 +149,7 @@ function endOfDay(now: Date, dayOffset: number): Date {
  * 画板上还有一条「派发时标了紧急」，**本页不实现**：后端 `OAWorkObjectView` 没有该字段，它由后续的
  * 任务派发模块提供。不拿别的字段凑，界面上也不出现这四个字，免得让人以为它已经生效。
  */
-function isUrgentWorkObject(item: OAWorkObjectView, now: Date): boolean {
+function isUrgentWorkObject(item: WorkObjectListResponseItemsItem, now: Date): boolean {
   if (item.handling_mark === 'pending_sync_confirmation') {
     return true;
   }
@@ -277,7 +277,7 @@ function handlingMarkTag(mark: OAWorkObjectView['handling_mark']) {
   return <Tag><Icon name="minus" size={16} /> 未标记</Tag>;
 }
 
-function dueBadgeOf(item: OAWorkObjectView) {
+function dueBadgeOf(item: WorkObjectListResponseItemsItem) {
   const badge = dueBadge(item.due_at, new Date());
   if (badge === null) {
     return null;
@@ -472,15 +472,9 @@ export default function WorkObjectsPage() {
     },
   });
 
-  const items = listQuery.data?.items;
-  const oaItems = useMemo(
-    () =>
-      (items ?? []).filter(
-        (item): item is OAWorkObjectView =>
-          item.state_authority === 'external_snapshot',
-      ),
-    [items],
-  );
+  const items = listQuery.isSuccess ? listQuery.data.items : undefined;
+  const visibleSourceItems = useMemo(() => items ?? [], [items]);
+  const oaItems = visibleSourceItems.filter((item): item is OAWorkObjectView => item.state_authority === 'external_snapshot');
   const newestFetchedAt = oaItems.reduce<string | undefined>((newest, item) => {
     if (!newest || new Date(item.source_fetched_at) > new Date(newest)) {
       return item.source_fetched_at;
@@ -490,13 +484,13 @@ export default function WorkObjectsPage() {
 
   const { todoItems, urgentItems } = useMemo(() => {
     const now = new Date();
-    const urgent: OAWorkObjectView[] = [];
-    const todo: OAWorkObjectView[] = [];
-    for (const item of oaItems) {
+    const urgent: WorkObjectListResponseItemsItem[] = [];
+    const todo: WorkObjectListResponseItemsItem[] = [];
+    for (const item of visibleSourceItems) {
       (isUrgentWorkObject(item, now) ? urgent : todo).push(item);
     }
     return { todoItems: todo, urgentItems: urgent };
-  }, [oaItems]);
+  }, [visibleSourceItems]);
 
   /*
    * 「已完成」永远给空数组：后端没有办结数据源，任何非空列表都会是编出来的。空态里写明缺口。
@@ -504,8 +498,7 @@ export default function WorkObjectsPage() {
   const visibleItems =
     view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : [];
   const contextWorkObject =
-    selectedWorkObjectId !== undefined &&
-    detailQuery.data?.state_authority === 'external_snapshot'
+    selectedWorkObjectId !== undefined && detailQuery.isSuccess
       ? detailQuery.data
       : undefined;
   const pageContextDeclaration = useMemo<PageContextDeclaration>(() => {
@@ -517,7 +510,7 @@ export default function WorkObjectsPage() {
           ? []
           : [{ work_object_id: contextWorkObject.work_object_id }],
       source_refs:
-        contextWorkObject === undefined
+        contextWorkObject === undefined || contextWorkObject.source_ref === null
           ? []
           : [
               {
@@ -550,24 +543,24 @@ export default function WorkObjectsPage() {
 
   const assigneeFilters = useMemo(
     () =>
-      [...new Set(oaItems.map((item) => item.assignee_display_name))]
+      [...new Set(visibleSourceItems.flatMap((item) => item.assignee_display_name === null ? [] : [item.assignee_display_name]))]
         .sort((left, right) => left.localeCompare(right, 'zh-CN'))
         .map((assignee) => ({ text: assignee, value: assignee })),
-    [oaItems],
+    [visibleSourceItems],
   );
 
-  const columns = useMemo<ColumnsType<OAWorkObjectView>>(
+  const columns = useMemo<ColumnsType<WorkObjectListResponseItemsItem>>(
     () => [
       {
         title: '事项',
         dataIndex: 'source_title',
         key: 'source_title',
         width: '48%',
-        render: (value: string, item) => (
+        render: (_value: unknown, item) => (
           <div className={styles.workItemTitle}>
             <div className={styles.titleLine}>
               <Text className={styles.titleText} strong>
-                {value}
+                {item.state_authority === 'internal' ? item.title === null ? <span>未提供标题</span> : item.title : item.source_title}
               </Text>
               {dueBadgeOf(item)}
               {markBadge(item.handling_mark)}
@@ -576,12 +569,16 @@ export default function WorkObjectsPage() {
               来源系统 · 来源编号 · 当前步骤 · 数据截至：四段常驻可见，不折叠、不靠 hover
               （2026-08-27 §五）。
             */}
-            <div className={styles.sourceLine}>
+            {item.state_authority === 'internal' ? <div className={styles.sourceLine}>
+              <span>内部交办</span><span>{item.status === 'assigned' ? '已派发' : item.status === 'department_pending' ? '待部门认领' : '未提供状态'}</span>
+              <span>创建 {item.created_at === null ? '未提供' : formatTimestamp(item.created_at)}</span>
+              <span>更新 {item.updated_at === null ? '未提供' : formatTimestamp(item.updated_at)}</span>
+            </div> : <div className={styles.sourceLine}>
               <span>OA 办公系统</span>
               <span>{item.source_ref}</span>
               <span>当前步骤 {item.source_status}</span>
               <span>数据截至 {formatFreshnessClock(item.source_fetched_at)}</span>
-            </div>
+            </div>}
           </div>
         ),
       },
@@ -593,11 +590,10 @@ export default function WorkObjectsPage() {
         filters: assigneeFilters,
         filterIcon: () => <span className={styles.filterLabel}>筛选</span>,
         onFilter: (value, item) => item.assignee_display_name === value,
-        sorter: (left, right) =>
-          left.assignee_display_name.localeCompare(
-            right.assignee_display_name,
-            'zh-CN',
-          ),
+        render: (value: string | null) => value === null ? <span>未提供显示名</span> : <span data-assignee-value>{value}</span>,
+        sorter: (left, right) => left.assignee_display_name === null
+          ? right.assignee_display_name === null ? 0 : 1
+          : right.assignee_display_name === null ? -1 : left.assignee_display_name.localeCompare(right.assignee_display_name, 'zh-CN'),
       },
       {
         title: '截止时间',
@@ -605,7 +601,7 @@ export default function WorkObjectsPage() {
         key: 'due_at',
         width: '16%',
         sorter: (left, right) => dueTimestamp(left.due_at) - dueTimestamp(right.due_at),
-        render: (value: string | null) => {
+        render: (value: string | null, item) => {
           const now = new Date();
           const dueAt = value === null ? null : new Date(value);
           const pressing =
@@ -614,7 +610,7 @@ export default function WorkObjectsPage() {
             dueAt <= endOfDay(now, 0);
           return (
             <span className={pressing ? styles.duePressing : undefined}>
-              {formatDueAt(value, now)}
+              {value === null && item.state_authority === 'internal' ? '未提供截止时间' : formatDueAt(value, now)}
             </span>
           );
         },
@@ -647,9 +643,9 @@ export default function WorkObjectsPage() {
           '办结数据还没有接进来。',
           '下一步：办结记录接进来后，这里会自动出现。',
         ]
-      : oaItems.length === 0
+      : visibleSourceItems.length === 0
         ? [
-            '还没有取得可显示的 OA 事项。',
+            '还没有取得可显示的工作事项。',
             '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
           ]
         : view === 'urgent'
@@ -775,7 +771,7 @@ export default function WorkObjectsPage() {
         <p className={styles.rule}>
           紧急 = 已逾期、今明两天到期，或等你确认。一件事只会出现在一个分类里。
         </p>
-        <QueryTable<OAWorkObjectView>
+        <QueryTable<WorkObjectListResponseItemsItem>
           rowKey="work_object_id"
           columns={columns}
           dataSource={visibleItems}
@@ -817,12 +813,23 @@ export default function WorkObjectsPage() {
         ) : detailQuery.isLoading ? (
           <Spin />
         ) : detailQuery.data?.state_authority === 'internal' ? (
-          <Alert
-            showIcon
-            type="info"
-            title="内部事项暂未在此页面展示"
-            description="内部事项以后在交办功能里看。"
-          />
+          <Space orientation="vertical" size="large" style={{ width: '100%' }}>
+            <Alert type="info" title="只读详情" description="当前仅支持查看，认领、转派、催办、撤销和回执提交尚未启用。" />
+            <Descriptions bordered column={1} size="small">
+              <Descriptions.Item label="事项编号">{detailQuery.data.work_object_id}</Descriptions.Item>
+              <Descriptions.Item label="事项">{detailQuery.data.title === null ? <span>未提供标题</span> : detailQuery.data.title}</Descriptions.Item>
+              <Descriptions.Item label="责任人">{detailQuery.data.assignee_display_name === null ? <span>未提供显示名</span> : <span data-assignee-value>{detailQuery.data.assignee_display_name}</span>}</Descriptions.Item>
+              <Descriptions.Item label="状态">{detailQuery.data.status === 'assigned' ? '已派发' : detailQuery.data.status === 'department_pending' ? '待部门认领' : '未提供状态'}</Descriptions.Item>
+              <Descriptions.Item label="类型">{detailQuery.data.kind ?? '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="责任部门编号">{detailQuery.data.owner_department_id ?? '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="办理要求">{detailQuery.data.requirement ?? '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="回执要求">{detailQuery.data.receipt_requirement ?? '未提供'}</Descriptions.Item>
+              <Descriptions.Item label="截止时间">{detailQuery.data.due_at === null ? '未提供截止时间' : formatTimestamp(detailQuery.data.due_at)}</Descriptions.Item>
+              <Descriptions.Item label="提醒设置">{detailQuery.data.reminder_choices === null ? '未提供' : detailQuery.data.reminder_choices.join('、') || '未设置'}；{detailQuery.data.reminder_delivery === 'not_enabled' ? '自动提醒尚未启用' : '未提供提醒投递状态'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{detailQuery.data.created_at === null ? '未提供' : formatTimestamp(detailQuery.data.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{detailQuery.data.updated_at === null ? '未提供' : formatTimestamp(detailQuery.data.updated_at)}</Descriptions.Item>
+            </Descriptions>
+          </Space>
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
             <Alert
@@ -848,7 +855,7 @@ export default function WorkObjectsPage() {
                 {detailQuery.data.source_title}
               </Descriptions.Item>
               <Descriptions.Item label="责任人">
-                {detailQuery.data.assignee_display_name ?? '暂未提供'}
+                {detailQuery.data.assignee_display_name === null ? <span>未提供显示名</span> : <span data-assignee-value>{detailQuery.data.assignee_display_name}</span>}
               </Descriptions.Item>
               <Descriptions.Item label="时限">
                 {detailQuery.data.due_at

@@ -33,6 +33,10 @@ export interface DispatchDraft {
   assignee: string;
   /** 截止时间，`<input type="datetime-local">` 的取值（本地时间，无时区）。 */
   dueAt: string;
+  /** Confirmed content time only; never a frozen publication request. */
+  dueInstant?: string;
+  dueZone?: string;
+  dueOffset?: string;
   visibility: string;
   /** 交办对象，去重后的顺序表。 */
   targets: readonly string[];
@@ -96,6 +100,9 @@ export function parseDraft(raw: unknown): DispatchDraft {
     title: textField(candidate.title),
     assignee: textField(candidate.assignee),
     dueAt: textField(candidate.dueAt),
+    ...(typeof candidate.dueInstant === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(candidate.dueInstant)
+      && Number.isFinite(Date.parse(candidate.dueInstant))
+      ? { dueInstant: candidate.dueInstant, dueZone: textField(candidate.dueZone), dueOffset: textField(candidate.dueOffset) } : {}),
     visibility: textField(candidate.visibility),
     targets,
     requirement: textField(candidate.requirement),
