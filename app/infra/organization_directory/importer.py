@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal
 
 from app.infra.organization_directory.validation import (
+    InvalidDirectorySnapshot,
     has_complete_snapshot_evidence,
     validate_department_graph,
+    validate_display_name,
+    validate_memberships,
 )
 from app.ports.organization_directory import (
     OrganizationDepartment,
-    OrganizationDirectoryError,
     OrganizationDirectoryPage,
     OrganizationDirectorySnapshot,
     OrganizationUserMembership,
@@ -50,6 +53,7 @@ def build_directory_snapshot(
         is_complete=False,
         fetched_at=fetched_at,
     )
+    validate_memberships(snapshot.memberships)
     return snapshot.model_copy(
         update={"is_complete": has_complete_snapshot_evidence(snapshot)}
     )
@@ -105,22 +109,45 @@ def _membership(row: Mapping[str, Any]) -> OrganizationUserMembership:
         organization_id=_optional_text(row, "orgid"),
         subcompany_id=_optional_text(row, "subcompanyid1"),
         job_title=_optional_job_title(row),
+        display_name=_optional_display_name(row),
     )
 
 
 def _required_text(row: Mapping[str, Any], field: str) -> str:
     value = row.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise OrganizationDirectoryError("invalid organization directory row")
+        raise InvalidDirectorySnapshot("invalid organization directory row")
     return value
 
 
 def _optional_job_title(row: Mapping[str, Any]) -> str | None:
     value = row.get("jobtitle")
-    # OA IDs may be JSON integers or strings. Do not coerce booleans/floats.
-    if type(value) is int and value > 0:
-        return str(value)
-    return _optional_text(row, "jobtitle")
+    if value is None:
+        return None
+    if type(value) is int and value >= 0:
+        return str(value) if value else None
+    if isinstance(value, str):
+        if value in ("", "0"):
+            return None
+        if re.fullmatch(r"[1-9][0-9]*", value):
+            return value
+    raise InvalidDirectorySnapshot("invalid organization directory row")
+
+
+def _optional_display_name(row: Mapping[str, Any]) -> str | None:
+    value = row.get("lastname")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidDirectorySnapshot("invalid organization directory name")
+    # Reject controls even when stripping would erase them.
+    import unicodedata
+
+    if any(unicodedata.category(char).startswith("C") for char in value):
+        raise InvalidDirectorySnapshot("invalid organization directory name")
+    normalized = value.strip() or None
+    validate_display_name(normalized)
+    return normalized
 
 
 def _optional_text(row: Mapping[str, Any], field: str) -> str | None:
@@ -128,13 +155,13 @@ def _optional_text(row: Mapping[str, Any], field: str) -> str | None:
     if value in (None, ""):
         return None
     if not isinstance(value, str):
-        raise OrganizationDirectoryError("invalid organization directory row")
+        raise InvalidDirectorySnapshot("invalid organization directory row")
     return value
 
 
 def _validate_count(value: int) -> None:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise OrganizationDirectoryError("invalid authoritative directory count")
+        raise InvalidDirectorySnapshot("invalid authoritative directory count")
 
 
 __all__ = (

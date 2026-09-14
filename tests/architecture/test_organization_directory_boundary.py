@@ -22,6 +22,7 @@ DIRECTORY_FILES = (
 EXPECTED_PROTOCOL_METHODS = {
     "OrganizationDirectoryPort": {
         "replace_snapshot": ("self", "snapshot"),
+        "read_view": ("self",),
         "get_department": ("self", "department_id"),
         "list_department_subtree": ("self", "department_id"),
         "list_user_memberships": ("self", "user_id"),
@@ -201,6 +202,7 @@ def test_postgresql_adapter_cannot_inject_filtering_capability() -> None:
     assert instance_attributes == {"_session_factory"}
     assert public_methods == {
         "replace_snapshot",
+        "read_view",
         "get_department",
         "list_department_subtree",
         "list_user_memberships",
