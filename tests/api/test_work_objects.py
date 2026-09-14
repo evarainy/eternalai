@@ -710,16 +710,35 @@ def test_semantically_invalid_gateway_text_fails_before_any_write(
     assert store.upsert_calls == 0
 
 
+def _sentinel_list(count: int = 201) -> tuple[list[str], list[WorkObjectRecord]]:
+    ids = [f"id-{count - 1 - index:03d}" for index in range(count)]
+    records = [
+        _record(source_ref=f"oa-todo-{index}", index=index).model_copy(
+            update={"work_object_id": item_id}
+        )
+        for index, item_id in enumerate(ids, start=1)
+    ]
+    return ids, records
+
+
 def test_list_returns_one_bounded_batch_with_explicit_overflow() -> None:
-    records = [_record(source_ref=f"oa-todo-{index}", index=index) for index in range(1, 202)]
-    client = _client(MemoryWorkObjectStore(records), RecordingGateway())
+    sentinel_ids, records = _sentinel_list()
+    store = MemoryWorkObjectStore(records)
+    client = _client(store, RecordingGateway())
 
     response = client.get("/api/v1/work-objects")
 
     assert response.status_code == 200
     assert response.json()["limit"] == 200
     assert response.json()["limit_exceeded"] is True
-    assert len(response.json()["items"]) == 200
+    assert [item["work_object_id"] for item in response.json()["items"]] == sentinel_ids[:200]
+    assert store.list_calls == [
+        {
+            "assignee_ai_user_id": "user-a",
+            "search_term": None,
+            "limit": 201,
+        }
+    ]
 
 
 def test_list_search_normalizes_query_before_store_call() -> None:
@@ -753,15 +772,67 @@ def test_list_whitespace_query_preserves_the_existing_list_behavior(query: str |
 
 
 def test_list_search_reports_overflow_after_filtering() -> None:
-    records = [_record(source_ref=f"oa-todo-{index}", index=index) for index in range(1, 202)]
-    client = _client(MemoryWorkObjectStore(records), RecordingGateway())
+    sentinel_ids, records = _sentinel_list()
+    store = MemoryWorkObjectStore(records)
+    client = _client(store, RecordingGateway())
 
     response = client.get("/api/v1/work-objects", params={"q": "pending approval"})
 
     assert response.status_code == 200
     assert response.json()["limit"] == 200
     assert response.json()["limit_exceeded"] is True
-    assert len(response.json()["items"]) == 200
+    assert [item["work_object_id"] for item in response.json()["items"]] == sentinel_ids[:200]
+    assert store.list_calls == [
+        {
+            "assignee_ai_user_id": "user-a",
+            "search_term": "pending approval",
+            "limit": 201,
+        }
+    ]
+
+
+def test_list_q_and_sync_preserve_ordered_store_prefix() -> None:
+    sentinel_ids, records = _sentinel_list()
+    list_store = MemoryWorkObjectStore(records)
+    list_client = _client(list_store, RecordingGateway())
+    listed = list_client.get("/api/v1/work-objects")
+    assert list_store.list_calls == [
+        {"assignee_ai_user_id": "user-a", "search_term": None, "limit": 201}
+    ]
+    assert [item["work_object_id"] for item in listed.json()["items"]] == sentinel_ids[:200]
+    assert listed.json()["limit_exceeded"] is True
+
+    search_store = MemoryWorkObjectStore(records)
+    search_client = _client(search_store, RecordingGateway())
+    searched = search_client.get("/api/v1/work-objects", params={"q": "pending approval"})
+    assert search_store.list_calls == [
+        {
+            "assignee_ai_user_id": "user-a",
+            "search_term": "pending approval",
+            "limit": 201,
+        }
+    ]
+    assert [item["work_object_id"] for item in searched.json()["items"]] == sentinel_ids[:200]
+    assert searched.json()["limit_exceeded"] is True
+
+    existing = [
+        _record(source_ref=f"existing-{index}", index=index).model_copy(
+            update={"work_object_id": f"keep-{index}"}
+        )
+        for index in (1, 2, 3)
+    ]
+    sync_store = MemoryWorkObjectStore(existing)
+    sync_client = _client(sync_store, RecordingGateway(_success_result(title="Synced title")))
+    synced = sync_client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    expected_sync = ["keep-1", "keep-2", "keep-3", "work-user-a-oa-todo-1"]
+    assert sync_store.list_calls[-1] == {
+        "assignee_ai_user_id": "user-a",
+        "search_term": None,
+        "limit": 201,
+    }
+    assert [item["work_object_id"] for item in synced.json()["items"]] == expected_sync
+    assert synced.json()["limit_exceeded"] is False
+    assert synced.json()["items"][-1]["source_title"] == "Synced title"
 
 
 @pytest.mark.parametrize(

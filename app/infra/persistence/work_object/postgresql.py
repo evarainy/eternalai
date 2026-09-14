@@ -128,7 +128,11 @@ class PostgreSQLWorkObjectStore:
                 await session.execute(
                     text(
                         "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
-                        "WHERE " + visibility + " " + search_clause + "LIMIT :limit"
+                        "WHERE " + visibility + " " + search_clause
+                        + "ORDER BY due_at ASC NULLS LAST, "
+                        'created_at DESC NULLS LAST, '
+                        'work_object_id COLLATE "C" ASC '
+                        "LIMIT :limit"
                     ),
                     parameters,
                 )

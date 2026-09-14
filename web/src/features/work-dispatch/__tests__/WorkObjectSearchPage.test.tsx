@@ -324,7 +324,7 @@ describe('WorkObjectSearchPage', () => {
     });
   });
 
-  it('discloses the unordered and unstable 200-item set when results overflow', async () => {
+  it('discloses deterministic selection when results overflow', async () => {
     apiMocks.listWorkObjects.mockResolvedValueOnce(
       listResponse({ items: [TITLE_ITEM], limit_exceeded: true }),
     );
@@ -332,8 +332,11 @@ describe('WorkObjectSearchPage', () => {
 
     expect(await screen.findByText('结果过多，请缩小范围')).toBeInTheDocument();
     expect(
-      screen.getByText('当前仅展示 200 条；结果未排序，具体 200 条可能变化。'),
+      screen.getByText(
+        '当前仅展示前 200 条：有截止时间的优先，截止越早越靠前；截止时间相同或均未设置时，按首次入库时间从新到旧选取。请缩小搜索范围。',
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/结果未排序/)).not.toBeInTheDocument();
   });
 
   it('registers the hit set through the existing nine-field page-context contract', async () => {

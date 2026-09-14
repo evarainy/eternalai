@@ -723,7 +723,7 @@ export default function WorkObjectsPage() {
           showIcon
           type="warning"
           title={`事项超过首版展示上限 ${listQuery.data.limit} 条`}
-          description="分页只整理已取得的部分，不代表 OA 里的全部事项。"
+          description="服务端最多返回前 200 条：有截止时间的优先，截止越早越靠前；截止时间相同或均未设置时，按首次入库时间从新到旧选取。本页筛选、排序和分页仅整理已取得的事项，不代表全部事项。"
         />
       ) : null}
 
