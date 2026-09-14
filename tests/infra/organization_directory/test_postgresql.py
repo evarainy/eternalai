@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -15,8 +15,58 @@ from app.ports.organization_directory import (
     OrganizationDirectorySnapshot,
     OrganizationUserMembership,
 )
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 
 FETCHED_AT = datetime(2026, 8, 31, tzinfo=UTC)
+
+
+def test_read_view_never_mixes_generations(dispatch_db):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sqlalchemy import event
+
+    from tests.api.test_work_object_dispatch import run
+    from tests.infra.organization_directory.test_sync_state import snapshot
+    db = dispatch_db
+    old = run(db.directory.read_view())
+    candidate = run(snapshot(db))
+    departments = tuple(item.model_copy(update={"display_name": "Synthetic new generation"})
+                        for item in candidate.departments)
+    page = candidate.user_pages[0].model_copy(update={"memberships": tuple(
+        member.model_copy(update={"display_name": "Synthetic new person"})
+        for member in candidate.memberships
+    )})
+    candidate = candidate.model_copy(update={"departments": departments, "user_pages": (page,)})
+    entered, release = threading.Event(), threading.Event()
+    reading_thread = []
+    def pause(connection, cursor, statement, parameters, context, many):
+        if (threading.get_ident() in reading_thread
+                and "SELECT snapshot_version,source_fetched_at" in statement):
+            entered.set()
+            assert release.wait(10), "concurrent publisher never released reader"
+    event.listen(db.engine.sync_engine, "after_cursor_execute", pause)
+    def read():
+        reading_thread.append(threading.get_ident())
+        return run(db.directory.read_view())
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(read)
+            try:
+                assert entered.wait(10), "reader never acquired its first snapshot"
+                run(db.directory.replace_snapshot(candidate))
+            finally:
+                release.set()
+            observed = future.result(timeout=10)
+    finally:
+        event.remove(db.engine.sync_engine, "after_cursor_execute", pause)
+    assert observed.snapshot_version == old.snapshot_version
+    assert observed.departments == old.departments
+    assert observed.memberships == old.memberships
+    current = run(db.directory.read_view())
+    assert current.snapshot_version == old.snapshot_version+1
+    assert current.departments == departments
+    assert current.memberships == page.memberships
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -146,13 +196,20 @@ def test_replaces_and_queries_complete_directory_snapshot(migrated_database_url:
             revoked = snapshot.user_pages[0].model_copy(update={
                 "memberships": (snapshot.memberships[0].model_copy(update={"job_title": None}),),
             })
-            await directory.replace_snapshot(snapshot.model_copy(update={"user_pages": (revoked,)}))
+            await directory.replace_snapshot(snapshot.model_copy(update={
+                "user_pages": (revoked,), "fetched_at": snapshot.fetched_at + timedelta(seconds=1),
+            }))
             refreshed = await directory.list_user_memberships("synthetic-user")
             assert len(refreshed) == 1 and refreshed[0].job_title is None
         finally:
             async with factory() as session:
                 await session.execute(text("DELETE FROM organization_user_memberships"))
                 await session.execute(text("DELETE FROM organization_departments"))
+                await session.execute(text(
+                    "UPDATE organization_directory_sync_state SET snapshot_version=0,"
+                    "source_fetched_at=NULL,last_success_at=NULL,last_attempt_started_at=NULL,"
+                    "last_attempt_finished_at=NULL,last_attempt_status='never',last_error_code=NULL"
+                ))
                 await session.commit()
             await engine.dispose()
 
@@ -207,6 +264,11 @@ def test_list_user_memberships_returns_complete_set_across_organization_values(
             async with factory() as session:
                 await session.execute(text("DELETE FROM organization_user_memberships"))
                 await session.execute(text("DELETE FROM organization_departments"))
+                await session.execute(text(
+                    "UPDATE organization_directory_sync_state SET snapshot_version=0,"
+                    "source_fetched_at=NULL,last_success_at=NULL,last_attempt_started_at=NULL,"
+                    "last_attempt_finished_at=NULL,last_attempt_status='never',last_error_code=NULL"
+                ))
                 await session.commit()
             await engine.dispose()
 
@@ -282,6 +344,11 @@ def test_query_fails_closed_if_stored_department_graph_contains_cycle(
             async with factory() as session:
                 await session.execute(text("DELETE FROM organization_user_memberships"))
                 await session.execute(text("DELETE FROM organization_departments"))
+                await session.execute(text(
+                    "UPDATE organization_directory_sync_state SET snapshot_version=0,"
+                    "source_fetched_at=NULL,last_success_at=NULL,last_attempt_started_at=NULL,"
+                    "last_attempt_finished_at=NULL,last_attempt_status='never',last_error_code=NULL"
+                ))
                 await session.commit()
             await engine.dispose()
 

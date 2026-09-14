@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OrganizationDirectoryError(RuntimeError):
     """Fail-closed directory snapshot or query failure."""
+
+
+class OrganizationDirectoryReadError(OrganizationDirectoryError):
+    def __init__(
+        self,
+        code: Literal["organization_directory_missing", "organization_directory_unavailable"],
+    ) -> None:
+        self.code = (
+            code if code in {"organization_directory_missing", "organization_directory_unavailable"}
+            else "organization_directory_unavailable"
+        )
+        super().__init__(self.code)
 
 
 class OrganizationDepartment(BaseModel):
@@ -30,6 +42,25 @@ class OrganizationUserMembership(BaseModel):
     organization_id: str | None = None
     subcompany_id: str | None = None
     job_title: str | None = None
+    display_name: str | None = Field(default=None, repr=False)
+
+
+class OrganizationDirectoryReadView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    snapshot_version: int = Field(ge=1, strict=True)
+    source_fetched_at: datetime
+    last_success_at: datetime
+    observed_at: datetime
+    departments: tuple[OrganizationDepartment, ...] = Field(repr=False)
+    memberships: tuple[OrganizationUserMembership, ...] = Field(repr=False)
+
+    @field_validator("source_fetched_at", "last_success_at", "observed_at")
+    @classmethod
+    def _utc_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("directory timestamps must be timezone aware")
+        return value.astimezone(UTC)
 
 
 class OrganizationDirectoryPage(BaseModel):
@@ -69,6 +100,8 @@ class OrganizationDirectorySnapshot(BaseModel):
 
 
 class OrganizationDirectoryPort(Protocol):
+    async def read_view(self) -> OrganizationDirectoryReadView: ...
+
     async def replace_snapshot(self, snapshot: OrganizationDirectorySnapshot) -> None: ...
 
     async def get_department(
@@ -99,6 +132,8 @@ __all__ = (
     "OrganizationDirectoryError",
     "OrganizationDirectoryPage",
     "OrganizationDirectoryPort",
+    "OrganizationDirectoryReadError",
+    "OrganizationDirectoryReadView",
     "OrganizationDirectorySnapshot",
     "OrganizationDirectorySourcePort",
     "OrganizationUserMembership",

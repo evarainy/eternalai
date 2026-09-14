@@ -12,6 +12,27 @@ async def _healthy_check() -> bool:
     return True
 
 
+def test_directory_diagnostics_never_change_overall_health() -> None:
+    async def failed() -> bool:
+        raise RuntimeError("synthetic-private-diagnostic")
+
+    for required, status_code in (
+        ({"database": _healthy_check}, 200),
+        ({}, 503),
+        ({"database": failed}, 503),
+    ):
+        result = TestClient(create_app(
+            health_checks=required, diagnostic_checks={"organization_directory": failed},
+        )).get("/api/v1/health")
+        assert result.status_code == status_code
+        assert result.json()["checks"]["organization_directory"] == "failed"
+        assert result.json()["status"] == ("ok" if status_code == 200 else "unhealthy")
+        assert "synthetic-private-diagnostic" not in result.text
+    with pytest.raises(ValueError, match="unique"):
+        create_app(health_checks={"organization_directory": _healthy_check},
+                   diagnostic_checks={"organization_directory": failed})
+
+
 client = TestClient(
     create_app(
         health_checks={

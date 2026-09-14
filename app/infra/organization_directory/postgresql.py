@@ -8,6 +8,10 @@ from pydantic import TypeAdapter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.infra.organization_directory.sync_state import (
+    PostgreSQLOrganizationDirectorySync,
+    validate_snapshot,
+)
 from app.infra.organization_directory.validation import (
     has_complete_snapshot_evidence,
     validate_department_graph,
@@ -16,9 +20,12 @@ from app.ports.organization_directory import (
     OrganizationDepartment,
     OrganizationDirectoryError,
     OrganizationDirectoryPort,
+    OrganizationDirectoryReadError,
+    OrganizationDirectoryReadView,
     OrganizationDirectorySnapshot,
     OrganizationUserMembership,
 )
+from app.ports.organization_directory_sync import DirectorySourceError
 
 _DEPARTMENT_ADAPTER = TypeAdapter(OrganizationDepartment)
 _MEMBERSHIP_ADAPTER = TypeAdapter(OrganizationUserMembership)
@@ -33,35 +40,69 @@ class PostgreSQLOrganizationDirectory:
             raise OrganizationDirectoryError("incomplete organization snapshot")
         validate_department_graph(snapshot.departments)
         try:
+            validate_snapshot(snapshot)
+        except DirectorySourceError:
+            raise OrganizationDirectoryError("invalid organization snapshot") from None
+        sync = PostgreSQLOrganizationDirectorySync(self._session_factory)
+        try:
+            async with sync.try_acquire() as lease:
+                if lease is None:
+                    raise OrganizationDirectoryError("organization directory lock busy")
+                await lease.start_attempt()
+                try:
+                    await lease.replace_snapshot(snapshot)
+                except DirectorySourceError as exc:
+                    if exc.code != "storage_unavailable":
+                        await lease.mark_failed(exc.code)
+                    raise
+        except Exception:
+            raise OrganizationDirectoryError("organization snapshot replacement failed") from None
+
+    async def read_view(self) -> OrganizationDirectoryReadView:
+        try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    await session.execute(text("DELETE FROM organization_user_memberships"))
-                    await session.execute(text("DELETE FROM organization_departments"))
-                    for department in snapshot.departments:
-                        await session.execute(
-                            text(
-                                "INSERT INTO organization_departments "
-                                "(department_id, parent_department_id, display_name, "
-                                "subcompany_id, fetched_at) VALUES "
-                                "(:department_id, :parent_department_id, :display_name, "
-                                ":subcompany_id, :fetched_at)"
-                            ),
-                            {**department.model_dump(), "fetched_at": snapshot.fetched_at},
+                    await session.execute(
+                        text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                    )
+                    state = (await session.execute(text(
+                        "SELECT snapshot_version,source_fetched_at,last_success_at,"
+                        "clock_timestamp() AS observed_at FROM organization_directory_sync_state "
+                        "WHERE singleton_id=1"
+                    ))).mappings().one()
+                    if state["snapshot_version"] == 0:
+                        raise OrganizationDirectoryReadError("organization_directory_missing")
+                    departments = (await session.execute(text(
+                        "SELECT department_id,parent_department_id,display_name,subcompany_id "
+                        "FROM organization_departments ORDER BY department_id"
+                    ))).mappings().all()
+                    members = (
+                        (
+                            await session.execute(
+                                text(
+                                    "SELECT user_id,department_id,organization_id,"
+                                    "subcompany_id,job_title,"
+                                    "display_name FROM organization_user_memberships "
+                                    "ORDER BY user_id,department_id"
+                                )
+                            )
                         )
-                    for membership in snapshot.memberships:
-                        await session.execute(
-                            text(
-                                "INSERT INTO organization_user_memberships "
-                                "(user_id, department_id, organization_id, subcompany_id, "
-                                "job_title, fetched_at) VALUES (:user_id, :department_id, "
-                                ":organization_id, :subcompany_id, :job_title, :fetched_at)"
-                            ),
-                            {**membership.model_dump(), "fetched_at": snapshot.fetched_at},
-                        )
-        except OrganizationDirectoryError:
+                        .mappings()
+                        .all()
+                    )
+                    return OrganizationDirectoryReadView(
+                        **dict(state),
+                        departments=tuple(
+                            _DEPARTMENT_ADAPTER.validate_python(dict(row)) for row in departments
+                        ),
+                        memberships=tuple(
+                            _MEMBERSHIP_ADAPTER.validate_python(dict(row)) for row in members
+                        ),
+                    )
+        except OrganizationDirectoryReadError:
             raise
-        except Exception as exc:
-            raise OrganizationDirectoryError("organization snapshot replacement failed") from exc
+        except Exception:
+            raise OrganizationDirectoryReadError("organization_directory_unavailable") from None
 
     async def get_department(
         self, department_id: str
@@ -122,7 +163,8 @@ class PostgreSQLOrganizationDirectory:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT user_id, department_id, organization_id, subcompany_id, job_title "
+                        "SELECT user_id, department_id, organization_id, subcompany_id, "
+                        "job_title, display_name "
                         "FROM organization_user_memberships WHERE user_id = :user_id "
                         "ORDER BY department_id"
                     ),

@@ -4,6 +4,12 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+export interface DepartmentDispatchOption {
+  department_display_name: string;
+  department_id: string;
+  kind: 'department';
+}
+
 export interface DepartmentDispatchTarget {
   /**
    * @minLength 1
@@ -11,6 +17,30 @@ export interface DepartmentDispatchTarget {
    */
   department_id: string;
   kind: 'department';
+}
+
+export type DispatchOptionsResponseItems = DepartmentDispatchOption[] | UserDispatchOption[];
+
+export type DispatchOptionsResponseKind = typeof DispatchOptionsResponseKind[keyof typeof DispatchOptionsResponseKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchOptionsResponseKind = {
+  department: 'department',
+  user: 'user',
+} as const;
+
+export type DispatchOptionsResponseNextCursor = string | null;
+
+export interface DispatchOptionsResponse {
+  has_more: boolean;
+  items: DispatchOptionsResponseItems;
+  kind: DispatchOptionsResponseKind;
+  next_cursor: DispatchOptionsResponseNextCursor;
+  /** @minimum 1 */
+  snapshot_version: number;
+  /** @minimum 0 */
+  unselectable_count: number;
 }
 
 export type DispatchWorkObjectsRequestDueAt = string | null;
@@ -223,6 +253,14 @@ export interface SetHandlingMarkRequest {
   mark: SetHandlingMarkRequestMark;
 }
 
+export interface UserDispatchOption {
+  department_display_name: string;
+  department_id: string;
+  directory_user_id: string;
+  display_name: string;
+  kind: 'user';
+}
+
 export interface UserDispatchTarget {
   /**
    * @minLength 1
@@ -269,6 +307,34 @@ export interface WorkObjectListResponse {
 export type ListWorkObjectsApiV1WorkObjectsGetParams = {
 q?: string | null;
 };
+
+export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams = {
+kind: ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind;
+/**
+ * @minLength 1
+ * @maxLength 128
+ */
+department_id?: string;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * @minLength 1
+ * @maxLength 2048
+ */
+cursor?: string;
+};
+
+export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = typeof ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind[keyof typeof ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = {
+  department: 'department',
+  user: 'user',
+} as const;
 
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView | InternalWorkObjectView;
 

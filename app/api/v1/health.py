@@ -22,11 +22,15 @@ def make_router(
     checks: Mapping[str, HealthCheck] | None = None,
     *,
     timeout_seconds: float = _DEFAULT_HEALTH_TIMEOUT_SECONDS,
+    diagnostic_checks: Mapping[str, HealthCheck] | None = None,
 ) -> APIRouter:
     if timeout_seconds <= 0:
         raise ValueError("Health timeout must be positive")
     router = APIRouter()
     configured_checks = dict(checks or {})
+    diagnostics = dict(diagnostic_checks or {})
+    if configured_checks.keys() & diagnostics.keys():
+        raise ValueError("Health check keys must be unique")
 
     @router.get(
         "/health",
@@ -36,20 +40,18 @@ def make_router(
         },
     )
     async def health(response: Response) -> HealthResponse:
-        if not configured_checks:
-            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-            return HealthResponse(status="unhealthy", checks={})
+        combined = {**configured_checks, **diagnostics}
         results = await asyncio.gather(
             *(
                 _check(check, timeout_seconds=timeout_seconds)
-                for check in configured_checks.values()
+                for check in combined.values()
             )
         )
         check_statuses: dict[str, Literal["ok", "failed"]] = {
             name: "ok" if healthy else "failed"
-            for name, healthy in zip(configured_checks, results, strict=True)
+            for name, healthy in zip(combined, results, strict=True)
         }
-        healthy = all(results)
+        healthy = bool(configured_checks) and all(results[:len(configured_checks)])
         if not healthy:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return HealthResponse(

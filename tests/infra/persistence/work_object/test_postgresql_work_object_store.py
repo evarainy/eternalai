@@ -496,10 +496,62 @@ def test_postgresql_search_keeps_literal_wildcards_and_overflow_contract() -> No
 
 def _scope(actor: str) -> AuthorizedWorkObjectScope:
     return AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id=actor,
         principal_department_id=None,
     )
+
+
+def test_no_job_keeps_only_existing_visibility(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import (
+        assert_created,
+        insert_synthetic_row,
+        manual_row,
+    )
+    from tests.api.test_work_objects import _record
+    from tests.auth_fakes import TEST_CSRF_HEADERS
+
+    db = dispatch_db
+    own_outgoing = assert_created(db, db.post())["work_object_id"]
+    for item_id, department, tenant in (
+        ("local", "office-a", "default"),
+        ("other-department", "office-c", "default"),
+        ("other-tenant", "office-a", "synthetic-other"),
+    ):
+        insert_synthetic_row(db, manual_row(
+            db, work_object_id=item_id, owner_department_id=department,
+            initiator_ai_user_id="ai-other", tenant_id=tenant,
+        ))
+    for user in ("ai-sender", "ai-other"):
+        oa = _record(owner=user).model_dump()
+        insert_synthetic_row(db, oa)
+        legacy = {
+            **oa, "work_object_id": "legacy-" + user, "state_authority": "internal",
+            "source_system": "eternalai", "source_kind": "internal_task",
+        }
+        for field in ("source_ref", "source_title", "source_status", "source_received_at",
+                      "source_created_at", "source_workflow_type_id", "source_fetched_at"):
+            legacy[field] = None
+        insert_synthetic_row(db, legacy)
+    db.actor("sender", "office-a", None)
+    expected = {own_outgoing, "local", "work-ai-sender-1", "legacy-ai-sender"}
+    response = db.client.get("/api/v1/work-objects")
+    assert response.status_code == 200
+    assert {item["work_object_id"] for item in response.json()["items"]} == expected
+    for row in db.rows("work_objects"):
+        item_id = row["work_object_id"]
+        assert db.client.get("/api/v1/work-objects/" + item_id).status_code == (
+            200 if item_id in expected else 404
+        )
+        marked = db.client.patch(
+            "/api/v1/work-objects/" + item_id + "/handling-mark",
+            json={"mark": "handled_elsewhere"}, headers=TEST_CSRF_HEADERS,
+        )
+        assert marked.status_code == (200 if item_id == "work-ai-sender-1" else 404)
+    assert {
+        row["work_object_id"] for row in db.rows("work_objects")
+        if row["handling_mark"] is not None
+    } == {"work-ai-sender-1"}
 
 
 def test_internal_scope_consumes_department_and_initiator_before_limit(dispatch_db) -> None:
@@ -560,13 +612,13 @@ def test_internal_scope_consumes_department_and_initiator_before_limit(dispatch_
         },
     )
     scope = AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id="ai-reader",
         principal_department_id="office-a",
     )
     rows = run(db.store.list_for_scope(scope))
     assert {row.work_object_id for row in rows} == expected
-    assert {row.tenant_id for row in rows} == {"tenant-dispatch-a"}
+    assert {row.tenant_id for row in rows} == {"default"}
     assert run(db.store.get_for_scope("other-tenant", scope)) is None
     insert_synthetic_row(
         db, {**base, "work_object_id": "visible-201", "owner_department_id": "office-a"}
@@ -608,7 +660,7 @@ def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(dispatch_d
         legacy[field] = None
     insert_synthetic_row(db, legacy)
     private = AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id="ai-private-owner",
         principal_department_id=None,
     )
@@ -630,7 +682,7 @@ def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(dispatch_d
         )
     for actor in ("ai-private-owner", "ai-admin", "ai-recipient"):
         scope = AuthorizedWorkObjectScope(
-            principal_tenant_id="tenant-dispatch-a",
+            principal_tenant_id="default",
             principal_ai_user_id=actor,
             principal_department_id="office-b",
         )
@@ -685,7 +737,7 @@ def test_internal_search_filters_scope_and_title_before_limit(dispatch_db, query
         },
     )
     scope = AuthorizedWorkObjectScope(
-        principal_tenant_id="tenant-dispatch-a",
+        principal_tenant_id="default",
         principal_ai_user_id="ai-reader",
         principal_department_id="office-a",
     )
@@ -735,7 +787,7 @@ def test_dispatch_concurrent_idempotency_and_restart_replay(dispatch_db, monkeyp
         assert first.items == second.items and first.created_count == second.created_count == 1
         restarted = PostgreSQLWorkObjectStore(db.factory)
         saved = await restarted.get_dispatch_receipt(
-            tenant_id="tenant-dispatch-a", initiator_ai_user_id="ai-sender", idempotency_key=key
+            tenant_id="default", initiator_ai_user_id="ai-sender", idempotency_key=key
         )
         assert saved is not None
         assert saved.result["items"] == first.model_dump(mode="json")["items"]

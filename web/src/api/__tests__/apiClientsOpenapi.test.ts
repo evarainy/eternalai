@@ -95,6 +95,11 @@ const PROJECTS = [
         operationId: 'dispatch_work_objects_api_v1_work_objects_dispatch_post',
       },
       {
+        path: '/api/v1/work-objects/dispatch-options',
+        method: 'get',
+        operationId: 'list_dispatch_options_api_v1_work_objects_dispatch_options_get',
+      },
+      {
         path: '/api/v1/work-objects/sync',
         method: 'post',
         operationId: 'sync_work_objects_api_v1_work_objects_sync_post',
@@ -284,13 +289,13 @@ from tests.auth_fakes import StaticSessionTokens, auth_cookies, make_session_bin
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 class FailedDirectory:
-    async def list_user_memberships(self, user_id):
+    async def read_view(self):
         raise RuntimeError("synthetic directory unavailable")
 
 tokens = StaticSessionTokens(roles=("user",))
 tokens.principal = Principal(
     ai_user_id="ai-synthetic", display_name="Synthetic", roles=("user",),
-    org_ctx=PrincipalOrgContext(tenant_id="tenant-dispatch-a", directory_user_id="synthetic-key"),
+    org_ctx=PrincipalOrgContext(tenant_id="default", directory_user_id="synthetic-key"),
 )
 service = WorkObjectService(
     store=MemoryWorkObjectStore(), gateway=RecordingGateway(),
