@@ -1,9 +1,7 @@
-/**
- * 「新建应用」草稿的取值闭集与本机草稿存取。
- *
- * 2026-09-02 裁决「界面先行、后端不做」：这里没有任何 API 调用。产出物是**草稿**，只落本机
- * `localStorage`；「提交审核」在审核端点接进来之前不可用，界面上写明「提交审核后才对他人可见」。
- */
+import { createSessionDraftStore, LEGACY_SOFTWARE_DRAFT_KEY } from '../../stores/sessionDraftStore';
+import type { DraftSessionToken } from '../../stores/sessionDraftStore';
+
+/** 草稿字段规范化与当前认证会话内的显式快照；不持久化。 */
 
 export const SOFTWARE_SOURCES = [
   { value: 'existing_system', title: '接入单位已有的系统', hint: '填一个地址，登记成大家能点开的入口' },
@@ -63,7 +61,7 @@ export const EMPTY_NEW_SOFTWARE_DRAFT: NewSoftwareDraft = {
   visibleTo: [],
 };
 
-export const NEW_SOFTWARE_DRAFT_KEY = 'eternalai.apps.new-software-draft';
+export const NEW_SOFTWARE_DRAFT_KEY = LEGACY_SOFTWARE_DRAFT_KEY;
 
 function textField(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -93,7 +91,7 @@ export function dedupeVisibleTo(values: readonly string[]): string[] {
 
 export function parseNewSoftwareDraft(raw: unknown): NewSoftwareDraft {
   if (raw === null || typeof raw !== 'object') {
-    return EMPTY_NEW_SOFTWARE_DRAFT;
+    return { ...EMPTY_NEW_SOFTWARE_DRAFT, visibleTo: [] };
   }
   const candidate = raw as Record<string, unknown>;
   const visibleTo: readonly unknown[] = Array.isArray(candidate.visibleTo)
@@ -111,8 +109,8 @@ export function parseNewSoftwareDraft(raw: unknown): NewSoftwareDraft {
     owner: textField(candidate.owner),
     /*
      * 「嵌在工作台里面」这一档在界面上是禁用的（OA 实测 `X-Frame-Options: SAMEORIGIN`，嵌不进来）。
-     * 本机存的草稿可能被手改成 `embedded`，读回来时一律拉回「开新窗口」，不让一个当前不成立的取值从
-     * 存储绕进界面。
+     * 输入草稿可能含有 `embedded`，规范化时一律拉回「开新窗口」，不让一个当前不成立的取值从
+     * 输入绕进界面。
      */
     openMode: 'new_window',
     binding: memberOr(BINDING_CHOICES, candidate.binding, EMPTY_NEW_SOFTWARE_DRAFT.binding),
@@ -123,29 +121,13 @@ export function parseNewSoftwareDraft(raw: unknown): NewSoftwareDraft {
   };
 }
 
-export function loadNewSoftwareDraft(): NewSoftwareDraft {
-  let stored: string | null;
-  try {
-    stored = window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY);
-  } catch {
-    return EMPTY_NEW_SOFTWARE_DRAFT;
-  }
-  if (stored === null) {
-    return EMPTY_NEW_SOFTWARE_DRAFT;
-  }
-  try {
-    return parseNewSoftwareDraft(JSON.parse(stored));
-  } catch {
-    return EMPTY_NEW_SOFTWARE_DRAFT;
-  }
+const slot = createSessionDraftStore<NewSoftwareDraft>(parseNewSoftwareDraft);
+if (import.meta.hot) import.meta.hot.dispose(() => slot.dispose());
+
+export function loadNewSoftwareDraft(token: DraftSessionToken | null): NewSoftwareDraft {
+  return slot.read(token) ?? parseNewSoftwareDraft(null);
 }
 
-/** 存成功返回 `true`；浏览器禁写本机存储时返回 `false`，由调用方如实告诉用户没存上。 */
-export function saveNewSoftwareDraft(draft: NewSoftwareDraft): boolean {
-  try {
-    window.localStorage.setItem(NEW_SOFTWARE_DRAFT_KEY, JSON.stringify(draft));
-    return true;
-  } catch {
-    return false;
-  }
+export function saveNewSoftwareDraft(draft: NewSoftwareDraft, token: DraftSessionToken | null): boolean {
+  return slot.save(token, draft);
 }

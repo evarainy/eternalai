@@ -1,18 +1,32 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；同步 2026-09-14 已合并的四根审计修复棒、组织目录方案进度与新环境欠债，并纠正审计 #17 的 Workflow 接缝事实）。
-- 当前实现候选 task_id：`P2-AUDIT-DEPT-DEFAULT-001`（A 档、串行，承担 A 类同步；本地候选验证完成，待独立 Monitor → grok 评审，未 push/合并）。2026-09-14 实测后端 `3533 passed, 0 failed, 0 skipped`、Golden `34/34`、架构 `124 passed`、mypy `127 source files`、Ruff 通过。上一已合并功能基线为 `P2-ORGDIR-PERSON-SYNC-001`。
-- 当前实现后继指针：本棒后继尚未唯一绑定，留空待 GOV-SYNC 裁决；既有前端指针 `P2-FE-DISPATCH-WIRING-001` 保留。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
+- 当前实现候选 task_id：`P2-AUDIT-DEPT-DEFAULT-001`（A 档、串行，承担 A 类同步；本地候选验证完成，独立 Monitor r2 PASS，待 grok 评审与 required checks，未 push/合并）。上一已合并功能基线为 `P2-ORGDIR-PERSON-SYNC-001`。
+- 本棒完成情况：已按显式跨部门允许集合收窄派发授权，候选验证与变异反证完成；独立 Monitor 三轮结论为 r1 监理自建用例问题未完成、r2 PASS，代码 grok 评审桥与 required checks 尚待完成。
+- 当前实现后继指针：`P2-FE-DISPATCH-WIRING-001`；组织目录候选与本棒草稿隔离候选均须先完成独立审查与集成。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
+- 本棒新增欠债指针：`PHASE2_PLAN.md` 活欠债表中的“上线前真实跨部门允许名单待提供”和“派发名单漂移诊断的实际部署消费未验收”；后继绑定与旧 fail-open 残余由 GOV-SYNC 承接。
 
 ## 已登记验证基线
 
-后端、Golden、架构、mypy 与 Ruff 采用 **2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001`** 本机验证证据；全量为本次最终候选实测，Golden、独立架构与 mypy 沿用同棒前轮证据，已核对相关生产与测试字节保持不变。独立 Monitor 与代码 grok 评审尚待执行，不代表合并或生产验收。前端全量沿用下列已合并棒的历史结果，本棒未改前端。
+### 本棒候选验证
 
-- pytest：`3533 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001` 后台全量最终 exit=0）。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001`）。
-- `tests/architecture/`：`124 passed`（2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001` 独立架构命令；P4 observer authoritative PASS）。
+- 本棒候选验证（2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001`）：后端 `3533 passed, 0 failed, 0 skipped`，Golden `34/34 passed`，架构 `124 passed`，mypy `127 source files`，Ruff 通过；定向 `348 passed`、迁移回归与 policy 定向 `11 passed`、生产变异 `19/19` 被捕获，十个改动测试文件弱测试检查通过。全量、Golden、架构与 mypy 均有对应证据，前端未改且沿用主干现值。
+
+### 草稿隔离待审候选
+
+- `P2-AUDIT-DRAFT-ISOLATION-001`（A 档；2026-09-14）：两类草稿改为当前认证会话内存快照，启动仅移除两固定旧键且不读取旧值；刷新、退出、有效 401、认证换代与页面生命周期失效后不恢复。独立 Monitor 三轮最终 r3 PASS；当前为待合并候选，grok 评审桥与 required checks 尚待完成；不替换下方已合并基线。
+- 2026-09-14 / r2 前端全量 `638 passed`（组件 333、单元 302、OpenAPI 3），BindingsPage 独立两次均 `13 passed`；r1 的 lint、build、Golden `34/34`、九个新改测试弱测试检查通过，初轮最终 typecheck 通过。后端沿用同日 r1 的 `3346 passed, 1 failed`，唯一失败为已登记的 `InMemoryHumanGate` 幂等语义用例，按续派裁定以 CI 为准继续；r2 未运行后端或连接测试库的测试，不将该结果写成后端全绿。
+- 已决后继为 `P2-FE-DISPATCH-WIRING-001`：本棒须先合并，后继开工前按获批方案修订旧本机恢复/C6/P5，消费捕获会话 token 的内存接口；组织目录棒的现役前置保留。服务端草稿、发布与审核义务继续记原欠债。本棒与组织目录棒共享两份状态文档，集成时须核对各自候选事实；不据此重排 DAG。
+
+### 已合并来源
+
+以下每一条结果都带来源棒与日期：后端、Golden、架构、mypy 与 Ruff 采用 **2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`** 最终整体实现的本机实测；独立 Monitor 三轮后已按当次人工裁决完成扩域修复与指定验证补齐，不开第四轮；grok 尚待执行，不能视作独立 Monitor PASS、合并或生产验收。前端全量沿用下列已合并棒的历史结果；本棒另做生成客户端的定向验证。解释器获取欠债另列活欠债。
+
+- pytest：`3459 passed, 0 failed, 0 skipped`（未使用 `--ignore=`；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 后台全量最终 exit=0）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（negative 21/21，positive 13/13；2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`）。
+- `tests/architecture/`：`124 passed`（2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001` 独立架构命令；P4 observer authoritative PASS）。
 - 前端全量 `pnpm --dir web test`：`585 passed`（`P2-AUDIT-VITE-001` 复测；本棒未重跑）。
-- mypy：`127 source files`；Ruff：通过（2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001`）。定向 `348 passed`，续派适配的迁移回归与 policy 定向 `11 passed`，生产变异 `19/19` 被捕获；十个改动测试文件弱测试检查通过。
+- mypy：`126 source files`；Ruff：通过（2026-09-14 / `P2-ORGDIR-PERSON-SYNC-001`）。本棒 OpenAPI `3 passed`，前端 typecheck/lint/build 通过；这些不是前端全量或页面交互实测。
 
 ## 必达链与阻塞
 
@@ -22,7 +36,7 @@
 
 ## 当前实现摘要
 
-- 页面合同：既有交办结构与控件闭集、附件禁用及可执行空态、本机草稿失败反馈、软件中心三块顺序、状态/版本整块留位、新建表单九字段与单句审核告知、可访问名称及多状态命名守卫已收口；软件弹窗恢复共享字段边界与单焦点宿主。真实发布、附件上传、服务端草稿、软件登记审核和用户侧列表接口仍未接入。可信选择合同、截止时间时区与序列化两项欠债见 `PHASE2_PLAN.md`。
+- 页面合同：既有交办结构与控件闭集、附件禁用及可执行空态、草稿失败反馈、软件中心三块顺序、状态/版本整块留位、新建表单九字段与单句审核告知、可访问名称及多状态命名守卫已收口；软件弹窗恢复共享字段边界与单焦点宿主。草稿隔离待审候选将两类本机持久草稿改为会话内存，状态见上方；真实发布、附件上传、服务端草稿、软件登记审核和用户侧列表接口仍未接入。可信选择合同、截止时间时区与序列化两项欠债见 `PHASE2_PLAN.md`。
 - 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
 - 意图输出必须显式给出 `match`；`none` 为合法无匹配，进入 `no_capability_found` 且 reason 为 `no_matching_capability`，`capability` 仍要求有效能力 ID。漏字段与矛盾组合保持 `schema_invalid`；无匹配文案保留「暂未接入」「能力」，只说明当前可用能力。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定。聊天回退后继为 `P2-RUNTIME-DIRECT-ANSWER-001`，本棒不新增终态。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。

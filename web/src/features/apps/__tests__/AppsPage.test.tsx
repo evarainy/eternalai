@@ -1,8 +1,9 @@
+import { useAuthStore } from '../../../stores/authStore';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CredentialBindingView } from '../../../generated/credential-bindings/credential-bindings.schemas';
@@ -96,6 +97,7 @@ function oaCard(): HTMLElement {
 }
 
 beforeEach(() => {
+  useAuthStore.getState().markAuthenticated();
   apiMocks.getBinding.mockReset();
   apiMocks.getBinding.mockResolvedValue(binding());
   navigationConfigMock.current = {
@@ -387,4 +389,19 @@ describe('AppsPage vocabulary', () => {
     expect(bindRules[1]).toContain('var(--workbench-control-ring-primary)');
     expect(bindRules[1]).toContain('var(--workbench-control-glow-strong)');
   });
+});
+
+it('reopens_a_clean_software_dialog_after_authentication_changes', async () => {
+  renderPage();
+  await screen.findByRole('article');
+  fireEvent.click(screen.getByRole('button', { name: /新建应用/ }));
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'A-private' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  act(() => useAuthStore.getState().markAuthenticated());
+  fireEvent.click(screen.getByRole('button', { name: /新建应用/ }));
+  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('');
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(screen.getByRole('article')).toHaveTextContent('OA');
 });

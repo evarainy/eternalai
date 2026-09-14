@@ -1,11 +1,15 @@
+import { useLayoutEffect } from 'react';
+import { useAuthStore } from '../../../stores/authStore';
+import { useDraftSession } from '../../../stores/sessionDraftStore';
+import * as draftModule from '../dispatchDraft';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../../app/theme';
-import { DRAFT_STORAGE_KEY, parseDraft } from '../dispatchDraft';
+import { DRAFT_STORAGE_KEY, loadDraft, saveDraft, parseDraft } from '../dispatchDraft';
 import WorkDispatchPage from '../WorkDispatchPage';
 
 /** vitest 下 `import.meta.url` 是 jsdom 的 URL 实例，`fileURLToPath` 不认，先取 `.href`。 */
@@ -42,6 +46,7 @@ function renderPage() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  useAuthStore.getState().markAuthenticated();
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -103,7 +108,7 @@ describe('WorkDispatchPage form', () => {
 
     expect(screen.getByText('草稿尚未发布')).toBeInTheDocument();
     expect(
-      screen.getByText('逐项核对无误后，点右下角「发布」才会下发'),
+      screen.getByText('逐项核对无误后，点右下角「发布」才会下发。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。'),
     ).toBeInTheDocument();
   });
 
@@ -264,7 +269,7 @@ describe('WorkDispatchPage form', () => {
     expect(notice.textContent).not.toContain('发送成功');
   });
 
-  it('keeps the saved draft on this machine only and says so', () => {
+  it('saves_only_for_the_current_session_and_restores_after_route_return', () => {
     renderPage();
 
     fireEvent.change(screen.getByLabelText('标题'), {
@@ -273,25 +278,23 @@ describe('WorkDispatchPage form', () => {
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      '草稿存在这台电脑上，换台电脑就没有了。',
+      '草稿已暂存；刷新、关闭页面或退出登录后会丢失。',
     );
 
-    const stored = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-    expect(stored).not.toBeNull();
-    expect(parseDraft(JSON.parse(stored ?? '{}')).title).toBe(
+    expect(window.localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
+    expect(loadDraft(token()).title).toBe(
       '报送第三季度政务信息',
     );
   });
 
-  it('restores a stored draft and falls back to defaults on a broken one', () => {
-    window.localStorage.setItem(
-      DRAFT_STORAGE_KEY,
-      JSON.stringify({
+  it('restores a saved normalized snapshot and starts empty in a new session', () => {
+    saveDraft(
+      parseDraft({
         title: '值班表报送',
         kind: '督办令',
         targets: ['办公室', '办公室', '  '],
         reminders: ['提前 7 天', '这一档不存在'],
-      }),
+      }), token(),
     );
     const restored = renderPage();
 
@@ -314,6 +317,7 @@ describe('WorkDispatchPage form', () => {
     ).toBe('false');
     restored.unmount();
 
+    useAuthStore.getState().markAuthenticated();
     window.localStorage.setItem(DRAFT_STORAGE_KEY, '{ 不是 JSON');
     renderPage();
     expect(screen.getByLabelText('标题')).toHaveValue('');
@@ -333,25 +337,26 @@ describe('WorkDispatchPage form', () => {
     expect(screen.queryByText(/这是 AI 生成/)).toBeNull();
   });
 
-  it('reports storage refusal without claiming a saved or published result', () => {
+  it('saves_in_memory_when_browser_storage_is_denied', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('synthetic storage refusal');
     });
     renderPage();
     fireEvent.change(screen.getByLabelText('标题'), { target: { value: '合成草稿' } });
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-    expect(screen.getByRole('status')).toHaveTextContent('草稿没存上。先把要点抄到别处。');
+    expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存；刷新、关闭页面或退出登录后会丢失。');
+    expect(loadDraft(token()).title).toBe('合成草稿');
     expect(screen.getByRole('status').querySelector('svg')).not.toBeNull();
     expect(window.localStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
     expect(screen.queryByText(/草稿存在这台电脑上/)).toBeNull();
   });
 
   it('round-trips only decided choices and literal deduplicated targets through the page', () => {
-    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({
+    saveDraft(parseDraft({
       kind: '未知类型', dueAt: '2026-09-07T16:30',
       targets: [' 办公室 ', '办公室', '', 42, '财务科'],
       reminders: ['提前 7 天', '提前 7 天', '未知提醒'],
-    }));
+    }), token());
     renderPage();
     expect(screen.getByText('通知')).toBeVisible();
     expect(screen.getByLabelText('截止时间')).toHaveValue('2026-09-07T16:30');
@@ -362,7 +367,7 @@ describe('WorkDispatchPage form', () => {
       fireEvent.click(button);
     }
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-    const stored = JSON.parse(window.localStorage.getItem(DRAFT_STORAGE_KEY)!);
+    const stored = loadDraft(token());
     expect(stored).toMatchObject({
       kind: '通知', dueAt: '2026-09-07T16:30', targets: ['办公室', '财务科'],
       reminders: ['提前 3 天', '提前 1 天', '逾期当天'],
@@ -404,4 +409,82 @@ describe('WorkDispatchPage form', () => {
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
     checkCopy();
   });
+});
+
+function token() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }
+
+it.each(['unknown', 'unauthenticated'] as const)('does_not_render_private_fields_while_identity_is_unknown: %s', (status) => {
+  useAuthStore.setState({ status });
+  renderPage();
+  expect(screen.queryByLabelText('标题')).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  act(() => useAuthStore.getState().markAuthenticated());
+  expect(screen.getByLabelText('标题')).toHaveValue('');
+});
+
+it.each(['{broken', JSON.stringify({ title: 'private-A', targets: ['private-A'], visibleTo: ['private-A'] })])('never_restores_an_unowned_legacy_draft: %s', (legacy) => {
+  localStorage.setItem(DRAFT_STORAGE_KEY, legacy);
+  renderPage();
+  expect(screen.getByLabelText('标题')).toHaveValue('');
+  for (const node of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')) {
+    expect(node.value).not.toContain('private-A');
+  }
+  expect(document.body.textContent).not.toContain('private-A');
+});
+
+it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on_direct_and_batched_identity_changes: %s', (transition) => {
+  const observations: string[][] = [];
+  function Host() {
+    const current = useDraftSession();
+    useLayoutEffect(() => {
+      observations.push([
+        ...Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'), (node) => node.value),
+        document.body.textContent ?? '',
+      ]);
+    }, [current]);
+    return <WorkDispatchPage />;
+  }
+  render(<Host />);
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'private-A' } });
+  fireEvent.change(screen.getByLabelText('交办对象（已解析并去重）'), { target: { value: 'chip-A' } });
+  fireEvent.click(screen.getByRole('button', { name: '添加' }));
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  fireEvent.change(screen.getByLabelText('交办对象（已解析并去重）'), { target: { value: 'pending-A' } });
+  expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存');
+  act(() => {
+    if (transition === 'batched') useAuthStore.getState().markUnauthenticated();
+    if (transition === 'pagehide' || transition === 'pageshow') window.dispatchEvent(new PageTransitionEvent(transition, { persisted: true }));
+    else useAuthStore.getState().markAuthenticated();
+  });
+  expect(observations).toHaveLength(2);
+  for (const value of observations[1]!) {
+    expect(value).not.toMatch(/private-A|chip-A|pending-A|草稿已暂存/);
+  }
+  expect(screen.getByLabelText('标题')).toHaveValue('');
+  expect(screen.getByLabelText('交办对象（已解析并去重）')).toHaveValue('');
+  expect(screen.queryByRole('button', { name: '删除交办对象 chip-A' })).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'B' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(loadDraft(token()).title).toBe('B');
+});
+
+it('reports_failed_session_save_without_claiming_success', () => {
+  vi.spyOn(draftModule, 'saveDraft').mockReturnValue(false);
+  renderPage();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'synthetic' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(screen.getByRole('status')).toHaveTextContent('草稿没存上，请确认登录状态后重试。');
+  expect(screen.getByRole('status').textContent).not.toMatch(/已暂存|已发布|已审核/);
+});
+
+it('restores_only_the_last_explicit_snapshot_after_unmount', () => {
+  const mounted = renderPage();
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'saved' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: 'unsaved' } });
+  mounted.unmount();
+  renderPage();
+  expect(screen.getByLabelText('标题')).toHaveValue('saved');
+  expect(screen.queryByRole('status')).toBeNull();
 });

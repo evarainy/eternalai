@@ -1,3 +1,5 @@
+import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
+import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { useState } from 'react';
 import { Button, Input, Modal } from 'antd';
 import { Icon } from '../../shared/ui/Icon';
@@ -18,15 +20,14 @@ import styles from './AppsPage.module.css';
 /**
  * 「新建应用」弹窗，形态照定稿画板 `_scratch/design/glass/AppNew.dc.html`。
  *
- * 2026-09-02 裁决：界面先行、后端不做。所以这里**不新增任何 API**——「存草稿」落本机
- * `localStorage`，「提交审核」在审核端点接进来之前不可用；界面上写明「提交审核后才对他人可见」，
+ * 2026-09-02 裁决：界面先行、后端不做。所以这里**不新增任何 API**——「存草稿」仅在当前认证会话内存中暂存，「提交审核」在审核端点接进来之前不可用；界面上写明「提交审核后才对他人可见」，
  * 不让用户以为建完就上线了。
  *
  * 「嵌在工作台里面」默认禁用；各系统须先逐一核验，不能把 OA 的禁嵌证据外推到所有系统。
  */
 
-const SAVE_NOTICE = '草稿存在这台电脑上，换台电脑就没有了。';
-const SAVE_FAILED_NOTICE = '浏览器不让存东西，草稿没存上。先把要点抄到别处。';
+const SAVE_NOTICE = '草稿已暂存；刷新、关闭页面或退出登录后会丢失。';
+const SAVE_FAILED_NOTICE = '草稿没存上，请确认登录状态后重试。';
 const NAME_REQUIRED_NOTICE = '还没有填名字。先把名字填上。';
 
 export interface NewSoftwareDialogProps {
@@ -34,8 +35,13 @@ export interface NewSoftwareDialogProps {
   open: boolean;
 }
 
-export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
-  const [draft, setDraft] = useState<NewSoftwareDraft>(() => loadNewSoftwareDraft());
+export function NewSoftwareDialog(props: NewSoftwareDialogProps) {
+  const token = useDraftSession();
+  return token === null ? null : <SoftwareForm key={`${token.generation}:${token.revision}`} {...props} token={token} />;
+}
+
+function SoftwareForm({ onClose, open, token }: NewSoftwareDialogProps & { token: DraftSessionToken }) {
+  const [draft, setDraft] = useState<NewSoftwareDraft>(() => loadNewSoftwareDraft(token));
   const [visibleToInput, setVisibleToInput] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -57,11 +63,12 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
   };
 
   const store = () => {
+    if (!isCurrentDraftSession(token)) return;
     if (draft.name.trim().length === 0) {
       setNotice(NAME_REQUIRED_NOTICE);
       return;
     }
-    setNotice(saveNewSoftwareDraft(draft) ? SAVE_NOTICE : SAVE_FAILED_NOTICE);
+    setNotice(saveNewSoftwareDraft(draft, token) ? SAVE_NOTICE : SAVE_FAILED_NOTICE);
   };
 
   return (
@@ -255,7 +262,7 @@ export function NewSoftwareDialog({ onClose, open }: NewSoftwareDialogProps) {
         </span>
         <div>
           <p className={styles.warnCopy}>
-            提交审核功能还没有接进来，当前只能存这台电脑上的草稿；提交审核后才对他人可见。
+            审核尚未接入；草稿仅在本次登录期间暂存，刷新或关闭页面会丢失；提交审核后才对他人可见。
           </p>
         </div>
       </div>

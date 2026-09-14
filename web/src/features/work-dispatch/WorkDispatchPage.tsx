@@ -1,3 +1,5 @@
+import { isCurrentDraftSession, useDraftSession } from '../../stores/sessionDraftStore';
+import type { DraftSessionToken } from '../../stores/sessionDraftStore';
 import { useState } from 'react';
 import { Button, Input, Select } from 'antd';
 import { Icon } from '../../shared/ui/Icon';
@@ -19,7 +21,7 @@ import styles from './WorkDispatchPage.module.css';
  * 1. **界面该有的位置一律放出来**——九类字段一项不少，让缺哪些后端能力一眼可见；
  * 2. **UI 决定「要有什么功能」，不决定「数据可不可信」**——后端没有的东西一律如实说，绝不摆一个编出来
  *    的值。所以这一页**不新增任何 API**：AI 生成草稿、附件上传、下发都还没有接进来，界面上逐处写明；
- *    「存草稿」落本机 `localStorage`，也写明它只在这台电脑上。
+ *    「存草稿」仅在当前认证会话内存中暂存，写明刷新、关闭页面或退出后会丢失。
  *
  * 「发布」是全站唯一允许用「蓝字 + 蓝色高光内边」主动作样式的按钮（2026-09-02 裁决的例外只归本页），
  * 玻璃本体仍不填色。它是**可点**的：点之前页脚已经写清下发还没接进来，点之后给的是一句如实结论，
@@ -27,15 +29,20 @@ import styles from './WorkDispatchPage.module.css';
  */
 
 const SAVE_NOTICE =
-  '草稿存在这台电脑上，换台电脑就没有了。';
+  '草稿已暂存；刷新、关闭页面或退出登录后会丢失。';
 const SAVE_FAILED_NOTICE =
-  '浏览器不让存东西，草稿没存上。先把要点抄到别处。';
+  '草稿没存上，请确认登录状态后重试。';
 const PUBLISH_BLOCKED_NOTICE =
   '下发还没有接进来，现在发不出去。下一步：先存草稿。';
 const TITLE_REQUIRED_NOTICE = '还没有填标题。先把标题填上。';
 
 export default function WorkDispatchPage() {
-  const [draft, setDraft] = useState<DispatchDraft>(() => loadDraft());
+  const token = useDraftSession();
+  return token === null ? null : <DispatchForm key={`${token.generation}:${token.revision}`} token={token} />;
+}
+
+function DispatchForm({ token }: { token: DraftSessionToken }) {
+  const [draft, setDraft] = useState<DispatchDraft>(() => loadDraft(token));
   const [targetInput, setTargetInput] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -81,7 +88,8 @@ export default function WorkDispatchPage() {
   };
 
   const store = () => {
-    setNotice(saveDraft(draft) ? SAVE_NOTICE : SAVE_FAILED_NOTICE);
+    if (!isCurrentDraftSession(token)) return;
+    setNotice(saveDraft(draft, token) ? SAVE_NOTICE : SAVE_FAILED_NOTICE);
   };
 
   const targetCount = draft.targets.length;
@@ -128,7 +136,7 @@ export default function WorkDispatchPage() {
           </span>
           <b className={styles.draftTitle}>草稿尚未发布</b>
           <span className={styles.draftHint}>
-            逐项核对无误后，点右下角「发布」才会下发
+            逐项核对无误后，点右下角「发布」才会下发。草稿仅在本次登录期间暂存，刷新或关闭页面会丢失。
           </span>
         </div>
 
