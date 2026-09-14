@@ -728,7 +728,10 @@ def test_production_directory_scheduler_and_diagnostics_are_wired(
     sync = scheduler._service
     assert sync._store._session_factory is db.factory
     assert components.work_object_service._organization_directory._session_factory is db.factory
-    assert set(components.diagnostic_checks) == {"organization_directory"}
+    assert set(components.diagnostic_checks) == {
+        "organization_directory",
+        "organization_directory_dispatch_policy",
+    }
     assert "organization_directory" not in components.health_checks
     factory = sync._source_opener
     assert factory._ai_user_id == "synthetic-configured-owner"
@@ -763,6 +766,7 @@ def test_production_directory_scheduler_and_diagnostics_are_wired(
         assert response.status_code == 200
         assert response.json() == {"status": "ok", "checks": {
             "database": "ok", "organization_directory": "failed",
+            "organization_directory_dispatch_policy": "failed",
         }}
     assert calls == ["start", "stop"]
     assert forbidden.await_count == 0
@@ -1068,3 +1072,66 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
 
     with pytest.raises(RuntimeError, match="does not allow"):
         build_production_components(settings, **overrides)
+
+
+
+def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db):
+    from app.event_loop import make_event_loop
+    from app.ports import work_object_scope as policy
+    from tests.api.test_work_object_dispatch import run
+    db = dispatch_db
+    monkeypatch.setattr("app.composition.make_async_session_factory", lambda **_kwargs: db.factory)
+    settings = ProductionSettings.from_environment()
+    components = build_production_components(settings)
+    directory = components.work_object_service._organization_directory
+    for department in policy._PRISON_AREA_DEPARTMENT_IDS - {"572", "575"}:
+        db.execute("INSERT INTO organization_departments (department_id, display_name, fetched_at) "
+                   "VALUES (:department, 'Synthetic', clock_timestamp())", department=department)
+    monkeypatch.setattr(
+        policy,
+        "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS",
+        frozenset({"office-a", "office-b", "office-c"}),
+    )
+    original = directory.read_view
+    calls = []
+    async def observed():
+        calls.append(True)
+        return await original()
+    monkeypatch.setattr(directory, "read_view", observed)
+    callback = components.diagnostic_checks["organization_directory_dispatch_policy"]
+    assert run(callback()) is True and len(calls) == 1
+    async def healthy():
+        return True
+    # Keep the builder's actual diagnostic mapping through the production app factory.
+    safe = replace(
+        components, health_checks={"database": healthy}, credential_polling_scheduler=None
+    )
+    monkeypatch.setattr("app.main.build_production_components", lambda _settings: safe)
+    client = TestClient(
+        create_production_app(settings), backend_options={"loop_factory": make_event_loop}
+    )
+    first = client.get("/api/v1/health")
+    assert first.status_code == 200
+    assert first.json()["checks"]["organization_directory_dispatch_policy"] == "ok"
+    db.execute("INSERT INTO organization_departments (department_id, display_name, fetched_at) "
+               "VALUES ('synthetic-new-unregistered', 'Synthetic', clock_timestamp())")
+    drift = client.get("/api/v1/health")
+    assert drift.status_code == 200
+    assert drift.json()["checks"]["organization_directory_dispatch_policy"] == "failed"
+    db.execute(
+        "DELETE FROM organization_departments WHERE department_id='synthetic-new-unregistered'"
+    )
+    assert (
+        client.get("/api/v1/health").json()["checks"]["organization_directory_dispatch_policy"]
+        == "ok"
+    )
+    db.execute("UPDATE organization_directory_sync_state SET last_attempt_status='failed', "
+               "last_error_code='source_unconfigured'")
+    result = client.get("/api/v1/health")
+    assert result.status_code == 200
+    assert result.json()["checks"] == {
+        "database": "ok",
+        "organization_directory": "failed",
+        "organization_directory_dispatch_policy": "ok",
+    }
+    client.close()

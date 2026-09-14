@@ -166,3 +166,55 @@ def test_health_openapi_matches_success_and_failure_response_model() -> None:
         "ok",
         "unhealthy",
     ]
+
+
+@pytest.mark.parametrize("case", ["clean", "drift", "missing", "stale", "exception", "timeout"])
+@pytest.mark.parametrize("required_state", ["ok", "failed", "empty"])
+def test_dispatch_policy_diagnostic_is_nonblocking_and_fail_closed(case, required_state):
+    from datetime import timedelta
+    from functools import partial
+
+    from app.organization_directory_policy import check_dispatch_department_policy
+    from app.ports import work_object_scope as policy
+    from tests.test_organization_directory_policy import PolicyDirectory
+
+    directory = PolicyDirectory(
+        policy._PRISON_AREA_DEPARTMENT_IDS | ({"synthetic-unlisted"} if case == "drift" else set())
+    )
+    if case == "missing":
+        directory.missing = True
+    if case == "stale":
+        directory.view = directory.view.model_copy(
+            update={"observed_at": directory.view.observed_at + timedelta(days=3)}
+        )
+
+    async def failed():
+        raise RuntimeError("synthetic-private-policy")
+    async def hanging():
+        await asyncio.Event().wait()
+    if case in {"exception", "timeout"}:
+        directory.read_view = failed if case == "exception" else hanging
+    required = (
+        {}
+        if required_state == "empty"
+        else {"database": _healthy_check if required_state == "ok" else failed}
+    )
+    result = TestClient(
+        create_app(
+            health_checks=required,
+            diagnostic_checks={
+                "organization_directory_dispatch_policy": partial(
+                    check_dispatch_department_policy, directory
+                )
+            },
+            health_timeout_seconds=0.01,
+        )
+    ).get("/api/v1/health")
+    assert result.status_code == (200 if required_state == "ok" else 503)
+    checks = {"organization_directory_dispatch_policy": "ok" if case == "clean" else "failed"}
+    if required_state != "empty":
+        checks["database"] = required_state
+    assert result.json() == {
+        "status": "ok" if required_state == "ok" else "unhealthy",
+        "checks": checks,
+    }

@@ -1167,32 +1167,60 @@ def test_directory_failure_does_not_expose_join_key_or_return_success(
     assert store.list_calls == []
 
 
-def test_department_and_initiator_scope_reaches_real_store(dispatch_db) -> None:
-    from tests.api.test_work_object_dispatch import assert_created, request_body
+def test_department_and_initiator_scope_reaches_real_store(dispatch_db, monkeypatch) -> None:
+    from app.ports import work_object_scope as policy
+
+    monkeypatch.setattr(
+        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
+    )
+    from tests.api.test_work_object_dispatch import (
+        assert_created,
+        cross_department_body,
+        insert_synthetic_row,
+        manual_row,
+        request_body,
+    )
 
     db = dispatch_db
-    sent = assert_created(db, db.post())
+    sent = assert_created(db, db.post(cross_department_body()))
     db.actor("other-head", "office-c", "75")
     local_response = db.post(
         request_body(targets=[{"kind": "department", "department_id": "office-a"}])
     )
     assert local_response.status_code == 201
     local_id = local_response.json()["items"][0]["work_object_id"]
-    unrelated = assert_created(db, db.post())
+    unrelated = assert_created(db, db.post(cross_department_body()))
+    insert_synthetic_row(db, manual_row(
+        db, work_object_id="synthetic-other-tenant", tenant_id="synthetic-other",
+        owner_department_id="office-a", initiator_ai_user_id="ai-sender",
+    ))
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset())
+    db.actor("sender", "office-a", "75")
+    own = assert_created(db, db.post())
+    denied = db.post(cross_department_body())
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "cross_department_dispatch_denied"
     db.actor("sender", "office-a", None)
     visible = db.client.get("/api/v1/work-objects")
     assert visible.status_code == 200
     assert {item["work_object_id"] for item in visible.json()["items"]} == {
         sent["work_object_id"],
         local_id,
+        own["work_object_id"],
     }
     for item_id in (sent["work_object_id"], local_id):
         assert db.client.get("/api/v1/work-objects/" + item_id).status_code == 200
     assert db.client.get("/api/v1/work-objects/" + unrelated["work_object_id"]).status_code == 404
+    assert db.client.get("/api/v1/work-objects/synthetic-other-tenant").status_code == 404
 
 
 @pytest.mark.parametrize("missing", [False, True])
-def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, missing):
+def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, monkeypatch, missing):
+    from app.ports import work_object_scope as policy
+
+    monkeypatch.setattr(
+        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
+    )
     from tests.api.test_work_object_dispatch import assert_created, expire_directory, request_body
     db = dispatch_db
     own = assert_created(db, db.post())["work_object_id"]
@@ -1229,6 +1257,11 @@ def test_missing_and_stale_directory_preserve_self_reads(dispatch_db, missing):
 
 
 def test_expiry_before_read_response_requeries_self_scope(dispatch_db, monkeypatch):
+    from app.ports import work_object_scope as policy
+
+    monkeypatch.setattr(
+        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
+    )
     from tests.api.test_work_object_dispatch import assert_created, request_body
     db = dispatch_db
     own = assert_created(db, db.post())["work_object_id"]
@@ -1269,7 +1302,14 @@ def test_expiry_before_read_response_requeries_self_scope(dispatch_db, monkeypat
     assert detail_calls == ["office-a", None]
 
 
-def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(dispatch_db) -> None:
+def test_memory_store_keeps_two_personal_dispatches_and_oa_upserts_distinct(
+    dispatch_db, monkeypatch
+) -> None:
+    from app.ports import work_object_scope as policy
+
+    monkeypatch.setattr(
+        policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a", "office-c"})
+    )
     from uuid import uuid4
 
     from tests.api.test_work_object_dispatch import request_body, run
