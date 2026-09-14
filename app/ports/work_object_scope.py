@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from app.ports.organization_directory import OrganizationDepartment, OrganizationUserMembership
 
 _DEPARTMENT_HEAD_JOBTITLE_IDS: frozenset[str] = frozenset({"75", "380", "1405", "1701", "1999"})
+_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS: frozenset[str] = frozenset()
 _PRISON_AREA_DEPARTMENT_IDS: frozenset[str] = frozenset(
     {
         "572",
@@ -63,8 +64,11 @@ class DispatchAuthorizationDecision(BaseModel):
         | None
     )
     department_id: str | None
-    dispatcher_department_type: Literal["prison_area", "office"]
-    matched_rule: Literal["department_unresolved", "prison_area_id", "resolved_non_prison_id"]
+    dispatcher_department_type: Literal["prison_area", "office", "unknown"]
+    matched_rule: Literal[
+        "department_unresolved", "prison_area_id", "cross_department_allowlist",
+        "department_not_allowlisted",
+    ]
     alert_code: Literal["directory_membership_missing"] | None = None
 
     @property
@@ -85,8 +89,8 @@ def compute_dispatch_authorization(
     """Use lookup results, never token-baked department/job title or caller labels.
 
     A missing/mismatched department is unresolved, even when the membership's
-    department ID is outside the enumerated list. Only resolved non-list IDs
-    receive office authority. Missing membership is a distinct fail-closed alert.
+    department ID is explicitly allowlisted. Known prison areas always remain
+    same-department only. Missing membership is a distinct fail-closed alert.
     """
     department_id = dispatcher_membership.department_id if dispatcher_membership else None
     resolved = (
@@ -94,16 +98,20 @@ def compute_dispatch_authorization(
         and dispatcher_department is not None
         and dispatcher_department.department_id == department_id
     )
-    department_type: Literal["prison_area", "office"] = "prison_area"
-    matched_rule: Literal["department_unresolved", "prison_area_id", "resolved_non_prison_id"] = (
-        "department_unresolved"
-    )
+    department_type: Literal["prison_area", "office", "unknown"] = "unknown"
+    matched_rule: Literal[
+        "department_unresolved", "prison_area_id", "cross_department_allowlist",
+        "department_not_allowlisted",
+    ] = "department_unresolved"
     if resolved:
         if department_id in _PRISON_AREA_DEPARTMENT_IDS:
+            department_type = "prison_area"
             matched_rule = "prison_area_id"
-        else:
+        elif department_id in _CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS:
             department_type = "office"
-            matched_rule = "resolved_non_prison_id"
+            matched_rule = "cross_department_allowlist"
+        else:
+            matched_rule = "department_not_allowlisted"
 
     reason: (
         Literal[
@@ -119,7 +127,7 @@ def compute_dispatch_authorization(
         alert = "directory_membership_missing"
     elif dispatcher_membership.job_title not in _DEPARTMENT_HEAD_JOBTITLE_IDS:
         reason = "not_department_head"
-    elif department_type == "prison_area" and not (
+    elif department_type != "office" and not (
         department_id and department_id.strip() and department_id == target_department_id
     ):
         reason = "cross_department_dispatch_denied"

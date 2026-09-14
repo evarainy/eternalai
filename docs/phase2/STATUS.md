@@ -1,11 +1,16 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；同步 2026-09-14 已合并的四根审计修复棒、组织目录方案进度与新环境欠债，并纠正审计 #17 的 Workflow 接缝事实）。
-- 当前实现候选 task_id：`P2-ORGDIR-PERSON-SYNC-001`（A 档、串行，承担 A 类同步；本地候选已按当次裁决修复派发存在性探测并补齐验证，待 grok 评审，未 push/合并）。2026-09-14 实测后端 `3459 passed, 0 failed, 0 skipped`、Golden `34/34`、架构 `124 passed`、mypy `126 source files`、Ruff 通过。上一已合并功能基线为 `P2-INTERNAL-WO-DISPATCH-001`，四根审计修复棒与 `P2-TEST-MONOTONIC-DEADLINE-001` 已合并。
-- 本棒完成情况：`P2-AUDIT-DRAFT-ISOLATION-001` 已完成实现与本地验证，独立 Monitor 三轮最终 r3 PASS；当前为待合并候选，grok 静态评审桥与 required checks 仍待完成。
+- 当前实现候选 task_id：`P2-AUDIT-DEPT-DEFAULT-001`（A 档、串行，承担 A 类同步；本地候选验证完成，独立 Monitor r2 PASS，待 grok 评审与 required checks，未 push/合并）。上一已合并功能基线为 `P2-ORGDIR-PERSON-SYNC-001`。
+- 本棒完成情况：已按显式跨部门允许集合收窄派发授权，候选验证与变异反证完成；独立 Monitor 三轮结论为 r1 监理自建用例问题未完成、r2 PASS，代码 grok 评审桥与 required checks 尚待完成。
 - 当前实现后继指针：`P2-FE-DISPATCH-WIRING-001`；组织目录候选与本棒草稿隔离候选均须先完成独立审查与集成。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按 `PHASE2_PLAN.md` 现役 DAG 独立承接。
+- 本棒新增欠债指针：`PHASE2_PLAN.md` 活欠债表中的“上线前真实跨部门允许名单待提供”和“派发名单漂移诊断的实际部署消费未验收”；后继绑定与旧 fail-open 残余由 GOV-SYNC 承接。
 
 ## 已登记验证基线
+
+### 本棒候选验证
+
+- 本棒候选验证（2026-09-14 / `P2-AUDIT-DEPT-DEFAULT-001`）：后端 `3533 passed, 0 failed, 0 skipped`，Golden `34/34 passed`，架构 `124 passed`，mypy `127 source files`，Ruff 通过；定向 `348 passed`、迁移回归与 policy 定向 `11 passed`、生产变异 `19/19` 被捕获，十个改动测试文件弱测试检查通过。全量、Golden、架构与 mypy 均有对应证据，前端未改且沿用主干现值。
 
 ### 草稿隔离待审候选
 
@@ -43,7 +48,7 @@
 
 ## 组织目录与前端机会层指针
 
-- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已形成姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断候选。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；候选只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 仍承接更广泛的可信组织身份来源、sessions 与 identity binding，本棒单目录仅服务 default 租户。生命周期、前端接线、显示名语义、多 membership 与监区名单风险仍见 `PHASE2_PLAN.md`。
+- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已合并交付姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；既有验收只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 仍承接更广泛的可信组织身份来源、sessions 与 identity binding，本棒单目录仅服务 default 租户。生命周期、前端接线、显示名语义、多 membership 与监区名单风险仍见 `PHASE2_PLAN.md`。
 - 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。本状态不把它与仍未实例化的 `WorkflowEngineAdapter` 欠债混同。
 - 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
 - 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，前端选择、发布接线、终态、草稿持久化与显示名语义由 `P2-FE-DISPATCH-WIRING-001` 承接；不改变必达链的 BLOCKED 状态。

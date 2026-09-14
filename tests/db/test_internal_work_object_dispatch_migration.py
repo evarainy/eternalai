@@ -106,7 +106,10 @@ def _reject(db, base, updates, constraint, *, sql_null=False):
     assert row["work_object_id"] not in {item["work_object_id"] for item in db.rows("work_objects")}
 
 
-def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db):
+def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, monkeypatch):
+    from app.ports import work_object_scope as policy
+
+    monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     assert db.counts() == (0, 0)
     _apply(db, "downgrade")
