@@ -1,7 +1,11 @@
+import { useLayoutEffect } from 'react';
+import { useAuthStore } from '../../../stores/authStore';
+import { useDraftSession } from '../../../stores/sessionDraftStore';
+import * as draftModule from '../newSoftwareDraft';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { App as AntApp, ConfigProvider } from 'antd';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NewSoftwareDialog } from '../NewSoftwareDialog';
 import {
@@ -9,6 +13,7 @@ import {
   NEW_SOFTWARE_DRAFT_KEY,
   dedupeVisibleTo,
   loadNewSoftwareDraft,
+  saveNewSoftwareDraft,
   parseNewSoftwareDraft,
 } from '../newSoftwareDraft';
 
@@ -57,6 +62,7 @@ function renderDialog() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  useAuthStore.getState().markAuthenticated();
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -109,12 +115,12 @@ describe('NewSoftwareDialog form', () => {
   });
 
   it('restores all nine fields and saves only supported choices through the dialog', () => {
-    window.localStorage.setItem(NEW_SOFTWARE_DRAFT_KEY, JSON.stringify({
+    saveNewSoftwareDraft(parseNewSoftwareDraft({
       source: 'unknown-source', name: '合成软件', summary: '合成用途',
       address: 'https://software.synthetic.invalid', owner: '合成科室',
       openMode: 'embedded', binding: 'unknown-binding', risk: 'unknown-risk',
       visibleTo: [' 办公室 ', '办公室', '', 42, '财务科'],
-    }));
+    }), token());
     renderDialog();
     const sources = screen.getByRole('radiogroup', { name: '这个软件是哪儿来的？' });
     expect(within(sources).getAllByRole('radio')).toHaveLength(2);
@@ -129,7 +135,7 @@ describe('NewSoftwareDialog form', () => {
     fireEvent.click(screen.getByRole('radio', { name: /装单位发布的软件/ }));
     fireEvent.click(screen.getByRole('button', { name: '删除可见范围 财务科' }));
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
-    expect(JSON.parse(window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY)!)).toEqual({
+    expect(loadNewSoftwareDraft(token())).toEqual({
       source: 'published_software', name: '合成软件', summary: '合成用途',
       address: 'https://software.synthetic.invalid', owner: '合成科室',
       openMode: 'new_window', binding: 'required', risk: 'read_only', visibleTo: ['办公室'],
@@ -175,7 +181,7 @@ describe('NewSoftwareDialog draft-only outcome', () => {
     expect(screen.getByRole('button', { name: '提交审核' })).toBeDisabled();
     expect(screen.getByText(/提交审核后才对他人可见/)).toBeInTheDocument();
     expect(screen.getByText(
-      '提交审核功能还没有接进来，当前只能存这台电脑上的草稿；提交审核后才对他人可见。',
+      '审核尚未接入；草稿仅在本次登录期间暂存，刷新或关闭页面会丢失；提交审核后才对他人可见。',
     )).toBeVisible();
     const explanations = Array.from(screen.getByRole('dialog').querySelectorAll('p, b, span'))
       .filter((node) => node.children.length === 0 && /草稿|审核/.test(node.textContent ?? '')
@@ -193,19 +199,18 @@ describe('NewSoftwareDialog draft-only outcome', () => {
     expect(window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY)).toBeNull();
   });
 
-  it('saves the draft to this browser only, and says that is all it did', () => {
+  it('saves the current session snapshot and says when it will be lost', () => {
     renderDialog();
 
     typeInto(screen.getByLabelText('叫什么名字'), '财务报销系统');
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
 
-    expect(screen.getByRole('status')).toHaveTextContent('草稿存在这台电脑上');
-    const stored = window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY);
-    expect(stored).not.toBeNull();
-    expect(JSON.parse(stored ?? '{}')).toMatchObject({ name: '财务报销系统' });
+    expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存；刷新、关闭页面或退出登录后会丢失。');
+    expect(window.localStorage.getItem(NEW_SOFTWARE_DRAFT_KEY)).toBeNull();
+    expect(loadNewSoftwareDraft(token())).toMatchObject({ name: '财务报销系统' });
   });
 
-  it('tells the user the draft was lost when the browser refuses to store it', () => {
+  it('saves_in_memory_when_browser_storage_is_denied', () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage disabled');
     });
@@ -214,7 +219,8 @@ describe('NewSoftwareDialog draft-only outcome', () => {
     typeInto(screen.getByLabelText('叫什么名字'), '财务报销系统');
     fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
 
-    expect(screen.getByRole('status')).toHaveTextContent('草稿没存上');
+    expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存；刷新、关闭页面或退出登录后会丢失。');
+    expect(loadNewSoftwareDraft(token()).name).toBe('财务报销系统');
     setItem.mockRestore();
   });
 
@@ -268,13 +274,11 @@ describe('newSoftwareDraft storage contract', () => {
   });
 
   it.each([
-    ['not an object at all', '"just a string"'],
-    ['broken JSON', '{oops'],
-    ['an unknown source value', '{"source":"somewhere_else"}'],
+    ['not an object at all', 'just a string'],
+    ['broken JSON text is not a draft object', '{oops'],
+    ['an unknown source value', { source: 'somewhere_else' }],
   ])('falls back to an empty draft for %s', (_case, stored) => {
-    window.localStorage.setItem(NEW_SOFTWARE_DRAFT_KEY, stored);
-
-    expect(loadNewSoftwareDraft().source).toBe(EMPTY_NEW_SOFTWARE_DRAFT.source);
+    expect(parseNewSoftwareDraft(stored).source).toBe(EMPTY_NEW_SOFTWARE_DRAFT.source);
   });
 
   /*
@@ -286,4 +290,110 @@ describe('newSoftwareDraft storage contract', () => {
       { name: '财务报销系统', openMode: 'new_window' },
     );
   });
+});
+
+function token() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }
+
+it.each(['unknown', 'unauthenticated'] as const)('does_not_render_private_fields_while_identity_is_unknown: %s', (status) => {
+  useAuthStore.setState({ status });
+  renderDialog();
+  expect(screen.queryByLabelText('叫什么名字')).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  act(() => useAuthStore.getState().markAuthenticated());
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('');
+});
+
+it.each(['{broken', JSON.stringify({ name: 'private-A', targets: ['private-A'], visibleTo: ['private-A'] })])('never_restores_an_unowned_legacy_draft: %s', (legacy) => {
+  localStorage.setItem(NEW_SOFTWARE_DRAFT_KEY, legacy);
+  renderDialog();
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('');
+  for (const node of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')) {
+    expect(node.value).not.toContain('private-A');
+  }
+  expect(document.body.textContent).not.toContain('private-A');
+});
+
+it.each(['direct', 'batched', 'pagehide', 'pageshow'])('remounts_private_form_on_direct_and_batched_identity_changes: %s', (transition) => {
+  const observations: string[][] = [];
+  function Host() {
+    const current = useDraftSession();
+    useLayoutEffect(() => {
+      observations.push([
+        ...Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'), (node) => node.value),
+        document.body.textContent ?? '',
+      ]);
+    }, [current]);
+    return <NewSoftwareDialog open onClose={() => {}} />;
+  }
+  render(<Host />);
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'private-A' } });
+  fireEvent.change(screen.getByLabelText('谁能在软件中心看见它'), { target: { value: 'chip-A' } });
+  fireEvent.click(screen.getByRole('button', { name: '添加' }));
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  fireEvent.change(screen.getByLabelText('谁能在软件中心看见它'), { target: { value: 'pending-A' } });
+  expect(screen.getByRole('status')).toHaveTextContent('草稿已暂存');
+  act(() => {
+    if (transition === 'batched') useAuthStore.getState().markUnauthenticated();
+    if (transition === 'pagehide' || transition === 'pageshow') window.dispatchEvent(new PageTransitionEvent(transition, { persisted: true }));
+    else useAuthStore.getState().markAuthenticated();
+  });
+  expect(observations).toHaveLength(2);
+  for (const value of observations[1]!) {
+    expect(value).not.toMatch(/private-A|chip-A|pending-A|草稿已暂存/);
+  }
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('');
+  expect(screen.getByLabelText('谁能在软件中心看见它')).toHaveValue('');
+  expect(screen.queryByRole('button', { name: '删除可见范围 chip-A' })).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'B' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(loadNewSoftwareDraft(token()).name).toBe('B');
+});
+
+it('reports_failed_session_save_without_claiming_success', () => {
+  vi.spyOn(draftModule, 'saveNewSoftwareDraft').mockReturnValue(false);
+  renderDialog();
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'synthetic' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(screen.getByRole('status')).toHaveTextContent('草稿没存上，请确认登录状态后重试。');
+  expect(screen.getByRole('status').textContent).not.toMatch(/已暂存|已发布|已审核/);
+});
+
+it('restores_only_the_last_explicit_snapshot_after_unmount', () => {
+  const mounted = renderDialog();
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'saved' } });
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  fireEvent.change(screen.getByLabelText('叫什么名字'), { target: { value: 'unsaved' } });
+  mounted.unmount();
+  renderDialog();
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('saved');
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('preserves_same_session_edits_on_close_but_restores_only_saved_snapshot_after_unmount', () => {
+  const onClose = vi.fn();
+  const mounted = render(<NewSoftwareDialog open onClose={onClose} />);
+  typeInto(screen.getByLabelText('叫什么名字'), 'saved');
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  typeInto(screen.getByLabelText('叫什么名字'), 'unsaved');
+  mounted.rerender(<NewSoftwareDialog open={false} onClose={onClose} />);
+  mounted.rerender(<NewSoftwareDialog open onClose={onClose} />);
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('unsaved');
+  expect(loadNewSoftwareDraft(token()).name).toBe('saved');
+  expect(screen.queryByRole('status')).toBeNull();
+  mounted.unmount();
+  renderDialog();
+  expect(screen.getByLabelText('叫什么名字')).toHaveValue('saved');
+});
+
+it('refuses_to_save_a_nameless_draft_and_preserves_the_prior_snapshot', () => {
+  saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'original' }), token());
+  renderDialog();
+  typeInto(screen.getByLabelText('叫什么名字'), '   ');
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(screen.getByRole('status')).toHaveTextContent('还没有填名字');
+  expect(loadNewSoftwareDraft(token()).name).toBe('original');
+  typeInto(screen.getByLabelText('叫什么名字'), 'valid');
+  fireEvent.click(screen.getByRole('button', { name: '存草稿' }));
+  expect(loadNewSoftwareDraft(token()).name).toBe('valid');
 });

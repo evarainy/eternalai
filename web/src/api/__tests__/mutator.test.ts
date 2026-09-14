@@ -1,3 +1,7 @@
+import { renderHook } from '@testing-library/react';
+import { useDraftSession } from '../../stores/sessionDraftStore';
+import { loadDraft, saveDraft, parseDraft } from '../../features/work-dispatch/dispatchDraft';
+import { loadNewSoftwareDraft, saveNewSoftwareDraft, parseNewSoftwareDraft } from '../../features/apps/newSoftwareDraft';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, customInstance } from '../mutator';
 import { useAuthStore } from '../../stores/authStore';
@@ -84,6 +88,9 @@ describe('customInstance authentication boundary', () => {
     });
     useAuthStore.getState().markUnauthenticated();
     useAuthStore.getState().markAuthenticated();
+    const b = draftToken();
+    expect(saveDraft(parseDraft({ title: 'B' }), b)).toBe(true);
+    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'B' }), b)).toBe(true);
     resolveFetch(response({}, { ok: false, status: 401, statusText: 'Unauthorized' }));
 
     await expect(oldRequest).rejects.toEqual(
@@ -97,6 +104,8 @@ describe('customInstance authentication boundary', () => {
     expect(useAuthStore.getState()).toEqual(
       expect.objectContaining({ generation: 3, status: 'authenticated' }),
     );
+    expect(loadDraft(b).title).toBe('B');
+    expect(loadNewSoftwareDraft(b).name).toBe('B');
   });
 
   it('preserves the backend business error code and message', async () => {
@@ -190,3 +199,25 @@ describe('customInstance CSRF header', () => {
     expect(csrfHeaders).toEqual([['X-EternalAI-CSRF', '1']]);
   });
 });
+
+it('rejects_a_draft_write_from_a_late_success_response', async () => {
+  useAuthStore.getState().markAuthenticated();
+  const a = draftToken();
+  let release!: (value: Response) => void;
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>((resolve) => { release = resolve; }));
+  try {
+    const pending = customInstance<{ title: string }>({ url: '/api/v1/me', method: 'GET' });
+    useAuthStore.getState().markAuthenticated();
+    const b = draftToken();
+    saveDraft(parseDraft({ title: 'B' }), b);
+    saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'B' }), b);
+    release(response({ title: 'late A' }));
+    const result = await pending;
+    expect(saveDraft(parseDraft(result), a)).toBe(false);
+    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: result.title }), a)).toBe(false);
+    expect(loadDraft(b).title).toBe('B');
+    expect(loadNewSoftwareDraft(b).name).toBe('B');
+  } finally { fetchSpy.mockRestore(); }
+});
+
+function draftToken() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }
