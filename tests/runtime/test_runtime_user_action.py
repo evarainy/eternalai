@@ -318,6 +318,8 @@ async def _build_harness(
     tenant_id: str = "default",
     task_store_override: Any = None,
     trace_override: Any = None,
+    utc_clock: Callable[[], datetime] | None = None,
+    monotonic_clock: Callable[[], float] | None = None,
 ) -> Harness:
     definition = definition or _single_definition()
     gate = gate if with_gate else None
@@ -397,6 +399,10 @@ async def _build_harness(
         workflow_engine=engine,
         human_gate_port=gate,
     )
+    if utc_clock is not None:
+        runtime._utc_clock = utc_clock
+    if monotonic_clock is not None:
+        runtime._monotonic_clock = monotonic_clock
     principal = _principal(tenant_id=tenant_id)
     waiting = await runtime.handle_user_message(
         channel="mock",
@@ -1256,12 +1262,22 @@ def test_each_resume_pending_mutation_preserves_a_concurrent_winner(cas_site: st
 
 def test_second_structured_confirmation_uses_fresh_claim_and_succeeds() -> None:
     async def exercise() -> tuple[Harness, Any, Any]:
-        harness = await _build_harness(definition=_two_confirmation_definition())
+        started_at = datetime(2026, 1, 1, tzinfo=UTC)
+        elapsed = 0.0
+        harness = await _build_harness(
+            definition=_two_confirmation_definition(),
+            utc_clock=lambda: started_at + timedelta(seconds=elapsed),
+            monotonic_clock=lambda: 1000.0 + elapsed,
+        )
         old_pending = _pending(harness)
+        # Advance both runtime clocks before the next confirmation is created.
+        elapsed = 1.0
         first = await _dispatch(harness)
         next_pending = _pending(harness)
         assert next_pending.expires_at > old_pending.expires_at
         assert next_pending.monotonic_deadline > old_pending.monotonic_deadline
+        assert next_pending.expires_at - old_pending.expires_at == timedelta(seconds=1)
+        assert next_pending.monotonic_deadline - old_pending.monotonic_deadline == 1.0
         assert next_pending.gate_request_id != old_pending.gate_request_id
         assert _outcome(await _dispatch(harness)) == "action_already_claimed"
         assert _pending(harness) is next_pending
