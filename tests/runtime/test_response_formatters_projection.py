@@ -24,6 +24,26 @@ from tests.runtime.registry_fakes import active_capability, runtime_output_schem
 PathPart = str | int
 
 
+def test_overview_formatter_uses_projected_titles_and_exact_completeness() -> None:
+    from app.infra.workflow.catalog import production_workflow_capabilities
+    from app.runtime.response_projection import project_response_data
+    from tests.runtime.test_production_workflow import overview_data
+
+    schema = production_workflow_capabilities()[0].output_schema
+    data = overview_data()
+    data["pending"]["workflows"][0]["undeclared"] = "SYNTHETIC_DROP"
+    projected = project_response_data(data, schema)
+    assert projected is not None
+    assert "undeclared" not in projected["pending"]["workflows"][0]
+    message = _format_capability_response("oa.read_overview", projected)
+    assert message == (
+        "OA 待办 1 条（结果完整）：待办甲；"
+        "系统消息返回 1 条（结果不完整，可能还有更多消息）：消息乙"
+    )
+    assert "synthetic-content" not in message and "synthetic-source" not in message
+    assert "SYNTHETIC_DROP" not in message
+
+
 class TrackingDict(dict[str, Any]):
     def __init__(
         self,

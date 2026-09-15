@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -87,7 +88,13 @@ from app.infra.persistence.task_store.postgresql import (
 from app.infra.persistence.work_object.postgresql import PostgreSQLWorkObjectStore
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.workflow.catalog import production_workflow_capabilities
 from app.infra.workflow.engine_adapter import WorkflowEngineAdapter
+from app.infra.workflow.production import (
+    validate_production_workflows,
+    validate_selected_workflow,
+    validate_workflow_configuration,
+)
 from app.knowledge import BasicKnowledge
 from app.knowledge.basic_knowledge import (
     ENTERPRISE_TERM_ITEMS,
@@ -105,7 +112,7 @@ from app.organization_directory_sync import (
 from app.ports.adapter import AdapterPort
 from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
 from app.ports.capability_gateway import CapabilityGatewayPort
-from app.ports.capability_registry import CapabilityRegistryPort
+from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.credential_binding import CredentialBindingVerifierPort
 from app.ports.human_gate import HumanGatePort
 from app.ports.identity_mapping import IdentityMappingPort
@@ -122,6 +129,7 @@ from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
 from app.ports.user_profile import UserProfilePort
 from app.runtime.runtime import RuntimeImpl
+from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
 
 
@@ -144,6 +152,7 @@ class ProductionComponents:
     user_profile: UserProfilePort
     organization_directory_scheduler: OrganizationDirectoryScheduler
     diagnostic_checks: Mapping[str, HealthCheck]
+    validate_workflows: Callable[[], Awaitable[None]]
 
 
 def build_credential_store(
@@ -413,6 +422,7 @@ def build_runtime(
     structured_output: StructuredOutputPort,
     intent_model: str,
     workflow_engine: WorkflowEngine | None = None,
+    validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None = None,
     session_memory: SessionMemory | None = None,
     semantic_knowledge: BasicKnowledge | None = None,
     evaluator: TerminalEvaluator | None = None,
@@ -432,6 +442,7 @@ def build_runtime(
         gateway=gateway,
         workflow_engine=resolved_workflow_port,
         response_builder=response_builder,
+        validate_workflow=validate_workflow,
     )
     return RuntimeImpl(
         task_store=task_store,
@@ -482,6 +493,8 @@ def build_production_components(
     session_store = PostgreSQLSessionStore(session_factory)
     capability_registry = PostgreSQLCapabilityRegistry(session_factory)
     human_gate_port = PostgreSQLHumanGate(session_factory)
+    if human_gate_port is None:
+        raise RuntimeError("workflow_configuration_invalid")
     credential_store = build_credential_store(
         session_factory=session_factory,
         encryption_key=settings.credential_encryption_key,
@@ -511,6 +524,30 @@ def build_production_components(
         unbound_task_capability_ids=frozenset({OA_PENDING_WORKFLOWS_CAPABILITY_ID}),
     )
     gateway.assert_production_wiring()
+    definitions = deepcopy(production_workflow_definitions())
+    descriptors = {
+        item.capability_id: item.model_copy(deep=True)
+        for item in production_workflow_capabilities()
+    }
+    validate_workflow_configuration(definitions, descriptors)
+    workflow_engine = WorkflowEngine(
+        definitions=definitions,
+        capability_registry=capability_registry,
+        gateway=gateway,
+        task_store=task_store,
+        trace_port=resolved_trace_port,
+        human_gate_port=human_gate_port,
+    )
+    if workflow_engine is None:
+        raise RuntimeError("workflow_configuration_invalid")
+    validate_workflows = partial(
+        validate_production_workflows, registry=capability_registry,
+        definitions=definitions, descriptors=descriptors,
+    )
+    validate_workflow = partial(
+        validate_selected_workflow, registry=capability_registry,
+        definitions=definitions, descriptors=descriptors,
+    )
     production_llm = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -532,6 +569,8 @@ def build_production_components(
             JSONStructuredOutputProvider() if structured_output is None else structured_output
         ),
         intent_model=settings.llm_model,
+        workflow_engine=workflow_engine,
+        validate_workflow=validate_workflow,
         semantic_knowledge=BasicKnowledge(
             static_items=ENTERPRISE_TERM_ITEMS
             + {
@@ -677,6 +716,7 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
+        validate_workflows=validate_workflows,
         runtime=runtime,
         admin_registry_service=admin_registry_service,
         work_object_service=work_object_service,

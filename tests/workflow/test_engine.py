@@ -1100,3 +1100,106 @@ def test_deterministic_step_errors_never_retry_or_call_later_step(
     assert len(selected) == 1
     assert selected[0]["attributes"]["attempt"] == 1
     assert selected[0]["attributes"]["retry_number"] == 0
+
+
+@pytest.mark.parametrize("selected", [(), ("first", "second")])
+def test_output_step_ids_preserve_both_results_and_legacy_default(selected) -> None:
+    definition = WorkflowDefinition(
+        "workflow.aggregate", "1.0.0",
+        (WorkflowStep("first", "oa.first"), WorkflowStep("second", "oa.second")),
+        output_step_ids=selected,
+    )
+    outputs = {"oa.first": {"title": "pending-title", "count": 1},
+               "oa.second": {"title": "message-title", "count": 2}}
+    registry = RecordingRegistry(_capability("oa.first"), _capability("oa.second"))
+    result, _, _ = _run_engine(definition, registry, RoutingAdapter(outputs))
+    expected = {"first": outputs["oa.first"], "second": outputs["oa.second"]}
+    assert result.status == "completed"
+    assert result.step_outputs == expected
+    assert result.output == (expected if selected else outputs["oa.second"])
+    if selected:
+        result.output["first"]["title"] = "changed"
+        assert result.step_outputs["first"]["title"] == "pending-title"
+        assert outputs["oa.first"]["title"] == "pending-title"
+
+
+@pytest.mark.parametrize("selected,conditional", [
+    (("",), False), (("first", "first"), False), (("unknown",), False), (("first",), True),
+])
+def test_invalid_output_step_ids_fail_before_gateway(selected, conditional) -> None:
+    condition = WorkflowCondition(WorkflowInputRef("workflow_input", "enabled"), True)
+    definition = WorkflowDefinition(
+        "workflow.aggregate", "1.0.0",
+        (WorkflowStep("first", "oa.first", when=condition if conditional else None),),
+        output_step_ids=selected,
+    )
+    gateway = SequencedGateway({})
+    with pytest.raises(ValueError, match="Workflow output selection is invalid"):
+        _run_engine_with_gateway(definition, RecordingRegistry(_capability("oa.first")), gateway)
+    assert gateway.calls == []
+
+
+def test_missing_selected_output_cannot_finish_successfully() -> None:
+    class MissingOutput(dict):
+        def __contains__(self, key):
+            return False
+
+    async def exercise():
+        definition = WorkflowDefinition(
+            "workflow.aggregate", "1.0.0", (WorkflowStep("first", "oa.first"),),
+            output_step_ids=("first",),
+        )
+        gateway = SequencedGateway({"oa.first": (
+            ExecutionResult(status="completed", data={"n": 1}, trace_id="trace-output"),
+        )})
+        store = RecordingTaskStore()
+        engine = WorkflowEngine(
+            definitions={definition.workflow_id: definition},
+            capability_registry=RecordingRegistry(_capability("oa.first")), gateway=gateway,
+            task_store=store, trace_port=RecordingTrace(),
+        )
+        with pytest.raises(ValueError, match="Workflow selected output is unavailable"):
+            await engine._run_steps(
+                definition=definition, task_id="task-output", session_id="session-output",
+                ai_user_id="owner-output", initial_input={},
+                request_context=RequestOrgContext(request_id="trace-output", channel="mock"),
+                start_index=0, confirmed_step_index=None, step_outputs=MissingOutput(),
+            )
+        assert not any(event.event_type == "workflow_completed" for event in store.events)
+        assert gateway.calls == [("oa.first", {})]
+    asyncio.run(exercise())
+
+
+def test_output_selection_is_part_of_workflow_binding() -> None:
+    from app.version_binding import workflow_version_binding
+    definition = WorkflowDefinition(
+        "workflow.aggregate", "1.0.0", (WorkflowStep("first", "oa.first"),),
+    )
+    capability = _capability(definition.workflow_id, capability_type="workflow")
+    assert workflow_version_binding(capability, definition).digest != workflow_version_binding(
+        capability, replace(definition, output_step_ids=("first",)),
+    ).digest
+
+
+
+def test_output_selection_checkpoint_keeps_original_definition() -> None:
+    definition = WorkflowDefinition(
+        "workflow.aggregate", "1.0.0",
+        (WorkflowStep("first", "oa.first"),
+         WorkflowStep("second", "oa.preview", confirmed_capability_id="oa.execute")),
+        output_step_ids=("first", "second"),
+    )
+    registry = RecordingRegistry(*(_capability(identifier) for identifier in
+                                  ("oa.first", "oa.preview", "oa.execute")))
+    gateway = SequencedGateway({
+        "oa.first": (ExecutionResult(status="completed", data={"first": 1}, trace_id="t"),),
+        "oa.preview": (ExecutionResult(status="waiting_user", trace_id="t"),),
+        "oa.execute": (ExecutionResult(status="completed", data={"second": 2}, trace_id="t"),),
+    })
+    result, _, _, engine = _run_engine_with_gateway(definition, registry, gateway)
+    assert result.status == "waiting_confirm"
+    engine._definitions[definition.workflow_id] = replace(definition, output_step_ids=("second",))
+    result = asyncio.run(engine.resume(task_id="task-retry", confirmed=True))
+    assert result.status == "completed"
+    assert result.output == {"first": {"first": 1}, "second": {"second": 2}}
+    assert [call[0] for call in gateway.calls] == ["oa.first", "oa.preview", "oa.execute"]

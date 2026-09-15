@@ -110,7 +110,18 @@ def test_production_components_share_real_gateway_with_orchestration() -> None:
     assert isinstance(gateway._trace_port, PostgreSQLTraceWriter)
     assert isinstance(components.runtime._task_store, PostgreSQLTaskStore)
     assert isinstance(components.runtime._human_gate_port, PostgreSQLHumanGate)
-    assert orchestration._workflow_engine is components.runtime._workflow_engine is None
+    assert orchestration._workflow_engine is components.runtime._workflow_engine
+    assert isinstance(orchestration._workflow_engine, WorkflowEngineAdapter)
+    engine = orchestration._workflow_engine._engine
+    assert set(engine._definitions) == {"oa.read_overview"}
+    assert engine._gateway is gateway
+    assert engine._capability_registry is gateway._capability_registry
+    assert engine._trace_port is gateway._trace_port
+    assert engine._task_store is components.runtime._task_store
+    assert engine._human_gate_port is components.runtime._human_gate_port
+    assert engine._human_gate_port is gateway._human_gate_port
+    assert callable(components.validate_workflows)
+    assert orchestration._validate_workflow is not None
 
 
 @pytest.fixture
@@ -787,6 +798,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         csrf_allowed_origins=frozenset({"http://testserver"}),
     )
     components = SimpleNamespace(
+        validate_workflows=AsyncMock(),
         runtime=None,
         admin_registry_service=None,
         work_object_service=None,

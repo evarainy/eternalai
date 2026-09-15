@@ -27,6 +27,36 @@ from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 _FULL_CHAIN_FAILURE_SCHEMA_VERSION = "p2.smoke.full-chain.v2"
 
 
+def test_optional_overview_is_visible_and_does_not_mask_unknown_capabilities() -> None:
+    from app.infra.workflow.catalog import production_workflow_capabilities
+    from app.knowledge import BasicKnowledge
+    from scripts.smoke.capabilities import classify_oa_registry, expected_oa_capabilities
+
+    leaves = expected_oa_capabilities()
+    overview = production_workflow_capabilities()[0]
+    for optional in ((), (overview,), (overview.model_copy(update={"status": "disabled"}),)):
+        result = classify_oa_registry((*leaves, *optional))
+        assert result.state == "passed"
+        assert (result.found_count, result.valid_count, result.visible_probe_count) == (2, 2, 2)
+        assert result.active_total_count == (3 if optional == (overview,) else 2)
+    selection = BasicKnowledge().select_capability_candidates(
+        "查看 OA 待办与系统消息概览", (*leaves, overview),
+    )
+    assert selection.outcome == "ready"
+    assert {binding.capability_id for binding in selection.bindings} == {
+        item.capability_id for item in (*leaves, overview)
+    }
+    assert "additionalProperties" in selection.payload_json
+    for update in ({"version": "2.0.0"}, {"binding_required": False}, {"status": "draft"}):
+        result = classify_oa_registry((*leaves, overview.model_copy(update=update)))
+        assert result.state == "contract_mismatch"
+        assert overview.capability_id in result.contract_mismatch_capability_ids
+    unknown = overview.model_copy(update={"capability_id": "oa.unknown_workflow"})
+    result = classify_oa_registry((*leaves, overview, unknown))
+    assert result.state == "unexpected_active"
+    assert result.unexpected_active_capability_ids == ("oa.unknown_workflow",)
+
+
 def _successful_outcome(
     capability_ids: tuple[str, ...] = REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
 ) -> FullChainOutcome:
