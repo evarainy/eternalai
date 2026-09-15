@@ -23,6 +23,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.auth import Principal, PrincipalOrgContext
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.capability_registry import CapabilitySpec
@@ -1710,6 +1711,7 @@ def test_runtime_restart_invalidates_old_reference_without_resume() -> None:
         orchestration_workflow = engine
         orchestration_builder = original._response_builder
         harness.runtime = RuntimeImpl(
+            candidate_policy=MinimalPolicyGuard(),
             task_store=original._task_store,
             session_store=original._session_store,
             capability_registry=orchestration_registry,

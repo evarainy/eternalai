@@ -13,6 +13,7 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -315,6 +316,7 @@ def _run_runtime(
         orchestration_workflow = None
         orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
+            candidate_policy=MinimalPolicyGuard(),
             task_store=task_store,
             session_store=ExistingSessionStore(),
             capability_registry=orchestration_registry,

@@ -9,12 +9,14 @@ import pytest
 
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -24,6 +26,8 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.human_gate import HumanGateConflictError
+from app.ports.identity_mapping import IdentityCheckResult
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision
 from app.ports.response_envelope import ResponseEnvelope
@@ -278,6 +282,17 @@ def _capability(
     )
 
 
+def _ready_single_selection() -> dict[str, Any]:
+    from app.knowledge.capability_selection import select_capability_candidates
+
+    selection = select_capability_candidates("select oa.safe", (_capability("oa.safe"),))
+    assert selection.outcome == "ready"
+    return selection.trace_attributes()
+
+
+_READY_SINGLE_SELECTION = _ready_single_selection()
+
+
 def _run_runtime(
     selector: str,
     capabilities: list[CapabilitySpec],
@@ -323,6 +338,7 @@ def _run_runtime(
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -388,14 +404,14 @@ def test_unique_intent_tag_fallback_selects_canonical_capability_id() -> None:
     )
 
     assert envelope.status == "completed"
-    assert registry.get_calls == ["pending-workflows"]
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"},
-    ]
+    # The tag is resolved inside this request's admitted candidates, then the
+    # canonical exact ID is re-read once; no full-Registry tag search remains.
+    assert registry.get_calls == [capability.capability_id]
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls[0]["capability_id"] == capability.capability_id
     selected = next(step for step in trace.steps if step["event_type"] == "capability_selected")
     assert selected["capability_id"] == capability.capability_id
+    assert selected["attributes"]["selection_rule"] == "unique_intent_tag"
 
 
 @pytest.mark.parametrize("status", ["draft", "disabled", "deprecated"])
@@ -415,11 +431,9 @@ def test_exact_inactive_capability_fails_closed_without_tag_fallback(
 
     assert envelope.status == "no_capability_found"
     assert task_store.status_updates[-1][1] == "no_capability_found"
-    assert registry.get_calls == [capability.capability_id]
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"},
-    ]
+    # An inactive definition is never visible, so no model call or re-read happens.
+    assert registry.get_calls == []
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls == []
     assert "Admin Lite > Registry" not in envelope.message
     assert capability.capability_id not in envelope.message
@@ -444,14 +458,60 @@ def test_unregistered_selector_returns_standard_envelope_without_gateway_call() 
     assert envelope.ui.component_type == "operator_handback_card"
     assert envelope.ui.action == "none"
     assert task_store.status_updates[-1][1] == "no_capability_found"
-    assert registry.get_calls == ["unknown.capability"]
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"},
-    ]
+    assert registry.get_calls == []
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls == []
     assert "capability_selected" not in {step["event_type"] for step in trace.steps}
+
+
+def test_runtime_rejects_outside_candidate_and_preserves_tag_compatibility() -> None:
+    ninth = _capability("oa.ninth")
+    candidate = _capability("oa.candidate", intent_tags=["candidate-tag"])
+    exact_decoy = _capability("oa.decoy", intent_tags=["oa.candidate"])
+
+    outside, outside_store, outside_trace, outside_gateway, outside_registry = _run_runtime(
+        "oa.unlisted",
+        [ninth, candidate],
+    )
+    tagged, _tag_store, tag_trace, tag_gateway, _tag_registry = _run_runtime(
+        "candidate-tag",
+        [ninth, candidate],
+    )
+    exact, _exact_store, _exact_trace, exact_gateway, _exact_registry = _run_runtime(
+        "oa.candidate",
+        [exact_decoy, candidate],
+    )
+    conflicting, conflict_store, _conflict_trace, conflict_gateway, conflict_registry = (
+        _run_runtime("oa.candidate", [candidate], capability_type="action")
+    )
+
+    assert outside.status == "failed"
+    assert outside_store.status_updates[-1][1:] == (
+        "failed",
+        "capability_candidate_out_of_scope",
+    )
+    assert outside.message == "本次能力选择无效，请重新描述请求。"
+    assert outside_registry.get_calls == []
+    assert outside_gateway.calls == []
+    outside_intent = next(
+        step for step in outside_trace.steps if step["event_type"] == "intent_parsed"
+    )
+    assert outside_intent["status"] == "failed"
+    assert outside_intent["error_code"] == "capability_candidate_out_of_scope"
+    assert outside_intent["attributes"]["reason"] == "candidate_out_of_scope"
+    assert "oa.unlisted" not in repr(outside_trace.steps)
+    assert tagged.status == "completed"
+    assert tag_gateway.calls[0]["capability_id"] == "oa.candidate"
+    tag_selected = next(
+        step for step in tag_trace.steps if step["event_type"] == "capability_selected"
+    )
+    assert tag_selected["attributes"]["selection_rule"] == "unique_intent_tag"
+    assert exact.status == "completed"
+    assert exact_gateway.calls[0]["capability_id"] == "oa.candidate"
+    assert conflicting.status == "failed"
+    assert conflict_store.status_updates[-1][2] == "capability_candidate_out_of_scope"
+    assert conflict_registry.get_calls == []
+    assert conflict_gateway.calls == []
 
 
 def test_ambiguous_intent_tag_is_order_independent_and_fails_closed() -> None:
@@ -476,6 +536,10 @@ def test_ambiguous_intent_tag_is_order_independent_and_fails_closed() -> None:
 
     assert outcomes[0] == outcomes[1]
     assert outcomes[0][0:2] == ("no_capability_found", "no_capability_found")
+    assert task_store.status_updates[-1][2] == "capability_not_found"
+    no_match = next(step for step in trace.steps if step["event_type"] == "no_capability_found")
+    assert no_match["attributes"]["reason"] == "no_unique_active_candidate"
+    assert "no_capability_found" in outcomes[0][2]
     assert outcomes[0][3] == 0
 
 
@@ -505,22 +569,18 @@ def test_exact_active_capability_must_match_intent_constraints() -> None:
         target_system="u8",
     )
 
-    assert envelope.status == "no_capability_found"
+    assert envelope.status == "failed"
     assert task_store.status_updates[-1][1:] == (
-        "no_capability_found",
-        "capability_not_found",
+        "failed",
+        "capability_candidate_out_of_scope",
     )
-    assert registry.get_calls == [capability.capability_id]
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": None, "type": None, "status": "active"},
-    ]
+    assert registry.get_calls == []
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
     assert gateway.calls == []
-    no_capability = next(
-        step for step in trace.steps if step["event_type"] == "no_capability_found"
-    )
-    assert no_capability["error_code"] == "capability_not_found"
-    assert no_capability["attributes"] == {"reason": "no_unique_active_candidate"}
+    assert all(step["event_type"] != "no_capability_found" for step in trace.steps)
+    intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
+    assert intent_event["error_code"] == "capability_candidate_out_of_scope"
+    assert intent_event["attributes"]["reason"] == "candidate_out_of_scope"
 
 
 def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
@@ -531,27 +591,54 @@ def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
         capability_type="action",
     )
     other_system = _capability("u8.query", intent_tags=["shared-intent"])
-
-    envelope, _task_store, trace, gateway, registry = _run_runtime(
+    colliding, _collision_store, _collision_trace, collision_gateway, _registry = _run_runtime(
         "shared-intent",
         [query, action, other_system],
         target_system="oa",
         capability_type="action",
     )
+    unique_query = _capability("oa.query")
+    unique_other = _capability("u8.query")
 
+    envelope, _task_store, trace, gateway, registry = _run_runtime(
+        "shared-intent",
+        [unique_query, action, unique_other],
+        target_system="oa",
+        capability_type="action",
+    )
+
+    # A tag shared by several admitted candidates is not disambiguated by type/target.
+    assert colliding.status == "no_capability_found"
+    assert _collision_store.status_updates[-1][2] == "capability_not_found"
+    assert collision_gateway.calls == []
     assert envelope.status == "completed"
-    assert registry.list_calls == [
-        {"target_system": None, "type": None, "status": "active"},
-        {"target_system": "oa", "type": "action", "status": "active"},
-    ]
+    assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
+    assert registry.get_calls == ["oa.action"]
     assert gateway.calls[0]["capability_id"] == "oa.action"
     intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
+    selection_summary = {
+        key: intent_event["attributes"][key]
+        for key in (
+            "protocol_version",
+            "outcome",
+            "coverage_complete",
+            "visible_count",
+            "selected_count",
+            "omitted_count",
+            "truncated_by",
+            "payload_bytes",
+        )
+    }
     assert intent_event["attributes"] == {
         "result": "valid",
         "intent_fingerprint": ("5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"),
         "target_system": "oa",
         "capability_type": "action",
+        **selection_summary,
     }
+    assert selection_summary["outcome"] == "ready"
+    assert selection_summary["coverage_complete"] is True
+    assert selection_summary["visible_count"] == selection_summary["selected_count"] == 3
     selected = next(step for step in trace.steps if step["event_type"] == "capability_selected")
     assert selected["attributes"] == {
         "intent_fingerprint": ("5e7b0ce7c4c1dc054d4e768a2c0287032f9104902dc75071c5e4edf164cdc1d6"),
@@ -572,16 +659,31 @@ def test_model_generated_intent_is_fingerprinted_before_trace() -> None:
     legacy_capability = _capability("oa.safe").model_copy(
         update={"intent_tags": [sensitive_intent]}
     )
+    safe_capability = _capability("oa.safe", intent_tags=["safe-tag"])
 
-    envelope, _task_store, trace, gateway, _registry = _run_runtime(
+    rejected, rejected_store, rejected_trace, rejected_gateway, _ = _run_runtime(
         sensitive_intent,
         [legacy_capability],
     )
+    outside, _outside_store, outside_trace, outside_gateway, _ = _run_runtime(
+        sensitive_intent,
+        [safe_capability],
+    )
+    envelope, _task_store, trace, gateway, _registry = _run_runtime(
+        "safe-tag",
+        [safe_capability],
+    )
 
+    # A bypassed invalid tag now fails the whole visible catalog before the model.
+    assert rejected.status == "failed"
+    assert rejected_store.status_updates[-1][2] == "capability_catalog_invalid"
+    assert rejected_gateway.calls == []
+    assert outside.status == "failed"
+    assert outside_gateway.calls == []
+    for steps in (rejected_trace.steps, outside_trace.steps):
+        assert sensitive_intent not in repr(steps)
     assert envelope.status == "completed"
     assert gateway.calls[0]["capability_id"] == "oa.safe"
-    serialized_trace = repr(trace.steps)
-    assert sensitive_intent not in serialized_trace
     intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     selected_event = next(
         step for step in trace.steps if step["event_type"] == "capability_selected"
@@ -655,10 +757,10 @@ def test_intent_boundary_failures_return_safe_failed_envelopes_without_registry_
     assert "Admin Lite" not in envelope.message
     assert all(step["event_type"] != "no_capability_found" for step in trace.steps)
     intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
-    expected_attributes = {"result": "invalid", "reason": expected_reason}
+    expected_attributes: dict[str, Any] = {"result": "invalid", "reason": expected_reason}
     if expected_subcode is not None:
         expected_attributes["structured_output_error_code"] = expected_subcode
-    assert intent_event["attributes"] == expected_attributes
+    assert intent_event["attributes"] == {**_READY_SINGLE_SELECTION, **expected_attributes}
     serialized = repr((envelope, task_store.status_updates, trace.steps, gateway.calls))
     assert canary not in serialized
 
@@ -689,6 +791,7 @@ def test_intent_validation_trace_has_only_safe_diagnostics_and_no_rejected_value
     assert gateway.calls == []
     intent_event = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     assert intent_event["attributes"] == {
+        **_READY_SINGLE_SELECTION,
         "result": "invalid",
         "reason": "schema_invalid",
         "structured_output_error_code": "validation_error",
@@ -743,6 +846,7 @@ def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_ada
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -785,3 +889,489 @@ def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_ada
     serialized = repr((envelope, task_store.status_updates, trace.steps))
     assert canary not in serialized
     assert canary not in caplog.text
+
+
+class DriftingRegistry(StaticRegistry):
+    """Serve the listed snapshot, then a changed exact definition after the model."""
+
+    def __init__(
+        self,
+        capabilities: list[CapabilitySpec],
+        *,
+        drifted: CapabilitySpec | None,
+    ) -> None:
+        super().__init__(capabilities)
+        self.drifted = drifted
+
+    async def get(self, capability_id: str) -> CapabilitySpec | None:
+        self.get_calls.append(capability_id)
+        if self.drifted is not None and self.drifted.capability_id != capability_id:
+            return None
+        return self.drifted
+
+
+class ContextGateway:
+    def __init__(self) -> None:
+        self.request_contexts: list[RequestOrgContext] = []
+        self.ai_user_ids: list[str] = []
+
+    async def execute_capability(
+        self,
+        task_id: str,
+        session_id: str,
+        ai_user_id: str,
+        capability_id: str,
+        arguments: dict[str, Any],
+        request_context: RequestOrgContext,
+    ) -> ExecutionResult:
+        self.request_contexts.append(request_context)
+        self.ai_user_ids.append(ai_user_id)
+        return ExecutionResult(status="completed", data={}, trace_id=request_context.request_id)
+
+
+class RecordingCandidatePolicy:
+    def __init__(self, result: Any = "defer", *, error: Exception | None = None) -> None:
+        self.result = result
+        self.error = error
+        self.calls: list[tuple[str, str, RequestOrgContext]] = []
+
+    async def preview_capability(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> Any:
+        self.calls.append((ai_user_id, capability_id, request_context))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class DecisionPolicyGuard:
+    def __init__(self, decision: PolicyDecision) -> None:
+        self.decision = decision
+        self.call_count = 0
+
+    async def decide(self, **kwargs: Any) -> PolicyDecision:
+        self.call_count += 1
+        return self.decision
+
+
+class StatusIdentityMapping:
+    def __init__(self, bind_status: str) -> None:
+        self.bind_status = bind_status
+        self.call_count = 0
+
+    async def resolve_execution_identity(
+        self,
+        ai_user_id: str,
+        target_system: Any,
+        execution_identity: Any,
+        request_context: RequestOrgContext,
+    ) -> IdentityCheckResult:
+        self.call_count += 1
+        return IdentityCheckResult(
+            bind_status=cast(Any, self.bind_status),
+            target_system=target_system,
+            execution_identity=execution_identity,
+        )
+
+
+class CountingSuccessAdapter:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        self.call_count += 1
+        return AdapterResult(status="success", data={})
+
+
+def _handle_with(
+    *,
+    registry: StaticRegistry,
+    gateway: Any,
+    candidate_policy: Any,
+    completion: str,
+    message: str = "select oa.target",
+    principal_tenant: str = "tenant-test",
+    human_gate: Any = None,
+) -> tuple[ResponseEnvelope, RecordingTaskStore, RecordingTracePort, MockLLMProvider]:
+    task_store = RecordingTaskStore()
+    trace_port = RecordingTracePort()
+    llm_provider = MockLLMProvider()
+    llm_provider.register(message, LLMCompletionResponse(content=completion))
+    builder = ResponseEnvelopeBuilder()
+    runtime = RuntimeImpl(
+        human_gate_port=human_gate,
+        candidate_policy=candidate_policy,
+        task_store=task_store,
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=registry,
+            gateway=gateway,
+            workflow_engine=None,
+            response_builder=builder,
+        ),
+        trace_port=trace_port,
+        llm_provider=llm_provider,
+        structured_output=JSONStructuredOutputProvider(),
+        intent_model="test-intent-model",
+        response_builder=builder,
+    )
+    envelope = asyncio.run(
+        runtime.handle_user_message(
+            channel="web",
+            principal=runtime_principal("ai-user-topk", tenant_id=principal_tenant),
+            session_id="session-web",
+            message=message,
+            client_capabilities={},
+        )
+    )
+    return envelope, task_store, trace_port, llm_provider
+
+
+_SELECT_TARGET = '{"match":"capability","capability_id":"oa.target","arguments":{}}'
+
+
+def test_selected_definition_change_fails_before_gateway() -> None:
+    listed = _capability("oa.target")
+    drifts = {
+        "disabled": listed.model_copy(update={"status": "disabled"}),
+        "deleted": None,
+        "schema_changed": listed.model_copy(
+            update={"input_schema": {"type": "object", "properties": {"x": {}}}}
+        ),
+        "owner_changed": listed.model_copy(update={"owner": "another-owner"}),
+        "version_upgraded": listed.model_copy(update={"version": "2.0.0"}),
+    }
+
+    for label, drifted in drifts.items():
+        gateway = RecordingGateway()
+        registry = DriftingRegistry([listed], drifted=drifted)
+        envelope, task_store, trace, llm = _handle_with(
+            registry=registry,
+            gateway=gateway,
+            candidate_policy=MinimalPolicyGuard(),
+            completion=_SELECT_TARGET,
+        )
+        assert envelope.status == "failed", label
+        assert task_store.status_updates[-1][1:] == ("failed", "capability_candidate_stale")
+        assert envelope.message == "能力配置已变化，请重新发起请求。"
+        assert gateway.calls == []
+        assert len(llm.calls) == 1
+        intent_events = [step for step in trace.steps if step["event_type"] == "intent_parsed"]
+        assert len(intent_events) == 1
+        assert intent_events[0]["status"] == "failed"
+        assert intent_events[0]["attributes"]["reason"] == "candidate_stale"
+        assert "capability_selected" not in {step["event_type"] for step in trace.steps}
+
+    control_gateway = RecordingGateway()
+    control, control_store, _trace, _llm = _handle_with(
+        registry=DriftingRegistry([listed], drifted=listed.model_copy(deep=True)),
+        gateway=control_gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+    )
+    assert control.status == "completed"
+    assert control_store.status_updates[-1][1] == "completed"
+    assert [call["capability_id"] for call in control_gateway.calls] == ["oa.target"]
+
+
+def test_preview_never_replaces_gateway_authorization() -> None:
+    capability = _capability("oa.target")
+    cases = [
+        (PolicyDecision(decision="deny", reason_code="policy_denied"), "active", "policy_denied"),
+        (
+            PolicyDecision(decision="confirm", required_action="confirm"),
+            "active",
+            "confirm_required",
+        ),
+        (PolicyDecision(decision="allow"), "unbound", "identity_unbound"),
+        (PolicyDecision(decision="allow"), "needs_binding_scope", "needs_binding_scope"),
+        (PolicyDecision(decision="allow"), "active", None),
+    ]
+
+    for decision, bind_status, expected_error in cases:
+        registry = StaticRegistry([capability])
+        adapter = CountingSuccessAdapter()
+        policy = DecisionPolicyGuard(decision)
+        identity = StatusIdentityMapping(bind_status)
+        candidate_policy = RecordingCandidatePolicy("defer")
+        gateway = CapabilityGateway(
+            adapter=adapter,
+            capability_registry=registry,
+            identity_mapping=cast(Any, identity),
+            policy_guard=policy,
+            trace_port=RecordingTracePort(),
+        )
+
+        _envelope, task_store, _trace, _llm = _handle_with(
+            registry=registry,
+            gateway=gateway,
+            candidate_policy=candidate_policy,
+            completion=_SELECT_TARGET,
+        )
+
+        assert [call[1] for call in candidate_policy.calls] == ["oa.target"]
+        assert identity.call_count == 1
+        assert task_store.status_updates[-1][2] == expected_error
+        if expected_error is None:
+            assert policy.call_count == 1
+            assert adapter.call_count == 1
+        else:
+            assert adapter.call_count == 0
+
+
+def test_preview_failure_and_execution_context_are_preserved() -> None:
+    target = _capability("oa.target")
+    admin = _capability("admin_registry_list")
+    failures = {
+        "raises": RecordingCandidatePolicy(error=RuntimeError("preview-canary")),
+        "invalid": RecordingCandidatePolicy("allow"),
+    }
+    for label, candidate_policy in failures.items():
+        gateway = RecordingGateway()
+        envelope, task_store, trace, llm = _handle_with(
+            registry=StaticRegistry([target]),
+            gateway=gateway,
+            candidate_policy=candidate_policy,
+            completion=_SELECT_TARGET,
+        )
+        assert envelope.status == "failed", label
+        assert task_store.status_updates[-1][1:] == ("failed", "capability_catalog_invalid")
+        assert envelope.message == "能力配置暂不可用，请联系管理员核对。"
+        assert llm.calls == []
+        assert gateway.calls == []
+        assert "preview-canary" not in repr((envelope, trace.steps))
+
+    candidate_policy = RecordingCandidatePolicy("defer")
+    context_gateway = ContextGateway()
+    scoped = (
+        '{"match":"capability","capability_id":"oa.target","arguments":'
+        '{"account_set_id":"set-1","resource_scope":"scope-1","device_domain_id":"domain-1"}}'
+    )
+    envelope, _store, _trace, _llm = _handle_with(
+        registry=StaticRegistry([target]),
+        gateway=context_gateway,
+        candidate_policy=candidate_policy,
+        completion=scoped,
+        principal_tenant="tenant-topk",
+    )
+
+    assert envelope.status == "completed"
+    ((preview_user, _, preview_context),) = candidate_policy.calls
+    (execute_context,) = context_gateway.request_contexts
+    assert preview_user == context_gateway.ai_user_ids[0] == "ai-user-topk"
+    assert preview_context.request_id == execute_context.request_id == envelope.trace_id
+    assert preview_context.channel == execute_context.channel == "web"
+    assert preview_context.tenant_id == execute_context.tenant_id == "tenant-topk"
+    assert (
+        preview_context.account_set_id,
+        preview_context.resource_scope,
+        preview_context.device_domain_id,
+    ) == (None, None, None)
+    assert (
+        execute_context.account_set_id,
+        execute_context.resource_scope,
+        execute_context.device_domain_id,
+    ) == ("set-1", "scope-1", "domain-1")
+    for context in (preview_context, execute_context):
+        assert (context.org_id, context.department_id, context.roles) == (None, None, [])
+
+    excluded_gateway = RecordingGateway()
+    excluded, excluded_store, excluded_trace, excluded_llm = _handle_with(
+        registry=StaticRegistry([admin, target]),
+        gateway=excluded_gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion='{"match":"capability","capability_id":"admin_registry_list","arguments":{}}',
+    )
+    assert excluded.status == "failed"
+    assert excluded_store.status_updates[-1][2] == "capability_candidate_out_of_scope"
+    assert excluded_gateway.calls == []
+    sent = "\n".join(message.content for message in excluded_llm.calls[0]["messages"])
+    assert "admin_registry_list" not in sent
+    intent = next(step for step in excluded_trace.steps if step["event_type"] == "intent_parsed")
+    assert intent["attributes"]["visible_count"] == 1
+
+
+class _InvalidRowRegistry(StaticRegistry):
+    async def list(self, *args: Any, **kwargs: Any) -> list[CapabilitySpec]:
+        await super().list(*args, **kwargs)
+        CapabilitySpec.model_validate(
+            {**_capability("oa.target").model_dump(), "short_description": "row-canary {x}"}
+        )
+        raise AssertionError("unreachable")
+
+
+def test_registry_row_validation_error_is_catalog_invalid_without_raw_text() -> None:
+    gateway = RecordingGateway()
+    envelope, task_store, trace, llm = _handle_with(
+        registry=_InvalidRowRegistry([]),
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+    )
+
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1][1:] == ("failed", "capability_catalog_invalid")
+    assert llm.calls == []
+    assert gateway.calls == []
+    assert "row-canary" not in repr((envelope, trace.steps))
+
+
+@pytest.mark.parametrize("selector, expected", [("claß", "failed"), ("ｃｌａｓｓ", "completed")])
+def test_tag_reference_reuses_registry_character_validation(selector: str, expected: str) -> None:
+    envelope, store, _trace, gateway, registry = _run_runtime(
+        selector, [_capability("oa.target", intent_tags=["class"])]
+    )
+    assert envelope.status == expected
+    if expected == "failed":
+        assert store.status_updates[-1][2] == "capability_candidate_out_of_scope"
+        assert registry.get_calls == gateway.calls == []
+    else:
+        assert registry.get_calls == ["oa.target"]
+        assert [call["capability_id"] for call in gateway.calls] == ["oa.target"]
+
+
+class _InvalidRereadRegistry(StaticRegistry):
+    async def get(self, capability_id: str) -> CapabilitySpec | None:
+        await super().get(capability_id)
+        return CapabilitySpec.model_validate(
+            {**_capability(capability_id).model_dump(), "owner": "reread-canary {x}"}
+        )
+
+
+def test_selected_row_validation_error_finishes_stale_without_raw_text() -> None:
+    registry = _InvalidRereadRegistry([_capability("oa.target")])
+    gateway = RecordingGateway()
+    envelope, store, trace, llm = _handle_with(
+        registry=registry,
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+    )
+    assert registry.get_calls == ["oa.target"]
+    assert len(llm.calls) == 1
+    assert envelope.status == "failed"
+    assert store.status_updates[-1][1:] == ("failed", "capability_candidate_stale")
+    assert gateway.calls == []
+    assert [step["event_type"] for step in trace.steps] == [
+        "task_created",
+        "intent_parsed",
+        "response_envelope_created",
+        "task_failed",
+        "evaluation_recorded",
+    ]
+    intent = trace.steps[1]
+    assert intent["status"] == "failed"
+    assert intent["error_code"] == "capability_candidate_stale"
+    assert "reread-canary" not in repr((envelope, store.events, trace.steps))
+
+
+class _ConflictingHumanGate:
+    async def bind_task(self, manifest: Any) -> None:
+        raise HumanGateConflictError("synthetic version conflict")
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_partial_candidate_notice_survives_version_binding_failure(partial: bool) -> None:
+    capabilities = [_capability("oa.target")]
+    if partial:
+        capabilities.extend(_capability(f"oa.filler-{index}") for index in range(8))
+    gateway = RecordingGateway()
+    envelope, store, trace, _llm = _handle_with(
+        registry=StaticRegistry(capabilities),
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+        human_gate=_ConflictingHumanGate(),
+    )
+    assert envelope.status == "failed"
+    assert store.status_updates[-1][1:] == ("failed", "internal_error")
+    assert gateway.calls == []
+    assert envelope.message.startswith("任务绑定的执行版本已不可用，本次未执行。")
+    assert envelope.message.count("本次仅在相关性最高的部分能力中选择") == int(partial)
+    assert envelope.fallback_text.count(
+        "This selection considered only the most relevant capabilities"
+    ) == int(partial)
+    assert [step["event_type"] for step in trace.steps][-3:] == [
+        "response_envelope_created",
+        "task_failed",
+        "evaluation_recorded",
+    ]
+
+
+@pytest.mark.parametrize(
+    "scopes, requested_scope, error",
+    [
+        ([], None, "identity_unbound"),
+        (["east", "west"], None, "needs_binding_scope"),
+        (["east", "west"], "foreign", "identity_unbound"),
+        (["east", "west"], "east", None),
+    ],
+)
+def test_topk_gateway_resolves_binding_rows_before_execution(
+    scopes: list[str], requested_scope: str | None, error: str | None
+) -> None:
+    import json
+
+    # Use the shipped resolver with actual synthetic rows, not precomputed statuses.
+    identity = MockIdentityMapping(
+        rows=[
+            {
+                "ai_user_id": "ai-user-topk",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "active",
+                "binding_id": f"binding-{scope}",
+                "binding_scope": scope,
+            }
+            for scope in scopes
+        ]
+        + [
+            {
+                "ai_user_id": "another-user",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "active",
+                "binding_id": "foreign-binding",
+                "binding_scope": "foreign",
+            }
+        ]
+    )
+    registry = StaticRegistry([_capability("oa.target")])
+    adapter = CountingSuccessAdapter()
+    gateway_trace = RecordingTracePort()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=registry,
+        identity_mapping=identity,
+        policy_guard=MinimalPolicyGuard(),
+        trace_port=gateway_trace,
+    )
+    arguments = {} if requested_scope is None else {"resource_scope": requested_scope}
+    envelope, store, _trace, llm = _handle_with(
+        registry=registry,
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=json.dumps(
+            {"match": "capability", "capability_id": "oa.target", "arguments": arguments}
+        ),
+    )
+    assert len(llm.calls) == 1
+    assert store.status_updates[-1][2] == error
+    assert adapter.call_count == int(error is None)
+    check = next(step for step in gateway_trace.steps if step["event_type"] == "identity_check")
+    if error is None:
+        assert envelope.status == "completed"
+        assert check["status"] == "ok"
+    else:
+        assert check["status"] == "blocked"
+        assert check["error_code"] == error

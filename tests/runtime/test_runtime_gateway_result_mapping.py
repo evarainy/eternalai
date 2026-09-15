@@ -244,6 +244,7 @@ def _run_mapping(result: ExecutionResult) -> tuple[ResponseEnvelope, SpyTaskStor
         orchestration_workflow = None
         orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
+            candidate_policy=MinimalPolicyGuard(),
             task_store=task_store,
             session_store=ExistingSessionStore(),
             capability_registry=orchestration_registry,
@@ -317,6 +318,7 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -357,17 +359,16 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "blocked"
-    assert task_store.status_updates[-1][2] == "policy_denied"
-    assert gateway.calls == 1
+    # Candidate preview excludes the management-plane ID for a business request,
+    # so it is never offered to the model and the Gateway is never reached.
+    assert response.json()["status"] == "no_capability_found"
+    assert capability_id not in response.json()["message"]
+    assert task_store.status_updates[-1][2] == "capability_not_found"
+    assert gateway.calls == 0
     assert trace_port.record_gateway_call_count == 0
     assert adapter.calls == 0
-    assert any(
-        step["event_type"] == "policy_checked"
-        and step["status"] == "blocked"
-        and step["error_code"] == "policy_denied"
-        for step in trace_port.steps
-    )
+    assert all(step["event_type"] != "policy_checked" for step in trace_port.steps)
+    assert all(step["event_type"] != "capability_selected" for step in trace_port.steps)
 
 
 def test_binding_required_result_maps_to_failed_task_blocked_envelope_with_operator_handback() -> (

@@ -6,10 +6,11 @@ import json
 from typing import Any
 
 from app.knowledge import BasicKnowledge, sanitize_knowledge_text
-from app.knowledge.basic_knowledge import (
-    MAX_CAPABILITY_CONTRACT_LENGTH,
-    MAX_CAPABILITY_CONTRACTS,
-    KnowledgeItem,
+from app.knowledge.basic_knowledge import KnowledgeItem
+from app.knowledge.capability_selection import (
+    MAX_CAPABILITY_CANDIDATES,
+    MAX_CAPABILITY_CONTRACT_BYTES,
+    canonical_json,
 )
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 
@@ -83,9 +84,9 @@ def test_capability_contracts_follow_each_registry_snapshot() -> None:
         for status in ("draft", "disabled", "deprecated")
     )
 
-    first_context = knowledge.capability_input_contracts((first,))
-    second_context = knowledge.capability_input_contracts((second,))
-    inactive_context = knowledge.capability_input_contracts(inactive)
+    first_context = knowledge.select_capability_candidates("expense", (first,)).contracts
+    second_context = knowledge.select_capability_candidates("expense", (second,)).contracts
+    inactive_selection = knowledge.select_capability_candidates("expense", inactive)
 
     assert len(first_context) == len(second_context) == 1
     assert first_context[0]["capability_id"] == "oa.expense.first"
@@ -94,7 +95,8 @@ def test_capability_contracts_follow_each_registry_snapshot() -> None:
     assert first_context[0]["status"] == "active"
     assert second_context[0]["capability_id"] == "oa.expense.second"
     assert second_context[0]["status"] == "active"
-    assert inactive_context == ()
+    assert inactive_selection.outcome == "empty"
+    assert inactive_selection.contracts == ()
 
 
 def test_zero_argument_contract_explicitly_requires_empty_arguments() -> None:
@@ -108,7 +110,7 @@ def test_zero_argument_contract_explicitly_requires_empty_arguments() -> None:
         },
     )
 
-    contract = BasicKnowledge().capability_input_contracts((capability,))[0]
+    contract = BasicKnowledge().select_capability_candidates("待办", (capability,)).contracts[0]
 
     assert contract["capability_id"] == "oa.list_pending_workflows"
     assert contract["allowed_argument_keys"] == []
@@ -149,20 +151,24 @@ def test_registry_free_text_is_never_read_into_capability_knowledge() -> None:
         },
     )
 
-    contracts = BasicKnowledge().capability_input_contracts((capability,))
+    contracts = BasicKnowledge().select_capability_candidates("query", (capability,)).contracts
     serialized = json.dumps(contracts, ensure_ascii=False)
+    contract = contracts[0]
 
+    # Name, intent tags, and every schema free-text value stay out of the projection.
     for free_text in (
-        description_marker,
         name_marker,
-        owner_marker,
         intent_marker,
         *schema_value_markers,
         "top-level-schema-description-must-not-enter",
     ):
         assert free_text not in serialized
+    # The approved safe summary exposes owner/description only under exact keys.
+    assert contract["short_description"] == description_marker
+    assert contract["owner"] == owner_marker
+    assert serialized.count(description_marker) == 1
+    assert serialized.count(owner_marker) == 1
     assert "oa.safe.query" in serialized
-    contract = contracts[0]
     assert contract["capability_type"] == "query"
     assert contract["allowed_argument_keys"] == ["user"]
     assert contract["required_argument_keys"] == ["user"]
@@ -190,8 +196,8 @@ def test_structured_contract_preserves_all_multi_and_long_argument_keys() -> Non
         },
     )
 
-    contract = BasicKnowledge().capability_input_contracts((capability,))[0]
-    serialized = json.dumps(contract, ensure_ascii=True, separators=(",", ":"))
+    contract = BasicKnowledge().select_capability_candidates("query", (capability,)).contracts[0]
+    serialized = canonical_json(contract)
 
     assert contract["capability_id"] == "oa.long-arguments.query"
     assert contract["capability_type"] == "query"
@@ -199,7 +205,7 @@ def test_structured_contract_preserves_all_multi_and_long_argument_keys() -> Non
     assert contract["allowed_argument_keys"] == sorted(allowed_keys)
     assert contract["required_argument_keys"] == sorted(required_keys)
     assert contract["additionalProperties"] is False
-    assert len(serialized) <= MAX_CAPABILITY_CONTRACT_LENGTH
+    assert len(serialized.encode("utf-8")) <= MAX_CAPABILITY_CONTRACT_BYTES
     assert json.loads(serialized) == contract
     for index in range(len(allowed_keys)):
         assert f"description-value-{index}" not in serialized
@@ -210,12 +216,13 @@ def test_structured_contract_preserves_all_multi_and_long_argument_keys() -> Non
 def test_contract_payload_is_count_bounded_without_partial_contracts() -> None:
     knowledge = BasicKnowledge()
     capabilities = tuple(
-        _capability(f"oa.contract-{index}") for index in range(MAX_CAPABILITY_CONTRACTS + 2)
+        _capability(f"oa.contract-{index}") for index in range(MAX_CAPABILITY_CANDIDATES + 2)
     )
-    oversized_key = "x" * MAX_CAPABILITY_CONTRACT_LENGTH
+    oversized_key = "x" * MAX_CAPABILITY_CONTRACT_BYTES
 
-    contracts = knowledge.capability_input_contracts(capabilities)
-    rejected = knowledge.capability_input_contracts(
+    selection = knowledge.select_capability_candidates("oa.contract-9", capabilities)
+    rejected = knowledge.select_capability_candidates(
+        "oversized",
         (
             _capability(
                 "oa.oversized",
@@ -224,11 +231,14 @@ def test_contract_payload_is_count_bounded_without_partial_contracts() -> None:
                     "properties": {oversized_key: {"type": "string"}},
                 },
             ),
-        )
+        ),
     )
 
-    assert len(contracts) == MAX_CAPABILITY_CONTRACTS
-    assert rejected == ()
+    assert selection.outcome == "ready"
+    assert 1 <= len(selection.contracts) <= MAX_CAPABILITY_CANDIDATES
+    assert selection.contracts[0]["capability_id"] == "oa.contract-9"
+    assert rejected.outcome == "over_budget"
+    assert rejected.contracts == ()
 
 
 def test_sensitive_items_and_unsafe_capability_ids_fail_closed_as_whole_values() -> None:
@@ -246,10 +256,13 @@ def test_sensitive_items_and_unsafe_capability_ids_fail_closed_as_whole_values()
     assert [sanitize_knowledge_text(item) for item in sensitive_items] == ["[REDACTED]"] * len(
         sensitive_items
     )
-    contracts = BasicKnowledge().capability_input_contracts(
-        (_capability("token=synthetic-unsafe-id"),)
+    selection = BasicKnowledge().select_capability_candidates(
+        "query",
+        (_capability("token=synthetic-unsafe-id"),),
     )
-    assert contracts == ()
+    assert selection.outcome == "catalog_invalid"
+    assert selection.contracts == ()
+    assert "synthetic-unsafe-id" not in repr(selection)
 
 
 def test_no_capability_guidance_filters_to_active_registry_entries() -> None:

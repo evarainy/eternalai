@@ -73,7 +73,7 @@ from tests.auth_fakes import (
     auth_cookies,
     make_session_binder,
 )
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
+from tests.runtime.registry_fakes import StaticCapabilityRegistry, active_capability
 
 
 @pytest.mark.parametrize("with_workflow", [False, True])
@@ -544,7 +544,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     assert llm_provider.calls[0]["response_format"] == {"type": "json_object"}
     messages = llm_provider.calls[0]["messages"]
     assert [message.role for message in messages] == ["system", "system", "user"]
-    assert "semantic_system_knowledge" in messages[1].content
+    assert '{"capability_candidates":' in messages[1].content
     assert "synthetic.query" in messages[1].content
     assert structured_output.trace_metadata == [
         {
@@ -984,7 +984,12 @@ def test_production_model_context_matches_oa_adapter_mode(mode: str, message: st
             LiveOAReadProvider if mode == "live" else ReplayOAReadProvider,
         )
 
-    result = asyncio.run(runtime._intent_router.parse(message))
+    result = asyncio.run(
+        runtime._intent_router.parse(
+            message,
+            capabilities=(active_capability("oa.list_pending_workflows"),),
+        )
+    )
 
     assert result.match == "none"
     assert result.failure_reason is None
@@ -993,10 +998,13 @@ def test_production_model_context_matches_oa_adapter_mode(mode: str, message: st
     assert messages[-1].role == "user"
     assert messages[-1].content == message
     if message == "roadmap automation":
-        assert [item.role for item in messages] == ["system", "user"]
+        assert [item.role for item in messages] == ["system", "system", "user"]
+        assert '{"capability_candidates":' in messages[1].content
+        assert "semantic_system_knowledge" not in messages[1].content
         return
 
-    assert [item.role for item in messages] == ["system", "system", "user"]
+    assert [item.role for item in messages] == ["system", "system", "system", "user"]
+    assert '{"capability_candidates":' in messages[2].content
     payload = json.loads(messages[1].content.split("\n", maxsplit=1)[1])
     knowledge = payload["semantic_system_knowledge"]
     assert "企业术语：待办是等待当前用户处理的流程事项，不代表已经完成。" in knowledge
@@ -1016,6 +1024,35 @@ def test_production_model_context_matches_oa_adapter_mode(mode: str, message: st
             assert "replay 模式" in prompt
             assert "从本地合同包回放响应，不代表实时业务数据" in prompt
             assert "live 模式" not in prompt
+
+
+@pytest.mark.parametrize("mode", ["mock", "live", "replay"])
+def test_topk_is_wired_with_production_policy_and_knowledge_mode(mode: str) -> None:
+    message = "查询 OA 待办 zz.tail-target"
+    llm_provider = MockLLMProvider()
+    llm_provider.register(message, LLMCompletionResponse(content='{"match":"none"}'))
+    components = build_production_components(_oa_mode_settings(mode), llm_provider=llm_provider)
+    runtime = components.runtime
+    capabilities = (
+        *(active_capability(f"aa.item-{index}") for index in range(8)),
+        active_capability("zz.tail-target"),
+    )
+
+    result = asyncio.run(runtime._intent_router.parse(message, capabilities=capabilities))
+
+    gateway_policy = runtime._orchestration._gateway._policy_guard
+    assert isinstance(gateway_policy, MinimalPolicyGuard)
+    assert runtime._candidate_policy is gateway_policy
+    assert result.candidate_selection is not None
+    assert result.candidate_selection.outcome == "ready"
+    messages = llm_provider.calls[0]["messages"]
+    segment = next(item.content for item in messages if '{"capability_candidates":' in item.content)
+    items = json.loads(segment.split("\n", maxsplit=1)[1])["capability_candidates"]["items"]
+    assert [item["capability_id"] for item in items] == ["zz.tail-target"]
+    prompt = "\n".join(item.content for item in messages)
+    assert ("Mock 系统说明" in prompt) is (mode == "mock")
+    assert ("live 模式" in prompt) is (mode == "live")
+    assert ("replay 模式" in prompt) is (mode == "replay")
 
 
 def test_explicit_production_adapters_and_identity_mapping_take_priority() -> None:

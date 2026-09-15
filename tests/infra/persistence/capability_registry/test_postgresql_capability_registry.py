@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import delete
+from sqlalchemy import delete, update
 
 from app.infra.persistence.capability_registry.schema import capabilities
 
@@ -415,6 +415,154 @@ def test_returns_capability_spec_not_dict() -> None:
             assert isinstance(result, CapabilitySpec)
             assert not isinstance(result, dict)
         finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+class _NoGateway:
+    async def execute_capability(self, **kwargs: Any) -> Any:
+        raise AssertionError("Gateway must not run for an invalid persisted catalog")
+
+
+class _DeferPolicy:
+    async def preview_capability(self, **kwargs: Any) -> str:
+        return "defer"
+
+
+@pytest.mark.parametrize("invalid_timing", ["before_prompt", "after_prompt"])
+def test_topk_uses_validated_persisted_metadata(
+    invalid_timing: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_db()
+    from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
+    from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
+    from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+    from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+    from app.knowledge.capability_selection import select_capability_candidates
+    from app.ports.llm_provider import LLMCompletionResponse
+    from app.runtime.runtime import RuntimeImpl
+    from tests.runtime.principal_fakes import runtime_principal
+    from tests.runtime.test_runtime_capability_selection import (
+        ExistingSessionStore,
+        RecordingTaskStore,
+        RecordingTracePort,
+    )
+
+    run_id = uuid.uuid4().hex[:12]
+    fillers = [_capability(capability_id=f"topk-{run_id}-filler-{index}") for index in range(8)]
+    target = _capability(capability_id=f"zz-topk-{run_id}-target")
+    created = [*fillers, target]
+    invalid = _capability(capability_id=f"topk-{run_id}-invalid")
+    owned_ids = [*(item.capability_id for item in created), invalid.capability_id]
+    canary = f"persisted-invalid-canary-{run_id}"
+
+    async def _run() -> None:
+        engine = _make_engine()
+        try:
+            registry = _registry(_make_factory(engine))
+            for item in created:
+                await registry.create(item)
+            persisted = [
+                item
+                for item in await registry.list(status="active")
+                if item.capability_id in owned_ids
+            ]
+            from_db = select_capability_candidates(target.capability_id, persisted)
+            in_memory = select_capability_candidates(target.capability_id, created)
+            assert from_db.outcome == "ready"
+            assert from_db.bindings[0].capability_id == target.capability_id
+            assert from_db.payload_json == in_memory.payload_json
+            assert from_db.bindings == in_memory.bindings
+
+            async def corrupt_row(capability_id: str) -> None:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        update(capabilities)
+                        .where(capabilities.c.capability_id == capability_id)
+                        .values(short_description=f"{canary} {{system}}")
+                    )
+
+            if invalid_timing == "before_prompt":
+                await registry.create(invalid)
+                await corrupt_row(invalid.capability_id)
+                with pytest.raises(ValidationError):
+                    await registry.list(status="active")
+
+            task_store = RecordingTaskStore()
+            trace_port = RecordingTracePort()
+            llm_provider = MockLLMProvider()
+            if invalid_timing == "after_prompt":
+                import json
+
+                llm_provider.register(
+                    target.capability_id,
+                    LLMCompletionResponse(
+                        content=json.dumps(
+                            {
+                                "match": "capability",
+                                "capability_id": target.capability_id,
+                                "arguments": {},
+                            }
+                        )
+                    ),
+                )
+                original_complete = llm_provider.complete
+
+                async def complete_after_corruption(
+                    *args: Any, **kwargs: Any
+                ) -> LLMCompletionResponse:
+                    await corrupt_row(target.capability_id)
+                    return await original_complete(*args, **kwargs)
+
+                monkeypatch.setattr(llm_provider, "complete", complete_after_corruption)
+            builder = ResponseEnvelopeBuilder()
+            runtime = RuntimeImpl(
+                candidate_policy=_DeferPolicy(),
+                task_store=task_store,
+                session_store=ExistingSessionStore(),
+                capability_registry=registry,
+                orchestration=AgentOrchestrationAdapter(
+                    capability_registry=registry,
+                    gateway=_NoGateway(),
+                    workflow_engine=None,
+                    response_builder=builder,
+                ),
+                trace_port=trace_port,
+                llm_provider=llm_provider,
+                structured_output=JSONStructuredOutputProvider(),
+                intent_model="test-intent-model",
+                response_builder=builder,
+            )
+            envelope = await runtime.handle_user_message(
+                channel="web",
+                principal=runtime_principal("ai-user-topk-pg"),
+                session_id="session-topk-pg",
+                message=target.capability_id,
+                client_capabilities={},
+            )
+            assert envelope.status == "failed"
+            expected_error = (
+                "capability_catalog_invalid"
+                if invalid_timing == "before_prompt"
+                else "capability_candidate_stale"
+            )
+            assert task_store.status_updates[-1][1:] == ("failed", expected_error)
+            assert len(llm_provider.calls) == int(invalid_timing == "after_prompt")
+            intent = [step for step in trace_port.steps if step["event_type"] == "intent_parsed"]
+            assert len(intent) == 1
+            assert intent[0]["error_code"] == expected_error
+            assert [step["event_type"] for step in trace_port.steps][-3:] == [
+                "response_envelope_created",
+                "task_failed",
+                "evaluation_recorded",
+            ]
+            assert canary not in repr((envelope, trace_port.steps))
+        finally:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    delete(capabilities).where(capabilities.c.capability_id.in_(owned_ids))
+                )
             await engine.dispose()
 
     asyncio.run(_run())

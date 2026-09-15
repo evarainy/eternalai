@@ -25,6 +25,12 @@ ErrorCode: TypeAlias = Literal[
     "adapter_http_500",
     "upstream_permission_denied",
     "internal_error",
+    "capability_candidates_low_confidence",
+    "capability_candidates_ambiguous",
+    "capability_candidates_over_budget",
+    "capability_catalog_invalid",
+    "capability_candidate_out_of_scope",
+    "capability_candidate_stale",
 ]
 
 ExecutionStatus: TypeAlias = Literal[

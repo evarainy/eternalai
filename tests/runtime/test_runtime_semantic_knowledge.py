@@ -12,10 +12,11 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.ports.capability_registry import CapabilitySpec, CapabilityStatus
 from app.ports.response_envelope import ResponseEnvelope
-from app.runtime.models import IntentOutput, MatchedIntent
+from app.runtime.models import IntentOutput, MatchedIntent, UnmatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import runtime_output_schema, schema_digest
@@ -57,9 +58,19 @@ def _capability(
     )
 
 
+def _candidate_prompt(call: dict[str, Any]) -> str:
+    return next(
+        message.content
+        for message in call["messages"]
+        if '{"capability_candidates":' in message.content
+    )
+
+
 def _run(
     selector: str,
     capabilities: list[CapabilitySpec],
+    *,
+    match_none: bool = False,
 ) -> tuple[
     ResponseEnvelope,
     RecordingTaskStore,
@@ -78,12 +89,15 @@ def _run(
     structured_output.register(
         message,
         IntentOutput,
-        MatchedIntent(match="capability", capability_id=selector),
+        UnmatchedIntent(match="none")
+        if match_none
+        else MatchedIntent(match="capability", capability_id=selector),
     )
     orchestration_registry = registry
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -148,8 +162,10 @@ def test_knowledge_never_authorizes_disabled_or_missing_selector(
     )
     assert no_capability["error_code"] == "capability_not_found"
     assert "Admin Lite > Registry" not in envelope.message
-    knowledge_prompt = llm_provider.calls[0]["messages"][1].content
-    assert selector not in knowledge_prompt
+    # Nothing is visible, so the model is never offered any candidate at all.
+    assert llm_provider.calls == []
+    assert selector not in envelope.message
+    assert selector not in repr(trace.steps)
 
 
 def test_runtime_injects_only_active_registry_capabilities() -> None:
@@ -165,7 +181,8 @@ def test_runtime_injects_only_active_registry_capabilities() -> None:
         capabilities,
     )
 
-    prompt = llm_provider.calls[0]["messages"][1].content
+    prompt = _candidate_prompt(llm_provider.calls[0])
+    all_prompts = "\n".join(message.content for message in llm_provider.calls[0]["messages"])
     assert '"capability_id":"oa.active.query"' in prompt
     assert '"status":"active"' in prompt
     assert '"capability_type":' in prompt
@@ -174,16 +191,17 @@ def test_runtime_injects_only_active_registry_capabilities() -> None:
         "oa.disabled.query",
         "oa.deprecated.query",
     ):
-        assert inactive_id not in prompt
+        assert inactive_id not in all_prompts
     assert registry.list_calls[0] == {
         "target_system": None,
         "type": None,
         "status": "active",
     }
-    assert envelope.status == "no_capability_found"
+    # A selector outside the admitted candidates is rejected, never executed.
+    assert envelope.status == "failed"
     assert task_store.status_updates[-1][1:] == (
-        "no_capability_found",
-        "capability_not_found",
+        "failed",
+        "capability_candidate_out_of_scope",
     )
     assert gateway.calls == []
 
@@ -198,6 +216,7 @@ def test_no_capability_guidance_lists_only_active_registry_capabilities() -> Non
     envelope, task_store, _trace, gateway, registry, _llm = _run(
         "oa.missing.query",
         [disabled, active],
+        match_none=True,
     )
 
     assert envelope.status == "no_capability_found"
@@ -241,6 +260,11 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
         "oa.missing.query",
         [safe_capability, unsafe_capability],
     )
+    safe_envelope, safe_store, safe_trace, safe_gateway, _safe_registry, safe_llm = _run(
+        "oa.missing.query",
+        [safe_capability],
+        match_none=True,
+    )
 
     observed: list[Any] = [
         llm_provider.calls,
@@ -259,9 +283,26 @@ def test_sensitive_registry_values_do_not_reach_prompt_trace_state_or_response()
         "synthetic-free-text",
     ):
         assert sensitive not in serialized
-    assert "[REDACTED]" in serialized
-    assert envelope.status == "no_capability_found"
+    # An unsafe visible identifier invalidates the whole snapshot before the model.
+    assert envelope.status == "failed"
+    assert task_store.status_updates[-1][1:] == ("failed", "capability_catalog_invalid")
+    assert llm_provider.calls == []
     assert gateway.calls == []
+    safe_host_state = repr(
+        [
+            safe_trace.steps,
+            safe_store.created,
+            safe_store.status_updates,
+            safe_envelope.model_dump(),
+        ]
+    )
+    for free_text in (description_marker, name_marker, owner_marker, intent_marker):
+        assert free_text not in safe_host_state
+    safe_prompt = "\n".join(message.content for message in safe_llm.calls[0]["messages"])
+    assert name_marker not in safe_prompt
+    assert intent_marker not in safe_prompt
+    assert safe_envelope.status == "no_capability_found"
+    assert safe_gateway.calls == []
 
 
 def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
@@ -286,6 +327,7 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=RecordingTaskStore(),
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -329,15 +371,15 @@ def test_runtime_refreshes_registry_knowledge_on_every_request() -> None:
 
     asyncio.run(exercise())
 
-    first_prompt = llm_provider.calls[0]["messages"][1].content
-    second_messages = llm_provider.calls[1]["messages"]
-    third_prompt = llm_provider.calls[2]["messages"][1].content
+    # The second request sees no active capability, so only two model calls happen.
+    assert len(llm_provider.calls) == 2
+    first_prompt = _candidate_prompt(llm_provider.calls[0])
+    third_prompt = _candidate_prompt(llm_provider.calls[1])
     assert "oa.first.query" in first_prompt
-    assert "status=active" in first_prompt
+    assert '"status":"active"' in first_prompt
     assert "oa.second.query" not in first_prompt
-    assert [message.role for message in second_messages] == ["system", "user"]
-    assert all("semantic_system_knowledge" not in item.content for item in second_messages)
-    assert all("oa.first.query" not in item.content for item in second_messages)
     assert "oa.second.query" in third_prompt
-    assert "status=active" in third_prompt
-    assert "oa.first.query" not in third_prompt
+    assert '"status":"active"' in third_prompt
+    assert all(
+        "oa.first.query" not in message.content for message in llm_provider.calls[1]["messages"]
+    )

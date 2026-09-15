@@ -284,14 +284,16 @@ def test_new_task_uses_port_for_selection_binding_execution_and_response() -> No
     assert [event.payload for event in events] == [
         {
             "capability_id": h.capability.capability_id,
-            "selection_rule": "unique_intent_tag",
+            # The rule records how the model selector bound to this request's
+            # candidates (an exact ID here), not the port's re-read label.
+            "selection_rule": "exact_id",
         }
     ]
     assert [
         event["attributes"]["selection_rule"]
         for event in h.trace.steps
         if event["event_type"] == "capability_selected"
-    ] == ["unique_intent_tag"]
+    ] == ["exact_id"]
 
 
 def test_resume_uses_port_after_decision_and_returns_its_response(
@@ -994,6 +996,7 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
             "_resume_pending_workflow",
             "_finish_version_binding_failure",
             "_finish_intent_failure",
+            "_finish_candidate_failure",
             "_finish_no_capability_found",
         ]
     )

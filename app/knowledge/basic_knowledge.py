@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from typing import Literal, Sequence, TypeAlias
+from typing import TYPE_CHECKING, Literal, Sequence, TypeAlias
 
 from app.ports.capability_registry import CapabilitySpec
+
+if TYPE_CHECKING:
+    from app.knowledge.capability_selection import CapabilityCandidateSet
 
 KnowledgeCategory: TypeAlias = Literal[
     "enterprise_term",
@@ -19,10 +21,7 @@ KnowledgeCategory: TypeAlias = Literal[
 _REDACTED = "[REDACTED]"
 _MAX_GUIDANCE_CAPABILITIES = 5
 _MAX_CAPABILITY_ID_LENGTH = 96
-MAX_CAPABILITY_CONTRACTS = 8
-MAX_CAPABILITY_CONTRACT_LENGTH = 4096
 _SAFE_CAPABILITY_ID = re.compile(r"[A-Za-z0-9._-]+")
-_SAFE_ARGUMENT_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9._-]*")
 _SENSITIVE_MARKER = re.compile(
     r"(?:bearer|token|credential|secret|password|passwd|auth|authorization|"
     r"cookie|session)",
@@ -130,22 +129,15 @@ class BasicKnowledge:
             if any(_keyword_matches(keyword, normalized_message) for keyword in item.keywords)
         )
 
-    def capability_input_contracts(
+    def select_capability_candidates(
         self,
+        message: str,
         capabilities: Sequence[CapabilitySpec],
-    ) -> tuple[dict[str, object], ...]:
-        """Return complete, value-free contracts admitted by fixed prompt bounds."""
-        contracts: list[dict[str, object]] = []
-        for capability in sorted(
-            (item for item in capabilities if item.status == "active"),
-            key=lambda item: _safe_capability_id(item.capability_id),
-        ):
-            contract = _capability_input_contract(capability)
-            if contract is not None:
-                contracts.append(contract)
-            if len(contracts) == MAX_CAPABILITY_CONTRACTS:
-                break
-        return tuple(contracts)
+    ) -> CapabilityCandidateSet:
+        """Delegate to the single safe projection and deterministic Top-K selector."""
+        from app.knowledge.capability_selection import select_capability_candidates
+
+        return select_capability_candidates(message, capabilities)
 
     def no_capability_guidance(
         self,
@@ -164,12 +156,28 @@ class BasicKnowledge:
             overview = f"当前可用能力：{'、'.join(summaries)}{suffix}。"
             fallback_overview = f"Available capabilities: {', '.join(summaries)}{suffix}."
         else:
-            overview = "当前没有已启用能力。"
-            fallback_overview = "No active capabilities are currently registered."
+            overview = "当前没有可用能力。"
+            fallback_overview = "No capabilities are currently available."
         return (
             f"暂未接入该能力。{overview}",
             f"No capability found. {fallback_overview}",
         )
+
+
+def contains_sensitive_property_key(value: str) -> bool:
+    """Apply credential word boundaries to keys, retaining location checks."""
+    if any(pattern.search(value) for pattern in _SENSITIVE_LOCATION_OR_IDENTITY):
+        return True
+    # Exact business-contract exception, never a prefix or whole-schema exemption.
+    if value == "authoritative_count":
+        return False
+    segmented = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    segmented = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", segmented)
+    return any(
+        _SENSITIVE_MARKER.fullmatch(part) is not None
+        or part.casefold() in {"sessionid", "accesstoken", "refreshtoken"}
+        for part in re.split(r"[_.-]+", segmented)
+    )
 
 
 def sanitize_knowledge_text(value: str) -> str:
@@ -180,54 +188,6 @@ def sanitize_knowledge_text(value: str) -> str:
     ):
         return _REDACTED
     return normalized.strip()
-
-
-def _capability_input_contract(
-    capability: CapabilitySpec,
-) -> dict[str, object] | None:
-    capability_id = _safe_capability_id(capability.capability_id)
-    if capability_id == _REDACTED:
-        return None
-    target_system = capability.target_system or "none"
-    schema = capability.input_schema
-    properties = schema.get("properties")
-    if properties is None:
-        raw_property_keys: tuple[object, ...] = ()
-    elif isinstance(properties, dict):
-        raw_property_keys = tuple(properties)
-    else:
-        return None
-    raw_required_keys = schema.get("required")
-    if raw_required_keys is None:
-        required_keys: tuple[object, ...] = ()
-    elif isinstance(raw_required_keys, list):
-        required_keys = tuple(raw_required_keys)
-    else:
-        return None
-    allowed_argument_keys = _safe_argument_keys(raw_property_keys)
-    safe_required_keys = _safe_argument_keys(required_keys)
-    if allowed_argument_keys is None or safe_required_keys is None:
-        return None
-    additional_properties = schema.get("additionalProperties", True)
-    if isinstance(additional_properties, dict):
-        safe_additional_properties: bool | str = "schema"
-    elif isinstance(additional_properties, bool):
-        safe_additional_properties = additional_properties
-    else:
-        return None
-    contract: dict[str, object] = {
-        "capability_id": capability_id,
-        "capability_type": capability.type,
-        "target_system": target_system,
-        "status": capability.status,
-        "allowed_argument_keys": allowed_argument_keys,
-        "required_argument_keys": safe_required_keys,
-        "additionalProperties": safe_additional_properties,
-    }
-    if not allowed_argument_keys and safe_additional_properties is False:
-        contract["arguments_must_be"] = {}
-    serialized = json.dumps(contract, ensure_ascii=True, separators=(",", ":"))
-    return contract if len(serialized) <= MAX_CAPABILITY_CONTRACT_LENGTH else None
 
 
 def _active_capability_summary(capability: CapabilitySpec) -> str:
@@ -248,15 +208,6 @@ def _safe_capability_id(value: str) -> str:
     ):
         return _REDACTED
     return normalized
-
-
-def _safe_argument_keys(values: Sequence[object]) -> list[str] | None:
-    if any(not isinstance(value, str) for value in values):
-        return None
-    normalized = [value.strip() for value in values if isinstance(value, str)]
-    if any(not value or _SAFE_ARGUMENT_KEY.fullmatch(value) is None for value in normalized):
-        return None
-    return sorted(normalized)
 
 
 def _normalize_for_match(value: str) -> str:
@@ -282,8 +233,6 @@ __all__ = (
     "ENTERPRISE_TERM_ITEMS",
     "KnowledgeItem",
     "MOCK_SYSTEM_ITEMS",
-    "MAX_CAPABILITY_CONTRACT_LENGTH",
-    "MAX_CAPABILITY_CONTRACTS",
     "POLICY_TEMPLATE_ITEMS",
     "sanitize_knowledge_text",
 )

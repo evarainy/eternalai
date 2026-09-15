@@ -21,7 +21,9 @@ from app.infra.llm.mock_structured_output.mock_structured_output_provider import
     MockStructuredOutputProvider,
 )
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter, _confirm_card_payload
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.ports.agent_orchestration import AgentResponseContext
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.response_envelope import ConfirmCard, ResponseEnvelope
@@ -238,6 +240,7 @@ def _run_runtime(
         orchestration_workflow = None
         orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
+            candidate_policy=MinimalPolicyGuard(),
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
             capability_registry=orchestration_registry,
@@ -354,6 +357,7 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
         orchestration_workflow = None
         orchestration_builder = ResponseEnvelopeBuilder()
         runtime = RuntimeImpl(
+            candidate_policy=MinimalPolicyGuard(),
             task_store=SpyTaskStore(),
             session_store=ExistingSessionStore(),
             capability_registry=orchestration_registry,
@@ -616,15 +620,38 @@ def test_confirm_required_payload_omits_credential_keys_and_all_argument_values(
         },
     }
 
-    envelope = _run_runtime(
-        ExecutionResult(
-            status="waiting_user",
-            error_code="confirm_required",
-            trace_id="tr-confirm-sensitive",
-        ),
-        capability_id="oa.submit_leave_request",
+    execution = ExecutionResult(
+        status="waiting_user", error_code="confirm_required", trace_id="tr-confirm-sensitive"
+    )
+    rejected = _run_runtime(
+        execution,
+        capability_id=capability.capability_id,
         capability=capability,
         arguments=arguments,
+    )
+    assert rejected.status == "failed"
+    assert rejected.message == "能力配置暂不可用，请联系管理员核对。"
+    # The selector now rejects credential-key catalogs. Independently retain the
+    # original downstream confirmation rendering contract with identical inputs.
+    orchestration = AgentOrchestrationAdapter(
+        capability_registry=StaticCapabilityRegistry(capability),
+        gateway=SpyGateway(execution),
+        workflow_engine=None,
+        response_builder=ResponseEnvelopeBuilder(),
+    )
+    envelope = orchestration.build_response(
+        context=AgentResponseContext(
+            response_id="response-test",
+            task_id="task-test",
+            session_id="session-test",
+            trace_id="tr-confirm-sensitive",
+            capability_id=capability.capability_id,
+        ),
+        execution=execution,
+        projection=None,
+        confirmation=orchestration.prepare_confirmation(
+            capability_id=capability.capability_id, capability=capability, arguments=arguments
+        ),
     )
     serialized = envelope.model_dump_json()
 

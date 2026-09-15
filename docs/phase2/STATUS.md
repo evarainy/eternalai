@@ -1,6 +1,21 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；2026-09-14 治理同步）。本棒仅作 A 类机械同步，不重排 DAG 或裁定跨棒欠债。
+- 当前实现候选 task_id：`P2-AUDIT-CAPABILITY-TOPK-001`（A 档、串行，承担 A 类同步；修复与本地验证完成，待独立 Monitor → grok 评审桥，未 push/合并）。前置 `P2-FE-DISPATCH-WIRING-001` 已由当前分支基线包含。
+- 本棒完成情况：确定性相关性 Top-K、安全摘要、有限 Policy 预排除和候选绑定已接入正式 Runtime；标签碰撞恢复冻结 GT-014，属性键恢复词段敏感检测，选后坏行、slug、复合摘要、标签规范化和提前返回提示已修复。方案冲突裁定待 GOV-SYNC 落盘，文本字段误伤等剩余义务见 `PHASE2_PLAN.md`。
+- 当前实现后继指针：留空（本棒没有已决且唯一的后继）；方案恢复裁定与欠债后继由 GOV-SYNC 处理。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；不改变现役 DAG。
+
+## 已登记验证基线
+
+### 当前 Top-K 修复候选（2026-09-16）
+
+- 定向 `708 passed`（含非仓库 cwd 的真实 Golden runner）、Registry/Admin `65 passed`、架构 `125 passed`、Golden `34/34`（negative/boundary `21/21`）、前端 Registry `9 passed`；Ruff、mypy `128 source files`、24 个候选改动测试文件的弱测试检查通过。
+- 9 项回退/故障注入均被断言捕获并在恢复后通过：7 个评分修复点、第九候选 HTTP 接线、真实 PostgreSQL 错主体绑定。双主体成功记忆、各自真实绑定与非法会话拒绝已核对；多绑定范围使用现役内存 Identity resolver 的合成行验证，未声称 PostgreSQL OA 支持多绑定。
+- 固定测试库入口后端全量 `3611 passed, 0 failed, 0 skipped`，后台最终 exit=0。Windows access violation 按 2026-09-10 裁决处理：错误绑定反证仍以断言失败、exit=1 结束，恢复后 exit=0；CI 尚未运行。
+- 独立 Monitor、grok 评审桥与远端 CI 均未执行；本候选不能作为已合并或已获独立 PASS 的基线。真实 vLLM 语义召回与真实 OA E2E 未验证。
+
+### 当前前端候选（2026-09-14）
+
 - 当前实现候选 task_id：`P2-AUDIT-LIST-ORDER-001`（B 档、串行，承担 A 类同步；实现与本地验证完成，待 grok 评审，未 push/合并）。前置 `P2-FE-DISPATCH-WIRING-001` 已合入主干。
 - 本棒完成情况：为现有有界工作事项列表增加服务端唯一默认顺序（截止时间升序且 NULL 最后、首次入库时间降序、唯一 ID 的 C collation 升序），超限时返回确定前 200 条；搜索页与工作事项页超限说明已同步。未做分页、无 schema。
 - 当前实现后继指针：留空（本棒没有已决且唯一的后继）；D-6 有限替换与旧债归档由 GOV-SYNC 登记。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；内部任务生命周期与附件按现役 DAG 独立承接。
@@ -40,7 +55,7 @@
 
 - 页面合同：既有交办结构与控件闭集、附件禁用、草稿失败反馈及软件中心合同保留；`P2-FE-DISPATCH-WIRING-001` 已接通目录选择、派发、时区与内部只读事项。本棒只改有界列表默认顺序与两处超限说明。草稿沿用会话内存；解析、附件上传、服务端草稿、软件登记审核和用户侧软件列表接口仍未接入。生产选人仍受真实目录 Source/首同步阻塞。
 - 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
-- 意图输出必须显式给出 `match`；`none` 为合法无匹配，进入 `no_capability_found` 且 reason 为 `no_matching_capability`，`capability` 仍要求有效能力 ID。漏字段与矛盾组合保持 `schema_invalid`；无匹配文案保留「暂未接入」「能力」，只说明当前可用能力。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定。聊天回退后继为 `P2-RUNTIME-DIRECT-ANSWER-001`，本棒不新增终态。
+- 意图输出必须显式给出 `match`；完整候选的 `none` 进入 `no_capability_found`，reason 为 `no_matching_capability`；不完整候选的 `none` 为 `capability_candidates_low_confidence`。候选内标签碰撞保留冻结 `no_unique_active_candidate` 无匹配语义；候选外引用与约束矛盾拒绝执行。漏字段与矛盾组合保持 `schema_invalid`。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定；聊天回退后继仍为 `P2-RUNTIME-DIRECT-ANSWER-001`。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。
 - 部门：后端代持用户自身 OA Session 读取 `orginfo`，以标准库 `html.parser` 有界解析（输入 8192 / 锚点 16 / 标签 64，部门锚点必须恰好一条）；原始 HTML 不进响应。OA 失败不改变 `authenticated`，只体现在闭集 `org_status`（`ok` / `unbound` / `expired` / `unavailable` / `unparsable`）。
 - 头像：后端代理对 `messagerurl` 做六步 URL 校验与图片 MIME 白名单检查，拒绝时传输层零调用；前端只见常量路径。两个身份端点均返回 `Cache-Control: no-store`。

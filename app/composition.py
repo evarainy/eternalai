@@ -116,6 +116,7 @@ from app.ports.organization_directory import (
     OrganizationDirectorySourcePort,
 )
 from app.ports.organization_directory_sync import DirectorySourceError
+from app.ports.policy_guard import CapabilityCandidatePolicyPort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort, TaskStorePort
 from app.ports.trace import TracePort, TraceQueryPort
@@ -416,6 +417,7 @@ def build_runtime(
     semantic_knowledge: BasicKnowledge | None = None,
     evaluator: TerminalEvaluator | None = None,
     human_gate_port: HumanGatePort | None = None,
+    candidate_policy: CapabilityCandidatePolicyPort | None = None,
 ) -> RuntimeImpl:
     """Wire the frozen Runtime dependencies without adding adapter behavior."""
     resolved_human_gate = human_gate_port
@@ -441,6 +443,9 @@ def build_runtime(
         structured_output=structured_output,
         intent_model=intent_model,
         response_builder=response_builder,
+        candidate_policy=(
+            MinimalPolicyGuard() if candidate_policy is None else candidate_policy
+        ),
         workflow_engine=resolved_workflow_port,
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
@@ -537,6 +542,7 @@ def build_production_components(
             + POLICY_TEMPLATE_ITEMS,
         ),
         human_gate_port=human_gate_port,
+        candidate_policy=policy_guard,
     )
     resolved_authentication = (
         build_authentication_port(

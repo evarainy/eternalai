@@ -6,21 +6,25 @@ from typing import Any, cast
 import pytest
 
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
     MockStructuredOutputProvider,
 )
 from app.infra.observability.noop_trace_writer import NoopTraceWriter
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.memory import SessionMemoryKey
 from app.ports.adapter import AdapterResult
 from app.ports.capability_gateway import ExecutionResult, ExecutionStatus, RequestOrgContext
+from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.task_store import SessionRecord, TaskEventRecord, TaskRecord
 from app.runtime.models import IntentOutput, MatchedIntent
 from app.runtime.runtime import RuntimeImpl
 from tests.runtime.principal_fakes import runtime_principal
-from tests.runtime.registry_fakes import StaticCapabilityRegistry
+from tests.runtime.registry_fakes import StaticCapabilityRegistry, active_capability
 
 
 class CapturingLogger:
@@ -137,6 +141,7 @@ def _run_runtime(
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -177,6 +182,7 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=task_store,
         session_store=ExistingSessionStore(),
         capability_registry=orchestration_registry,
@@ -404,3 +410,184 @@ def test_confirmation_terminal_persists_original_task_and_trace(
             await engine.dispose()
 
     asyncio.run(exercise(), loop_factory=make_event_loop)
+
+
+class _DriftedRegistry(StaticCapabilityRegistry):
+    async def get(self, capability_id: str) -> Any:
+        listed = await super().get(capability_id)
+        if listed is None:
+            return None
+        return listed.model_copy(update={"version": "9.9.9"})
+
+
+class _FailingIntentTrace(NoopTraceWriter):
+    async def record_step(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("event_type") == "intent_parsed":
+            raise RuntimeError("synthetic trace write failure")
+        await super().record_step(*args, **kwargs)
+
+
+class _CountingGateway(ResultGateway):
+    def __init__(self) -> None:
+        super().__init__(ExecutionResult(status="completed", data={}, trace_id="unused"))
+        self.calls = 0
+
+    async def execute_capability(self, *args: Any, **kwargs: Any) -> ExecutionResult:
+        self.calls += 1
+        return await super().execute_capability(*args, **kwargs)
+
+
+def _candidate_runtime(
+    registry: StaticCapabilityRegistry,
+    completion: str,
+    *,
+    message: str,
+    writer: NoopTraceWriter,
+    gateway: _CountingGateway,
+) -> tuple[RuntimeImpl, MemoryTaskStore, MockLLMProvider]:
+    task_store = MemoryTaskStore()
+    llm_provider = MockLLMProvider()
+    llm_provider.register(message, LLMCompletionResponse(content=completion))
+    builder = ResponseEnvelopeBuilder()
+    runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
+        task_store=task_store,
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=registry,
+            gateway=gateway,
+            workflow_engine=None,
+            response_builder=builder,
+        ),
+        trace_port=writer,
+        llm_provider=llm_provider,
+        structured_output=JSONStructuredOutputProvider(),
+        intent_model="test-intent-model",
+        response_builder=builder,
+    )
+    return runtime, task_store, llm_provider
+
+
+def _handle(runtime: RuntimeImpl, message: str) -> ResponseEnvelope:
+    return asyncio.run(
+        runtime.handle_user_message(
+            channel="mock",
+            principal=runtime_principal("synthetic-user"),
+            session_id="synthetic-session",
+            message=message,
+            client_capabilities={},
+        )
+    )
+
+
+def test_candidate_failure_has_safe_code_and_complete_terminal_trace() -> None:
+    canary = "candidate-trace-canary"
+    none = '{"match":"none"}'
+    select_target = '{"match":"capability","capability_id":"zz.target","arguments":{}}'
+    select_outside = '{"match":"capability","capability_id":"zz.outside","arguments":{}}'
+    zero = [active_capability(f"aa.zero-{index}") for index in range(9)]
+    tied = [
+        active_capability(f"aa.tied-{index}").model_copy(update={"short_description": "alpha"})
+        for index in range(9)
+    ]
+    oversized = active_capability("zz.target").model_copy(
+        update={"input_schema": {"type": "object", "properties": {"k" * 5000: {"type": "string"}}}}
+    )
+    invalid = active_capability("zz.target").model_copy(
+        update={"short_description": f"{canary} {{system}}"}
+    )
+    target = active_capability("zz.target")
+    scenarios: list[tuple[str, StaticCapabilityRegistry, str, str, str]] = [
+        ("low", StaticCapabilityRegistry(*zero), none, "nothing", "low_confidence"),
+        ("ambiguous", StaticCapabilityRegistry(*tied), none, "alpha", "ambiguous"),
+        ("budget", StaticCapabilityRegistry(oversized), none, "zz.target", "over_budget"),
+        ("invalid", StaticCapabilityRegistry(invalid), none, "zz.target", "catalog_invalid"),
+        ("outside", StaticCapabilityRegistry(target), select_outside, "zz.target", "out_of_scope"),
+        ("stale", _DriftedRegistry(target), select_target, "zz.target", "stale"),
+        ("partial", StaticCapabilityRegistry(target, *zero), none, "zz.target", "low_confidence"),
+    ]
+    codes = {
+        "low_confidence": "capability_candidates_low_confidence",
+        "ambiguous": "capability_candidates_ambiguous",
+        "over_budget": "capability_candidates_over_budget",
+        "catalog_invalid": "capability_catalog_invalid",
+        "out_of_scope": "capability_candidate_out_of_scope",
+        "stale": "capability_candidate_stale",
+    }
+
+    for label, registry, completion, message, short_code in scenarios:
+        error_code = codes[short_code]
+        logger = CapturingLogger()
+        gateway = _CountingGateway()
+        runtime, task_store, _llm = _candidate_runtime(
+            registry,
+            completion,
+            message=message,
+            writer=NoopTraceWriter(logger=cast(Any, logger)),
+            gateway=gateway,
+        )
+        envelope = _handle(runtime, message)
+
+        assert envelope.status == "failed", label
+        assert task_store.status_updates[-1][1:] == ("failed", error_code), label
+        assert _event_types(logger.events) == [
+            "task_created",
+            "intent_parsed",
+            "response_envelope_created",
+            "task_failed",
+            "evaluation_recorded",
+        ], label
+        intent = logger.events[1]
+        assert (intent["status"], intent["error_code"]) == ("failed", error_code), label
+        assert logger.events[3]["error_code"] == error_code
+        assert set(intent["attributes"]) == {
+            "protocol_version",
+            "outcome",
+            "coverage_complete",
+            "visible_count",
+            "selected_count",
+            "omitted_count",
+            "truncated_by",
+            "payload_bytes",
+            "reason",
+        }
+        assert logger.events[-1]["attributes"]["evaluation_result"] != "passed"
+        assert gateway.calls == 0
+        assert canary not in repr((envelope, logger.events))
+        assert (
+            runtime._session_memory.recall(
+                SessionMemoryKey(
+                    tenant_id="tenant-test",
+                    session_id="synthetic-session",
+                    ai_user_id="synthetic-user",
+                )
+            )
+            == ()
+        )
+
+    empty_logger = CapturingLogger()
+    empty_runtime, _store, empty_llm = _candidate_runtime(
+        StaticCapabilityRegistry(),
+        none,
+        message="anything",
+        writer=NoopTraceWriter(logger=cast(Any, empty_logger)),
+        gateway=_CountingGateway(),
+    )
+    empty = _handle(empty_runtime, "anything")
+    assert empty.status == "no_capability_found"
+    assert empty_llm.calls == []
+    assert "no_capability_found" in _event_types(empty_logger.events)
+
+    failing_gateway = _CountingGateway()
+    failing_runtime, _store, failing_llm = _candidate_runtime(
+        StaticCapabilityRegistry(target),
+        select_target,
+        message="zz.target",
+        writer=_FailingIntentTrace(logger=cast(Any, CapturingLogger())),
+        gateway=failing_gateway,
+    )
+    with pytest.raises(RuntimeError, match="synthetic trace write failure"):
+        _handle(failing_runtime, "zz.target")
+    assert failing_gateway.calls == 0
+    assert len(failing_llm.calls) == 1

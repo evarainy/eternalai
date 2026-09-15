@@ -183,15 +183,13 @@ def classify_oa_registry(
         and item.capability_id not in required_capability_ids
     )
     resolved_knowledge = BasicKnowledge() if knowledge is None else knowledge
-    visible_contract_ids = {
-        capability_id
-        for contract in resolved_knowledge.capability_input_contracts(active)
-        if isinstance((capability_id := contract.get("capability_id")), str)
-    }
-    visible_probe_count = sum(
-        capability_id in visible_contract_ids
-        for _, capability_id in probe_capability_pairs
-    )
+    visible_probe_count = 0
+    for probe, capability_id in probe_capability_pairs:
+        selection = resolved_knowledge.select_capability_candidates(probe, active)
+        if selection.outcome == "ready" and any(
+            binding.capability_id == capability_id for binding in selection.bindings
+        ):
+            visible_probe_count += 1
 
     if missing:
         state = "missing"
