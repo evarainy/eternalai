@@ -164,9 +164,20 @@ class BasicKnowledge:
         )
 
 
-def contains_sensitive_location_or_identity(value: str) -> bool:
-    """Detect URL, UNC, email, IPv4, or labelled-person shapes inside an identifier."""
-    return any(pattern.search(value) for pattern in _SENSITIVE_LOCATION_OR_IDENTITY)
+def contains_sensitive_property_key(value: str) -> bool:
+    """Apply credential word boundaries to keys, retaining location checks."""
+    if any(pattern.search(value) for pattern in _SENSITIVE_LOCATION_OR_IDENTITY):
+        return True
+    # Exact business-contract exception, never a prefix or whole-schema exemption.
+    if value == "authoritative_count":
+        return False
+    segmented = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    segmented = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", segmented)
+    return any(
+        _SENSITIVE_MARKER.fullmatch(part) is not None
+        or part.casefold() in {"sessionid", "accesstoken", "refreshtoken"}
+        for part in re.split(r"[_.-]+", segmented)
+    )
 
 
 def sanitize_knowledge_text(value: str) -> str:

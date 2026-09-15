@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any, get_args
 
 import pytest
@@ -17,7 +20,10 @@ from app.api.v1.runtime import (
     make_router,
 )
 from app.contracts.sdui.models import UserAction
+from app.event_loop import make_event_loop
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.identity.mock_identity_mapping import MockIdentityMapping
+from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
 from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
@@ -518,6 +524,7 @@ class _CandidateOnlyLLM:
 class _CountingAdapter:
     def __init__(self) -> None:
         self.capability_ids: list[str] = []
+        self.execution_contexts: list[dict[str, Any]] = []
 
     async def execute(
         self,
@@ -526,6 +533,7 @@ class _CountingAdapter:
         execution_context: dict[str, Any],
     ) -> AdapterResult:
         self.capability_ids.append(capability_id)
+        self.execution_contexts.append(execution_context)
         return AdapterResult(status="success", data={})
 
 
@@ -576,6 +584,7 @@ def _topk_client(
     llm: _CandidateOnlyLLM,
     candidate_policy: Any,
     session_tokens: StaticSessionTokens,
+    identity_mapping: MockIdentityMapping | PostgreSQLOAIdentityMapping | None = None,
 ) -> tuple[TestClient, _CountingAdapter, RuntimeImpl]:
     registry = StaticCapabilityRegistry(*capabilities)
     adapter = _CountingAdapter()
@@ -591,6 +600,7 @@ def _topk_client(
             gateway=CapabilityGateway(
                 adapter=adapter,
                 capability_registry=registry,
+                identity_mapping=identity_mapping,
                 policy_guard=MinimalPolicyGuard(),
                 trace_port=trace_port,
             ),
@@ -612,6 +622,7 @@ def _topk_client(
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
     )
     client.cookies.update(auth_cookies())
     return client, adapter, runtime
@@ -652,12 +663,95 @@ def test_authenticated_handle_reaches_ninth_capability_through_topk() -> None:
     )
 
 
-def test_topk_does_not_cross_principal_or_session() -> None:
+@pytest.fixture(params=["binding_rows", "postgresql"])
+def topk_identity_mapping(request: pytest.FixtureRequest) -> Iterator[Any]:
+    from uuid import uuid4
+
+    subjects = {subject: "usr_v1_" + uuid4().hex + uuid4().hex[:11] for subject in ("a", "b")}
+    if request.param == "binding_rows":
+        yield (
+            MockIdentityMapping(
+                rows=[
+                    {
+                        "ai_user_id": user,
+                        "target_system": "oa",
+                        "execution_identity": "user_delegated",
+                        "bind_status": "active",
+                        "binding_id": f"oa-session-v1:{user}",
+                    }
+                    for user in subjects.values()
+                ]
+            ),
+            subjects,
+        )
+        return
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.db.session import make_async_session_factory
+    from scripts.check_dev_environment import resolve_database_configuration
+
+    resolution = resolve_database_configuration()
+    assert resolution.check.passed, "The fixed synthetic test database must be available"
+    assert resolution.database_url is not None
+    from app.db.config import normalize_database_url
+
+    engine = create_async_engine(
+        normalize_database_url(resolution.database_url), poolclass=NullPool
+    )
+    factory = make_async_session_factory(engine)
+    now = datetime.now(UTC)
+
+    async def insert_bindings() -> None:
+        async with engine.begin() as connection:
+            for user in subjects.values():
+                await connection.execute(
+                    text(
+                        "INSERT INTO oa_session_credentials "
+                        "(ai_user_id, cipher_version, nonce, encrypted_payload, "
+                        "expires_at, updated_at) "
+                        "VALUES (:user, 'synthetic-unused', :blob, :blob, :expiry, :now)"
+                    ),
+                    {
+                        "user": user,
+                        "blob": b"synthetic-unused-ciphertext",
+                        "expiry": now + timedelta(hours=1),
+                        "now": now,
+                    },
+                )
+
+    async def clean_bindings() -> None:
+        try:
+            async with engine.begin() as connection:
+                for user in subjects.values():
+                    await connection.execute(
+                        text("DELETE FROM oa_session_credentials WHERE ai_user_id = :user"),
+                        {"user": user},
+                    )
+        finally:
+            await engine.dispose()
+
+    with asyncio.Runner(loop_factory=make_event_loop) as runner:
+        try:
+            runner.run(insert_bindings())
+            yield PostgreSQLOAIdentityMapping(session_factory=factory), subjects
+        finally:
+            runner.run(clean_bindings())
+
+
+def test_topk_does_not_cross_principal_or_session(topk_identity_mapping: Any) -> None:
     capabilities = [
         _topk_spec("zz.shared", name="共享报表查询"),
         _topk_spec("zz.tenant-a-only", name="甲方报表查询"),
         _topk_spec("zz.tenant-b-only", name="乙方报表查询"),
     ]
+    capabilities = [
+        spec.model_copy(update={"target_system": "oa", "binding_required": True})
+        for spec in capabilities
+    ]
+    identity, subjects = topk_identity_mapping
     llm = _CandidateOnlyLLM(frozenset({"zz.tenant-a-only", "zz.tenant-b-only"}))
     policy = _TenantCandidatePolicy()
     tokens = StaticSessionTokens(roles=("user",))
@@ -666,15 +760,16 @@ def test_topk_does_not_cross_principal_or_session() -> None:
         llm=llm,
         candidate_policy=policy,
         session_tokens=tokens,
+        identity_mapping=identity,
     )
     principal_a = Principal(
-        ai_user_id="usr_topk_a",
+        ai_user_id=subjects["a"],
         display_name="Synthetic A",
         roles=("user",),
         org_ctx=PrincipalOrgContext(tenant_id="tenant-a"),
     )
     principal_b = Principal(
-        ai_user_id="usr_topk_b",
+        ai_user_id=subjects["b"],
         display_name="Synthetic B",
         roles=("user",),
         org_ctx=PrincipalOrgContext(tenant_id="tenant-b"),
@@ -705,9 +800,13 @@ def test_topk_does_not_cross_principal_or_session() -> None:
         ["zz.shared", "zz.tenant-b-only"],
     ]
     assert adapter.capability_ids == ["zz.tenant-a-only", "zz.tenant-b-only"]
+    assert adapter.execution_contexts == [
+        {"credential_ref": f"oa-session-v1:{subjects['a']}"},
+        {"credential_ref": f"oa-session-v1:{subjects['b']}"},
+    ]
     assert {(user, tenant) for user, tenant, _ in policy.calls} == {
-        ("usr_topk_a", "tenant-a"),
-        ("usr_topk_b", "tenant-b"),
+        (subjects["a"], "tenant-a"),
+        (subjects["b"], "tenant-b"),
     }
     second_prompt = "\n".join(message.content for message in llm.calls[1])
     assert "zz.tenant-a-only" not in second_prompt
@@ -715,3 +814,20 @@ def test_topk_does_not_cross_principal_or_session() -> None:
     assert unauthenticated.status_code == 401
     assert len(llm.calls) == 2
     assert len(adapter.capability_ids) == 2
+
+    tokens.principal = principal_a
+    repeated = client.post(
+        "/api/v1/runtime/handle", headers=TEST_CSRF_HEADERS, json=_handle_body("报表查询")
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "completed"
+    memory_segments = [
+        json.loads(message.content.split("\n", maxsplit=1)[1])["session_memory"]
+        for message in llm.calls[2]
+        if '"session_memory":' in message.content
+    ]
+    assert memory_segments == [
+        [{"capability_id": "zz.tenant-a-only", "terminal_status": "completed"}]
+    ]
+    assert llm.offered[2] == ["zz.shared", "zz.tenant-a-only"]
+    assert adapter.execution_contexts[2] == {"credential_ref": f"oa-session-v1:{subjects['a']}"}

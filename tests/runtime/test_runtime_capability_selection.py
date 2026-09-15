@@ -9,6 +9,7 @@ import pytest
 
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.identity.mock_identity_mapping import MockIdentityMapping
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.infra.llm.mock_structured_output.mock_structured_output_provider import (
@@ -25,6 +26,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.human_gate import HumanGateConflictError
 from app.ports.identity_mapping import IdentityCheckResult
 from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision
@@ -533,9 +535,11 @@ def test_ambiguous_intent_tag_is_order_independent_and_fails_closed() -> None:
         )
 
     assert outcomes[0] == outcomes[1]
-    assert outcomes[0][0:2] == ("failed", "failed")
-    assert task_store.status_updates[-1][2] == "capability_candidate_out_of_scope"
-    assert "no_capability_found" not in outcomes[0][2]
+    assert outcomes[0][0:2] == ("no_capability_found", "no_capability_found")
+    assert task_store.status_updates[-1][2] == "capability_not_found"
+    no_match = next(step for step in trace.steps if step["event_type"] == "no_capability_found")
+    assert no_match["attributes"]["reason"] == "no_unique_active_candidate"
+    assert "no_capability_found" in outcomes[0][2]
     assert outcomes[0][3] == 0
 
 
@@ -604,8 +608,8 @@ def test_tag_selection_filters_by_target_system_and_capability_type() -> None:
     )
 
     # A tag shared by several admitted candidates is not disambiguated by type/target.
-    assert colliding.status == "failed"
-    assert _collision_store.status_updates[-1][2] == "capability_candidate_out_of_scope"
+    assert colliding.status == "no_capability_found"
+    assert _collision_store.status_updates[-1][2] == "capability_not_found"
     assert collision_gateway.calls == []
     assert envelope.status == "completed"
     assert registry.list_calls == [{"target_system": None, "type": None, "status": "active"}]
@@ -996,6 +1000,7 @@ def _handle_with(
     completion: str,
     message: str = "select oa.target",
     principal_tenant: str = "tenant-test",
+    human_gate: Any = None,
 ) -> tuple[ResponseEnvelope, RecordingTaskStore, RecordingTracePort, MockLLMProvider]:
     task_store = RecordingTaskStore()
     trace_port = RecordingTracePort()
@@ -1003,6 +1008,7 @@ def _handle_with(
     llm_provider.register(message, LLMCompletionResponse(content=completion))
     builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        human_gate_port=human_gate,
         candidate_policy=candidate_policy,
         task_store=task_store,
         session_store=ExistingSessionStore(),
@@ -1218,3 +1224,154 @@ def test_registry_row_validation_error_is_catalog_invalid_without_raw_text() -> 
     assert llm.calls == []
     assert gateway.calls == []
     assert "row-canary" not in repr((envelope, trace.steps))
+
+
+@pytest.mark.parametrize("selector, expected", [("claß", "failed"), ("ｃｌａｓｓ", "completed")])
+def test_tag_reference_reuses_registry_character_validation(selector: str, expected: str) -> None:
+    envelope, store, _trace, gateway, registry = _run_runtime(
+        selector, [_capability("oa.target", intent_tags=["class"])]
+    )
+    assert envelope.status == expected
+    if expected == "failed":
+        assert store.status_updates[-1][2] == "capability_candidate_out_of_scope"
+        assert registry.get_calls == gateway.calls == []
+    else:
+        assert registry.get_calls == ["oa.target"]
+        assert [call["capability_id"] for call in gateway.calls] == ["oa.target"]
+
+
+class _InvalidRereadRegistry(StaticRegistry):
+    async def get(self, capability_id: str) -> CapabilitySpec | None:
+        await super().get(capability_id)
+        return CapabilitySpec.model_validate(
+            {**_capability(capability_id).model_dump(), "owner": "reread-canary {x}"}
+        )
+
+
+def test_selected_row_validation_error_finishes_stale_without_raw_text() -> None:
+    registry = _InvalidRereadRegistry([_capability("oa.target")])
+    gateway = RecordingGateway()
+    envelope, store, trace, llm = _handle_with(
+        registry=registry,
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+    )
+    assert registry.get_calls == ["oa.target"]
+    assert len(llm.calls) == 1
+    assert envelope.status == "failed"
+    assert store.status_updates[-1][1:] == ("failed", "capability_candidate_stale")
+    assert gateway.calls == []
+    assert [step["event_type"] for step in trace.steps] == [
+        "task_created",
+        "intent_parsed",
+        "response_envelope_created",
+        "task_failed",
+        "evaluation_recorded",
+    ]
+    intent = trace.steps[1]
+    assert intent["status"] == "failed"
+    assert intent["error_code"] == "capability_candidate_stale"
+    assert "reread-canary" not in repr((envelope, store.events, trace.steps))
+
+
+class _ConflictingHumanGate:
+    async def bind_task(self, manifest: Any) -> None:
+        raise HumanGateConflictError("synthetic version conflict")
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_partial_candidate_notice_survives_version_binding_failure(partial: bool) -> None:
+    capabilities = [_capability("oa.target")]
+    if partial:
+        capabilities.extend(_capability(f"oa.filler-{index}") for index in range(8))
+    gateway = RecordingGateway()
+    envelope, store, trace, _llm = _handle_with(
+        registry=StaticRegistry(capabilities),
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=_SELECT_TARGET,
+        human_gate=_ConflictingHumanGate(),
+    )
+    assert envelope.status == "failed"
+    assert store.status_updates[-1][1:] == ("failed", "internal_error")
+    assert gateway.calls == []
+    assert envelope.message.startswith("任务绑定的执行版本已不可用，本次未执行。")
+    assert envelope.message.count("本次仅在相关性最高的部分能力中选择") == int(partial)
+    assert envelope.fallback_text.count(
+        "This selection considered only the most relevant capabilities"
+    ) == int(partial)
+    assert [step["event_type"] for step in trace.steps][-3:] == [
+        "response_envelope_created",
+        "task_failed",
+        "evaluation_recorded",
+    ]
+
+
+@pytest.mark.parametrize(
+    "scopes, requested_scope, error",
+    [
+        ([], None, "identity_unbound"),
+        (["east", "west"], None, "needs_binding_scope"),
+        (["east", "west"], "foreign", "identity_unbound"),
+        (["east", "west"], "east", None),
+    ],
+)
+def test_topk_gateway_resolves_binding_rows_before_execution(
+    scopes: list[str], requested_scope: str | None, error: str | None
+) -> None:
+    import json
+
+    # Use the shipped resolver with actual synthetic rows, not precomputed statuses.
+    identity = MockIdentityMapping(
+        rows=[
+            {
+                "ai_user_id": "ai-user-topk",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "active",
+                "binding_id": f"binding-{scope}",
+                "binding_scope": scope,
+            }
+            for scope in scopes
+        ]
+        + [
+            {
+                "ai_user_id": "another-user",
+                "target_system": "oa",
+                "execution_identity": "user_delegated",
+                "bind_status": "active",
+                "binding_id": "foreign-binding",
+                "binding_scope": "foreign",
+            }
+        ]
+    )
+    registry = StaticRegistry([_capability("oa.target")])
+    adapter = CountingSuccessAdapter()
+    gateway_trace = RecordingTracePort()
+    gateway = CapabilityGateway(
+        adapter=adapter,
+        capability_registry=registry,
+        identity_mapping=identity,
+        policy_guard=MinimalPolicyGuard(),
+        trace_port=gateway_trace,
+    )
+    arguments = {} if requested_scope is None else {"resource_scope": requested_scope}
+    envelope, store, _trace, llm = _handle_with(
+        registry=registry,
+        gateway=gateway,
+        candidate_policy=MinimalPolicyGuard(),
+        completion=json.dumps(
+            {"match": "capability", "capability_id": "oa.target", "arguments": arguments}
+        ),
+    )
+    assert len(llm.calls) == 1
+    assert store.status_updates[-1][2] == error
+    assert adapter.call_count == int(error is None)
+    check = next(step for step in gateway_trace.steps if step["event_type"] == "identity_check")
+    if error is None:
+        assert envelope.status == "completed"
+        assert check["status"] == "ok"
+    else:
+        assert check["status"] == "blocked"
+        assert check["error_code"] == error

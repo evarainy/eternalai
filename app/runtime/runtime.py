@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,7 +13,7 @@ from time import monotonic
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.contracts.sdui.models import UserAction
 from app.evaluator import (
@@ -44,7 +43,11 @@ from app.ports.capability_gateway import (
     ExecutionStatus,
     RequestOrgContext,
 )
-from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.capability_registry import (
+    CapabilityIntentTag,
+    CapabilityRegistryPort,
+    CapabilitySpec,
+)
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
@@ -466,6 +469,24 @@ class RuntimeImpl:
             **selection_attributes,
         }
         resolution = _resolve_candidate_binding(selection.bindings, capability_ref)
+        if resolution == "no_unique_active_candidate":
+            await self._record_intent_parsed(
+                trace_id,
+                task_id,
+                session_id,
+                memory_key=memory_key,
+                status="ok",
+                attributes={**valid_intent_attributes, "reason": resolution},
+            )
+            return await self._finish_no_capability_found(
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                reason=resolution,
+                capabilities=visible_capabilities,
+                memory_key=memory_key,
+            )
         if resolution is None:
             return await self._finish_candidate_failure(
                 response_id,
@@ -480,11 +501,16 @@ class RuntimeImpl:
         candidate_binding, selection_rule = resolution
 
         intent_selector = capability_ref.capability_id
-        selection_result = await self._orchestration.select_capability(
-            capability_id=candidate_binding.capability_id,
-            target_system=capability_ref.target_system,
-            capability_type=capability_ref.capability_type,
-        )
+        try:
+            selection_result = await self._orchestration.select_capability(
+                capability_id=candidate_binding.capability_id,
+                target_system=capability_ref.target_system,
+                capability_type=capability_ref.capability_type,
+            )
+        except ValidationError:
+            # A row that became invalid after the prompt is a stale candidate.
+            # Never expose repository validation details in the response/trace.
+            selection_result = None
         if selection_result is None or not _selection_matches_binding(
             selection_result.capability,
             candidate_binding,
@@ -570,6 +596,7 @@ class RuntimeImpl:
                     trace_id=trace_id,
                     capability_id=selected_capability.capability_id,
                     memory_key=memory_key,
+                    candidate_selection=selection,
                 )
         request_context = RequestOrgContext(
             request_id=trace_id,
@@ -711,15 +738,7 @@ class RuntimeImpl:
             projection_snapshot=projection_snapshot,
             confirmation=confirmation,
         )
-        if selection.omitted_count > 0:
-            envelope = envelope.model_copy(
-                update={
-                    "message": f"{envelope.message}\n{_PARTIAL_CANDIDATE_NOTICE[0]}",
-                    "fallback_text": (
-                        f"{envelope.fallback_text}\n{_PARTIAL_CANDIDATE_NOTICE[1]}"
-                    ),
-                }
-            )
+        envelope = _append_partial_candidate_notice(envelope, selection)
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -1739,6 +1758,7 @@ class RuntimeImpl:
         trace_id: str,
         capability_id: str,
         memory_key: SessionMemoryKey,
+        candidate_selection: CapabilityCandidateSet | None = None,
     ) -> ResponseEnvelope:
         error_code: ErrorCode = "internal_error"
         await self._task_store.update_status(task_id, "failed", error_code)
@@ -1751,6 +1771,7 @@ class RuntimeImpl:
             trace_id,
             status="failed",
         )
+        envelope = _append_partial_candidate_notice(envelope, candidate_selection)
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -2098,23 +2119,48 @@ def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
     return str(value)
 
 
+def _append_partial_candidate_notice(
+    envelope: ResponseEnvelope, selection: CapabilityCandidateSet | None
+) -> ResponseEnvelope:
+    if selection is None or selection.omitted_count == 0:
+        return envelope
+    return envelope.model_copy(
+        update={
+            "message": f"{envelope.message}\n{_PARTIAL_CANDIDATE_NOTICE[0]}",
+            "fallback_text": f"{envelope.fallback_text}\n{_PARTIAL_CANDIDATE_NOTICE[1]}",
+        }
+    )
+
+
+_INTENT_TAG_ADAPTER = TypeAdapter(CapabilityIntentTag)
+
+
 def _resolve_candidate_binding(
     bindings: tuple[CandidateBinding, ...],
     intent: CapabilityRef,
-) -> tuple[CandidateBinding, Literal["exact_id", "unique_intent_tag"]] | None:
+) -> (
+    tuple[CandidateBinding, Literal["exact_id", "unique_intent_tag"]]
+    | Literal["no_unique_active_candidate"]
+    | None
+):
     """Bind a model selector to this request's admitted candidates only.
 
     Exact IDs win; a tag must map uniquely inside the admitted bindings. A tag
-    collision, an outside reference or a type/target contradiction is out of
-    scope and never disambiguated or rescued from the full Registry.
+    collision retains the frozen no-match outcome; outside references and
+    type/target contradictions never get rescued from the full Registry.
     """
     exact = [item for item in bindings if item.capability_id == intent.capability_id]
     if exact:
         binding: CandidateBinding = exact[0]
         rule: Literal["exact_id", "unique_intent_tag"] = "exact_id"
     else:
-        selector = unicodedata.normalize("NFKC", intent.capability_id).strip().casefold()
+        try:
+            selector = _INTENT_TAG_ADAPTER.validate_python(intent.capability_id)
+        except ValidationError:
+            return None
         tagged = [item for item in bindings if selector and selector in item.intent_tags]
+        if len(tagged) > 1:
+            return "no_unique_active_candidate"
         if len(tagged) != 1:
             return None
         binding, rule = tagged[0], "unique_intent_tag"

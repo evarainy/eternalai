@@ -20,7 +20,7 @@ from typing import Any, Literal, TypeAlias
 from pydantic import ValidationError
 
 from app.knowledge.basic_knowledge import (
-    contains_sensitive_location_or_identity,
+    contains_sensitive_property_key,
     sanitize_knowledge_text,
 )
 from app.ports.capability_registry import CapabilitySpec
@@ -49,7 +49,9 @@ CAPABILITY_SELECTION_RULES = (
     "normalize=nfkc,casefold,whitespace;tokens=ascii[a-z0-9]{2,},cjk_bigram;"
     "score=exact_id_phrase,exact_tag_phrase,exact_name_phrase,"
     "name_jaccard_milli,description_jaccard_milli,id_jaccard_milli;"
-    "admission=complete_score_groups;json=ascii,sorted,compact"
+    "admission=complete_score_groups;json=ascii,sorted,compact;"
+    "slug_boundary=ascii_slug;property_keys=credential_segments_v1;"
+    "composite_property_type=unspecified;tag_collision=no_unique_active_candidate"
 )
 
 _TRUNCATION_ORDER: tuple[TruncationReason, ...] = ("relevance", "count", "bytes")
@@ -72,16 +74,7 @@ _SCHEMA_ANNOTATION_KEYS = frozenset(
 _ROOT_STRUCTURE_KEYS = frozenset({"type", "properties", "required", "additionalProperties"})
 _REDACTED = "[REDACTED]"
 _SAFE_CAPABILITY_ID = re.compile(r"[A-Za-z0-9._-]+")
-_SENSITIVE_ID_MARKER = re.compile(
-    r"(?:bearer|token|credential|secret|password|passwd|auth|authorization|"
-    r"cookie|session)",
-    re.IGNORECASE,
-)
-# Property keys are argument identifiers the model must reproduce exactly, never
-# credential values. They get the value-shape checks (URL/email/IP/UNC) only: a
-# credential-word rule would reject legitimate contracts such as the canonical OA
-# ``authoritative_count`` or credential-named input fields that the confirm card
-# already redacts downstream.
+# Property identifiers retain their exact spelling after credential-word checks.
 _SAFE_PROPERTY_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9._-]*")
 _SAFE_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+:-]{0,95}")
 _ASCII_TOKEN = re.compile(r"[a-z0-9]+")
@@ -150,7 +143,7 @@ def is_safe_capability_id(value: object) -> bool:
         isinstance(value, str)
         and 0 < len(value) <= MAX_CAPABILITY_ID_LENGTH
         and _SAFE_CAPABILITY_ID.fullmatch(value) is not None
-        and _SENSITIVE_ID_MARKER.search(value) is None
+        and sanitize_knowledge_text(value) != _REDACTED
     )
 
 
@@ -414,7 +407,7 @@ def _schema_keys(schema: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
 def _require_safe_property_key(key: object) -> None:
     if not isinstance(key, str) or _SAFE_PROPERTY_KEY.fullmatch(key) is None:
         raise _InvalidCatalogError("unsafe schema property key")
-    if contains_sensitive_location_or_identity(key):
+    if contains_sensitive_property_key(key):
         raise _InvalidCatalogError("sensitive schema property key")
 
 
@@ -461,6 +454,10 @@ def _schema_summary(schema: dict[str, Any]) -> dict[str, object]:
 
 def _property_type(schema: object) -> tuple[str, bool]:
     if not isinstance(schema, dict):
+        return "unspecified", True
+    if any(
+        key in schema for key in ("$ref", "allOf", "anyOf", "oneOf", "not", "if", "then", "else")
+    ):
         return "unspecified", True
     raw_type = schema.get("type")
     supported = isinstance(raw_type, str) and raw_type in _SCHEMA_TYPES
@@ -515,7 +512,7 @@ def _jaccard_milli(query: frozenset[str], field: frozenset[str]) -> int:
 def _slug_phrase_in(phrase: str, normalized_message: str) -> bool:
     if not phrase:
         return False
-    pattern = rf"(?<![a-z0-9._-]){re.escape(phrase)}(?![a-z0-9_-]|\.[a-z0-9])"
+    pattern = rf"(?<![a-z0-9._-]){re.escape(phrase)}(?![a-z0-9._-])"
     return re.search(pattern, normalized_message) is not None
 
 

@@ -3737,6 +3737,26 @@ def test_registry_preflight_counts_zero_when_both_top_groups_exceed_the_limit() 
     assert all(selection.contracts == () for selection in selections)
 
 
+def test_registry_preflight_rejects_an_oversized_highest_group() -> None:
+    expected = expected_oa_capabilities()
+    oversized = _capability_copy(
+        expected[0],
+        capability_id="aaa.large",
+        target_system="u8",
+        input_schema={"type": "object", "properties": {"k" * 5000: {"type": "string"}}},
+    )
+    catalog = (oversized, *expected)
+    result = smoke_runner._classify_capability_registry(catalog)
+    selections = [
+        smoke_runner.BasicKnowledge().select_capability_candidates(probe, catalog)
+        for probe in smoke_runner.OA_CAPABILITY_CONTEXT_PROBES
+    ]
+    assert selections[0].outcome == "over_budget"
+    assert selections[0].contracts == ()
+    assert result.state == "context_truncated"
+    assert result.visible_probe_count < 2
+
+
 class _FakeRegistryEngine:
     def __init__(self) -> None:
         self.dispose_count = 0

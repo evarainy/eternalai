@@ -156,6 +156,84 @@ def test_projection_revalidates_bypassed_models() -> None:
     assert _ids(valid)[0] == "oa.target"
 
 
+@pytest.mark.parametrize("field", ["input_schema", "output_schema"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "password",
+        "access_token",
+        "auth_header",
+        "sessionid",
+        "refreshToken",
+        "AuthHeader",
+        "HTTPAuthHeader",
+        "access.token",
+        "client-secret",
+        "sessionID",
+    ],
+)
+def test_credential_property_segments_are_rejected(field: str, key: str) -> None:
+    capability = _spec("oa.target").model_copy(
+        update={field: {"type": "object", "properties": {key: {"type": "string"}}}}
+    )
+    selection = select_capability_candidates("oa.target", [capability])
+    assert selection.outcome == "catalog_invalid"
+    assert selection.contracts == selection.bindings == ()
+    assert selection.payload_json == ""
+
+
+@pytest.mark.parametrize(
+    "key", ["authoritative_count", "author", "authorizationCounted", "item_count"]
+)
+def test_business_property_words_are_preserved(key: str) -> None:
+    # authorizationCounted contains the actual authorization segment and is unsafe.
+    selection = select_capability_candidates(
+        "oa.target",
+        [
+            _spec(
+                "oa.target",
+                output_schema={"type": "object", "properties": {key: {"type": "integer"}}},
+            )
+        ],
+    )
+    if key == "authorizationCounted":
+        assert selection.outcome == "catalog_invalid"
+    else:
+        assert selection.outcome == "ready"
+        assert selection.contracts[0]["output_summary"]["properties"] == [
+            {"key": key, "type": "integer"}
+        ]
+
+
+@pytest.mark.parametrize("keyword", ["$ref", "anyOf", "allOf", "oneOf", "not", "if"])
+def test_composite_property_with_explicit_type_is_unspecified(keyword: str) -> None:
+    selection = select_capability_candidates(
+        "oa.target",
+        [
+            _spec(
+                "oa.target",
+                input_schema={
+                    "type": "object",
+                    "properties": {"value": {"type": "string", keyword: {}}},
+                },
+            )
+        ],
+    )
+    assert selection.outcome == "ready"
+    summary = selection.contracts[0]["input_summary"]
+    assert summary["properties"] == [{"key": "value", "type": "unspecified"}]
+    assert summary["partial"] is True
+
+
+@pytest.mark.parametrize("suffix", ["._extra", ".-extra", ".extra", "_extra", "-extra", "."])
+def test_slug_prefix_is_not_an_exact_id_or_tag_phrase(suffix: str) -> None:
+    capability = _spec("oa.work", intent_tags=["work-tag"])
+    assert _score("oa.work" + suffix, capability)[0] == 0
+    assert _score("work-tag" + suffix, capability)[1] == 0
+    assert _score("查询 oa.work，请继续", capability)[0] == 1
+    assert _score("use work-tag now", capability)[1] == 1
+
+
 def test_summary_allowlist_is_complete_and_value_free() -> None:
     long_key = "synthetic_" + "long_key_" * 20
     capability = _spec(
@@ -315,7 +393,8 @@ def test_scoring_is_exact_deterministic_and_permutation_invariant() -> None:
     assert _score("ＯＡ．ＰＥＮＤＩＮＧ－ＬＩＳＴ", exact_id)[0] == 1
     assert _score("xoa.pending-list", exact_id)[0] == 0
     assert _score("oa.pending-list.extra", exact_id)[0] == 0
-    assert _score("oa.pending-list.", exact_id)[0] == 1
+    # A dot is a legal ID character, so this is not the exact shorter slug.
+    assert _score("oa.pending-list.", exact_id)[0] == 0
 
     catalog = [exact_id, prefix_id, *(_spec(f"oa.filler-{index}") for index in range(4))]
     expected = select_capability_candidates(message, catalog)
