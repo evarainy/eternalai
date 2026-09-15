@@ -29,6 +29,7 @@ from scripts.smoke import har as smoke_har
 from scripts.smoke import runner as smoke_runner
 from scripts.smoke.capabilities import (
     REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
+    classify_oa_registry,
     expected_oa_capabilities,
 )
 from scripts.smoke.environment import parse_env_file, prepare_environment
@@ -3450,7 +3451,12 @@ def test_registry_preflight_fails_closed_for_invalid_or_extra_active_capability(
 
 def test_registry_preflight_passes_only_exact_runtime_visible_contracts() -> None:
     catalog = expected_oa_capabilities()
-    contracts = smoke_runner.BasicKnowledge().capability_input_contracts(catalog)
+    knowledge = smoke_runner.BasicKnowledge()
+    contracts = tuple(
+        contract
+        for probe in smoke_runner.OA_CAPABILITY_CONTEXT_PROBES
+        for contract in knowledge.select_capability_candidates(probe, catalog).contracts
+    )
     result = smoke_runner._classify_capability_registry(catalog)
 
     assert result.state == "passed"
@@ -3511,7 +3517,10 @@ def test_registry_preflight_contract_channel_ignores_registry_free_text_and_sche
         for capability in expected_oa_capabilities()
     )
 
-    contracts = smoke_runner.BasicKnowledge().capability_input_contracts(poisoned)
+    contracts = smoke_runner.BasicKnowledge().select_capability_candidates(
+        smoke_runner.OA_CAPABILITY_CONTEXT_PROBES[0],
+        poisoned,
+    ).contracts
     result = smoke_runner._classify_capability_registry(poisoned)
     serialized = json.dumps(contracts, ensure_ascii=False)
 
@@ -3521,11 +3530,17 @@ def test_registry_preflight_contract_channel_ignores_registry_free_text_and_sche
         "oa.list_pending_workflows",
         "oa.list_system_messages",
     }
-    for marker in (*markers, "registry-intent-marker"):
+    # The approved safe summary exposes owner/description only under exact keys;
+    # name, intent tags and schema free-text values stay out of the contract.
+    assert all(item["owner"] == markers[1] for item in contracts)
+    assert all(item["short_description"] == markers[2] for item in contracts)
+    assert serialized.count(markers[1]) == serialized.count(markers[2]) == 2
+    for marker in (markers[0], *markers[3:], "registry-intent-marker"):
         assert marker not in serialized
 
 
-def test_registry_preflight_rejects_required_capabilities_truncated_from_context() -> None:
+def test_registry_preflight_keeps_required_capabilities_after_seven_earlier_ids() -> None:
+    # Before Top-K the ninth ID-sorted capability never reached the model.
     pending = expected_oa_capabilities()[0]
     earlier_capabilities = tuple(
         _capability_copy(
@@ -3540,9 +3555,47 @@ def test_registry_preflight_rejects_required_capabilities_truncated_from_context
         earlier_capabilities + expected_oa_capabilities()
     )
 
-    assert result.state == "context_truncated"
+    assert result.state == "passed"
     assert result.active_total_count == 9
-    assert result.visible_probe_count == 1
+    assert result.visible_probe_count == 2
+
+
+def test_registry_preflight_uses_request_specific_topk() -> None:
+    pending, system_messages = expected_oa_capabilities()
+    unrelated = tuple(
+        _capability_copy(
+            pending,
+            capability_id=f"aaa.unrelated.{index}",
+            name=f"Synthetic ledger export {index}",
+            short_description="Export a synthetic ledger report.",
+            intent_tags=[],
+            target_system="u8",
+        )
+        for index in range(7)
+    )
+    catalog = unrelated + (pending, system_messages)
+    knowledge = smoke_runner.BasicKnowledge()
+    pending_probe, messages_probe = smoke_runner.OA_CAPABILITY_CONTEXT_PROBES
+
+    pending_selection = knowledge.select_capability_candidates(pending_probe, catalog)
+    messages_selection = knowledge.select_capability_candidates(messages_probe, catalog)
+    result = smoke_runner._classify_capability_registry(catalog)
+    unmatched = classify_oa_registry(
+        catalog,
+        context_probes=("zzqx vvkw", messages_probe),
+    )
+
+    assert result.state == "passed"
+    assert result.active_total_count == 9
+    assert result.visible_probe_count == 2
+    first_ids = [item.capability_id for item in pending_selection.bindings]
+    second_ids = [item.capability_id for item in messages_selection.bindings]
+    assert first_ids[0] == "oa.list_pending_workflows"
+    assert second_ids[0] == "oa.list_system_messages"
+    assert all(not item.startswith("aaa.unrelated.") for item in first_ids + second_ids)
+    # A probe without any lexical match over more than eight capabilities is not visible.
+    assert unmatched.state == "context_truncated"
+    assert unmatched.visible_probe_count == 1
 
 
 def test_registry_preflight_counts_each_probe_contract_pair_independently() -> None:
@@ -3659,23 +3712,29 @@ def test_registry_preflight_rejects_duplicate_probe_or_required_id(
         smoke_runner._classify_capability_registry(expected_oa_capabilities())
 
 
-def test_registry_preflight_counts_zero_when_both_contracts_are_truncated() -> None:
-    pending = expected_oa_capabilities()[0]
-    earlier_capabilities = tuple(
+def test_registry_preflight_counts_zero_when_both_top_groups_exceed_the_limit() -> None:
+    pending, system_messages = expected_oa_capabilities()
+    tied_copies = tuple(
         _capability_copy(
-            pending,
-            capability_id=f"aaa.synthetic.{index}",
+            template,
+            capability_id=f"aaa.synthetic.{prefix}.{index}",
             target_system="u8",
         )
+        for prefix, template in (("pending", pending), ("messages", system_messages))
         for index in range(8)
     )
+    catalog = tied_copies + expected_oa_capabilities()
 
-    result = smoke_runner._classify_capability_registry(
-        earlier_capabilities + expected_oa_capabilities()
-    )
+    result = smoke_runner._classify_capability_registry(catalog)
+    selections = [
+        smoke_runner.BasicKnowledge().select_capability_candidates(probe, catalog)
+        for probe in smoke_runner.OA_CAPABILITY_CONTEXT_PROBES
+    ]
 
     assert result.state == "context_truncated"
     assert result.visible_probe_count == 0
+    assert [selection.outcome for selection in selections] == ["ambiguous", "ambiguous"]
+    assert all(selection.contracts == () for selection in selections)
 
 
 class _FakeRegistryEngine:

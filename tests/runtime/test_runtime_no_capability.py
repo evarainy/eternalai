@@ -10,6 +10,7 @@ import pytest
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.mock_llm.mock_llm_provider import MockLLMProvider
 from app.knowledge import BasicKnowledge
+from app.knowledge.capability_selection import select_capability_candidates
 from app.ports.llm_provider import LLMCompletionResponse
 from app.runtime.intent_router import IntentRouter
 from app.runtime.models import IntentOutput
@@ -34,7 +35,9 @@ from tests.runtime.test_runtime_capability_selection import _capability, _run_ru
 def test_invalid_decision_is_schema_invalid_and_never_no_match(payload: dict) -> None:
     raw = json.dumps(payload)
     router = IntentRouter(MockLLMProvider(), JSONStructuredOutputProvider(), "test")
-    result = asyncio.run(router.parse(raw))
+    result = asyncio.run(
+        router.parse(raw, capabilities=(_capability("oa.list_pending_workflows"),))
+    )
     assert result.match is None
     assert result.capability_ref is None
     assert result.failure_reason == "schema_invalid"
@@ -60,7 +63,9 @@ def test_invalid_decision_is_schema_invalid_and_never_no_match(payload: dict) ->
 def test_explicit_no_match_is_successful_parse_and_no_capability_terminal() -> None:
     raw = '{"match":"none"}'
     router = IntentRouter(MockLLMProvider(), JSONStructuredOutputProvider(), "test")
-    result = asyncio.run(router.parse(raw))
+    result = asyncio.run(
+        router.parse(raw, capabilities=(_capability("oa.list_pending_workflows"),))
+    )
     assert result.match == "none"
     assert result.failure_reason is None
     assert result.structured_output_error_code is None
@@ -79,7 +84,14 @@ def test_explicit_no_match_is_successful_parse_and_no_capability_terminal() -> N
     assert registry.get_calls == []
     parsed = next(step for step in trace.steps if step["event_type"] == "intent_parsed")
     assert parsed["status"] == "ok"
-    assert parsed["attributes"] == {"result": "valid", "match": "none"}
+    assert parsed["attributes"] == {
+        "result": "valid",
+        "match": "none",
+        **select_capability_candidates(
+            "select oa.list_pending_workflows",
+            (_capability("oa.list_pending_workflows"),),
+        ).trace_attributes(),
+    }
     terminal = next(step for step in trace.steps if step["event_type"] == "no_capability_found")
     assert terminal["attributes"]["reason"] == "no_matching_capability"
     assert terminal["error_code"] == "capability_not_found"
@@ -122,4 +134,67 @@ def test_user_guidance_is_short_and_lists_only_available_oa_operations() -> None
         assert "Registry" not in text
         assert "配置" not in text
     empty, _ = BasicKnowledge().no_capability_guidance([])
-    assert empty == "暂未接入该能力。当前没有已启用能力。"
+    assert empty == "暂未接入该能力。当前没有可用能力。"
+
+
+def test_partial_candidate_none_is_not_global_no_match() -> None:
+    target = _capability("oa.target")
+    others = [_capability(f"oa.other-{index}") for index in range(8)]
+    none_raw = '{"match":"none"}'
+    select_raw = '{"match":"capability","capability_id":"oa.target"}'
+
+    complete, complete_store, complete_trace, _, _ = _run_runtime(
+        "oa.target",
+        [target],
+        llm_completion=LLMCompletionResponse(content=none_raw),
+        structured_output_override=JSONStructuredOutputProvider(),
+    )
+    partial, partial_store, partial_trace, partial_gateway, _ = _run_runtime(
+        "oa.target",
+        [target, *others],
+        llm_completion=LLMCompletionResponse(content=none_raw),
+        structured_output_override=JSONStructuredOutputProvider(),
+    )
+    success, success_store, _success_trace, success_gateway, _ = _run_runtime(
+        "oa.target",
+        [target, *others],
+        llm_completion=LLMCompletionResponse(content=select_raw),
+        structured_output_override=JSONStructuredOutputProvider(),
+    )
+    full, _full_store, _full_trace, _full_gateway, _ = _run_runtime(
+        "oa.target",
+        [target, others[0]],
+        llm_completion=LLMCompletionResponse(content=select_raw),
+        structured_output_override=JSONStructuredOutputProvider(),
+    )
+
+    assert complete.status == "no_capability_found"
+    assert complete_store.status_updates[-1][1:] == ("no_capability_found", "capability_not_found")
+    assert any(step["event_type"] == "no_capability_found" for step in complete_trace.steps)
+    assert partial.status == "failed"
+    assert partial_store.status_updates[-1][1:] == (
+        "failed",
+        "capability_candidates_low_confidence",
+    )
+    assert partial.message == "当前请求尚未定位到足够明确的能力，请补充目标系统和具体操作。"
+    assert partial.fallback_text == "Please specify the target system and operation."
+    assert "暂未接入" not in partial.message
+    assert partial_gateway.calls == []
+    assert all(step["event_type"] != "no_capability_found" for step in partial_trace.steps)
+    partial_intent = next(
+        step for step in partial_trace.steps if step["event_type"] == "intent_parsed"
+    )
+    assert partial_intent["attributes"]["coverage_complete"] is False
+    assert partial_intent["attributes"]["reason"] == "low_confidence"
+    notice = "本次仅在相关性最高的部分能力中选择；若目标不符，请补充具体操作。"
+    assert success.status == "completed"
+    assert success_store.status_updates[-1][1:] == ("completed", None)
+    assert success_gateway.calls[0]["capability_id"] == "oa.target"
+    assert success.message.endswith(notice)
+    assert success.message.count(notice) == 1
+    assert success.fallback_text.endswith(
+        "This selection considered only the most relevant capabilities; specify the "
+        "operation if the result does not match your goal."
+    )
+    assert full.status == "completed"
+    assert notice not in full.message

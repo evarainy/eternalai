@@ -9,6 +9,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.ports.policy_guard import (
+    CandidateVisibility,
+    CapabilityCandidatePolicyPort,
     ManagementPlanePolicyContext,
     PolicyDecision,
     PolicyDecisionValue,
@@ -140,3 +142,28 @@ def test_policy_request_context_keeps_business_and_management_planes_distinct() 
     assert type(business) is RequestOrgContext
     assert type(management) is ManagementPlanePolicyContext
     assert not isinstance(management, RequestOrgContext)
+
+
+def test_candidate_policy_is_distinct_from_execution_authorization() -> None:
+    hints = get_type_hints(CapabilityCandidatePolicyPort.preview_capability)
+    signature = inspect.signature(CapabilityCandidatePolicyPort.preview_capability)
+
+    # Preview has no arguments and no allow value; it can only exclude or defer.
+    assert get_args(CandidateVisibility) == ("exclude", "defer")
+    assert set(CapabilityCandidatePolicyPort.__protocol_attrs__) == {"preview_capability"}
+    assert not getattr(CapabilityCandidatePolicyPort, "_is_runtime_protocol", False)
+    assert list(signature.parameters) == [
+        "self",
+        "ai_user_id",
+        "capability_id",
+        "request_context",
+    ]
+    assert all(
+        signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in ("ai_user_id", "capability_id", "request_context")
+    )
+    assert "arguments" not in signature.parameters
+    assert hints["request_context"] is RequestOrgContext
+    assert hints["return"] == CandidateVisibility
+    assert inspect.iscoroutinefunction(CapabilityCandidatePolicyPort.preview_capability)
+    assert set(PolicyGuardPort.__protocol_attrs__) == {"decide"}

@@ -44,3 +44,18 @@ class PolicyGuardPort(Protocol):
         arguments: dict[str, Any],
         request_context: PolicyRequestContext,
     ) -> PolicyDecision: ...
+
+
+CandidateVisibility: TypeAlias = Literal["exclude", "defer"]
+
+
+class CapabilityCandidatePolicyPort(Protocol):
+    """Pre-model candidate visibility; ``defer`` is never an authorization."""
+
+    async def preview_capability(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> CandidateVisibility: ...

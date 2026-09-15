@@ -290,3 +290,38 @@ def test_decide_return_isinstance() -> None:
     result = _decide(capability_id="oa_create_task", arguments={})
 
     assert isinstance(result, PolicyDecision)
+
+
+def test_candidate_preview_preserves_management_and_confirmation_rules() -> None:
+    guard = MinimalPolicyGuard(
+        admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
+        audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
+    )
+    admin_capability_id = sorted(ADMIN_LITE_POLICY_CAPABILITY_IDS)[0]
+    business_context = _request_context(roles=["admin"])
+    management_context = ManagementPlanePolicyContext(
+        request_id="policy-test-request",
+        tenant_id="tenant-policy-test",
+        roles=["admin"],
+    )
+
+    def preview(capability_id: str, context: RequestOrgContext) -> str:
+        return asyncio.run(
+            guard.preview_capability(
+                ai_user_id="policy-test-user",
+                capability_id=capability_id,
+                request_context=context,
+            )
+        )
+
+    assert preview(admin_capability_id, business_context) == "exclude"
+    assert preview("admin_unlisted_action", business_context) == "exclude"
+    assert preview(admin_capability_id, management_context) == "defer"
+    assert preview("oa_create_task", business_context) == "defer"
+    assert preview("payroll_update_confirm", business_context) == "defer"
+    # Execution decisions keep their original deny/confirm semantics.
+    assert _decide(capability_id=admin_capability_id, arguments={}, roles=["admin"]) == (
+        PolicyDecision(decision="deny", reason_code="role_not_allowed")
+    )
+    assert _decide(capability_id="payroll_update_confirm", arguments={}).decision == "confirm"
+    assert _decide(capability_id="oa_create_task", arguments=None).decision == "deny"

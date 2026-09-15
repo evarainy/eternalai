@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -13,6 +14,8 @@ from time import monotonic
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
+
 from app.contracts.sdui.models import UserAction
 from app.evaluator import (
     EvaluationConclusion,
@@ -21,6 +24,12 @@ from app.evaluator import (
 )
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
+from app.knowledge.capability_selection import (
+    CandidateBinding,
+    CapabilityCandidateSet,
+    capability_fingerprint,
+    is_safe_capability_id,
+)
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.agent_orchestration import (
     AgentOrchestrationPort,
@@ -47,6 +56,7 @@ from app.ports.human_gate import (
     build_task_version_binding_manifest,
 )
 from app.ports.llm_provider import LLMProviderPort
+from app.ports.policy_guard import CapabilityCandidatePolicyPort
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.response_projection_contract import ProjectionContractSnapshot
 from app.ports.runtime import UserActionOutcome
@@ -86,6 +96,55 @@ class _PendingWorkflow:
 
 
 _CONFIRMATION_TTL_SECONDS = 600
+_PARTIAL_CANDIDATE_NOTICE = (
+    "本次仅在相关性最高的部分能力中选择；若目标不符，请补充具体操作。",
+    "This selection considered only the most relevant capabilities; specify the "
+    "operation if the result does not match your goal.",
+)
+_CANDIDATE_FAILURE_MESSAGES: dict[ErrorCode, tuple[str, str]] = {
+    "capability_candidates_low_confidence": (
+        "当前请求尚未定位到足够明确的能力，请补充目标系统和具体操作。",
+        "Please specify the target system and operation.",
+    ),
+    "capability_candidates_ambiguous": (
+        "匹配到的能力过于接近，无法确定候选范围，请补充具体操作。",
+        "Matching capabilities are too similar; please specify the operation.",
+    ),
+    "capability_candidates_over_budget": (
+        "能力说明超过候选处理范围，请明确具体操作；仍失败时请联系管理员。",
+        "Capability descriptions exceed the candidate budget; specify the operation "
+        "or contact an administrator.",
+    ),
+    "capability_catalog_invalid": (
+        "能力配置暂不可用，请联系管理员核对。",
+        "Capability configuration is temporarily unavailable; contact an administrator.",
+    ),
+    "capability_candidate_out_of_scope": (
+        "本次能力选择无效，请重新描述请求。",
+        "The capability selection is invalid; please rephrase the request.",
+    ),
+    "capability_candidate_stale": (
+        "能力配置已变化，请重新发起请求。",
+        "Capability configuration changed; please submit the request again.",
+    ),
+}
+_SELECTION_FAILURE_CODES: dict[str, ErrorCode] = {
+    "low_confidence": "capability_candidates_low_confidence",
+    "ambiguous": "capability_candidates_ambiguous",
+    "over_budget": "capability_candidates_over_budget",
+    "catalog_invalid": "capability_catalog_invalid",
+}
+_CATALOG_INVALID_SELECTION = CapabilityCandidateSet(
+    outcome="catalog_invalid",
+    contracts=(),
+    bindings=(),
+    visible_count=0,
+    selected_count=0,
+    omitted_count=0,
+    coverage_complete=False,
+    truncated_by=(),
+    payload_bytes=0,
+)
 _CONFIRMATION_INVALIDATED_MESSAGE = (
     "此确认已失效，请重新发起。若此前已提交，请先核对业务状态，避免重复操作。"
 )
@@ -122,6 +181,8 @@ class RuntimeImpl:
         structured_output: StructuredOutputPort,
         intent_model: str,
         response_builder: ResponseEnvelopeBuilder,
+        *,
+        candidate_policy: CapabilityCandidatePolicyPort,
         workflow_engine: WorkflowEnginePort | None = None,
         session_memory: SessionMemory | None = None,
         semantic_knowledge: BasicKnowledge | None = None,
@@ -136,6 +197,7 @@ class RuntimeImpl:
         self._capability_registry = capability_registry
         self._orchestration = orchestration
         self._trace_port = trace_port
+        self._candidate_policy = candidate_policy
         self._semantic_knowledge = semantic_knowledge or BasicKnowledge()
         self._intent_router = IntentRouter(
             llm_provider=llm_provider,
@@ -267,65 +329,99 @@ class RuntimeImpl:
             status="ok",
         )
 
-        capability_snapshot = await self._capability_registry.list(status="active")
+        visible_capabilities: tuple[CapabilitySpec, ...] = ()
+        active_count = 0
+        if message.strip():
+            visibility = await self._visible_capabilities(
+                ai_user_id=ai_user_id,
+                request_context=RequestOrgContext(
+                    request_id=trace_id,
+                    channel=channel,
+                    tenant_id=memory_key.tenant_id,
+                ),
+            )
+            if visibility is None:
+                return await self._finish_candidate_failure(
+                    response_id,
+                    task_id,
+                    session_id,
+                    trace_id,
+                    error_code="capability_catalog_invalid",
+                    reason="catalog_invalid",
+                    selection=_CATALOG_INVALID_SELECTION,
+                    memory_key=memory_key,
+                )
+            visible_capabilities, active_count = visibility
         intent_result = await self._intent_router.parse(
             message,
             trace_metadata={
                 "trace_id": trace_id,
                 "task_id": task_id,
             },
-            capabilities=tuple(capability_snapshot),
+            capabilities=visible_capabilities,
             memory_summaries=self._session_memory.recall(memory_key),
         )
-        capability_ref = intent_result.capability_ref
-        parse_ok = intent_result.failure_reason is None and (
-            intent_result.match == "none"
-            or (intent_result.match == "capability" and capability_ref is not None)
-        )
-
-        await self._trace_port.record_step(
-            trace_id,
-            task_id,
-            session_id,
-            tenant_id=memory_key.tenant_id,
-            ai_user_id=memory_key.ai_user_id,
-            event_type="intent_parsed",
-            status="ok" if parse_ok else "failed",
-            attributes={"result": "valid", "match": "none"}
-            if parse_ok and intent_result.match == "none"
-            else _intent_trace_attributes(
-                capability_ref,
-                intent_result.failure_reason,
-                intent_result.structured_output_error_code,
-                intent_result.validation_error_path,
-                intent_result.validation_error_type,
-                intent_result.argument_keys,
-            ),
-        )
-
-        if parse_ok and intent_result.match == "none":
-            return await self._finish_no_capability_found(
-                response_id,
-                task_id,
-                session_id,
-                trace_id,
-                reason="no_matching_capability",
-                memory_key=memory_key,
-            )
-
-        if not parse_ok or capability_ref is None:
-            # With no active capability at all, the honest answer is that the
-            # function is not integrated yet — not that the parse blew up. Only
-            # a parse failure against a non-empty catalogue is an internal fault.
-            if not capability_snapshot:
+        selection = intent_result.candidate_selection
+        if selection is not None and selection.outcome != "ready":
+            if selection.outcome == "empty":
+                await self._record_intent_parsed(
+                    trace_id,
+                    task_id,
+                    session_id,
+                    memory_key=memory_key,
+                    status="ok",
+                    attributes={**selection.trace_attributes(), "reason": "empty"},
+                )
                 return await self._finish_no_capability_found(
                     response_id,
                     task_id,
                     session_id,
                     trace_id,
-                    reason="no_active_capability_registered",
+                    reason=(
+                        "no_active_capability_registered"
+                        if active_count == 0
+                        else "no_visible_capability"
+                    ),
+                    capabilities=(),
                     memory_key=memory_key,
                 )
+            return await self._finish_candidate_failure(
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                error_code=_SELECTION_FAILURE_CODES[selection.outcome],
+                reason=selection.outcome,
+                selection=selection,
+                memory_key=memory_key,
+            )
+
+        capability_ref = intent_result.capability_ref
+        parse_ok = intent_result.failure_reason is None and (
+            intent_result.match == "none"
+            or (intent_result.match == "capability" and capability_ref is not None)
+        )
+        selection_attributes = selection.trace_attributes() if selection is not None else {}
+
+        if not parse_ok or selection is None:
+            await self._record_intent_parsed(
+                trace_id,
+                task_id,
+                session_id,
+                memory_key=memory_key,
+                status="failed",
+                attributes={
+                    **selection_attributes,
+                    **_intent_trace_attributes(
+                        None,
+                        intent_result.failure_reason,
+                        intent_result.structured_output_error_code,
+                        intent_result.validation_error_path,
+                        intent_result.validation_error_type,
+                        intent_result.argument_keys,
+                    ),
+                },
+            )
             return await self._finish_intent_failure(
                 response_id,
                 task_id,
@@ -335,22 +431,83 @@ class RuntimeImpl:
                 memory_key=memory_key,
             )
 
-        intent_selector = capability_ref.capability_id
-        selection = await self._orchestration.select_capability(
-            capability_id=capability_ref.capability_id,
-            target_system=capability_ref.target_system,
-            capability_type=capability_ref.capability_type,
-        )
-        if selection is None:
+        if intent_result.match == "none" or capability_ref is None:
+            if not selection.coverage_complete:
+                return await self._finish_candidate_failure(
+                    response_id,
+                    task_id,
+                    session_id,
+                    trace_id,
+                    error_code="capability_candidates_low_confidence",
+                    reason="low_confidence",
+                    selection=selection,
+                    memory_key=memory_key,
+                )
+            await self._record_intent_parsed(
+                trace_id,
+                task_id,
+                session_id,
+                memory_key=memory_key,
+                status="ok",
+                attributes={"result": "valid", "match": "none", **selection_attributes},
+            )
             return await self._finish_no_capability_found(
                 response_id,
                 task_id,
                 session_id,
                 trace_id,
-                reason="no_unique_active_candidate",
+                reason="no_matching_capability",
+                capabilities=visible_capabilities,
                 memory_key=memory_key,
             )
-        selected_capability = selection.capability.model_copy(deep=True)
+
+        valid_intent_attributes = {
+            **_intent_trace_attributes(capability_ref, None, None),
+            **selection_attributes,
+        }
+        resolution = _resolve_candidate_binding(selection.bindings, capability_ref)
+        if resolution is None:
+            return await self._finish_candidate_failure(
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                error_code="capability_candidate_out_of_scope",
+                reason="candidate_out_of_scope",
+                selection=selection,
+                memory_key=memory_key,
+            )
+        candidate_binding, selection_rule = resolution
+
+        intent_selector = capability_ref.capability_id
+        selection_result = await self._orchestration.select_capability(
+            capability_id=candidate_binding.capability_id,
+            target_system=capability_ref.target_system,
+            capability_type=capability_ref.capability_type,
+        )
+        if selection_result is None or not _selection_matches_binding(
+            selection_result.capability,
+            candidate_binding,
+        ):
+            return await self._finish_candidate_failure(
+                response_id,
+                task_id,
+                session_id,
+                trace_id,
+                error_code="capability_candidate_stale",
+                reason="candidate_stale",
+                selection=selection,
+                memory_key=memory_key,
+            )
+        await self._record_intent_parsed(
+            trace_id,
+            task_id,
+            session_id,
+            memory_key=memory_key,
+            status="ok",
+            attributes=valid_intent_attributes,
+        )
+        selected_capability = selection_result.capability.model_copy(deep=True)
         projection_snapshot = ProjectionContractSnapshot.from_capability(selected_capability)
         capability_ref = capability_ref.model_copy(
             update={"capability_id": selected_capability.capability_id}
@@ -365,7 +522,7 @@ class RuntimeImpl:
                 timestamp=datetime.now(UTC),
                 payload={
                     "capability_id": selected_capability.capability_id,
-                    "selection_rule": selection.rule,
+                    "selection_rule": selection_rule,
                 },
             ),
         )
@@ -381,7 +538,7 @@ class RuntimeImpl:
             capability_id=capability_ref.capability_id,
             attributes={
                 "intent_fingerprint": _intent_fingerprint(intent_selector),
-                "selection_rule": selection.rule,
+                "selection_rule": selection_rule,
             },
         )
         binding_manifest: TaskVersionBindingManifest | None = None
@@ -554,6 +711,15 @@ class RuntimeImpl:
             projection_snapshot=projection_snapshot,
             confirmation=confirmation,
         )
+        if selection.omitted_count > 0:
+            envelope = envelope.model_copy(
+                update={
+                    "message": f"{envelope.message}\n{_PARTIAL_CANDIDATE_NOTICE[0]}",
+                    "fallback_text": (
+                        f"{envelope.fallback_text}\n{_PARTIAL_CANDIDATE_NOTICE[1]}"
+                    ),
+                }
+            )
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -1440,6 +1606,130 @@ class RuntimeImpl:
         return envelope
 
 
+    async def _visible_capabilities(
+        self,
+        *,
+        ai_user_id: str,
+        request_context: RequestOrgContext,
+    ) -> tuple[tuple[CapabilitySpec, ...], int] | None:
+        """Return this request's policy-previewed active snapshot, or None if invalid."""
+        try:
+            snapshot = await self._capability_registry.list(status="active")
+        except ValidationError:
+            return None
+        active = [item for item in snapshot if item.status == "active"]
+        if any(not is_safe_capability_id(item.capability_id) for item in active):
+            return None
+        visible: list[CapabilitySpec] = []
+        for item in sorted(active, key=lambda capability: capability.capability_id):
+            try:
+                visibility = await self._candidate_policy.preview_capability(
+                    ai_user_id=ai_user_id,
+                    capability_id=item.capability_id,
+                    request_context=request_context.model_copy(deep=True),
+                )
+            except Exception:
+                return None
+            if visibility == "exclude":
+                continue
+            if visibility != "defer":
+                return None
+            visible.append(item.model_copy(deep=True))
+        return tuple(visible), len(active)
+
+    async def _record_intent_parsed(
+        self,
+        trace_id: str,
+        task_id: str,
+        session_id: str,
+        *,
+        memory_key: SessionMemoryKey,
+        status: TraceEventStatus,
+        attributes: dict[str, Any],
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            event_type="intent_parsed",
+            status=status,
+            error_code=error_code,
+            attributes=attributes,
+        )
+
+    async def _finish_candidate_failure(
+        self,
+        response_id: str,
+        task_id: str,
+        session_id: str,
+        trace_id: str,
+        *,
+        error_code: ErrorCode,
+        reason: str,
+        selection: CapabilityCandidateSet,
+        memory_key: SessionMemoryKey,
+    ) -> ResponseEnvelope:
+        await self._record_intent_parsed(
+            trace_id,
+            task_id,
+            session_id,
+            memory_key=memory_key,
+            status="failed",
+            error_code=error_code,
+            attributes={**selection.trace_attributes(), "reason": reason},
+        )
+        message, fallback_text = _CANDIDATE_FAILURE_MESSAGES[error_code]
+        await self._task_store.update_status(task_id, "failed", error_code)
+        envelope = self._response_builder.build_message(
+            response_id,
+            task_id,
+            session_id,
+            message,
+            fallback_text,
+            trace_id,
+            status="failed",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            event_type="response_envelope_created",
+            status="ok",
+        )
+        await self._trace_port.record_step(
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            event_type="task_failed",
+            status="failed",
+            error_code=error_code,
+        )
+        await self._record_terminal_evaluation(
+            trace_id=trace_id,
+            task_id=task_id,
+            session_id=session_id,
+            business_status="failed",
+            error_code=error_code,
+            memory_key=memory_key,
+        )
+        await self._trace_port.finalize_task_trace(
+            trace_id,
+            task_id,
+            session_id,
+            tenant_id=memory_key.tenant_id,
+            ai_user_id=memory_key.ai_user_id,
+            status="failed",
+            error_code=error_code,
+        )
+        return envelope
+
     async def _finish_version_binding_failure(
         self,
         *,
@@ -1570,12 +1860,10 @@ class RuntimeImpl:
         trace_id: str,
         reason: str,
         *,
+        capabilities: Sequence[CapabilitySpec],
         memory_key: SessionMemoryKey,
     ) -> ResponseEnvelope:
-        active_capabilities = await self._capability_registry.list(status="active")
-        message, fallback_text = self._semantic_knowledge.no_capability_guidance(
-            active_capabilities
-        )
+        message, fallback_text = self._semantic_knowledge.no_capability_guidance(capabilities)
         await self._task_store.update_status(
             task_id,
             "no_capability_found",
@@ -1808,6 +2096,42 @@ def _optional_str_argument(arguments: dict[str, Any], key: str) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _resolve_candidate_binding(
+    bindings: tuple[CandidateBinding, ...],
+    intent: CapabilityRef,
+) -> tuple[CandidateBinding, Literal["exact_id", "unique_intent_tag"]] | None:
+    """Bind a model selector to this request's admitted candidates only.
+
+    Exact IDs win; a tag must map uniquely inside the admitted bindings. A tag
+    collision, an outside reference or a type/target contradiction is out of
+    scope and never disambiguated or rescued from the full Registry.
+    """
+    exact = [item for item in bindings if item.capability_id == intent.capability_id]
+    if exact:
+        binding: CandidateBinding = exact[0]
+        rule: Literal["exact_id", "unique_intent_tag"] = "exact_id"
+    else:
+        selector = unicodedata.normalize("NFKC", intent.capability_id).strip().casefold()
+        tagged = [item for item in bindings if selector and selector in item.intent_tags]
+        if len(tagged) != 1:
+            return None
+        binding, rule = tagged[0], "unique_intent_tag"
+    if intent.target_system is not None and binding.target_system != intent.target_system:
+        return None
+    if intent.capability_type is not None and binding.capability_type != intent.capability_type:
+        return None
+    return binding, rule
+
+
+def _selection_matches_binding(capability: CapabilitySpec, binding: CandidateBinding) -> bool:
+    return (
+        capability.status == "active"
+        and capability.capability_id == binding.capability_id
+        and capability.version == binding.version
+        and capability_fingerprint(capability) == binding.fingerprint
+    )
 
 
 def _intent_trace_attributes(

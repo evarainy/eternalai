@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.memory import SessionMemory, SessionMemoryKey
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
@@ -204,6 +205,7 @@ def _build_runtime(
     orchestration_workflow = None
     orchestration_builder = ResponseEnvelopeBuilder()
     runtime = RuntimeImpl(
+        candidate_policy=MinimalPolicyGuard(),
         task_store=RecordingTaskStore(),
         session_store=InMemorySessionStore(),
         capability_registry=orchestration_registry,
@@ -258,10 +260,11 @@ def test_same_session_and_user_followup_can_use_prior_success_summary() -> None:
         "system",
         "user",
     ]
-    knowledge_prompt = followup_messages[1].content
+    candidate_prompt = followup_messages[1].content
     memory_prompt = followup_messages[2].content
-    assert "semantic_system_knowledge" in knowledge_prompt
-    assert "session_memory" not in knowledge_prompt
+    assert '{"capability_candidates":' in candidate_prompt
+    assert "session_memory" not in candidate_prompt
+    assert "capability_candidates" not in memory_prompt
     assert '"capability_id":"oa.get_workflow_status"' in memory_prompt
     assert '"terminal_status":"completed"' in memory_prompt
     assert "first request" not in memory_prompt
@@ -293,14 +296,17 @@ def test_followup_cannot_read_another_session_or_users_memory(
 
     followup, followup_messages = asyncio.run(exercise())
 
-    assert followup.status == "no_capability_found"
+    # Without the other principal's memory the fake model picks an unlisted ID,
+    # which the host rejects as outside this request's candidates.
+    assert followup.status == "failed"
+    assert followup.message == "本次能力选择无效，请重新描述请求。"
     assert [message.role for message in followup_messages] == [
         "system",
         "system",
         "user",
     ]
-    assert "semantic_system_knowledge" in followup_messages[1].content
-    assert "session_memory" not in followup_messages[1].content
+    assert '{"capability_candidates":' in followup_messages[1].content
+    assert all("session_memory" not in message.content for message in followup_messages)
 
 
 @pytest.mark.parametrize(

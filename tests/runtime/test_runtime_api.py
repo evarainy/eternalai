@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, get_args
 
 import pytest
@@ -16,17 +17,36 @@ from app.api.v1.runtime import (
     make_router,
 )
 from app.contracts.sdui.models import UserAction
+from app.infra.gateway.capability_gateway import CapabilityGateway
+from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
+from app.infra.orchestration.agent_adapter import AgentOrchestrationAdapter
+from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.main import create_app
-from app.ports.auth import Principal
+from app.ports.adapter import AdapterResult
+from app.ports.auth import Principal, PrincipalOrgContext
+from app.ports.capability_registry import CapabilitySpec
+from app.ports.llm_provider import LLMCompletionResponse, LLMMessage
+from app.ports.request_context import RequestOrgContext
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.runtime import UserActionOutcome
+from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
+)
+from tests.runtime.registry_fakes import (
+    StaticCapabilityRegistry,
+    runtime_output_schema,
+    schema_digest,
+)
+from tests.runtime.test_runtime_capability_selection import (
+    ExistingSessionStore,
+    RecordingTaskStore,
+    RecordingTracePort,
 )
 
 
@@ -459,3 +479,239 @@ def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> No
     assert response.json()["data"] == {"action_outcome": expected, "result": None}
     assert harness.engine.resume_calls == 0
     assert harness.gate.record_decision_calls == (0 if kind == "expired" else 1)
+
+
+class _CandidateOnlyLLM:
+    """Select a wanted capability only when the host actually offered it."""
+
+    def __init__(self, wanted: frozenset[str]) -> None:
+        self.wanted = wanted
+        self.calls: list[list[LLMMessage]] = []
+        self.offered: list[list[str]] = []
+
+    async def complete(
+        self,
+        messages: list[LLMMessage],
+        model: str,
+        response_format: dict[str, Any] | None = None,
+    ) -> LLMCompletionResponse:
+        self.calls.append(list(messages))
+        segment = next(
+            message.content
+            for message in messages
+            if message.role == "system" and '{"capability_candidates":' in message.content
+        )
+        items = json.loads(segment.split("\n", maxsplit=1)[1])["capability_candidates"]["items"]
+        offered = [item["capability_id"] for item in items]
+        self.offered.append(offered)
+        chosen = next((item for item in offered if item in self.wanted), None)
+        if chosen is None:
+            return LLMCompletionResponse(content='{"match":"none"}', model_used=model)
+        return LLMCompletionResponse(
+            content=json.dumps({"match": "capability", "capability_id": chosen, "arguments": {}}),
+            model_used=model,
+        )
+
+    chat = complete
+
+
+class _CountingAdapter:
+    def __init__(self) -> None:
+        self.capability_ids: list[str] = []
+
+    async def execute(
+        self,
+        capability_id: str,
+        arguments: dict[str, Any],
+        execution_context: dict[str, Any],
+    ) -> AdapterResult:
+        self.capability_ids.append(capability_id)
+        return AdapterResult(status="success", data={})
+
+
+class _TenantCandidatePolicy:
+    """Explicit synthetic preview policy keyed only by trusted principal fields."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def preview_capability(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> str:
+        self.calls.append((ai_user_id, request_context.tenant_id, capability_id))
+        owner_tenant = capability_id.removeprefix("zz.").removesuffix("-only")
+        if capability_id.endswith("-only") and owner_tenant != request_context.tenant_id:
+            return "exclude"
+        return "defer"
+
+
+def _topk_spec(capability_id: str, *, name: str | None = None) -> CapabilitySpec:
+    output_schema = runtime_output_schema("registry_fakes.default")
+    return CapabilitySpec(
+        capability_id=capability_id,
+        name=name or f"Synthetic {capability_id}",
+        type="query",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        input_schema_digest=f"input-{capability_id}",
+        output_schema=output_schema,
+        output_schema_digest=schema_digest(output_schema),
+        risk_level="low",
+        owner="runtime-api-topk",
+        version="1.0.0",
+        status="active",
+        short_description="Synthetic capability.",
+        target_system=None,
+        execution_identity="user_delegated",
+        binding_required=False,
+    )
+
+
+def _topk_client(
+    *,
+    capabilities: list[CapabilitySpec],
+    llm: _CandidateOnlyLLM,
+    candidate_policy: Any,
+    session_tokens: StaticSessionTokens,
+) -> tuple[TestClient, _CountingAdapter, RuntimeImpl]:
+    registry = StaticCapabilityRegistry(*capabilities)
+    adapter = _CountingAdapter()
+    trace_port = RecordingTracePort()
+    builder = ResponseEnvelopeBuilder()
+    runtime = RuntimeImpl(
+        candidate_policy=candidate_policy,
+        task_store=RecordingTaskStore(),
+        session_store=ExistingSessionStore(),
+        capability_registry=registry,
+        orchestration=AgentOrchestrationAdapter(
+            capability_registry=registry,
+            gateway=CapabilityGateway(
+                adapter=adapter,
+                capability_registry=registry,
+                policy_guard=MinimalPolicyGuard(),
+                trace_port=trace_port,
+            ),
+            workflow_engine=None,
+            response_builder=builder,
+        ),
+        trace_port=trace_port,
+        llm_provider=llm,
+        structured_output=JSONStructuredOutputProvider(),
+        intent_model="topk-api-test",
+        response_builder=builder,
+    )
+    client = TestClient(
+        create_app(
+            runtime=runtime,
+            session_tokens=session_tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+    return client, adapter, runtime
+
+
+def _handle_body(message: str, session_id: str = "topk-session") -> dict[str, Any]:
+    return {
+        "channel": "web",
+        "session_id": session_id,
+        "message": message,
+        "client_capabilities": {},
+    }
+
+
+def test_authenticated_handle_reaches_ninth_capability_through_topk() -> None:
+    target = _topk_spec("zz.tail-target", name="差旅补贴查询")
+    earlier = [_topk_spec(f"aa.item-{index}") for index in range(8)]
+    llm = _CandidateOnlyLLM(frozenset({"zz.tail-target"}))
+    client, adapter, _runtime = _topk_client(
+        capabilities=[*earlier, target],
+        llm=llm,
+        candidate_policy=MinimalPolicyGuard(),
+        session_tokens=StaticSessionTokens(roles=("user",)),
+    )
+
+    response = client.post(
+        "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
+        json=_handle_body("帮我查询差旅补贴"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert llm.offered == [["zz.tail-target"]]
+    assert adapter.capability_ids == ["zz.tail-target"]
+    assert response.json()["message"].endswith(
+        "本次仅在相关性最高的部分能力中选择；若目标不符，请补充具体操作。"
+    )
+
+
+def test_topk_does_not_cross_principal_or_session() -> None:
+    capabilities = [
+        _topk_spec("zz.shared", name="共享报表查询"),
+        _topk_spec("zz.tenant-a-only", name="甲方报表查询"),
+        _topk_spec("zz.tenant-b-only", name="乙方报表查询"),
+    ]
+    llm = _CandidateOnlyLLM(frozenset({"zz.tenant-a-only", "zz.tenant-b-only"}))
+    policy = _TenantCandidatePolicy()
+    tokens = StaticSessionTokens(roles=("user",))
+    client, adapter, _runtime = _topk_client(
+        capabilities=capabilities,
+        llm=llm,
+        candidate_policy=policy,
+        session_tokens=tokens,
+    )
+    principal_a = Principal(
+        ai_user_id="usr_topk_a",
+        display_name="Synthetic A",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="tenant-a"),
+    )
+    principal_b = Principal(
+        ai_user_id="usr_topk_b",
+        display_name="Synthetic B",
+        roles=("user",),
+        org_ctx=PrincipalOrgContext(tenant_id="tenant-b"),
+    )
+
+    tokens.principal = principal_a
+    first = client.post(
+        "/api/v1/runtime/handle", headers=TEST_CSRF_HEADERS, json=_handle_body("报表查询")
+    )
+    tokens.principal = principal_b
+    second = client.post(
+        "/api/v1/runtime/handle", headers=TEST_CSRF_HEADERS, json=_handle_body("报表查询")
+    )
+    foreign_session = make_session_binder()(principal_a, "topk-session")
+    foreign = client.post(
+        "/api/v1/runtime/handle",
+        headers=TEST_CSRF_HEADERS,
+        json=_handle_body("报表查询", session_id=foreign_session),
+    )
+    unauthenticated = TestClient(client.app, base_url="https://testserver").post(
+        "/api/v1/runtime/handle", headers=TEST_CSRF_HEADERS, json=_handle_body("报表查询")
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["status"] == second.json()["status"] == "completed"
+    assert llm.offered == [
+        ["zz.shared", "zz.tenant-a-only"],
+        ["zz.shared", "zz.tenant-b-only"],
+    ]
+    assert adapter.capability_ids == ["zz.tenant-a-only", "zz.tenant-b-only"]
+    assert {(user, tenant) for user, tenant, _ in policy.calls} == {
+        ("usr_topk_a", "tenant-a"),
+        ("usr_topk_b", "tenant-b"),
+    }
+    second_prompt = "\n".join(message.content for message in llm.calls[1])
+    assert "zz.tenant-a-only" not in second_prompt
+    assert foreign.status_code == 404
+    assert unauthenticated.status_code == 401
+    assert len(llm.calls) == 2
+    assert len(adapter.capability_ids) == 2

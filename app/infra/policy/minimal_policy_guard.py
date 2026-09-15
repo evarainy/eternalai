@@ -7,14 +7,21 @@ from typing import Any
 
 from app.admin.actions import AUDIT_READER_ROLE
 from app.ports.policy_guard import (
+    CandidateVisibility,
+    CapabilityCandidatePolicyPort,
     ManagementPlanePolicyContext,
     PolicyDecision,
     PolicyGuardPort,
     PolicyRequestContext,
 )
+from app.ports.request_context import RequestOrgContext
 
 
-class MinimalPolicyGuard(PolicyGuardPort):
+def _is_management_plane_capability(capability_id: str) -> bool:
+    return capability_id.startswith("admin_")
+
+
+class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
     """Deterministic minimal policy skeleton used by downstream gateway tests."""
 
     def __init__(
@@ -37,7 +44,7 @@ class MinimalPolicyGuard(PolicyGuardPort):
                 decision="deny",
                 reason_code="policy_denied",
             )
-        if capability_id.startswith("admin_"):
+        if _is_management_plane_capability(capability_id):
             if not isinstance(request_context, ManagementPlanePolicyContext):
                 return PolicyDecision(
                     decision="deny",
@@ -66,3 +73,17 @@ class MinimalPolicyGuard(PolicyGuardPort):
                 required_action="confirm",
             )
         return PolicyDecision(decision="allow")
+
+    async def preview_capability(
+        self,
+        *,
+        ai_user_id: str,
+        capability_id: str,
+        request_context: RequestOrgContext,
+    ) -> CandidateVisibility:
+        """Exclude only what ``decide`` always denies on the business plane."""
+        if _is_management_plane_capability(capability_id) and not isinstance(
+            request_context, ManagementPlanePolicyContext
+        ):
+            return "exclude"
+        return "defer"
