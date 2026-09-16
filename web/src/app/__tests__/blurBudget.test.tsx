@@ -75,6 +75,12 @@ function workObjectList(): WorkObjectListResponse {
         handling_marked_at: null,
         source_created_at: '2026-09-01 09:00:00',
         source_fetched_at: '2026-09-02T03:00:00Z',
+        oa_observation: {
+          pending_state: 'current',
+          revision: 1,
+          last_seen_at: '2026-09-02T03:00:00Z',
+          last_checked_at: '2026-09-02T03:00:00Z',
+        },
         source_kind: 'pending_workflow',
         source_received_at: '2026-09-01 09:05:00',
         source_ref: 'OA-WF-001',
@@ -89,6 +95,14 @@ function workObjectList(): WorkObjectListResponse {
     ],
     limit: 200,
     limit_exceeded: false,
+    oa_sync: {
+      status: 'succeeded',
+      revision: 1,
+      attempt_revision: 1,
+      last_attempt_at: '2026-09-02T03:00:00Z',
+      last_success_at: '2026-09-02T03:00:00Z',
+      failure_code: null,
+    },
   };
 }
 

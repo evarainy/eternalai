@@ -133,7 +133,7 @@ def test_work_object_routes_and_store_calls_use_scoped_boundary() -> None:
         if isinstance(node, ast.ClassDef) and node.name == "WorkObjectService"
     )
     for method_name, store_call, scope_position in (
-        ("list_for_principal", "list_for_scope", 0),
+        ("list_for_principal", "list_with_oa_sync_for_scope", 0),
         ("get_for_principal", "get_for_scope", 1),
         ("set_handling_mark_for_principal", "set_handling_mark_for_scope", 1),
     ):
