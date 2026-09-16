@@ -1,13 +1,21 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；2026-09-14 治理同步）。本棒仅作 A 类机械同步，不重排 DAG 或裁定跨棒欠债。
-- 当前实现候选 task_id：`P2-AUDIT-CAPABILITY-TOPK-001`（A 档、串行，承担 A 类同步；修复与本地验证完成，待独立 Monitor → grok 评审桥，未 push/合并）。前置 `P2-FE-DISPATCH-WIRING-001` 已由当前分支基线包含。
-- 本棒完成情况：确定性相关性 Top-K、安全摘要、有限 Policy 预排除和候选绑定已接入正式 Runtime；标签碰撞恢复冻结 GT-014，属性键恢复词段敏感检测，选后坏行、slug、复合摘要、标签规范化和提前返回提示已修复。方案冲突裁定待 GOV-SYNC 落盘，文本字段误伤等剩余义务见 `PHASE2_PLAN.md`。
+- 当前实现候选 task_id：`P2-AUDIT-WORKFLOW-WIRING-001`（A 档、串行，承担 A 类同步；修复与本地验证完成，可交独立 Monitor → grok 评审桥，未 push/合并）。
+- 本棒完成情况：在已选 Workflow 候选上修复 CLI 参数回显、PG 测试隔离，补齐模型空输入合同、响应投影、架构与真实 PG 接线反证；相同时间戳确认竞争及组件重建验证通过。Workflow denied → envelope `blocked`、timeout 耗尽 → `failed`、Task/Trace 保留原 error_code 的第 8 条裁定保持落实，待 GOV-SYNC 落盘；裸文本确认多一次 LLM 调用按第 10 条裁定延期。
 - 当前实现后继指针：留空（本棒没有已决且唯一的后继）；方案恢复裁定与欠债后继由 GOV-SYNC 处理。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；不改变现役 DAG。
 
 ## 已登记验证基线
 
-### 当前 Top-K 修复候选（2026-09-16）
+### 当前 Workflow 修复候选（2026-09-16）
+
+- 固定测试库入口后端全量 `3736 passed, 0 failed, 0 skipped`（113 warnings），后台最终 exit=0；P4 observer authoritative PASS。Windows access violation 按 2026-09-10 裁定登记，CI 尚未运行。
+- PG/管理工具定向 `68 passed`；此前组件定向 `225 passed`、CLI/smoke/投影/新架构定向 `66 passed` 的证据保留。当前架构 `131 passed`；Golden `34/34`（positive `13/13`、negative/boundary `21/21`、零 skipped）；Ruff、mypy `132 source files`、11 个候选改动测试文件的弱测试检查通过。
+- CLI、模型合同、响应投影、静态目录依赖四组反证保持有效；新增真实 HTTP＋PG 反证断开生产 Workflow 注入后在成功终态断言变红，恢复后通过且原文件哈希一致。全量前后固定测试库均为主干 revision `20260914_120000`、仅 public schema、Registry 空，本棒沙箱和能力声明无残留。
+- 真实 PG 保留并重建生产组件后：按钮明确失效且 LLM/adapter 零调用；无 pending 裸文本“确认”仍调用 LLM 一次、adapter 零调用，合成未注册文本的新 Task `failed/internal_error`，旧 checkpoint 未恢复。零 LLM 义务按第 10 条延期，五字段见 `PHASE2_PLAN.md`；不声称真正进程重启或真实 OA/LLM 验收。
+- 独立 Monitor、grok 评审桥、远端 CI 均未执行。真实 OA/vLLM 与部署启用义务保留；未完成项见 `PHASE2_PLAN.md`。
+
+### 既有 Top-K 修复候选记录（2026-09-16，非本轮复测）
 
 - 定向 `708 passed`（含非仓库 cwd 的真实 Golden runner）、Registry/Admin `65 passed`、架构 `125 passed`、Golden `34/34`（negative/boundary `21/21`）、前端 Registry `9 passed`；Ruff、mypy `128 source files`、24 个候选改动测试文件的弱测试检查通过。
 - 9 项回退/故障注入均被断言捕获并在恢复后通过：7 个评分修复点、第九候选 HTTP 接线、真实 PostgreSQL 错主体绑定。双主体成功记忆、各自真实绑定与非法会话拒绝已核对；多绑定范围使用现役内存 Identity resolver 的合成行验证，未声称 PostgreSQL OA 支持多绑定。

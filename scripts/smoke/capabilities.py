@@ -8,13 +8,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from app.infra.adapters.oa.adapter import (
-    ListPendingWorkflowsArguments,
-    ListSystemMessagesArguments,
-)
-from app.infra.adapters.oa.contracts import (
-    OAPendingWorkflowCollection,
-    OASystemMessageCollection,
+from app.infra.adapters.oa.capabilities import expected_oa_capabilities
+from app.infra.workflow.catalog import (
+    OVERVIEW_ID,
+    is_canonical_overview,
 )
 from app.knowledge import BasicKnowledge
 from app.ports.capability_registry import CapabilitySpec
@@ -51,53 +48,6 @@ def schema_digest(schema: Mapping[str, Any]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
-
-
-def expected_oa_capabilities() -> tuple[CapabilitySpec, CapabilitySpec]:
-    pending_input = ListPendingWorkflowsArguments.model_json_schema()
-    pending_output = OAPendingWorkflowCollection.model_json_schema()
-    system_input = ListSystemMessagesArguments.model_json_schema()
-    system_output = OASystemMessageCollection.model_json_schema()
-    return (
-        CapabilitySpec(
-            capability_id="oa.list_pending_workflows",
-            name="OA 待办事宜查询",
-            type="query",
-            intent_tags=["oa.pending_workflows", "oa.pending_approvals"],
-            input_schema=pending_input,
-            output_schema=pending_output,
-            input_schema_digest=schema_digest(pending_input),
-            output_schema_digest=schema_digest(pending_output),
-            risk_level="low",
-            owner="eternalai-platform",
-            version="2.0.0",
-            status="active",
-            short_description="查询当前 OA 用户的待办事宜列表。",
-            target_system="oa",
-            execution_identity="user_delegated",
-            binding_required=True,
-            policy_digest=None,
-        ),
-        CapabilitySpec(
-            capability_id="oa.list_system_messages",
-            name="OA 系统消息查询",
-            type="query",
-            intent_tags=["oa.system_messages"],
-            input_schema=system_input,
-            output_schema=system_output,
-            input_schema_digest=schema_digest(system_input),
-            output_schema_digest=schema_digest(system_output),
-            risk_level="low",
-            owner="eternalai-platform",
-            version="1.0.0",
-            status="active",
-            short_description="查询当前 OA 用户的系统消息列表。",
-            target_system="oa",
-            execution_identity="user_delegated",
-            binding_required=True,
-            policy_digest=None,
-        ),
-    )
 
 
 def classify_oa_registry(
@@ -167,6 +117,9 @@ def classify_oa_registry(
             and item != expected.get(capability_id)
         )
     )
+    overview = by_id.get(OVERVIEW_ID)
+    if overview is not None and not is_canonical_overview(overview):
+        contract_mismatch += (OVERVIEW_ID,)
     valid = tuple(
         item
         for capability_id in required_capability_ids
@@ -181,9 +134,31 @@ def classify_oa_registry(
         for item in active
         if item.target_system == "oa"
         and item.capability_id not in required_capability_ids
+        and not is_canonical_overview(item)
     )
     resolved_knowledge = BasicKnowledge() if knowledge is None else knowledge
     visible_probe_count = 0
+    overview_visible = True
+    if overview is not None and overview.status == "active":
+        overview_selection = resolved_knowledge.select_capability_candidates(
+            "查看 OA 待办与系统消息概览", active,
+        )
+        overview_visible = overview_selection.outcome == "ready" and any(
+            binding.capability_id == OVERVIEW_ID for binding in overview_selection.bindings
+        )
+        try:
+            payload = json.loads(overview_selection.payload_json)
+            overview_visible = overview_visible and any(
+                item.get("capability_id") == OVERVIEW_ID
+                and item.get("capability_type") == "workflow"
+                and item.get("allowed_argument_keys") == []
+                and item.get("required_argument_keys") == []
+                and item.get("additionalProperties") is False
+                and item.get("arguments_must_be") == {}
+                for item in payload["capability_candidates"]["items"]
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            overview_visible = False
     for probe, capability_id in probe_capability_pairs:
         selection = resolved_knowledge.select_capability_candidates(probe, active)
         if selection.outcome == "ready" and any(
@@ -199,7 +174,7 @@ def classify_oa_registry(
         state = "contract_mismatch"
     elif unexpected_active:
         state = "unexpected_active"
-    elif visible_probe_count != len(context_probes):
+    elif visible_probe_count != len(context_probes) or not overview_visible:
         state = "context_truncated"
     else:
         state = "passed"

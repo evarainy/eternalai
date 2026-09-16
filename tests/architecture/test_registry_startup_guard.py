@@ -18,6 +18,19 @@ class _RegistryStartupWriteDetected(AssertionError):
     """Raised when production startup attempts Registry DML."""
 
 
+class _EmptyRegistryResult:
+    """Allow the production Workflow validator's read-only empty catalog lookup."""
+
+    def mappings(self) -> _EmptyRegistryResult:
+        return self
+
+    def all(self) -> list[dict[str, object]]:
+        return []
+
+    def first(self) -> None:
+        return None
+
+
 def _capability_registry_dml(statement: object) -> str | None:
     operations: tuple[tuple[type[object], str], ...] = (
         (Insert, "INSERT"),
@@ -67,7 +80,7 @@ def _install_execute_guard(
         # Startup SQL is isolated from a real engine in this architecture test.
         # Only capabilities DML is a contract violation; unrelated statements
         # are accepted by the guard without being sent to a database.
-        return object()
+        return _EmptyRegistryResult()
 
     async def isolated_driver_sql(
         _connection: object,

@@ -124,6 +124,25 @@ def _read_audit_records(audit_dir: Path) -> tuple[dict[str, Any], ...]:
     )
 
 
+def test_canonical_overview_is_preserved_but_unknown_workflows_still_fail() -> None:
+    from app.infra.workflow.catalog import production_workflow_capabilities
+
+    overview = production_workflow_capabilities()[0]
+    for status in ("active", "disabled"):
+        row = overview.model_copy(update={"status": status}, deep=True)
+        before = row.model_dump()
+        plan = manager._plan_registry_management((*expected_oa_capabilities(), row))
+        assert plan.state == "already_applied"
+        assert (plan.insert_count, plan.update_count, plan.disable_count) == (0, 0, 0)
+        assert row.model_dump() == before
+    for update in ({"version": "2.0.0"}, {"binding_required": False}, {"target_system": "u8"},
+                   {"status": "draft"}, {"capability_id": "oa.unknown_workflow"}):
+        row = overview.model_copy(update=update)
+        plan = manager._plan_registry_management((*expected_oa_capabilities(), row))
+        assert plan.state == "precondition_failed"
+        assert plan.unknown_oa_count == 1
+
+
 def _legacy_catalog(count: int = 9) -> tuple[CapabilitySpec, ...]:
     template = expected_oa_capabilities()[0]
     return tuple(

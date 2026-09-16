@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -58,9 +58,12 @@ def create_app(
     credential_polling_scheduler: CredentialPollingScheduler | None = None,
     organization_directory_scheduler: OrganizationDirectoryScheduler | None = None,
     diagnostic_checks: dict[str, HealthCheck] | None = None,
+    validate_workflows: Callable[[], Awaitable[None]] | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        if validate_workflows is not None:
+            await validate_workflows()
         if credential_polling_scheduler is not None:
             await credential_polling_scheduler.start()
         if organization_directory_scheduler is not None:
@@ -155,6 +158,7 @@ def create_production_app(
         credential_polling_scheduler=components.credential_polling_scheduler,
         organization_directory_scheduler=components.organization_directory_scheduler,
         diagnostic_checks=dict(components.diagnostic_checks),
+        validate_workflows=components.validate_workflows,
     )
 
 
