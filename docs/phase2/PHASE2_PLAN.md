@@ -73,14 +73,23 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ## 3. 活欠债登记
 
-### OA 待办收敛候选的分段义务（2026-09-17）
+### OA 待办收敛的分段义务与非阻断欠债（2026-09-17）
 
-`P2-AUDIT-OA-TODO-CONVERGE-001` 的审计 #6 当前状态为「P 段已交付，D 段仍阻塞」；本次只修复 P 段候选，`#6` 的 done_when 仍为 P+D。以下机械同步候选已有义务，不核销既有消失项、已完成数据源、第二租户或真实现场验收欠债；跨棒合并与后继分配仍由 GOV-SYNC 裁定。
+`P2-AUDIT-OA-TODO-CONVERGE-001` 的审计 #6 为「P 段已交付并合并，D 段仍阻塞」；雨爷 2026-09-17 已接受分段交付，`#6` 的 done_when 仍为 P+D。保留 D 协议输入与真实现场验收两条义务，补登 PR #197 已登记的 N-1～N-9，不核销第二租户或既有验收债。九条非阻断发现与既有欠债不重复；N-5 针对后续新增 work-objects 端点，不与 `/me` / 头像错误响应缓存债合并；N-9 的根目录报告已移出仓库，保留后续历史数字引用的时态核对义务。
 
 | 义务 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | D 可信办结协议与语义输入 | 现有来源只有 pending/system_messages；缺经确认的流程终态、完成时间/时区、todo_id 映射、分页窗口与撤销/重开/ref 复用合同，不能把消失或个人已处理视为办结 | 无已登记输入任务；阻塞于经确认的脱敏结构合同提供，不虚构 task_id | P2-AUDIT-OA-TODO-CONVERGE-001 的 D 部分；拆棒由 GOV-SYNC 分配 | 输入齐备并冻结 provider/adapter/descriptor 映射与传输矩阵，真实受控读取→PG→HTTP→done 验证通过，完成与个人已处理可区分 | 已批方案 §3.4、§7.1–7.2 及末尾裁定 11；本候选无 D 表、能力、路由，done 保留占位 |
 | 真实 OA 观察一致性与完成列表现场验收 | P 的合成测试及分页计数不证明上游原子快照；未取得真实消失/重现与办结事实的现场证据 | 无已登记确定 task_id；需具体账号/环境/只读与持久化授权及 D 输入 | 本任务验收或 GOV-SYNC 分配的受控验收任务 | 获授权后核对完整空/变化、时序与已办终态对应，留下脱敏最小证据 | 已批方案 §4、§7.1；本轮仅合成上游与真实本地 PG/HTTP 测试，未读取原始 OA 素材 |
+| N-1 `_record_from_row` 用真值判断做空值合并 | 当前 DDL 约束兜底，但未来放宽约束会使 `pending_state or legacy_unverified`、`revision or 0`、`seen or source_fetched_at` 的语义静默改变 | 无（非阻断） | 待 GOV-SYNC 分配 | 相关约束或输入形状放宽前，补 `is None` 语义回归并完成约束/类型一致性核对 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-1；PR #197 欠债登记 |
+| N-2 观察表 upsert 的 `ON CONFLICT ... DO UPDATE ... WHERE` 不匹配时静默跳过 | 当前 ownership 前置反查使该分支实际不可达，但缺少防御性可观测信号 | 无（非阻断） | 待 GOV-SYNC 分配 | ownership 校验范围变化、允许同 ID 跨主体数据，或出现该冲突告警需求时增加显式失败/可观测性 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-2；PR #197 欠债登记 |
+| N-3 `begin_oa_sync` 构造丢弃式 `generation=1` 的 OASyncTicket 仅为触发校验 | 意图依赖注释，易被后续读者误解为真实票据 | 无（非阻断） | 待 GOV-SYNC 分配 | begin_oa_sync 票据校验或构造合同调整时，移除丢弃式票据并用显式校验表达意图 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-3；PR #197 欠债登记 |
+| N-4 `_raise_local_sync_error` 的 `code` 为裸 `str` | 闭集只由 messages 字典兜底，拼写错误在类型层不可见并可能退化为运行时 KeyError | 无（非阻断） | 待 GOV-SYNC 分配 | 新增或调整本地错误分支时，改为三元 Literal 并让类型检查覆盖闭集 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-4；PR #197 欠债登记 |
+| N-5 读取响应未实现 `Cache-Control: no-store` | 这符合裁定 8 对本棒无新增端点的收窄，但 D 段或后续新增 work-objects 端点仍需按裁定执行 | 无（非阻断） | 待 GOV-SYNC 分配；D 段施工时触发 | 新增读取端点或 D 段响应合同冻结并完成 no-store 验证 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-5；PR #197 欠债登记 |
+| N-6 协调重取守卫在同一 auth generation 内只触发一次 invalidate | 避免无界自动重试，但后续新一轮 revision 失配只能等常规刷新/轮询，计数可能持续显示 `—` | 无（非阻断） | 待 GOV-SYNC 分配 | 出现有界多轮 revision 失配需求时，补充有界协调策略及对应回归 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-6；PR #197 欠债登记 |
+| N-7 `mergeWorkObjectView` 以对象引用比较判定 splitProjection | 同内容不同引用可能多收窄一次，虽偏保守且不越权，但需关注显示/办理投影 | 无（非阻断） | 待 GOV-SYNC 分配 | 投影合并或数据装配改为独立对象时，补充值相等与引用不同的覆盖并重新核对收窄语义 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-7；PR #197 欠债登记 |
+| N-8 `apply_oa_pending_snapshot` 末尾 UPDATE 未重复限定 `issued_generation = generation` | 当前 FOR UPDATE 行锁与代次比较保证正确，但缺少纵深防御的冗余条件 | 无（非阻断） | 待 GOV-SYNC 分配 | 事务、锁或并发 writer 结构变化时，补充 SQL 条件与并发回归 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-8；PR #197 欠债登记 |
+| N-9 不同轮次验证数字并存的时态混淆风险 | 根目录报告已由 PR #197 移出；仍需防止后续把外部历史数字回写现役状态并被误作当前实测 | 无（非阻断） | 待 GOV-SYNC 分配 | 后续状态、PR 与外部证据引用均完成轮次/来源标注核对，且不把旧数字写成当前结果 | `C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-OA-TODO-CONVERGE-001/_静态评审r1_结论.md` N-9；PR #197 欠债登记 |
 
 ### Top-K 候选新增及待治理义务（2026-09-16）
 
@@ -88,7 +97,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| Top-K 方案恢复及 R-a/R-b 裁定待落盘 | 2026-09-16 已裁定标签碰撞沿用冻结 GT-014、属性键使用词段匹配及业务计数窄白名单；现役 DECISIONS 尚未传播方案恢复与两项冲突裁定，本实现棒不能代行 B 类治理裁决 | `P2-AUDIT-CAPABILITY-TOPK-001` 最终候选及独立审查 | GOV-SYNC（批次 task_id 待主控分配） | GOV-SYNC 落盘恢复裁定，明确方案 §3.6.1/§3.1.4 的替代关系，并据最终证据处理 b1/b2/b3 账目 | 已批授权记录第7条（原件路径留 PR）；`app/runtime/runtime.py::_resolve_candidate_binding`；`app/knowledge/basic_knowledge.py::contains_sensitive_property_key`；GT-014 与属性键回归 |
+| Top-K 方案恢复及剩余账目待治理 | R-a/R-b 两项冲突裁定已由 `P2-GOV-SYNC-064` 写入 DECISIONS；方案恢复与 b1/b2/b3 账目仍须据最终证据核对，本棒不据裁决落盘核销其余义务 | `P2-AUDIT-CAPABILITY-TOPK-001` 最终候选及独立审查 | GOV-SYNC（批次 task_id 待主控分配） | GOV-SYNC 落盘恢复裁定，明确方案 §3.6.1/§3.1.4 的替代关系，并据最终证据处理 b1/b2/b3 账目 | 已批授权记录第7条（原件路径留 PR）；`app/runtime/runtime.py::_resolve_candidate_binding`；`app/knowledge/basic_knowledge.py::contains_sensitive_property_key`；GT-014 与属性键回归 |
 | 文本字段敏感子串误伤 | name/owner/short_description/tag/version 继续沿用既有子串检测，合法 author 等可能命中 auth 而使可见目录失败；本次词段裁定只覆盖属性键，未授权扩大至文本字段 | 待批准的文本字段检测合同，无已分配 task_id | 待 GOV-SYNC 分配 | 获批字段/形状规则后，合法文本正例和真正敏感负例均通过，保持安全摘要与零原文外露 | `app/knowledge/basic_knowledge.py::sanitize_knowledge_text`；`app/knowledge/capability_selection.py::_project_contract`；第7条 R-b 裁定 |
 | 确定性词面相关性覆盖局限 | ASCII token/中文双字不保证所有同义表达及指代召回；大目录零分/同分明确要求补充，不能以 Top-K 可达性证明语义召回率 | `P2-AUDIT-CAPABILITY-TOPK-001` 最终证据及后续检索价值评估 | 既有 b4：Embedding 增强，是否激活仍按需求裁定 | 获批语义召回方案达到事先确定的合成请求集标准，且无越权/超预算回归；或正式决定保留词面方案 | `app/knowledge/capability_selection.py::_tokens`、`_with_score`；`tests/knowledge/test_capability_selection.py` |
 | 完整模型输入不能重建 | 候选计数、规则版本与 hash 不足以重建完整 messages；用户输入可能含敏感值，不能直接持久化进 Trace | 未分配的模型输入记录/脱敏/保留合同任务 | 待 GOV-SYNC 分配 | 明确批准保存字段、脱敏、保留与读取授权，能重建所承诺范围且无凭证明文；不据本棒候选 hash 宣称已完成 | `app/runtime/intent_router.py::parse`；`app/infra/llm/openai_compatible.py::_request_completion`；Top-K 方案 §7.1 |

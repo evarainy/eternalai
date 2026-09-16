@@ -54,6 +54,7 @@
 - 集成只走任务分支普通 push → PR → required checks 最终全绿 → 获准的 PR 合并；不得本地合完直推主分支。验证、所需 Review、候选 freshness、分支保护与 required checks 均须满足；绿灯本身不是合并授权。每次合并后检查对应 merge SHA 的远端 GitHub Actions 结果。
 - 不建 per-task Task Record。PR body 合并前必须完整包含 `## Scope`、`## 验证结果`、`## 本棒新增欠债`。验证段逐条记录实际命令、最小充分原始结果、未执行项理由、候选 commit 与 CI run；欠债每条带 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
 - A 档验证段还须含 `### Opus 评审桥` 或 `### grok 评审桥` JSON 摘要，字段闭集：`requested_model`、`observed_model`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。合规要求 `review_model_verified=true`、PR 摘要如实记录实际 `observed_model`、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
+- 评审桥因额度耗尽或服务故障不可用时，经雨爷当次明确授权，可由**替代静态评审方**（如子智能体）承担 A 档静态评审。此时 PR 验证段改用 `### 静态评审（替代评审桥）` 段落，如实记录：替代授权的来源与日期、实际使用的模型、`verdict`、绑定的 `base_sha` 与 `head_sha`、以及未运行评审桥的原因。**不得伪造 `review_model_verified`、`termination_reason`、`provider_error`、`invalid_stream_lines` 等由桥脚本产出的闭集字段**——没有跑桥就不写这些字段。替代评审方的判据、只读边界与「不重复 Monitor 已取证的动态事实」要求与评审桥一致。
 - Owner 已登记待办：为主分支保护开启 **Do not allow bypassing the above settings**；无专项授权不得代改。
 
 ## 状态同步
