@@ -756,7 +756,10 @@ class WorkObjectService:
                 ticket, failure_code=code, finished_at=self._clock(),
             )
         except Exception:
-            _raise_local_sync_error("work_object_sync_failed", background)
+            # Callers still raise the original background failure classification.
+            # A diagnostic write must not replace authentication/countable errors.
+            if not background:
+                _raise_local_sync_error("work_object_sync_failed", background=False)
 
     async def sync_for_background(self, principal: Principal) -> None:
         """Run the same Gateway path with retry-safe failure classification."""

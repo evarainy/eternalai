@@ -679,3 +679,55 @@ def test_superseded_and_local_storage_failure_are_not_poll_success(failure):
     assert bindings.non_counted_failures == 1
     assert bindings.counted_failures == 0
     assert bindings.terminal == []
+
+
+@pytest.mark.parametrize("failure,terminal,counted", [
+    ("identity_expired", ["invalid"], 0),
+    ("adapter_timeout", [], 1),
+    ("adapter_payload_invalid", [], 1),
+    ("malformed-success", [], 1),
+])
+def test_diagnostic_write_failure_preserves_original_poll_classification(
+    failure, terminal, counted,
+):
+    from tests.api.test_work_objects import RecordingGateway, _record
+
+    attempts = []
+
+    class DiagnosticFailure(MemoryWorkObjectStore):
+        async def finish_oa_sync_failure(self, ticket, **kwargs):
+            attempts.append((ticket, kwargs))
+            raise RuntimeError("synthetic diagnostic failure")
+
+    result = (
+        ExecutionResult(status="completed", trace_id="synthetic", data={"workflows": []})
+        if failure == "malformed-success" else
+        ExecutionResult(status="failed", trace_id="synthetic", error_code=failure)
+    )
+    gateway = RecordingGateway(result)
+    original = _record(owner=PRINCIPAL.ai_user_id)
+    records = DiagnosticFailure([original])
+    bindings = FakeBindingStore()
+    objects = WorkObjectService(store=records, gateway=gateway,
+        capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    service = CredentialPollingService(
+        binding_store=bindings, acquirer=FakeAcquirer(), work_objects=objects,
+        policy=CredentialPollingPolicy(interval_seconds=600, maximum_backoff_seconds=3600,
+            work_start_hour=8, work_end_hour=18, timezone_name="Asia/Shanghai",
+            global_concurrency=1, scheduler_tick_seconds=60), clock=lambda: NOW,
+    )
+    assert asyncio.run(service.run_due()) == 1
+    assert len(gateway.calls) == len(attempts) == 1
+    assert attempts[0][0].subject.ai_user_id == PRINCIPAL.ai_user_id
+    assert attempts[0][1]["failure_code"] == {
+        "identity_expired": "reauthentication_required",
+        "adapter_timeout": "upstream_unavailable",
+        "adapter_payload_invalid": "invalid_response",
+        "malformed-success": "invalid_response",
+    }[failure]
+    assert records.records == {original.work_object_id: original}
+    assert records.apply_calls == 0
+    assert bindings.terminal == terminal
+    assert bindings.counted_failures == counted
+    assert bindings.non_counted_failures == 0
+    assert bindings.successes == 0

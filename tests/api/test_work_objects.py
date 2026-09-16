@@ -1479,13 +1479,13 @@ def test_expiry_before_read_response_requeries_self_scope(dispatch_db, monkeypat
     ticks = [0.0]
     db.service._monotonic = lambda: ticks[0]
     calls = []
-    original = db.store.list_for_scope
+    original = db.store.list_with_oa_sync_for_scope
     async def delayed(scope, **kwargs):
         calls.append((scope, kwargs))
         records = await original(scope, **kwargs)
         ticks[0] = 172801.0
         return records
-    monkeypatch.setattr(db.store, "list_for_scope", delayed)
+    monkeypatch.setattr(db.store, "list_with_oa_sync_for_scope", delayed)
     response = db.client.get("/api/v1/work-objects?q=Synthetic")
     assert response.status_code == 200
     assert [item["work_object_id"] for item in response.json()["items"]] == [own]
@@ -1734,13 +1734,15 @@ def test_background_sync_keeps_auth_upstream_and_local_failure_classes(
     from tests.api.test_work_object_dispatch import run
 
     db = dispatch_db
+    apply_failures = []
     if failure == "local-db":
         db.service._gateway = RecordingGateway(_success_result())
 
-        async def fail(**_kwargs):
+        async def fail(ticket, **_kwargs):
+            apply_failures.append(ticket)
             raise RuntimeError("synthetic database failure")
 
-        monkeypatch.setattr(db.store, "upsert_oa_pending_workflows", fail)
+        monkeypatch.setattr(db.store, "apply_oa_pending_snapshot", fail)
     else:
         db.service._gateway = RecordingGateway(
             ExecutionResult(status="failed", trace_id="synthetic-trace", error_code=failure)
@@ -1750,6 +1752,15 @@ def test_background_sync_keeps_auth_upstream_and_local_failure_classes(
     assert error.value.authentication_denied is expected_auth
     assert error.value.failure_code == expected_code
     assert db.counts() == (0, 0)
+    with db.sql.connect() as connection:
+        assert connection.execute(text("SELECT * FROM oa_work_pending_observations")).all() == []
+        state = connection.execute(text("SELECT * FROM oa_work_sync_state")).mappings().all()
+    if failure == "local-db":
+        assert len(apply_failures) == 1
+        assert len(state) == 1
+        assert state[0]["last_attempt_status"] == "failed"
+        assert state[0]["last_error_code"] == "storage_unavailable"
+        assert state[0]["applied_generation"] == 0
 
 
 def _default_client(store, gateway) -> TestClient:
@@ -1767,6 +1778,7 @@ def _default_client(store, gateway) -> TestClient:
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
         ),
         base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
     )
     client.cookies.update(auth_cookies())
     return client
@@ -1916,6 +1928,90 @@ def test_online_sync_reaches_real_reconciliation_store(dispatch_db):
         ).all()
     assert rows == [("unconfirmed", 2)]
     assert client.get(f"/api/v1/work-objects/{work_id}").json()["handling_action"] == "view_only"
+
+
+@pytest.mark.parametrize("error_code", ["identity_expired", "adapter_timeout"])
+def test_online_diagnostic_write_failure_remains_fixed_503(error_code):
+    attempts = []
+
+    class DiagnosticFailure(MemoryWorkObjectStore):
+        async def finish_oa_sync_failure(self, ticket, **kwargs):
+            attempts.append((ticket, kwargs))
+            raise RuntimeError("synthetic diagnostic failure")
+
+    original = _record()
+    store = DiagnosticFailure([original])
+    gateway = RecordingGateway(ExecutionResult(
+        status="failed", trace_id="synthetic-trace", error_code=error_code,
+    ))
+    client = _default_client(store, gateway)
+    response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "work_object_sync_failed",
+        "message": "Work Object synchronization failed; stored data is unchanged.",
+    }
+    assert len(gateway.calls) == len(attempts) == 1
+    assert attempts[0][1]["failure_code"] == (
+        "reauthentication_required" if error_code == "identity_expired" else "upstream_unavailable"
+    )
+    assert store.records == {original.work_object_id: original}
+    assert store.apply_calls == 0
+
+
+def test_http_real_commit_ack_loss_reloads_published_empty_snapshot(dispatch_db, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    db = dispatch_db
+    gateway = RecordingGateway()
+    client = _default_client(db.store, gateway)
+    first = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert first.status_code == 200
+    work_id = first.json()["items"][0]["work_object_id"]
+    commits = []
+    diagnostic_calls = []
+
+    class LostApplyAcknowledgement(AsyncSession):
+        async def commit(self):
+            await super().commit()
+            commits.append(True)
+            if len(commits) == 2:
+                raise RuntimeError("synthetic lost apply acknowledgement")
+
+    original_finish = db.store.finish_oa_sync_failure
+
+    async def record_finish(*args, **kwargs):
+        diagnostic_calls.append(True)
+        return await original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(db.store, "finish_oa_sync_failure", record_finish)
+    monkeypatch.setattr(db.store, "_session_factory", async_sessionmaker(
+        db.engine, class_=LostApplyAcknowledgement, expire_on_commit=False,
+    ))
+    gateway.result = _empty_success_result()
+    response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "oa_sync_outcome_unknown"
+    assert len(commits) == 2  # begin then apply; no retry or diagnostic commit
+    assert len(gateway.calls) == 2  # seed then empty batch
+    assert diagnostic_calls == []
+    persisted = client.get("/api/v1/work-objects")
+    assert persisted.status_code == 200
+    assert persisted.json()["items"] == []
+    assert persisted.json()["oa_sync"]["status"] == "succeeded"
+    assert persisted.json()["oa_sync"]["revision"] == 2
+    assert persisted.json()["oa_sync"]["failure_code"] is None
+    history = client.get("/api/v1/work-objects", params={"oa_view": "unconfirmed"})
+    assert history.status_code == 200
+    assert [r["work_object_id"] for r in history.json()["items"]] == [work_id]
+    assert history.json()["items"][0]["oa_observation"]["revision"] == 2
+    with db.sql.connect() as connection:
+        assert connection.execute(text(
+            "SELECT last_attempt_status FROM oa_work_sync_state"
+        )).scalar_one() == "succeeded"
+        assert connection.execute(text(
+            "SELECT pending_state FROM oa_work_pending_observations"
+        )).scalar_one() == "unconfirmed"
 
 
 def test_real_commit_ack_loss_preserves_published_state_and_late_failure(dispatch_db):

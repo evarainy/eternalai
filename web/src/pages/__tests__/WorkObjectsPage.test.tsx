@@ -828,6 +828,9 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
     expect(screen.getByText(/数据截至/)).toHaveTextContent('2026年9月16日');
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
+    expect(screen.getByText('当前无待办。')).toBeVisible();
+    expect(screen.queryByText('还没有取得可显示的工作事项。')).toBeNull();
+    expect(screen.queryByText(/下一步：先在顶栏确认 OA 绑定/)).toBeNull();
     const historySection = screen.getByText('当前待办未再确认（1）').closest('details')!;
     fireEvent.click(screen.getByText('当前待办未再确认（1）'));
     expect(historySection).toHaveTextContent('可能已转交、撤回或办结，请到OA核对');
@@ -835,6 +838,29 @@ describe('WorkObjectsPage', () => {
     fireEvent.click(within(historySection).getByRole('button', { name: '先看看' }));
     await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('当前待办未再确认'));
     expect(apiMocks.historyWorkObjects).toHaveBeenCalledWith({ oa_view: 'unconfirmed' });
+  });
+
+  it.each([
+    ['never', '尚未成功核对 OA 待办'],
+    ['running', 'OA 同步进行中，当前显示已保存数据'],
+    ['failed', '最近一次 OA 同步失败，保留已保存数据'],
+  ] as const)('does not call an empty %s batch a successful empty snapshot', async (status, title) => {
+    const sync: WorkObjectListResponse['oa_sync'] = {
+      status, revision: 0, attempt_revision: status === 'never' ? 0 : 1,
+      last_attempt_at: status === 'never' ? null : '2026-09-16T04:00:00Z',
+      last_success_at: null,
+      failure_code: status === 'failed' ? 'upstream_unavailable' : null,
+    };
+    const response = listResponse({ items: [], oa_sync: sync });
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.historyWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
+    renderPage();
+    expect(await screen.findByText(title)).toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
+    expect(screen.getByText('还没有取得可显示的工作事项。')).toBeVisible();
+    expect(screen.queryByText('当前无待办。')).toBeNull();
+    expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
   });
 
   it('keeps latest attempt failure when stale running arrives and accepts a newer attempt', async () => {

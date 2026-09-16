@@ -544,7 +544,7 @@ def test_no_job_keeps_only_existing_visibility(dispatch_db) -> None:
             initiator_ai_user_id="ai-other", tenant_id=tenant,
         ))
     for user in ("ai-sender", "ai-other"):
-        oa = _record(owner=user).model_dump()
+        oa = _record(owner=user).model_dump(exclude={"oa_observation"})
         insert_synthetic_row(db, oa)
         legacy = {
             **oa, "work_object_id": "legacy-" + user, "state_authority": "internal",
@@ -670,7 +670,7 @@ def test_private_legacy_and_oa_rows_do_not_gain_department_visibility(
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     created = assert_created(db, db.post(cross_department_body()))
-    oa = _record(owner="ai-private-owner").model_dump()
+    oa = _record(owner="ai-private-owner").model_dump(exclude={"oa_observation"})
     insert_synthetic_row(db, oa)
     legacy = {
         **oa,
@@ -1012,7 +1012,9 @@ def _insert_sorted_row(
         }
         insert_synthetic_row(db, row)
         return
-    row = _record(owner="ai-sorter", source_ref="oa-" + item_id, index=1).model_dump()
+    row = _record(owner="ai-sorter", source_ref="oa-" + item_id, index=1).model_dump(
+        exclude={"oa_observation"}
+    )
     row.update(
         {
             "work_object_id": item_id,
@@ -1275,7 +1277,9 @@ def test_ordering_preserves_scope_before_limit(dispatch_db) -> None:
             owner_department_id="office-a",
             initiator_ai_user_id="ai-neighbor",
         )
-    other_oa = _record(owner="ai-other", source_ref="other-oa", index=1).model_dump()
+    other_oa = _record(owner="ai-other", source_ref="other-oa", index=1).model_dump(
+        exclude={"oa_observation"}
+    )
     other_oa.update(
         {
             "work_object_id": "hid-oa",

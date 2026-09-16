@@ -716,10 +716,15 @@ export default function WorkObjectsPage() {
           '下一步：办结记录接进来后，这里会自动出现。',
         ]
       : visibleSourceItems.length === 0
-        ? [
-            '还没有取得可显示的工作事项。',
-            '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
-          ]
+        ? syncStatus?.status === 'succeeded'
+          ? [
+              '当前无待办。',
+              '下一步：需要时刷新 OA 事项，历史记录可在「待办」下方查看。',
+            ]
+          : [
+              '还没有取得可显示的工作事项。',
+              '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
+            ]
         : view === 'urgent'
           ? [
               '现在没有要紧的事。',
