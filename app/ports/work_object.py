@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, TypeAlias
 from uuid import UUID
 
@@ -41,6 +41,140 @@ WorkObjectHandlingMark: TypeAlias = Literal[
     "pending_sync_confirmation",
     "handled_elsewhere",
 ]
+
+OASyncStream: TypeAlias = Literal["pending", "completed"]
+OAView: TypeAlias = Literal["active", "unconfirmed", "all"]
+OASyncFailureCode: TypeAlias = Literal[
+    "reauthentication_required", "binding_scope_required", "forbidden",
+    "invalid_response", "upstream_unavailable", "storage_unavailable", "clock_invalid",
+]
+
+
+class _OAStrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    @field_validator("*", mode="after")
+    @classmethod
+    def _utc_datetimes(cls, value: Any) -> Any:
+        if isinstance(value, datetime) and value.utcoffset() != timedelta(0):
+            raise ValueError("OA observation times require UTC")
+        return value
+
+
+class OASyncSubject(_OAStrictModel):
+    tenant_id: Literal["default"]
+    ai_user_id: str = Field(min_length=1)
+
+    @field_validator("ai_user_id")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("OA subject must not be blank")
+        return value
+
+
+class OASyncTicket(_OAStrictModel):
+    subject: OASyncSubject
+    stream: OASyncStream
+    generation: int = Field(gt=0)
+    started_at: datetime
+
+
+class OAObservation(_OAStrictModel):
+    pending_state: Literal["legacy_unverified", "current", "unconfirmed"]
+    revision: int = Field(ge=0)
+    last_seen_at: datetime
+    last_checked_at: datetime | None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> OAObservation:
+        if self.pending_state == "legacy_unverified":
+            if self.revision != 0 or self.last_checked_at is not None:
+                raise ValueError("legacy observations have no reconciliation")
+        elif (
+            self.revision == 0 or self.last_checked_at is None
+            or self.last_checked_at < self.last_seen_at
+            or (self.pending_state == "current" and self.last_checked_at != self.last_seen_at)
+        ):
+            raise ValueError("inconsistent reconciled observation")
+        return self
+
+
+class OASyncStatusView(_OAStrictModel):
+    status: Literal["never", "running", "succeeded", "failed", "unsupported_scope"]
+    revision: int = Field(ge=0)
+    attempt_revision: int = Field(ge=0)
+    last_attempt_at: datetime | None
+    last_success_at: datetime | None
+    failure_code: OASyncFailureCode | None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> OASyncStatusView:
+        if self.attempt_revision < self.revision:
+            raise ValueError("attempt revision precedes publication")
+        if (self.revision == 0) != (self.last_success_at is None):
+            raise ValueError("success time must match publication")
+        if self.status in {"never", "unsupported_scope"}:
+            if self.attempt_revision or self.last_attempt_at is not None or self.failure_code:
+                raise ValueError("unattempted sync must be empty")
+        else:
+            if self.last_attempt_at is None or self.attempt_revision == 0:
+                raise ValueError("attempt metadata required")
+            if self.status == "succeeded":
+                if self.revision != self.attempt_revision or self.revision == 0:
+                    raise ValueError("success must publish the issued generation")
+                if self.last_success_at is None or self.last_success_at < self.last_attempt_at:
+                    raise ValueError("success precedes attempt")
+            elif self.attempt_revision <= self.revision:
+                raise ValueError("unfinished publication requires a newer attempt")
+        if (self.status == "failed") != (self.failure_code is not None):
+            raise ValueError("only failed sync has a diagnostic code")
+        return self
+
+
+class OASyncStatus(_OAStrictModel):
+    subject: OASyncSubject
+    stream: OASyncStream
+    issued_generation: int = Field(ge=0)
+    applied_generation: int = Field(ge=0)
+    last_attempt_status: Literal["never", "running", "succeeded", "failed"]
+    last_attempt_started_at: datetime | None
+    last_attempt_finished_at: datetime | None
+    last_success_at: datetime | None
+    last_error_code: OASyncFailureCode | None
+
+    def to_view(self) -> OASyncStatusView:
+        return OASyncStatusView(
+            status=self.last_attempt_status, revision=self.applied_generation,
+            attempt_revision=self.issued_generation, last_attempt_at=self.last_attempt_started_at,
+            last_success_at=self.last_success_at, failure_code=self.last_error_code,
+        )
+
+    @model_validator(mode="after")
+    def _consistent(self) -> OASyncStatus:
+        self.to_view()
+        finished = self.last_attempt_finished_at
+        if self.last_attempt_status in {"never", "running"}:
+            if finished is not None:
+                raise ValueError("unfinished attempt has a finish time")
+        elif finished is None:
+            raise ValueError("terminal attempt requires a finish time")
+        elif self.last_attempt_status == "succeeded" and finished != self.last_success_at:
+            raise ValueError("successful finish must match publication time")
+        elif (
+            self.last_attempt_started_at is not None
+            and finished < self.last_attempt_started_at and self.last_error_code != "clock_invalid"
+        ):
+            raise ValueError("finish precedes start without clock diagnostic")
+        return self
+
+
+class OASyncOutcomeUnknown(RuntimeError):
+    """Commit acknowledgement was lost; callers must read, never repeat apply."""
+
+
+class OASyncClockInvalid(ValueError):
+    """A snapshot cannot replace a later observed fact."""
 
 
 class OAPendingWorkSnapshot(BaseModel):
@@ -81,6 +215,13 @@ class OAPendingWorkSnapshotCollection(BaseModel):
     returned_count: int
     authoritative_count: int
     is_complete: Literal[True]
+
+    @field_validator("is_complete", mode="before")
+    @classmethod
+    def _require_true_boolean(cls, value: Any) -> Any:
+        if value is not True:
+            raise ValueError("OA collection completeness requires boolean true")
+        return value
 
     @model_validator(mode="after")
     def _validate_complete_collection(self) -> OAPendingWorkSnapshotCollection:
@@ -135,6 +276,7 @@ class OAWorkObjectRecord(_WorkObjectRecordBase):
     source_created_at: str
     source_workflow_type_id: str
     source_fetched_at: datetime
+    oa_observation: OAObservation
 
 
 class InternalWorkObjectRecord(_WorkObjectRecordBase):
@@ -249,7 +391,34 @@ WorkObjectRecord: TypeAlias = Annotated[
 ]
 
 
+class WorkObjectReadBatch(_OAStrictModel):
+    records: list[WorkObjectRecord]
+    oa_sync: OASyncStatusView
+
+
 class WorkObjectStorePort(Protocol):
+    async def begin_oa_sync(
+        self, subject: OASyncSubject, stream: OASyncStream, started_at: datetime,
+    ) -> OASyncTicket: ...
+
+    async def apply_oa_pending_snapshot(
+        self, ticket: OASyncTicket, *, assignee_display_name: str,
+        collection: OAPendingWorkSnapshotCollection, fetched_at: datetime,
+    ) -> Literal["applied", "superseded"]: ...
+
+    async def finish_oa_sync_failure(
+        self, ticket: OASyncTicket, *, failure_code: OASyncFailureCode, finished_at: datetime,
+    ) -> None: ...
+
+    async def get_oa_sync_status(
+        self, subject: OASyncSubject, stream: OASyncStream,
+    ) -> OASyncStatus: ...
+
+    async def list_with_oa_sync_for_scope(
+        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
+        oa_view: OAView = "active", limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+    ) -> WorkObjectReadBatch: ...
+
     async def upsert_oa_pending_workflows(
         self,
         *,
@@ -302,12 +471,23 @@ class WorkObjectStorePort(Protocol):
 
 __all__ = (
     "InternalWorkObjectRecord",
+    "OAObservation",
     "OAPendingWorkSnapshot",
     "OAPendingWorkSnapshotCollection",
+    "OASyncClockInvalid",
+    "OASyncFailureCode",
+    "OASyncOutcomeUnknown",
+    "OASyncStatus",
+    "OASyncStatusView",
+    "OASyncStream",
+    "OASyncSubject",
+    "OASyncTicket",
+    "OAView",
     "OAWorkObjectRecord",
     "WORK_OBJECT_LIST_FETCH_LIMIT",
     "WORK_OBJECT_LIST_LIMIT",
     "WorkObjectHandlingMark",
+    "WorkObjectReadBatch",
     "WorkObjectRecord",
     "WorkObjectStorePort",
 )

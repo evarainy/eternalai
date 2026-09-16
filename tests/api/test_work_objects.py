@@ -37,9 +37,21 @@ from app.ports.request_context import RequestOrgContext
 from app.ports.work_object import (
     DispatchReceipt,
     InternalWorkObjectRecord,
+    OAObservation,
     OAPendingWorkSnapshot,
+    OAPendingWorkSnapshotCollection,
+    OASyncClockInvalid,
+    OASyncFailureCode,
+    OASyncOutcomeUnknown,
+    OASyncStatus,
+    OASyncStatusView,
+    OASyncStream,
+    OASyncSubject,
+    OASyncTicket,
+    OAView,
     OAWorkObjectRecord,
     WorkObjectHandlingMark,
+    WorkObjectReadBatch,
     WorkObjectRecord,
 )
 from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
@@ -60,9 +72,117 @@ NOW = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
 class MemoryWorkObjectStore:
     def __init__(self, records: list[WorkObjectRecord] | None = None) -> None:
         self.records = {record.work_object_id: record for record in records or []}
+        self.states: dict[tuple[str, str], OASyncStatus] = {}
+        self.apply_calls = 0
         self.upsert_calls = 0
         self.list_calls: list[dict[str, object]] = []
         self.receipts: dict[tuple[str, str, UUID], DispatchReceipt] = {}
+
+    @staticmethod
+    def _project(record: WorkObjectRecord, scope: AuthorizedWorkObjectScope) -> WorkObjectRecord:
+        if scope.principal_tenant_id != "default" and record.state_authority == "external_snapshot":
+            return record.model_copy(update={"oa_observation": OAObservation(
+                pending_state="legacy_unverified", revision=0,
+                last_seen_at=record.source_fetched_at, last_checked_at=None,
+            )})
+        return record
+
+    async def get_oa_sync_status(
+        self, subject: OASyncSubject, stream: OASyncStream
+    ) -> OASyncStatus:
+        return self.states.get((subject.ai_user_id, stream), OASyncStatus(
+            subject=subject, stream=stream, issued_generation=0, applied_generation=0,
+            last_attempt_status="never", last_attempt_started_at=None,
+            last_attempt_finished_at=None, last_success_at=None, last_error_code=None,
+        ))
+
+    async def begin_oa_sync(
+        self, subject: OASyncSubject, stream: OASyncStream, started_at: datetime,
+    ) -> OASyncTicket:
+        state = await self.get_oa_sync_status(subject, stream)
+        ticket = OASyncTicket(subject=subject, stream=stream,
+                              generation=state.issued_generation + 1, started_at=started_at)
+        self.states[(subject.ai_user_id, stream)] = OASyncStatus.model_validate({
+            **state.model_dump(), "issued_generation": ticket.generation,
+            "last_attempt_status": "running", "last_attempt_started_at": started_at,
+            "last_attempt_finished_at": None, "last_error_code": None,
+        })
+        return ticket
+
+    async def apply_oa_pending_snapshot(
+        self, ticket: OASyncTicket, *, assignee_display_name: str,
+        collection: OAPendingWorkSnapshotCollection, fetched_at: datetime,
+    ) -> str:
+        self.apply_calls += 1
+        collection = OAPendingWorkSnapshotCollection.model_validate(collection.model_dump())
+        state = await self.get_oa_sync_status(ticket.subject, ticket.stream)
+        if (
+            ticket.generation != state.issued_generation
+            or ticket.generation <= state.applied_generation
+        ):
+            return "superseded"
+        owned = [r for r in self.records.values() if r.state_authority == "external_snapshot"
+                 and r.assignee_ai_user_id == ticket.subject.ai_user_id]
+        if fetched_at < ticket.started_at or any(fetched_at < r.source_fetched_at for r in owned):
+            raise OASyncClockInvalid()
+        await self.upsert_oa_pending_workflows(
+            assignee_ai_user_id=ticket.subject.ai_user_id,
+            assignee_display_name=assignee_display_name,
+            snapshots=collection.workflows, fetched_at=fetched_at,
+        )
+        refs = {item.source_ref for item in collection.workflows}
+        for key, record in list(self.records.items()):
+            if (
+                record.state_authority == "external_snapshot"
+                and record.assignee_ai_user_id == ticket.subject.ai_user_id
+            ):
+                self.records[key] = record.model_copy(update={"oa_observation": OAObservation(
+                    pending_state="current" if record.source_ref in refs else "unconfirmed",
+                    revision=ticket.generation, last_seen_at=record.source_fetched_at,
+                    last_checked_at=fetched_at,
+                )})
+        self.states[(ticket.subject.ai_user_id, ticket.stream)] = OASyncStatus.model_validate({
+            **state.model_dump(), "applied_generation": ticket.generation,
+            "last_attempt_status": "succeeded", "last_attempt_finished_at": fetched_at,
+            "last_success_at": fetched_at, "last_error_code": None,
+        })
+        return "applied"
+
+    async def finish_oa_sync_failure(
+        self, ticket: OASyncTicket, *, failure_code: OASyncFailureCode, finished_at: datetime,
+    ) -> None:
+        state = await self.get_oa_sync_status(ticket.subject, ticket.stream)
+        if (
+            ticket.generation == state.issued_generation
+            and ticket.generation > state.applied_generation
+        ):
+            self.states[(ticket.subject.ai_user_id, ticket.stream)] = OASyncStatus.model_validate(
+                {
+                    **state.model_dump(),
+                    "last_attempt_status": "failed",
+                    "last_attempt_finished_at": finished_at,
+                    "last_error_code": "clock_invalid"
+                    if finished_at < ticket.started_at
+                    else failure_code,
+                }
+            )
+
+    async def list_with_oa_sync_for_scope(
+        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
+        oa_view: OAView = "active", limit: int = 201,
+    ) -> WorkObjectReadBatch:
+        records = await self.list_for_scope(
+            scope, search_term=search_term, limit=limit, oa_view=oa_view
+        )
+        if scope.principal_tenant_id == "default":
+            state = await self.get_oa_sync_status(OASyncSubject(
+                tenant_id="default", ai_user_id=scope.principal_ai_user_id,
+            ), "pending")
+            view = state.to_view()
+        else:
+            view = OASyncStatusView(status="unsupported_scope", revision=0, attempt_revision=0,
+                                    last_attempt_at=None, last_success_at=None, failure_code=None)
+        return WorkObjectReadBatch(records=records, oa_sync=view)
 
     async def upsert_oa_pending_workflows(
         self,
@@ -108,6 +228,10 @@ class MemoryWorkObjectStore:
                 source_created_at=snapshot.created_at,
                 source_workflow_type_id=snapshot.workflow_type_id,
                 source_fetched_at=fetched_at,
+                oa_observation=OAObservation(
+                    pending_state="legacy_unverified", revision=0,
+                    last_seen_at=fetched_at, last_checked_at=None,
+                ),
                 handling_mark=current.handling_mark if current else None,
                 handling_marked_by_ai_user_id=(
                     current.handling_marked_by_ai_user_id if current else None
@@ -124,6 +248,7 @@ class MemoryWorkObjectStore:
         *,
         search_term: str | None = None,
         limit: int = 201,
+        oa_view: OAView = "all",
     ) -> list[WorkObjectRecord]:
         self.list_calls.append(
             {
@@ -157,6 +282,13 @@ class MemoryWorkObjectStore:
                     and normalized_search_term in normalize_search_value(record.title)
                 )
             ]
+        records = [self._project(record, scope) for record in records]
+        if oa_view == "active":
+            records = [r for r in records if r.state_authority != "external_snapshot"
+                       or r.oa_observation.pending_state != "unconfirmed"]
+        elif oa_view == "unconfirmed":
+            records = [r for r in records if r.state_authority == "external_snapshot"
+                       and r.oa_observation.pending_state == "unconfirmed"]
         return records[:limit]
 
     async def get_for_scope(
@@ -166,7 +298,7 @@ class MemoryWorkObjectStore:
     ) -> WorkObjectRecord | None:
         return next(
             (
-                record
+                self._project(record, scope)
                 for record in self.records.values()
                 if record.work_object_id == work_object_id and self._visible(record, scope)
             ),
@@ -307,6 +439,10 @@ def _record(
         source_created_at="2026-08-17",
         source_workflow_type_id="workflow-1",
         source_fetched_at=NOW - timedelta(minutes=index),
+        oa_observation=OAObservation(
+            pending_state="legacy_unverified", revision=0,
+            last_seen_at=NOW - timedelta(minutes=index), last_checked_at=None,
+        ),
         handling_mark=None,
         handling_marked_by_ai_user_id=None,
         handling_marked_at=None,
@@ -1614,3 +1750,226 @@ def test_background_sync_keeps_auth_upstream_and_local_failure_classes(
     assert error.value.authentication_denied is expected_auth
     assert error.value.failure_code == expected_code
     assert db.counts() == (0, 0)
+
+
+def _default_client(store, gateway) -> TestClient:
+    tokens = StaticSessionTokens(roles=("user",))
+    tokens.principal = Principal(ai_user_id="user-a", display_name="User A", roles=("user",),
+                                 org_ctx=PrincipalOrgContext(tenant_id="default"))
+    service = WorkObjectService(store=store, gateway=gateway,
+                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    client = TestClient(
+        create_app(
+            work_object_service=service,
+            session_tokens=tokens,
+            session_binder=make_session_binder(),
+            session_cookie_ttl_seconds=3600,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url="https://testserver",
+    )
+    client.cookies.update(auth_cookies())
+    return client
+
+
+def _empty_success_result() -> ExecutionResult:
+    return ExecutionResult(status="completed", trace_id="trace-empty", data={
+        "workflows": [], "returned_count": 0, "authoritative_count": 0, "is_complete": True,
+    })
+
+
+def test_complete_empty_snapshot_history_search_default_and_reappearance() -> None:
+    original = _record()
+    other = _record(owner="user-b")
+    store = MemoryWorkObjectStore([original, other])
+    gateway = RecordingGateway(_empty_success_result())
+    client = _default_client(store, gateway)
+    result = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert result.status_code == 200
+    assert result.json()["items"] == []
+    assert result.json()["oa_sync"]["revision"] == 1
+    assert result.json()["oa_sync"]["last_success_at"] == NOW.isoformat().replace("+00:00", "Z")
+    history = client.get("/api/v1/work-objects", params={"oa_view": "unconfirmed"})
+    assert [row["work_object_id"] for row in history.json()["items"]] == [original.work_object_id]
+    assert history.json()["items"][0]["oa_observation"]["pending_state"] == "unconfirmed"
+    assert history.json()["items"][0]["handling_action"] == "view_only"
+    assert history.json()["items"][0]["handling_capability_id"] is None
+    assert store.records[other.work_object_id] == other
+    default_search = client.get("/api/v1/work-objects", params={"q": original.source_ref})
+    all_search = client.get(
+        "/api/v1/work-objects", params={"q": original.source_ref, "oa_view": "all"}
+    )
+    assert default_search.json()["items"] == []
+    assert [row["work_object_id"] for row in all_search.json()["items"]] == [
+        original.work_object_id
+    ]
+    detail = client.get(f"/api/v1/work-objects/{original.work_object_id}")
+    assert detail.json()["source_fetched_at"] == original.source_fetched_at.isoformat().replace(
+        "+00:00", "Z"
+    )
+    marked = client.patch(f"/api/v1/work-objects/{original.work_object_id}/handling-mark",
+                          json={"mark": "handled_elsewhere"}, headers=TEST_CSRF_HEADERS)
+    assert marked.status_code == 200
+    assert marked.json()["handling_action"] == "view_only"
+    assert marked.json()["oa_observation"]["pending_state"] == "unconfirmed"
+    gateway.result = _success_result()
+    returned = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert returned.status_code == 200
+    assert returned.json()["items"][0]["work_object_id"] == original.work_object_id
+    assert returned.json()["items"][0]["handling_mark"] == "handled_elsewhere"
+    assert returned.json()["items"][0]["oa_observation"]["pending_state"] == "current"
+    assert store.apply_calls == 2
+    assert "cache-control" not in result.headers
+    assert "cache-control" not in detail.headers
+
+
+@pytest.mark.parametrize("changes", [
+    {"is_complete": False}, {"returned_count": 2}, {"authoritative_count": 2},
+    {"workflows": [{"todo_id": "bad"}]},
+])
+def test_partial_and_malformed_batches_preserve_facts_and_report_diagnostic(changes) -> None:
+    original = _record()
+    store = MemoryWorkObjectStore([original])
+    good = _success_result()
+    gateway = RecordingGateway(good.model_copy(update={"data": {**good.data, **changes}}))
+    client = _default_client(store, gateway)
+    response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "work_object_sync_invalid"
+    assert store.records == {original.work_object_id: original}
+    assert store.apply_calls == 0
+    sync = client.get("/api/v1/work-objects").json()["oa_sync"]
+    assert sync == {"status": "failed", "revision": 0, "attempt_revision": 1,
+                    "last_attempt_at": NOW.isoformat().replace("+00:00", "Z"),
+                    "last_success_at": None, "failure_code": "invalid_response"}
+
+
+def test_commit_ack_loss_reports_unknown_without_reapplying_or_recording_failure() -> None:
+    class LostAckStore(MemoryWorkObjectStore):
+        async def apply_oa_pending_snapshot(self, *args, **kwargs):
+            await super().apply_oa_pending_snapshot(*args, **kwargs)
+            raise OASyncOutcomeUnknown()
+
+        async def finish_oa_sync_failure(self, *args, **kwargs):
+            raise AssertionError("unknown outcome must not record failure")
+
+    store = LostAckStore([_record()])
+    client = _default_client(store, RecordingGateway(_empty_success_result()))
+    result = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert result.status_code == 503
+    assert result.json()["detail"]["code"] == "oa_sync_outcome_unknown"
+    persisted = client.get("/api/v1/work-objects").json()
+    assert persisted["oa_sync"]["status"] == "succeeded"
+    assert persisted["items"] == []
+    assert store.apply_calls == 1
+
+
+def test_begin_failure_prevents_gateway_and_local_errors_are_non_counted() -> None:
+    class BeginFailure(MemoryWorkObjectStore):
+        async def begin_oa_sync(self, *args, **kwargs):
+            raise RuntimeError("synthetic begin failure")
+
+    gateway = RecordingGateway()
+    store = BeginFailure()
+    client = _default_client(store, gateway)
+    response = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "work_object_sync_failed"
+    assert gateway.calls == []
+    assert store.records == {}
+
+
+def test_background_default_reconciliation_does_not_read_directory_or_list() -> None:
+    class NoReads(MemoryWorkObjectStore):
+        async def list_with_oa_sync_for_scope(self, *args, **kwargs):
+            raise AssertionError("background must not list")
+
+    store = NoReads([_record()])
+    service = WorkObjectService(store=store, gateway=RecordingGateway(_empty_success_result()),
+                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    principal = Principal(ai_user_id="user-a", display_name="A", roles=("user",),
+                           org_ctx=PrincipalOrgContext(tenant_id="default"))
+    asyncio.run(service.sync_for_background(principal))
+    assert store.records[_record().work_object_id].oa_observation.pending_state == "unconfirmed"
+    assert store.states[("user-a", "pending")].last_attempt_status == "succeeded"
+    assert store.list_calls == []
+
+
+def test_online_sync_reaches_real_reconciliation_store(dispatch_db):
+    db = dispatch_db
+    # Use the real router and PostgreSQL store; only upstream OA is synthetic.
+    gateway = RecordingGateway()
+    client = _default_client(db.store, gateway)
+    first = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert first.status_code == 200
+    work_id = first.json()["items"][0]["work_object_id"]
+    gateway.result = _empty_success_result()
+    second = client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert second.status_code == 200
+    assert second.json()["items"] == []
+    assert second.json()["oa_sync"]["revision"] == 2
+    history = client.get("/api/v1/work-objects", params={"oa_view": "unconfirmed"})
+    assert [r["work_object_id"] for r in history.json()["items"]] == [work_id]
+    with db.sql.connect() as connection:
+        rows = connection.execute(
+            text("SELECT pending_state, revision FROM oa_work_pending_observations")
+        ).all()
+    assert rows == [("unconfirmed", 2)]
+    assert client.get(f"/api/v1/work-objects/{work_id}").json()["handling_action"] == "view_only"
+
+
+def test_real_commit_ack_loss_preserves_published_state_and_late_failure(dispatch_db):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+
+    class LostAcknowledgement(AsyncSession):
+        async def commit(self):
+            await super().commit()
+            raise RuntimeError("synthetic lost acknowledgement")
+
+    async def exercise():
+        subject = OASyncSubject(tenant_id="default", ai_user_id="user-a")
+        ticket = await db.store.begin_oa_sync(subject, "pending", NOW)
+        uncertain = PostgreSQLWorkObjectStore(
+            async_sessionmaker(db.engine, class_=LostAcknowledgement)
+        )
+        with pytest.raises(OASyncOutcomeUnknown):
+            await uncertain.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
+                collection=OAPendingWorkSnapshotCollection(workflows=[], returned_count=0,
+                    authoritative_count=0, is_complete=True), fetched_at=NOW)
+        await db.store.finish_oa_sync_failure(
+            ticket, failure_code="storage_unavailable", finished_at=NOW
+        )
+        state = await db.store.get_oa_sync_status(subject, "pending")
+        assert state.last_attempt_status == "succeeded"
+        assert state.last_error_code is None
+        assert state.applied_generation == 1
+
+    run(exercise())
+
+
+def test_nondefault_legacy_sync_never_touches_default_observation_state(dispatch_db):
+    from tests.api.test_work_object_dispatch import run
+
+    db = dispatch_db
+    principal = Principal(ai_user_id="user-a", display_name="Synthetic", roles=(),
+                          org_ctx=PrincipalOrgContext(tenant_id="default"))
+    service = WorkObjectService(store=db.store, gateway=RecordingGateway(),
+                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+
+    def side_tables():
+        with db.sql.connect() as connection:
+            return [list(connection.execute(text("SELECT * FROM " + table)).mappings())
+                    for table in ("oa_work_sync_state", "oa_work_pending_observations")]
+
+    run(service.sync_for_background(principal))
+    before = side_tables()
+    other = principal.model_copy(update={"org_ctx": PrincipalOrgContext(tenant_id="other")})
+    response = run(service.sync_for_principal(other))
+    assert response.oa_sync.status == "unsupported_scope"
+    assert response.oa_sync.revision == 0
+    assert response.items[0].oa_observation.pending_state == "legacy_unverified"
+    assert side_tables() == before

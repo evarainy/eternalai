@@ -55,8 +55,15 @@ from app.ports.work_object import (
     DispatchKind,
     DispatchReceipt,
     InternalWorkObjectRecord,
-    OAPendingWorkSnapshot,
+    OAObservation,
     OAPendingWorkSnapshotCollection,
+    OASyncClockInvalid,
+    OASyncFailureCode,
+    OASyncOutcomeUnknown,
+    OASyncStatusView,
+    OASyncSubject,
+    OASyncTicket,
+    OAView,
     ReminderChoice,
     WorkObjectHandlingMark,
     WorkObjectRecord,
@@ -119,6 +126,7 @@ class OAWorkObjectView(_WorkObjectViewBase):
     source_created_at: str
     source_workflow_type_id: str
     source_fetched_at: datetime
+    oa_observation: OAObservation
 
 
 class InternalWorkObjectView(_WorkObjectViewBase):
@@ -307,6 +315,7 @@ class WorkObjectListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[WorkObjectView]
+    oa_sync: OASyncStatusView
     limit: int
     limit_exceeded: bool
 
@@ -474,15 +483,17 @@ class WorkObjectService:
         principal: Principal,
         *,
         search_term: str | None = None,
+        oa_view: OAView = "active",
     ) -> WorkObjectListResponse:
         scope, fresh = await self._visibility_context(principal)
         while True:
-            records = await self._store.list_for_scope(
-                scope, search_term=search_term, limit=WORK_OBJECT_LIST_FETCH_LIMIT,
+            batch = await self._store.list_with_oa_sync_for_scope(
+                scope, search_term=search_term, oa_view=oa_view, limit=WORK_OBJECT_LIST_FETCH_LIMIT,
             )
+            records = batch.records
             capabilities = await self._projection_capabilities(records)
             if fresh is None or not self._read_expired(fresh):
-                return _list_response(records, capabilities)
+                return _list_response(records, capabilities, batch.oa_sync)
             scope = self._scope(principal)
             fresh = None
 
@@ -651,23 +662,36 @@ class WorkObjectService:
         *,
         background: bool,
     ) -> None:
+        ticket: OASyncTicket | None = None
+        if principal.org_ctx.tenant_id == "default":
+            try:
+                ticket = await self._store.begin_oa_sync(
+                    OASyncSubject(tenant_id="default", ai_user_id=principal.ai_user_id),
+                    "pending", self._clock(),
+                )
+            except OASyncOutcomeUnknown:
+                _raise_local_sync_error("oa_sync_outcome_unknown", background)
+            except Exception:
+                _raise_local_sync_error("work_object_sync_failed", background)
         operation_id = self._id_factory()
-        result = await self._gateway.execute_capability(
-            task_id=f"work-object-sync:{operation_id}",
-            session_id=f"work-object:{principal.ai_user_id}",
-            ai_user_id=principal.ai_user_id,
-            capability_id=OA_PENDING_WORKFLOWS_CAPABILITY_ID,
-            arguments={},
-            request_context=RequestOrgContext(
-                request_id=operation_id,
-                tenant_id=principal.org_ctx.tenant_id,
-                org_id=principal.org_ctx.org_id,
-                department_id=principal.org_ctx.department_id,
-                roles=list(principal.roles),
-                channel="web",
-            ),
-        )
+        try:
+            result = await self._gateway.execute_capability(
+                task_id=f"work-object-sync:{operation_id}",
+                session_id=f"work-object:{principal.ai_user_id}",
+                ai_user_id=principal.ai_user_id,
+                capability_id=OA_PENDING_WORKFLOWS_CAPABILITY_ID,
+                arguments={},
+                request_context=RequestOrgContext(
+                    request_id=operation_id, tenant_id=principal.org_ctx.tenant_id,
+                    org_id=principal.org_ctx.org_id, department_id=principal.org_ctx.department_id,
+                    roles=list(principal.roles), channel="web",
+                ),
+            )
+        except Exception:
+            await self._record_sync_failure(ticket, "upstream_unavailable", background)
+            _raise_local_sync_error("work_object_sync_failed", background)
         if result.status != "completed" or result.data is None:
+            await self._record_sync_failure(ticket, _sync_diagnostic(result.error_code), background)
             if background:
                 _raise_background_sync_failure(result.error_code)
             _raise_sync_failure(result.error_code)
@@ -692,30 +716,47 @@ class WorkObjectService:
                 strict=True,
             )
         except (AttributeError, TypeError, ValidationError):
+            await self._record_sync_failure(ticket, "invalid_response", background)
             if background:
                 raise BackgroundWorkObjectSyncError(
-                    authentication_denied=False,
-                    failure_code="invalid_response",
+                    authentication_denied=False, failure_code="invalid_response",
                 ) from None
             _raise_invalid_sync_payload()
         fetched_at = self._clock()
         try:
-            await self._store.upsert_oa_pending_workflows(
-                assignee_ai_user_id=principal.ai_user_id,
-                assignee_display_name=principal.display_name,
-                snapshots=[
-                    OAPendingWorkSnapshot.model_validate(snapshot.model_dump(), strict=True)
-                    for snapshot in payload.workflows
-                ],
-                fetched_at=fetched_at,
+            if ticket is None:
+                await self._store.upsert_oa_pending_workflows(
+                    assignee_ai_user_id=principal.ai_user_id,
+                    assignee_display_name=principal.display_name,
+                    snapshots=payload.workflows, fetched_at=fetched_at,
+                )
+                return
+            outcome = await self._store.apply_oa_pending_snapshot(
+                ticket, assignee_display_name=principal.display_name,
+                collection=payload, fetched_at=fetched_at,
+            )
+        except OASyncOutcomeUnknown:
+            _raise_local_sync_error("oa_sync_outcome_unknown", background)
+        except OASyncClockInvalid:
+            await self._record_sync_failure(ticket, "clock_invalid", background)
+            _raise_local_sync_error("work_object_sync_failed", background)
+        except Exception:
+            await self._record_sync_failure(ticket, "storage_unavailable", background)
+            _raise_local_sync_error("work_object_sync_failed", background)
+        if outcome == "superseded":
+            _raise_local_sync_error("oa_sync_superseded", background)
+
+    async def _record_sync_failure(
+        self, ticket: OASyncTicket | None, code: OASyncFailureCode, background: bool,
+    ) -> None:
+        if ticket is None:
+            return
+        try:
+            await self._store.finish_oa_sync_failure(
+                ticket, failure_code=code, finished_at=self._clock(),
             )
         except Exception:
-            if background:
-                raise BackgroundWorkObjectSyncError(
-                    authentication_denied=False,
-                    failure_code=None,
-                ) from None
-            _raise_dispatch_error(503, "work_object_sync_failed")
+            _raise_local_sync_error("work_object_sync_failed", background)
 
     async def sync_for_background(self, principal: Principal) -> None:
         """Run the same Gateway path with retry-safe failure classification."""
@@ -1093,12 +1134,14 @@ def make_router(
     )
     async def list_work_objects(
         q: Annotated[str | None, Query()] = None,
+        oa_view: Annotated[OAView, Query()] = "active",
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectListResponse:
         search_term = normalize_search_query(q)
         return await configured().list_for_principal(
             principal,
             search_term=search_term,
+            oa_view=oa_view,
         )
 
     @router.post("/sync", response_model=WorkObjectListResponse)
@@ -1195,6 +1238,7 @@ def make_router(
 def _list_response(
     records: list[WorkObjectRecord],
     capabilities: list[CapabilitySpec],
+    oa_sync: OASyncStatusView,
 ) -> WorkObjectListResponse:
     limit_exceeded = len(records) > WORK_OBJECT_LIST_LIMIT
     return WorkObjectListResponse(
@@ -1203,6 +1247,7 @@ def _list_response(
         ],
         limit=WORK_OBJECT_LIST_LIMIT,
         limit_exceeded=limit_exceeded,
+        oa_sync=oa_sync,
     )
 
 
@@ -1211,9 +1256,13 @@ def _view_from_record(
     capabilities: list[CapabilitySpec],
 ) -> WorkObjectView:
     manual = record.state_authority == "internal" and record.source_kind == "manual_dispatch"
+    view_only = manual or (
+        record.state_authority == "external_snapshot"
+        and record.oa_observation.pending_state == "unconfirmed"
+    )
     handling_capability = (
         None
-        if manual
+        if view_only
         else _resolve_handling_capability(
             record=record,
             capabilities=capabilities,
@@ -1221,7 +1270,7 @@ def _view_from_record(
     )
     handling_action = (
         "view_only"
-        if manual
+        if view_only
         else project_handling_action(
             state_authority=record.state_authority,
             source_system=record.source_system,
@@ -1284,6 +1333,40 @@ def _resolve_handling_capability(
             sorted(capability.capability_id for capability in matches),
         )
     return None
+
+
+def _sync_diagnostic(code: ErrorCode | None) -> OASyncFailureCode:
+    if code in _REAUTHENTICATION_ERRORS:
+        return "reauthentication_required"
+    if code in _BINDING_SCOPE_ERRORS:
+        return "binding_scope_required"
+    if code in {"policy_denied", "upstream_permission_denied"}:
+        return "forbidden"
+    if code in {
+        "adapter_payload_invalid",
+        "adapter_missing_required_field",
+        "adapter_empty_response",
+    }:
+        return "invalid_response"
+    return "upstream_unavailable"
+
+
+def _raise_local_sync_error(code: str, background: bool) -> NoReturn:
+    if background:
+        raise BackgroundWorkObjectSyncError(
+            authentication_denied=False, failure_code=None
+        ) from None
+    messages = {
+        "oa_sync_superseded": "A newer OA synchronization has started; refresh the stored result.",
+        "oa_sync_outcome_unknown": (
+            "OA synchronization outcome is not confirmed; refresh the stored result."
+        ),
+        "work_object_sync_failed": "Work Object synchronization failed; stored data is unchanged.",
+    }
+    raise HTTPException(
+        status_code=409 if code == "oa_sync_superseded" else 503,
+        detail={"code": code, "message": messages[code]},
+    ) from None
 
 
 def _raise_sync_failure(error_code: ErrorCode | None) -> NoReturn:

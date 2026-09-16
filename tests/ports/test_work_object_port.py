@@ -8,6 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.ports.task_store import TaskRecord
 from app.ports.work_object import (
     InternalWorkObjectRecord,
+    OAObservation,
     OAPendingWorkSnapshotCollection,
     OAWorkObjectRecord,
     WorkObjectRecord,
@@ -38,6 +39,10 @@ def _record(**updates: object) -> WorkObjectRecord:
         "created_at": now,
         "updated_at": now,
     }
+    if updates.get("state_authority", "external_snapshot") == "external_snapshot":
+        values["oa_observation"] = OAObservation(
+            pending_state="legacy_unverified", revision=0, last_seen_at=now, last_checked_at=None,
+        )
     values.update(updates)
     return TypeAdapter(WorkObjectRecord).validate_python(values, strict=True)
 
@@ -140,3 +145,79 @@ def test_handling_mark_requires_actor_and_timestamp_as_one_record() -> None:
         _record(handling_mark="handled_elsewhere")
     with pytest.raises(ValidationError, match="requires a handling mark"):
         _record(handling_marked_by_ai_user_id="user-a")
+
+@pytest.mark.parametrize("updates", [
+    {"returned_count": True}, {"authoritative_count": False},
+    {"returned_count": -1}, {"is_complete": False}, {"unexpected": "field"},
+])
+def test_reconciliation_accepts_only_complete_unique_collections(
+    updates: dict[str, object],
+) -> None:
+    payload = {"workflows": [], "returned_count": 0, "authoritative_count": 0, "is_complete": True}
+    assert OAPendingWorkSnapshotCollection.model_validate(payload).workflows == []
+    with pytest.raises(ValidationError):
+        OAPendingWorkSnapshotCollection.model_validate({**payload, **updates})
+
+
+def test_observation_requires_explicit_legacy_or_checked_state() -> None:
+    from datetime import timedelta
+
+    now = datetime(2026, 9, 16, tzinfo=UTC)
+    assert OAObservation(pending_state="legacy_unverified", revision=0,
+                         last_seen_at=now, last_checked_at=None).revision == 0
+    assert OAObservation(pending_state="current", revision=1,
+                         last_seen_at=now, last_checked_at=now).pending_state == "current"
+    assert OAObservation(pending_state="unconfirmed", revision=2,
+                         last_seen_at=now, last_checked_at=now + timedelta(seconds=1)).revision == 2
+    for update in ({"revision": 0}, {"revision": True}, {"last_checked_at": None},
+                   {"last_checked_at": now - timedelta(seconds=1)},
+                   {"last_seen_at": now.replace(tzinfo=None)}):
+        with pytest.raises(ValidationError):
+            OAObservation.model_validate({"pending_state": "unconfirmed", "revision": 1,
+                                         "last_seen_at": now, "last_checked_at": now, **update})
+
+
+def test_sync_subject_ticket_and_status_are_strict_and_default_only() -> None:
+    from app.ports.work_object import OASyncStatus, OASyncSubject, OASyncTicket
+
+    now = datetime(2026, 9, 16, tzinfo=UTC)
+    subject = OASyncSubject(tenant_id="default", ai_user_id="person-a")
+    with pytest.raises(ValidationError):
+        OASyncSubject(tenant_id="other", ai_user_id="person-a")
+    with pytest.raises(ValidationError):
+        OASyncSubject(tenant_id="default", ai_user_id="  ")
+    for generation in (True, 0, -1, "1"):
+        with pytest.raises(ValidationError):
+            OASyncTicket(subject=subject, stream="pending", generation=generation, started_at=now)
+    state = OASyncStatus(
+        subject=subject,
+        stream="pending",
+        issued_generation=1,
+        applied_generation=0,
+        last_attempt_status="failed",
+        last_attempt_started_at=now,
+        last_attempt_finished_at=now,
+        last_success_at=None,
+        last_error_code="invalid_response",
+    )
+    assert state.to_view().attempt_revision == 1
+    assert state.to_view().failure_code == "invalid_response"
+    assert set(state.to_view().model_dump()) == {
+        "status",
+        "revision",
+        "attempt_revision",
+        "last_attempt_at",
+        "last_success_at",
+        "failure_code",
+    }
+    for update in ({"last_error_code": None}, {"last_attempt_status": "running"},
+                   {"applied_generation": 1}, {"last_attempt_finished_at": None}):
+        with pytest.raises(ValidationError):
+            OASyncStatus.model_validate({**state.model_dump(), **update})
+
+
+def test_collection_completeness_does_not_coerce_one_to_true() -> None:
+    for value in (1, 1.0, "true", None):
+        with pytest.raises(ValidationError, match="requires boolean true"):
+            OAPendingWorkSnapshotCollection.model_validate({"workflows": [], "returned_count": 0,
+                "authoritative_count": 0, "is_complete": value})

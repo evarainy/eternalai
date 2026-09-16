@@ -650,3 +650,32 @@ def test_committed_sync_is_not_classified_as_directory_failure(dispatch_db, monk
     assert len(rows) == 1
     assert rows[0]["assignee_ai_user_id"] == PRINCIPAL.ai_user_id
     assert rows[0]["source_ref"] == "oa-todo-1"
+
+
+@pytest.mark.parametrize("failure", ["superseded", "storage", "unknown"])
+def test_superseded_and_local_storage_failure_are_not_poll_success(failure):
+    from app.ports.work_object import OASyncOutcomeUnknown
+    from tests.api.test_work_objects import RecordingGateway
+
+    class FailingReconciliation(MemoryWorkObjectStore):
+        async def apply_oa_pending_snapshot(self, *args, **kwargs):
+            if failure == "superseded":
+                return "superseded"
+            if failure == "unknown":
+                raise OASyncOutcomeUnknown()
+            raise RuntimeError("synthetic storage failure")
+
+    bindings = FakeBindingStore()
+    objects = WorkObjectService(store=FailingReconciliation(), gateway=RecordingGateway(),
+                                capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
+    service = CredentialPollingService(
+        binding_store=bindings, acquirer=FakeAcquirer(), work_objects=objects,
+        policy=CredentialPollingPolicy(interval_seconds=600, maximum_backoff_seconds=3600,
+            work_start_hour=8, work_end_hour=18, timezone_name="Asia/Shanghai",
+            global_concurrency=4, scheduler_tick_seconds=60), clock=lambda: NOW,
+    )
+    assert asyncio.run(service.run_due()) == 1
+    assert bindings.successes == 0
+    assert bindings.non_counted_failures == 1
+    assert bindings.counted_failures == 0
+    assert bindings.terminal == []

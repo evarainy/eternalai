@@ -1431,3 +1431,328 @@ def test_non_sort_updates_preserve_order_and_new_rows_reselect(dispatch_db) -> N
     )
     assert still_old[0] == "row-199"
     assert "row-000" not in still_old
+
+
+# These tests intentionally require the neutral verifier's isolated PostgreSQL fixture.
+def _oa_collection(*refs):
+    from app.ports.work_object import OAPendingWorkSnapshotCollection
+
+    return OAPendingWorkSnapshotCollection(
+        workflows=[_snapshot(title=ref, status="pending", source_ref=ref) for ref in refs],
+        returned_count=len(refs), authoritative_count=len(refs), is_complete=True,
+    )
+
+
+def _oa_subject(user="oa-reconcile-owner"):
+    from app.ports.work_object import OASyncSubject
+
+    return OASyncSubject(tenant_id="default", ai_user_id=user)
+
+
+async def _publish(store, refs, at, user="oa-reconcile-owner"):
+    ticket = await store.begin_oa_sync(_oa_subject(user), "pending", at)
+    result = await store.apply_oa_pending_snapshot(
+        ticket,
+        assignee_display_name="Synthetic owner",
+        collection=_oa_collection(*refs),
+        fetched_at=at,
+    )
+    assert result == "applied"
+    return ticket
+
+
+def _oa_rows(db, table):
+    assert table in {"work_objects", "oa_work_pending_observations", "oa_work_sync_state"}
+    with db.sql.connect() as connection:
+        return [dict(row) for row in connection.execute(text("SELECT * FROM " + table)).mappings()]
+
+
+def test_complete_empty_snapshot_reconciles_all_existing_oa_rows(dispatch_db) -> None:
+    from tests.api.test_work_object_dispatch import NOW, insert_synthetic_row, run
+    from tests.db.test_internal_work_object_dispatch_migration import _legacy_row
+
+    db = dispatch_db
+    legacy = _legacy_row(external=False)
+    insert_synthetic_row(db, legacy)
+
+    async def exercise():
+        await db.store.upsert_oa_pending_workflows(
+            assignee_ai_user_id="oa-reconcile-owner", assignee_display_name="Synthetic",
+            snapshots=_oa_collection(*(f"old-{i}" for i in range(205))).workflows, fetched_at=NOW,
+        )
+        await _publish(db.store, ["other"], NOW, "other-owner")
+        scope = _scope("oa-reconcile-owner")
+        rows = await db.store.list_for_scope(scope)
+        await db.store.set_handling_mark_for_scope(rows[0].work_object_id, scope,
+                                                   "handled_elsewhere", marked_at=NOW)
+        before = _oa_rows(db, "work_objects")
+        await _publish(db.store, [], NOW + timedelta(minutes=1))
+        assert _oa_rows(db, "work_objects") == before
+        observations = _oa_rows(db, "oa_work_pending_observations")
+        own = [r for r in observations if r["ai_user_id"] == "oa-reconcile-owner"]
+        assert len(own) == 205
+        assert {r["pending_state"] for r in own} == {"unconfirmed"}
+        assert {r["last_seen_at"] for r in own} == {NOW}
+        assert {r["last_checked_at"] for r in own} == {NOW + timedelta(minutes=1)}
+        assert [r["pending_state"] for r in observations if r["ai_user_id"] == "other-owner"] == [
+            "current"
+        ]
+        batch = await db.store.list_with_oa_sync_for_scope(scope)
+        assert batch.records == []
+        assert batch.oa_sync.status == "succeeded"
+        assert batch.oa_sync.last_success_at == NOW + timedelta(minutes=1)
+        history = await db.store.list_with_oa_sync_for_scope(scope, oa_view="unconfirmed")
+        assert len(history.records) == 201
+        assert legacy["work_object_id"] not in {r.work_object_id for r in history.records}
+
+    run(exercise())
+
+
+def test_nonempty_snapshot_marks_only_missing_refs_and_reappearance_preserves_identity(dispatch_db):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["a", "b"], NOW)
+        original = {
+            r.source_ref: r for r in await db.store.list_for_scope(_scope("oa-reconcile-owner"))
+        }
+        marked = await db.store.set_handling_mark_for_scope(original["a"].work_object_id,
+                    _scope("oa-reconcile-owner"), "handled_elsewhere", marked_at=NOW)
+        await _publish(db.store, ["b", "c"], NOW + timedelta(seconds=1))
+        second = {
+            r.source_ref: r for r in await db.store.list_for_scope(_scope("oa-reconcile-owner"))
+        }
+        assert {ref: r.oa_observation.pending_state for ref, r in second.items()} == {
+            "a": "unconfirmed", "b": "current", "c": "current",
+        }
+        await _publish(db.store, ["a"], NOW + timedelta(seconds=2))
+        third = {
+            r.source_ref: r for r in await db.store.list_for_scope(_scope("oa-reconcile-owner"))
+        }
+        assert {ref: r.oa_observation.pending_state for ref, r in third.items()} == {
+            "a": "current", "b": "unconfirmed", "c": "unconfirmed",
+        }
+        assert third["a"].work_object_id == original["a"].work_object_id
+        assert marked is not None
+        assert (
+            third["a"].handling_mark,
+            third["a"].handling_marked_at,
+            third["a"].handling_marked_by_ai_user_id,
+        ) == (marked.handling_mark, marked.handling_marked_at, marked.handling_marked_by_ai_user_id)
+
+    run(exercise())
+
+
+@pytest.mark.parametrize("failure_point", ["second_upsert", "observations", "success"])
+def test_apply_failure_rolls_back_rows_observations_and_success_marker(dispatch_db, failure_point):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["a"], NOW)
+        ticket = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW + timedelta(seconds=1))
+        before = {t: _oa_rows(db, t) for t in
+                  ("work_objects", "oa_work_pending_observations", "oa_work_sync_state")}
+        upserts = 0
+
+        def fault(_conn, _cursor, statement, _params, _context, _many):
+            nonlocal upserts
+            if statement.startswith("INSERT INTO work_objects"):
+                upserts += 1
+            if (
+                (failure_point == "second_upsert" and upserts == 2)
+                or (
+                    failure_point == "observations"
+                    and statement.startswith("INSERT INTO oa_work_pending")
+                )
+                or (
+                    failure_point == "success" and statement.startswith("UPDATE oa_work_sync_state")
+                )
+            ):
+                raise RuntimeError("synthetic precommit fault")
+
+        event.listen(db.engine.sync_engine, "before_cursor_execute", fault)
+        try:
+            with pytest.raises(RuntimeError, match="synthetic precommit fault"):
+                await db.store.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
+                    collection=_oa_collection("b", "c"), fetched_at=NOW + timedelta(seconds=1))
+        finally:
+            event.remove(db.engine.sync_engine, "before_cursor_execute", fault)
+        assert {t: _oa_rows(db, t) for t in before} == before
+        await db.store.finish_oa_sync_failure(ticket, failure_code="storage_unavailable",
+                                              finished_at=NOW + timedelta(seconds=1))
+        state = await db.store.get_oa_sync_status(_oa_subject(), "pending")
+        assert state.last_error_code == "storage_unavailable"
+        assert state.applied_generation == 1
+        assert state.last_success_at == NOW
+
+    run(exercise())
+
+
+@pytest.mark.parametrize("newer_fails", [False, True])
+def test_newer_attempt_supersedes_late_success_and_late_failure(dispatch_db, newer_fails):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["baseline"], NOW)
+        a = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW + timedelta(seconds=1))
+        begun = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def newer():
+            b = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW + timedelta(seconds=2))
+            begun.set()
+            if newer_fails:
+                await db.store.finish_oa_sync_failure(b, failure_code="upstream_unavailable",
+                                                    finished_at=NOW + timedelta(seconds=3))
+            else:
+                await db.store.apply_oa_pending_snapshot(b, assignee_display_name="Synthetic",
+                    collection=_oa_collection("new"), fetched_at=NOW + timedelta(seconds=3))
+            finished.set()
+
+        worker = asyncio.create_task(newer())
+        await begun.wait()
+        await finished.wait()
+        before = {t: _oa_rows(db, t) for t in
+                  ("work_objects", "oa_work_pending_observations", "oa_work_sync_state")}
+        assert (
+            await db.store.apply_oa_pending_snapshot(
+                a,
+                assignee_display_name="Synthetic",
+                collection=_oa_collection("stale"),
+                fetched_at=NOW + timedelta(seconds=4),
+            )
+            == "superseded"
+        )
+        await db.store.finish_oa_sync_failure(a, failure_code="forbidden",
+                                              finished_at=NOW + timedelta(seconds=5))
+        assert {t: _oa_rows(db, t) for t in before} == before
+        state = await db.store.get_oa_sync_status(_oa_subject(), "pending")
+        assert state.issued_generation == 3
+        assert state.last_attempt_status == ("failed" if newer_fails else "succeeded")
+        assert state.applied_generation == (1 if newer_fails else 3)
+        await worker
+
+    run(exercise())
+
+
+def test_clock_rollback_reports_failure_without_rewriting_snapshot_time(dispatch_db):
+    from app.ports.work_object import OASyncClockInvalid
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["a"], NOW)
+        before = _oa_rows(db, "work_objects")
+        ticket = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW - timedelta(seconds=2))
+        with pytest.raises(OASyncClockInvalid):
+            await db.store.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
+                collection=_oa_collection(), fetched_at=NOW - timedelta(seconds=1))
+        await db.store.finish_oa_sync_failure(ticket, failure_code="forbidden",
+                                              finished_at=NOW - timedelta(seconds=3))
+        state = await db.store.get_oa_sync_status(_oa_subject(), "pending")
+        assert state.last_error_code == "clock_invalid"
+        assert state.last_attempt_finished_at == NOW - timedelta(seconds=3)
+        assert state.last_success_at == NOW
+        assert _oa_rows(db, "work_objects") == before
+
+    run(exercise())
+
+
+def test_read_batch_is_one_database_snapshot(dispatch_db, monkeypatch):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["before"], NOW)
+        original = db.store._sync_status
+        writer = PostgreSQLWorkObjectStore(db.factory)
+
+        async def publish_between_reads(session, subject, stream, *, lock=False):
+            await _publish(writer, ["after"], NOW + timedelta(seconds=1))
+            return await original(session, subject, stream, lock=lock)
+
+        monkeypatch.setattr(db.store, "_sync_status", publish_between_reads)
+        batch = await db.store.list_with_oa_sync_for_scope(_scope("oa-reconcile-owner"))
+        assert [r.source_ref for r in batch.records] == ["before"]
+        assert batch.oa_sync.revision == 1
+        assert batch.records[0].oa_observation.revision == batch.oa_sync.revision
+
+    run(exercise())
+
+
+def test_view_filter_precedes_limit_and_search_preserves_history(dispatch_db):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, [f"history-{i}" for i in range(205)], NOW)
+        await _publish(db.store, ["current"], NOW + timedelta(seconds=1))
+        scope = _scope("oa-reconcile-owner")
+        active = await db.store.list_with_oa_sync_for_scope(scope)
+        assert [r.source_ref for r in active.records] == ["current"]
+        assert (
+            await db.store.list_with_oa_sync_for_scope(scope, search_term="history")
+        ).records == []
+        history = await db.store.list_with_oa_sync_for_scope(scope, oa_view="unconfirmed")
+        assert len(history.records) == 201
+        assert all(r.oa_observation.pending_state == "unconfirmed" for r in history.records)
+        all_history = await db.store.list_with_oa_sync_for_scope(
+            scope, search_term="history", oa_view="all"
+        )
+        assert len(all_history.records) == 201
+        assert all(r.source_ref.startswith("history-") for r in all_history.records)
+
+    run(exercise())
+
+
+def test_reconciliation_rejects_foreign_observation_ownership(dispatch_db):
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await _publish(db.store, ["a"], NOW, "other-owner")
+        db.execute("UPDATE oa_work_pending_observations SET ai_user_id='oa-reconcile-owner'")
+        ticket = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW + timedelta(seconds=1))
+        before = _oa_rows(db, "work_objects")
+        with pytest.raises(ValueError, match="ownership mismatch"):
+            await db.store.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
+                collection=_oa_collection("a"), fetched_at=NOW + timedelta(seconds=1))
+        assert _oa_rows(db, "work_objects") == before
+        own = await db.store.list_with_oa_sync_for_scope(_scope("oa-reconcile-owner"))
+        assert own.records == []
+
+    run(exercise())
+
+
+def test_legacy_future_time_blocks_first_reconciliation(dispatch_db):
+    from app.ports.work_object import OASyncClockInvalid
+    from tests.api.test_work_object_dispatch import NOW, run
+
+    db = dispatch_db
+
+    async def exercise():
+        await db.store.upsert_oa_pending_workflows(assignee_ai_user_id="oa-reconcile-owner",
+            assignee_display_name="Synthetic", snapshots=_oa_collection("legacy").workflows,
+            fetched_at=NOW + timedelta(minutes=1))
+        ticket = await db.store.begin_oa_sync(_oa_subject(), "pending", NOW)
+        before = _oa_rows(db, "work_objects")
+        with pytest.raises(OASyncClockInvalid):
+            await db.store.apply_oa_pending_snapshot(ticket, assignee_display_name="Synthetic",
+                collection=_oa_collection(), fetched_at=NOW)
+        assert _oa_rows(db, "work_objects") == before
+        assert _oa_rows(db, "oa_work_pending_observations") == []
+        state = await db.store.get_oa_sync_status(_oa_subject(), "pending")
+        assert state.applied_generation == 0
+        assert state.last_success_at is None
+
+    run(exercise())

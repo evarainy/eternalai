@@ -566,3 +566,17 @@ it('keeps generated terminal contracts and the discriminated actions in sync', (
   expect(trace.components.schemas.AdminTracePersistedView.properties.event_type.enum).toContain('task_cancelled');
   expect(trace.components.schemas.AdminTracePersistedView.properties.event_type.enum).toContain('task_confirmation_invalidated');
 });
+
+
+it('requires OA observations and batch metadata and keeps active as the list default', () => {
+  const schema = JSON.parse(readFileSync(resolve(webRoot, 'openapi/work-objects.openapi.json'), 'utf8'));
+  expect(schema.components.schemas.OAWorkObjectView.required).toContain('oa_observation');
+  expect(schema.components.schemas.InternalWorkObjectView.properties).not.toHaveProperty('oa_observation');
+  expect(schema.components.schemas.WorkObjectListResponse.required).toContain('oa_sync');
+  expect(Object.keys(schema.components.schemas.OASyncStatusView.properties).sort()).toEqual([
+    'attempt_revision', 'failure_code', 'last_attempt_at', 'last_success_at', 'revision', 'status',
+  ]);
+  const parameter = schema.paths['/api/v1/work-objects'].get.parameters.find((item: { name: string }) => item.name === 'oa_view');
+  expect(parameter.schema).toMatchObject({ default: 'active', enum: ['active', 'unconfirmed', 'all'] });
+  expect(Object.keys(schema.paths)).not.toContain('/api/v1/work-objects/oa-completed');
+});
