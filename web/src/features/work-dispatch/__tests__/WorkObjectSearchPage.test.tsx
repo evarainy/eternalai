@@ -30,6 +30,7 @@ const TITLE_ITEM: OAWorkObjectView = {
   handling_capability_id: null,
   source_created_at: '2026-08-18 09:00:00',
   source_fetched_at: '2026-08-31T03:00:00Z',
+  oa_observation: { pending_state: 'current', revision: 1, last_seen_at: '2026-08-31T03:00:00Z', last_checked_at: '2026-08-31T03:00:00Z' },
   source_kind: 'pending_workflow',
   source_received_at: '2026-08-18 09:05:00',
   source_ref: 'OA-TITLE-001',
@@ -73,6 +74,7 @@ function listResponse(
     items: [TITLE_ITEM, SOURCE_REF_ITEM, ASSIGNEE_ITEM],
     limit: 200,
     limit_exceeded: false,
+    oa_sync: { status: 'succeeded', revision: 1, attempt_revision: 1, last_attempt_at: '2026-08-31T03:00:00Z', last_success_at: '2026-08-31T03:00:00Z', failure_code: null },
     ...overrides,
   };
 }
@@ -150,7 +152,7 @@ describe('WorkObjectSearchPage', () => {
       expect(within(result).queryByText('命中责任人')).toBeNull();
     }
     expect(screen.queryByText('内部工作事项')).not.toBeInTheDocument();
-    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'synthetic' });
+    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'synthetic', oa_view: 'all' });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -195,7 +197,7 @@ describe('WorkObjectSearchPage', () => {
       expect(await screen.findByText(expectedTitle)).toBeInTheDocument();
       expect(screen.getByText(expectedTag)).toBeInTheDocument();
       expect(screen.getByText('找到 1 条')).toBeInTheDocument();
-      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: expectedQuery });
+      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: expectedQuery, oa_view: 'all' });
       expect(
         screen.queryByText('结果过多，请缩小范围'),
       ).not.toBeInTheDocument();
@@ -244,7 +246,7 @@ describe('WorkObjectSearchPage', () => {
       }));
       const view = renderPage(`/search?q=${query}`);
       expect(await screen.findByText(`Title ${query}`)).toBeInTheDocument();
-      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: query });
+      expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: query, oa_view: 'all' });
       expect(screen.getByText('命中标题')).toBeInTheDocument();
       expect(screen.queryByText(forbiddenTag)).not.toBeInTheDocument();
       view.unmount();
@@ -253,7 +255,7 @@ describe('WorkObjectSearchPage', () => {
       renderPage(`/search?q=${query}`);
       expect(await screen.findByText('找到 0 条')).toBeInTheDocument();
       expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
-      expect(apiMocks.listWorkObjects).toHaveBeenLastCalledWith({ q: query });
+      expect(apiMocks.listWorkObjects).toHaveBeenLastCalledWith({ q: query, oa_view: 'all' });
     },
   );
 
@@ -265,9 +267,9 @@ describe('WorkObjectSearchPage', () => {
       assignee_display_name: '\u3000OA\t  REF\u0085',
     };
     apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse({ items: [item] }));
-    renderPage(`/search?${new URLSearchParams({ q: '\u3000OA\u00a0  ReF\u0085' })}`);
+    renderPage(`/search?${new URLSearchParams({ q: '\u3000OA\u00a0  ReF\u0085', oa_view: 'all' })}`);
     expect(await screen.findByText('找到 1 条')).toBeInTheDocument();
-    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'oa ref' });
+    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'oa ref', oa_view: 'all' });
     expect(screen.getByText('关键词：oa ref')).toBeInTheDocument();
     for (const label of ['命中标题', '命中来源编号', '命中责任人']) {
       expect(screen.getByText(label)).toBeInTheDocument();
@@ -279,7 +281,7 @@ describe('WorkObjectSearchPage', () => {
 
   it.each(['', ' ', '\u3000', '\u00a0', '\u0085', '\ufeff'])(
     'does not request data for normalized empty URL %j', (query) => {
-      renderPage(`/search?${new URLSearchParams({ q: query })}`);
+      renderPage(`/search?${new URLSearchParams({ q: query, oa_view: 'all' })}`);
       expect(screen.getByText('等待搜索')).toBeInTheDocument();
       expect(apiMocks.listWorkObjects).not.toHaveBeenCalled();
     },
@@ -401,4 +403,15 @@ describe('WorkObjectSearchPage', () => {
     ).toBeInTheDocument();
     expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();
   });
+  it('requests all OA states and labels unconfirmed history explicitly', async () => {
+    const historical: OAWorkObjectView = { ...TITLE_ITEM, handling_action: 'view_only',
+      handling_capability_id: null, oa_observation: { ...TITLE_ITEM.oa_observation,
+        pending_state: 'unconfirmed', revision: 2, last_checked_at: '2026-09-16T01:00:00Z' } };
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [historical] }));
+    renderPage('/work-dispatch/search?q=approval');
+    expect(await screen.findByText('当前待办未再确认')).toBeInTheDocument();
+    expect(apiMocks.listWorkObjects).toHaveBeenCalledWith({ q: 'approval', oa_view: 'all' });
+    expect(screen.getByText(/默认当前视图不包含/)).toBeVisible();
+  });
+
 });

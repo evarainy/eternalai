@@ -96,8 +96,8 @@ export default function WorkObjectSearchPage() {
   const hasSearch = rawTerm !== null && term.length > 0;
 
   const listQuery = useQuery({
-    queryKey: ['work-objects', authGeneration, 'search', term],
-    queryFn: () => listWorkObjects({ q: term }),
+    queryKey: ['work-objects', authGeneration, 'search', 'all', term],
+    queryFn: () => listWorkObjects({ q: term, oa_view: 'all' }),
     enabled: hasSearch,
   });
   const results = listQuery.isSuccess ? listQuery.data.items : EMPTY_ITEMS;
@@ -181,6 +181,7 @@ export default function WorkObjectSearchPage() {
             <Title className={styles.title} level={1}>工作事项搜索</Title>
             <Paragraph className={styles.copy}>
               标题可输入其中一段；来源编号和责任人请输入完整内容。
+              本页显式检索全部 OA 历史状态；默认当前视图不包含“未再确认”记录。
             </Paragraph>
           </div>
           <div className={styles.scopeCard} aria-live="polite">
@@ -238,6 +239,9 @@ export default function WorkObjectSearchPage() {
                 <div className={styles.resultBody}>
                   <div className={styles.resultHeading}>
                     {workObjectTitle(item) == null ? <span>未提供标题</span> : <strong>{workObjectTitle(item)}</strong>}
+                    {item.state_authority === 'external_snapshot' ? <Tag>{item.oa_observation.pending_state === 'unconfirmed'
+                      ? '当前待办未再确认' : item.oa_observation.pending_state === 'legacy_unverified'
+                        ? '历史快照，尚未重新核对' : '当前待办'}</Tag> : null}
                     <div className={styles.matchTags} aria-label="匹配字段">
                       {matchedFields(item, term).map((field) => (
                         <Tag color="blue" key={field}>命中{field}</Tag>

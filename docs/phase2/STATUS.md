@@ -1,19 +1,20 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；2026-09-14 治理同步）。本棒仅作 A 类机械同步，不重排 DAG 或裁定跨棒欠债。
-- 当前实现候选 task_id：`P2-AUDIT-WORKFLOW-WIRING-001`（A 档、串行，承担 A 类同步；修复与本地验证完成，可交独立 Monitor → grok 评审桥，未 push/合并）。
-- 本棒完成情况：在已选 Workflow 候选上修复 CLI 参数回显、PG 测试隔离，补齐模型空输入合同、响应投影、架构与真实 PG 接线反证；相同时间戳确认竞争及组件重建验证通过。Workflow denied → envelope `blocked`、timeout 耗尽 → `failed`、Task/Trace 保留原 error_code 的第 8 条裁定保持落实，待 GOV-SYNC 落盘；裸文本确认多一次 LLM 调用按第 10 条裁定延期。
+- 当前实现 task_id：`P2-AUDIT-OA-TODO-CONVERGE-001`（A 档、串行，承担 A 类同步；P 段已交付，D 段仍阻塞）。
+- 本棒完成情况：X-01 保留后台认证否定/可计数失败分类，在线诊断写入失败仍固定 503；X-02 区分成功空与尚未取得。raw-row、旧故障注入、目录过期重读与 Windows 测试 loop 接缝已适配，真实 HTTP→PG 提交确认丢失及恢复读取已覆盖。审计 #6 的 done_when 保持 P+D，D 与真实现场验收仍受外部输入/授权阻塞。
 - 当前实现后继指针：留空（本棒没有已决且唯一的后继）；方案恢复裁定与欠债后继由 GOV-SYNC 处理。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；不改变现役 DAG。
 
 ## 已登记验证基线
 
-### 当前 Workflow 修复候选（2026-09-16）
+### 当前 OA 待办收敛 P 段已交付基线（2026-09-17）
 
-- 固定测试库入口后端全量 `3736 passed, 0 failed, 0 skipped`（113 warnings），后台最终 exit=0；P4 observer authoritative PASS。Windows access violation 按 2026-09-10 裁定登记，CI 尚未运行。
-- PG/管理工具定向 `68 passed`；此前组件定向 `225 passed`、CLI/smoke/投影/新架构定向 `66 passed` 的证据保留。当前架构 `131 passed`；Golden `34/34`（positive `13/13`、negative/boundary `21/21`、零 skipped）；Ruff、mypy `132 source files`、11 个候选改动测试文件的弱测试检查通过。
-- CLI、模型合同、响应投影、静态目录依赖四组反证保持有效；新增真实 HTTP＋PG 反证断开生产 Workflow 注入后在成功终态断言变红，恢复后通过且原文件哈希一致。全量前后固定测试库均为主干 revision `20260914_120000`、仅 public schema、Registry 空，本棒沙箱和能力声明无残留。
-- 真实 PG 保留并重建生产组件后：按钮明确失效且 LLM/adapter 零调用；无 pending 裸文本“确认”仍调用 LLM 一次、adapter 零调用，合成未注册文本的新 Task `failed/internal_error`，旧 checkpoint 未恢复。零 LLM 义务按第 10 条延期，五字段见 `PHASE2_PLAN.md`；不声称真正进程重启或真实 OA/LLM 验收。
-- 独立 Monitor、grok 评审桥、远端 CI 均未执行。真实 OA/vLLM 与部署启用义务保留；未完成项见 `PHASE2_PLAN.md`。
+- 固定测试库后端全量 `3801 passed, 0 failed, 0 skipped`（113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录；CI 未运行。
+- P 段 ports/API/真实 PG/迁移/轮询定向 `172 passed`；架构 `131 passed`、P4 observer authoritative PASS；Golden `34/34`（positive `13/13`、negative/boundary `21/21`，零 failed/skipped）。
+- 前端完整入口 `785 passed`（19 个独立组件进程 `423`、单元 `358`、OpenAPI `4`）；typecheck/lint 通过。Ruff、mypy `132 source files`、候选 6 个改动测试文件的弱测试检查及前端 build 通过。
+- 分类修复、成功空态与返回前目录过期三组生产回退/故障反证均变红，恢复后通过；原测试保留，生产文件恢复哈希一致。HTTP→真实 PG 确认丢失返回固定 503 后重读已发布空批次，不误报回滚或重复 apply。
+- 迁移唯一 head 为 `20260915_120000`，parent 为 `20260914_120000`；本轮无迁移改动或测试库重置。D 五字段义务见 `PHASE2_PLAN.md`，未核销第二租户或既有验收债。
+- 独立 Monitor、静态评审桥与远端 CI 未执行；当前只准备 P 候选，不能替代独立 PASS、合并或审计 #6 的 P+D 验收。真实 OA/vLLM、部署与办结源接入未执行。
 
 ### 既有 Top-K 修复候选记录（2026-09-16，非本轮复测）
 
@@ -61,7 +62,7 @@
 
 ## 当前实现摘要
 
-- 页面合同：既有交办结构与控件闭集、附件禁用、草稿失败反馈及软件中心合同保留；`P2-FE-DISPATCH-WIRING-001` 已接通目录选择、派发、时区与内部只读事项。本棒只改有界列表默认顺序与两处超限说明。草稿沿用会话内存；解析、附件上传、服务端草稿、软件登记审核和用户侧软件列表接口仍未接入。生产选人仍受真实目录 Source/首同步阻塞。
+- 页面合同：既有交办结构与控件闭集、附件禁用、草稿失败反馈及软件中心合同保留；`P2-FE-DISPATCH-WIRING-001` 已接通目录选择、派发、时区与内部只读事项。列表保留有界稳定排序与超限说明；当前 P 候选新增完整批次消失对账、未再确认历史区、同步状态与成功空态，未接 D 可信办结源。草稿沿用会话内存；解析、附件上传、服务端草稿、软件登记审核和用户侧软件列表接口仍未接入。生产选人仍受真实目录 Source/首同步阻塞。
 - 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
 - 意图输出必须显式给出 `match`；完整候选的 `none` 进入 `no_capability_found`，reason 为 `no_matching_capability`；不完整候选的 `none` 为 `capability_candidates_low_confidence`。候选内标签碰撞保留冻结 `no_unique_active_candidate` 无匹配语义；候选外引用与约束矛盾拒绝执行。漏字段与矛盾组合保持 `schema_invalid`。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定；聊天回退后继仍为 `P2-RUNTIME-DIRECT-ANSWER-001`。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。

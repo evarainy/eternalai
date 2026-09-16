@@ -18,6 +18,7 @@ import WorkObjectsPage from '../WorkObjectsPage';
 const apiMocks = vi.hoisted(() => ({
   getWorkObject: vi.fn(),
   listWorkObjects: vi.fn(),
+  historyWorkObjects: vi.fn(),
   setHandlingMark: vi.fn(),
   syncWorkObjects: vi.fn(),
 }));
@@ -25,7 +26,8 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('../../generated/work-objects/work-objects', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../generated/work-objects/work-objects')>(),
   getWorkObjectApiV1WorkObjectsWorkObjectIdGet: apiMocks.getWorkObject,
-  listWorkObjectsApiV1WorkObjectsGet: apiMocks.listWorkObjects,
+  listWorkObjectsApiV1WorkObjectsGet: (params: { oa_view?: string } | undefined) =>
+    params?.oa_view === 'unconfirmed' ? apiMocks.historyWorkObjects(params) : apiMocks.listWorkObjects(params),
   setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch:
     apiMocks.setHandlingMark,
   syncWorkObjectsApiV1WorkObjectsSyncPost: apiMocks.syncWorkObjects,
@@ -40,6 +42,7 @@ const WORK_OBJECT: OAWorkObjectView = {
   handling_capability_id: null,
   source_created_at: '2026-08-18 09:00:00',
   source_fetched_at: '2026-08-19T03:00:00Z',
+  oa_observation: { pending_state: 'current', revision: 1, last_seen_at: '2026-08-19T03:00:00Z', last_checked_at: '2026-08-19T03:00:00Z' },
   source_kind: 'pending_workflow',
   source_received_at: '2026-08-18 09:05:00',
   source_ref: 'OA-WF-001',
@@ -101,6 +104,7 @@ function listResponse(
     items: [WORK_OBJECT],
     limit: 200,
     limit_exceeded: false,
+    oa_sync: { status: 'succeeded', revision: 1, attempt_revision: 1, last_attempt_at: '2026-08-19T03:00:00Z', last_success_at: '2026-08-19T03:00:00Z', failure_code: null },
     ...overrides,
   };
 }
@@ -145,6 +149,7 @@ describe('WorkObjectsPage', () => {
       transcript: [],
     });
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    apiMocks.historyWorkObjects.mockReset().mockResolvedValue(listResponse({ items: [] }));
     apiMocks.listWorkObjects.mockResolvedValue(listResponse());
     apiMocks.syncWorkObjects.mockResolvedValue(listResponse());
     apiMocks.getWorkObject.mockResolvedValue(WORK_OBJECT);
@@ -159,8 +164,8 @@ describe('WorkObjectsPage', () => {
     const mixedResponse = listResponse({
       items: [WORK_OBJECT, INTERNAL_WORK_OBJECT],
     });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(mixedResponse);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(mixedResponse);
+    apiMocks.listWorkObjects.mockResolvedValue(mixedResponse);
+    apiMocks.syncWorkObjects.mockResolvedValue(mixedResponse);
 
     renderPage();
 
@@ -178,9 +183,9 @@ describe('WorkObjectsPage', () => {
       handling_capability_id: 'oa.work.read',
     };
     const response = listResponse({ items: [capableItem] });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.getWorkObject.mockResolvedValueOnce(capableItem);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
+    apiMocks.getWorkObject.mockResolvedValue(capableItem);
 
     const page = renderPage();
 
@@ -220,9 +225,9 @@ describe('WorkObjectsPage', () => {
       ...WORK_OBJECT,
       source_fetched_at: '2026-08-19T11:00:00+08:00',
     };
-    const response = listResponse({ items: [invalidTimestampItem] });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    const response = listResponse({ items: [invalidTimestampItem], oa_sync: { ...listResponse().oa_sync, last_success_at: invalidTimestampItem.source_fetched_at } });
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
     useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
 
     renderPage(makeClient(), { withDock: true });
@@ -241,9 +246,9 @@ describe('WorkObjectsPage', () => {
       source_ref: '11010519491231002X',
     };
     const response = listResponse({ items: [credentialShapedSourceRef] });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.getWorkObject.mockResolvedValueOnce(credentialShapedSourceRef);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
+    apiMocks.getWorkObject.mockResolvedValue(credentialShapedSourceRef);
     useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
 
     renderPage(makeClient(), { withDock: true });
@@ -268,9 +273,9 @@ describe('WorkObjectsPage', () => {
       work_object_id: `work-page-${index + 1}`,
     }));
     const response = listResponse({ items });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.getWorkObject.mockResolvedValueOnce(items[0] as OAWorkObjectView);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
+    apiMocks.getWorkObject.mockResolvedValue(items[0] as OAWorkObjectView);
 
     renderPage();
 
@@ -326,8 +331,8 @@ describe('WorkObjectsPage', () => {
       },
     ];
     const response = listResponse({ items });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
 
     renderPage();
 
@@ -359,8 +364,8 @@ describe('WorkObjectsPage', () => {
     const response = listResponse({
       items: [WORK_OBJECT, futureItem, pendingConfirmation],
     });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
 
     renderPage();
 
@@ -424,7 +429,7 @@ describe('WorkObjectsPage', () => {
 
     expect(await screen.findByText(/OA-WF-001/)).toBeInTheDocument();
     expect(screen.getByText('OA 办公系统')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤 待办/)).toBeInTheDocument();
+    expect(screen.getByText(/上次OA步骤 待办/)).toBeInTheDocument();
     expect(screen.getAllByText(/^数据截至 /).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('筛选')).toBeInTheDocument();
     const overdueStatus = within(screen.getByRole('table')).getByText(/已逾期/);
@@ -455,8 +460,8 @@ describe('WorkObjectsPage', () => {
       work_object_id: 'work-future',
     };
     const response = listResponse({ items: [futureItem] });
-    apiMocks.listWorkObjects.mockResolvedValueOnce(response);
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(response);
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
 
     renderPage();
 
@@ -468,7 +473,7 @@ describe('WorkObjectsPage', () => {
   });
 
   it('keeps the saved OA snapshot visible when sync fails and warns about bounded results', async () => {
-    apiMocks.listWorkObjects.mockResolvedValueOnce(
+    apiMocks.listWorkObjects.mockResolvedValue(
       listResponse({ limit_exceeded: true }),
     );
     apiMocks.syncWorkObjects.mockRejectedValueOnce(
@@ -480,10 +485,10 @@ describe('WorkObjectsPage', () => {
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
     expect(await screen.findByText('OA 同步失败')).toBeInTheDocument();
     expect(
-      screen.getByText('仍在显示上次成功拉取的数据；请以每项的数据截至时间为准。'),
+      screen.getByText('仍在显示上次成功拉取的数据；请以批次数据截至时间为准。'),
     ).toBeInTheDocument();
     expect(screen.getByText(/oa_sync_failed: OA 暂时不可用/)).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤 待办/)).toBeInTheDocument();
+    expect(screen.getByText(/上次OA步骤 待办/)).toBeInTheDocument();
     expect(screen.getByText('事项超过首版展示上限 200 条')).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -495,10 +500,10 @@ describe('WorkObjectsPage', () => {
   });
 
   it('discloses bounded selection without claiming complete results', async () => {
-    apiMocks.listWorkObjects.mockResolvedValueOnce(
+    apiMocks.listWorkObjects.mockResolvedValue(
       listResponse({ limit_exceeded: true }),
     );
-    apiMocks.syncWorkObjects.mockResolvedValueOnce(
+    apiMocks.syncWorkObjects.mockResolvedValue(
       listResponse({ limit_exceeded: true }),
     );
 
@@ -512,7 +517,8 @@ describe('WorkObjectsPage', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/OA 里的全部事项/)).not.toBeInTheDocument();
     unmount();
-
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse());
+    apiMocks.syncWorkObjects.mockResolvedValue(listResponse());
     renderPage();
 
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
@@ -566,14 +572,12 @@ describe('WorkObjectsPage', () => {
       resolveOldSync = resolve;
     });
     const otherUserResponse = listResponse({ items: [OTHER_USER_WORK_OBJECT] });
-    apiMocks.listWorkObjects
-      .mockReset()
-      .mockResolvedValueOnce(listResponse())
-      .mockResolvedValueOnce(otherUserResponse);
-    apiMocks.syncWorkObjects
-      .mockReset()
-      .mockReturnValueOnce(oldSync)
-      .mockResolvedValueOnce(otherUserResponse);
+    apiMocks.listWorkObjects.mockReset().mockImplementation(() => Promise.resolve(
+      useAuthStore.getState().generation === 1 ? listResponse() : otherUserResponse,
+    ));
+    apiMocks.syncWorkObjects.mockReset().mockImplementation(() =>
+      useAuthStore.getState().generation === 1 ? oldSync : Promise.resolve(otherUserResponse),
+    );
     const firstPage = renderPage();
 
     expect(await screen.findByText('核对本月采购流程')).toBeInTheDocument();
@@ -598,7 +602,7 @@ describe('WorkObjectsPage', () => {
       expect(
         firstPage.queryClient.getQueryData([
           'work-objects',
-          otherUserGeneration,
+          otherUserGeneration, 'list', 'active', '',
         ]),
       ).toEqual(otherUserResponse);
     });
@@ -615,7 +619,7 @@ describe('WorkObjectsPage', () => {
       source_fetched_at: '2026-08-19T03:05:00Z',
       source_status: 'OA_UPDATED',
     };
-    apiMocks.syncWorkObjects.mockReset().mockReturnValueOnce(pendingSync);
+    apiMocks.syncWorkObjects.mockReset().mockReturnValue(pendingSync);
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
@@ -632,7 +636,7 @@ describe('WorkObjectsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText(/上次OA步骤 OA_UPDATED/)).toBeInTheDocument();
       expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
       expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
     });
@@ -657,8 +661,8 @@ describe('WorkObjectsPage', () => {
       handling_mark: 'handled_elsewhere',
       handling_marked_at: '2026-08-19T03:10:00Z',
     };
-    apiMocks.syncWorkObjects.mockReset().mockReturnValueOnce(pendingSync);
-    apiMocks.setHandlingMark.mockReset().mockReturnValueOnce(pendingMark);
+    apiMocks.syncWorkObjects.mockReset().mockReturnValue(pendingSync);
+    apiMocks.setHandlingMark.mockReset().mockReturnValue(pendingMark);
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
@@ -671,13 +675,13 @@ describe('WorkObjectsPage', () => {
 
     resolveSync(listResponse({ items: [refreshedSource] }));
     await waitFor(() => {
-      expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
+      expect(screen.getByText(/上次OA步骤 OA_UPDATED/)).toBeInTheDocument();
       expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     });
     resolveMark(markedOldSource);
 
     expect(await screen.findByText('处理痕迹已记录；OA 状态未被修改')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/上次OA步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
   });
@@ -697,8 +701,8 @@ describe('WorkObjectsPage', () => {
       source_status: 'OA_UPDATED',
       task_record_id: 'task-new',
     };
-    apiMocks.syncWorkObjects.mockReset().mockReturnValueOnce(pendingSync);
-    apiMocks.getWorkObject.mockReset().mockReturnValueOnce(pendingDetail);
+    apiMocks.syncWorkObjects.mockReset().mockReturnValue(pendingSync);
+    apiMocks.getWorkObject.mockReset().mockReturnValue(pendingDetail);
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
@@ -707,7 +711,7 @@ describe('WorkObjectsPage', () => {
 
     resolveSync(listResponse({ items: [refreshedSource] }));
     expect(await screen.findByText('task-new')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/上次OA步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
     await act(async () => {
       resolveDetail(WORK_OBJECT);
@@ -715,7 +719,7 @@ describe('WorkObjectsPage', () => {
     });
 
     expect(screen.getByText('task-new')).toBeInTheDocument();
-    expect(screen.getByText(/当前步骤 OA_UPDATED/)).toBeInTheDocument();
+    expect(screen.getByText(/上次OA步骤 OA_UPDATED/)).toBeInTheDocument();
     expect(screen.getByText('OA_UPDATED')).toBeInTheDocument();
   });
 
@@ -728,8 +732,8 @@ describe('WorkObjectsPage', () => {
     const pendingDetail = new Promise<OAWorkObjectView>((resolve) => {
       resolveDetail = resolve;
     });
-    apiMocks.syncWorkObjects.mockReset().mockReturnValueOnce(pendingSync);
-    apiMocks.getWorkObject.mockReset().mockReturnValueOnce(pendingDetail);
+    apiMocks.syncWorkObjects.mockReset().mockReturnValue(pendingSync);
+    apiMocks.getWorkObject.mockReset().mockReturnValue(pendingDetail);
     renderPage();
     await screen.findByText('核对本月采购流程');
     await waitFor(() => expect(apiMocks.syncWorkObjects).toHaveBeenCalledTimes(1));
@@ -739,6 +743,7 @@ describe('WorkObjectsPage', () => {
     resolveSync(
       listResponse({
         items: [OTHER_USER_WORK_OBJECT],
+        oa_sync: { ...listResponse().oa_sync, revision: 2, attempt_revision: 2 },
         limit_exceeded: true,
       }),
     );
@@ -755,28 +760,26 @@ describe('WorkObjectsPage', () => {
     const pendingList = new Promise<WorkObjectListResponse>((resolve) => {
       resolveList = resolve;
     });
-    apiMocks.listWorkObjects
-      .mockReset()
-      .mockResolvedValueOnce(listResponse())
-      .mockReturnValueOnce(pendingList);
+    apiMocks.listWorkObjects.mockReset().mockResolvedValue(listResponse());
     const page = renderPage();
     await screen.findByText('核对本月采购流程');
     fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
     await screen.findByText(/OA 状态数据截至/);
+    apiMocks.listWorkObjects.mockReturnValue(pendingList);
     void page.queryClient.refetchQueries({
-      queryKey: ['work-objects', useAuthStore.getState().generation],
+      queryKey: ['work-objects', useAuthStore.getState().generation, 'list', 'active', ''],
       exact: true,
     });
-    await waitFor(() => expect(apiMocks.listWorkObjects).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiMocks.listWorkObjects.mock.results.at(-1)?.value).toBe(pendingList));
     fireEvent.click(
       screen.getByRole('button', { name: '标记为已在别处处理' }),
     );
-    expect(await screen.findByText('处理痕迹已记录；OA 状态未被修改')).toBeInTheDocument();
     await act(async () => {
       resolveList(listResponse());
       await pendingList;
     });
 
+    expect(await screen.findByText('处理痕迹已记录；OA 状态未被修改')).toBeInTheDocument();
     expect(screen.getAllByText('已在别处处理').length).toBeGreaterThanOrEqual(2);
   });
 
@@ -790,7 +793,7 @@ describe('WorkObjectsPage', () => {
     expect(
       screen.getByText('这条事项的状态权威在 OA，请在 OA 中办理。'),
     ).toBeInTheDocument();
-    expect(screen.getByText('处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。')).toBeInTheDocument();
+    expect(screen.getByText(/处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。/)).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole('button', { name: '标记为已在别处处理' }),
     );
@@ -808,6 +811,125 @@ describe('WorkObjectsPage', () => {
     expect(handlingTimeRow).toHaveTextContent('2026');
     expect(handlingTimeRow).not.toHaveTextContent('未记录');
   });
+  it('shows empty success batch time and unconfirmed history without a done count', async () => {
+    const stamp = '2026-09-16T01:00:00Z';
+    const sync = { ...listResponse().oa_sync, revision: 2, attempt_revision: 2,
+      last_attempt_at: stamp, last_success_at: stamp };
+    const history: OAWorkObjectView = { ...WORK_OBJECT, handling_action: 'view_only',
+      handling_capability_id: null, oa_observation: { ...WORK_OBJECT.oa_observation,
+        pending_state: 'unconfirmed', revision: 2, last_checked_at: stamp } };
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [], oa_sync: sync }));
+    apiMocks.syncWorkObjects.mockResolvedValue(listResponse({ items: [], oa_sync: sync }));
+    apiMocks.historyWorkObjects.mockResolvedValue(listResponse({ items: [history], oa_sync: sync }));
+    apiMocks.getWorkObject.mockResolvedValue(history);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('0'));
+    expect(screen.getByTestId('work-count-urgent')).toHaveTextContent('0');
+    expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
+    expect(screen.getByText(/数据截至/)).toHaveTextContent('2026年9月16日');
+    fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
+    expect(screen.getByText('当前无待办。')).toBeVisible();
+    expect(screen.queryByText('还没有取得可显示的工作事项。')).toBeNull();
+    expect(screen.queryByText(/下一步：先在顶栏确认 OA 绑定/)).toBeNull();
+    const historySection = screen.getByText('当前待办未再确认（1）').closest('details')!;
+    fireEvent.click(screen.getByText('当前待办未再确认（1）'));
+    expect(historySection).toHaveTextContent('可能已转交、撤回或办结，请到OA核对');
+    expect(within(historySection).queryByRole('button', { name: '去 OA 办' })).toBeNull();
+    fireEvent.click(within(historySection).getByRole('button', { name: '先看看' }));
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('当前待办未再确认'));
+    expect(apiMocks.historyWorkObjects).toHaveBeenCalledWith({ oa_view: 'unconfirmed' });
+  });
+
+  it.each([
+    ['never', '尚未成功核对 OA 待办'],
+    ['running', 'OA 同步进行中，当前显示已保存数据'],
+    ['failed', '最近一次 OA 同步失败，保留已保存数据'],
+  ] as const)('does not call an empty %s batch a successful empty snapshot', async (status, title) => {
+    const sync: WorkObjectListResponse['oa_sync'] = {
+      status, revision: 0, attempt_revision: status === 'never' ? 0 : 1,
+      last_attempt_at: status === 'never' ? null : '2026-09-16T04:00:00Z',
+      last_success_at: null,
+      failure_code: status === 'failed' ? 'upstream_unavailable' : null,
+    };
+    const response = listResponse({ items: [], oa_sync: sync });
+    apiMocks.listWorkObjects.mockResolvedValue(response);
+    apiMocks.historyWorkObjects.mockResolvedValue(response);
+    apiMocks.syncWorkObjects.mockResolvedValue(response);
+    renderPage();
+    expect(await screen.findByText(title)).toBeVisible();
+    fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
+    expect(screen.getByText('还没有取得可显示的工作事项。')).toBeVisible();
+    expect(screen.queryByText('当前无待办。')).toBeNull();
+    expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
+  });
+
+  it('keeps latest attempt failure when stale running arrives and accepts a newer attempt', async () => {
+    const failed = listResponse({ oa_sync: { ...listResponse().oa_sync, status: 'failed',
+      attempt_revision: 2, failure_code: 'upstream_unavailable' } });
+    apiMocks.listWorkObjects.mockResolvedValue(failed);
+    apiMocks.syncWorkObjects.mockRejectedValue(new ApiError(503, 'work_object_sync_failed', 'synthetic'));
+    const page = renderPage();
+    expect(await screen.findByText('最近一次 OA 同步失败，保留已保存数据')).toBeVisible();
+    const key = ['work-objects', 1, 'list', 'active', ''];
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ oa_sync: { ...failed.oa_sync,
+      status: 'running', failure_code: null } }));
+    await act(async () => { await page.queryClient.refetchQueries({ queryKey: key, exact: true }); });
+    expect(screen.getByText('最近一次 OA 同步失败，保留已保存数据')).toBeVisible();
+    expect(page.queryClient.getQueryData<WorkObjectListResponse>(key)?.oa_sync.status).toBe('failed');
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ oa_sync: { ...failed.oa_sync,
+      status: 'running', failure_code: null, attempt_revision: 3 } }));
+    await act(async () => { await page.queryClient.refetchQueries({ queryKey: key, exact: true }); });
+    expect(await screen.findByText('OA 同步进行中，当前显示已保存数据')).toBeVisible();
+    expect(page.queryClient.getQueryData<WorkObjectListResponse>(key)?.oa_sync.attempt_revision).toBe(3);
+  });
+
+  it('an old mark response cannot restore an unconfirmed handling capability', async () => {
+    let resolveSync!: (value: WorkObjectListResponse) => void;
+    let resolveMark!: (value: OAWorkObjectView) => void;
+    apiMocks.syncWorkObjects.mockReturnValue(new Promise<WorkObjectListResponse>((resolve) => { resolveSync = resolve; }));
+    apiMocks.setHandlingMark.mockReturnValue(new Promise<OAWorkObjectView>((resolve) => { resolveMark = resolve; }));
+    const page = renderPage();
+    await screen.findByText('核对本月采购流程');
+    fireEvent.click(screen.getByRole('button', { name: '去 OA 办' }));
+    fireEvent.click(await screen.findByRole('button', { name: '标记为已在别处处理' }));
+    const stamp = '2026-08-19T03:20:00Z';
+    const metadata = { ...listResponse().oa_sync, revision: 2, attempt_revision: 2,
+      last_attempt_at: stamp, last_success_at: stamp };
+    const history: OAWorkObjectView = { ...WORK_OBJECT, handling_action: 'view_only',
+      handling_capability_id: null, oa_observation: { ...WORK_OBJECT.oa_observation,
+        pending_state: 'unconfirmed', revision: 2, last_checked_at: stamp } };
+    apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [], oa_sync: metadata }));
+    apiMocks.historyWorkObjects.mockResolvedValue(listResponse({ items: [history], oa_sync: metadata }));
+    apiMocks.getWorkObject.mockResolvedValue(history);
+    await act(async () => { resolveSync(listResponse({ items: [], oa_sync: metadata })); });
+    await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('当前待办未再确认'));
+    let releaseReads!: () => void;
+    const delayedReads = new Promise<void>((resolve) => { releaseReads = resolve; });
+    apiMocks.listWorkObjects.mockImplementation(async () => {
+      await delayedReads; return listResponse({ items: [], oa_sync: metadata });
+    });
+    apiMocks.historyWorkObjects.mockImplementation(async () => {
+      await delayedReads; return listResponse({ items: [history], oa_sync: metadata });
+    });
+    apiMocks.getWorkObject.mockImplementation(async () => { await delayedReads; return history; });
+    await act(async () => { resolveMark({ ...WORK_OBJECT, handling_mark: 'handled_elsewhere',
+      handling_marked_at: '2026-08-19T03:21:00Z', handling_action: 'self_serve',
+      handling_capability_id: 'oa.synthetic.handle' }); });
+    const key = ['work-objects', 1, 'detail', WORK_OBJECT.work_object_id];
+    try {
+      await waitFor(() => expect(page.queryClient.getQueryData<OAWorkObjectView>(key)?.handling_mark).toBe('handled_elsewhere'));
+      const detail = page.queryClient.getQueryData<OAWorkObjectView>(key);
+      expect(detail?.oa_observation.pending_state).toBe('unconfirmed');
+      expect(detail?.handling_action).toBe('view_only');
+      expect(detail?.handling_capability_id).toBeNull();
+      expect(screen.getByRole('dialog')).toHaveTextContent('当前待办未再确认');
+    } finally {
+      await act(async () => { releaseReads(); });
+    }
+    await screen.findByText('处理痕迹已记录；OA 状态未被修改');
+
+  });
+
 });
 
 describe('internal dispatch integration at fetch boundary', () => {
@@ -818,6 +940,7 @@ describe('internal dispatch integration at fetch boundary', () => {
     useAuthStore.getState().markAuthenticated();
     const real = await vi.importActual<typeof import('../../generated/work-objects/work-objects')>('../../generated/work-objects/work-objects');
     apiMocks.listWorkObjects.mockReset().mockImplementation(real.listWorkObjectsApiV1WorkObjectsGet);
+    apiMocks.historyWorkObjects.mockReset().mockImplementation(real.listWorkObjectsApiV1WorkObjectsGet);
     apiMocks.getWorkObject.mockReset().mockImplementation(real.getWorkObjectApiV1WorkObjectsWorkObjectIdGet);
     apiMocks.syncWorkObjects.mockReset().mockImplementation(real.syncWorkObjectsApiV1WorkObjectsSyncPost);
     internal = { ...INTERNAL_WORK_OBJECT, title: '合成内部事项', assignee_display_name: null, kind: '通知', target_kind: 'user', status: 'assigned', requirement: '办理正文', receipt_requirement: '回执正文', reminder_choices: ['提前 1 天'], reminder_delivery: 'not_enabled', created_at: '2026-09-14T01:00:00Z', updated_at: '2026-09-14T02:00:00Z', owner_department_id: 'd1', version: 1 };
@@ -838,17 +961,17 @@ describe('internal dispatch integration at fetch boundary', () => {
     expect(within(drawer).getByText(/自动提醒尚未启用/)).toHaveTextContent('提前 1 天');
     expect(drawer.querySelector('[data-assignee-value]')).toBeNull();
     expect(within(drawer).queryByRole('button', { name: /标记为|去 OA|认领|转派/ })).toBeNull();
-    expect(vi.mocked(fetch).mock.calls.map(([url, init]) => [url, init?.method])).toEqual([['/api/v1/work-objects', 'GET'], ['/api/v1/work-objects/sync', 'POST'], ['/api/v1/work-objects/internal-work-object-1', 'GET']]);
+    expect(vi.mocked(fetch).mock.calls.map(([url, init]) => [url, init?.method])).toEqual([['/api/v1/work-objects?oa_view=active', 'GET'], ['/api/v1/work-objects?oa_view=unconfirmed', 'GET'], ['/api/v1/work-objects/sync', 'POST'], ['/api/v1/work-objects?oa_view=active', 'GET'], ['/api/v1/work-objects?oa_view=unconfirmed', 'GET'], ['/api/v1/work-objects/internal-work-object-1', 'GET']]);
     expect(apiMocks.setHandlingMark).not.toHaveBeenCalled();
-    expect(useAIDockStore.getState().pageContextDeclaration).toMatchObject({ work_object_refs: [{ work_object_id: 'internal-work-object-1' }], source_refs: [], allowed_capabilities: [], freshness: { state: 'unknown', observed_at: null } });
+    expect(useAIDockStore.getState().pageContextDeclaration).toMatchObject({ work_object_refs: [{ work_object_id: 'internal-work-object-1' }], source_refs: [], allowed_capabilities: [], freshness: { state: 'reported', observed_at: '2026-08-19T03:00:00Z' } });
   });
   it('N2 filters_and_sorts_null_without_synthetic_values', async () => {
     const items = [internal, { ...internal, work_object_id: 'null2', title: '空名二' }, { ...internal, work_object_id: 'named1', title: '同名一', assignee_display_name: '张三' }, { ...internal, work_object_id: 'named2', title: '同名二', assignee_display_name: '张三' }];
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(listResponse({ items }))));
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(new Response(JSON.stringify(listResponse({ items })))));
     renderPage(); await waitFor(() => expect(screen.getByTestId('work-count-todo')).toHaveTextContent('4'));
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
     const rows = () => Array.from(document.querySelectorAll('tbody tr[data-row-key]'), (node) => node.getAttribute('data-row-key'));
-    const header = screen.getByRole('columnheader', { name: /责任人/ });
+    const header = within(screen.getByRole('region', { name: '事项分类' })).getByRole('columnheader', { name: /责任人/ });
     fireEvent.click(header);
     expect(rows()).toEqual(['named1', 'named2', 'internal-work-object-1', 'null2']);
     fireEvent.click(header);
@@ -869,13 +992,13 @@ describe('internal dispatch integration at fetch boundary', () => {
     const now = new Date(); const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(23, 59, 59, 999);
     const dayAfter = new Date(tomorrow.getTime() + 1);
     const items = [internal, { ...internal, work_object_id: 'past', title: '逾期项', due_at: new Date(now.getTime() - 60000).toISOString() }, { ...internal, work_object_id: 'tomorrow', title: '明日末项', due_at: tomorrow.toISOString() }, { ...internal, work_object_id: 'future', title: '后日零点项', due_at: dayAfter.toISOString(), status: 'department_pending' as const }];
-    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(listResponse({ items }))));
+    vi.mocked(fetch).mockImplementation(() => Promise.resolve(new Response(JSON.stringify(listResponse({ items })))));
     renderPage(); expect(await screen.findByText('逾期项')).toBeVisible(); expect(screen.getByText('明日末项')).toBeVisible();
     expect(screen.getByTestId('work-count-urgent')).toHaveTextContent('2'); expect(screen.getByTestId('work-count-todo')).toHaveTextContent('2');
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
     expect(screen.getByText('后日零点项')).toBeVisible(); expect(screen.getByText('待部门认领')).toBeVisible();
     expect(screen.getByText('合成内部事项')).toBeVisible();
-    expect(screen.getByText(/尚未取得 OA 数据/)).toBeVisible();
+    expect(screen.getByText(/数据截至/)).toHaveTextContent('2026');
     expect(screen.getByTestId('work-count-done')).toHaveTextContent('—');
     fireEvent.click(screen.getByRole('radio', { name: /已完成/ }));
     expect(screen.queryByText('合成内部事项')).toBeNull(); expect(screen.getByText('办结数据还没有接进来。')).toBeVisible();
@@ -897,7 +1020,7 @@ describe('internal dispatch integration at fetch boundary', () => {
     expect(within(screen.getByRole('dialog')).queryByText('办理正文')).toBeNull();
     expect(within(screen.getByRole('dialog')).queryByText('合成内部事项')).toBeNull(); list.unmount();
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ detail: { code: 'organization_directory_unavailable', message: 'synthetic' } }), { status: 503 }));
-    const failedClient = makeClient(); failedClient.setQueryData(['work-objects', useAuthStore.getState().generation], listResponse({ items: [internal] }));
+    const failedClient = makeClient(); failedClient.setQueryData(['work-objects', useAuthStore.getState().generation, 'list', 'active', ''], listResponse({ items: [internal] }));
     renderPage(failedClient); expect(await screen.findByText('无法读取已保存的工作事项')).toBeVisible();
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
     expect(screen.queryByText('合成内部事项')).toBeNull();

@@ -198,6 +198,55 @@ export interface InternalWorkObjectView {
   work_object_id: string;
 }
 
+export type OAObservationLastCheckedAt = string | null;
+
+export type OAObservationPendingState = typeof OAObservationPendingState[keyof typeof OAObservationPendingState];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const OAObservationPendingState = {
+  legacy_unverified: 'legacy_unverified',
+  current: 'current',
+  unconfirmed: 'unconfirmed',
+} as const;
+
+export interface OAObservation {
+  last_checked_at: OAObservationLastCheckedAt;
+  last_seen_at: string;
+  pending_state: OAObservationPendingState;
+  /** @minimum 0 */
+  revision: number;
+}
+
+export type OASyncStatusViewFailureCode = 'reauthentication_required' | 'binding_scope_required' | 'forbidden' | 'invalid_response' | 'upstream_unavailable' | 'storage_unavailable' | 'clock_invalid' | null;
+
+export type OASyncStatusViewLastAttemptAt = string | null;
+
+export type OASyncStatusViewLastSuccessAt = string | null;
+
+export type OASyncStatusViewStatus = typeof OASyncStatusViewStatus[keyof typeof OASyncStatusViewStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const OASyncStatusViewStatus = {
+  never: 'never',
+  running: 'running',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  unsupported_scope: 'unsupported_scope',
+} as const;
+
+export interface OASyncStatusView {
+  /** @minimum 0 */
+  attempt_revision: number;
+  failure_code: OASyncStatusViewFailureCode;
+  last_attempt_at: OASyncStatusViewLastAttemptAt;
+  last_success_at: OASyncStatusViewLastSuccessAt;
+  /** @minimum 0 */
+  revision: number;
+  status: OASyncStatusViewStatus;
+}
+
 export type OAWorkObjectViewDueAt = string | null;
 
 export type OAWorkObjectViewHandlingAction = typeof OAWorkObjectViewHandlingAction[keyof typeof OAWorkObjectViewHandlingAction];
@@ -226,6 +275,7 @@ export interface OAWorkObjectView {
   handling_capability_id: OAWorkObjectViewHandlingCapabilityId;
   handling_mark: OAWorkObjectViewHandlingMark;
   handling_marked_at: OAWorkObjectViewHandlingMarkedAt;
+  oa_observation: OAObservation;
   source_created_at: string;
   source_fetched_at: string;
   source_kind: 'pending_workflow';
@@ -302,11 +352,23 @@ export interface WorkObjectListResponse {
   items: WorkObjectListResponseItemsItem[];
   limit: number;
   limit_exceeded: boolean;
+  oa_sync: OASyncStatusView;
 }
 
 export type ListWorkObjectsApiV1WorkObjectsGetParams = {
 q?: string | null;
+oa_view?: ListWorkObjectsApiV1WorkObjectsGetOaView;
 };
+
+export type ListWorkObjectsApiV1WorkObjectsGetOaView = typeof ListWorkObjectsApiV1WorkObjectsGetOaView[keyof typeof ListWorkObjectsApiV1WorkObjectsGetOaView];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const ListWorkObjectsApiV1WorkObjectsGetOaView = {
+  active: 'active',
+  unconfirmed: 'unconfirmed',
+  all: 'all',
+} as const;
 
 export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams = {
 kind: ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind;

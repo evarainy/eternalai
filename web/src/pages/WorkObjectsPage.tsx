@@ -25,6 +25,7 @@ import {
 } from '../generated/work-objects/work-objects';
 import type {
   OAWorkObjectView,
+  OASyncStatusView,
   SetHandlingMarkRequestMark,
   WorkObjectListResponse,
   WorkObjectListResponseItemsItem,
@@ -50,8 +51,8 @@ type WorkObjectView = 'urgent' | 'todo' | 'done';
 /** 「已完成」的计数占位：没有数据源时显示它，不显示任何数字。 */
 const UNAVAILABLE_COUNT = '—';
 
-function workObjectsQueryKey(authGeneration: number) {
-  return ['work-objects', authGeneration] as const;
+function workObjectsQueryKey(authGeneration: number, oaView: 'active' | 'unconfirmed' = 'active') {
+  return ['work-objects', authGeneration, 'list', oaView, ''] as const;
 }
 
 function workObjectDetailsQueryKey(authGeneration: number) {
@@ -96,14 +97,52 @@ function mergeWorkObjectView(
     timestampValue(current.handling_marked_at)
       ? incoming
       : current;
+  const observationOwner = incoming.oa_observation.revision >= current.oa_observation.revision
+    ? incoming : current;
+  const splitProjection = observationOwner !== handlingOwner && (
+    observationOwner.oa_observation.revision !== handlingOwner.oa_observation.revision ||
+    observationOwner.handling_marked_at !== handlingOwner.handling_marked_at
+  );
+  const viewOnly = observationOwner.oa_observation.pending_state === 'unconfirmed' || splitProjection;
   return {
     ...sourceOwner,
+    oa_observation: observationOwner.oa_observation,
     handling_mark: handlingOwner.handling_mark,
     handling_marked_at: handlingOwner.handling_marked_at,
-    handling_action: handlingOwner.handling_action,
-    handling_capability_id: handlingOwner.handling_capability_id,
+    handling_action: viewOnly ? 'view_only' : observationOwner.handling_action,
+    handling_capability_id: viewOnly ? null : observationOwner.handling_capability_id,
     task_record_id: incoming.task_record_id ?? current.task_record_id,
   };
+}
+
+function mergeSyncStatus(current: OASyncStatusView, incoming: OASyncStatusView): OASyncStatusView {
+  if (incoming.attempt_revision !== current.attempt_revision) {
+    return incoming.attempt_revision > current.attempt_revision ? incoming : current;
+  }
+  const terminal = (value: OASyncStatusView) => value.status === 'failed' || value.status === 'succeeded';
+  return terminal(current) && !terminal(incoming) ? current : incoming;
+}
+
+function mergeListResponse(
+  current: WorkObjectListResponse | undefined, incoming: WorkObjectListResponse,
+): WorkObjectListResponse {
+  if (!current) return incoming;
+  const source = incoming.oa_sync.revision >= current.oa_sync.revision ? incoming : current;
+  return {
+    ...source,
+    oa_sync: mergeSyncStatus(current.oa_sync, incoming.oa_sync),
+    items: source.items.map((item) => mergeWorkObjectView(
+      current.items.find((old) => old.work_object_id === item.work_object_id),
+      incoming.items.find((next) => next.work_object_id === item.work_object_id) ?? item,
+    )),
+  };
+}
+
+function observationLabel(item: OAWorkObjectView): string {
+  return item.oa_observation.pending_state === 'unconfirmed'
+    ? '当前待办未再确认'
+    : item.oa_observation.pending_state === 'legacy_unverified'
+      ? '历史快照，尚未重新核对' : '当前待办';
 }
 
 const handlingMarkLabels: Record<SetHandlingMarkRequestMark, string> = {
@@ -321,7 +360,17 @@ export default function WorkObjectsPage() {
 
   const listQuery = useQuery({
     queryKey: listQueryKey,
-    queryFn: () => listWorkObjects(),
+    queryFn: () => listWorkObjects({ oa_view: 'active' }),
+    structuralSharing: (old, incoming) => mergeListResponse(
+      old as WorkObjectListResponse | undefined, incoming as WorkObjectListResponse,
+    ),
+  });
+  const historyQuery = useQuery({
+    queryKey: workObjectsQueryKey(authGeneration, 'unconfirmed'),
+    queryFn: () => listWorkObjects({ oa_view: 'unconfirmed' }),
+    structuralSharing: (old, incoming) => mergeListResponse(
+      old as WorkObjectListResponse | undefined, incoming as WorkObjectListResponse,
+    ),
   });
 
   const syncMutation = useMutation({
@@ -329,6 +378,7 @@ export default function WorkObjectsPage() {
       if (useAuthStore.getState().generation !== requestedGeneration) {
         throw new Error('authentication_generation_changed');
       }
+      coordinatedRevision.current = undefined;
       return syncWorkObjects();
     },
     onSuccess: async (response, requestedGeneration) => {
@@ -352,18 +402,7 @@ export default function WorkObjectsPage() {
       }
       queryClient.setQueryData<WorkObjectListResponse>(
         workObjectsQueryKey(requestedGeneration),
-        (current) => ({
-          ...response,
-          items: response.items.map((item) =>
-            mergeWorkObjectView(
-              current?.items.find(
-                (currentItem) =>
-                  currentItem.work_object_id === item.work_object_id,
-              ),
-              item,
-            ),
-          ),
-        }),
+        (current) => mergeListResponse(current, response),
       );
       for (const item of response.items) {
         const detailKey = workObjectDetailQueryKey(
@@ -377,6 +416,11 @@ export default function WorkObjectsPage() {
           );
         }
       }
+      await queryClient.invalidateQueries({ queryKey: ['work-objects', requestedGeneration] });
+    },
+    onError: async (_error, requestedGeneration) => {
+      if (useAuthStore.getState().generation !== requestedGeneration) return;
+      await queryClient.invalidateQueries({ queryKey: ['work-objects', requestedGeneration] });
     },
   });
   const triggerSync = syncMutation.mutate;
@@ -403,7 +447,21 @@ export default function WorkObjectsPage() {
       return getWorkObject(selectedWorkObjectId);
     },
     enabled: selectedWorkObjectId !== undefined,
+    structuralSharing: (old, incoming) => mergeWorkObjectView(
+      old as WorkObjectListResponseItemsItem | undefined, incoming as WorkObjectListResponseItemsItem,
+    ),
   });
+
+  useEffect(() => {
+    if (useAuthStore.getState().generation !== authGeneration) return;
+    for (const item of [...(listQuery.data?.items ?? []), ...(historyQuery.data?.items ?? [])]) {
+      const key = workObjectDetailQueryKey(authGeneration, item.work_object_id);
+      if (queryClient.getQueryState(key)) {
+        queryClient.setQueryData<WorkObjectListResponseItemsItem>(key,
+          (current) => mergeWorkObjectView(current, item));
+      }
+    }
+  }, [authGeneration, historyQuery.data, listQuery.data, queryClient]);
 
   const markMutation = useMutation({
     mutationFn: ({
@@ -462,6 +520,8 @@ export default function WorkObjectsPage() {
         (current: WorkObjectListResponseItemsItem | undefined) =>
           mergeWorkObjectView(current, updated),
       );
+      await queryClient.invalidateQueries({ queryKey: ['work-objects', variables.authGeneration] });
+      if (useAuthStore.getState().generation !== variables.authGeneration) return;
       void message.success('处理痕迹已记录；OA 状态未被修改');
     },
     onError: (error, variables) => {
@@ -473,14 +533,23 @@ export default function WorkObjectsPage() {
   });
 
   const items = listQuery.isSuccess ? listQuery.data.items : undefined;
-  const visibleSourceItems = useMemo(() => items ?? [], [items]);
-  const oaItems = visibleSourceItems.filter((item): item is OAWorkObjectView => item.state_authority === 'external_snapshot');
-  const newestFetchedAt = oaItems.reduce<string | undefined>((newest, item) => {
-    if (!newest || new Date(item.source_fetched_at) > new Date(newest)) {
-      return item.source_fetched_at;
-    }
-    return newest;
-  }, undefined);
+  const visibleSourceItems = useMemo(() => (items ?? []).filter((item) =>
+    item.state_authority !== 'external_snapshot' || item.oa_observation.pending_state !== 'unconfirmed'), [items]);
+  const syncStatus = listQuery.data?.oa_sync;
+  const newestFetchedAt = syncStatus?.last_success_at ?? undefined;
+  const historyItems = (historyQuery.data?.items ?? []).filter((item) =>
+    item.state_authority === 'external_snapshot' && item.oa_observation.pending_state === 'unconfirmed');
+  const listsAligned = listQuery.isSuccess && historyQuery.isSuccess &&
+    listQuery.data.oa_sync.revision === historyQuery.data.oa_sync.revision;
+  const coordinatedRevision = useRef<string>();
+  useEffect(() => {
+    if (!listQuery.isSuccess || !historyQuery.isSuccess || listsAligned) return;
+    const pair = `${authGeneration}:${listQuery.data.oa_sync.revision}:${historyQuery.data.oa_sync.revision}`;
+    if (coordinatedRevision.current?.startsWith(`${authGeneration}:`)) return;
+    coordinatedRevision.current = pair;
+    void queryClient.invalidateQueries({ queryKey: ['work-objects', authGeneration, 'list'] });
+  }, [authGeneration, historyQuery.data, historyQuery.isSuccess, listQuery.data,
+    listQuery.isSuccess, listsAligned, queryClient]);
 
   const { todoItems, urgentItems } = useMemo(() => {
     const now = new Date();
@@ -566,7 +635,7 @@ export default function WorkObjectsPage() {
               {markBadge(item.handling_mark)}
             </div>
             {/*
-              来源系统 · 来源编号 · 当前步骤 · 数据截至：四段常驻可见，不折叠、不靠 hover
+              来源系统 · 来源编号 · 上次OA步骤 · 数据截至：四段常驻可见，不折叠、不靠 hover
               （2026-08-27 §五）。
             */}
             {item.state_authority === 'internal' ? <div className={styles.sourceLine}>
@@ -576,7 +645,10 @@ export default function WorkObjectsPage() {
             </div> : <div className={styles.sourceLine}>
               <span>OA 办公系统</span>
               <span>{item.source_ref}</span>
-              <span>当前步骤 {item.source_status}</span>
+              <span>上次OA步骤 {item.source_status}</span>
+              <Tag>{observationLabel(item)}</Tag>
+              <span>最后见到 {formatTimestamp(item.oa_observation.last_seen_at)}</span>
+              <span>核对时间 {item.oa_observation.last_checked_at ? formatTimestamp(item.oa_observation.last_checked_at) : '尚未核对'}</span>
               <span>数据截至 {formatFreshnessClock(item.source_fetched_at)}</span>
             </div>}
           </div>
@@ -644,10 +716,15 @@ export default function WorkObjectsPage() {
           '下一步：办结记录接进来后，这里会自动出现。',
         ]
       : visibleSourceItems.length === 0
-        ? [
-            '还没有取得可显示的工作事项。',
-            '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
-          ]
+        ? syncStatus?.status === 'succeeded'
+          ? [
+              '当前无待办。',
+              '下一步：需要时刷新 OA 事项，历史记录可在「待办」下方查看。',
+            ]
+          : [
+              '还没有取得可显示的工作事项。',
+              '下一步：先在顶栏确认 OA 绑定，再点「刷新 OA 事项」。',
+            ]
         : view === 'urgent'
           ? [
               '现在没有要紧的事。',
@@ -701,7 +778,9 @@ export default function WorkObjectsPage() {
           description={
             <Space orientation="vertical">
               <span>{errorText(syncError)}</span>
-              <span>仍在显示上次成功拉取的数据；请以每项的数据截至时间为准。</span>
+              <span>{syncError instanceof ApiError && syncError.code === 'oa_sync_outcome_unknown'
+                ? '同步结果尚未确认，正在重新读取持久结果；读取失败时不能确认本次是否已更新。'
+                : '仍在显示上次成功拉取的数据；请以批次数据截至时间为准。'}</span>
               {requiresReauthentication ? (
                 <Button
                   danger
@@ -718,6 +797,14 @@ export default function WorkObjectsPage() {
         />
       ) : null}
 
+      {syncStatus && syncStatus.status !== 'succeeded' ? (
+        <Alert showIcon type={syncStatus.status === 'failed' ? 'warning' : 'info'}
+          title={syncStatus.status === 'failed' ? '最近一次 OA 同步失败，保留已保存数据'
+            : syncStatus.status === 'running' ? 'OA 同步进行中，当前显示已保存数据'
+              : syncStatus.status === 'never' ? '尚未成功核对 OA 待办'
+                : '当前账号范围暂不支持完整批次对账'} />
+      ) : null}
+      {!listsAligned ? <Alert type="info" title="当前与历史数据正在对齐，请稍候或刷新" /> : null}
       {listQuery.data?.limit_exceeded ? (
         <Alert
           showIcon
@@ -742,12 +829,12 @@ export default function WorkObjectsPage() {
           >
             <Radio.Button value="urgent">
               紧急<span className={styles.segmentCount} data-testid="work-count-urgent">
-                {urgentItems.length}
+                {listsAligned ? urgentItems.length : UNAVAILABLE_COUNT}
               </span>
             </Radio.Button>
             <Radio.Button value="todo">
               待办<span className={styles.segmentCount} data-testid="work-count-todo">
-                {todoItems.length}
+                {listsAligned ? todoItems.length : UNAVAILABLE_COUNT}
               </span>
             </Radio.Button>
             <Radio.Button value="done">
@@ -786,9 +873,22 @@ export default function WorkObjectsPage() {
           一个查不出来的承诺。
         */}
         <p className={styles.after}>
-          紧急 {urgentItems.length} 件、待办 {todoItems.length} 件，互不重叠。「已完成」还没有接进来。
+          当前已加载工作集：紧急 {listsAligned ? urgentItems.length : UNAVAILABLE_COUNT} 件、待办 {listsAligned ? todoItems.length : UNAVAILABLE_COUNT} 件，互不重叠。「已完成」还没有接进来。
         </p>
       </section>
+
+      {view === 'todo' ? (
+        <details className={styles.listSection}>
+          <summary>当前待办未再确认（{historyQuery.isSuccess ? historyItems.length : UNAVAILABLE_COUNT}）</summary>
+          <p>可能已转交、撤回或办结，请到OA核对。此处记录不计入当前待办，也不代表已完成。</p>
+          {historyQuery.error ? <Alert type="error" title="历史区读取失败" description={errorText(historyQuery.error)} /> : null}
+          {historyQuery.data?.limit_exceeded ? <Alert type="warning" title="历史区仅展示前 200 项，列表未完整展示" /> : null}
+          <QueryTable<WorkObjectListResponseItemsItem> rowKey="work_object_id" columns={columns}
+            dataSource={historyItems} loading={historyQuery.isLoading} queryResetKey="unconfirmed"
+            emptyReason="暂无未再确认记录" emptyNextStep="完成一次 OA 同步后在这里查看历史记录。"
+            tableLayout="fixed" />
+        </details>
+      ) : null}
 
       <Drawer
         title="工作事项详情"
@@ -836,7 +936,7 @@ export default function WorkObjectsPage() {
               showIcon
               type="info"
               title={`OA 状态数据截至 ${formatTimestamp(detailQuery.data.source_fetched_at)}`}
-              description="处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。"
+              description={`${observationLabel(detailQuery.data)}。处理痕迹只记录你在 EternalAI 中的声明，不会改写 OA 状态。最后见到 ${formatTimestamp(detailQuery.data.oa_observation.last_seen_at)}；核对时间 ${detailQuery.data.oa_observation.last_checked_at ? formatTimestamp(detailQuery.data.oa_observation.last_checked_at) : '尚未核对'}`}
             />
             <Alert
               showIcon

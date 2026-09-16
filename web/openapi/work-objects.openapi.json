@@ -578,6 +578,130 @@
         "title": "InternalWorkObjectView",
         "type": "object"
       },
+      "OAObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
+          "pending_state": {
+            "enum": [
+              "legacy_unverified",
+              "current",
+              "unconfirmed"
+            ],
+            "title": "Pending State",
+            "type": "string"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending_state",
+          "revision",
+          "last_seen_at",
+          "last_checked_at"
+        ],
+        "title": "OAObservation",
+        "type": "object"
+      },
+      "OASyncStatusView": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_revision": {
+            "minimum": 0.0,
+            "title": "Attempt Revision",
+            "type": "integer"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reauthentication_required",
+                  "binding_scope_required",
+                  "forbidden",
+                  "invalid_response",
+                  "upstream_unavailable",
+                  "storage_unavailable",
+                  "clock_invalid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Success At"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "never",
+              "running",
+              "succeeded",
+              "failed",
+              "unsupported_scope"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "revision",
+          "attempt_revision",
+          "last_attempt_at",
+          "last_success_at",
+          "failure_code"
+        ],
+        "title": "OASyncStatusView",
+        "type": "object"
+      },
       "OAWorkObjectView": {
         "additionalProperties": false,
         "properties": {
@@ -644,6 +768,9 @@
               }
             ],
             "title": "Handling Marked At"
+          },
+          "oa_observation": {
+            "$ref": "#/components/schemas/OAObservation"
           },
           "source_created_at": {
             "title": "Source Created At",
@@ -723,7 +850,8 @@
           "source_received_at",
           "source_created_at",
           "source_workflow_type_id",
-          "source_fetched_at"
+          "source_fetched_at",
+          "oa_observation"
         ],
         "title": "OAWorkObjectView",
         "type": "object"
@@ -913,10 +1041,14 @@
           "limit_exceeded": {
             "title": "Limit Exceeded",
             "type": "boolean"
+          },
+          "oa_sync": {
+            "$ref": "#/components/schemas/OASyncStatusView"
           }
         },
         "required": [
           "items",
+          "oa_sync",
           "limit",
           "limit_exceeded"
         ],
@@ -949,6 +1081,21 @@
                 }
               ],
               "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "oa_view",
+            "required": false,
+            "schema": {
+              "default": "active",
+              "enum": [
+                "active",
+                "unconfirmed",
+                "all"
+              ],
+              "title": "Oa View",
+              "type": "string"
             }
           }
         ],
