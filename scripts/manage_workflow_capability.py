@@ -130,8 +130,18 @@ async def manage_registry(engine: AsyncEngine, mode: str) -> ManagementResult:
         return ManagementResult("unavailable", "workflow_registry_unavailable")
 
 
+class _InvalidArguments(Exception):
+    pass
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        # argparse's diagnostic includes arbitrary user-supplied argument values.
+        raise _InvalidArguments from None
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _SafeArgumentParser(description=__doc__, allow_abbrev=False)
     modes = parser.add_mutually_exclusive_group()
     for name in ("dry-run", "verify", "apply", "disable"):
         modes.add_argument(f"--{name}", dest="mode", action="store_const", const=name)
@@ -140,7 +150,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    try:
+        args = _build_parser().parse_args(argv)
+    except _InvalidArguments:
+        result = ManagementResult("invalid_arguments", "workflow_arguments_invalid")
+        print(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+        return 2
 
     async def run() -> ManagementResult:
         engine = make_async_engine(database_url=get_database_url())

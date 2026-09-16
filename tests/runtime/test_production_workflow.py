@@ -479,20 +479,67 @@ def test_read_catalog_never_produces_a_confirmed_action() -> None:
     assert h.runtime._pending_workflows == {}
 
 
-# The following tests require migrated_database_url and are intentionally not
-# executed in the comparison implementation phase. All data are synthetic.
+# All PostgreSQL rows below are synthetic and live in a per-case schema.
 @pytest.fixture
 def pg_workflow_factory(migrated_database_url, monkeypatch):
     from contextlib import asynccontextmanager
     from uuid import uuid4
 
+    import sqlalchemy as sa
+
     import app.composition as composition
+    from app.db.config import normalize_database_url
+    from app.db.session import make_async_engine
     from app.ports.capability_registry import CapabilitySpec
     from app.ports.response_projection_contract import canonical_schema_digest
     from app.workflow.models import WorkflowDefinition, WorkflowStep
 
     @asynccontextmanager
-    async def factory(*, confirmation=False):
+    async def isolated_database():
+        url = sa.engine.make_url(normalize_database_url(migrated_database_url))
+        assert url.host == "127.0.0.1" and url.port == 15432
+        schema_name = f"p2_workflow_test_{uuid4().hex}"
+        engine = make_async_engine(migrated_database_url)
+        created = False
+        try:
+            async with engine.begin() as connection:
+                source, target = sa.MetaData(), sa.MetaData()
+                await connection.run_sync(lambda sync: source.reflect(bind=sync, schema="public"))
+                for table in source.sorted_tables:
+                    if table.name == "alembic_version":
+                        continue
+                    # Copy migrated constraints and foreign keys, with every
+                    # reference pointing into this case's own schema.
+                    table.to_metadata(
+                        target, schema=schema_name,
+                        referred_schema_fn=lambda *_args: schema_name,
+                    )
+                assert target.tables
+                assert all(
+                    column.server_default is None
+                    or "nextval" not in str(column.server_default.arg)
+                    for table in target.tables.values() for column in table.columns
+                ), "Sandbox must not share public sequences"
+                await connection.execute(sa.schema.CreateSchema(schema_name))
+                await connection.run_sync(target.create_all)
+            created = True
+            isolated_url = url.update_query_dict({"options": f"-csearch_path={schema_name}"})
+            yield isolated_url.render_as_string(hide_password=False)
+        finally:
+            if created:
+                assert schema_name.startswith("p2_workflow_test_")
+                async with engine.begin() as connection:
+                    await connection.execute(sa.schema.DropSchema(schema_name, cascade=True))
+                async with engine.connect() as connection:
+                    remaining = await connection.scalar(
+                        sa.text("SELECT count(*) FROM pg_namespace WHERE nspname = :name"),
+                        {"name": schema_name},
+                    )
+                    assert remaining == 0
+            await engine.dispose()
+
+    @asynccontextmanager
+    async def prepared_factory(database_url, *, confirmation=False):
         definitions = production_workflow_definitions()
         descriptors = list(production_workflow_capabilities())
         leaves = list(expected_oa_capabilities())
@@ -564,7 +611,7 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
         )
         settings = replace(
             ProductionSettings.from_environment(),
-            database_url=migrated_database_url,
+            database_url=database_url,
             oa_read_adapter_mode="mock",
         )
 
@@ -580,19 +627,12 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
         components = build()
         runtime = components.runtime
         registry = runtime._capability_registry
-        prior = {}
+        gateway = runtime._orchestration._gateway
+        gateway.execute_capability = AsyncMock(wraps=gateway.execute_capability)
         try:
             for item in (*leaves, *descriptors):
-                previous = await registry.get(item.capability_id)
-                prior[item.capability_id] = previous
-                if previous is None:
-                    await registry.create(item)
-                else:
-                    assert previous == item or previous == item.model_copy(
-                        update={"status": "disabled"}
-                    )
-                    if previous.status == "disabled":
-                        await registry.update(item.capability_id, {"status": "active"})
+                assert await registry.get(item.capability_id) is None
+                await registry.create(item)
             await components.validate_workflows()
             sid = f"synthetic-workflow-{uuid4().hex}"
             principal = runtime_principal(
@@ -610,16 +650,13 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
 
             yield SimpleNamespace(**locals())
         finally:
-            # Retain rows and task evidence. Restore prior descriptors, and disable
-            # only newly inserted synthetic rows; no DELETE or schema operations.
-            for identifier, previous in prior.items():
-                if previous is not None:
-                    await registry.update(
-                        identifier, previous.model_dump(exclude={"capability_id"})
-                    )
-                elif await registry.get(identifier) is not None:
-                    await registry.disable(identifier)
             await runtime._task_store._session_factory.kw["bind"].dispose()
+
+    @asynccontextmanager
+    async def factory(*, confirmation=False):
+        async with isolated_database() as database_url:
+            async with prepared_factory(database_url, confirmation=confirmation) as harness:
+                yield harness
 
     return factory
 
@@ -690,6 +727,29 @@ def test_http_overview_executes_two_reads_with_real_stores(pg_workflow_factory) 
             assert all(
                 identifier in prompt for identifier in (OVERVIEW_ID, PENDING_ID, MESSAGES_ID)
             )
+            decoder = json.JSONDecoder()
+            marker = prompt.index('{"capability_candidates"')
+            payload, _ = decoder.raw_decode(prompt[marker:])
+            contracts = {
+                item["capability_id"]: item
+                for item in payload["capability_candidates"]["items"]
+            }
+            assert set(contracts) == {OVERVIEW_ID, PENDING_ID, MESSAGES_ID}
+            assert contracts[OVERVIEW_ID]["capability_type"] == "workflow"
+            assert contracts[OVERVIEW_ID]["allowed_argument_keys"] == []
+            assert contracts[OVERVIEW_ID]["required_argument_keys"] == []
+            assert contracts[OVERVIEW_ID]["additionalProperties"] is False
+            assert contracts[OVERVIEW_ID]["arguments_must_be"] == {}
+            assert h.gateway.execute_capability.await_count == 2
+            bound_session_id = components.session_binder.bind(h.principal, h.sid)
+            assert task.session_id == bound_session_id
+            for call in h.gateway.execute_capability.await_args_list:
+                task_id, session_id, ai_user_id, _, arguments, context = call.args
+                assert arguments == {}
+                assert (task_id, session_id, ai_user_id) == (
+                    task.task_id, bound_session_id, task.ai_user_id,
+                )
+                assert context.tenant_id == h.principal.org_ctx.tenant_id
 
     _run_pg(exercise())
 
@@ -703,6 +763,8 @@ def test_production_confirm_and_text_resume_share_pg_claim(pg_workflow_factory, 
             waiting = await h.start()
             assert waiting.status == "waiting_user"
             pending = h.runtime._pending_workflows[(h.sid, h.principal.ai_user_id)]
+            fixed_time = h.runtime._utc_clock()
+            h.runtime._utc_clock = lambda: fixed_time
             request = await h.runtime._human_gate_port.get_request(pending.gate_request_id)
             assert request is not None and request.task_id == waiting.task_id
             if mode == "button":
@@ -743,6 +805,9 @@ def test_production_reject_cancel_and_duplicate_are_once_only(pg_workflow_factor
         async with pg_workflow_factory(confirmation=True) as h:
             waiting = await h.start()
             assert waiting.status == "waiting_user"
+            pending = h.runtime._pending_workflows[(h.sid, h.principal.ai_user_id)]
+            fixed_time = h.runtime._utc_clock()
+            h.runtime._utc_clock = lambda: fixed_time
             action = (
                 CancelUserAction(action_type="cancel", response_id=waiting.response_id)
                 if kind == "cancel"
@@ -760,7 +825,31 @@ def test_production_reject_cancel_and_duplicate_are_once_only(pg_workflow_factor
                     channel="web", principal=h.principal, session_id=h.sid, action=action
                 )
 
-            responses = await asyncio.gather(dispatch(), dispatch())
+            # Hold the winner inside the real PG decision write while a second
+            # request tries the identical pending action at the same clock time.
+            entered, release = asyncio.Event(), asyncio.Event()
+            decisions = []
+            gate = h.runtime._human_gate_port
+            record = gate.record_decision
+
+            async def held_record(decision):
+                decisions.append(decision)
+                entered.set()
+                await release.wait()
+                return await record(decision)
+
+            gate.record_decision = held_record
+            first = asyncio.create_task(dispatch())
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=10)
+                second = await asyncio.wait_for(dispatch(), timeout=10)
+            finally:
+                release.set()
+                first_response = await first
+            responses = [first_response, second]
+            assert len(decisions) == 1
+            assert decisions[0].decided_at == fixed_time
+            assert await gate.get_decision(pending.gate_request_id) == decisions[0]
             expected = 1 if kind == "duplicate" else 0
             assert len(h.adapter.calls) == expected
             accepted = sum(response.data["action_outcome"] == "accepted" for response in responses)
@@ -826,7 +915,10 @@ def test_production_confirmation_rejects_foreign_reference_and_version_drift(
     _run_pg(exercise())
 
 
-def test_rebuilt_production_components_cannot_resume_old_checkpoint(pg_workflow_factory) -> None:
+@pytest.mark.parametrize("mode", ["button", "text"])
+def test_rebuilt_production_components_cannot_resume_old_checkpoint(
+    pg_workflow_factory, mode,
+) -> None:
     from app.contracts.sdui.models import ConfirmUserAction
 
     async def exercise():
@@ -837,17 +929,33 @@ def test_rebuilt_production_components_cannot_resume_old_checkpoint(pg_workflow_
             rebuilt = h.build()
             try:
                 await rebuilt.validate_workflows()
-                response = await rebuilt.runtime.handle_user_action(
-                    channel="web",
-                    principal=h.principal,
-                    session_id=h.sid,
-                    action=ConfirmUserAction(
-                        action_type="confirm", response_id=waiting.response_id, confirmed=True
-                    ),
-                )
-                assert response.data["action_outcome"] == "confirmation_invalidated"
-                assert response.status == "confirmation_invalidated"
-                assert h.adapter.calls == [] and len(h.llm.calls) == calls
+                if mode == "button":
+                    response = await rebuilt.runtime.handle_user_action(
+                        channel="web",
+                        principal=h.principal,
+                        session_id=h.sid,
+                        action=ConfirmUserAction(
+                            action_type="confirm", response_id=waiting.response_id, confirmed=True
+                        ),
+                    )
+                    assert response.data["action_outcome"] == "confirmation_invalidated"
+                    assert response.status == "confirmation_invalidated"
+                    assert len(h.llm.calls) == calls
+                else:
+                    response = await rebuilt.runtime.handle_user_message(
+                        channel="web", principal=h.principal, session_id=h.sid,
+                        message="确认", client_capabilities={},
+                    )
+                    # Authorization item 10 defers zero-LLM bare confirmation:
+                    # no pending state still enters intent parsing once.
+                    assert response.status == "failed"
+                    assert len(h.llm.calls) == calls + 1
+                    task = await rebuilt.runtime._task_store.get_task(response.task_id)
+                    assert task is not None
+                    assert (task.status, task.error_code) == ("failed", "internal_error")
+                    assert response.task_id != waiting.task_id
+                assert h.adapter.calls == []
+                assert rebuilt.runtime._pending_workflows == {}
             finally:
                 await rebuilt.runtime._task_store._session_factory.kw["bind"].dispose()
 

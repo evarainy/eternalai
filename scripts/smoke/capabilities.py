@@ -146,6 +146,19 @@ def classify_oa_registry(
         overview_visible = overview_selection.outcome == "ready" and any(
             binding.capability_id == OVERVIEW_ID for binding in overview_selection.bindings
         )
+        try:
+            payload = json.loads(overview_selection.payload_json)
+            overview_visible = overview_visible and any(
+                item.get("capability_id") == OVERVIEW_ID
+                and item.get("capability_type") == "workflow"
+                and item.get("allowed_argument_keys") == []
+                and item.get("required_argument_keys") == []
+                and item.get("additionalProperties") is False
+                and item.get("arguments_must_be") == {}
+                for item in payload["capability_candidates"]["items"]
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            overview_visible = False
     for probe, capability_id in probe_capability_pairs:
         selection = resolved_knowledge.select_capability_candidates(probe, active)
         if selection.outcome == "ready" and any(

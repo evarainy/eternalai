@@ -1,6 +1,9 @@
 """Exact SQL planning and transaction failure tests with no database I/O."""
 
 import asyncio
+import json
+import subprocess
+import sys
 from copy import deepcopy
 
 import pytest
@@ -167,15 +170,34 @@ def test_concurrent_activation_cannot_overwrite_conflicting_row() -> None:
     assert engine.rollbacks == 1 and engine.commits == 0
 
 
-def test_cli_modes_are_mutually_exclusive_and_default_to_read_only() -> None:
+def test_cli_modes_are_mutually_exclusive_and_default_to_read_only(capsys) -> None:
     parser = management._build_parser()
     assert parser.parse_args([]).mode == "dry-run"
     for mode in ("dry-run", "verify", "apply", "disable"):
         assert parser.parse_args([f"--{mode}"]).mode == mode
     for args in (["--apply", "--disable"], ["--id", "oa.other"], ["--definition", "custom.py"]):
-        with pytest.raises(SystemExit) as error:
-            parser.parse_args(args)
-        assert error.value.code == 2
+        assert management.main(args) == 2
+        output = capsys.readouterr()
+        assert json.loads(output.out)["error_code"] == "workflow_arguments_invalid"
+        assert output.err == ""
+
+
+@pytest.mark.parametrize("args", [
+    ["--unexpected", "SYNTHETIC_ARGUMENT_CANARY"],
+    ["--apply=SYNTHETIC_ARGUMENT_CANARY"],
+    ["--apply", "--disable", "SYNTHETIC_ARGUMENT_CANARY"],
+])
+def test_cli_argument_errors_emit_only_fixed_result(args) -> None:
+    result = subprocess.run(
+        [sys.executable, str(management.Path(management.__file__).resolve()), *args],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 2
+    assert result.stderr == ""
+    assert json.loads(result.stdout) == management.asdict(
+        management.ManagementResult("invalid_arguments", "workflow_arguments_invalid")
+    )
+    assert "SYNTHETIC_ARGUMENT_CANARY" not in result.stdout + result.stderr
 
 
 # Reuse the existing isolated PostgreSQL table fixture. These tests are collected
