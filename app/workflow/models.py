@@ -45,6 +45,7 @@ class WorkflowDefinition:
     workflow_id: str
     version: str
     steps: tuple[WorkflowStep, ...]
+    output_step_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

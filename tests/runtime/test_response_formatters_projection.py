@@ -24,6 +24,37 @@ from tests.runtime.registry_fakes import active_capability, runtime_output_schem
 PathPart = str | int
 
 
+def test_overview_formatter_uses_projected_titles_and_exact_completeness(monkeypatch) -> None:
+    import app.infra.orchestration.agent_adapter as orchestration
+    from app.infra.workflow.catalog import production_workflow_capabilities
+    from tests.runtime.test_production_workflow import overview_data
+
+    schema = production_workflow_capabilities()[0].output_schema
+    data = overview_data()
+    data["pending"]["workflows"][0]["undeclared"] = "SYNTHETIC_DROP"
+    data["messages"]["messages"][0]["access_token"] = "SYNTHETIC_CREDENTIAL_CANARY"
+    observed = []
+
+    def format_spy(capability_id, projected):
+        observed.append(projected)
+        return _format_capability_response(capability_id, projected)
+
+    monkeypatch.setattr(orchestration, "_format_capability_response", format_spy)
+    envelope = _build_completed_envelope("oa.read_overview", schema, data)
+    assert envelope.status == "completed"
+    assert len(observed) == 1
+    assert "undeclared" not in observed[0]["pending"]["workflows"][0]
+    assert "access_token" not in observed[0]["messages"]["messages"][0]
+    assert envelope.message == (
+        "OA 待办 1 条（结果完整）：待办甲；"
+        "系统消息返回 1 条（结果不完整，可能还有更多消息）：消息乙"
+    )
+    assert "synthetic-content" not in envelope.message
+    assert "synthetic-source" not in envelope.message
+    _assert_complete_envelope_omits(envelope, "SYNTHETIC_DROP")
+    _assert_complete_envelope_omits(envelope, "SYNTHETIC_CREDENTIAL_CANARY")
+
+
 class TrackingDict(dict[str, Any]):
     def __init__(
         self,

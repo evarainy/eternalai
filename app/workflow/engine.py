@@ -510,6 +510,13 @@ class WorkflowEngine:
                 terminal_state,
             )
 
+        if definition.output_step_ids:
+            if any(step_id not in step_outputs for step_id in definition.output_step_ids):
+                raise ValueError("Workflow selected output is unavailable")
+            final_output = {
+                step_id: deepcopy(step_outputs[step_id])
+                for step_id in definition.output_step_ids
+            }
         await self._append_state(
             task_id,
             "workflow_completed",
@@ -535,6 +542,32 @@ class WorkflowEngine:
         return deepcopy(source)
 
     async def _validate_steps(self, definition: WorkflowDefinition) -> None:
+        self.validate_structure(definition)
+        for step in definition.steps:
+            capability = await self._capability_registry.get(step.capability_id)
+            if (
+                capability is None
+                or capability.status != "active"
+                or capability.risk_level != "low"
+                or capability.type == "workflow"
+            ):
+                raise ValueError(
+                    "each Workflow step must reference an active low-risk registered capability"
+                )
+            if step.confirmed_capability_id is not None:
+                await self._validate_confirmed_capability(step)
+
+    @staticmethod
+    def validate_structure(definition: WorkflowDefinition) -> None:
+        """Check local structure without reading Registry or making leaf calls."""
+        if not definition.steps:
+            raise ValueError("Workflow steps must not be empty")
+        selected = definition.output_step_ids
+        unconditional = {step.step_id for step in definition.steps if step.when is None}
+        if len(set(selected)) != len(selected) or any(
+            not step_id or step_id not in unconditional for step_id in selected
+        ):
+            raise ValueError("Workflow output selection is invalid")
         seen_step_ids: set[str] = set()
         for step in definition.steps:
             if not step.step_id or step.step_id in seen_step_ids:
@@ -548,18 +581,6 @@ class WorkflowEngine:
                         "Workflow step_output references must target a strictly earlier step"
                     )
             seen_step_ids.add(step.step_id)
-            capability = await self._capability_registry.get(step.capability_id)
-            if (
-                capability is None
-                or capability.status != "active"
-                or capability.risk_level != "low"
-                or capability.type == "workflow"
-            ):
-                raise ValueError(
-                    "each Workflow step must reference an active low-risk registered capability"
-                )
-            if step.confirmed_capability_id is not None:
-                await self._validate_confirmed_capability(step)
 
     async def _definition_version_bindings(
         self,

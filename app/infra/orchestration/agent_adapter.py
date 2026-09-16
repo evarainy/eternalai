@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Mapping
+
+from pydantic import ValidationError
 
 from app.contracts.sdui.models import ConfirmCardPayload
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
+from app.infra.workflow.catalog import OVERVIEW_ID, OAReadOverviewInput, OAReadOverviewOutput
 from app.ports.agent_orchestration import (
     AgentCapabilitySelection,
     AgentResponseContext,
@@ -37,11 +41,13 @@ class AgentOrchestrationAdapter:
         gateway: CapabilityGatewayPort,
         workflow_engine: WorkflowEnginePort | None,
         response_builder: ResponseEnvelopeBuilder,
+        validate_workflow: Callable[[CapabilitySpec], Awaitable[None]] | None = None,
     ) -> None:
         self._capability_registry = capability_registry
         self._gateway = gateway
         self._workflow_engine = workflow_engine
         self._response_builder = response_builder
+        self._validate_workflow = validate_workflow
 
     async def select_capability(
         self,
@@ -91,6 +97,10 @@ class AgentOrchestrationAdapter:
         capability: CapabilitySpec,
         intent_version_binding: VersionBinding,
     ) -> AgentTaskVersionBindings:
+        if self._validate_workflow is not None and (
+            capability.type == "workflow" or capability.capability_id == OVERVIEW_ID
+        ):
+            await self._validate_workflow(capability)
         if capability.type == "workflow":
             if self._workflow_engine is None:
                 raise VersionBindingMismatchError(
@@ -132,7 +142,19 @@ class AgentOrchestrationAdapter:
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
+        if self._validate_workflow is not None and (
+            capability.type == "workflow" or capability.capability_id == OVERVIEW_ID
+        ):
+            await self._validate_workflow(capability)
         if capability.type == "workflow":
+            if capability.capability_id == OVERVIEW_ID:
+                try:
+                    OAReadOverviewInput.model_validate(arguments)
+                except ValidationError:
+                    return ExecutionResult(
+                        status="failed", error_code="internal_error",
+                        trace_id=request_context.request_id,
+                    )
             if self._workflow_engine is None:
                 return ExecutionResult(
                     status="failed",
@@ -149,6 +171,14 @@ class AgentOrchestrationAdapter:
                 initial_input=arguments,
                 request_context=request_context,
             )
+            if capability.capability_id == OVERVIEW_ID and result.status == "completed":
+                try:
+                    OAReadOverviewOutput.model_validate(result.output)
+                except ValidationError:
+                    return ExecutionResult(
+                        status="failed", error_code="adapter_payload_invalid",
+                        trace_id=request_context.request_id,
+                    )
             return _workflow_execution_result(result)
         return await self._gateway.execute_capability(
             task_id,
@@ -438,6 +468,22 @@ def _format_capability_response(
 ) -> str:
     if not data:
         return "操作完成"
+
+    if capability_id == OVERVIEW_ID:
+        pending = data.get("pending", {})
+        messages = data.get("messages", {})
+        pending_titles = _joined_scalar_values(pending.get("workflows"), ("title",))
+        message_titles = _joined_scalar_values(messages.get("messages"), ("title",))
+        pending_text = (
+            f"OA 待办 {pending['returned_count']} 条{_completeness_note(pending, '待办')}"
+        )
+        message_text = (
+            f"系统消息返回 {messages['returned_count']} 条{_completeness_note(messages, '消息')}"
+        )
+        return "；".join((
+            f"{pending_text}：{pending_titles}" if pending_titles else pending_text,
+            f"{message_text}：{message_titles}" if message_titles else message_text,
+        ))
 
     if capability_id == "oa.list_pending_workflows":
         workflows = data.get("workflows")

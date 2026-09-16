@@ -29,6 +29,7 @@ from app.db.config import get_database_url
 from app.db.session import make_async_engine
 from app.event_loop import make_event_loop
 from app.infra.persistence.capability_registry.schema import capabilities
+from app.infra.workflow.catalog import OVERVIEW_ID, is_canonical_overview
 from app.ports.capability_registry import CapabilitySpec
 from scripts.smoke.capabilities import (
     OA_CAPABILITY_CONTEXT_PROBES,
@@ -841,8 +842,9 @@ def _plan_registry_management(
     noncanonical_oa = tuple(
         item
         for item in catalog
-        if item.target_system == "oa"
+        if (item.target_system == "oa" or item.capability_id == OVERVIEW_ID)
         and item.capability_id not in REQUIRED_ACTIVE_OA_CAPABILITY_IDS
+        and not is_canonical_overview(item)
     )
     authorized_legacy = tuple(
         item

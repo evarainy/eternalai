@@ -27,6 +27,78 @@ from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 _FULL_CHAIN_FAILURE_SCHEMA_VERSION = "p2.smoke.full-chain.v2"
 
 
+def test_optional_overview_is_visible_and_does_not_mask_unknown_capabilities() -> None:
+    from app.infra.workflow.catalog import production_workflow_capabilities
+    from app.knowledge import BasicKnowledge
+    from scripts.smoke.capabilities import classify_oa_registry, expected_oa_capabilities
+
+    leaves = expected_oa_capabilities()
+    overview = production_workflow_capabilities()[0]
+    for optional in ((), (overview,), (overview.model_copy(update={"status": "disabled"}),)):
+        result = classify_oa_registry((*leaves, *optional))
+        assert result.state == "passed"
+        assert (result.found_count, result.valid_count, result.visible_probe_count) == (2, 2, 2)
+        assert result.active_total_count == (3 if optional == (overview,) else 2)
+    selection = BasicKnowledge().select_capability_candidates(
+        "查看 OA 待办与系统消息概览", (*leaves, overview),
+    )
+    assert selection.outcome == "ready"
+    assert {binding.capability_id for binding in selection.bindings} == {
+        item.capability_id for item in (*leaves, overview)
+    }
+    contracts = {
+        item["capability_id"]: item
+        for item in json.loads(selection.payload_json)["capability_candidates"]["items"]
+    }
+    contract = contracts[overview.capability_id]
+    assert contract["capability_type"] == "workflow"
+    assert contract["allowed_argument_keys"] == contract["required_argument_keys"] == []
+    assert contract["additionalProperties"] is False
+    assert contract["arguments_must_be"] == {}
+    for update in ({"version": "2.0.0"}, {"binding_required": False}, {"status": "draft"}):
+        result = classify_oa_registry((*leaves, overview.model_copy(update=update)))
+        assert result.state == "contract_mismatch"
+        assert overview.capability_id in result.contract_mismatch_capability_ids
+    unknown = overview.model_copy(update={"capability_id": "oa.unknown_workflow"})
+    result = classify_oa_registry((*leaves, overview, unknown))
+    assert result.state == "unexpected_active"
+    assert result.unexpected_active_capability_ids == ("oa.unknown_workflow",)
+
+
+@pytest.mark.parametrize("fault", ["missing", "extra_arguments", "open_input", "no_empty_contract"])
+def test_overview_binding_without_exact_model_contract_is_context_truncated(fault) -> None:
+    from dataclasses import replace
+
+    from app.infra.workflow.catalog import OVERVIEW_ID, production_workflow_capabilities
+    from app.knowledge import BasicKnowledge
+    from scripts.smoke.capabilities import classify_oa_registry, expected_oa_capabilities
+
+    class IncompleteKnowledge(BasicKnowledge):
+        def select_capability_candidates(self, message, capabilities):
+            selection = super().select_capability_candidates(message, capabilities)
+            payload = json.loads(selection.payload_json)
+            items = payload["capability_candidates"]["items"]
+            for item in list(items):
+                if item["capability_id"] != OVERVIEW_ID:
+                    continue
+                if fault == "missing":
+                    items.remove(item)
+                elif fault == "extra_arguments":
+                    item["allowed_argument_keys"] = ["unknown"]
+                elif fault == "open_input":
+                    item["additionalProperties"] = True
+                else:
+                    item.pop("arguments_must_be")
+            return replace(selection, payload_json=json.dumps(payload))
+
+    result = classify_oa_registry(
+        (*expected_oa_capabilities(), *production_workflow_capabilities()),
+        knowledge=IncompleteKnowledge(),
+    )
+    assert result.state == "context_truncated"
+    assert result.visible_probe_count == 2
+
+
 def _successful_outcome(
     capability_ids: tuple[str, ...] = REQUIRED_ACTIVE_OA_CAPABILITY_IDS,
 ) -> FullChainOutcome:
