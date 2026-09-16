@@ -1,13 +1,13 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-063`（C 档；2026-09-14 治理同步）。本棒仅作 A 类机械同步，不重排 DAG 或裁定跨棒欠债。
-- 当前实现候选 task_id：`P2-AUDIT-OA-TODO-CONVERGE-001`（A 档、串行，承担 A 类同步；P 段候选修复与本地验证完成，可交独立 Monitor → 静态评审桥，未 push/合并）。
+- 当前实现 task_id：`P2-AUDIT-OA-TODO-CONVERGE-001`（A 档、串行，承担 A 类同步；P 段已交付，D 段仍阻塞）。
 - 本棒完成情况：X-01 保留后台认证否定/可计数失败分类，在线诊断写入失败仍固定 503；X-02 区分成功空与尚未取得。raw-row、旧故障注入、目录过期重读与 Windows 测试 loop 接缝已适配，真实 HTTP→PG 提交确认丢失及恢复读取已覆盖。审计 #6 的 done_when 保持 P+D，D 与真实现场验收仍受外部输入/授权阻塞。
 - 当前实现后继指针：留空（本棒没有已决且唯一的后继）；方案恢复裁定与欠债后继由 GOV-SYNC 处理。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；不改变现役 DAG。
 
 ## 已登记验证基线
 
-### 当前 OA 待办收敛 P 修复候选（2026-09-17）
+### 当前 OA 待办收敛 P 段已交付基线（2026-09-17）
 
 - 固定测试库后端全量 `3801 passed, 0 failed, 0 skipped`（113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录；CI 未运行。
 - P 段 ports/API/真实 PG/迁移/轮询定向 `172 passed`；架构 `131 passed`、P4 observer authoritative PASS；Golden `34/34`（positive `13/13`、negative/boundary `21/21`，零 failed/skipped）。

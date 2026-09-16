@@ -75,7 +75,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ### OA 待办收敛候选的分段义务（2026-09-17）
 
-`P2-AUDIT-OA-TODO-CONVERGE-001` 本次只修复 P 段候选，审计 #6 的 done_when 仍为 P+D。以下机械同步候选已有义务，不核销既有消失项、已完成数据源、第二租户或真实现场验收欠债；跨棒合并与后继分配仍由 GOV-SYNC 裁定。
+`P2-AUDIT-OA-TODO-CONVERGE-001` 的审计 #6 当前状态为「P 段已交付，D 段仍阻塞」；本次只修复 P 段候选，`#6` 的 done_when 仍为 P+D。以下机械同步候选已有义务，不核销既有消失项、已完成数据源、第二租户或真实现场验收欠债；跨棒合并与后继分配仍由 GOV-SYNC 裁定。
 
 | 义务 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
