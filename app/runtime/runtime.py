@@ -21,6 +21,15 @@ from app.evaluator import (
     TerminalBusinessStatus,
     TerminalEvaluator,
 )
+from app.evaluator.overview import (
+    OVERVIEW_VERSION,
+    OverviewPostconditionEvaluator,
+    canonical_object,
+    load_object,
+    required_postcondition_rule,
+    unevaluated,
+    verification,
+)
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.knowledge.capability_selection import (
@@ -48,6 +57,7 @@ from app.ports.capability_registry import (
     CapabilityRegistryPort,
     CapabilitySpec,
 )
+from app.ports.evaluation import BusinessVerification, EvaluationScope
 from app.ports.human_gate import (
     HumanGateConflictError,
     HumanGateDecisionRecord,
@@ -190,6 +200,7 @@ class RuntimeImpl:
         session_memory: SessionMemory | None = None,
         semantic_knowledge: BasicKnowledge | None = None,
         evaluator: TerminalEvaluator | None = None,
+        overview_evaluator: OverviewPostconditionEvaluator | None = None,
         human_gate_port: HumanGatePort | None = None,
         utc_clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] = monotonic,
@@ -212,6 +223,9 @@ class RuntimeImpl:
         self._workflow_engine = workflow_engine
         self._session_memory = session_memory or SessionMemory()
         self._evaluator = evaluator or TerminalEvaluator()
+        self._overview_evaluator = (
+            OverviewPostconditionEvaluator() if overview_evaluator is None else overview_evaluator
+        )
         self._human_gate_port = human_gate_port
         self._intent_version_binding = self._intent_router.version_binding()
         self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
@@ -727,6 +741,15 @@ class RuntimeImpl:
                 arguments=capability_ref.arguments,
                 capability=selected_capability,
             )
+        raw_execution = exec_result
+        exec_result, business_verification = self._evaluate_required_postconditions(
+            exec_result,
+            scope=EvaluationScope(
+                task_id, trace_id, session_id, memory_key.tenant_id, memory_key.ai_user_id,
+            ),
+            capability_id=selected_capability.capability_id,
+            version=selected_capability.version,
+        )
         envelope = self._build_envelope(
             response_id,
             task_id,
@@ -737,6 +760,9 @@ class RuntimeImpl:
             capability=selected_capability,
             projection_snapshot=projection_snapshot,
             confirmation=confirmation,
+            business_verification=(
+                business_verification if business_verification.rule_id else None
+            ),
         )
         envelope = _append_partial_candidate_notice(envelope, selection)
         await self._trace_port.record_step(
@@ -776,6 +802,8 @@ class RuntimeImpl:
                     session_id=session_id,
                     business_status=exec_result.status,
                     error_code=exec_result.error_code,
+                    raw_execution=raw_execution,
+                    business_verification=business_verification,
                     capability_id=capability_ref.capability_id,
                     memory_key=memory_key,
                 )
@@ -1530,6 +1558,19 @@ class RuntimeImpl:
                 arguments={},
                 capability=None,
             )
+        raw_execution = exec_result
+        exec_result, business_verification = self._evaluate_required_postconditions(
+            exec_result,
+            scope=EvaluationScope(
+                pending.task_id, pending.trace_id, session_id,
+                memory_key.tenant_id, memory_key.ai_user_id,
+            ),
+            capability_id=pending.capability_id,
+            version=(
+                pending.projection_snapshot.capability_version
+                if pending.projection_snapshot is not None else ""
+            ),
+        )
         envelope = self._build_envelope(
             response_id,
             pending.task_id,
@@ -1539,6 +1580,9 @@ class RuntimeImpl:
             capability_ref,
             projection_snapshot=pending.projection_snapshot,
             confirmation=confirmation,
+            business_verification=(
+                business_verification if business_verification.rule_id else None
+            ),
         )
         if exec_result.status == "waiting_user":
             next_pending = _PendingWorkflow(
@@ -1604,6 +1648,8 @@ class RuntimeImpl:
                 session_id=session_id,
                 business_status=exec_result.status,
                 error_code=exec_result.error_code,
+                raw_execution=raw_execution,
+                business_verification=business_verification,
                 capability_id=pending.capability_id,
                 memory_key=memory_key,
             )
@@ -1947,6 +1993,56 @@ class RuntimeImpl:
         )
         return envelope
 
+    def _evaluate_required_postconditions(
+        self,
+        execution: ExecutionResult,
+        *,
+        scope: EvaluationScope,
+        capability_id: str,
+        version: str,
+    ) -> tuple[ExecutionResult, BusinessVerification]:
+        if required_postcondition_rule(capability_id) is None or execution.status != "completed":
+            return execution, unevaluated(capability_id)
+        evidence = execution.postcondition_input
+        if version != OVERVIEW_VERSION:
+            conclusion = verification("error", "unsupported_version", source="failed")
+        elif execution.error_code is not None:
+            conclusion = verification("error", "evaluator_error")
+        elif evidence is None:
+            conclusion = verification("error", "evidence_missing", source="failed")
+        else:
+            try:
+                output_json = canonical_object(execution.data)
+            except (ValueError, TypeError, OverflowError, RecursionError):
+                conclusion = verification("failed", "structure_invalid", structure="failed")
+            else:
+                if output_json != evidence.output_json:
+                    conclusion = verification("failed", "output_snapshot_mismatch")
+                else:
+                    try:
+                        conclusion = self._overview_evaluator.evaluate(
+                            scope, capability_id, version, evidence,
+                        )
+                        if type(conclusion) is not BusinessVerification or (
+                            conclusion.rule_id != required_postcondition_rule(capability_id)
+                            or conclusion.result not in {"passed", "failed", "error"}
+                        ):
+                            raise ValueError("Invalid required verification conclusion")
+                        if conclusion.result == "passed":
+                            if conclusion != verification(
+                                "passed", "postconditions_satisfied", structure="passed",
+                                source="passed", pending="passed", messages="passed",
+                            ):
+                                raise ValueError("Incomplete required verification")
+                            return execution.model_copy(
+                                update={"data": load_object(evidence.output_json)},
+                            ), conclusion
+                    except Exception:
+                        conclusion = verification("error", "evaluator_error")
+        return ExecutionResult(
+            status="failed", error_code="internal_error", trace_id=execution.trace_id,
+        ), conclusion
+
     async def _record_terminal_evaluation(
         self,
         *,
@@ -1957,6 +2053,8 @@ class RuntimeImpl:
         business_status: TerminalBusinessStatus,
         error_code: ErrorCode | None,
         capability_id: str | None = None,
+        raw_execution: ExecutionResult | None = None,
+        business_verification: BusinessVerification | None = None,
     ) -> None:
         try:
             conclusion = self._evaluator.evaluate(business_status, error_code)
@@ -1967,6 +2065,24 @@ class RuntimeImpl:
                 evaluation_result="error",
                 reason="evaluator_error",
             )
+        business = business_verification or unevaluated(capability_id)
+        attributes = conclusion.trace_attributes()
+        attributes.update({
+            "evaluation_scope": "terminal_status",
+            "execution_status": raw_execution.status if raw_execution else business_status,
+            "execution_error_code": raw_execution.error_code if raw_execution else error_code,
+            "business_verification": {
+                "rule_id": business.rule_id,
+                "result": business.result,
+                "structure_result": business.structure_result,
+                "reason": business.reason,
+                "checks": {
+                    "source_binding": business.checks.source_binding,
+                    "pending_preserved": business.checks.pending_preserved,
+                    "messages_preserved": business.checks.messages_preserved,
+                },
+            },
+        })
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -1974,10 +2090,13 @@ class RuntimeImpl:
             tenant_id=memory_key.tenant_id,
             ai_user_id=memory_key.ai_user_id,
             event_type="evaluation_recorded",
-            status="ok" if conclusion.evaluation_result == "passed" else "failed",
+            status=(
+                "ok" if conclusion.evaluation_result == "passed"
+                and business.result not in {"failed", "error"} else "failed"
+            ),
             capability_id=capability_id,
             error_code=error_code,
-            attributes=conclusion.trace_attributes(),
+            attributes=attributes,
         )
 
     def _build_envelope(
@@ -1992,6 +2111,7 @@ class RuntimeImpl:
         capability: CapabilitySpec | None = None,
         projection_snapshot: ProjectionContractSnapshot | None = None,
         confirmation: ConfirmationPreview | None = None,
+        business_verification: BusinessVerification | None = None,
     ) -> ResponseEnvelope:
         return self._orchestration.build_response(
             context=AgentResponseContext(
@@ -2004,6 +2124,7 @@ class RuntimeImpl:
             execution=exec_result,
             projection=projection_snapshot,
             confirmation=confirmation,
+            business_verification=business_verification,
         )
 
 

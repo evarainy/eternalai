@@ -38,7 +38,7 @@ def production_workflow_capabilities() -> tuple[CapabilitySpec, ...]:
             output_schema_digest=canonical_schema_digest(output_schema),
             risk_level="low",
             owner="eternalai-platform",
-            version="1.0.0",
+            version="1.1.0",
             status="active",
             short_description=(
                 "一次查看当前 OA 用户的待办事宜和系统消息，只读，不提交审批或办理事项。"

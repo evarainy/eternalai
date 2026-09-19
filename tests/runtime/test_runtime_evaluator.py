@@ -385,6 +385,16 @@ def test_main_chain_records_one_distinct_evaluation_for_every_terminal_status(
         "rule_id": "terminal_status_v1",
         "business_status": business_status,
         "business_error_code": error_code,
+        "evaluation_scope": "terminal_status",
+        "execution_status": business_status,
+        "execution_error_code": error_code,
+        "business_verification": {
+            "rule_id": None, "result": "not_evaluated",
+            "structure_result": "not_checked", "reason": "rule_not_configured",
+            "checks": {"source_binding": "not_checked",
+                       "pending_preserved": "not_checked",
+                       "messages_preserved": "not_checked"},
+        },
         "evaluation_result": expected_evaluation_result,
         "reason": (
             "business_completed"
@@ -436,6 +446,16 @@ def test_evaluator_exception_does_not_change_business_terminal_state(
         "rule_id": "terminal_status_v1",
         "business_status": business_status,
         "business_error_code": error_code,
+        "evaluation_scope": "terminal_status",
+        "execution_status": business_status,
+        "execution_error_code": error_code,
+        "business_verification": {
+            "rule_id": None, "result": "not_evaluated",
+            "structure_result": "not_checked", "reason": "rule_not_configured",
+            "checks": {"source_binding": "not_checked",
+                       "pending_preserved": "not_checked",
+                       "messages_preserved": "not_checked"},
+        },
         "evaluation_result": "error",
         "reason": "evaluator_error",
     }
@@ -461,6 +481,16 @@ def test_intent_failure_terminal_path_records_exactly_one_failed_evaluation() ->
         "rule_id": "terminal_status_v1",
         "business_status": "failed",
         "business_error_code": "internal_error",
+        "evaluation_scope": "terminal_status",
+        "execution_status": "failed",
+        "execution_error_code": "internal_error",
+        "business_verification": {
+            "rule_id": None, "result": "not_evaluated",
+            "structure_result": "not_checked", "reason": "rule_not_configured",
+            "checks": {"source_binding": "not_checked",
+                       "pending_preserved": "not_checked",
+                       "messages_preserved": "not_checked"},
+        },
         "evaluation_result": "failed",
         "reason": "business_not_completed",
     }
@@ -515,6 +545,16 @@ def test_workflow_waiting_has_no_evaluation_then_resume_records_exact_terminal(
         "rule_id": "terminal_status_v1",
         "business_status": resume_status,
         "business_error_code": error_code,
+        "evaluation_scope": "terminal_status",
+        "execution_status": resume_status,
+        "execution_error_code": error_code,
+        "business_verification": {
+            "rule_id": None, "result": "not_evaluated",
+            "structure_result": "not_checked", "reason": "rule_not_configured",
+            "checks": {"source_binding": "not_checked",
+                       "pending_preserved": "not_checked",
+                       "messages_preserved": "not_checked"},
+        },
         "evaluation_result": expected_evaluation_result,
         "reason": (
             "business_completed"

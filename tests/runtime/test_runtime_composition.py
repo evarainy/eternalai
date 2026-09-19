@@ -28,6 +28,7 @@ from app.composition import (
 from app.config import ProductionSettings
 from app.credential_polling import CREDENTIAL_POLLING_TASK_TYPE
 from app.evaluator import TerminalEvaluator
+from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.provider import (
@@ -122,6 +123,7 @@ def test_production_components_share_real_gateway_with_orchestration() -> None:
     assert engine._human_gate_port is gateway._human_gate_port
     assert callable(components.validate_workflows)
     assert orchestration._validate_workflow is not None
+    assert type(components.runtime._overview_evaluator) is OverviewPostconditionEvaluator
 
 
 @pytest.fixture

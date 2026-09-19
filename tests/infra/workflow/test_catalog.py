@@ -5,6 +5,7 @@ from dataclasses import asdict
 import pytest
 from pydantic import ValidationError
 
+from app.evaluator.overview import OVERVIEW_VERSION, required_postcondition_rule
 from app.infra.adapters.oa.capabilities import expected_oa_capabilities
 from app.infra.adapters.oa.contracts import OAPendingWorkflowCollection, OASystemMessageCollection
 from app.infra.workflow.catalog import OAReadOverviewInput, production_workflow_capabilities
@@ -18,7 +19,7 @@ def test_catalog_contains_only_versioned_read_overview() -> None:
     definition = definitions["oa.read_overview"]
     assert asdict(definition) == {
         "workflow_id": "oa.read_overview",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "output_step_ids": ("pending", "messages"),
         "steps": tuple(
             {
@@ -46,7 +47,7 @@ def test_catalog_contains_only_versioned_read_overview() -> None:
         "capability_id": "oa.read_overview",
         "name": "OA 待办与系统消息概览",
         "type": "workflow",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "status": "active",
         "intent_tags": ["oa.read_overview"],
         "short_description": "一次查看当前 OA 用户的待办事宜和系统消息,只读,不提交审批或办理事项。",
@@ -81,3 +82,20 @@ def test_catalog_contains_only_versioned_read_overview() -> None:
     assert production_workflow_definitions()["oa.read_overview"].steps[0].static_arguments == {}
     capability.input_schema["properties"]["changed"] = {}
     assert production_workflow_capabilities()[0].input_schema["properties"] == {}
+
+
+def test_overview_rule_and_version_are_bound():
+    from dataclasses import replace
+
+    from app.version_binding import workflow_version_binding
+
+    definition = production_workflow_definitions()["oa.read_overview"]
+    capability = production_workflow_capabilities()[0]
+    assert required_postcondition_rule(capability.capability_id) == "oa_read_overview_v1"
+    assert required_postcondition_rule("oa.list_pending_workflows") is None
+    assert definition.version == capability.version == OVERVIEW_VERSION == "1.1.0"
+    current = workflow_version_binding(capability, definition)
+    previous = workflow_version_binding(
+        capability.model_copy(update={"version": "1.0.0"}), replace(definition, version="1.0.0"),
+    )
+    assert current != previous

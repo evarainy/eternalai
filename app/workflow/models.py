@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, TypeAlias
 
 from app.ports.capability_gateway import ErrorCode
+from app.ports.evaluation import StepObservation
 
 WorkflowInputSource = Literal["workflow_input", "step_output"]
 WorkflowRunStatus: TypeAlias = Literal[
@@ -57,6 +58,7 @@ class WorkflowRunResult:
     output: dict[str, Any]
     step_outputs: dict[str, dict[str, Any]]
     error_code: ErrorCode | None = None
+    evaluation_observations: tuple[StepObservation, ...] = ()
 
 
 __all__ = (

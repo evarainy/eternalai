@@ -37,6 +37,7 @@ from app.credential_polling import (
 from app.db.health import check_database_health
 from app.db.session import make_async_session_factory
 from app.evaluator import TerminalEvaluator
+from app.evaluator.overview import OverviewPostconditionEvaluator
 from app.execution_fabric.mock_adapters.oa.mock_oa_adapter import MockOAAdapter
 from app.infra.adapters.oa.adapter import OAReadAdapter
 from app.infra.adapters.oa.profile import (
@@ -426,6 +427,7 @@ def build_runtime(
     session_memory: SessionMemory | None = None,
     semantic_knowledge: BasicKnowledge | None = None,
     evaluator: TerminalEvaluator | None = None,
+    overview_evaluator: OverviewPostconditionEvaluator | None = None,
     human_gate_port: HumanGatePort | None = None,
     candidate_policy: CapabilityCandidatePolicyPort | None = None,
 ) -> RuntimeImpl:
@@ -461,6 +463,7 @@ def build_runtime(
         session_memory=session_memory or SessionMemory(),
         semantic_knowledge=semantic_knowledge or BasicKnowledge(),
         evaluator=evaluator or TerminalEvaluator(),
+        overview_evaluator=overview_evaluator,
         human_gate_port=resolved_human_gate,
     )
 
@@ -558,6 +561,9 @@ def build_production_components(
         enable_thinking=settings.llm_enable_thinking,
     )
     resolved_llm = production_llm if llm_provider is None else llm_provider
+    overview_evaluator = OverviewPostconditionEvaluator()
+    if not isinstance(overview_evaluator, OverviewPostconditionEvaluator):
+        raise RuntimeError("overview_evaluator_configuration_invalid")
     runtime = build_runtime(
         task_store=task_store,
         session_store=session_store,
@@ -571,6 +577,7 @@ def build_production_components(
         intent_model=settings.llm_model,
         workflow_engine=workflow_engine,
         validate_workflow=validate_workflow,
+        overview_evaluator=overview_evaluator,
         semantic_knowledge=BasicKnowledge(
             static_items=ENTERPRISE_TERM_ITEMS
             + {

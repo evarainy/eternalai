@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+from app.evaluator.overview import OVERVIEW_VERSION, required_postcondition_rule
 from app.infra.adapters.oa.capabilities import expected_oa_capabilities
 from app.infra.workflow.catalog import OVERVIEW_ID
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
@@ -23,6 +24,11 @@ def validate_workflow_configuration(
                 raise ValueError("definition")
             WorkflowEngine.validate_structure(definition)
             descriptor = descriptors[key]
+            if key == OVERVIEW_ID and (
+                required_postcondition_rule(key) != "oa_read_overview_v1"
+                or definition.version != OVERVIEW_VERSION
+            ):
+                raise ValueError("postcondition version")
             if (
                 descriptor.capability_id != key
                 or descriptor.type != "workflow"
@@ -47,6 +53,11 @@ async def _validate_entry(
     canonical = descriptors.get(capability.capability_id)
     if definition is None or canonical is None:
         raise RuntimeError("workflow_definition_unavailable")
+    if capability.capability_id == OVERVIEW_ID and (
+        required_postcondition_rule(capability.capability_id) != "oa_read_overview_v1"
+        or capability.version != OVERVIEW_VERSION or definition.version != OVERVIEW_VERSION
+    ):
+        raise RuntimeError("workflow_contract_mismatch")
     if capability != canonical or definition.version != capability.version:
         raise RuntimeError("workflow_contract_mismatch")
     canonical_leaves = {item.capability_id: item for item in expected_oa_capabilities()}

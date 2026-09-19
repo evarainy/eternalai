@@ -15,6 +15,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.evaluation import BusinessVerification
 from app.ports.human_gate import VersionBinding
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.response_projection_contract import ProjectionContractSnapshot
@@ -136,6 +137,7 @@ class AgentOrchestrationPort(Protocol):
         execution: ExecutionResult,
         projection: ProjectionContractSnapshot | None,
         confirmation: ConfirmationPreview | None = None,
+        business_verification: BusinessVerification | None = None,
     ) -> ResponseEnvelope: ...
 
 

@@ -61,6 +61,7 @@ EXPECTED_ERROR_CODE_VALUES = (
 )
 
 EXPECTED_EXECUTION_RESULT_FIELDS = {
+    "postcondition_input",
     "status",
     "data",
     "error_code",
