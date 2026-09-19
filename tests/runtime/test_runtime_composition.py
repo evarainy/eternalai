@@ -96,6 +96,67 @@ def test_build_runtime_instantiates_agent_adapter_with_shared_workflow_port(
         assert orchestration._workflow_engine is None
 
 
+def test_production_work_object_lifecycle_routes_use_real_components(monkeypatch, dispatch_db):
+    from sqlalchemy import text
+
+    from app.event_loop import make_event_loop
+    from app.ports.auth import Principal, PrincipalOrgContext
+    from tests.api.test_work_object_lifecycle import command, publish
+
+    db = dispatch_db
+    monkeypatch.setattr("app.composition.make_async_session_factory", lambda **_kwargs: db.factory)
+    settings = replace(
+        ProductionSettings.from_environment(), csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS
+    )
+    components = build_production_components(settings)
+    service = components.work_object_service
+    assert service._store._session_factory is db.factory
+    assert service._organization_directory._session_factory is db.factory
+    assert service._trace_port._session_factory is db.factory
+    safe = replace(components, credential_polling_scheduler=None)
+    monkeypatch.setattr("app.main.build_production_components", lambda _settings: safe)
+    with TestClient(
+        create_production_app(settings),
+        base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
+    ) as client:
+
+        def sign(user):
+            principal = Principal(
+                ai_user_id="ai-" + user,
+                display_name="Synthetic lifecycle",
+                roles=("user",),
+                org_ctx=PrincipalOrgContext(tenant_id="default", directory_user_id=user),
+            )
+            client.cookies.clear()
+            client.cookies.set("eternalai_session", components.session_tokens.issue(principal))
+
+        sign("sender")
+        object_id = publish(client)["items"][0]["work_object_id"]
+        sign("local-recipient")
+        assert command(client, object_id, "accept").status_code == 200
+        assert (
+            command(client, object_id, "feedback", message="Production wiring").status_code == 200
+        )
+        assert command(client, object_id, "complete", message="Done").status_code == 200
+        events = client.get(f"/api/v1/work-objects/{object_id}/lifecycle/events")
+        assert events.status_code == 200
+        assert [item["result_version"] for item in events.json()["items"]] == [2, 3, 4]
+    with db.sql.connect() as connection:
+        assert (
+            connection.execute(
+                text("SELECT count(*) FROM work_object_lifecycle_events")
+            ).scalar_one()
+            == 3
+        )
+        assert (
+            connection.execute(
+                text("SELECT status FROM work_objects WHERE work_object_id=:id"), {"id": object_id}
+            ).scalar_one()
+            == "completed"
+        )
+
+
 def test_production_components_share_real_gateway_with_orchestration() -> None:
     settings = replace(ProductionSettings.from_environment(), oa_read_adapter_mode="mock")
     components = build_production_components(settings)

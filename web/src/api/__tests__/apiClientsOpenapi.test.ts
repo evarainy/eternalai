@@ -24,6 +24,8 @@ interface OpenApiSchema {
 
 interface OpenApiOperation {
   operationId?: string;
+  parameters?: Array<{ name: string; in: string; required?: boolean; schema?: unknown }>;
+  responses?: Record<string, unknown>;
   requestBody?: {
     content?: {
       'application/json'?: {
@@ -115,6 +117,12 @@ const PROJECTS = [
         operationId:
           'set_work_object_handling_mark_api_v1_work_objects__work_object_id__handling_mark_patch',
       },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle', method: 'get',
+        operationId: 'get_work_object_lifecycle_api_v1_work_objects_work_object_id_lifecycle_get' },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/commands', method: 'post',
+        operationId: 'command_work_object_lifecycle_api_v1_work_objects_work_object_id_lifecycle_commands_post' },
+      { path: '/api/v1/work-objects/{work_object_id}/lifecycle/events', method: 'get',
+        operationId: 'list_work_object_lifecycle_events_api_v1_work_objects_work_object_id_lifecycle_events_get' },
     ],
   },
   {
@@ -372,6 +380,29 @@ function readOpenApi(path: string): OpenApiDocument {
 }
 
 describe('FastAPI-derived Orval clients', () => {
+  it('declares_lifecycle_headers_errors_and_closed_command_contract', () => {
+    const document = readOpenApi(resolve(webRoot, 'openapi/work-objects.openapi.json'));
+    const base = '/api/v1/work-objects/{work_object_id}/lifecycle';
+    const command = document.paths[`${base}/commands`]!.post!;
+    expect(command.parameters?.filter((parameter) => parameter.in === 'header')).toEqual([
+      { name: 'Idempotency-Key', in: 'header', required: true, schema: { format: 'uuid', type: 'string' } },
+      { name: 'If-Match', in: 'header', required: true, schema: { pattern: '"wolc-[0-9a-f]{64}"', type: 'string' } },
+    ]);
+    expect(command.requestBody?.content?.['application/json']?.schema).toMatchObject({
+      discriminator: { propertyName: 'operation' },
+      oneOf: [
+        { additionalProperties: false, properties: { operation: { const: 'accept' } }, required: ['operation'] },
+        { additionalProperties: false, properties: { operation: { const: 'feedback' }, text: { minLength: 1, maxLength: 2000 } }, required: ['text', 'operation'] },
+        { additionalProperties: false, properties: { operation: { const: 'complete' }, text: { minLength: 1, maxLength: 2000 } }, required: ['text', 'operation'] },
+      ],
+    });
+    for (const operation of [document.paths[base]!.get!, command, document.paths[`${base}/events`]!.get!]) {
+      expect(Object.keys(operation.responses!)).toEqual(['200', '401', '403', '404', '409', '412', '422', '428', '503']);
+      for (const response of Object.values(operation.responses!)) expect(response).toMatchObject({ headers: { 'Cache-Control': { schema: { const: 'no-store' } } } });
+    }
+    expect(document.paths[base]!.get!.responses!['200']).toMatchObject({ headers: { ETag: { schema: { pattern: '"wolc-[0-9a-f]{64}"' } } } });
+    expect(document.paths['/api/v1/work-objects']!.get!.parameters).toContainEqual(expect.objectContaining({ name: 'completion', in: 'query' }));
+  });
   it(
     're-exports six FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
@@ -485,6 +516,7 @@ describe('FastAPI-derived Orval clients', () => {
               {
                 input: resolve(temporaryWeb, target.input),
                 output: {
+                  ...(target.project === 'workObjects' ? { headers: true } : {}),
                   mode: 'split',
                   target: resolve(temporaryWeb, target.target),
                   mock: false,

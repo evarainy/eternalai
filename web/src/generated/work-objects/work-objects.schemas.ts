@@ -19,6 +19,100 @@ export interface DepartmentDispatchTarget {
   kind: 'department';
 }
 
+export type DispatchInitialWorkObjectViewAssigneeDisplayName = string | null;
+
+export type DispatchInitialWorkObjectViewCreatedAt = string | null;
+
+export type DispatchInitialWorkObjectViewDueAt = string | null;
+
+export type DispatchInitialWorkObjectViewHandlingAction = typeof DispatchInitialWorkObjectViewHandlingAction[keyof typeof DispatchInitialWorkObjectViewHandlingAction];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchInitialWorkObjectViewHandlingAction = {
+  ai_draft: 'ai_draft',
+  self_serve: 'self_serve',
+  go_source_system: 'go_source_system',
+  view_only: 'view_only',
+} as const;
+
+export type DispatchInitialWorkObjectViewHandlingCapabilityId = string | null;
+
+export type DispatchInitialWorkObjectViewHandlingMark = 'pending_sync_confirmation' | 'handled_elsewhere' | null;
+
+export type DispatchInitialWorkObjectViewHandlingMarkedAt = string | null;
+
+export type DispatchInitialWorkObjectViewInitiatorAiUserId = string | null;
+
+export type DispatchInitialWorkObjectViewKind = '通知' | '督办令' | '工作任务' | '提醒' | null;
+
+export type DispatchInitialWorkObjectViewOwnerDepartmentId = string | null;
+
+export type DispatchInitialWorkObjectViewReceiptRequirement = string | null;
+
+export type DispatchInitialWorkObjectViewReminderChoicesAnyOfItem = typeof DispatchInitialWorkObjectViewReminderChoicesAnyOfItem[keyof typeof DispatchInitialWorkObjectViewReminderChoicesAnyOfItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const DispatchInitialWorkObjectViewReminderChoicesAnyOfItem = {
+  提前_7_天: '提前 7 天',
+  提前_3_天: '提前 3 天',
+  提前_1_天: '提前 1 天',
+  逾期当天: '逾期当天',
+} as const;
+
+export type DispatchInitialWorkObjectViewReminderChoices = DispatchInitialWorkObjectViewReminderChoicesAnyOfItem[] | null;
+
+export type DispatchInitialWorkObjectViewReminderDelivery = 'not_enabled' | null;
+
+export type DispatchInitialWorkObjectViewRequirement = string | null;
+
+export type DispatchInitialWorkObjectViewStatus = 'assigned' | 'department_pending' | null;
+
+export type DispatchInitialWorkObjectViewTargetKind = 'user' | 'department' | null;
+
+export type DispatchInitialWorkObjectViewTaskRecordId = string | null;
+
+export type DispatchInitialWorkObjectViewTitle = string | null;
+
+export type DispatchInitialWorkObjectViewUpdatedAt = string | null;
+
+export type DispatchInitialWorkObjectViewVersion = number | null;
+
+export interface DispatchInitialWorkObjectView {
+  assignee_display_name: DispatchInitialWorkObjectViewAssigneeDisplayName;
+  created_at: DispatchInitialWorkObjectViewCreatedAt;
+  due_at: DispatchInitialWorkObjectViewDueAt;
+  handling_action: DispatchInitialWorkObjectViewHandlingAction;
+  handling_capability_id: DispatchInitialWorkObjectViewHandlingCapabilityId;
+  handling_mark: DispatchInitialWorkObjectViewHandlingMark;
+  handling_marked_at: DispatchInitialWorkObjectViewHandlingMarkedAt;
+  initiator_ai_user_id: DispatchInitialWorkObjectViewInitiatorAiUserId;
+  kind: DispatchInitialWorkObjectViewKind;
+  owner_department_id: DispatchInitialWorkObjectViewOwnerDepartmentId;
+  receipt_requirement: DispatchInitialWorkObjectViewReceiptRequirement;
+  reminder_choices: DispatchInitialWorkObjectViewReminderChoices;
+  reminder_delivery: DispatchInitialWorkObjectViewReminderDelivery;
+  requirement: DispatchInitialWorkObjectViewRequirement;
+  source_created_at: null;
+  source_fetched_at: null;
+  source_kind: string;
+  source_received_at: null;
+  source_ref: null;
+  source_status: null;
+  source_system: string;
+  source_title: null;
+  source_workflow_type_id: null;
+  state_authority: 'internal';
+  status: DispatchInitialWorkObjectViewStatus;
+  target_kind: DispatchInitialWorkObjectViewTargetKind;
+  task_record_id: DispatchInitialWorkObjectViewTaskRecordId;
+  title: DispatchInitialWorkObjectViewTitle;
+  updated_at: DispatchInitialWorkObjectViewUpdatedAt;
+  version: DispatchInitialWorkObjectViewVersion;
+  work_object_id: string;
+}
+
 export type DispatchOptionsResponseItems = DepartmentDispatchOption[] | UserDispatchOption[];
 
 export type DispatchOptionsResponseKind = typeof DispatchOptionsResponseKind[keyof typeof DispatchOptionsResponseKind];
@@ -96,7 +190,7 @@ export interface DispatchWorkObjectsResponse {
    * @minItems 1
    * @maxItems 100
    */
-  items: InternalWorkObjectView[];
+  items: DispatchInitialWorkObjectView[];
   replayed: boolean;
 }
 
@@ -104,7 +198,11 @@ export interface HTTPValidationError {
   detail?: ValidationError[];
 }
 
+export type InternalWorkObjectViewAcceptedAt = string | null;
+
 export type InternalWorkObjectViewAssigneeDisplayName = string | null;
+
+export type InternalWorkObjectViewCompletedAt = string | null;
 
 export type InternalWorkObjectViewCreatedAt = string | null;
 
@@ -152,7 +250,7 @@ export type InternalWorkObjectViewReminderDelivery = 'not_enabled' | null;
 
 export type InternalWorkObjectViewRequirement = string | null;
 
-export type InternalWorkObjectViewStatus = 'assigned' | 'department_pending' | null;
+export type InternalWorkObjectViewStatus = 'assigned' | 'department_pending' | 'in_progress' | 'completed' | null;
 
 export type InternalWorkObjectViewTargetKind = 'user' | 'department' | null;
 
@@ -165,7 +263,9 @@ export type InternalWorkObjectViewUpdatedAt = string | null;
 export type InternalWorkObjectViewVersion = number | null;
 
 export interface InternalWorkObjectView {
+  accepted_at?: InternalWorkObjectViewAcceptedAt;
   assignee_display_name: InternalWorkObjectViewAssigneeDisplayName;
+  completed_at?: InternalWorkObjectViewCompletedAt;
   created_at: InternalWorkObjectViewCreatedAt;
   due_at: InternalWorkObjectViewDueAt;
   handling_action: InternalWorkObjectViewHandlingAction;
@@ -195,6 +295,104 @@ export interface InternalWorkObjectView {
   title: InternalWorkObjectViewTitle;
   updated_at: InternalWorkObjectViewUpdatedAt;
   version: InternalWorkObjectViewVersion;
+  work_object_id: string;
+}
+
+export interface LifecycleCommandResponse {
+  event: LifecycleEventView;
+  replayed: boolean;
+}
+
+export type LifecycleEventViewFromStatus = typeof LifecycleEventViewFromStatus[keyof typeof LifecycleEventViewFromStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const LifecycleEventViewFromStatus = {
+  assigned: 'assigned',
+  department_pending: 'department_pending',
+  in_progress: 'in_progress',
+  completed: 'completed',
+} as const;
+
+export type LifecycleEventViewOperation = typeof LifecycleEventViewOperation[keyof typeof LifecycleEventViewOperation];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const LifecycleEventViewOperation = {
+  accept: 'accept',
+  feedback: 'feedback',
+  complete: 'complete',
+} as const;
+
+export type LifecycleEventViewText = string | null;
+
+export type LifecycleEventViewToStatus = typeof LifecycleEventViewToStatus[keyof typeof LifecycleEventViewToStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const LifecycleEventViewToStatus = {
+  assigned: 'assigned',
+  department_pending: 'department_pending',
+  in_progress: 'in_progress',
+  completed: 'completed',
+} as const;
+
+export interface LifecycleEventView {
+  actor_role: 'assignee';
+  event_id: string;
+  from_status: LifecycleEventViewFromStatus;
+  occurred_at: string;
+  operation: LifecycleEventViewOperation;
+  /** @minimum 2 */
+  result_version: number;
+  text: LifecycleEventViewText;
+  to_status: LifecycleEventViewToStatus;
+  work_object_id: string;
+}
+
+export type LifecycleEventsResponseNextAfterVersion = number | null;
+
+export interface LifecycleEventsResponse {
+  has_more: boolean;
+  items: LifecycleEventView[];
+  next_after_version: LifecycleEventsResponseNextAfterVersion;
+}
+
+export type LifecycleViewAcceptedAt = string | null;
+
+export type LifecycleViewAvailableCommandsItem = typeof LifecycleViewAvailableCommandsItem[keyof typeof LifecycleViewAvailableCommandsItem];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const LifecycleViewAvailableCommandsItem = {
+  accept: 'accept',
+  feedback: 'feedback',
+  complete: 'complete',
+} as const;
+
+export type LifecycleViewCompletedAt = string | null;
+
+export type LifecycleViewStatus = typeof LifecycleViewStatus[keyof typeof LifecycleViewStatus];
+
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const LifecycleViewStatus = {
+  assigned: 'assigned',
+  department_pending: 'department_pending',
+  in_progress: 'in_progress',
+  completed: 'completed',
+} as const;
+
+export type LifecycleViewUnavailableReason = 'work_object_lifecycle_request_invalid' | 'work_object_precondition_required' | 'work_object_not_found' | 'work_object_lifecycle_unsupported' | 'directory_membership_missing' | 'directory_membership_ambiguous' | 'work_object_action_forbidden' | 'work_object_transition_invalid' | 'idempotency_key_reused' | 'work_object_version_conflict' | 'organization_directory_missing' | 'organization_directory_stale' | 'organization_directory_unavailable' | 'work_object_unavailable' | 'work_object_audit_unavailable' | 'work_object_lifecycle_failed' | null;
+
+export interface LifecycleView {
+  accepted_at: LifecycleViewAcceptedAt;
+  available_commands: LifecycleViewAvailableCommandsItem[];
+  completed_at: LifecycleViewCompletedAt;
+  status: LifecycleViewStatus;
+  unavailable_reason: LifecycleViewUnavailableReason;
+  /** @minimum 1 */
+  version: number;
   work_object_id: string;
 }
 
@@ -358,6 +556,7 @@ export interface WorkObjectListResponse {
 export type ListWorkObjectsApiV1WorkObjectsGetParams = {
 q?: string | null;
 oa_view?: ListWorkObjectsApiV1WorkObjectsGetOaView;
+completion?: 'active' | 'completed' | null;
 };
 
 export type ListWorkObjectsApiV1WorkObjectsGetOaView = typeof ListWorkObjectsApiV1WorkObjectsGetOaView[keyof typeof ListWorkObjectsApiV1WorkObjectsGetOaView];
@@ -401,3 +600,47 @@ export const ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind = {
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200 = OAWorkObjectView | InternalWorkObjectView;
 
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200 = OAWorkObjectView | InternalWorkObjectView;
+
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostHeaders = {
+'Idempotency-Key': string;
+/**
+ * @pattern "wolc-[0-9a-f]{64}"
+ */
+'If-Match': string;
+};
+
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOf = {
+  operation: 'accept';
+};
+
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfTwo = {
+  operation: 'feedback';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
+};
+
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfThree = {
+  operation: 'complete';
+  /**
+   * @minLength 1
+   * @maxLength 2000
+   */
+  text: string;
+};
+
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody = CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOf | CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfTwo | CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBodyOneOfThree;
+
+export type ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetParams = {
+/**
+ * @minimum 0
+ */
+after_version?: number;
+/**
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+};

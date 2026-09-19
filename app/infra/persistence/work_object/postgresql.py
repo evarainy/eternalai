@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
@@ -32,6 +33,20 @@ from app.ports.work_object import (
     WorkObjectReadBatch,
     WorkObjectRecord,
     WorkObjectStorePort,
+)
+from app.ports.work_object_lifecycle import (
+    CompletionFilter,
+    LifecycleActor,
+    LifecycleCommand,
+    LifecycleEventRecord,
+    LifecycleMutationResult,
+    LifecycleStatus,
+    LifecycleStoreError,
+    can_replay_lifecycle_event,
+    compute_lifecycle_actions,
+    lifecycle_etag,
+    lifecycle_role_allowed,
+    lifecycle_transition_allowed,
 )
 from app.ports.work_object_scope import AuthorizedWorkObjectScope
 from app.ports.work_object_search import (
@@ -253,8 +268,14 @@ class PostgreSQLWorkObjectStore:
             await session.commit()
 
     async def _list_records(
-        self, session: AsyncSession, scope: AuthorizedWorkObjectScope, *,
-        search_term: str | None, oa_view: OAView, limit: int,
+        self,
+        session: AsyncSession,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        search_term: str | None,
+        oa_view: OAView,
+        limit: int,
+        completion: CompletionFilter | None = None,
     ) -> list[WorkObjectRecord]:
         if not 1 <= limit <= WORK_OBJECT_LIST_FETCH_LIMIT:
             raise ValueError("Work Object list limit is outside the allowed range")
@@ -273,51 +294,113 @@ class PostgreSQLWorkObjectStore:
             )
             reference = "LOWER(BTRIM(regexp_replace(source_ref, :ws_pattern, ' ', 'g')))"
             assignee = "LOWER(BTRIM(regexp_replace(assignee_display_name, :ws_pattern, ' ', 'g')))"
-            search_clause = (f"AND (STRPOS({title}, {query}) > 0 "
-                             f"OR {reference} = {query} OR {assignee} = {query}) ")
+            search_clause = (
+                f"AND (STRPOS({title}, {query}) > 0 "
+                f"OR {reference} = {query} OR {assignee} = {query}) "
+            )
             parameters.update(ws_pattern=SEARCH_WHITESPACE_PATTERN, search_term=normalized)
+        completion_clause = ""
+        ordering = (
+            'due_at ASC NULLS LAST, created_at DESC NULLS LAST, work_object_id COLLATE "C" ASC'
+        )
+        if completion == "active":
+            completion_clause = "AND status IS DISTINCT FROM 'completed' "
+        elif completion == "completed":
+            completion_clause = (
+                "AND state_authority = 'internal' AND source_kind = 'manual_dispatch' "
+                "AND status = 'completed' AND completed_at BETWEEN "
+                "CURRENT_TIMESTAMP - INTERVAL '30 days' AND CURRENT_TIMESTAMP "
+            )
+            ordering = 'completed_at DESC, work_object_id COLLATE "C" ASC'
+        elif completion is not None:
+            raise ValueError("Unknown completion filter")
         columns, source = _observed_source(scope)
         view_clause = ""
         if oa_view == "active" and scope.principal_tenant_id == "default":
             view_clause = "AND obs_pending_state IS DISTINCT FROM 'unconfirmed' "
         elif oa_view == "unconfirmed":
-            view_clause = ("AND obs_pending_state = 'unconfirmed' "
-                           if scope.principal_tenant_id == "default" else "AND FALSE ")
-        rows = (await session.execute(text(
-            "SELECT " + columns + " FROM " + source + " WHERE " + visibility + " "
-            + search_clause + view_clause
-            + "ORDER BY due_at ASC NULLS LAST, created_at DESC NULLS LAST, "
-            + 'work_object_id COLLATE "C" ASC LIMIT :limit'
-        ), parameters)).fetchall()
+            view_clause = (
+                "AND obs_pending_state = 'unconfirmed' "
+                if scope.principal_tenant_id == "default"
+                else "AND FALSE "
+            )
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT "
+                    + columns
+                    + " FROM "
+                    + source
+                    + " WHERE "
+                    + visibility
+                    + " "
+                    + search_clause
+                    + view_clause
+                    + completion_clause
+                    + "ORDER BY "
+                    + ordering
+                    + " LIMIT :limit"
+                ),
+                parameters,
+            )
+        ).fetchall()
         return [_record_from_row(row) for row in rows]
 
     async def list_for_scope(
-        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
+        self,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        completion: CompletionFilter | None = None,
     ) -> list[WorkObjectRecord]:
         async with self._session_factory() as session:
             return await self._list_records(
-                session, scope, search_term=search_term, oa_view="all", limit=limit,
+                session,
+                scope,
+                search_term=search_term,
+                oa_view="all",
+                limit=limit,
+                completion=completion,
             )
 
     async def list_with_oa_sync_for_scope(
-        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
-        oa_view: OAView = "active", limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        self,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        search_term: str | None = None,
+        oa_view: OAView = "active",
+        limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        completion: CompletionFilter | None = None,
     ) -> WorkObjectReadBatch:
         async with self._session_factory() as session:
             await session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
             records = await self._list_records(
-                session, scope, search_term=search_term, oa_view=oa_view, limit=limit,
+                session,
+                scope,
+                search_term=search_term,
+                oa_view=oa_view,
+                limit=limit,
+                completion=completion,
             )
             if scope.principal_tenant_id == "default":
-                state = await self._sync_status(session, OASyncSubject(
-                    tenant_id="default", ai_user_id=scope.principal_ai_user_id,
-                ), "pending")
+                state = await self._sync_status(
+                    session,
+                    OASyncSubject(
+                        tenant_id="default",
+                        ai_user_id=scope.principal_ai_user_id,
+                    ),
+                    "pending",
+                )
                 view = state.to_view()
             else:
                 view = OASyncStatusView(
-                    status="unsupported_scope", revision=0, attempt_revision=0,
-                    last_attempt_at=None, last_success_at=None, failure_code=None,
+                    status="unsupported_scope",
+                    revision=0,
+                    attempt_revision=0,
+                    last_attempt_at=None,
+                    last_success_at=None,
+                    failure_code=None,
                 )
             return WorkObjectReadBatch(records=records, oa_sync=view)
 
@@ -359,6 +442,231 @@ class PostgreSQLWorkObjectStore:
             record = await self._get_record(session, work_object_id, scope)
             await session.commit()
             return record
+
+    async def _lifecycle_event(
+        self,
+        session: AsyncSession,
+        work_object_id: str,
+        tenant_id: str,
+        actor_ai_user_id: str,
+        idempotency_key: UUID,
+    ) -> LifecycleEventRecord | None:
+        row = (
+            (
+                await session.execute(
+                    text(
+                        (
+                            'SELECT * FROM work_object_lifecycle_events WHERE work_o'
+                            'bject_id = :id AND tenant_id = :tenant AND actor_ai_use'
+                            'r_id = :actor AND idempotency_key = :key'
+                        )
+                    ),
+                    {
+                        "id": work_object_id,
+                        "tenant": tenant_id,
+                        "actor": actor_ai_user_id,
+                        "key": idempotency_key,
+                    },
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else LifecycleEventRecord.model_validate(dict(row))
+
+    async def get_lifecycle_event_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        actor_ai_user_id: str,
+        idempotency_key: UUID,
+    ) -> LifecycleEventRecord | None:
+        if actor_ai_user_id != scope.principal_ai_user_id:
+            raise LifecycleStoreError("work_object_action_forbidden")
+        async with self._session_factory() as session:
+            record = await self._get_record(session, work_object_id, scope)
+            if not isinstance(record, InternalWorkObjectRecord) or record.tenant_id is None:
+                return None
+            return await self._lifecycle_event(
+                session, work_object_id, record.tenant_id, actor_ai_user_id, idempotency_key
+            )
+
+    async def list_lifecycle_events_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        after_version: int,
+        limit: int,
+    ) -> list[LifecycleEventRecord] | None:
+        if after_version < 0 or not 1 <= limit <= 101:
+            raise ValueError("Invalid lifecycle page")
+        async with self._session_factory() as session:
+            await session.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+            record = await self._get_record(session, work_object_id, scope)
+            if record is None:
+                return None
+            if (
+                not isinstance(record, InternalWorkObjectRecord)
+                or record.source_kind != "manual_dispatch"
+            ):
+                raise LifecycleStoreError("work_object_lifecycle_unsupported")
+            rows = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM work_object_lifecycle_events WHERE work_object_id = :id "
+                            "AND tenant_id = :tenant AND result_version > :after "
+                            "ORDER BY result_version ASC LIMIT :limit"
+                        ),
+                        {
+                            "id": work_object_id,
+                            "tenant": record.tenant_id,
+                            "after": after_version,
+                            "limit": limit,
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            return [LifecycleEventRecord.model_validate(dict(row)) for row in rows]
+
+    async def apply_lifecycle_command_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        actor: LifecycleActor,
+        command: LifecycleCommand,
+        idempotency_key: UUID,
+        request_fingerprint: str,
+        expected_etag: str,
+        event_id: UUID,
+    ) -> LifecycleMutationResult:
+        if (
+            actor.tenant_id != scope.principal_tenant_id
+            or actor.ai_user_id != scope.principal_ai_user_id
+            or actor.department_id != scope.principal_department_id
+        ):
+            raise LifecycleStoreError("work_object_action_forbidden")
+        visibility, parameters = _visibility_predicate(scope)
+        parameters["work_object_id"] = work_object_id
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT " + _WORK_OBJECT_COLUMNS + " FROM work_objects "
+                            "WHERE work_object_id = :work_object_id AND "
+                            + visibility
+                            + " FOR UPDATE"
+                        ),
+                        parameters,
+                    )
+                ).fetchone()
+                if row is None:
+                    raise LifecycleStoreError("work_object_not_found")
+                # Only internal manual rows have lifecycle fields and authorization.
+                if (
+                    row._mapping["state_authority"] != "internal"
+                    or row._mapping["source_kind"] != "manual_dispatch"
+                ):
+                    raise LifecycleStoreError("work_object_lifecycle_unsupported")
+                record = InternalWorkObjectRecord.model_validate(dict(row._mapping))
+                if time.monotonic() > actor.valid_until:
+                    raise LifecycleStoreError("organization_directory_stale")
+                if not lifecycle_role_allowed(record, actor, command.operation):
+                    raise LifecycleStoreError("work_object_action_forbidden")
+                previous = await self._lifecycle_event(
+                    session, work_object_id, actor.tenant_id, actor.ai_user_id, idempotency_key
+                )
+                if previous is not None:
+                    if previous.request_fingerprint != request_fingerprint:
+                        raise LifecycleStoreError("idempotency_key_reused")
+                    if not can_replay_lifecycle_event(record, actor, previous):
+                        raise LifecycleStoreError("work_object_action_forbidden")
+                    if time.monotonic() > actor.valid_until:
+                        raise LifecycleStoreError("organization_directory_stale")
+                    return LifecycleMutationResult(previous, True)
+                if not lifecycle_transition_allowed(record, command.operation):
+                    raise LifecycleStoreError("work_object_transition_invalid")
+                if lifecycle_etag(_lifecycle_representation(record, actor)) != expected_etag:
+                    raise LifecycleStoreError("work_object_version_conflict")
+                occurred = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+                occurred = max(occurred, record.updated_at)
+                assert record.version is not None and record.status is not None
+                next_status: LifecycleStatus = (
+                    "completed" if command.operation == "complete" else "in_progress"
+                )
+                event = LifecycleEventRecord(
+                    event_id=event_id,
+                    work_object_id=work_object_id,
+                    tenant_id=actor.tenant_id,
+                    actor_ai_user_id=actor.ai_user_id,
+                    operation=command.operation,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    from_status=record.status,
+                    to_status=next_status,
+                    result_version=record.version + 1,
+                    occurred_at=occurred,
+                    text=command.text,
+                )
+                extra = ""
+                if command.operation == "accept":
+                    extra = ", accepted_by_ai_user_id = :actor, accepted_at = :at"
+                elif command.operation == "complete":
+                    extra = ", completed_by_ai_user_id = :actor, completed_at = :at"
+                parameters.update(
+                    actor=actor.ai_user_id,
+                    at=occurred,
+                    new_status=next_status,
+                    version=record.version,
+                    status=record.status,
+                )
+                actor_predicate = (
+                    "accepted_by_ai_user_id IS NULL"
+                    if command.operation == "accept"
+                    else "accepted_by_ai_user_id = :actor"
+                )
+                if time.monotonic() > actor.valid_until:
+                    raise LifecycleStoreError("organization_directory_stale")
+                changed = (
+                    await session.execute(
+                        text(
+                            (
+                                'UPDATE work_objects SET status = :new_status, version = version '
+                                '+ 1, updated_at = :at'
+                            )
+                            + extra
+                            + " WHERE work_object_id = :work_object_id AND "
+                            + visibility
+                            + (
+                                ' AND tenant_id = :principal_tenant_id AND version = :version AND'
+                                ' status = :status AND '
+                            )
+                            + actor_predicate
+                            + " RETURNING work_object_id"
+                        ),
+                        parameters,
+                    )
+                ).fetchall()
+                if len(changed) != 1:
+                    raise LifecycleStoreError("work_object_version_conflict")
+                values = event.model_dump()
+                await session.execute(
+                    text(
+                        "INSERT INTO work_object_lifecycle_events ("
+                        + ", ".join(values)
+                        + ") VALUES ("
+                        + ", ".join(":" + name for name in values)
+                        + ")"
+                    ),
+                    values,
+                )
+            return LifecycleMutationResult(event, False)
 
     async def get_dispatch_receipt(
         self,
@@ -460,6 +768,30 @@ _PENDING_OWNER = (
     "state_authority = 'external_snapshot' AND source_system = 'oa' "
     "AND source_kind = 'pending_workflow' AND assignee_ai_user_id = :ai_user_id"
 )
+
+
+def _lifecycle_representation(
+    record: InternalWorkObjectRecord, actor: LifecycleActor
+) -> dict[str, Any]:
+    def utc(value: datetime | None) -> str | None:
+        return (
+            None
+            if value is None
+            else value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        )
+
+    actions = compute_lifecycle_actions(record, actor)
+    return {
+        "work_object_id": record.work_object_id,
+        "status": record.status,
+        "version": record.version,
+        "accepted_at": utc(record.accepted_at),
+        "completed_at": utc(record.completed_at),
+        "available_commands": actions,
+        "unavailable_reason": None
+        if actions or record.status == "completed"
+        else "work_object_action_forbidden",
+    }
 
 
 async def _commit_publication(session: AsyncSession) -> None:

@@ -8,6 +8,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.ports.work_object_lifecycle import (
+    CompletionFilter,
+    LifecycleActor,
+    LifecycleCommand,
+    LifecycleEventRecord,
+    LifecycleMutationResult,
+    LifecycleStatus,
+)
 from app.ports.work_object_scope import AuthorizedWorkObjectScope
 from app.ports.work_object_search import SEARCH_WHITESPACE
 
@@ -35,6 +43,10 @@ DISPATCH_RECORD_FIELDS: tuple[str, ...] = (
     "reminder_choices",
     "status",
     "version",
+    "accepted_by_ai_user_id",
+    "accepted_at",
+    "completed_by_ai_user_id",
+    "completed_at",
 )
 
 WorkObjectHandlingMark: TypeAlias = Literal[
@@ -294,8 +306,12 @@ class InternalWorkObjectRecord(_WorkObjectRecordBase):
     requirement: str | None = None
     receipt_requirement: str | None = None
     reminder_choices: list[ReminderChoice] | None = None
-    status: Literal["assigned", "department_pending"] | None = None
+    status: LifecycleStatus | None = None
     version: int | None = None
+    accepted_by_ai_user_id: str | None = None
+    accepted_at: datetime | None = None
+    completed_by_ai_user_id: str | None = None
+    completed_at: datetime | None = None
 
     state_authority: Literal["internal"]
     source_system: str
@@ -340,15 +356,46 @@ class InternalWorkObjectRecord(_WorkObjectRecordBase):
                 not self.assignee_directory_user_id
                 or not 1 <= len(self.assignee_directory_user_id) <= 128
                 or self.assignee_display_name is not None
-                or self.status != "assigned"
+                or self.status == "department_pending"
             ):
                 raise ValueError("manual user target is inconsistent")
         elif (
             self.assignee_directory_user_id is not None
             or self.assignee_display_name is None
-            or self.status != "department_pending"
+            or self.status == "assigned"
         ):
             raise ValueError("manual department target is inconsistent")
+        if self.status in {"assigned", "department_pending"}:
+            if any(
+                value is not None
+                for value in (
+                    self.accepted_by_ai_user_id,
+                    self.accepted_at,
+                    self.completed_by_ai_user_id,
+                    self.completed_at,
+                )
+            ):
+                raise ValueError("initial state cannot carry lifecycle fields")
+        else:
+            if (
+                not self.accepted_by_ai_user_id
+                or self.accepted_at is None
+                or self.version < 2
+                or self.accepted_at < self.created_at
+                or self.updated_at < self.accepted_at
+            ):
+                raise ValueError("accepted state requires consistent evidence")
+            if self.status == "in_progress":
+                if self.completed_by_ai_user_id is not None or self.completed_at is not None:
+                    raise ValueError("in-progress state cannot carry completion")
+            elif (
+                self.version < 3
+                or self.completed_at is None
+                or self.completed_by_ai_user_id != self.accepted_by_ai_user_id
+                or self.completed_at < self.accepted_at
+                or self.updated_at != self.completed_at
+            ):
+                raise ValueError("completed state requires consistent evidence")
         if self.reminder_choices is None or self.reminder_choices != [
             value for value in REMINDER_CHOICES if value in self.reminder_choices
         ]:
@@ -415,8 +462,13 @@ class WorkObjectStorePort(Protocol):
     ) -> OASyncStatus: ...
 
     async def list_with_oa_sync_for_scope(
-        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
-        oa_view: OAView = "active", limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        self,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        search_term: str | None = None,
+        oa_view: OAView = "active",
+        limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        completion: CompletionFilter | None = None,
     ) -> WorkObjectReadBatch: ...
 
     async def upsert_oa_pending_workflows(
@@ -434,6 +486,7 @@ class WorkObjectStorePort(Protocol):
         *,
         search_term: str | None = None,
         limit: int = WORK_OBJECT_LIST_FETCH_LIMIT,
+        completion: CompletionFilter | None = None,
     ) -> list[WorkObjectRecord]: ...
 
     async def get_for_scope(
@@ -450,6 +503,37 @@ class WorkObjectStorePort(Protocol):
         *,
         marked_at: datetime,
     ) -> WorkObjectRecord | None: ...
+
+    async def get_lifecycle_event_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        actor_ai_user_id: str,
+        idempotency_key: UUID,
+    ) -> LifecycleEventRecord | None: ...
+
+    async def list_lifecycle_events_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        after_version: int,
+        limit: int,
+    ) -> list[LifecycleEventRecord] | None: ...
+
+    async def apply_lifecycle_command_for_scope(
+        self,
+        work_object_id: str,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        actor: LifecycleActor,
+        command: LifecycleCommand,
+        idempotency_key: UUID,
+        request_fingerprint: str,
+        expected_etag: str,
+        event_id: UUID,
+    ) -> LifecycleMutationResult: ...
 
     async def get_dispatch_receipt(
         self,

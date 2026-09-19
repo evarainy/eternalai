@@ -135,6 +135,12 @@ def test_work_object_routes_and_store_calls_use_scoped_boundary() -> None:
     for method_name, store_call, scope_position in (
         ("list_for_principal", "list_with_oa_sync_for_scope", 0),
         ("get_for_principal", "get_for_scope", 1),
+        ("get_lifecycle_for_principal", "get_for_scope", 1),
+        ("list_lifecycle_events_for_principal", "get_for_scope", 1),
+        ("list_lifecycle_events_for_principal", "list_lifecycle_events_for_scope", 1),
+        ("command_lifecycle_for_principal", "get_for_scope", 1),
+        ("command_lifecycle_for_principal", "get_lifecycle_event_for_scope", 1),
+        ("command_lifecycle_for_principal", "apply_lifecycle_command_for_scope", 1),
         ("set_handling_mark_for_principal", "set_handling_mark_for_scope", 1),
     ):
         method = next(

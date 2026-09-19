@@ -5,11 +5,17 @@
  * OpenAPI spec version: 0.1.0
  */
 import type {
+  CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody,
+  CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostHeaders,
   DispatchOptionsResponse,
   DispatchWorkObjectsRequest,
   DispatchWorkObjectsResponse,
   GetWorkObjectApiV1WorkObjectsWorkObjectIdGet200,
+  LifecycleCommandResponse,
+  LifecycleEventsResponse,
+  LifecycleView,
   ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams,
+  ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetParams,
   ListWorkObjectsApiV1WorkObjectsGetParams,
   SetHandlingMarkRequest,
   SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch200,
@@ -99,9 +105,54 @@ export const setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPa
       );
     }
 
+/**
+ * @summary Get Work Object Lifecycle
+ */
+export const getWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleGet = (
+    workObjectId: string,
+ ) => {
+      return customInstance<LifecycleView>(
+      {url: `/api/v1/work-objects/${workObjectId}/lifecycle`, method: 'GET'
+    },
+      );
+    }
+
+/**
+ * @summary Command Work Object Lifecycle
+ */
+export const commandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPost = (
+    workObjectId: string,
+    commandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody: CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody,
+    headers: CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostHeaders,
+ ) => {
+      return customInstance<LifecycleCommandResponse>(
+      {url: `/api/v1/work-objects/${workObjectId}/lifecycle/commands`, method: 'POST',
+      headers: {'Content-Type': 'application/json', ...headers},
+      data: commandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostBody
+    },
+      );
+    }
+
+/**
+ * @summary List Work Object Lifecycle Events
+ */
+export const listWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGet = (
+    workObjectId: string,
+    params?: ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetParams,
+ ) => {
+      return customInstance<LifecycleEventsResponse>(
+      {url: `/api/v1/work-objects/${workObjectId}/lifecycle/events`, method: 'GET',
+        params
+    },
+      );
+    }
+
 export type ListWorkObjectsApiV1WorkObjectsGetResult = NonNullable<Awaited<ReturnType<typeof listWorkObjectsApiV1WorkObjectsGet>>>
 export type DispatchWorkObjectsApiV1WorkObjectsDispatchPostResult = NonNullable<Awaited<ReturnType<typeof dispatchWorkObjectsApiV1WorkObjectsDispatchPost>>>
 export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetResult = NonNullable<Awaited<ReturnType<typeof listDispatchOptionsApiV1WorkObjectsDispatchOptionsGet>>>
 export type SyncWorkObjectsApiV1WorkObjectsSyncPostResult = NonNullable<Awaited<ReturnType<typeof syncWorkObjectsApiV1WorkObjectsSyncPost>>>
 export type GetWorkObjectApiV1WorkObjectsWorkObjectIdGetResult = NonNullable<Awaited<ReturnType<typeof getWorkObjectApiV1WorkObjectsWorkObjectIdGet>>>
 export type SetWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatchResult = NonNullable<Awaited<ReturnType<typeof setWorkObjectHandlingMarkApiV1WorkObjectsWorkObjectIdHandlingMarkPatch>>>
+export type GetWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleGetResult = NonNullable<Awaited<ReturnType<typeof getWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleGet>>>
+export type CommandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPostResult = NonNullable<Awaited<ReturnType<typeof commandWorkObjectLifecycleApiV1WorkObjectsWorkObjectIdLifecycleCommandsPost>>>
+export type ListWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGetResult = NonNullable<Awaited<ReturnType<typeof listWorkObjectLifecycleEventsApiV1WorkObjectsWorkObjectIdLifecycleEventsGet>>>

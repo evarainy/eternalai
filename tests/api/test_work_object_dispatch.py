@@ -948,8 +948,12 @@ def test_manual_projection_and_post_invariants_precede_commit(dispatch_db, monke
     first = assert_created(db, db.post(key=key))
     replay = db.post(key=key)
     assert replay.status_code == 200 and replay.json()["items"] == [first]
-    assert db.client.get("/api/v1/work-objects/" + first["work_object_id"]).json() == first
-    assert db.client.get("/api/v1/work-objects").json()["items"] == [first]
+    assert db.client.get("/api/v1/work-objects/" + first["work_object_id"]).json() == {
+        **first, "accepted_at": None, "completed_at": None,
+    }
+    assert db.client.get("/api/v1/work-objects").json()["items"] == [
+        {**first, "accepted_at": None, "completed_at": None},
+    ]
     assert first["handling_action"] == "view_only" and first["handling_capability_id"] is None
     assert calls == []
     original = api._view_from_record
@@ -1144,7 +1148,7 @@ def test_openapi_and_read_view_expose_approved_contract(dispatch_db):
     assert set(item) == INTERNAL_KEYS and len(INTERNAL_KEYS) == 31
     assert "etag" not in response.headers
     detail = db.client.get("/api/v1/work-objects/" + item["work_object_id"])
-    assert detail.json() == item
+    assert detail.json() == {**item, "accepted_at": None, "completed_at": None}
     assert detail.headers["etag"] == '"wo:' + item["work_object_id"] + ':1"'
     assert item["created_at"] == item["updated_at"] == "2026-09-10T12:00:00.000000Z"
     schema = db.client.app.openapi()
@@ -1159,7 +1163,10 @@ def test_openapi_and_read_view_expose_approved_contract(dispatch_db):
         "503",
     }
     view = schema["components"]["schemas"]["InternalWorkObjectView"]
-    assert set(view["properties"]) == INTERNAL_KEYS
+    assert set(view["properties"]) == INTERNAL_KEYS | {"accepted_at", "completed_at"}
+    assert set(
+        schema["components"]["schemas"]["DispatchInitialWorkObjectView"]["properties"]
+    ) == INTERNAL_KEYS
     assert view["properties"]["assignee_display_name"]["anyOf"] == [
         {"type": "string"},
         {"type": "null"},
