@@ -23,6 +23,24 @@ def catalog():
     return definitions, descriptors
 
 
+@pytest.mark.parametrize("fault", ["missing_rule", "old_version"])
+def test_startup_rejects_missing_or_unsupported_required_rule(monkeypatch, fault):
+    import app.infra.workflow.production as production
+
+    definitions, descriptors = catalog()
+    if fault == "missing_rule":
+        monkeypatch.setattr(production, "required_postcondition_rule", lambda _: None)
+    else:
+        definitions["oa.read_overview"] = replace(
+            definitions["oa.read_overview"], version="1.0.0",
+        )
+        descriptors["oa.read_overview"] = descriptors["oa.read_overview"].model_copy(
+            update={"version": "1.0.0"},
+        )
+    with pytest.raises(RuntimeError, match="^workflow_configuration_invalid$"):
+        validate_workflow_configuration(definitions, descriptors)
+
+
 @pytest.mark.parametrize(
     "fault,error",
     [
@@ -107,7 +125,7 @@ def test_selected_contract_is_rechecked_without_leaking_registry_errors(fault) -
         current = selected.model_copy(
             update={
                 "status": "disabled" if fault == "disabled" else "active",
-                "version": "2.0.0" if fault == "version" else "1.0.0",
+                "version": "2.0.0" if fault == "version" else selected.version,
             }
         )
     if fault == "dependency":

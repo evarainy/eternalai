@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from app.contracts.sdui.models import ConfirmCardPayload
+from app.evaluator.overview import required_postcondition_rule
+from app.infra.orchestration.overview_evaluation import build_overview_evaluation_input
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.infra.workflow.catalog import OVERVIEW_ID, OAReadOverviewInput, OAReadOverviewOutput
 from app.ports.agent_orchestration import (
@@ -24,6 +26,7 @@ from app.ports.capability_registry import (
     CapabilityTargetSystem,
     CapabilityType,
 )
+from app.ports.evaluation import BusinessVerification, EvaluationScope
 from app.ports.human_gate import VersionBinding, VersionBindingMismatchError
 from app.ports.response_envelope import ResponseEnvelope, TargetSystem
 from app.ports.response_projection_contract import ProjectionContractSnapshot
@@ -179,7 +182,15 @@ class AgentOrchestrationAdapter:
                         status="failed", error_code="adapter_payload_invalid",
                         trace_id=request_context.request_id,
                     )
-            return _workflow_execution_result(result)
+            return _workflow_execution_result(
+                result,
+                scope=EvaluationScope(
+                    task_id, request_context.request_id, session_id,
+                    request_context.tenant_id, ai_user_id,
+                ),
+                capability=capability,
+                arguments=arguments,
+            )
         return await self._gateway.execute_capability(
             task_id,
             session_id,
@@ -233,8 +244,22 @@ class AgentOrchestrationAdapter:
         execution: ExecutionResult,
         projection: ProjectionContractSnapshot | None,
         confirmation: ConfirmationPreview | None = None,
+        business_verification: BusinessVerification | None = None,
     ) -> ResponseEnvelope:
         target_system = _target_system_for_capability(context.capability_id)
+        if (
+            required_postcondition_rule(context.capability_id) is not None
+            and execution.status == "failed"
+            and execution.error_code == "internal_error"
+            and business_verification is not None
+            and business_verification.rule_id == "oa_read_overview_v1"
+            and business_verification.result in {"failed", "error"}
+        ):
+            return self._response_builder.build_failed(
+                context.response_id, context.task_id, context.session_id,
+                "查询已返回，但概览结果未通过核验，本次未展示。",
+                "The overview could not be verified.", context.trace_id,
+            )
         if execution.status == "completed":
             data = project_response_data(
                 execution.data,
@@ -346,13 +371,34 @@ def _matches_intent_constraints(
     return capability_type is None or capability.type == capability_type
 
 
-def _workflow_execution_result(result: WorkflowRunResult) -> ExecutionResult:
+def _workflow_execution_result(
+    result: WorkflowRunResult,
+    *,
+    scope: EvaluationScope | None = None,
+    capability: CapabilitySpec | None = None,
+    arguments: dict[str, Any] | None = None,
+) -> ExecutionResult:
     if result.status == "completed":
+        evidence = None
+        if capability is not None and required_postcondition_rule(capability.capability_id):
+            try:
+                OAReadOverviewOutput.model_validate(result.output, strict=True)
+            except ValidationError:
+                return ExecutionResult(
+                    status="failed", error_code="adapter_payload_invalid", trace_id=result.trace_id,
+                )
+            if scope is not None and arguments is not None:
+                try:
+                    evidence = build_overview_evaluation_input(result, scope, arguments)
+                except (ValueError, TypeError, OverflowError, RecursionError):
+                    # Valid aggregation without a usable snapshot is never verification success.
+                    evidence = None
         return ExecutionResult(
             status="completed",
             data=result.output,
             error_code=result.error_code,
             trace_id=result.trace_id,
+            postcondition_input=evidence,
         )
     if result.status == "denied":
         return ExecutionResult(

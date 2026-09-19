@@ -22,6 +22,7 @@ from app.ports.agent_orchestration import (
 )
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec, CapabilityTargetSystem, CapabilityType
+from app.ports.evaluation import BusinessVerification
 from app.ports.human_gate import HumanGateConflictError, VersionBinding, VersionBindingMismatchError
 from app.ports.response_envelope import ResponseEnvelope
 from app.ports.response_projection_contract import ProjectionContractSnapshot
@@ -66,6 +67,7 @@ def test_public_contract_is_framework_free_and_has_six_methods() -> None:
             "execution": ExecutionResult,
             "projection": ProjectionContractSnapshot | None,
             "confirmation": ConfirmationPreview | None,
+            "business_verification": BusinessVerification | None,
             "return": ResponseEnvelope,
         },
     }
@@ -87,6 +89,7 @@ def test_public_contract_is_framework_free_and_has_six_methods() -> None:
             if (name, parameter_name) in {
                 ("resume_capability", "expected_action_digest"),
                 ("build_response", "confirmation"),
+                ("build_response", "business_verification"),
             }:
                 assert parameter.default is None
             else:

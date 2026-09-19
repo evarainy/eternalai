@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
+from app.ports.evaluation import OverviewEvaluationInput
 from app.ports.request_context import RequestChannel as RequestChannel
 from app.ports.request_context import RequestOrgContext as RequestOrgContext
 
@@ -49,6 +50,16 @@ class ExecutionResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     trace_id: str
+    postcondition_input: OverviewEvaluationInput | None = Field(
+        default=None, exclude=True, repr=False,
+    )
+
+    @field_validator("postcondition_input", mode="before")
+    @classmethod
+    def _typed_evidence(cls, value: object) -> object:
+        if value is not None and type(value) is not OverviewEvaluationInput:
+            raise ValueError("Postcondition input must be an immutable evaluation value")
+        return value
 
 
 class CapabilityGatewayPort(Protocol):

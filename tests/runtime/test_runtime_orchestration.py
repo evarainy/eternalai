@@ -276,6 +276,7 @@ def test_new_task_uses_port_for_selection_binding_execution_and_response() -> No
             execution=execution,
             projection=ProjectionContractSnapshot.from_capability(selected),
             confirmation=None,
+            business_verification=None,
         ),
     ]
     assert registry.mock_calls == [call.list(status="active")]
@@ -1027,5 +1028,6 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
             execution=execution,
             projection=None,
             confirmation=preview,
+            business_verification=None,
         )
     ]

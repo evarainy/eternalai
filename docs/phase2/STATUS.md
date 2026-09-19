@@ -1,26 +1,27 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-064`（C 档、串行；2026-09-17 同步已定裁决、分段交付、后继指针及九条非阻断欠债，承担 A 类机械同步；本棒不产生新的架构裁决）。
-- 当前实现 task_id：`P2-AUDIT-OA-TODO-CONVERGE-001`（A 档、串行，承担 A 类同步；P 段已交付并合并，D 段仍阻塞于经确认的脱敏结构合同）。
-- 本棒完成情况：X-01 保留后台认证否定/可计数失败分类，在线诊断写入失败仍固定 503；X-02 区分成功空与尚未取得。raw-row、旧故障注入、目录过期重读与 Windows 测试 loop 接缝已适配，真实 HTTP→PG 提交确认丢失及恢复读取已覆盖。雨爷 2026-09-17 已接受 #6 分段交付；审计 #6 的 done_when 保持 P+D，D 与真实现场验收仍受外部输入/授权阻塞。
-- 当前实现后继指针：`P2-AUDIT-EVAL-POSTCOND-001`（审计 #11，前置 #5 `P2-AUDIT-WORKFLOW-WIRING-001` 已合并，已解锁）与 `P2-AUDIT-WO-LIFECYCLE-001`（审计 #7）。组织身份集成仍指向 `P2-TENANT-IDENTITY-001`，聊天回退仍指向 `P2-RUNTIME-DIRECT-ANSWER-001`；不改变现役 DAG。
+- 当前实现 task_id：`P2-AUDIT-EVAL-POSTCOND-001`（A 档、串行，承担 A 类同步；实现与本地验证完成，待独立 Monitor/静态评审；未 push/合并）。
+- 本棒完成情况：`oa.read_overview/1.1.0` 以两步独立不可变观察执行 `oa_read_overview_v1` 确定性保真核验；核验失败阻断 Task/Response 成功与成功 Memory，上游失败保留原码。Trace 单条事件分别记录终态汇总和业务核验；其他 capability 为 not_evaluated。未扩大为 OA 源真实性、审批后态或真实部署验收。
+- 当前实现后继指针：留空（本棒没有已决且唯一的后继）；`P2-AUDIT-WO-LIFECYCLE-001`、组织身份集成 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，不重排现役 DAG。
 
 - 审计 #1 `P2-AUDIT-LOGOUT-001`：**停摆待裁决**。三轮监理已用满；第 3 轮 FAIL 的 B2 为未变异候选自带前端用例 `App.test.tsx::logout_refresh_and_other_tab_revalidate_with_server` 失败：`/me` 401 广播后 query 缓存应为空，实测剩 1 项，未证实数据泄漏。候选停在任务分支，未合并。
 
 ## 已登记验证基线
 
-### 当前 OA 待办收敛 P 段已交付基线（2026-09-17）
+### 当前首例确定性后置核验候选基线（2026-09-19）
 
-以下数字沿用 #6 最终候选实测及 PR #197 交付证据；本治理棒未重跑，不是 064 的新实测。
+以下为 `P2-AUDIT-EVAL-POSTCOND-001` 本地候选实测；独立 Monitor、静态评审与远端 CI 尚未执行，不作为已合并基线。
 
-- pytest：`3801 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录；该交付合并后 CI 已通过。
-- P 段 ports/API/真实 PG/迁移/轮询定向 `172 passed`。
-- `tests/architecture/`：`131 passed`，P4 observer authoritative PASS。
+- pytest：`3906 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录。
+- `tests/architecture/`：`133 passed`，P4 observer authoritative PASS。
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（positive `13/13`、negative/boundary `21/21`）。
-- 前端完整入口 `785 passed`（19 个独立组件进程 `423`、单元 `358`、OpenAPI `4`）；typecheck/lint 通过。Ruff、mypy `132 source files`、候选 6 个改动测试文件的弱测试检查及前端 build 通过。
-- 分类修复、成功空态与返回前目录过期三组生产回退/故障反证均变红，恢复后通过；原测试保留，生产文件恢复哈希一致。HTTP→真实 PG 确认丢失返回固定 503 后重读已发布空批次，不误报回滚或重复 apply。
-- 迁移唯一 head 为 `20260915_120000`，parent 为 `20260914_120000`；本轮无迁移改动或测试库重置。D 五字段义务见 `PHASE2_PLAN.md`，未核销第二租户或既有验收债。
-- 独立 Monitor r1 PASS；获授权的替代静态评审唯一阻断项为三份过程报告入库，已按专项授权移出仓库；雨爷豁免该收口变更的 Monitor / 静态评审重跑。P 段已通过 PR 合并及合并后 CI，不冒称评审桥执行或静态评审原结论为 PASS，也不代替审计 #6 的 P+D 验收。真实 OA/vLLM、部署与办结源接入未执行。
+- 规则/ports 定向 99 项、Workflow/编排定向 171 项、Runtime/生产/投影定向 158 项通过；补充版本/归属/接线与既有精确调用适配定向 98 项、最终新增生产 HTTP/PG 定向 15 项通过。上述集合存在交集，不相加为全量数字。
+- Ruff、mypy（135 source files）、依赖检查、13 个改动测试文件逐项弱测试检查通过。无前端改动，未增加前端套餐。
+- 前端基线沿用 2026-09-17 / `P2-AUDIT-OA-TODO-CONVERGE-001` 已合并证据：完整入口 `785 passed`（组件 `423`、单元 `358`、OpenAPI `4`），typecheck/lint/build 通过；本棒未重跑，不标为本次实测。
+- 保留全部测试、仅回退 Runtime 门禁/步骤观察采集/pending 精确比较时分别 2/1/6 项断言变红；恢复生产文件原字节后对应全部通过。合成签名 HTTP 经真实 Runtime/Workflow/Gateway/Policy/PG Task/Registry/Trace，核验失败不补查、不写成功 Memory，Trace 故障不返回成功。
+- 固定测试库 `127.0.0.1:15432` revision 核对为 `20260915_120000`；本棒无 schema 或迁移改动。未执行真实 OA/vLLM、生产登记、部署或审批后态核验。
+- 已合并的 OA 待办收敛 P 段仍按雨爷 2026-09-17 接受的分段交付有效，审计 #6 的 done_when 保持 P+D；D 及真实现场验收继续受外部输入/授权阻塞。既有证据留 PR 与 Git，本棒不核销其欠债。
 
 ### 既有 Top-K 修复候选记录（2026-09-16，非本轮复测）
 

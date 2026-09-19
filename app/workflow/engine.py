@@ -9,12 +9,14 @@ from hmac import compare_digest
 from typing import Any, Mapping
 from uuid import uuid4
 
+from app.evaluator.overview import canonical_object, required_postcondition_rule
 from app.ports.capability_gateway import (
     CapabilityGatewayPort,
     ErrorCode,
     RequestOrgContext,
 )
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
+from app.ports.evaluation import EvaluationScope, StepObservation
 from app.ports.human_gate import (
     HumanGatePort,
     VersionBinding,
@@ -294,6 +296,7 @@ class WorkflowEngine:
     ) -> WorkflowRunResult:
 
         final_output: dict[str, Any] = {}
+        observations: list[StepObservation] = []
         for index in range(start_index, len(definition.steps)):
             step = definition.steps[index]
             if step.when is not None and not self._condition_matches(
@@ -494,6 +497,25 @@ class WorkflowEngine:
                     error_code=execution.error_code,
                 )
 
+            if required_postcondition_rule(definition.workflow_id) is not None:
+                try:
+                    observation = StepObservation(
+                        scope=EvaluationScope(
+                            task_id, request_context.request_id, session_id,
+                            request_context.tenant_id, ai_user_id,
+                        ),
+                        workflow_id=definition.workflow_id,
+                        workflow_version=definition.version,
+                        step_id=step.step_id,
+                        capability_id=capability_id,
+                        attempt=attempt,
+                        payload_json=canonical_object(execution.data),
+                    )
+                except (ValueError, TypeError, OverflowError, RecursionError):
+                    # Missing evidence fails closed in Runtime; never query again.
+                    pass
+                else:
+                    observations.append(observation)
             final_output = deepcopy(execution.data or {})
             step_outputs[step.step_id] = final_output
             terminal_state = _step_state(
@@ -529,6 +551,7 @@ class WorkflowEngine:
             status="completed",
             output=final_output,
             step_outputs=step_outputs,
+            evaluation_observations=tuple(observations),
         )
 
     def _snapshot_definition(
