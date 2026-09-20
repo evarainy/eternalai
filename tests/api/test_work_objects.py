@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -12,6 +13,7 @@ from sqlalchemy import text
 from app.api.v1.work_objects import (
     OAWorkObjectView,
     WorkObjectService,
+    _lifecycle_view,
     _resolve_handling_capability,
     _view_from_record,
 )
@@ -54,6 +56,16 @@ from app.ports.work_object import (
     WorkObjectReadBatch,
     WorkObjectRecord,
 )
+from app.ports.work_object_lifecycle import (
+    CompletionFilter,
+    LifecycleEventRecord,
+    LifecycleMutationResult,
+    LifecycleStoreError,
+    can_replay_lifecycle_event,
+    lifecycle_etag,
+    lifecycle_role_allowed,
+    lifecycle_transition_allowed,
+)
 from app.ports.work_object_scope import AuthorizedWorkObjectScope, compute_visibility_scope
 from app.ports.work_object_search import normalize_search_query, normalize_search_value
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
@@ -77,6 +89,7 @@ class MemoryWorkObjectStore:
         self.upsert_calls = 0
         self.list_calls: list[dict[str, object]] = []
         self.receipts: dict[tuple[str, str, UUID], DispatchReceipt] = {}
+        self.lifecycle_events: list[LifecycleEventRecord] = []
 
     @staticmethod
     def _project(record: WorkObjectRecord, scope: AuthorizedWorkObjectScope) -> WorkObjectRecord:
@@ -168,20 +181,35 @@ class MemoryWorkObjectStore:
             )
 
     async def list_with_oa_sync_for_scope(
-        self, scope: AuthorizedWorkObjectScope, *, search_term: str | None = None,
-        oa_view: OAView = "active", limit: int = 201,
+        self,
+        scope: AuthorizedWorkObjectScope,
+        *,
+        search_term: str | None = None,
+        oa_view: OAView = "active",
+        limit: int = 201,
+        completion: CompletionFilter | None = None,
     ) -> WorkObjectReadBatch:
         records = await self.list_for_scope(
-            scope, search_term=search_term, limit=limit, oa_view=oa_view
+            scope, search_term=search_term, limit=limit, oa_view=oa_view, completion=completion
         )
         if scope.principal_tenant_id == "default":
-            state = await self.get_oa_sync_status(OASyncSubject(
-                tenant_id="default", ai_user_id=scope.principal_ai_user_id,
-            ), "pending")
+            state = await self.get_oa_sync_status(
+                OASyncSubject(
+                    tenant_id="default",
+                    ai_user_id=scope.principal_ai_user_id,
+                ),
+                "pending",
+            )
             view = state.to_view()
         else:
-            view = OASyncStatusView(status="unsupported_scope", revision=0, attempt_revision=0,
-                                    last_attempt_at=None, last_success_at=None, failure_code=None)
+            view = OASyncStatusView(
+                status="unsupported_scope",
+                revision=0,
+                attempt_revision=0,
+                last_attempt_at=None,
+                last_success_at=None,
+                failure_code=None,
+            )
         return WorkObjectReadBatch(records=records, oa_sync=view)
 
     async def upsert_oa_pending_workflows(
@@ -249,6 +277,7 @@ class MemoryWorkObjectStore:
         search_term: str | None = None,
         limit: int = 201,
         oa_view: OAView = "all",
+        completion: CompletionFilter | None = None,
     ) -> list[WorkObjectRecord]:
         self.list_calls.append(
             {
@@ -284,11 +313,35 @@ class MemoryWorkObjectStore:
             ]
         records = [self._project(record, scope) for record in records]
         if oa_view == "active":
-            records = [r for r in records if r.state_authority != "external_snapshot"
-                       or r.oa_observation.pending_state != "unconfirmed"]
+            records = [
+                r
+                for r in records
+                if r.state_authority != "external_snapshot"
+                or r.oa_observation.pending_state != "unconfirmed"
+            ]
         elif oa_view == "unconfirmed":
-            records = [r for r in records if r.state_authority == "external_snapshot"
-                       and r.oa_observation.pending_state == "unconfirmed"]
+            records = [
+                r
+                for r in records
+                if r.state_authority == "external_snapshot"
+                and r.oa_observation.pending_state == "unconfirmed"
+            ]
+        if completion == "active":
+            records = [
+                r
+                for r in records
+                if not isinstance(r, InternalWorkObjectRecord) or r.status != "completed"
+            ]
+        elif completion == "completed":
+            now = datetime.now(UTC)
+            records = [
+                r
+                for r in records
+                if isinstance(r, InternalWorkObjectRecord)
+                and r.status == "completed"
+                and r.completed_at is not None
+                and now - timedelta(days=30) <= r.completed_at <= now
+            ]
         return records[:limit]
 
     async def get_for_scope(
@@ -304,6 +357,119 @@ class MemoryWorkObjectStore:
             ),
             None,
         )
+
+    async def get_lifecycle_event_for_scope(
+        self, work_object_id, scope, *, actor_ai_user_id, idempotency_key
+    ):
+        if actor_ai_user_id != scope.principal_ai_user_id:
+            raise LifecycleStoreError("work_object_action_forbidden")
+        record = await self.get_for_scope(work_object_id, scope)
+        if record is None:
+            return None
+        return next(
+            (
+                event
+                for event in self.lifecycle_events
+                if event.work_object_id == work_object_id
+                and event.tenant_id == scope.principal_tenant_id
+                and event.actor_ai_user_id == actor_ai_user_id
+                and event.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    async def list_lifecycle_events_for_scope(self, work_object_id, scope, *, after_version, limit):
+        record = await self.get_for_scope(work_object_id, scope)
+        if record is None:
+            return None
+        if (
+            not isinstance(record, InternalWorkObjectRecord)
+            or record.source_kind != "manual_dispatch"
+        ):
+            raise LifecycleStoreError("work_object_lifecycle_unsupported")
+        return sorted(
+            (
+                event
+                for event in self.lifecycle_events
+                if event.work_object_id == work_object_id
+                and event.tenant_id == scope.principal_tenant_id
+                and event.result_version > after_version
+            ),
+            key=lambda event: event.result_version,
+        )[:limit]
+
+    async def apply_lifecycle_command_for_scope(
+        self,
+        work_object_id,
+        scope,
+        *,
+        actor,
+        command,
+        idempotency_key,
+        request_fingerprint,
+        expected_etag,
+        event_id,
+    ):
+        record = await self.get_for_scope(work_object_id, scope)
+        if record is None:
+            raise LifecycleStoreError("work_object_not_found")
+        if (
+            not isinstance(record, InternalWorkObjectRecord)
+            or record.source_kind != "manual_dispatch"
+        ):
+            raise LifecycleStoreError("work_object_lifecycle_unsupported")
+        if (
+            actor.tenant_id != scope.principal_tenant_id
+            or actor.ai_user_id != scope.principal_ai_user_id
+            or actor.department_id != scope.principal_department_id
+            or not lifecycle_role_allowed(record, actor, command.operation)
+        ):
+            raise LifecycleStoreError("work_object_action_forbidden")
+        if time.monotonic() > actor.valid_until:
+            raise LifecycleStoreError("organization_directory_stale")
+        previous = await self.get_lifecycle_event_for_scope(
+            work_object_id, scope, actor_ai_user_id=actor.ai_user_id,
+            idempotency_key=idempotency_key
+        )
+        if previous is not None:
+            if previous.request_fingerprint != request_fingerprint:
+                raise LifecycleStoreError("idempotency_key_reused")
+            if not can_replay_lifecycle_event(record, actor, previous):
+                raise LifecycleStoreError("work_object_action_forbidden")
+            return LifecycleMutationResult(previous, True)
+        if not lifecycle_transition_allowed(record, command.operation):
+            raise LifecycleStoreError("work_object_transition_invalid")
+        if (
+            lifecycle_etag(_lifecycle_view(record, actor, None).model_dump(mode="json"))
+            != expected_etag
+        ):
+            raise LifecycleStoreError("work_object_version_conflict")
+        now = max(datetime.now(UTC), record.updated_at)
+        status = "completed" if command.operation == "complete" else "in_progress"
+        event = LifecycleEventRecord(
+            event_id=event_id,
+            work_object_id=work_object_id,
+            tenant_id=actor.tenant_id,
+            actor_ai_user_id=actor.ai_user_id,
+            operation=command.operation,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            from_status=record.status,
+            to_status=status,
+            result_version=record.version + 1,
+            occurred_at=now,
+            text=command.text,
+        )
+        changes = dict(status=status, version=event.result_version, updated_at=now)
+        if command.operation == "accept":
+            changes.update(accepted_by_ai_user_id=actor.ai_user_id, accepted_at=now)
+        elif command.operation == "complete":
+            changes.update(completed_by_ai_user_id=actor.ai_user_id, completed_at=now)
+        self.records[work_object_id] = InternalWorkObjectRecord.model_validate(
+            {**record.model_dump(), **changes}
+        )
+        self.lifecycle_events.append(event)
+        return LifecycleMutationResult(event, False)
 
     async def set_handling_mark_for_scope(
         self,
@@ -394,6 +560,69 @@ class RecordingGateway:
             }
         )
         return self.result
+
+
+def test_sync_keeps_unfiltered_completion_contract(dispatch_db, monkeypatch):
+    from datetime import UTC, datetime
+
+    db = dispatch_db
+    ids = []
+    for _ in range(3):
+        response = db.post()
+        assert response.status_code == 201
+        ids.append(response.json()["items"][0]["work_object_id"])
+    for object_id, days in zip(ids[1:], (1, 31), strict=True):
+        db.execute(
+            "UPDATE work_objects SET status='completed',version=3,"
+            "created_at=CURRENT_TIMESTAMP-interval '40 days',"
+            "accepted_by_ai_user_id='synthetic',accepted_at=CURRENT_TIMESTAMP-interval '39 days',"
+            "completed_by_ai_user_id='synthetic',completed_at=CURRENT_TIMESTAMP-make_interval(days=>:days),"
+            "updated_at=CURRENT_TIMESTAMP-make_interval(days=>:days) WHERE work_object_id=:id",
+            id=object_id,
+            days=days,
+        )
+    monkeypatch.setattr(db.service, "_clock", lambda: datetime.now(UTC))
+    db.service._gateway.result = _success_result(title="Synthetic OA success")
+    calls = []
+    original = db.store.list_with_oa_sync_for_scope
+
+    async def capture(*args, **kwargs):
+        calls.append(kwargs.get("completion"))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(db.store, "list_with_oa_sync_for_scope", capture)
+    synced = db.client.post("/api/v1/work-objects/sync", headers=TEST_CSRF_HEADERS)
+    assert synced.status_code == 200
+    assert calls[-1] is None
+    assert {
+        item["work_object_id"]
+        for item in synced.json()["items"]
+        if item["state_authority"] == "internal"
+    } == set(ids)
+    assert [
+        item["source_title"]
+        for item in synced.json()["items"]
+        if item["state_authority"] == "external_snapshot"
+    ] == ["Synthetic OA success"]
+    active = db.client.get("/api/v1/work-objects?completion=active")
+    assert active.status_code == 200 and calls[-1] == "active"
+    assert {
+        item["work_object_id"]
+        for item in active.json()["items"]
+        if item["state_authority"] == "internal"
+    } == {ids[0]}
+    completed = db.client.get("/api/v1/work-objects?completion=completed")
+    assert completed.status_code == 200 and calls[-1] == "completed"
+    assert [item["work_object_id"] for item in completed.json()["items"]] == [ids[1]]
+    # A view expiring during projection must preserve the filter on its self-scope retry.
+    monkeypatch.setattr(db.service, "_read_expired", lambda _fresh: True)
+    for completion, expected in (("active", {ids[0]}), ("completed", {ids[1]})):
+        calls.clear()
+        fallback = db.client.get("/api/v1/work-objects", params={"completion": completion})
+        assert fallback.status_code == 200
+        assert calls == [completion, completion]
+        assert {item["work_object_id"] for item in fallback.json()["items"]
+                if item["state_authority"] == "internal"} == expected
 
 
 def _success_result(*, title: str = "Pending approval") -> ExecutionResult:
@@ -573,6 +802,8 @@ def test_api_serializes_the_internal_arm_without_oa_snapshot_fields() -> None:
     assert response.json()["items"] == [
         {
             "work_object_id": "work-internal-1",
+            "accepted_at": None,
+            "completed_at": None,
             "title": None,
             "requirement": None,
             "receipt_requirement": None,

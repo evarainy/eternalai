@@ -1,21 +1,32 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-064`（C 档、串行；2026-09-17 同步已定裁决、分段交付、后继指针及九条非阻断欠债，承担 A 类机械同步；本棒不产生新的架构裁决）。
-- 当前实现 task_id：`P2-AUDIT-EVAL-POSTCOND-001`（A 档、串行，承担 A 类同步；实现与本地验证完成，待独立 Monitor/静态评审；未 push/合并）。
-- 本棒完成情况：`oa.read_overview/1.1.0` 以两步独立不可变观察执行 `oa_read_overview_v1` 确定性保真核验；核验失败阻断 Task/Response 成功与成功 Memory，上游失败保留原码。Trace 单条事件分别记录终态汇总和业务核验；其他 capability 为 not_evaluated。未扩大为 OA 源真实性、审批后态或真实部署验收。
-- 当前实现后继指针：留空（本棒没有已决且唯一的后继）；`P2-AUDIT-WO-LIFECYCLE-001`、组织身份集成 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，不重排现役 DAG。
+- 当前实现 task_id：`P2-AUDIT-WO-LIFECYCLE-001`（A 档、串行，承担 A 类同步；最小内部事项生命周期本地候选，待独立 Monitor/静态评审；未 push/合并）。
+- 本棒完成情况：指定收件人或当前部门成员接单，仅接单人可反馈并自行办结；强 ETag、同 key 重放、锁内授权与原子活动证据已接入真实 API/PG。前端完成确认、活动分页、近 30 天内部完成列表与双角色合成界面贯穿已验证，发布回执仍为原始初始快照；OA 同步 body 不写列表缓存。
+- 当前实现后继指针：留空（本棒没有已决且唯一的后继）；组织身份集成 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，不重排现役 DAG。离岗交接、跨刷新未决命令恢复及 LOGOUT 依赖验证已登记欠债。
 
 - 审计 #1 `P2-AUDIT-LOGOUT-001`：**停摆待裁决**。三轮监理已用满；第 3 轮 FAIL 的 B2 为未变异候选自带前端用例 `App.test.tsx::logout_refresh_and_other_tab_revalidate_with_server` 失败：`/me` 401 广播后 query 缓存应为空，实测剩 1 项，未证实数据泄漏。候选停在任务分支，未合并。
 
 ## 已登记验证基线
 
-### 当前首例确定性后置核验候选基线（2026-09-19）
+### 当前内部事项生命周期候选基线（2026-09-20）
+
+以下为 `P2-AUDIT-WO-LIFECYCLE-001` 本地候选实测；独立 Monitor、静态评审和远端 CI 留待主控，不作为已合并基线。
+
+- pytest：`3982 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings），后台最终 state=passed、exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决保留；生产反证仍以真实断言失败退出。
+- `tests/architecture/`：`134 passed`（包含扩展的既有 scope 守卫和新增生命周期边界）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（positive `13/13`、negative/boundary `21/21`）。
+- 前端最终覆盖 `809 passed`（组件 439、单元 365、OpenAPI 5）。完整入口的组件/单元先通过，最后的 OpenAPI 顺序期望机械适配后单独通过；后续 StrictMode 面板回归独立 10 项通过。初次入口非零结果留 PR 证据，不冒称一次全量命令 exit=0。
+- Ruff、mypy（136 source files）、前端 lint/typecheck/build、15 个改动测试文件弱测试检查通过。定向覆盖真实认证/CSRF、目录时效与权限、双连接竞争、同 key 重放、事务回滚、完成窗口、迁移往返与有数据拒退；high 自核及生产恢复反证证据留 PR。
+- 真实浏览器使用合成 A/B 身份及隔离 PG schema 贯通发布、接单、反馈、确认办结、发起人回读和 OA 刷新。真实目录 Source、真实 OA 账号、OA 已办源与退出吊销未验收；本棒三项新欠债按 `PHASE2_PLAN.md` 保留。
+
+### 既有首例确定性后置核验候选基线（2026-09-19，非本轮数字）
 
 以下为 `P2-AUDIT-EVAL-POSTCOND-001` 本地候选实测；独立 Monitor、静态评审与远端 CI 尚未执行，不作为已合并基线。
 
-- pytest：`3906 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录。
-- `tests/architecture/`：`133 passed`，P4 observer authoritative PASS。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（positive `13/13`、negative/boundary `21/21`）。
+- 历史 pytest：`3906 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings），后台最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`。Windows access violation 按 2026-09-10 裁决记录。
+- 历史 `tests/architecture/`：`133 passed`，P4 observer authoritative PASS。
+- 历史 Golden Gate：`34/34 passed, 0 skipped, 0 failed`（positive `13/13`、negative/boundary `21/21`）。
 - 规则/ports 定向 99 项、Workflow/编排定向 171 项、Runtime/生产/投影定向 158 项通过；补充版本/归属/接线与既有精确调用适配定向 98 项、最终新增生产 HTTP/PG 定向 15 项通过。上述集合存在交集，不相加为全量数字。
 - Ruff、mypy（135 source files）、依赖检查、13 个改动测试文件逐项弱测试检查通过。无前端改动，未增加前端套餐。
 - 前端基线沿用 2026-09-17 / `P2-AUDIT-OA-TODO-CONVERGE-001` 已合并证据：完整入口 `785 passed`（组件 `423`、单元 `358`、OpenAPI `4`），typecheck/lint/build 通过；本棒未重跑，不标为本次实测。

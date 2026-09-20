@@ -146,6 +146,91 @@ def test_handling_mark_requires_actor_and_timestamp_as_one_record() -> None:
     with pytest.raises(ValidationError, match="requires a handling mark"):
         _record(handling_marked_by_ai_user_id="user-a")
 
+
+@pytest.mark.parametrize("target", ["user", "department"])
+def test_internal_lifecycle_fields_are_consistent(target):
+    now = datetime(2026, 9, 20, tzinfo=UTC)
+    initial = dict(
+        work_object_id="synthetic-lifecycle-model",
+        state_authority="internal",
+        source_system="eternalai",
+        source_kind="manual_dispatch",
+        tenant_id="default",
+        owner_department_id="office-a",
+        initiator_ai_user_id="sender",
+        target_kind=target,
+        assignee_directory_user_id="recipient" if target == "user" else None,
+        assignee_ai_user_id=None,
+        assignee_display_name=None if target == "user" else "Synthetic office",
+        title="Synthetic",
+        kind="工作任务",
+        requirement="",
+        receipt_requirement="",
+        status="assigned" if target == "user" else "department_pending",
+        reminder_choices=[],
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    nullable = dict(
+        source_ref=None,
+        source_title=None,
+        source_status=None,
+        source_received_at=None,
+        source_created_at=None,
+        source_workflow_type_id=None,
+        source_fetched_at=None,
+        due_at=None,
+        handling_mark=None,
+        handling_marked_by_ai_user_id=None,
+        handling_marked_at=None,
+        task_record_id=None,
+    )
+    initial.update(nullable)
+    assert InternalWorkObjectRecord.model_validate(initial).accepted_at is None
+    progress = {
+        **initial,
+        "status": "in_progress",
+        "version": 2,
+        "accepted_at": now,
+        "accepted_by_ai_user_id": "recipient",
+    }
+    completed = {
+        **progress,
+        "status": "completed",
+        "version": 3,
+        "completed_at": now,
+        "completed_by_ai_user_id": "recipient",
+    }
+    assert InternalWorkObjectRecord.model_validate(progress).status == "in_progress"
+    assert InternalWorkObjectRecord.model_validate(completed).status == "completed"
+    for source, updates in (
+        (initial, {"accepted_at": now}),
+        (progress, {"accepted_by_ai_user_id": None}),
+        (progress, {"version": 1}),
+        (progress, {"completed_at": now}),
+        (completed, {"completed_by_ai_user_id": "other"}),
+        (completed, {"completed_at": None}),
+        (completed, {"version": 2}),
+    ):
+        with pytest.raises(ValidationError):
+            InternalWorkObjectRecord.model_validate({**source, **updates})
+    legacy = dict(
+        work_object_id="synthetic-legacy",
+        state_authority="internal",
+        source_system="eternalai",
+        source_kind="internal_task",
+        assignee_ai_user_id="legacy",
+        created_at=now,
+        updated_at=now,
+    )
+    legacy.update(nullable, assignee_display_name="Synthetic legacy")
+    assert InternalWorkObjectRecord.model_validate(legacy).accepted_at is None
+    with pytest.raises(ValidationError):
+        InternalWorkObjectRecord.model_validate({**legacy, "accepted_by_ai_user_id": "recipient"})
+    with pytest.raises(ValidationError):
+        _record(accepted_by_ai_user_id="recipient")
+
 @pytest.mark.parametrize("updates", [
     {"returned_count": True}, {"authoritative_count": False},
     {"returned_count": -1}, {"is_complete": False}, {"unexpected": "field"},

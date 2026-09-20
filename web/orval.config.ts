@@ -74,6 +74,7 @@ export default defineConfig({
   workObjects: {
     input: './openapi/work-objects.openapi.json',
     output: {
+      headers: true,
       mode: 'split',
       target: './src/generated/work-objects/work-objects.ts',
       mock: false,

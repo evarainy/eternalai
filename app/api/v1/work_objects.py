@@ -47,7 +47,7 @@ from app.ports.organization_directory import (
     OrganizationUserMembership,
 )
 from app.ports.request_context import RequestOrgContext
-from app.ports.trace import TraceEvent, TracePort
+from app.ports.trace import TraceEvent, TracePort, redact_trace_attributes
 from app.ports.work_object import (
     REMINDER_CHOICES,
     WORK_OBJECT_LIST_FETCH_LIMIT,
@@ -72,6 +72,20 @@ from app.ports.work_object import (
 from app.ports.work_object_handling import (
     WorkObjectHandlingAction,
     project_handling_action,
+)
+from app.ports.work_object_lifecycle import (
+    CompletionFilter,
+    LifecycleActor,
+    LifecycleCommand,
+    LifecycleErrorCode,
+    LifecycleEventRecord,
+    LifecycleOperation,
+    LifecycleStatus,
+    LifecycleStoreError,
+    can_replay_lifecycle_event,
+    compute_lifecycle_actions,
+    lifecycle_etag,
+    lifecycle_role_allowed,
 )
 from app.ports.work_object_scope import (
     AuthorizedWorkObjectScope,
@@ -129,7 +143,7 @@ class OAWorkObjectView(_WorkObjectViewBase):
     oa_observation: OAObservation
 
 
-class InternalWorkObjectView(_WorkObjectViewBase):
+class _InternalWorkObjectViewBase(_WorkObjectViewBase):
     assignee_display_name: str | None
     state_authority: Literal["internal"]
     source_system: str
@@ -148,7 +162,6 @@ class InternalWorkObjectView(_WorkObjectViewBase):
     initiator_ai_user_id: str | None
     kind: DispatchKind | None
     target_kind: Literal["user", "department"] | None
-    status: Literal["assigned", "department_pending"] | None
     reminder_choices: list[ReminderChoice] | None
     reminder_delivery: Literal["not_enabled"] | None
     version: int | None
@@ -158,6 +171,101 @@ class InternalWorkObjectView(_WorkObjectViewBase):
     @field_serializer("due_at", "handling_marked_at", "created_at", "updated_at")
     def _serialize_time(self, value: datetime | None) -> str | None:
         return None if value is None else _utc_text(value)
+
+
+class DispatchInitialWorkObjectView(_InternalWorkObjectViewBase):
+    status: Literal["assigned", "department_pending"] | None
+
+
+class InternalWorkObjectView(_InternalWorkObjectViewBase):
+    status: LifecycleStatus | None
+    accepted_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    @field_serializer("accepted_at", "completed_at")
+    def _serialize_lifecycle_time(self, value: datetime | None) -> str | None:
+        return None if value is None else _utc_text(value)
+
+
+class LifecycleView(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    work_object_id: str
+    status: LifecycleStatus
+    version: int = Field(ge=1)
+    accepted_at: datetime | None
+    completed_at: datetime | None
+    available_commands: list[LifecycleOperation]
+    unavailable_reason: LifecycleErrorCode | None
+
+    @field_serializer("accepted_at", "completed_at")
+    def _serialize_time(self, value: datetime | None) -> str | None:
+        return None if value is None else _utc_text(value)
+
+
+class LifecycleEventView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event_id: UUID
+    work_object_id: str
+    operation: LifecycleOperation
+    from_status: LifecycleStatus
+    to_status: LifecycleStatus
+    result_version: int = Field(ge=2)
+    occurred_at: datetime
+    text: str | None
+    actor_role: Literal["assignee"]
+
+    @field_serializer("occurred_at")
+    def _serialize_time(self, value: datetime) -> str:
+        return _utc_text(value)
+
+
+class LifecycleCommandResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event: LifecycleEventView
+    replayed: bool
+
+
+class LifecycleEventsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[LifecycleEventView]
+    next_after_version: int | None
+    has_more: bool
+
+
+class AcceptLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    operation: Literal["accept"]
+
+
+class _LifecycleTextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    text: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _normalize(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("Invalid lifecycle text")
+        normalized = value.strip(SEARCH_WHITESPACE)
+        if redact_trace_attributes({"text": normalized}) != {"text": normalized}:
+            raise ValueError("Invalid lifecycle text")
+        return normalized
+
+
+class FeedbackLifecycleRequest(_LifecycleTextRequest):
+    operation: Literal["feedback"]
+
+
+class CompleteLifecycleRequest(_LifecycleTextRequest):
+    operation: Literal["complete"]
+
+
+LifecycleRequest: TypeAlias = Annotated[
+    AcceptLifecycleRequest | FeedbackLifecycleRequest | CompleteLifecycleRequest,
+    Field(discriminator="operation"),
+]
+_LIFECYCLE_REQUEST: TypeAdapter[LifecycleRequest] = TypeAdapter(LifecycleRequest)
+_LIFECYCLE_ETAG_PATTERN = r'"wolc-[0-9a-f]{64}"'
 
 
 class UserDispatchTarget(BaseModel):
@@ -246,7 +354,7 @@ class DispatchWorkObjectsRequest(BaseModel):
 
 class DispatchWorkObjectsResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    items: list[InternalWorkObjectView] = Field(min_length=1, max_length=100)
+    items: list[DispatchInitialWorkObjectView] = Field(min_length=1, max_length=100)
     created_count: int
     replayed: bool
 
@@ -484,11 +592,16 @@ class WorkObjectService:
         *,
         search_term: str | None = None,
         oa_view: OAView = "active",
+        completion: CompletionFilter | None = None,
     ) -> WorkObjectListResponse:
         scope, fresh = await self._visibility_context(principal)
         while True:
             batch = await self._store.list_with_oa_sync_for_scope(
-                scope, search_term=search_term, oa_view=oa_view, limit=WORK_OBJECT_LIST_FETCH_LIMIT,
+                scope,
+                search_term=search_term,
+                oa_view=oa_view,
+                limit=WORK_OBJECT_LIST_FETCH_LIMIT,
+                completion=completion,
             )
             records = batch.records
             capabilities = await self._projection_capabilities(records)
@@ -568,6 +681,193 @@ class WorkObjectService:
             )
         except DirectoryAccessError as exc:
             _raise_dispatch_error(503, exc.code)
+
+    async def _lifecycle_context(
+        self,
+        principal: Principal,
+        *,
+        writing: bool,
+    ) -> tuple[
+        AuthorizedWorkObjectScope,
+        FreshDirectoryView | None,
+        LifecycleActor | None,
+        LifecycleErrorCode | None,
+    ]:
+        if principal.org_ctx.tenant_id != "default" or self._organization_directory is None:
+            if writing:
+                _lifecycle_error("organization_directory_unavailable")
+            return self._scope(principal), None, None, "organization_directory_unavailable"
+        try:
+            fresh = await read_fresh_directory_view(
+                self._organization_directory,
+                max_age_s=self._directory_max_age_s,
+                monotonic=self._monotonic,
+            )
+        except DirectoryAccessError as exc:
+            if writing or exc.code == "organization_directory_unavailable":
+                _lifecycle_error(exc.code)
+            return self._scope(principal), None, None, exc.code
+        join = principal.org_ctx.directory_user_id
+        members = fresh.memberships.get(join, []) if join else []
+        reason: LifecycleErrorCode | None = None
+        if len(members) > 1:
+            reason = "directory_membership_ambiguous"
+        elif len(members) != 1 or members[0].department_id not in fresh.departments:
+            reason = "directory_membership_missing"
+        if reason is not None:
+            return self._scope(principal), fresh, None, reason
+        member = members[0]
+        assert fresh.view.source_fetched_at is not None and fresh.view.last_success_at is not None
+        remaining = fresh.max_age_s - max(
+            (fresh.view.observed_at - fresh.view.source_fetched_at).total_seconds(),
+            (fresh.view.observed_at - fresh.view.last_success_at).total_seconds(),
+        )
+        actor = LifecycleActor(
+            principal.org_ctx.tenant_id,
+            principal.ai_user_id,
+            member.user_id,
+            member.department_id,
+            fresh.view.snapshot_version,
+            fresh.started_at + remaining,
+        )
+        return self._scope(principal, member.department_id), fresh, actor, None
+
+    async def get_lifecycle_for_principal(
+        self,
+        work_object_id: str,
+        principal: Principal,
+    ) -> LifecycleView:
+        scope, fresh, actor, reason = await self._lifecycle_context(principal, writing=False)
+        while True:
+            record = await self._store.get_for_scope(work_object_id, scope)
+            if fresh is not None and self._read_expired(fresh):
+                scope, fresh, actor, reason = (
+                    self._scope(principal),
+                    None,
+                    None,
+                    "organization_directory_stale",
+                )
+                continue
+            internal = _lifecycle_record(record)
+            return _lifecycle_view(internal, actor, reason)
+
+    async def list_lifecycle_events_for_principal(
+        self,
+        work_object_id: str,
+        principal: Principal,
+        *,
+        after_version: int,
+        limit: int,
+    ) -> LifecycleEventsResponse:
+        scope, fresh, _actor, _reason = await self._lifecycle_context(principal, writing=False)
+        while True:
+            record = await self._store.get_for_scope(work_object_id, scope)
+            if fresh is not None and self._read_expired(fresh):
+                scope, fresh = self._scope(principal), None
+                continue
+            _lifecycle_record(record)
+            events = await self._store.list_lifecycle_events_for_scope(
+                work_object_id,
+                scope,
+                after_version=after_version,
+                limit=limit + 1,
+            )
+            if fresh is not None and self._read_expired(fresh):
+                scope, fresh = self._scope(principal), None
+                continue
+            if events is None:
+                _lifecycle_error("work_object_not_found")
+            more = len(events) > limit
+            page = events[:limit]
+            return LifecycleEventsResponse(
+                items=[_lifecycle_event_view(event) for event in page],
+                has_more=more,
+                next_after_version=page[-1].result_version if more else None,
+            )
+
+    async def command_lifecycle_for_principal(
+        self,
+        work_object_id: str,
+        principal: Principal,
+        command: LifecycleCommand,
+        *,
+        idempotency_key: UUID,
+        expected_etag: str,
+    ) -> LifecycleCommandResponse:
+        scope, fresh, actor, reason = await self._lifecycle_context(principal, writing=True)
+        record = _lifecycle_record(await self._store.get_for_scope(work_object_id, scope))
+        if actor is None:
+            _lifecycle_error(reason or "directory_membership_missing")
+        assert fresh is not None
+        _recheck_lifecycle(fresh)
+        if not lifecycle_role_allowed(record, actor, command.operation):
+            _lifecycle_error("work_object_action_forbidden")
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "work_object_id": work_object_id,
+                    "operation": command.operation,
+                    "text": command.text,
+                    "if_match": expected_etag,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        previous = await self._store.get_lifecycle_event_for_scope(
+            work_object_id,
+            scope,
+            actor_ai_user_id=actor.ai_user_id,
+            idempotency_key=idempotency_key,
+        )
+        if previous is not None:
+            if previous.request_fingerprint != fingerprint:
+                _lifecycle_error("idempotency_key_reused")
+            if not can_replay_lifecycle_event(record, actor, previous):
+                _lifecycle_error("work_object_action_forbidden")
+            _recheck_lifecycle(fresh)
+            return LifecycleCommandResponse(event=_lifecycle_event_view(previous), replayed=True)
+        event_id = uuid4()
+        try:
+            if self._trace_port is None:
+                raise _DispatchAuditUnavailable()
+            await self._trace_port.record_event(
+                TraceEvent(
+                    trace_id=str(event_id),
+                    task_id="work-object:" + str(event_id),
+                    session_id="work-object:" + str(event_id),
+                    tenant_id=actor.tenant_id,
+                    ai_user_id=actor.ai_user_id,
+                    event_type="user_action",
+                    status="ok",
+                    error_code=None,
+                    capability_id=None,
+                    attributes={
+                        "operation": "work_object_" + command.operation,
+                        "work_object_id": work_object_id,
+                        "event_id": str(event_id),
+                        "phase": "authorized_attempt",
+                        "directory_snapshot_version": actor.snapshot_version,
+                    },
+                )
+            )
+        except Exception:
+            _lifecycle_error("work_object_audit_unavailable")
+        _recheck_lifecycle(fresh)
+        result = await self._store.apply_lifecycle_command_for_scope(
+            work_object_id,
+            scope,
+            actor=actor,
+            command=command,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            expected_etag=expected_etag,
+            event_id=event_id,
+        )
+        return LifecycleCommandResponse(
+            event=_lifecycle_event_view(result.event), replayed=result.replayed
+        )
 
     async def list_dispatch_options(
         self, principal: Principal, query: _OptionsRequest,
@@ -654,7 +954,7 @@ class WorkObjectService:
 
     async def sync_for_principal(self, principal: Principal) -> WorkObjectListResponse:
         await self._sync_snapshots_for_principal(principal, background=False)
-        return await self.list_for_principal(principal)
+        return await self.list_for_principal(principal, completion=None)
 
     async def _sync_snapshots_for_principal(
         self,
@@ -1001,7 +1301,7 @@ class WorkObjectService:
         ]
         response = DispatchWorkObjectsResponse.model_validate(
             {
-                "items": [_view_from_record(record, []) for record in records],
+                "items": [_dispatch_initial_view(record) for record in records],
                 "created_count": len(records),
                 "replayed": False,
             }
@@ -1101,20 +1401,31 @@ def make_router(
                 options = request.method == "GET" and request.url.path.endswith(
                     "/work-objects/dispatch-options"
                 )
+                lifecycle = "/lifecycle" in request.url.path
                 try:
                     response = await original(request)
-                    if options:
+                    if options or lifecycle:
                         response.headers["Cache-Control"] = "no-store"
                     return response
                 except HTTPException as exc:
-                    if options:
+                    if options or lifecycle:
                         exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
                     raise
+                except LifecycleStoreError as exc:
+                    if lifecycle:
+                        _lifecycle_error(exc.code)
+                    raise
                 except RequestValidationError:
+                    if lifecycle:
+                        _lifecycle_error("work_object_lifecycle_request_invalid")
                     if request.method == "POST" and request.url.path.endswith(
                         "/work-objects/dispatch"
                     ):
                         _raise_dispatch_error(422, "dispatch_request_invalid")
+                    raise
+                except Exception:
+                    if lifecycle:
+                        _lifecycle_error("work_object_lifecycle_failed")
                     raise
 
             return handle
@@ -1136,15 +1447,20 @@ def make_router(
         "", response_model=WorkObjectListResponse, responses={503: {"model": WorkObjectError}}
     )
     async def list_work_objects(
+        request: Request,
         q: Annotated[str | None, Query()] = None,
         oa_view: Annotated[OAView, Query()] = "active",
+        completion: Annotated[CompletionFilter | None, Query()] = None,
         principal: Principal = Depends(require_principal),
     ) -> WorkObjectListResponse:
+        if len(request.query_params.getlist("completion")) > 1:
+            _lifecycle_error("work_object_lifecycle_request_invalid")
         search_term = normalize_search_query(q)
         return await configured().list_for_principal(
             principal,
             search_term=search_term,
             oa_view=oa_view,
+            completion=completion,
         )
 
     @router.post("/sync", response_model=WorkObjectListResponse)
@@ -1184,16 +1500,34 @@ def make_router(
         response_model=DispatchOptionsResponse,
         operation_id="list_dispatch_options_api_v1_work_objects_dispatch_options_get",
         responses={code: {"model": WorkObjectError} for code in (401, 403, 404, 409, 422, 503)},
-        openapi_extra={"parameters": [
-            {"name": "kind", "in": "query", "required": True,
-             "schema": {"type": "string", "enum": ["department", "user"]}},
-            {"name": "department_id", "in": "query", "required": False,
-             "schema": {"type": "string", "minLength": 1, "maxLength": 128}},
-            {"name": "limit", "in": "query", "required": False,
-             "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 100}},
-            {"name": "cursor", "in": "query", "required": False,
-             "schema": {"type": "string", "minLength": 1, "maxLength": 2048}},
-        ]},
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "kind",
+                    "in": "query",
+                    "required": True,
+                    "schema": {"type": "string", "enum": ["department", "user"]},
+                },
+                {
+                    "name": "department_id",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "default": 50, "minimum": 1, "maximum": 100},
+                },
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 2048},
+                },
+            ]
+        },
     )
     async def list_dispatch_options(
         request: Request,
@@ -1202,6 +1536,172 @@ def make_router(
         active = configured()
         query = _options_request(request)
         return await active.list_dispatch_options(principal, query)
+
+    lifecycle_responses: dict[int | str, dict[str, Any]] = {
+        code: {
+            "model": WorkObjectError,
+            "headers": {
+                "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+            },
+        }
+        for code in (401, 403, 404, 409, 412, 422, 428, 503)
+    }
+    lifecycle_responses[200] = {
+        "headers": {
+            "Cache-Control": {"schema": {"type": "string", "const": "no-store"}},
+        }
+    }
+
+    @router.get(
+        "/{work_object_id}/lifecycle",
+        response_model=LifecycleView,
+        operation_id="get_work_object_lifecycle_api_v1_work_objects_work_object_id_lifecycle_get",
+        responses={
+            **lifecycle_responses,
+            200: {
+                "headers": {
+                    **lifecycle_responses[200]["headers"],
+                    "ETag": {"schema": {"type": "string", "pattern": _LIFECYCLE_ETAG_PATTERN}},
+                }
+            },
+        },
+    )
+    async def get_work_object_lifecycle(
+        work_object_id: str,
+        request: Request,
+        response: Response,
+        principal: Principal = Depends(require_principal),
+    ) -> LifecycleView:
+        active = configured()
+        if request.query_params:
+            _lifecycle_error("work_object_lifecycle_request_invalid")
+        view = await active.get_lifecycle_for_principal(work_object_id, principal)
+        response.headers["ETag"] = lifecycle_etag(view.model_dump(mode="json"))
+        return view
+
+    @router.post(
+        "/{work_object_id}/lifecycle/commands",
+        response_model=LifecycleCommandResponse,
+        operation_id=(
+            'command_work_object_lifecycle_api_v1_work_objects_work_object_id'
+            '_lifecycle_commands_post'
+        ),
+        responses=lifecycle_responses,
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": True,
+                    "schema": {"type": "string", "format": "uuid"},
+                },
+                {
+                    "name": "If-Match",
+                    "in": "header",
+                    "required": True,
+                    "schema": {"type": "string", "pattern": _LIFECYCLE_ETAG_PATTERN},
+                },
+            ],
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": _lifecycle_body_schema(),
+                    }
+                },
+            },
+        },
+    )
+    async def command_work_object_lifecycle(
+        work_object_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> LifecycleCommandResponse:
+        active = configured()
+        try:
+            keys = request.headers.getlist("idempotency-key")
+            tags = request.headers.getlist("if-match")
+            if request.query_params or len(keys) != 1:
+                raise ValueError
+            key = UUID(keys[0])
+            if str(key) != keys[0]:
+                raise ValueError
+            if not tags:
+                _lifecycle_error("work_object_precondition_required")
+            if len(tags) != 1 or re.fullmatch(_LIFECYCLE_ETAG_PATTERN, tags[0]) is None:
+                raise ValueError
+            body = _LIFECYCLE_REQUEST.validate_python(
+                json.loads(
+                    await request.body(),
+                    object_pairs_hook=_unique_json_object,
+                )
+            )
+        except (ValueError, TypeError, UnicodeError):
+            _lifecycle_error("work_object_lifecycle_request_invalid")
+        command = LifecycleCommand(
+            operation=body.operation,
+            text=None if isinstance(body, AcceptLifecycleRequest) else body.text,
+        )
+        return await active.command_lifecycle_for_principal(
+            work_object_id,
+            principal,
+            command,
+            idempotency_key=key,
+            expected_etag=tags[0],
+        )
+
+    @router.get(
+        "/{work_object_id}/lifecycle/events",
+        response_model=LifecycleEventsResponse,
+        operation_id=(
+            'list_work_object_lifecycle_events_api_v1_work_objects_work_objec'
+            't_id_lifecycle_events_get'
+        ),
+        responses=lifecycle_responses,
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "after_version",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 0, "default": 0},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+                },
+            ]
+        },
+    )
+    async def list_work_object_lifecycle_events(
+        work_object_id: str,
+        request: Request,
+        principal: Principal = Depends(require_principal),
+    ) -> LifecycleEventsResponse:
+        active = configured()
+        try:
+            values = _unique_json_object(request.query_params.multi_items())
+            if set(values) - {"after_version", "limit"}:
+                raise ValueError
+            after_raw, limit_raw = values.get("after_version", "0"), values.get("limit", "50")
+            if (
+                re.fullmatch(r"[0-9]+", after_raw) is None
+                or re.fullmatch(r"[0-9]+", limit_raw) is None
+            ):
+                raise ValueError
+            after, limit = int(after_raw), int(limit_raw)
+            if not 1 <= limit <= 100:
+                raise ValueError
+        except (ValueError, TypeError):
+            _lifecycle_error("work_object_lifecycle_request_invalid")
+        return await active.list_lifecycle_events_for_principal(
+            work_object_id,
+            principal,
+            after_version=after,
+            limit=limit,
+        )
 
     @router.get(
         "/{work_object_id}",
@@ -1236,6 +1736,112 @@ def make_router(
         return view
 
     return router
+
+
+def _dispatch_initial_view(record: InternalWorkObjectRecord) -> DispatchInitialWorkObjectView:
+    current = _view_from_record(record, [])
+    return DispatchInitialWorkObjectView.model_validate(
+        current.model_dump(
+            exclude={"accepted_at", "completed_at"},
+        )
+    )
+
+
+def _lifecycle_record(record: WorkObjectRecord | None) -> InternalWorkObjectRecord:
+    if record is None:
+        _lifecycle_error("work_object_not_found")
+    if not isinstance(record, InternalWorkObjectRecord) or record.source_kind != "manual_dispatch":
+        _lifecycle_error("work_object_lifecycle_unsupported")
+    return record
+
+
+def _lifecycle_view(
+    record: InternalWorkObjectRecord,
+    actor: LifecycleActor | None,
+    reason: LifecycleErrorCode | None,
+) -> LifecycleView:
+    actions = compute_lifecycle_actions(record, actor)
+    assert record.status is not None and record.version is not None
+    return LifecycleView(
+        work_object_id=record.work_object_id,
+        status=record.status,
+        version=record.version,
+        accepted_at=record.accepted_at,
+        completed_at=record.completed_at,
+        available_commands=actions,
+        unavailable_reason=None
+        if actions or record.status == "completed"
+        else reason or "work_object_action_forbidden",
+    )
+
+
+def _lifecycle_event_view(event: LifecycleEventRecord) -> LifecycleEventView:
+    return LifecycleEventView.model_validate(
+        {
+            **event.model_dump(
+                exclude={
+                    "tenant_id",
+                    "actor_ai_user_id",
+                    "idempotency_key",
+                    "request_fingerprint",
+                }
+            ),
+            "actor_role": "assignee",
+        }
+    )
+
+
+def _recheck_lifecycle(fresh: FreshDirectoryView) -> None:
+    try:
+        fresh.recheck()
+    except DirectoryAccessError as exc:
+        _lifecycle_error(exc.code)
+
+
+def _lifecycle_body_schema() -> dict[str, Any]:
+    # Inline the three strict arms; no dangling local $defs in OpenAPI.
+    return {
+        "oneOf": [
+            model.model_json_schema()
+            for model in (
+                AcceptLifecycleRequest,
+                FeedbackLifecycleRequest,
+                CompleteLifecycleRequest,
+            )
+        ],
+        "discriminator": {"propertyName": "operation"},
+    }
+
+
+_LIFECYCLE_ERRORS: dict[LifecycleErrorCode, tuple[int, str]] = {
+    "work_object_lifecycle_request_invalid": (422, "Invalid work object lifecycle request."),
+    "work_object_precondition_required": (428, "A current work object lifecycle ETag is required."),
+    "work_object_not_found": (404, "Work Object was not found."),
+    "work_object_lifecycle_unsupported": (
+        409, "Work object lifecycle is not supported for this object."
+    ),
+    "directory_membership_missing": (403, "Organization directory membership is missing."),
+    "directory_membership_ambiguous": (403, "Organization directory membership is ambiguous."),
+    "work_object_action_forbidden": (403, "Work object action is not permitted."),
+    "work_object_transition_invalid": (409, "Work object state does not permit this action."),
+    "idempotency_key_reused": (409, "Idempotency key was used for a different request."),
+    "work_object_version_conflict": (412, "Work object lifecycle has changed."),
+    "organization_directory_missing": (503, "Organization directory has no trusted snapshot."),
+    "organization_directory_stale": (503, "Organization directory snapshot is stale."),
+    "organization_directory_unavailable": (503, "Organization directory is unavailable."),
+    "work_object_unavailable": (503, "Work Object provider is not configured."),
+    "work_object_audit_unavailable": (503, "Work object audit is unavailable."),
+    "work_object_lifecycle_failed": (503, "Work object lifecycle operation failed."),
+}
+
+
+def _lifecycle_error(code: LifecycleErrorCode) -> NoReturn:
+    http_status, message = _LIFECYCLE_ERRORS[code]
+    raise HTTPException(
+        status_code=http_status,
+        detail={"code": code, "message": message},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _list_response(
@@ -1290,6 +1896,8 @@ def _view_from_record(
         exclude={
             "assignee_ai_user_id",
             "assignee_directory_user_id",
+            "accepted_by_ai_user_id",
+            "completed_by_ai_user_id",
             "tenant_id",
             "handling_marked_by_ai_user_id",
             "created_at",

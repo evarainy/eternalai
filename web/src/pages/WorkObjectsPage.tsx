@@ -35,24 +35,18 @@ import type { IconName } from '../shared/ui/Icon';
 import { QueryTable } from '../shared/ui/QueryTable';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
+import InternalWorkLifecyclePanel from '../features/work-dispatch/InternalWorkLifecyclePanel';
 import styles from './WorkObjectsPage.module.css';
 
 const { Text } = Typography;
 
-/**
- * 2026-09-03 画板 `Main.dc.html` 定稿的三分类：互斥、各带计数，一件事只会落在一个分类里。
- *
- * `done`（已完成）**后端没有数据源**——`GET /api/v1/work-objects` 只返回 OA 待办快照，没有办结事项。
- * 按「UI 决定要有什么功能，不决定数据可不可信」这条护栏，这一格照常显示但计数写占位符，
- * 既不编数字也不写 `0`（`0` 会被读成「我没有已完成的」，同样是假信息）。
- */
 type WorkObjectView = 'urgent' | 'todo' | 'done';
-
-/** 「已完成」的计数占位：没有数据源时显示它，不显示任何数字。 */
 const UNAVAILABLE_COUNT = '—';
+const internalStatusLabels = { assigned: '已派发', department_pending: '待部门认领', in_progress: '办理中', completed: '已办结' };
 
-function workObjectsQueryKey(authGeneration: number, oaView: 'active' | 'unconfirmed' = 'active') {
-  return ['work-objects', authGeneration, 'list', oaView, ''] as const;
+function workObjectsQueryKey(authGeneration: number, view: 'active' | 'unconfirmed' | 'completed' = 'active') {
+  return ['work-objects', authGeneration, 'list', view === 'completed' ? 'active' : view,
+    view === 'unconfirmed' ? '' : view] as const;
 }
 
 function workObjectDetailsQueryKey(authGeneration: number) {
@@ -82,7 +76,7 @@ function mergeWorkObjectView(
     return incoming;
   }
   if (incoming.state_authority === 'internal') {
-    return incoming;
+    return current.state_authority === 'internal' && (current.version ?? 0) > (incoming.version ?? 0) ? current : incoming;
   }
   if (current.state_authority === 'internal') {
     return incoming;
@@ -131,7 +125,11 @@ function mergeListResponse(
   return {
     ...source,
     oa_sync: mergeSyncStatus(current.oa_sync, incoming.oa_sync),
-    items: source.items.map((item) => mergeWorkObjectView(
+    items: (source === incoming ? incoming.items : [...source.items.filter((item) => item.state_authority === 'external_snapshot'),
+      ...incoming.items.filter((item) => item.state_authority === 'internal')].sort((left, right) =>
+        dueTimestamp(left.due_at) - dueTimestamp(right.due_at) ||
+        timestampValue(right.state_authority === 'internal' ? right.created_at : right.source_fetched_at) - timestampValue(left.state_authority === 'internal' ? left.created_at : left.source_fetched_at) ||
+        left.work_object_id.localeCompare(right.work_object_id))).map((item) => mergeWorkObjectView(
       current.items.find((old) => old.work_object_id === item.work_object_id),
       incoming.items.find((next) => next.work_object_id === item.work_object_id) ?? item,
     )),
@@ -360,7 +358,7 @@ export default function WorkObjectsPage() {
 
   const listQuery = useQuery({
     queryKey: listQueryKey,
-    queryFn: () => listWorkObjects({ oa_view: 'active' }),
+    queryFn: () => listWorkObjects({ oa_view: 'active', completion: 'active' }),
     structuralSharing: (old, incoming) => mergeListResponse(
       old as WorkObjectListResponse | undefined, incoming as WorkObjectListResponse,
     ),
@@ -373,6 +371,12 @@ export default function WorkObjectsPage() {
     ),
   });
 
+  const completedQuery = useQuery({
+    queryKey: workObjectsQueryKey(authGeneration, 'completed'),
+    queryFn: () => listWorkObjects({ oa_view: 'active', completion: 'completed' }),
+  });
+  const [syncReadError, setSyncReadError] = useState<{ generation: number; message: string }>();
+
   const syncMutation = useMutation({
     mutationFn: (requestedGeneration: number) => {
       if (useAuthStore.getState().generation !== requestedGeneration) {
@@ -381,42 +385,23 @@ export default function WorkObjectsPage() {
       coordinatedRevision.current = undefined;
       return syncWorkObjects();
     },
-    onSuccess: async (response, requestedGeneration) => {
-      if (useAuthStore.getState().generation !== requestedGeneration) {
-        return;
-      }
-      const responseDetailKeys = response.items.map((item) =>
-        workObjectDetailQueryKey(requestedGeneration, item.work_object_id),
-      );
-      await Promise.all([
-        queryClient.cancelQueries({
-          queryKey: workObjectsQueryKey(requestedGeneration),
-          exact: true,
-        }),
-        ...responseDetailKeys.map((queryKey) =>
-          queryClient.cancelQueries({ queryKey, exact: true }),
-        ),
-      ]);
-      if (useAuthStore.getState().generation !== requestedGeneration) {
-        return;
-      }
-      queryClient.setQueryData<WorkObjectListResponse>(
-        workObjectsQueryKey(requestedGeneration),
-        (current) => mergeListResponse(current, response),
-      );
-      for (const item of response.items) {
-        const detailKey = workObjectDetailQueryKey(
-          requestedGeneration,
-          item.work_object_id,
-        );
-        if (queryClient.getQueryState(detailKey) !== undefined) {
-          queryClient.setQueryData<WorkObjectListResponseItemsItem>(
-            detailKey,
-            (current) => mergeWorkObjectView(current, item),
-          );
+    onSuccess: async (_response, requestedGeneration) => {
+      if (useAuthStore.getState().generation !== requestedGeneration) return;
+      const keys = ['active', 'unconfirmed', 'completed'].map((view) =>
+        workObjectsQueryKey(requestedGeneration, view as 'active' | 'unconfirmed' | 'completed'));
+      await Promise.all(keys.map((queryKey) => queryClient.cancelQueries({ queryKey, exact: true })));
+      if (useAuthStore.getState().generation !== requestedGeneration) return;
+      setSyncReadError(undefined);
+      try {
+        await Promise.all([
+          ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey, exact: true, refetchType: 'all' }, { throwOnError: true })),
+          queryClient.invalidateQueries({ queryKey: workObjectDetailsQueryKey(requestedGeneration) }, { throwOnError: true }),
+        ]);
+      } catch {
+        if (useAuthStore.getState().generation === requestedGeneration) {
+          setSyncReadError({ generation: requestedGeneration, message: 'OA 同步已完成，事项列表刷新失败' });
         }
       }
-      await queryClient.invalidateQueries({ queryKey: ['work-objects', requestedGeneration] });
     },
     onError: async (_error, requestedGeneration) => {
       if (useAuthStore.getState().generation !== requestedGeneration) return;
@@ -455,6 +440,7 @@ export default function WorkObjectsPage() {
   useEffect(() => {
     if (useAuthStore.getState().generation !== authGeneration) return;
     for (const item of [...(listQuery.data?.items ?? []), ...(historyQuery.data?.items ?? [])]) {
+      if (item.state_authority === 'internal') continue;
       const key = workObjectDetailQueryKey(authGeneration, item.work_object_id);
       if (queryClient.getQueryState(key)) {
         queryClient.setQueryData<WorkObjectListResponseItemsItem>(key,
@@ -561,11 +547,7 @@ export default function WorkObjectsPage() {
     return { todoItems: todo, urgentItems: urgent };
   }, [visibleSourceItems]);
 
-  /*
-   * 「已完成」永远给空数组：后端没有办结数据源，任何非空列表都会是编出来的。空态里写明缺口。
-   */
-  const visibleItems =
-    view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : [];
+  const visibleItems = view === 'urgent' ? urgentItems : view === 'todo' ? todoItems : completedQuery.data?.items ?? [];
   const contextWorkObject =
     selectedWorkObjectId !== undefined && detailQuery.isSuccess
       ? detailQuery.data
@@ -639,9 +621,10 @@ export default function WorkObjectsPage() {
               （2026-08-27 §五）。
             */}
             {item.state_authority === 'internal' ? <div className={styles.sourceLine}>
-              <span>内部交办</span><span>{item.status === 'assigned' ? '已派发' : item.status === 'department_pending' ? '待部门认领' : '未提供状态'}</span>
+              <span>内部交办</span><span>{item.status === null ? '未提供状态' : internalStatusLabels[item.status]}</span>
               <span>创建 {item.created_at === null ? '未提供' : formatTimestamp(item.created_at)}</span>
               <span>更新 {item.updated_at === null ? '未提供' : formatTimestamp(item.updated_at)}</span>
+              {item.completed_at ? <span>办结 {formatTimestamp(item.completed_at)}</span> : null}
             </div> : <div className={styles.sourceLine}>
               <span>OA 办公系统</span>
               <span>{item.source_ref}</span>
@@ -712,8 +695,8 @@ export default function WorkObjectsPage() {
   const [emptyReason, emptyNextStep] =
     view === 'done'
       ? [
-          '办结数据还没有接进来。',
-          '下一步：办结记录接进来后，这里会自动出现。',
+          '近 30 天暂无内部办结事项。',
+          'OA 已办结数据尚未接入，请到 OA 核对。',
         ]
       : visibleSourceItems.length === 0
         ? syncStatus?.status === 'succeeded'
@@ -755,6 +738,9 @@ export default function WorkObjectsPage() {
       */}
       <h1 className={styles.pageTitle}>工作事项</h1>
 
+      {syncReadError?.generation === authGeneration ? <Alert type="error" title={syncReadError.message} /> : null}
+      {completedQuery.error ? <Alert type="error" title="已完成事项读取失败" /> : null}
+      {view === 'done' && completedQuery.data?.limit_exceeded ? <Alert type="warning" title="内部办结事项超过展示上限 200 条" /> : null}
       {listQuery.error ? (
         <Alert
           showIcon
@@ -839,7 +825,7 @@ export default function WorkObjectsPage() {
             </Radio.Button>
             <Radio.Button value="done">
               已完成<span className={styles.segmentCount} data-testid="work-count-done">
-                {UNAVAILABLE_COUNT}
+                {completedQuery.isSuccess ? `${completedQuery.data.items.length}${completedQuery.data.limit_exceeded ? '+' : ''}` : UNAVAILABLE_COUNT}
               </span>
             </Radio.Button>
           </Radio.Group>
@@ -864,7 +850,7 @@ export default function WorkObjectsPage() {
           dataSource={visibleItems}
           emptyReason={emptyReason}
           emptyNextStep={emptyNextStep}
-          loading={listQuery.isLoading}
+          loading={view === 'done' ? completedQuery.isLoading : listQuery.isLoading}
           queryResetKey={view}
           tableLayout="fixed"
         />
@@ -873,7 +859,7 @@ export default function WorkObjectsPage() {
           一个查不出来的承诺。
         */}
         <p className={styles.after}>
-          当前已加载工作集：紧急 {listsAligned ? urgentItems.length : UNAVAILABLE_COUNT} 件、待办 {listsAligned ? todoItems.length : UNAVAILABLE_COUNT} 件，互不重叠。「已完成」还没有接进来。
+          当前已加载工作集：紧急 {listsAligned ? urgentItems.length : UNAVAILABLE_COUNT} 件、待办 {listsAligned ? todoItems.length : UNAVAILABLE_COUNT} 件，互不重叠。「已完成」仅展示近 30 天内部办结事项，OA 已办结数据尚未接入。
         </p>
       </section>
 
@@ -914,12 +900,12 @@ export default function WorkObjectsPage() {
           <Spin />
         ) : detailQuery.data?.state_authority === 'internal' ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-            <Alert type="info" title="只读详情" description="当前仅支持查看，认领、转派、催办、撤销和回执提交尚未启用。" />
+            <Alert type="info" title="内部事项" description="指定收件人或部门成员可接单，接单人可反馈并办结。" />
             <Descriptions bordered column={1} size="small">
               <Descriptions.Item label="事项编号">{detailQuery.data.work_object_id}</Descriptions.Item>
               <Descriptions.Item label="事项">{detailQuery.data.title === null ? <span>未提供标题</span> : detailQuery.data.title}</Descriptions.Item>
               <Descriptions.Item label="责任人">{detailQuery.data.assignee_display_name === null ? <span>未提供显示名</span> : <span data-assignee-value>{detailQuery.data.assignee_display_name}</span>}</Descriptions.Item>
-              <Descriptions.Item label="状态">{detailQuery.data.status === 'assigned' ? '已派发' : detailQuery.data.status === 'department_pending' ? '待部门认领' : '未提供状态'}</Descriptions.Item>
+              <Descriptions.Item label="状态">{detailQuery.data.status === null ? '未提供状态' : internalStatusLabels[detailQuery.data.status]}</Descriptions.Item>
               <Descriptions.Item label="类型">{detailQuery.data.kind ?? '未提供'}</Descriptions.Item>
               <Descriptions.Item label="责任部门编号">{detailQuery.data.owner_department_id ?? '未提供'}</Descriptions.Item>
               <Descriptions.Item label="办理要求">{detailQuery.data.requirement ?? '未提供'}</Descriptions.Item>
@@ -929,6 +915,7 @@ export default function WorkObjectsPage() {
               <Descriptions.Item label="创建时间">{detailQuery.data.created_at === null ? '未提供' : formatTimestamp(detailQuery.data.created_at)}</Descriptions.Item>
               <Descriptions.Item label="更新时间">{detailQuery.data.updated_at === null ? '未提供' : formatTimestamp(detailQuery.data.updated_at)}</Descriptions.Item>
             </Descriptions>
+            {detailQuery.data.source_kind === 'manual_dispatch' ? <InternalWorkLifecyclePanel workObjectId={detailQuery.data.work_object_id} /> : null}
           </Space>
         ) : detailQuery.data ? (
           <Space orientation="vertical" size="large" style={{ width: '100%' }}>

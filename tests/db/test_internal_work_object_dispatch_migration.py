@@ -56,6 +56,16 @@ def _apply(db, direction):
             getattr(_migration(), direction)()
 
 
+def _lifecycle(db, direction):
+    # Test the historical revision at its own schema, then restore columns needed by today's API.
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    module = ScriptDirectory.from_config(config).get_revision("20260920_120000").module
+    with db.sql.begin() as connection:
+        with Operations.context(MigrationContext.configure(connection)):
+            getattr(module, direction)()
+
+
 def _legacy_row(*, external):
     row = {
         "work_object_id": uuid4().hex,
@@ -112,6 +122,7 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
     monkeypatch.setattr(policy, "_CROSS_DEPARTMENT_DISPATCH_ALLOWED_IDS", frozenset({"office-a"}))
     db = dispatch_db
     assert db.counts() == (0, 0)
+    _lifecycle(db, "downgrade")
     _apply(db, "downgrade")
     for external in (True, False):
         insert_synthetic_row(db, _legacy_row(external=external))
@@ -134,6 +145,7 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
             row["work_object_id"]
         ]
         assert all(row[name] is None for name in NEW_COLUMNS)
+    _lifecycle(db, "upgrade")
     for kind in ("通知", "督办令", "工作任务", "提醒"):
         response = db.post(
             request_body(
@@ -146,6 +158,7 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
         )
         assert response.status_code == 201, response.text
         assert response.json()["created_count"] == 2
+    _lifecycle(db, "downgrade")
     rows = db.rows("work_objects")
     assert len(rows) == 10
     manual = next(row for row in rows if row["target_kind"] == "user")
@@ -210,12 +223,14 @@ def test_dispatch_schema_enforces_new_records_without_rewriting_oa(dispatch_db, 
 @pytest.mark.parametrize("populated", ["object", "receipt"])
 def test_dispatch_downgrade_refuses_populated_rows(dispatch_db, populated):
     db = dispatch_db
+    _lifecycle(db, "downgrade")
     _apply(db, "downgrade")
     assert not CHECKS.intersection(
         check["name"]
         for check in inspect(db.sql).get_check_constraints("work_objects", schema=db.schema)
     )
     _apply(db, "upgrade")
+    _lifecycle(db, "upgrade")
     assert db.post().status_code == 201
     original_objects = db.rows("work_objects")
     original_receipts = db.rows("work_object_dispatch_receipts")
