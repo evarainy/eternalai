@@ -386,7 +386,7 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 | D-3 | 不新建 `CredentialBindingPort`（记为相对蓝图 §11.2 的既定偏差）；新增 `HumanGatePort` | `P2-CONFIRM-BINDING-001` |
 | D-4 | 版本绑定**推广既有 Workflow 锁定模式**（不是从零建），与 `HumanGatePort` 合同一起设计，列为低风险写入硬前置 | `P2-CONFIRM-BINDING-001` |
 | D-5 | `P2-PILOT-OPS-001` 拆解，不再作任何后续任务前置；下游改依赖具体交付面 | `PHASE2_PLAN.md` DAG 已重排 |
-| D-6 | 薄查询层**不独立成棒**；Work Object 首版列表不做服务端分页排序，数据量上限进验收条件 | 并入 `P2-WORK-OBJECT-001` |
+| D-6 | 薄查询层**不独立成棒**；首版不做服务端分页，数据量上限进验收条件；既有不排序限制的有限例外见 `DECISIONS.md` 2026-09-20「D-6 有界列表排序的有限替换」（已合并 `P2-AUDIT-LIST-ORDER-001`）；其余约束保留 | 并入 `P2-WORK-OBJECT-001` |
 | D-7 | 下一棒 `P2-PORT-SEAM-001`；`STATUS.md` 与 `PHASE2_PLAN.md` 两处指针已对齐 | 本次 GOV-SYNC |
 
 其中 D-1 行的 `BLOCKED` 是裁决当时状态；同步策略随后已裁决，`P2-WORK-OBJECT-001` 也已完成。
