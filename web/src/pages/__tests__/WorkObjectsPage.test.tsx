@@ -1,9 +1,10 @@
+import { assertLogoutCache, trackAuthGenerations } from '../../test/logoutCache';
 import { MemoryRouter } from 'react-router-dom';
 import WorkDispatchPage from '../../features/work-dispatch/WorkDispatchPage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
 import { customInstance } from '../../api/mutator';
 import { AuthenticationEffects } from '../../App';
@@ -194,6 +195,8 @@ describe('WorkObjectsPage', () => {
   });
 
   it('logout_discards_all_views_without_breaking_revision_merge', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
     const client = makeClient();
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
       authenticated: true, display_name: 'Synthetic A', org: null, org_status: 'unavailable', avatar_path: null,
@@ -242,16 +245,33 @@ describe('WorkObjectsPage', () => {
       });
       expect(screen.getByText('合成退出状态')).toBeVisible();
       expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
       for (const query of client.getQueryCache().getAll()) expect(query.state.data).toBeUndefined();
       await act(async () => { release(listResponse()); await late; });
       expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
       apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
       apiMocks.syncWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
       apiMocks.completedWorkObjects.mockResolvedValue(listResponse({ items: [] }));
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({
+        authenticated: true, display_name: 'Synthetic B', org: null, org_status: 'unavailable', avatar_path: null,
+      })));
       act(() => useAuthStore.getState().markAuthenticated());
       await screen.findByText(OTHER_USER_WORK_OBJECT.source_title!);
       expect(screen.queryByText(WORK_OBJECT.source_title!)).toBeNull();
       expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+      for (const query of client.getQueryCache().getAll()) {
+        if (query.state.data === undefined) continue;
+        if (query.queryKey[0] === 'me') {
+          expect(query.state.data).toMatchObject({ display_name: 'Synthetic B' });
+        } else {
+          expect(query.queryKey[0]).toBe('work-objects');
+          const data = query.state.data as WorkObjectListResponse;
+          expect(data.items).toBeDefined();
+          for (const item of data.items) expect(item).toEqual(OTHER_USER_WORK_OBJECT);
+        }
+      }
     } finally {
       mounted?.unmount();
       fetchSpy.mockRestore();

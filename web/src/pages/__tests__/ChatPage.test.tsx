@@ -1,3 +1,4 @@
+import { assertLogoutCache, trackAuthGenerations } from '../../test/logoutCache';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConfigProvider } from 'antd';
 import {
@@ -11,7 +12,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { WORKBENCH_BUTTON_CONFIG } from '../../app/theme';
 import { AuthenticationEffects, ProtectedRoute } from '../../App';
 import { RecordsList } from '../../components/RecordsList';
@@ -1164,19 +1165,22 @@ describe('ChatPage HTTP failures', () => {
   });
 
   it('uses the unified 401 reauthentication chain without a chat error bubble', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
     const client = makeClient();
     const oldGeneration = useAuthStore.getState().generation;
     const oldIdentity = {
       authenticated: true, display_name: DISPLAY_NAME, org: null,
       org_status: 'ok', avatar_path: null,
     };
-    const privatePrefixes = [['private'], ['me', oldGeneration], ['work-objects', oldGeneration]];
     const seededKeys = [
       ['private'], ['private', 'unobserved'], ['me', oldGeneration],
       ['work-objects', oldGeneration, 'list', 'active', 'active'],
       ['work-objects', oldGeneration, 'list', 'unconfirmed', ''],
       ['work-objects', oldGeneration, 'list', 'active', 'completed'],
       ['work-objects', oldGeneration, 'detail', 'synthetic-a'],
+      ['work-objects', oldGeneration, 'search', 'all', 'synthetic'],
+      ['credential-binding', oldGeneration, 'oa'], ['admin', 'registry'],
     ];
     for (const key of seededKeys) {
       client.setQueryData(key, key[0] === 'me' ? oldIdentity : { value: 'cached response' });
@@ -1220,12 +1224,7 @@ describe('ChatPage HTTP failures', () => {
     expect(currentGeneration).toBe(oldGeneration + 1);
     const assertNoPreviousIdentity = (phase: string) => {
       const queries = client.getQueryCache().getAll();
-      for (const query of queries) {
-        expect.soft(query.state.data, `${phase}: data in ${JSON.stringify(query.queryKey)}`).toBeUndefined();
-      }
-      for (const prefix of privatePrefixes) {
-        expect.soft(client.getQueryCache().findAll({ queryKey: prefix }), `${phase}: old private key ${JSON.stringify(prefix)}`).toEqual([]);
-      }
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration });
       for (const query of queries) {
         expect.soft(query.queryKey, `${phase}: allowed current identity only`).toEqual(['me', currentGeneration]);
         for (const observer of query.observers) expect.soft(observer.options.enabled).toBe(false);
