@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.ports.auth import (
     Principal,
     PrincipalOrgContext,
     SessionTokenError,
+    VerifiedSessionToken,
 )
 
 AUTH_COOKIE_NAME = "eternalai_session"
@@ -38,6 +41,27 @@ class StaticSessionTokens:
         if token != AUTH_TOKEN:
             raise SessionTokenError("session token is invalid")
         return self.principal
+
+    def inspect(self, token: str) -> VerifiedSessionToken:
+        return VerifiedSessionToken(
+            principal=self.verify(token),
+            fingerprint=hashlib.sha256(token.encode()).digest(),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            version=2,
+        )
+
+
+class MemorySessionRevocations:
+    """Explicit test-only store; production never defaults to this adapter."""
+
+    def __init__(self) -> None:
+        self.revoked: set[bytes] = set()
+
+    async def is_revoked(self, fingerprint: bytes) -> bool:
+        return fingerprint in self.revoked
+
+    async def revoke(self, fingerprint: bytes, *, expires_at: datetime) -> None:
+        self.revoked.add(fingerprint)
 
 
 def make_session_binder() -> Callable[[Principal, str], str]:

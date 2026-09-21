@@ -50,6 +50,7 @@ const PROJECTS = [
         method: 'post',
         operationId: 'login_api_v1_auth_login_post',
       },
+      { path: '/api/v1/auth/logout', method: 'post', operationId: 'logout_api_v1_auth_logout_post' },
     ],
   },
   {
@@ -293,7 +294,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.work_objects import WorkObjectService
 from app.ports.auth import Principal, PrincipalOrgContext
 from tests.api.test_work_objects import MemoryWorkObjectStore, RecordingGateway
-from tests.auth_fakes import StaticSessionTokens, auth_cookies, make_session_binder
+from tests.auth_fakes import StaticSessionTokens, MemorySessionRevocations, auth_cookies, make_session_binder
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 
 class FailedDirectory:
@@ -310,7 +311,7 @@ service = WorkObjectService(
     capability_registry=StaticCapabilityRegistry(), organization_directory=FailedDirectory(),
 )
 with TestClient(create_app(
-    work_object_service=service, session_tokens=tokens, session_binder=make_session_binder(),
+    work_object_service=service, session_tokens=tokens, session_revocations=MemorySessionRevocations(), session_binder=make_session_binder(),
     session_cookie_ttl_seconds=3600, csrf_allowed_origins=("https://testserver",),
 ), base_url="https://testserver") as client:
     client.cookies.update(auth_cookies())

@@ -29,6 +29,7 @@ from app.ports.llm_provider import LLMCompletionResponse
 from app.ports.policy_guard import PolicyDecision
 from app.workflow.definitions import production_workflow_definitions
 from app.workflow.engine import WorkflowEngine
+from tests.auth_fakes import MemorySessionRevocations
 from tests.runtime.principal_fakes import runtime_principal
 from tests.runtime.registry_fakes import StaticCapabilityRegistry
 from tests.runtime.test_runtime_workflow import SessionStore, TaskStore, Trace
@@ -679,6 +680,7 @@ def test_http_overview_executes_two_reads_with_real_stores(pg_workflow_factory) 
             components = h.components
             app = create_app(
                 runtime=h.runtime,
+                session_revocations=MemorySessionRevocations(),
                 session_tokens=components.session_tokens,
                 session_binder=components.session_binder.bind,
                 csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,

@@ -70,6 +70,7 @@ from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -588,6 +589,7 @@ def test_formal_http_smoke_uses_builder_backed_runtime() -> None:
     client = TestClient(
         create_app(
             runtime,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -871,6 +873,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         diagnostic_checks={},
         authentication=None,
         session_tokens=None,
+        session_revocations=MemorySessionRevocations(),
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_checks={},
@@ -1247,3 +1250,143 @@ def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db)
         "organization_directory_dispatch_policy": "ok",
     }
     client.close()
+
+
+def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, dispatch_db):
+    from fastapi import HTTPException
+
+    from app.event_loop import make_event_loop
+    from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
+    from app.ports.auth import Principal, PrincipalOrgContext
+    from tests.api.test_work_object_dispatch import request_body
+
+    db = dispatch_db
+    monkeypatch.setattr("app.composition.make_async_session_factory", lambda **_kwargs: db.factory)
+    settings = replace(
+        ProductionSettings.from_environment(), csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS
+    )
+    components = build_production_components(settings)
+    assert isinstance(components.session_revocations, PostgreSQLSessionRevocationStore)
+    assert components.session_revocations._session_factory is db.factory
+    safe = replace(
+        components,
+        credential_polling_scheduler=None,
+        organization_directory_scheduler=None,
+        validate_workflows=None,
+    )
+    monkeypatch.setattr("app.main.build_production_components", lambda _settings: safe)
+    principal = Principal(
+        ai_user_id="synthetic-wiring",
+        display_name="Synthetic wiring",
+        roles=("admin",),
+        org_ctx=PrincipalOrgContext(),
+    )
+    original, independent = (components.session_tokens.issue(principal) for _ in range(2))
+    common = {
+        **TEST_CSRF_HEADERS,
+        "Idempotency-Key": str(uuid4()),
+        "If-Match": '"wolc-' + "a" * 64 + '"',
+    }
+    cases = [
+        ("GET", "/api/v1/me", None, components.user_profile, "get_profile"),
+        ("GET", "/api/v1/me/avatar", None, components.user_profile, "get_avatar"),
+        (
+            "GET",
+            "/api/v1/admin/registry",
+            None,
+            components.admin_registry_service,
+            "list_capabilities",
+        ),
+        (
+            "GET",
+            "/api/v1/credential-bindings/oa",
+            None,
+            components.credential_binding_service,
+            "get",
+        ),
+        (
+            "POST",
+            "/api/v1/runtime/handle",
+            {
+                "channel": "web",
+                "session_id": "synthetic",
+                "message": "hello",
+                "client_capabilities": {},
+            },
+            components.runtime,
+            "handle_user_message",
+        ),
+        ("GET", "/api/v1/work-objects", None, components.work_object_service, "list_for_principal"),
+        (
+            "POST",
+            "/api/v1/work-objects/sync",
+            None,
+            components.work_object_service,
+            "sync_for_principal",
+        ),
+        (
+            "POST",
+            "/api/v1/work-objects/dispatch",
+            request_body(),
+            components.work_object_service,
+            "dispatch_for_principal",
+        ),
+        (
+            "GET",
+            "/api/v1/work-objects/dispatch-options?kind=department",
+            None,
+            components.work_object_service,
+            "list_dispatch_options",
+        ),
+        (
+            "GET",
+            "/api/v1/work-objects/synthetic/lifecycle",
+            None,
+            components.work_object_service,
+            "get_lifecycle_for_principal",
+        ),
+        (
+            "GET",
+            "/api/v1/work-objects/synthetic/lifecycle/events",
+            None,
+            components.work_object_service,
+            "list_lifecycle_events_for_principal",
+        ),
+        (
+            "POST",
+            "/api/v1/work-objects/synthetic/lifecycle/commands",
+            {"operation": "accept"},
+            components.work_object_service,
+            "command_lifecycle_for_principal",
+        ),
+    ]
+    probes = []
+    for method, url, body, owner, name in cases:
+        spy = AsyncMock(
+            side_effect=HTTPException(409, detail={"code": "synthetic_business_reached"})
+        )
+        monkeypatch.setattr(owner, name, spy)
+        probes.append((method, url, body, spy))
+    with TestClient(
+        create_production_app(settings),
+        base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
+    ) as client:
+        client.cookies.set("eternalai_session", original)
+        for method, url, body, spy in probes:
+            client.request(method, url, json=body, headers=common)
+            assert spy.await_count == 1, url
+        assert client.post("/api/v1/auth/logout", headers=TEST_CSRF_HEADERS).status_code == 200
+        client.cookies.clear()
+        client.cookies.set("eternalai_session", original)
+        for method, url, body, spy in probes:
+            response = client.request(method, url, json=body, headers=common)
+            assert response.status_code == 401, url
+            assert response.json()["detail"]["code"] == "authentication_required"
+            assert response.headers["www-authenticate"] == "Session"
+            assert spy.await_count == 1, url
+        client.cookies.clear()
+        client.cookies.set("eternalai_session", independent)
+        for method, url, body, spy in probes:
+            client.request(method, url, json=body, headers=common)
+            assert spy.await_count == 2, url

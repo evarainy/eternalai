@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { UseQueryResult } from '@tanstack/react-query';
 import { readMeApiV1MeGet } from '../generated/me/me';
@@ -14,6 +14,7 @@ import { useAuthStore } from '../stores/authStore';
  * 关掉它，循环就不存在。
  */
 export const IDENTITY_QUERY_KEY = ['me'] as const;
+export const identityQueryKey = (generation: number) => [...IDENTITY_QUERY_KEY, generation] as const;
 export const IDENTITY_STALE_TIME_MS = 5 * 60 * 1000;
 
 export interface CurrentIdentity {
@@ -27,9 +28,10 @@ export interface CurrentIdentity {
 
 export function useIdentityQuery(): UseQueryResult<MeResponse> {
   const status = useAuthStore((state) => state.status);
+  const generation = useAuthStore((state) => state.generation);
 
   return useQuery({
-    queryKey: IDENTITY_QUERY_KEY,
+    queryKey: identityQueryKey(generation),
     queryFn: () => readMeApiV1MeGet(),
     enabled: status !== 'unauthenticated',
     staleTime: IDENTITY_STALE_TIME_MS,
@@ -56,12 +58,71 @@ export function useCurrentIdentity(): CurrentIdentity {
  */
 export function useIdentityBootstrap(): void {
   const status = useAuthStore((state) => state.status);
+  const generation = useAuthStore((state) => state.generation);
   const { data } = useIdentityQuery();
 
   useEffect(() => {
     // 只把 `unknown` 收敛掉。若已经明确退出登录，一个还在路上的启动确认**不得**把人重新标成已登录。
-    if (data !== undefined && status === 'unknown') {
+    if (data !== undefined && status === 'unknown' &&
+        useAuthStore.getState().status === 'unknown' &&
+        useAuthStore.getState().generation === generation) {
       useAuthStore.getState().markAuthenticated();
     }
-  }, [data, status]);
+  }, [data, status, generation]);
+}
+
+const AUTH_CHANNEL = 'eternalai-auth';
+const RECHECK_MESSAGE = 'recheck-identity';
+
+export function notifyIdentityRecheck(): void {
+  try {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(AUTH_CHANNEL);
+    channel.postMessage(RECHECK_MESSAGE);
+    channel.close();
+  } catch { /* Focus and protected requests still consult the server. */ }
+}
+
+export function useIdentityRevalidation(): boolean {
+  const generation = useAuthStore((state) => state.generation);
+  const status = useAuthStore((state) => state.status);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let sequence = 0;
+    let channel: BroadcastChannel | null = null;
+    setFailed(false);
+    const recheck = async () => {
+      const current = useAuthStore.getState();
+      if (current.status !== 'authenticated' || current.generation !== generation) return;
+      const requestSequence = ++sequence;
+      const isCurrent = () => live && requestSequence === sequence &&
+        useAuthStore.getState().generation === generation;
+      try {
+        // Bypass cache. The generated client cannot abort this HTTP request.
+        await readMeApiV1MeGet();
+        if (isCurrent()) setFailed(false);
+      } catch {
+        if (isCurrent()) setFailed(true);
+      }
+    };
+    const onFocus = () => { void recheck(); };
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel(AUTH_CHANNEL);
+        channel.onmessage = (event: MessageEvent<unknown>) => {
+          if (event.data === RECHECK_MESSAGE) void recheck();
+        };
+      }
+    } catch { /* Focus revalidation remains available. */ }
+    window.addEventListener('focus', onFocus);
+    return () => {
+      live = false;
+      channel?.close();
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [generation]);
+
+  return status === 'authenticated' && failed;
 }

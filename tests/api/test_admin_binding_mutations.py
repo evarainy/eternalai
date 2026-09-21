@@ -28,6 +28,7 @@ from app.ports.trace import TraceEvent, TracePort, TraceQueryPort
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -120,6 +121,7 @@ def _client(
     client = TestClient(
         create_app(
             admin_registry_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=StaticSessionTokens(roles=roles),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -257,6 +259,7 @@ def test_missing_mutation_composition_returns_distinct_503() -> None:
     client = TestClient(
         create_app(
             admin_registry_service=None,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=StaticSessionTokens(),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -297,6 +300,7 @@ def test_plain_registry_service_type_mismatch_returns_distinct_503() -> None:
     client = TestClient(
         create_app(
             admin_registry_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=StaticSessionTokens(),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

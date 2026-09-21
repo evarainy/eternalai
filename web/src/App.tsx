@@ -17,7 +17,7 @@ import {
 import { ApiError } from './api/mutator';
 import { AppShell } from './app/AppShell';
 import { BootGate } from './app/BootGate';
-import { useIdentityBootstrap } from './app/identity';
+import { useIdentityBootstrap, useIdentityRevalidation } from './app/identity';
 import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
 import ChatPage from './pages/ChatPage';
 import HealthPage from './pages/HealthPage';
@@ -52,15 +52,26 @@ export function AuthenticationEffects() {
 
   // 刷新后向后端确认一次会话。恢复登录态以**后端确认**为准，不看任何客户端保存的状态。
   useIdentityBootstrap();
+  const revalidationFailed = useIdentityRevalidation();
 
   useEffect(() => {
-    if (status === 'unauthenticated') {
+    const clearIdentityState = () => {
+      // Remove synchronously: a later login must never be cleared by this promise.
+      void activeQueryClient.cancelQueries();
       activeQueryClient.clear();
       useAIDockStore.getState().clearSession();
-    }
-  }, [activeQueryClient, status]);
+    };
+    if (useAuthStore.getState().status === 'unauthenticated') clearIdentityState();
+    return useAuthStore.subscribe((state, previous) => {
+      if (state.status === 'unauthenticated' && previous.status !== 'unauthenticated') {
+        clearIdentityState();
+      }
+    });
+  }, [activeQueryClient]);
 
-  return null;
+  return status === 'authenticated' && revalidationFailed
+    ? <div role="alert">暂时无法确认登录状态</div>
+    : null;
 }
 
 export function ProtectedRoute() {

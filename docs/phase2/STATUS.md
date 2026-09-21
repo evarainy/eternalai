@@ -1,23 +1,24 @@
 # Phase 2 当前状态
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-065`（C 档、串行；2026-09-20 同步已合并事实、评审桥非阻断欠债及已决后继，承担 A 类机械同步）。
+- 当前实现候选 task_id：`P2-AUDIT-LOGOUT-002`（A 档、串行，承担 A 类机械同步；本地实现、验证与 high 自核完成，独立 Monitor、静态评审桥和集成尚待完成）。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
-- 当前实现后继指针：`P2-AUDIT-LOGOUT-002` 为已决后继之一，须先更新方案并重新评审再施工；其余依赖与阻塞沿现役 DAG，不新增里程碑或重排。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留。
-- 审计 #1：旧 `P2-AUDIT-LOGOUT-001` 三轮监理 FAIL、未交付，不开第 4 轮。第 3 轮未变异用例在 `/me` 401 广播后缓存应为空而实测剩 1 项，未证实数据泄漏。2026-09-20 明确批准新 `002` 重新立项及新的三轮监理周期，换 ID 本身不产生豁免；新方案须承接生命周期吊销验收，见 `DECISIONS.md` 同日裁决。
+- 当前实现后继指针：`P2-AUDIT-LOGOUT-002` 已按重新评审的方案形成候选；本棒不新增后继，其他依赖与阻塞沿现役 DAG。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留。
+- 审计 #1：当前候选新增服务端当前票据持久吊销，旧票据/等价别名重放拒绝；前端确认成功后清理旧身份数据，允许当前代空身份查询。旧 `P2-AUDIT-LOGOUT-001` 未交付的历史不作为新棒证据；002 的独立审查状态见上，重开裁决仍见 `DECISIONS.md` 2026-09-20。
 
 ## 已登记验证基线
 
-### 当前已合并基线（2026-09-20，来源 P2-AUDIT-WO-LIFECYCLE-001）
+### 当前候选基线（2026-09-21，来源 P2-AUDIT-LOGOUT-002）
 
-以下为实现候选及其独立监理的既有证据，本治理棒未重跑业务测试，不将历史实测写成本棒实测。
+后端、前端全量为本棒最终测试集合实测；独立审查尚未执行，不把候选当作已合并。未改生产代码的定向、架构、Golden、类型和构建结果复用本棒 r2 证据，生产变异均已精确还原。
 
-- pytest：`3982 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings；最终 exit=0，P4 observer authoritative PASS；未使用 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录，生产反证仍以真实断言失败退出。
-- `tests/architecture/`：`134 passed`。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（positive 13/13、negative/boundary 21/21）。
-- 前端最终覆盖 809 项通过（组件 439、单元 365、OpenAPI 5）；组件/单元入口通过，OpenAPI 顺序期望机械适配后单独通过。后续 StrictMode 面板回归独立 10 项通过；不把初次入口写成一次全量 exit=0。
-- Ruff、mypy（136 source files）、前端 lint/typecheck/build 与 15 个改动测试文件弱测试检查通过。真实 API/PG 覆盖认证/CSRF、锁内授权、双连接竞争、同 key 重放、事务回滚、完成窗口与迁移往返/有数据拒退；合成 A/B 身份浏览器贯通发布、接单、反馈、办结和回读。
-- 仓库迁移 head：`20260920_120000`。固定测试库在该实现及监理收口时均回退到 `20260915_120000`；本治理棒未查询数据库，不声明测试库当前版本。
-- 真实目录 Source、真实 OA 账号、OA 已办源与退出吊销未验收；离岗交接、跨刷新未决命令恢复、吊销链复验及桥发现见 `PHASE2_PLAN.md`。
+- pytest：`4055 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings；exit=0、后台 status=passed，P4 observer authoritative PASS；无 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录。
+- `tests/architecture/`：`135 passed`（本棒 r2 定向及最终后端全量覆盖；A 类文档同步后另做 SSOT 定向验证）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（本棒 r2，positive 13/13、negative/boundary 21/21；相关生产路径未再改变）。
+- 前端最终全量 833 项通过（组件 459、单元 369、OpenAPI 5），入口 exit=0；各组件文件独立进程，原 N2 断言/时限未改。
+- Ruff、mypy（137 source files）、前端 lint/typecheck/build、改动测试弱测试检查通过。新增认证、吊销、并发/故障、缓存代次、迟到结果及真实生成接口均有定向证据；本棒两轮合计 54 份生产变异闭环记录（含补强后的重做），逐项证据留候选 PR。
+- 仓库候选迁移 head：`20260920_180000`，父为 `20260920_120000`。固定测试库本棒收口实测无吊销残留并回到 `20260920_120000`；已过期/未过期行拒降与空态往返沿用未改迁移的 r2 实证。
+- 合成真实浏览器已证明服务器注销、另一标签页/旧票据拒绝和刷新仍为登录页；未访问真实 OA。真实目录 Source、真实 OA 账号、OA 已办源与生产部署仍未验收；D1 过期吊销清理、离岗交接及跨刷新未决命令恢复见 `PHASE2_PLAN.md`。
 
 ## 本批及前置已合并事实
 

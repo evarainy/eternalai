@@ -19,6 +19,7 @@ from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
 )
@@ -146,6 +147,7 @@ def test_runtime_handle_declares_envelope_without_changing_response_bytes(
 ) -> None:
     app = create_app(
         runtime=BaselineRuntime(),
+        session_revocations=MemorySessionRevocations(),
         session_tokens=StaticSessionTokens(),
         session_binder=_bind_session,
         session_cookie_ttl_seconds=3600,

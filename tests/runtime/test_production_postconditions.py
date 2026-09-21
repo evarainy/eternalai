@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from tests.auth_fakes import MemorySessionRevocations
 from tests.runtime.test_production_workflow import (
     MESSAGE,
     _run_pg,
@@ -79,6 +80,7 @@ def test_production_request_rejects_valid_but_corrupted_overview(
             components = h.components
             app = create_app(
                 runtime=h.runtime,
+                session_revocations=MemorySessionRevocations(),
                 session_tokens=components.session_tokens,
                 session_binder=components.session_binder.bind,
                 csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,

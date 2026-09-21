@@ -85,3 +85,29 @@ def test_credential_store_error_has_no_sensitive_context_by_default() -> None:
 
     assert error.__context__ is None
     assert error.__cause__ is None
+
+
+def test_verified_session_metadata_repr_hides_identity_and_fingerprint() -> None:
+    from app.ports.auth import VerifiedSessionToken
+
+    value = VerifiedSessionToken(
+        principal=Principal(
+            ai_user_id=uuid4().hex,
+            display_name=uuid4().hex,
+            roles=(),
+            org_ctx=PrincipalOrgContext(),
+        ),
+        fingerprint=uuid4().bytes + uuid4().bytes,
+        expires_at=datetime.now(UTC),
+        version=2,
+    )
+    safe = all(
+        secret not in repr(value)
+        for secret in (
+            value.principal.ai_user_id,
+            value.principal.display_name,
+            repr(value.fingerprint),
+        )
+    )
+    assert safe
+    assert not hasattr(value, "token")

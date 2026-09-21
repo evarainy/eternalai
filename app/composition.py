@@ -61,6 +61,7 @@ from app.infra.auth.postgresql import (
     PostgreSQLPrincipalRoleReader,
 )
 from app.infra.auth.secret_provider import CredentialStoreSecretProvider
+from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
 from app.infra.gateway.capability_gateway import CapabilityGateway
 from app.infra.health import RedisHealthCheck
 from app.infra.human_gate import PostgreSQLHumanGate
@@ -111,7 +112,12 @@ from app.organization_directory_sync import (
     OrganizationDirectorySyncService,
 )
 from app.ports.adapter import AdapterPort
-from app.ports.auth import AuthenticationPort, CredentialStorePort, SessionTokenPort
+from app.ports.auth import (
+    AuthenticationPort,
+    CredentialStorePort,
+    SessionRevocationStorePort,
+    SessionTokenPort,
+)
 from app.ports.capability_gateway import CapabilityGatewayPort
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.credential_binding import CredentialBindingVerifierPort
@@ -146,6 +152,7 @@ class ProductionComponents:
     credential_polling_scheduler: CredentialPollingScheduler
     authentication: AuthenticationPort
     session_tokens: SessionTokenPort
+    session_revocations: SessionRevocationStorePort
     session_binder: PrincipalSessionBinder
     session_cookie_ttl_seconds: int
     health_timeout_seconds: float
@@ -732,6 +739,7 @@ def build_production_components(
         credential_polling_scheduler=credential_polling_scheduler,
         authentication=resolved_authentication,
         session_tokens=session_tokens,
+        session_revocations=PostgreSQLSessionRevocationStore(session_factory),
         session_binder=session_binder,
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_timeout_seconds=settings.health_timeout_seconds,

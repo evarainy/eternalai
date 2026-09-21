@@ -21,9 +21,11 @@ from app.ports.user_profile import (
     UserOrgProfile,
     UserProfileSnapshot,
 )
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     AUTH_COOKIE_NAME,
     TEST_CSRF_ALLOWED_ORIGINS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
 )
@@ -103,6 +105,7 @@ def build_client(
     tokens.principal = principal(ai_user_id, display_name)
     return TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             user_profile=user_profile,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
@@ -151,6 +154,7 @@ def test_expired_and_wrong_version_tokens_are_rejected(path: str) -> None:
     )
     client = TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=live,
             user_profile=StubUserProfile(),
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
@@ -387,6 +391,7 @@ def test_one_users_cookie_never_yields_another_users_identity() -> None:
     tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
     client = TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             user_profile=profile,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
@@ -562,3 +567,20 @@ def test_openapi_declares_two_parameterless_reads() -> None:
         "image/gif",
         "image/webp",
     }
+
+
+def test_revoked_ticket_cannot_read_identity_or_avatar(dispatch_db):
+    from tests.api.test_auth import _principal, assert_auth_denied, logout_client, set_ticket
+    client, tokens, profile = logout_client(dispatch_db)
+    token = tokens.issue(_principal("me-revocation"))
+    set_ticket(client, token)
+    assert client.get("/api/v1/me").status_code == 200
+    client.get("/api/v1/me/avatar")
+    assert len(profile.profile_calls) == len(profile.avatar_calls) == 1
+    from tests.auth_fakes import TEST_CSRF_HEADERS
+    assert client.post("/api/v1/auth/logout", headers=TEST_CSRF_HEADERS).status_code == 200
+    set_ticket(client, token)
+    assert_auth_denied(client.get("/api/v1/me"))
+    assert_auth_denied(client.get("/api/v1/me/avatar"))
+    assert len(profile.profile_calls) == len(profile.avatar_calls) == 1
+    client.close()

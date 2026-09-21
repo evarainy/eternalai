@@ -36,6 +36,7 @@ from app.ports.work_object_scope import DispatchAuthorizationDecision
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -121,6 +122,7 @@ class DispatchHarness:
         self.client = TestClient(
             create_app(
                 work_object_service=self.service,
+                session_revocations=MemorySessionRevocations(),
                 session_tokens=self.tokens,
                 session_binder=make_session_binder(),
                 session_cookie_ttl_seconds=3600,

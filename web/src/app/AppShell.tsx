@@ -14,6 +14,7 @@ import { Icon } from '../shared/ui/Icon';
 import type { IconName } from '../shared/ui/Icon';
 import { AIDock } from './AIDock';
 import { useCurrentIdentity } from './identity';
+import { useLogout } from './logout';
 import {
   DEPARTMENT_UNAVAILABLE_LINE,
   JOB_TITLE_UNAVAILABLE_LINE,
@@ -330,7 +331,7 @@ function NavigationLink({
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
-  const markUnauthenticated = useAuthStore((state) => state.markUnauthenticated);
+  const { logout, pending: logoutPending, failed: logoutFailed } = useLogout();
   const authGeneration = useAuthStore((state) => state.generation);
   const openDock = useAIDockStore((state) => state.openDock);
   const clearPageContext = useAIDockStore((state) => state.clearPageContext);
@@ -771,16 +772,18 @@ export function AppShell() {
                   </div>
                 </div>
                 <div className={styles.menuFoot}>
+                  {logoutFailed ? <p role="alert">退出未完成，请重试</p> : null}
                   <button
                     className={styles.menuRow}
                     data-tone="alert"
-                    onClick={() => markUnauthenticated()}
+                    disabled={logoutPending}
+                    onClick={() => { void logout(); }}
                     type="button"
                   >
                     <span className={styles.menuIcon}>
                       <Icon name="external" size={16} strokeWidth={1.9} />
                     </span>
-                    <span>退出登录</span>
+                    <span>{logoutPending ? '正在退出…' : '退出登录'}</span>
                     <span className={styles.menuNote}>只退工作台</span>
                   </button>
                 </div>

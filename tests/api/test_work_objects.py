@@ -72,6 +72,7 @@ from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -734,6 +735,7 @@ def _client(
     client = TestClient(
         create_app(
             work_object_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -2003,6 +2005,7 @@ def _default_client(store, gateway) -> TestClient:
     client = TestClient(
         create_app(
             work_object_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

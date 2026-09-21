@@ -221,3 +221,18 @@ it('rejects_a_draft_write_from_a_late_success_response', async () => {
 });
 
 function draftToken() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }
+
+
+describe('logout status boundary', () => {
+  it.each([201, 202, 204])('logout_status_guard_preserves_other_callers %s', async (status) => {
+    const payload = { authenticated: false };
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => response(payload, { status }));
+    useAuthStore.setState({ generation: 22, status: 'authenticated' });
+    await expect(customInstance({ url: '/api/v1/auth/logout', method: 'POST' })).rejects.toMatchObject({ status, code: 'logout_unconfirmed' });
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    for (const [url, method] of [['/api/v1/auth/login', 'POST'], ['/other', 'POST'], ['/other', 'GET'], ['/api/v1/auth/logout', 'GET']] as const) {
+      await expect(customInstance({ url, method })).resolves.toEqual(payload);
+    }
+    fetchSpy.mockRestore();
+  });
+});

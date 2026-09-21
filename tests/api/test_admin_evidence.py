@@ -31,6 +31,7 @@ from app.ports.task_store import (
 )
 from app.ports.trace import TRACE_QUERY_LIMIT, TraceEvent, TracePersistedEvent
 from tests.auth_fakes import (
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -376,6 +377,7 @@ def _client(
         create_app(
             runtime=runtime,
             admin_registry_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -893,6 +895,7 @@ def test_trace_list_returns_503_when_admin_service_is_unconfigured() -> None:
     session_tokens = StaticSessionTokens()
     client = TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

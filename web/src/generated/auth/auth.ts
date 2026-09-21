@@ -6,7 +6,8 @@
  */
 import type {
   LoginApiV1AuthLoginPostBody,
-  LoginResponse
+  LoginResponse,
+  LogoutResponse
 } from './auth.schemas';
 
 import { customInstance } from '../../api/mutator';
@@ -27,4 +28,17 @@ export const loginApiV1AuthLoginPost = (
       );
     }
 
+/**
+ * @summary Logout
+ */
+export const logoutApiV1AuthLogoutPost = (
+
+ ) => {
+      return customInstance<LogoutResponse>(
+      {url: `/api/v1/auth/logout`, method: 'POST'
+    },
+      );
+    }
+
 export type LoginApiV1AuthLoginPostResult = NonNullable<Awaited<ReturnType<typeof loginApiV1AuthLoginPost>>>
+export type LogoutApiV1AuthLogoutPostResult = NonNullable<Awaited<ReturnType<typeof logoutApiV1AuthLogoutPost>>>

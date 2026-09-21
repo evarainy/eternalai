@@ -7,13 +7,20 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from app.ports.auth import Principal, SessionBindingError, SessionTokenError
+from app.ports.auth import (
+    Principal,
+    SessionBindingError,
+    SessionTokenError,
+    VerifiedSessionToken,
+)
 
 _MIN_HMAC_KEY_BYTES = 32
 _BOUND_SESSION_RE = re.compile(
@@ -42,12 +49,16 @@ def identity_surrogate(loginid: str, *, key: bytes) -> str:
 
 
 class _TokenClaims(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     v: int
     principal: Principal
     iat: int
     exp: int
+
+
+class _TokenClaimsV2(_TokenClaims):
+    nonce: str
 
 
 class HMACSessionToken:
@@ -68,11 +79,12 @@ class HMACSessionToken:
 
     def issue(self, principal: Principal) -> str:
         issued_at = int(self._clock())
-        claims = _TokenClaims(
-            v=1,
+        claims = _TokenClaimsV2(
+            v=2,
             principal=principal,
             iat=issued_at,
             exp=issued_at + self._ttl_seconds,
+            nonce=_base64url_encode(secrets.token_bytes(32)),
         )
         payload = json.dumps(
             claims.model_dump(mode="json"),
@@ -81,14 +93,19 @@ class HMACSessionToken:
             sort_keys=True,
         ).encode("utf-8")
         encoded_payload = _base64url_encode(payload)
-        signed = f"v1.{encoded_payload}".encode("ascii")
+        signed = f"v2.{encoded_payload}".encode("ascii")
         signature = hmac.new(self._signing_key, signed, hashlib.sha256).digest()
-        return f"v1.{encoded_payload}.{_base64url_encode(signature)}"
+        return f"v2.{encoded_payload}.{_base64url_encode(signature)}"
 
     def verify(self, token: str) -> Principal:
+        return self.inspect(token).principal
+
+    def inspect(self, token: str) -> VerifiedSessionToken:
+        # Evaluate the injected clock outside the untrusted-input exception boundary.
+        now = int(self._clock())
         try:
             version, encoded_payload, encoded_signature = token.split(".")
-            if version != "v1":
+            if version not in {"v1", "v2"}:
                 raise ValueError
             signed = f"{version}.{encoded_payload}".encode("ascii")
             supplied_signature = _base64url_decode(encoded_signature)
@@ -100,13 +117,33 @@ class HMACSessionToken:
             if not hmac.compare_digest(supplied_signature, expected_signature):
                 raise ValueError
             payload = json.loads(_base64url_decode(encoded_payload))
-            claims = _TokenClaims.model_validate(payload)
-            now = int(self._clock())
-            if claims.v != 1 or claims.iat > now or claims.exp <= now:
+            claims = (
+                _TokenClaims.model_validate(payload)
+                if version == "v1"
+                else _TokenClaimsV2.model_validate(payload)
+            )
+            if isinstance(claims, _TokenClaimsV2):
+                nonce = _base64url_decode(claims.nonce)
+                if len(nonce) != 32 or _base64url_encode(nonce) != claims.nonce:
+                    raise ValueError
+            if (
+                claims.v != int(version[1:])
+                or claims.iat > now
+                or claims.exp <= now
+                or claims.exp <= claims.iat
+            ):
                 raise ValueError
-        except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
-            raise SessionTokenError("session token is invalid") from exc
-        return claims.principal
+            expires_at = datetime.fromtimestamp(claims.exp, tz=UTC)
+        except (TypeError, ValueError, UnicodeError, OverflowError, OSError):
+            pass
+        else:
+            return VerifiedSessionToken(
+                principal=claims.principal,
+                fingerprint=hashlib.sha256(b"eternalai-auth-revocation-v1\x00" + signed).digest(),
+                expires_at=expires_at,
+                version=1 if version == "v1" else 2,
+            )
+        raise SessionTokenError("session token is invalid")
 
 
 class PrincipalSessionBinder:

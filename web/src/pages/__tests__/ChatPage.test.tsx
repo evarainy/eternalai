@@ -1165,14 +1165,32 @@ describe('ChatPage HTTP failures', () => {
 
   it('uses the unified 401 reauthentication chain without a chat error bubble', async () => {
     const client = makeClient();
-    client.setQueryData(['private'], { value: 'cached response' });
+    const oldGeneration = useAuthStore.getState().generation;
+    const oldIdentity = {
+      authenticated: true, display_name: DISPLAY_NAME, org: null,
+      org_status: 'ok', avatar_path: null,
+    };
+    const privatePrefixes = [['private'], ['me', oldGeneration], ['work-objects', oldGeneration]];
+    const seededKeys = [
+      ['private'], ['private', 'unobserved'], ['me', oldGeneration],
+      ['work-objects', oldGeneration, 'list', 'active', 'active'],
+      ['work-objects', oldGeneration, 'list', 'unconfirmed', ''],
+      ['work-objects', oldGeneration, 'list', 'active', 'completed'],
+      ['work-objects', oldGeneration, 'detail', 'synthetic-a'],
+    ];
+    for (const key of seededKeys) {
+      client.setQueryData(key, key[0] === 'me' ? oldIdentity : { value: 'cached response' });
+    }
+    let releaseIdentity!: (value: typeof oldIdentity) => void;
+    const lateIdentity = new Promise<typeof oldIdentity>((resolve) => { releaseIdentity = resolve; });
+    identityMock.readMe.mockReturnValue(lateIdentity);
     const failedResponse = response(
       { detail: 'RAW_401_BODY' },
       { ok: false, status: 401, statusText: 'Unauthorized' },
     );
     const jsonSpy = vi.spyOn(failedResponse, 'json');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(failedResponse));
-    render(
+    const tree = () => (
       <ConfigProvider button={WORKBENCH_BUTTON_CONFIG}>
         <QueryClientProvider client={client}>
           <MemoryRouter initialEntries={['/chat']}>
@@ -1185,14 +1203,40 @@ describe('ChatPage HTTP failures', () => {
             </Routes>
           </MemoryRouter>
         </QueryClientProvider>
-      </ConfigProvider>,
+      </ConfigProvider>
     );
+    const mounted = render(tree());
+    let refetch!: Promise<void>;
+    act(() => { refetch = client.refetchQueries({ queryKey: ['me', oldGeneration], exact: true }); });
+    await waitFor(() => expect(identityMock.readMe).toHaveBeenCalledTimes(1));
+    for (const key of seededKeys) expect(client.getQueryData(key)).toBeDefined();
+    const previousQueries = client.getQueryCache().getAll();
 
     sendMessage('触发重新认证');
 
     expect(await screen.findByText('重新认证')).toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe('unauthenticated');
-    await waitFor(() => expect(client.getQueryCache().getAll()).toHaveLength(0));
+    const currentGeneration = useAuthStore.getState().generation;
+    expect(currentGeneration).toBe(oldGeneration + 1);
+    const assertNoPreviousIdentity = (phase: string) => {
+      const queries = client.getQueryCache().getAll();
+      for (const query of queries) {
+        expect.soft(query.state.data, `${phase}: data in ${JSON.stringify(query.queryKey)}`).toBeUndefined();
+      }
+      for (const prefix of privatePrefixes) {
+        expect.soft(client.getQueryCache().findAll({ queryKey: prefix }), `${phase}: old private key ${JSON.stringify(prefix)}`).toEqual([]);
+      }
+      for (const query of queries) {
+        expect.soft(query.queryKey, `${phase}: allowed current identity only`).toEqual(['me', currentGeneration]);
+        for (const observer of query.observers) expect.soft(observer.options.enabled).toBe(false);
+      }
+      expect.soft(previousQueries.every((query) => !queries.includes(query))).toBe(true);
+    };
+    assertNoPreviousIdentity('cleanup committed');
+    await act(async () => { releaseIdentity(oldIdentity); await lateIdentity; await refetch; });
+    assertNoPreviousIdentity('late response settled');
+    mounted.rerender(tree());
+    assertNoPreviousIdentity('subsequent render');
     expect(jsonSpy).not.toHaveBeenCalled();
     expect(screen.queryByText(/请求失败|网络异常|RAW_401_BODY/)).not.toBeInTheDocument();
   });

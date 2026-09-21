@@ -223,6 +223,7 @@ async def run_full_chain_check(
             admin_registry_service=components.admin_registry_service,
             authentication=components.authentication,
             session_tokens=components.session_tokens,
+            session_revocations=components.session_revocations,
             session_binder=components.session_binder.bind,
             session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
             session_cookie_secure=settings.session_cookie_secure,

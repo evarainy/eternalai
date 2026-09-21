@@ -40,6 +40,7 @@ from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -121,7 +122,7 @@ def _client(runtime: FakeRuntime | None = None) -> TestClient:
     app.include_router(
         make_router(
             runtime or FakeRuntime(),
-            make_require_principal(session_tokens),
+            make_require_principal(session_tokens, MemorySessionRevocations()),
             make_session_binder(),
         ),
         prefix="/api/v1/runtime",
@@ -344,6 +345,7 @@ def test_formal_app_runtime_route_fails_closed_without_provider() -> None:
     session_tokens = StaticSessionTokens()
     client = TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -374,6 +376,7 @@ def test_formal_app_runtime_route_validates_before_unavailable() -> None:
     session_tokens = StaticSessionTokens()
     client = TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -418,6 +421,7 @@ def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> No
     client = TestClient(
         create_app(
             runtime=harness.runtime,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=tokens,
             session_binder=binder.bind,
             csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
@@ -616,6 +620,7 @@ def _topk_client(
     client = TestClient(
         create_app(
             runtime=runtime,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

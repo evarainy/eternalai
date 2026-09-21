@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -58,6 +59,26 @@ class SessionTokenError(AuthenticationError):
     """Raised when an EternalAI session token cannot be trusted."""
 
 
+@dataclass(frozen=True)
+class VerifiedSessionToken:
+    """Trusted metadata; never carries the original bearer credential."""
+
+    principal: Principal = field(repr=False)
+    fingerprint: bytes = field(repr=False)
+    expires_at: datetime
+    version: Literal[1, 2]
+
+
+class SessionRevocationStoreError(RuntimeError):
+    """Fixed, sanitized failure of persistent session revocation."""
+
+
+class SessionRevocationStorePort(Protocol):
+    async def is_revoked(self, fingerprint: bytes) -> bool: ...
+
+    async def revoke(self, fingerprint: bytes, *, expires_at: datetime) -> None: ...
+
+
 class SessionBindingError(RuntimeError):
     """Raised when a conversation session is not bound to the Principal."""
 
@@ -79,6 +100,8 @@ class SessionTokenPort(Protocol):
     def issue(self, principal: Principal) -> str: ...
 
     def verify(self, token: str) -> Principal: ...
+
+    def inspect(self, token: str) -> VerifiedSessionToken: ...
 
 
 class CredentialStorePort(Protocol):
@@ -110,4 +133,7 @@ __all__ = (
     "SessionBindingError",
     "SessionTokenError",
     "SessionTokenPort",
+    "SessionRevocationStoreError",
+    "SessionRevocationStorePort",
+    "VerifiedSessionToken",
 )
