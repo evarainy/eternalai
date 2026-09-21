@@ -244,6 +244,43 @@ def _todo_list_entries(
     ]
 
 
+def _encoded_todo_list_entries(
+    *,
+    session_key: str,
+    source: str,
+    sort_params: str = "synthetic-sort",
+) -> list[object]:
+    entries = _todo_list_entries(session_key=session_key, sort_params=sort_params)
+    for entry in entries:
+        assert isinstance(entry, dict)
+        request = entry["request"]
+        assert isinstance(request, dict)
+        post_data = request["postData"]
+        assert isinstance(post_data, dict)
+        params = post_data["params"]
+        assert isinstance(params, list)
+        encoded_params: list[dict[str, str]] = []
+        for param in params:
+            assert isinstance(param, dict)
+            name = param["name"]
+            value = param["value"]
+            assert isinstance(name, str) and name
+            assert isinstance(value, str)
+            encoded_params.append(
+                {"name": f"%{ord(name[0]):02X}{name[1:]}", "value": value}
+            )
+        if source == "params":
+            post_data["params"] = encoded_params
+        elif source == "text":
+            post_data.pop("params")
+            post_data["text"] = "&".join(
+                f"{param['name']}={param['value']}" for param in encoded_params
+            )
+        else:
+            raise AssertionError(f"unexpected post data source: {source}")
+    return entries
+
+
 def _todo_list_capture_entries(
     *,
     session_key: str,
@@ -920,6 +957,95 @@ def test_extract_todo_list_contract_decodes_params_form_values(
     contract = extract_todo_list_contract(path)
 
     assert contract.sort_params == "synthetic sort[]"
+
+
+def test_extract_todo_list_contract_decodes_encoded_form_names_consistently(
+    tmp_path: Path,
+) -> None:
+    session_key = "s" * 69
+    contracts: dict[str, TodoListContract] = {}
+    for source in ("params", "text"):
+        path = tmp_path / f"synthetic-todo-{source}.har"
+        _write_har(
+            path,
+            _encoded_todo_list_entries(
+                session_key=session_key,
+                source=source,
+                sort_params="synthetic%2520sort",
+            ),
+        )
+        contracts[source] = extract_todo_list_contract(path)
+
+    assert contracts["params"] == contracts["text"]
+    assert contracts["params"].actiontype == "synthetic-action"
+    assert contracts["params"].sort_params == "synthetic%20sort"
+
+
+def test_extract_todo_list_contract_rejects_duplicate_decoded_form_name(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    session_key = "s" * 69
+    entries = _todo_list_entries(session_key=session_key)
+    counts_entry = entries[2]
+    assert isinstance(counts_entry, dict)
+    request = counts_entry["request"]
+    assert isinstance(request, dict)
+    post_data = request["postData"]
+    assert isinstance(post_data, dict)
+    params = post_data["params"]
+    assert isinstance(params, list)
+    params.append({"name": "%64ataKey", "value": session_key})
+    _write_har(path, entries)
+
+    with pytest.raises(SmokeError, match="todo_list_form_duplicate"):
+        extract_todo_list_contract(path)
+
+
+@pytest.mark.parametrize(
+    "invalid_sort_params",
+    ["", " ", "synthetic%0Avalue"],
+    ids=["empty", "whitespace", "control_character"],
+)
+def test_extract_todo_list_contract_rejects_blank_or_control_form_value(
+    tmp_path: Path,
+    invalid_sort_params: str,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    _write_har(
+        path,
+        _todo_list_entries(
+            session_key="s" * 69,
+            sort_params=invalid_sort_params,
+        ),
+    )
+
+    with pytest.raises(SmokeError, match="todo_list_form_invalid"):
+        extract_todo_list_contract(path)
+
+
+def test_extract_todo_list_contract_rejects_missing_selected_form_field(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    entries = _todo_list_entries(session_key="s" * 69)
+    split_entry = entries[0]
+    assert isinstance(split_entry, dict)
+    request = split_entry["request"]
+    assert isinstance(request, dict)
+    post_data = request["postData"]
+    assert isinstance(post_data, dict)
+    params = post_data["params"]
+    assert isinstance(params, list)
+    post_data["params"] = [
+        param
+        for param in params
+        if isinstance(param, dict) and param.get("name") != "viewcondition"
+    ]
+    _write_har(path, entries)
+
+    with pytest.raises(SmokeError, match="todo_list_entry_not_found"):
+        extract_todo_list_contract(path)
 
 
 def test_extract_todo_list_contract_accepts_identical_repeated_sequence(
