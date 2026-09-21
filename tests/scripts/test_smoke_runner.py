@@ -2321,13 +2321,16 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         assert value not in report
     for forbidden in ("隐式输入", "mock", "错误分类", "结构错误"):
         assert forbidden not in report
-    assert "输入时屏幕不会显示内容" in report
-    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" in report
-    assert "如果看到登录页，就在浏览器登录" in report
-    assert "登录后只查询一次" in report
-    assert "完成后回到命令行运行 `./smoke.ps1 verify`" in report
+    assert "输入时屏幕不会显示内容" not in report
+    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" not in report
+    assert "如果看到登录页，就在浏览器登录" not in report
+    assert "登录后只查询一次" not in report
+    assert "完成后回到命令行运行 `./smoke.ps1 verify`" not in report
+    assert "到内网后，在项目目录运行 `./smoke.ps1 start`" not in report
     assert "任一命令失败就马上停止" in report
+    assert "保留屏幕上的错误和已经生成的报告" in report
     assert "不要自行改文件，也不要切换运行模式" in report
+    assert "不以完整运行时链路的通过替代 Provider 协议检查" in report
     assert "传输失败细分：remote_disconnected" in report
     assert "HTTP 状态码：502" in report
     assert "完整运行时链路：passed" in report
@@ -4173,6 +4176,11 @@ def test_verify_full_chain_failure_writes_safe_report_and_returns_one(
         )
         == 1
     )
+    assert "到内网后，在项目目录运行 `./smoke.ps1 start`" not in report_text
+    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" not in report_text
+    assert "任一命令失败就马上停止" in report_text
+    assert "保留屏幕上的错误和已经生成的报告" in report_text
+    assert "不以完整运行时链路的通过替代 Provider 协议检查" in report_text
 
 
 def test_verify_full_chain_failure_prints_exact_run_pass_fail_counts(
