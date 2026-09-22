@@ -1415,7 +1415,19 @@ def make_router(
                     if lifecycle:
                         _lifecycle_error(exc.code)
                     raise
-                except RequestValidationError:
+                except RequestValidationError as exc:
+                    if (
+                        request.method == "GET"
+                        and self.name == "list_work_objects"
+                        and (
+                            len(request.query_params.getlist("completion")) > 1
+                            or any(
+                                tuple(error["loc"]) == ("query", "completion")
+                                for error in exc.errors()
+                            )
+                        )
+                    ):
+                        _lifecycle_error("work_object_lifecycle_request_invalid")
                     if lifecycle:
                         _lifecycle_error("work_object_lifecycle_request_invalid")
                     if request.method == "POST" and request.url.path.endswith(
@@ -1444,7 +1456,33 @@ def make_router(
         return service
 
     @router.get(
-        "", response_model=WorkObjectListResponse, responses={503: {"model": WorkObjectError}}
+        "",
+        response_model=WorkObjectListResponse,
+        responses={
+            503: {"model": WorkObjectError},
+            422: {
+                "description": (
+                    "Invalid completion uses WorkObjectError without input echo and with "
+                    "Cache-Control: no-store. Other query validation retains HTTPValidationError."
+                ),
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "oneOf": [
+                                {"$ref": "#/components/schemas/WorkObjectError"},
+                                {"$ref": "#/components/schemas/HTTPValidationError"},
+                            ]
+                        }
+                    }
+                },
+                "headers": {
+                    "Cache-Control": {
+                        "description": "Present on fixed completion validation failures.",
+                        "schema": {"type": "string", "const": "no-store"},
+                    }
+                },
+            },
+        },
     )
     async def list_work_objects(
         request: Request,

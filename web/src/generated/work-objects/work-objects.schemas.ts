@@ -569,6 +569,8 @@ export const ListWorkObjectsApiV1WorkObjectsGetOaView = {
   all: 'all',
 } as const;
 
+export type ListWorkObjectsApiV1WorkObjectsGet422 = WorkObjectError | HTTPValidationError;
+
 export type ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetParams = {
 kind: ListDispatchOptionsApiV1WorkObjectsDispatchOptionsGetKind;
 /**

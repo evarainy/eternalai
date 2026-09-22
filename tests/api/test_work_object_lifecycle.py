@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -109,6 +110,89 @@ def assert_error(response, status, code):
     assert response.json()["detail"]["code"] == code
     assert set(response.json()["detail"]) == {"code", "message"}
     assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("method,suffix", [("GET", ""), ("GET", "/events"), ("POST", "/commands")])
+def test_authentication_store_read_failure_is_503_without_business_calls(
+    lifecycle_http, monkeypatch, caplog, method, suffix
+):
+    db, client, actor, _ = lifecycle_http
+    object_id = publish(client)["items"][0]["work_object_id"]
+    actor("local-recipient")
+    assert command(client, object_id, "accept").status_code == 200
+    base = f"/api/v1/work-objects/{object_id}/lifecycle"
+    spies = []
+    for name in (
+        "get_lifecycle_for_principal", "list_lifecycle_events_for_principal",
+        "command_lifecycle_for_principal",
+    ):
+        spy = Mock(wraps=getattr(db.service, name))
+        monkeypatch.setattr(db.service, name, spy)
+        spies.append(spy)
+
+    def request_arguments():
+        view = client.get(base)
+        assert view.status_code == 200
+        return {} if method == "GET" else {
+            "json": {"operation": "feedback", "text": "SYNTHETIC_FEEDBACK_INPUT"},
+            "headers": {**TEST_CSRF_HEADERS, "Idempotency-Key": str(uuid4()),
+                        "If-Match": view.headers["etag"]},
+        }
+
+    healthy = client.request(method, base + suffix, **request_arguments())
+    assert healthy.status_code == 200
+    target = {"": 0, "/events": 1, "/commands": 2}[suffix]
+    assert spies[target].call_count >= 1
+    arguments = request_arguments()
+    before = db.rows("work_objects")
+
+    def event_count():
+        with db.sql.connect() as connection:
+            return connection.execute(text(
+                "SELECT count(*) FROM work_object_lifecycle_events WHERE work_object_id=:id"
+            ), {"id": object_id}).scalar_one()
+
+    count_before = event_count()
+    for spy in spies:
+        spy.reset_mock()
+    hits = []
+
+    def fail_revocation_read(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.startswith("SELECT 1 FROM auth_session_revocations WHERE token_fingerprint ="):
+            hits.append(True)
+            raise RuntimeError("SYNTHETIC_REVOCATION_READ_FAULT")
+
+    event.listen(db.engine.sync_engine, "before_cursor_execute", fail_revocation_read)
+    try:
+        failed = client.request(method, base + suffix, **arguments)
+        assert failed.status_code == 503
+        assert failed.json() == {"detail": {
+            "code": "authentication_unavailable",
+            "message": "Authentication is temporarily unavailable.",
+        }}
+        assert failed.headers.get("cache-control") == "no-store"
+        assert hits == [True]
+        assert [spy.call_count for spy in spies] == [0, 0, 0]
+        assert db.rows("work_objects") == before
+        assert event_count() == count_before
+        observed = failed.text + str(dict(failed.headers)) + caplog.text
+        for marker in ("SYNTHETIC_REVOCATION_READ_FAULT", "SYNTHETIC_FEEDBACK_INPUT",
+                       client.cookies.get("eternalai_session")):
+            assert marker not in observed
+    finally:
+        event.remove(db.engine.sync_engine, "before_cursor_execute", fail_revocation_read)
+    restored = client.request(method, base + suffix, **arguments)
+    assert restored.status_code == 200
+    assert spies[target].call_count == 1
+    assert event_count() == count_before + (1 if method == "POST" else 0)
+    if method == "POST":
+        assert restored.json()["replayed"] is False
+        replay = client.request(method, base + suffix, **arguments)
+        assert replay.status_code == 200
+        assert replay.json() == {**restored.json(), "replayed": True}
+        assert event_count() == count_before + 1
+    else:
+        assert db.rows("work_objects") == before
 
 
 def test_logout_replay_of_original_key_cannot_read_event(lifecycle_http):
