@@ -6,7 +6,8 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Button, Input } from 'antd';
+import Button from 'antd/es/button';
+import TextArea from 'antd/es/input/TextArea';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import { projectResponse } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
@@ -14,8 +15,6 @@ import { handleApiV1RuntimeHandlePost } from '../generated/runtime/runtime';
 import { Icon } from '../shared/ui/Icon';
 import { useAIDockStore } from '../stores/aiDockStore';
 import styles from './AIDock.module.css';
-
-const { TextArea } = Input;
 
 /** 键盘移动浮动面板的步长；提供给不能使用鼠标拖动的用户。 */
 export const DOCK_KEYBOARD_STEP = 24;

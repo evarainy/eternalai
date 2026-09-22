@@ -1,0 +1,47 @@
+.fallback {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--workbench-text-secondary);
+  background: var(--workbench-panel-fill);
+  border: 1px solid var(--workbench-border);
+  border-radius: var(--workbench-radius-panel);
+  box-shadow: var(--workbench-sheen);
+  font-size: var(--workbench-font-auxiliary);
+  line-height: var(--workbench-line-height);
+}
+
+.page {
+  min-height: 320px;
+  margin: 0;
+}
+
+.workspace {
+  min-height: 100vh;
+  margin: 16px;
+}
+
+.dock {
+  position: fixed;
+  z-index: 30;
+  right: 28px;
+  bottom: 28px;
+  min-height: 96px;
+  width: min(420px, calc(100vw - 56px));
+  border-radius: 30px;
+}
+
+.refresh {
+  min-height: 44px;
+  padding: 0 16px;
+  color: var(--workbench-primary);
+  background: transparent;
+  border: 1px solid var(--workbench-control-edge);
+  border-radius: var(--workbench-radius-control);
+  box-shadow: var(--workbench-control-glow);
+  cursor: pointer;
+  font: inherit;
+}
