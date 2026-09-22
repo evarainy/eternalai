@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { ConfigProvider, App as AntApp } from 'antd';
+import type { ComponentType } from 'react';
+import ConfigProvider from 'antd/es/config-provider';
 import zhCN from 'antd/locale/zh_CN';
 import {
   QueryClient,
@@ -15,22 +16,15 @@ import {
   useLocation,
 } from 'react-router-dom';
 import { ApiError } from './api/mutator';
-import { AppShell } from './app/AppShell';
 import { BootGate } from './app/BootGate';
 import { useIdentityBootstrap, useIdentityRevalidation } from './app/identity';
+import {
+  lazyRouteComponents,
+} from './app/lazyRoutes';
+import type { LazyRouteComponents } from './app/lazyRoutes';
+import { RouteLoadBoundary } from './app/RouteLoadingFallback';
 import { WORKBENCH_BUTTON_CONFIG, workbenchTheme } from './app/theme';
-import ChatPage from './pages/ChatPage';
-import HealthPage from './pages/HealthPage';
-import LoginPage from './pages/LoginPage';
-import AppsPage from './features/apps/AppsPage';
-import MessagesPage from './features/messages/MessagesPage';
-import WorkDispatchPage from './features/work-dispatch/WorkDispatchPage';
-import WorkObjectSearchPage from './features/work-dispatch/WorkObjectSearchPage';
-import WorkObjectsPage from './pages/WorkObjectsPage';
 import { getReturnPath } from './pages/loginNavigation';
-import BindingsPage from './pages/admin/BindingsPage';
-import RegistryPage from './pages/admin/RegistryPage';
-import TasksPage from './pages/admin/TasksPage';
 import { useAIDockStore } from './stores/aiDockStore';
 import { useAuthStore } from './stores/authStore';
 
@@ -96,7 +90,13 @@ export function ProtectedRoute() {
   return <Outlet />;
 }
 
-export function LoginRoute() {
+interface LoginRouteProps {
+  LoginPageComponent?: ComponentType;
+}
+
+export function LoginRoute({
+  LoginPageComponent = lazyRouteComponents.LazyLoginPage,
+}: LoginRouteProps) {
   const status = useAuthStore((state) => state.status);
   const location = useLocation();
 
@@ -108,42 +108,141 @@ export function LoginRoute() {
   return status === 'authenticated' ? (
     <Navigate replace to={getReturnPath(location.state)} />
   ) : (
-    <LoginPage />
+    <LoginPageComponent />
   );
 }
 
-export default function App() {
+interface AppProps {
+  routes?: LazyRouteComponents;
+}
+
+export default function App({ routes = lazyRouteComponents }: AppProps) {
+  const {
+    LazyAuthenticatedAppShell,
+    LazyAppsPage,
+    LazyBindingsPage,
+    LazyChatPage,
+    LazyHealthPage,
+    LazyLoginPage,
+    LazyMessagesPage,
+    LazyRegistryPage,
+    LazyTasksPage,
+    LazyWorkDispatchPage,
+    LazyWorkObjectSearchPage,
+    LazyWorkObjectsPage,
+  } = routes;
   return (
     <ConfigProvider
       button={WORKBENCH_BUTTON_CONFIG}
       locale={zhCN}
       theme={workbenchTheme}
     >
-      <AntApp>
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <AuthenticationEffects />
-            <Routes>
-              <Route path="/health" element={<HealthPage />} />
-              <Route path="/login" element={<LoginRoute />} />
-              <Route element={<ProtectedRoute />}>
-                <Route path="/" element={<Navigate replace to="/chat" />} />
-                <Route element={<AppShell />}>
-                  <Route path="/chat" element={<ChatPage />} />
-                  <Route path="/search" element={<WorkObjectSearchPage />} />
-                  <Route path="/work-objects" element={<WorkObjectsPage />} />
-                  <Route path="/work-dispatch" element={<WorkDispatchPage />} />
-                  <Route path="/apps" element={<AppsPage />} />
-                  <Route path="/messages" element={<MessagesPage />} />
-                  <Route path="/admin/registry" element={<RegistryPage />} />
-                  <Route path="/admin/tasks" element={<TasksPage />} />
-                  <Route path="/admin/bindings" element={<BindingsPage />} />
-                </Route>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AuthenticationEffects />
+          <Routes>
+            <Route
+              path="/health"
+              element={(
+                <RouteLoadBoundary label="正在打开健康检查">
+                  <LazyHealthPage />
+                </RouteLoadBoundary>
+              )}
+            />
+            <Route
+              path="/login"
+              element={(
+                <RouteLoadBoundary label="正在打开登录页">
+                  <LoginRoute LoginPageComponent={LazyLoginPage} />
+                </RouteLoadBoundary>
+              )}
+            />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/" element={<Navigate replace to="/chat" />} />
+              <Route
+                element={(
+                  <RouteLoadBoundary label="正在准备工作台" surface="workspace">
+                    <LazyAuthenticatedAppShell />
+                  </RouteLoadBoundary>
+                )}
+              >
+                <Route
+                  path="/chat"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyChatPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/search"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyWorkObjectSearchPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/work-objects"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyWorkObjectsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/work-dispatch"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyWorkDispatchPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/apps"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyAppsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/messages"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyMessagesPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/admin/registry"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyRegistryPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/admin/tasks"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyTasksPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
+                <Route
+                  path="/admin/bindings"
+                  element={(
+                    <RouteLoadBoundary label="正在打开页面">
+                      <LazyBindingsPage />
+                    </RouteLoadBoundary>
+                  )}
+                />
               </Route>
-            </Routes>
-          </BrowserRouter>
-        </QueryClientProvider>
-      </AntApp>
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </QueryClientProvider>
     </ConfigProvider>
   );
 }

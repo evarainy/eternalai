@@ -1,8 +1,9 @@
 import { normalizeSearchQuery } from '../shared/query/workObjectSearchNormalization';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Input } from 'antd';
+import AntApp from 'antd/es/app';
+import Input from 'antd/es/input/Input';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { getBindingApiV1CredentialBindingsTargetSystemGet as getBinding } from '../generated/credential-bindings/credential-bindings';
 import type { CredentialBindingView } from '../generated/credential-bindings/credential-bindings.schemas';
@@ -12,9 +13,9 @@ import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
 import { Icon } from '../shared/ui/Icon';
 import type { IconName } from '../shared/ui/Icon';
-import { AIDock } from './AIDock';
 import { useCurrentIdentity } from './identity';
 import { useLogout } from './logout';
+import { RouteLoadBoundary } from './RouteLoadingFallback';
 import {
   DEPARTMENT_UNAVAILABLE_LINE,
   JOB_TITLE_UNAVAILABLE_LINE,
@@ -38,6 +39,10 @@ import styles from './AppShell.module.css';
 const AI_ASSISTANT_PATH = '/chat';
 const BINDINGS_PATH = '/admin/bindings';
 const WORK_OBJECTS_PATH = '/work-objects';
+
+const LazyAIDock = lazy(() =>
+  import('./AIDock').then(({ AIDock }) => ({ default: AIDock })),
+);
 
 interface PrimaryNavigationItem {
   icon: IconName;
@@ -340,6 +345,9 @@ export function AppShell() {
   const background = useAppearanceStore((state) => state.background);
   const setBackground = useAppearanceStore((state) => state.setBackground);
   const [openPanel, setOpenPanel] = useState<TopbarPanel | null>(null);
+  const [hasOpenedDock, setHasOpenedDock] = useState(
+    () => useAIDockStore.getState().mode !== 'closed',
+  );
   const popoverRef = useRef<HTMLElement | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
 
@@ -397,6 +405,11 @@ export function AppShell() {
       pathname: '/search',
       search: term.length === 0 ? '' : `?${new URLSearchParams({ q: term })}`,
     });
+  };
+
+  const openAIDock = () => {
+    setHasOpenedDock(true);
+    openDock();
   };
 
   const togglePanel = (panel: TopbarPanel) =>
@@ -889,7 +902,7 @@ export function AppShell() {
           aria-label="打开 AI 助手"
           className={styles.floatingEntry}
           data-testid="ai-dock-launcher"
-          onClick={openDock}
+          onClick={openAIDock}
           type="button"
         >
           <Icon className={styles.floatingIcon} name="spark" size={21} strokeWidth={1.9} />
@@ -897,7 +910,20 @@ export function AppShell() {
         </button>
       )}
 
-      <AIDock suppressed={isAIAssistantPage} />
+      {hasOpenedDock ? (
+        <RouteLoadBoundary label="正在打开 AI 助手" surface="dock">
+          <LazyAIDock suppressed={isAIAssistantPage} />
+        </RouteLoadBoundary>
+      ) : null}
     </div>
+  );
+}
+
+/** 仅在 ProtectedRoute 已放行后加载；Ant App 上下文持续包住 AppShell 的 Outlet。 */
+export function AuthenticatedAppShell() {
+  return (
+    <AntApp>
+      <AppShell />
+    </AntApp>
   );
 }

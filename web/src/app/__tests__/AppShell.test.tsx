@@ -173,6 +173,12 @@ function renderShell(
   );
 }
 
+async function settleLazyDock(): Promise<void> {
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+}
+
 function shellElement(): HTMLElement {
   const shell = screen.getByTestId('app-main').parentElement;
   if (shell === null) {
@@ -205,15 +211,23 @@ function resetStores(): void {
 describe('AppShell and singleton AI Dock', () => {
   beforeEach(resetStores);
 
-  it('mounts exactly one Dock instance for the whole shell', () => {
+  it('loads one Dock only after explicit open and retains it after close', async () => {
     renderShell();
 
+    expect(screen.queryByTestId('ai-dock')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
+    expect(screen.getByTestId('lazy-dock-loading')).toHaveTextContent('正在打开 AI 助手');
+    await settleLazyDock();
+    expect(screen.getAllByTestId('ai-dock')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 助手' }));
+    expect(screen.getByTestId('ai-dock')).not.toBeVisible();
     expect(screen.getAllByTestId('ai-dock')).toHaveLength(1);
   });
 
-  it('keeps the main content width identical in drawer and enlarged floating modes', () => {
+  it('keeps the main content width identical in drawer and enlarged floating modes', async () => {
     useAIDockStore.setState({ mode: 'drawer', lastOpenMode: 'drawer' });
     renderShell();
+    await settleLazyDock();
 
     const shell = shellElement();
     const drawerShellClassName = shell.className;
@@ -229,9 +243,10 @@ describe('AppShell and singleton AI Dock', () => {
     expect(screen.getByTestId('ai-dock')).toHaveAttribute('data-floating', 'true');
   });
 
-  it('moves the floating panel by mouse drag, by arrow keys, and back by reset', () => {
+  it('moves the floating panel by mouse drag, by arrow keys, and back by reset', async () => {
     useAIDockStore.setState({ mode: 'drawer', lastOpenMode: 'drawer' });
     renderShell();
+    await settleLazyDock();
 
     const dock = screen.getByTestId('ai-dock');
     expect(dock).toHaveAttribute('data-positioned', 'false');
@@ -258,7 +273,7 @@ describe('AppShell and singleton AI Dock', () => {
     expect(dock.style.top).toBe('');
   });
 
-  it('keeps the same temporary session and conversation across SPA navigation', () => {
+  it('keeps the same temporary session and conversation across SPA navigation', async () => {
     useAIDockStore.setState({
       draft: '尚未发送的补充内容',
       lastOpenMode: 'drawer',
@@ -267,6 +282,7 @@ describe('AppShell and singleton AI Dock', () => {
       transcript: [{ role: 'user', text: '请继续处理这一项' }],
     });
     renderShell();
+    await settleLazyDock();
 
     expect(screen.getByText('请继续处理这一项')).toBeInTheDocument();
     expect(screen.getByLabelText('要 AI 帮什么')).toHaveValue('尚未发送的补充内容');
@@ -284,10 +300,11 @@ describe('AppShell and singleton AI Dock', () => {
     );
   });
 
-  it('provides visible input guidance and a textual Dock state', () => {
+  it('provides visible input guidance and a textual Dock state', async () => {
     useAIDockStore.setState({ mode: 'drawer' });
     useAIDockStore.getState().registerPageContext(workObjectsPageContext());
     renderShell();
+    await settleLazyDock();
 
     expect(screen.getByLabelText('要 AI 帮什么')).toBeInTheDocument();
     expect(
@@ -302,9 +319,10 @@ describe('AppShell and singleton AI Dock', () => {
     expect(document.body.textContent ?? '').not.toMatch(/[✦▤✎▦✉☻⊘◇➜◐◉⚑⚡⚙⏻✥«»]/u);
   });
 
-  it('submits the global Work Object search without changing the AI input', () => {
+  it('submits the global Work Object search without changing the AI input', async () => {
     useAIDockStore.setState({ mode: 'drawer' });
     renderShell('/admin/tasks');
+    await settleLazyDock();
 
     fireEvent.change(screen.getByLabelText('搜索工作事项'), {
       target: { value: '\u3000 OA-WF-001\u0085  ReVIEW\ufeff' },
@@ -325,6 +343,7 @@ describe('AppShell and singleton AI Dock', () => {
     useAIDockStore.getState().registerPageContext(workObjectsPageContext());
 
     renderShell('/chat');
+    await settleLazyDock();
 
     expect(screen.getByText('AI 助手页面')).toBeInTheDocument();
     expect(screen.getByTestId('ai-dock')).not.toBeVisible();
@@ -337,6 +356,7 @@ describe('AppShell and singleton AI Dock', () => {
     useAIDockStore.setState({ lastOpenMode: 'drawer', mode: 'drawer' });
     useAIDockStore.getState().registerPageContext(workObjectsPageContext());
     renderShell('/chat', { registerWorkObjectsContext: true });
+    await settleLazyDock();
 
     await waitFor(() => {
       expect(useAIDockStore.getState().pageContextDeclaration).toBeNull();

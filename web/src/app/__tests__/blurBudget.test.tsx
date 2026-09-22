@@ -297,7 +297,7 @@ describe('per-screen blur-layer budget', () => {
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
     );
-    expect(screen.getByTestId('ai-dock')).toBeVisible();
+    expect(await screen.findByTestId('ai-dock')).toBeVisible();
 
     const layers = describeBlurLayers(shellElement());
     expect(layers).toEqual([
@@ -315,6 +315,7 @@ describe('per-screen blur-layer budget', () => {
     await waitFor(() =>
       expect(screen.getByText('核对本月采购流程')).toBeInTheDocument(),
     );
+    await screen.findByTestId('ai-dock');
     const before = describeBlurLayers(shellElement());
 
     fireEvent.click(screen.getByRole('button', { name: '切换界面风格' }));
@@ -453,6 +454,10 @@ describe('per-screen blur-layer budget', () => {
     renderScreen('/work-objects');
     await screen.findByTestId('app-topbar');
 
+    expect(screen.queryByTestId('ai-dock')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 助手' }));
+    await screen.findByTestId('ai-dock');
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 助手' }));
     expect(screen.getByTestId('ai-dock')).not.toBeVisible();
     expect(describeBlurLayers(shellElement())).not.toContain(
       'app/AIDock.module.css .dock',

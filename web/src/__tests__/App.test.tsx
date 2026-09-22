@@ -1,11 +1,13 @@
 import { assertLogoutCache, trackAuthGenerations } from '../test/logoutCache';
+import { lazy } from 'react';
+import type { ComponentType } from 'react';
 import { renderHook } from '@testing-library/react';
 import { useDraftSession } from '../stores/sessionDraftStore';
 import { loadDraft, saveDraft, parseDraft } from '../features/work-dispatch/dispatchDraft';
 import { loadNewSoftwareDraft, saveNewSoftwareDraft, parseNewSoftwareDraft } from '../features/apps/newSoftwareDraft';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import App, {
   AuthenticationEffects,
@@ -17,6 +19,11 @@ import type { MeResponse } from '../generated/me/me.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigationStore } from '../stores/navigationStore';
+import { lazyRouteComponents } from '../app/lazyRoutes';
+import type { LazyRouteComponents } from '../app/lazyRoutes';
+import { AuthenticatedAppShell } from '../app/AppShell';
+import MessagesPage from '../features/messages/MessagesPage';
+import WorkDispatchPage from '../features/work-dispatch/WorkDispatchPage';
 
 const apiMocks = vi.hoisted(() => ({
   getBinding: vi.fn(),
@@ -46,6 +53,33 @@ function meResponse(): MeResponse {
 function LocationProbe() {
   const location = useLocation();
   return <div>{`${location.pathname}${location.search}`}</div>;
+}
+
+async function settleLazyModules(): Promise<void> {
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+}
+
+async function renderProductionApplication() {
+  const mounted = render(<App />);
+  await settleLazyModules();
+  return mounted;
+}
+
+function StaticChatPage() {
+  return <h1>AI 助手</h1>;
+}
+
+function staticAppRoutes(
+  overrides: Partial<LazyRouteComponents> = {},
+): LazyRouteComponents {
+  return {
+    ...lazyRouteComponents,
+    LazyAuthenticatedAppShell: AuthenticatedAppShell,
+    LazyChatPage: StaticChatPage,
+    ...overrides,
+  };
 }
 
 describe('application authentication boundary', () => {
@@ -241,7 +275,7 @@ describe('application authentication boundary', () => {
     'redirects an unauthenticated admin route to login without mounting its page',
     async () => {
       window.history.pushState({}, '', '/admin/registry');
-      render(<App />);
+      await renderProductionApplication();
 
       expect(
         await screen.findByRole('heading', { name: '欢迎回来' }),
@@ -252,8 +286,17 @@ describe('application authentication boundary', () => {
   );
 
   it('keeps chat protected and returns there after authentication', async () => {
+    function RouteOutlet() {
+      return <Outlet />;
+    }
+    const routes = {
+      ...lazyRouteComponents,
+      LazyAuthenticatedAppShell: RouteOutlet,
+      LazyChatPage: () => <h1>AI 助手</h1>,
+      LazyLoginPage: () => <h1>欢迎回来</h1>,
+    };
     window.history.pushState({}, '', '/chat');
-    render(<App />);
+    render(<App routes={routes} />);
 
     expect(
       await screen.findByRole('heading', { name: '欢迎回来' }),
@@ -296,7 +339,10 @@ describe('application authentication boundary', () => {
         initialEntries={[{ pathname: '/login', state: { from: '/admin/tasks' } }]}
       >
         <Routes>
-          <Route path="/login" element={<LoginRoute />} />
+          <Route
+            path="/login"
+            element={<LoginRoute LoginPageComponent={() => <h1>欢迎回来</h1>} />}
+          />
           <Route path="/admin/tasks" element={<div>受保护目标</div>} />
         </Routes>
       </MemoryRouter>,
@@ -316,7 +362,10 @@ describe('application authentication boundary', () => {
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/search?q=OA-WF-001']}>
           <Routes>
-            <Route path="/login" element={<LoginRoute />} />
+            <Route
+              path="/login"
+              element={<LoginRoute LoginPageComponent={() => <h1>欢迎回来</h1>} />}
+            />
             <Route element={<ProtectedRoute />}>
               <Route path="/search" element={<LocationProbe />} />
             </Route>
@@ -364,7 +413,11 @@ describe('application authentication boundary', () => {
   it('clears_both_drafts_through_shell_logout_and_reauthentication', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', '/');
-    render(<App />);
+    render(
+      <App
+        routes={staticAppRoutes({ LazyWorkDispatchPage: WorkDispatchPage })}
+      />,
+    );
 
     const a = draftToken();
     saveDraft(parseDraft({ title: 'A-private' }), a);
@@ -381,14 +434,14 @@ describe('application authentication boundary', () => {
     const b = draftToken();
     expect(loadDraft(b).title).toBe('');
     expect(loadNewSoftwareDraft(b).name).toBe('');
-    fireEvent.click(screen.getByRole('link', { name: '任务交办' }));
+    fireEvent.click(await screen.findByRole('link', { name: '任务交办' }));
     expect(await screen.findByLabelText('标题')).toHaveValue('');
   });
 
   it.each([403, 503])('logout_preserves_draft_isolation_contract after %s', async (status) => {
     useAuthStore.getState().markAuthenticated();
     window.history.pushState({}, '', '/');
-    const mounted = render(<App />);
+    const mounted = render(<App routes={staticAppRoutes()} />);
     const token = draftToken();
     expect(saveDraft(parseDraft({ title: 'Synthetic saved task' }), token)).toBe(true);
     expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'Synthetic saved software' }), token)).toBe(true);
@@ -418,7 +471,11 @@ describe('application authentication boundary', () => {
   it('clears_drafts_through_a_current_generation_fetch_401', async () => {
     useAuthStore.getState().markAuthenticated();
     window.history.pushState({}, '', '/work-dispatch');
-    const mounted = render(<App />);
+    const mounted = render(
+      <App
+        routes={staticAppRoutes({ LazyWorkDispatchPage: WorkDispatchPage })}
+      />,
+    );
     const a = draftToken();
     expect(saveDraft(parseDraft({ title: 'A-private' }), a)).toBe(true);
     expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'A-private' }), a)).toBe(true);
@@ -442,10 +499,167 @@ describe('application authentication boundary', () => {
     }
   });
 
+  it('shows a local route fallback until an authenticated lazy page resolves', async () => {
+    let loaderCalls = 0;
+    let releaseChat!: (module: { default: ComponentType }) => void;
+    const ControlledChatPage = lazy(
+      () =>
+        new Promise<{ default: ComponentType }>((resolve) => {
+          loaderCalls += 1;
+          releaseChat = resolve;
+        }),
+    );
+    function RouteOutlet() {
+      return <Outlet />;
+    }
+    const routes = {
+      ...lazyRouteComponents,
+      LazyAuthenticatedAppShell: RouteOutlet,
+      LazyChatPage: ControlledChatPage,
+    };
+
+    useAuthStore.getState().markAuthenticated();
+    window.history.pushState({}, '', '/chat');
+    render(<App routes={routes} />);
+
+    await waitFor(() => expect(loaderCalls).toBe(1));
+    expect(screen.getByTestId('lazy-page-loading')).toHaveTextContent('正在打开页面');
+
+    await act(async () => {
+      releaseChat({ default: () => <h1>AI 助手</h1> });
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('lazy-page-loading')).not.toBeInTheDocument();
+    expect(loaderCalls).toBe(1);
+  });
+
+  it('does not start a protected lazy loader before session confirmation', () => {
+    let loaderCalls = 0;
+    const ProtectedPage = lazy(() => {
+      loaderCalls += 1;
+      return Promise.resolve({ default: () => <h1>受保护的延迟页面</h1> });
+    });
+    function RouteOutlet() {
+      return <Outlet />;
+    }
+    const routes = {
+      ...lazyRouteComponents,
+      LazyAuthenticatedAppShell: RouteOutlet,
+      LazyChatPage: ProtectedPage,
+    };
+
+    apiMocks.readMe.mockReturnValue(new Promise(() => {}));
+    useAuthStore.setState({ generation: 0, status: 'unknown' });
+    window.history.pushState({}, '', '/chat');
+    render(<App routes={routes} />);
+
+    expect(screen.getByTestId('boot-gate')).toBeInTheDocument();
+    expect(screen.queryByTestId('lazy-page-loading')).not.toBeInTheDocument();
+    expect(loaderCalls).toBe(0);
+  });
+
+  it('clears state and never revives a protected lazy page when its loader resolves after a 401', async () => {
+    let loaderCalls = 0;
+    let releaseChat!: (module: { default: ComponentType }) => void;
+    const LateChatPage = lazy(
+      () =>
+        new Promise<{ default: ComponentType }>((resolve) => {
+          loaderCalls += 1;
+          releaseChat = resolve;
+        }),
+    );
+    function RouteOutlet() {
+      return <Outlet />;
+    }
+    const routes = {
+      ...lazyRouteComponents,
+      LazyAuthenticatedAppShell: RouteOutlet,
+      LazyChatPage: LateChatPage,
+    };
+
+    useAuthStore.getState().markAuthenticated();
+    useAIDockStore.setState({
+      draft: '上一位用户尚未发送的内容',
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      transcript: [{ role: 'user', text: '上一位用户的私有会话' }],
+    });
+    window.history.pushState({}, '', '/chat');
+    const mounted = render(<App routes={routes} />);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 401,
+    } as Response);
+    try {
+      await waitFor(() => expect(loaderCalls).toBe(1));
+      expect(screen.getByTestId('lazy-page-loading')).toHaveTextContent('正在打开页面');
+
+      await act(async () => {
+        await expect(
+          customInstance({ url: '/api/v1/me', method: 'GET' }),
+        ).rejects.toMatchObject({ code: 'authentication_required', status: 401 });
+      });
+
+      await waitFor(() => {
+        expect(useAuthStore.getState().status).toBe('unauthenticated');
+        expect(window.location.pathname).toBe('/login');
+      });
+      expect(useAIDockStore.getState().draft).toBe('');
+      expect(useAIDockStore.getState().sessionId).toBeNull();
+      expect(useAIDockStore.getState().transcript).toHaveLength(0);
+
+      await act(async () => {
+        releaseChat({ default: () => <h1>迟到的受保护页面</h1> });
+        await Promise.resolve();
+      });
+
+      expect(loaderCalls).toBe(1);
+      expect(
+        screen.queryByRole('heading', { name: '迟到的受保护页面' }),
+      ).not.toBeInTheDocument();
+    } finally {
+      mounted.unmount();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('shows one local refresh exit instead of retrying a failed route download', async () => {
+    let loaderCalls = 0;
+    const FailedPage = lazy(() => {
+      loaderCalls += 1;
+      return Promise.reject(new Error('Synthetic route module failure'));
+    });
+    function RouteOutlet() {
+      return <Outlet />;
+    }
+    const routes = {
+      ...lazyRouteComponents,
+      LazyAuthenticatedAppShell: RouteOutlet,
+      LazyChatPage: FailedPage,
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    useAuthStore.getState().markAuthenticated();
+    window.history.pushState({}, '', '/chat');
+    const mounted = render(<App routes={routes} />);
+    try {
+      const failure = await screen.findByRole('alert');
+      expect(failure).toHaveTextContent('正在打开页面加载失败。');
+      expect(within(failure).getByRole('button', { name: '刷新' })).toBeInTheDocument();
+      expect(loaderCalls).toBe(1);
+    } finally {
+      mounted.unmount();
+      consoleError.mockRestore();
+    }
+  });
+
   it('sends the bare root to the AI assistant route and keeps one shell for every authenticated route', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', '/');
-    render(<App />);
+    render(<App routes={staticAppRoutes()} />);
 
     expect(
       await screen.findByRole('heading', { level: 1, name: 'AI 助手' }),
@@ -480,7 +694,7 @@ describe('application authentication boundary', () => {
   ])('mounts the %s landing page inside the shell', async (path, heading, reason) => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', path);
-    render(<App />);
+    render(<App routes={staticAppRoutes({ LazyMessagesPage: MessagesPage })} />);
 
     expect(
       await screen.findByRole('heading', { level: 1, name: heading }),
@@ -497,7 +711,11 @@ describe('application authentication boundary', () => {
   it('mounts the dispatch draft form at /work-dispatch instead of a placeholder', async () => {
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     window.history.pushState({}, '', '/work-dispatch');
-    render(<App />);
+    render(
+      <App
+        routes={staticAppRoutes({ LazyWorkDispatchPage: WorkDispatchPage })}
+      />,
+    );
 
     expect(
       await screen.findByRole('heading', { level: 1, name: '任务交办' }),
