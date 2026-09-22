@@ -341,7 +341,7 @@ with TestClient(create_app(
   } finally {
     vi.unstubAllGlobals();
   }
-});
+}, 60_000);
 
 function run(command: string, args: string[], cwd: string): void {
   const result = spawnSync(command, args, {

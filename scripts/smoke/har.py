@@ -449,7 +449,7 @@ def _read_selected_form(
             name = item.get("name")
             value = item.get("value")
             if isinstance(name, str) and isinstance(value, str):
-                pairs.append((name, unquote_plus(value)))
+                pairs.append((unquote_plus(name), unquote_plus(value)))
     elif isinstance(post_data.get("text"), str):
         try:
             pairs = parse_qsl(

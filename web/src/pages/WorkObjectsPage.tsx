@@ -374,6 +374,9 @@ export default function WorkObjectsPage() {
   const completedQuery = useQuery({
     queryKey: workObjectsQueryKey(authGeneration, 'completed'),
     queryFn: () => listWorkObjects({ oa_view: 'active', completion: 'completed' }),
+    structuralSharing: (old, incoming) => mergeListResponse(
+      old as WorkObjectListResponse | undefined, incoming as WorkObjectListResponse,
+    ),
   });
   const [syncReadError, setSyncReadError] = useState<{ generation: number; message: string }>();
 

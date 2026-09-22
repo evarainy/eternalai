@@ -475,6 +475,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | task_id | depends_on | 预判档位 | BLOCKED / 边界 |
 |---|---|---|---|
 | `P2-AUDIT-LOGOUT-002` | P2-AUDIT-WO-LIFECYCLE-001（已合并的新基线） | **A** | 方案已更新并通过两轮独立评审；当前候选完成本地实现、验证与 high 自核，待独立 Monitor → 静态评审桥及集成；新棒三轮上限不变，旧 001 未交付不作为通过证据；不新增后继或重排 DAG |
+| `P2-WO-COMPLETED-MERGE-001` | P2-AUDIT-WO-LIFECYCLE-001（已合并） | **B** | 串行修复已办结查询未接既有列表版本合并：只接 `completedQuery` 到 `mergeListResponse`、新增专门前端回归；不改合并算法、认证代次、缓存隔离或公共合同。已合并（PR #206），`P2-AUDIT-LOGOUT-002` 已合入修复并继续验证。无新增欠债。 |
 | `P2-LOW-RISK-WRITE-001` | P2-GOLDEN-001、P2-CONFIRM-BINDING-001、P2-SDUI-RENDERER-001、P2-ENVELOPE-MESSAGE-REDACTION-001（均已完成） | **A** | **是：OA 审批提交协议结构未知；输入到位前不开棒** |
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
 | `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 是：获批知识语料与用户数据边界未到位；机会层 |

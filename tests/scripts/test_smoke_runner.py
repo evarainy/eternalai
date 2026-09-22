@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import secrets
+import subprocess
 from dataclasses import replace
 from http.client import RemoteDisconnected
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request
@@ -25,6 +28,7 @@ from app.ports.auth import AuthenticationError
 from app.ports.capability_registry import CapabilitySpec
 from scripts.sanitize_oa_contract_pack import SanitizationError
 from scripts.smoke import environment as smoke_environment
+from scripts.smoke import freshness as smoke_freshness
 from scripts.smoke import har as smoke_har
 from scripts.smoke import runner as smoke_runner
 from scripts.smoke.capabilities import (
@@ -34,6 +38,7 @@ from scripts.smoke.capabilities import (
 )
 from scripts.smoke.environment import parse_env_file, prepare_environment
 from scripts.smoke.errors import SmokeError
+from scripts.smoke.freshness import SourceFreshness
 from scripts.smoke.full_chain_contract import (
     FULL_CHAIN_SCHEMA_VERSION,
     CapabilityFullChainOutcome,
@@ -66,6 +71,229 @@ from scripts.smoke.runner import (
 from scripts.smoke.trace_contract import REQUIRED_TRACE_EVENTS
 
 _FULL_CHAIN_FAILURE_SCHEMA_VERSION = "p2.smoke.full-chain.v2"
+
+
+_TEMPORARY_GIT_ENVIRONMENT_NAMES = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_OPTIONAL_LOCKS",
+        "GIT_WORK_TREE",
+    }
+)
+
+
+def _temporary_git_environment(temporary_root: Path) -> dict[str, str]:
+    global_config = temporary_root / "global.gitconfig"
+    global_config.parent.mkdir(parents=True, exist_ok=True)
+    global_config.write_text("", encoding="utf-8")
+    environment = dict(os.environ)
+    for name in tuple(environment):
+        if (
+            name in _TEMPORARY_GIT_ENVIRONMENT_NAMES
+            or name.startswith("GIT_CONFIG_")
+            or name.startswith("GIT_TRACE")
+        ):
+            environment.pop(name, None)
+    environment["GIT_CONFIG_GLOBAL"] = str(global_config)
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    return environment
+
+
+def _run_temporary_git(
+    temporary_root: Path,
+    repo: Path,
+    *arguments: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+        env=_temporary_git_environment(temporary_root),
+        errors="strict",
+        text=True,
+        timeout=10,
+    )
+
+
+def _assert_temporary_git_directory(temporary_root: Path, repo: Path) -> None:
+    completed = _run_temporary_git(
+        temporary_root,
+        repo,
+        "rev-parse",
+        "--absolute-git-dir",
+    )
+    git_directory = Path(completed.stdout.strip()).resolve()
+    assert git_directory.is_relative_to(temporary_root.resolve())
+
+
+def _initialize_temporary_git_repo(temporary_root: Path, name: str) -> Path:
+    repo = temporary_root / name
+    repo.mkdir(parents=True)
+    _run_temporary_git(
+        temporary_root,
+        repo,
+        "init",
+        "--initial-branch=phase2/synthetic",
+    )
+    hooks = temporary_root / f"{name}-hooks"
+    hooks.mkdir()
+    _run_temporary_git(
+        temporary_root,
+        repo,
+        "config",
+        "--local",
+        "core.hooksPath",
+        str(hooks),
+    )
+    _run_temporary_git(
+        temporary_root,
+        repo,
+        "config",
+        "--local",
+        "user.email",
+        "synthetic@example.invalid",
+    )
+    _run_temporary_git(
+        temporary_root,
+        repo,
+        "config",
+        "--local",
+        "user.name",
+        "Synthetic Test",
+    )
+    _assert_temporary_git_directory(temporary_root, repo)
+    return repo
+
+
+def _commit_temporary_git(repo: Path, temporary_root: Path, content: str) -> str:
+    (repo / "tracked.txt").write_text(content, encoding="utf-8")
+    _run_temporary_git(temporary_root, repo, "add", "--", "tracked.txt")
+    _run_temporary_git(
+        temporary_root,
+        repo,
+        "commit",
+        "--no-gpg-sign",
+        "-m",
+        content,
+    )
+    return _run_temporary_git(
+        temporary_root,
+        repo,
+        "rev-parse",
+        "HEAD",
+    ).stdout.strip()
+
+
+def _temporary_relation_repo(
+    tmp_path: Path,
+    relation: Literal["same", "ahead", "behind", "diverged"],
+    *,
+    target_branch: str = "phase2/target",
+) -> Path:
+    temporary_root = tmp_path / "git-fixtures"
+    repo = _initialize_temporary_git_repo(temporary_root, relation)
+    base_commit = _commit_temporary_git(repo, temporary_root, "base")
+
+    if relation == "same":
+        _run_temporary_git(
+            temporary_root,
+            repo,
+            "branch",
+            "--force",
+            "phase0/main",
+            base_commit,
+        )
+    elif relation == "ahead":
+        _run_temporary_git(
+            temporary_root,
+            repo,
+            "branch",
+            "--force",
+            "phase0/main",
+            base_commit,
+        )
+        _commit_temporary_git(repo, temporary_root, "target-ahead")
+    else:
+        _run_temporary_git(temporary_root, repo, "branch", target_branch, base_commit)
+        _commit_temporary_git(repo, temporary_root, "known-main-ahead")
+        _run_temporary_git(
+            temporary_root,
+            repo,
+            "branch",
+            "--force",
+            "phase0/main",
+            "HEAD",
+        )
+        _run_temporary_git(temporary_root, repo, "checkout", "--quiet", target_branch)
+        if relation == "diverged":
+            _commit_temporary_git(repo, temporary_root, "target-diverged")
+
+    _assert_temporary_git_directory(temporary_root, repo)
+    return repo
+
+
+def _temporary_shallow_repo(tmp_path: Path) -> Path:
+    temporary_root = tmp_path / "git-fixtures"
+    source = _initialize_temporary_git_repo(temporary_root, "shallow-source")
+    _commit_temporary_git(source, temporary_root, "base")
+    _commit_temporary_git(source, temporary_root, "known-main-parent")
+    _commit_temporary_git(source, temporary_root, "known-main-head")
+    _run_temporary_git(
+        temporary_root,
+        source,
+        "branch",
+        "--force",
+        "phase0/main",
+        "HEAD",
+    )
+
+    shallow = temporary_root / "shallow-clone"
+    _run_temporary_git(
+        temporary_root,
+        temporary_root,
+        "clone",
+        "--no-local",
+        "--depth=2",
+        "--branch",
+        "phase0/main",
+        str(source),
+        str(shallow),
+    )
+    _assert_temporary_git_directory(temporary_root, shallow)
+    return shallow
+
+
+def _source_freshness_result(
+    relation: smoke_freshness.SourceRelation = "same",
+) -> SourceFreshness:
+    behind_commits: int | Literal["unknown"]
+    if relation == "behind":
+        behind_commits = 2
+    elif relation in {"same", "ahead"}:
+        behind_commits = 0
+    else:
+        behind_commits = "unknown"
+    return SourceFreshness(
+        target_commit="0123456789ab",
+        head_attachment="attached",
+        dirty=False,
+        main_ref="present",
+        known_main_commit="abcdef012345",
+        history="complete",
+        relation=relation,
+        behind_commits=behind_commits,
+        main_evidence="local_only",
+        remote_check="not_run",
+        gate="continue" if relation in {"same", "ahead"} else "warning",
+    )
 
 
 def _assert_smoke_har_traceback_is_redacted(
@@ -242,6 +470,43 @@ def _todo_list_entries(
             {"count": authoritative_count, "status": True},
         ),
     ]
+
+
+def _encoded_todo_list_entries(
+    *,
+    session_key: str,
+    source: str,
+    sort_params: str = "synthetic-sort",
+) -> list[object]:
+    entries = _todo_list_entries(session_key=session_key, sort_params=sort_params)
+    for entry in entries:
+        assert isinstance(entry, dict)
+        request = entry["request"]
+        assert isinstance(request, dict)
+        post_data = request["postData"]
+        assert isinstance(post_data, dict)
+        params = post_data["params"]
+        assert isinstance(params, list)
+        encoded_params: list[dict[str, str]] = []
+        for param in params:
+            assert isinstance(param, dict)
+            name = param["name"]
+            value = param["value"]
+            assert isinstance(name, str) and name
+            assert isinstance(value, str)
+            encoded_params.append(
+                {"name": f"%{ord(name[0]):02X}{name[1:]}", "value": value}
+            )
+        if source == "params":
+            post_data["params"] = encoded_params
+        elif source == "text":
+            post_data.pop("params")
+            post_data["text"] = "&".join(
+                f"{param['name']}={param['value']}" for param in encoded_params
+            )
+        else:
+            raise AssertionError(f"unexpected post data source: {source}")
+    return entries
 
 
 def _todo_list_capture_entries(
@@ -446,7 +711,14 @@ def test_main_passes_only_explicit_smoke_environment_repair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: list[bool] = []
-    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: object())
+    layout = SimpleNamespace(repo_root=Path("synthetic-runtime-root"))
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(
+        smoke_runner,
+        "inspect_source_freshness",
+        lambda _repo_root: _source_freshness_result(),
+    )
+    monkeypatch.setattr(smoke_runner, "_print_source_freshness", lambda _result: None)
 
     def command_prepare(
         _layout: object,
@@ -476,7 +748,14 @@ def test_main_prints_fixed_value_free_smoke_environment_repair_guidance(
     capsys: pytest.CaptureFixture[str],
     error_code: str,
 ) -> None:
-    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: object())
+    layout = SimpleNamespace(repo_root=Path("synthetic-runtime-root"))
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(
+        smoke_runner,
+        "inspect_source_freshness",
+        lambda _repo_root: _source_freshness_result(),
+    )
+    monkeypatch.setattr(smoke_runner, "_print_source_freshness", lambda _result: None)
 
     def fail_prepare(
         _layout: object,
@@ -499,6 +778,514 @@ def test_main_prints_fixed_value_free_smoke_environment_repair_guidance(
         "repair_preserves_existing_credentials=true",
         "仅运行上述固定修复命令，不要手工编辑 .env.smoke。",
     ]
+
+
+@pytest.mark.parametrize("command", ["prepare", "rehearse", "start", "verify"])
+def test_main_freshness_uses_layout_repo_root_before_each_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    layout = SimpleNamespace(repo_root=tmp_path / "runtime-source")
+    assert layout.repo_root != Path.cwd()
+    observed: list[tuple[str, Path]] = []
+
+    def inspect(repo_root: Path) -> SourceFreshness:
+        observed.append(("inspect", repo_root))
+        return _source_freshness_result()
+
+    def command_handler(received_layout: object, **_kwargs: object) -> int:
+        repo_root = getattr(received_layout, "repo_root")
+        assert isinstance(repo_root, Path)
+        observed.append(("handler", repo_root))
+        print(f"handler={command}")
+        return 41
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(smoke_runner, "inspect_source_freshness", inspect)
+    monkeypatch.setattr(smoke_runner, f"_command_{command}", command_handler)
+
+    assert smoke_runner.main([command]) == 41
+
+    captured = capsys.readouterr()
+    assert observed == [
+        ("inspect", layout.repo_root),
+        ("handler", layout.repo_root),
+    ]
+    assert captured.out.splitlines() == [
+        "source_target_commit=0123456789ab",
+        "source_head_attachment=attached",
+        "source_dirty=false",
+        "source_main_ref=present",
+        "source_known_main_commit=abcdef012345",
+        "source_history=complete",
+        "source_relation=same",
+        "source_behind_commits=0",
+        "source_main_evidence=local_only",
+        "source_remote_check=not_run",
+        "source_gate=continue",
+        f"handler={command}",
+    ]
+    assert captured.err == ""
+
+
+def test_source_freshness_classifies_same_ahead_behind_and_diverged(
+    tmp_path: Path,
+) -> None:
+    same = smoke_freshness.inspect_source_freshness(
+        _temporary_relation_repo(tmp_path, "same")
+    )
+    ahead = smoke_freshness.inspect_source_freshness(
+        _temporary_relation_repo(tmp_path, "ahead")
+    )
+    behind = smoke_freshness.inspect_source_freshness(
+        _temporary_relation_repo(tmp_path, "behind")
+    )
+    diverged = smoke_freshness.inspect_source_freshness(
+        _temporary_relation_repo(tmp_path, "diverged")
+    )
+
+    assert (same.relation, same.behind_commits, same.gate) == ("same", 0, "continue")
+    assert (ahead.relation, ahead.behind_commits, ahead.gate) == ("ahead", 0, "continue")
+    assert (behind.relation, behind.behind_commits, behind.gate) == (
+        "behind",
+        1,
+        "warning",
+    )
+    assert (diverged.relation, diverged.behind_commits, diverged.gate) == (
+        "diverged",
+        "unknown",
+        "warning",
+    )
+    for result in (same, ahead, behind, diverged):
+        assert result.main_ref == "present"
+        assert result.main_evidence == "local_only"
+        assert result.remote_check == "not_run"
+        assert len(result.target_commit) == 12
+        assert len(result.known_main_commit) == 12
+
+
+@pytest.mark.parametrize("command", ["prepare", "rehearse", "start", "verify"])
+def test_known_behind_warns_and_continues_to_all_command_handlers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+) -> None:
+    layout = SimpleNamespace(repo_root=tmp_path / "runtime-source")
+    observed: list[str] = []
+
+    def command_handler(*_args: object, **_kwargs: object) -> int:
+        observed.append(command)
+        return 17
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(
+        smoke_runner,
+        "inspect_source_freshness",
+        lambda _repo_root: _source_freshness_result("behind"),
+    )
+    monkeypatch.setattr(smoke_runner, f"_command_{command}", command_handler)
+
+    assert smoke_runner.main([command]) == 17
+
+    captured = capsys.readouterr()
+    assert observed == [command]
+    assert "source_relation=behind" in captured.out
+    assert "source_behind_commits=2" in captured.out
+    assert "source_gate=warning" in captured.out
+    assert (
+        "source_freshness_warning=当前运行版本落后已知主干 2 个提交；"
+        "建议更新或重建工作树后再复核；本次命令继续执行。"
+    ) in captured.out
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("command", ["prepare", "rehearse", "start", "verify"])
+@pytest.mark.parametrize(
+    ("relation", "expected_warning"),
+    [
+        (
+            "unknown",
+            "当前运行版本与已知主干关系未知；"
+            "建议检查本地 Git 与主干引用后再判断；本次命令继续执行。",
+        ),
+        (
+            "diverged",
+            "当前运行版本与已知主干分叉；"
+            "建议核对工作树版本后再决定是否更新；本次命令继续执行。",
+        ),
+    ],
+)
+def test_unknown_and_diverged_freshness_warn_and_continue_to_all_command_handlers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    relation: Literal["unknown", "diverged"],
+    expected_warning: str,
+) -> None:
+    layout = SimpleNamespace(repo_root=tmp_path / "runtime-source")
+    observed: list[str] = []
+
+    def command_handler(*_args: object, **_kwargs: object) -> int:
+        observed.append(command)
+        return 29
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(
+        smoke_runner,
+        "inspect_source_freshness",
+        lambda _repo_root: _source_freshness_result(relation),
+    )
+    monkeypatch.setattr(smoke_runner, f"_command_{command}", command_handler)
+
+    assert smoke_runner.main([command]) == 29
+
+    captured = capsys.readouterr()
+    assert observed == [command]
+    assert f"source_relation={relation}" in captured.out
+    assert "source_gate=warning" in captured.out
+    assert f"source_freshness_warning={expected_warning}" in captured.out
+    assert captured.err == ""
+
+
+def test_detached_head_keeps_commit_comparison_without_branch_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    branch_marker = "branch-marker-must-not-print"
+    repo = _temporary_relation_repo(
+        tmp_path,
+        "behind",
+        target_branch=f"phase2/{branch_marker}",
+    )
+    temporary_root = repo.parent
+    _run_temporary_git(temporary_root, repo, "checkout", "--quiet", "--detach", "HEAD")
+    layout = SimpleNamespace(repo_root=repo)
+    observed: list[object] = []
+
+    def command_prepare(*args: object, **kwargs: object) -> int:
+        observed.append((args, kwargs))
+        return 31
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(smoke_runner, "_command_prepare", command_prepare)
+
+    assert smoke_runner.main(["prepare"]) == 31
+
+    captured = capsys.readouterr()
+    assert observed
+    assert "source_head_attachment=detached" in captured.out
+    assert "source_relation=behind" in captured.out
+    assert "source_gate=warning" in captured.out
+    assert (
+        "source_freshness_warning=当前运行版本落后已知主干 1 个提交；"
+        "建议更新或重建工作树后再复核；本次命令继续执行。"
+    ) in captured.out
+    assert branch_marker not in captured.out
+    assert branch_marker not in captured.err
+
+
+def test_local_only_probe_never_fetches_or_queries_remote(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _temporary_relation_repo(tmp_path, "same")
+    temporary_root = repo.parent
+    original_run_git = smoke_freshness._run_git
+    forbidden_commands = frozenset({"fetch", "ls-remote", "pull", "remote"})
+    observed_commands: list[tuple[str, ...]] = []
+
+    def record_git_call(
+        repo_root: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert repo_root.resolve().is_relative_to(temporary_root.resolve())
+        observed_commands.append(arguments)
+        if arguments[0] in forbidden_commands:
+            return subprocess.CompletedProcess(["git"], 0, b"", b"")
+        return original_run_git(repo_root, *arguments)
+
+    monkeypatch.setattr(smoke_freshness, "_run_git", record_git_call)
+
+    result = smoke_freshness.inspect_source_freshness(repo)
+
+    assert observed_commands
+    assert all(command[0] not in forbidden_commands for command in observed_commands)
+    assert result.relation == "same"
+    assert result.main_evidence == "local_only"
+    assert result.remote_check == "not_run"
+
+
+def test_missing_main_and_git_unavailable_are_unknown_not_not_behind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    temporary_root = tmp_path / "git-fixtures"
+    repo = _initialize_temporary_git_repo(temporary_root, "missing-main")
+    _commit_temporary_git(repo, temporary_root, "base")
+    missing_main = smoke_freshness.inspect_source_freshness(repo)
+
+    def unavailable_git(
+        _repo_root: Path,
+        *_arguments: str,
+    ) -> subprocess.CompletedProcess[bytes]:
+        raise OSError("synthetic git unavailable")
+
+    monkeypatch.setattr(smoke_freshness, "_run_git", unavailable_git)
+    git_unavailable = smoke_freshness.inspect_source_freshness(repo)
+
+    assert missing_main.main_ref == "missing"
+    assert missing_main.main_evidence == "local_only"
+    assert missing_main.target_commit != "unknown"
+    assert git_unavailable.main_ref == "unknown"
+    assert git_unavailable.main_evidence == "unavailable"
+    assert git_unavailable.target_commit == "unknown"
+    for result in (missing_main, git_unavailable):
+        assert result.relation == "unknown"
+        assert result.gate == "warning"
+        smoke_runner._print_source_freshness(result)
+        captured = capsys.readouterr()
+        assert "source_relation=unknown" in captured.out
+        assert "source_gate=warning" in captured.out
+        assert (
+            "source_freshness_warning=当前运行版本与已知主干关系未知；"
+            "建议检查本地 Git 与主干引用后再判断；本次命令继续执行。"
+        ) in captured.out
+        assert "新鲜" not in captured.out
+        assert "未落后" not in captured.out
+        assert captured.err == ""
+
+
+def test_shallow_same_sha_and_confirmed_ancestor_relationships(
+    tmp_path: Path,
+) -> None:
+    shallow = _temporary_shallow_repo(tmp_path)
+    temporary_root = shallow.parent
+
+    same = smoke_freshness.inspect_source_freshness(shallow)
+    _run_temporary_git(
+        temporary_root,
+        shallow,
+        "checkout",
+        "--quiet",
+        "-b",
+        "phase2/synthetic",
+        "HEAD~1",
+    )
+    behind = smoke_freshness.inspect_source_freshness(shallow)
+
+    assert (same.history, same.relation, same.behind_commits, same.gate) == (
+        "shallow",
+        "same",
+        0,
+        "continue",
+    )
+    assert (behind.history, behind.relation, behind.behind_commits, behind.gate) == (
+        "shallow",
+        "behind",
+        1,
+        "warning",
+    )
+
+
+def test_source_freshness_dirty_is_observation_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _temporary_relation_repo(tmp_path, "same")
+    layout = SimpleNamespace(repo_root=repo)
+    observed_repairs: list[bool] = []
+
+    def command_prepare(
+        _layout: object,
+        *,
+        repair_smoke_env: bool,
+    ) -> int:
+        observed_repairs.append(repair_smoke_env)
+        return 0
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(smoke_runner, "_command_prepare", command_prepare)
+
+    assert smoke_runner.main(["prepare"]) == 0
+    clean_output = capsys.readouterr().out
+    (repo / "untracked-observation.txt").write_text("dirty", encoding="utf-8")
+    assert smoke_runner.main(["prepare"]) == 0
+    dirty_output = capsys.readouterr().out
+
+    def source_fields(output: str) -> dict[str, str]:
+        return {
+            name: value
+            for line in output.splitlines()
+            if line.startswith("source_") and "=" in line
+            for name, value in (line.split("=", maxsplit=1),)
+            if name != "source_freshness_warning"
+        }
+
+    clean_fields = source_fields(clean_output)
+    dirty_fields = source_fields(dirty_output)
+    assert clean_fields["source_dirty"] == "false"
+    assert dirty_fields["source_dirty"] == "true"
+    assert observed_repairs == [False, False]
+    for name, value in clean_fields.items():
+        if name != "source_dirty":
+            assert dirty_fields[name] == value
+
+
+def test_source_freshness_distinguishes_non_ancestor_from_merge_base_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo = _temporary_relation_repo(tmp_path, "diverged")
+    diverged = smoke_freshness.inspect_source_freshness(repo)
+    original_run_git = smoke_freshness._run_git
+
+    def fail_merge_base(
+        repo_root: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[bytes]:
+        if arguments[:2] == ("merge-base", "--is-ancestor"):
+            raise subprocess.TimeoutExpired(["git", *arguments], timeout=10)
+        return original_run_git(repo_root, *arguments)
+
+    monkeypatch.setattr(smoke_freshness, "_run_git", fail_merge_base)
+    unavailable = smoke_freshness.inspect_source_freshness(repo)
+
+    assert diverged.relation == "diverged"
+    assert diverged.gate == "warning"
+    assert unavailable.relation == "unknown"
+    assert unavailable.gate == "warning"
+    smoke_runner._print_source_freshness(diverged)
+    diverged_output = capsys.readouterr().out
+    smoke_runner._print_source_freshness(unavailable)
+    unavailable_output = capsys.readouterr().out
+    assert "当前运行版本与已知主干分叉" in diverged_output
+    assert "当前运行版本与已知主干关系未知" in unavailable_output
+    assert diverged_output != unavailable_output
+
+
+def test_freshness_output_discards_git_stderr_paths_remote_and_status_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    markers = (
+        "branch-marker-must-not-print",
+        r"C:\\Users\\sensitive-user\\source",
+        "https://remote-marker.invalid/private",
+        "access_token=synthetic-token-marker",
+    )
+    raw_marker = " | ".join(markers).encode("utf-8")
+    full_sha = b"0123456789abcdef0123456789abcdef01234567"
+    layout = SimpleNamespace(repo_root=tmp_path / "runtime-source")
+    unexpected_calls: list[tuple[str, ...]] = []
+
+    def fake_git_call(
+        repo_root: Path,
+        *arguments: str,
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert repo_root.resolve().is_relative_to(tmp_path.resolve())
+        if arguments == ("rev-parse", "--verify", "HEAD^{commit}"):
+            return subprocess.CompletedProcess(["git"], 0, full_sha + b"\n", raw_marker)
+        if arguments == ("symbolic-ref", "--quiet", "HEAD"):
+            return subprocess.CompletedProcess(
+                ["git"],
+                0,
+                b"refs/heads/" + markers[0].encode("ascii"),
+                raw_marker,
+            )
+        if arguments == (
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "-z",
+        ):
+            return subprocess.CompletedProcess(["git"], 0, b"?? " + raw_marker, raw_marker)
+        if arguments == ("rev-parse", "--is-shallow-repository"):
+            return subprocess.CompletedProcess(["git"], 0, b"false\n", raw_marker)
+        if arguments == ("show-ref", "--verify", "--quiet", "refs/heads/phase0/main"):
+            return subprocess.CompletedProcess(["git"], 0, b"", raw_marker)
+        if arguments == ("rev-parse", "--verify", "refs/heads/phase0/main^{commit}"):
+            return subprocess.CompletedProcess(["git"], 0, full_sha + b"\n", raw_marker)
+        unexpected_calls.append(arguments)
+        return subprocess.CompletedProcess(["git"], 1, b"", raw_marker)
+
+    def command_prepare(*_args: object, **_kwargs: object) -> int:
+        return 47
+
+    monkeypatch.setattr(smoke_freshness, "_run_git", fake_git_call)
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(smoke_runner, "_command_prepare", command_prepare)
+
+    assert smoke_runner.main(["prepare"]) == 47
+
+    captured = capsys.readouterr()
+    assert unexpected_calls == []
+    assert "source_relation=same" in captured.out
+    assert "source_dirty=true" in captured.out
+    for marker in markers:
+        assert marker not in captured.out
+        assert marker not in captured.err
+
+
+def test_main_start_keeps_candidate_fingerprint_failure_after_git_unavailable_freshness_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    layout = Layout(
+        repo_root=tmp_path / "runtime-source",
+        shared_root=tmp_path,
+        base_env=tmp_path / ".env",
+        smoke_env=tmp_path / ".env.smoke",
+        source_har=tmp_path / "synthetic.har",
+        scratch=tmp_path / "_scratch",
+    )
+    observed_git_commands: list[tuple[str, ...]] = []
+    backend_calls: list[object] = []
+
+    def git_unavailable(
+        command: list[str],
+        *_args: object,
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        observed_git_commands.append(tuple(command))
+        raise OSError("synthetic git unavailable")
+
+    def backend_must_not_start(*_args: object, **_kwargs: object) -> None:
+        backend_calls.append("called")
+        pytest.fail("candidate fingerprint failure must stop before service startup")
+
+    monkeypatch.setattr(smoke_runner, "_resolve_layout", lambda: layout)
+    monkeypatch.setattr(smoke_runner, "load_runtime_environment", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        smoke_runner,
+        "_validate_settings",
+        lambda _environment: SimpleNamespace(),
+    )
+    monkeypatch.setattr(smoke_runner, "_start_backend", backend_must_not_start)
+    monkeypatch.setattr(subprocess, "run", git_unavailable)
+
+    assert smoke_runner.main(["start"]) == 1
+
+    captured = capsys.readouterr()
+    assert any(
+        command[-2:] == ("rev-parse", "HEAD")
+        for command in observed_git_commands
+    )
+    assert backend_calls == []
+    assert (
+        "source_freshness_warning=当前运行版本与已知主干关系未知；"
+        "建议检查本地 Git 与主干引用后再判断；本次命令继续执行。"
+    ) in captured.out
+    assert "smoke failed: candidate_fingerprint_failed" in captured.err
 
 
 @pytest.mark.parametrize(
@@ -920,6 +1707,95 @@ def test_extract_todo_list_contract_decodes_params_form_values(
     contract = extract_todo_list_contract(path)
 
     assert contract.sort_params == "synthetic sort[]"
+
+
+def test_extract_todo_list_contract_decodes_encoded_form_names_consistently(
+    tmp_path: Path,
+) -> None:
+    session_key = "s" * 69
+    contracts: dict[str, TodoListContract] = {}
+    for source in ("params", "text"):
+        path = tmp_path / f"synthetic-todo-{source}.har"
+        _write_har(
+            path,
+            _encoded_todo_list_entries(
+                session_key=session_key,
+                source=source,
+                sort_params="synthetic%2520sort",
+            ),
+        )
+        contracts[source] = extract_todo_list_contract(path)
+
+    assert contracts["params"] == contracts["text"]
+    assert contracts["params"].actiontype == "synthetic-action"
+    assert contracts["params"].sort_params == "synthetic%20sort"
+
+
+def test_extract_todo_list_contract_rejects_duplicate_decoded_form_name(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    session_key = "s" * 69
+    entries = _todo_list_entries(session_key=session_key)
+    counts_entry = entries[2]
+    assert isinstance(counts_entry, dict)
+    request = counts_entry["request"]
+    assert isinstance(request, dict)
+    post_data = request["postData"]
+    assert isinstance(post_data, dict)
+    params = post_data["params"]
+    assert isinstance(params, list)
+    params.append({"name": "%64ataKey", "value": session_key})
+    _write_har(path, entries)
+
+    with pytest.raises(SmokeError, match="todo_list_form_duplicate"):
+        extract_todo_list_contract(path)
+
+
+@pytest.mark.parametrize(
+    "invalid_sort_params",
+    ["", " ", "synthetic%0Avalue"],
+    ids=["empty", "whitespace", "control_character"],
+)
+def test_extract_todo_list_contract_rejects_blank_or_control_form_value(
+    tmp_path: Path,
+    invalid_sort_params: str,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    _write_har(
+        path,
+        _todo_list_entries(
+            session_key="s" * 69,
+            sort_params=invalid_sort_params,
+        ),
+    )
+
+    with pytest.raises(SmokeError, match="todo_list_form_invalid"):
+        extract_todo_list_contract(path)
+
+
+def test_extract_todo_list_contract_rejects_missing_selected_form_field(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "synthetic-todo.har"
+    entries = _todo_list_entries(session_key="s" * 69)
+    split_entry = entries[0]
+    assert isinstance(split_entry, dict)
+    request = split_entry["request"]
+    assert isinstance(request, dict)
+    post_data = request["postData"]
+    assert isinstance(post_data, dict)
+    params = post_data["params"]
+    assert isinstance(params, list)
+    post_data["params"] = [
+        param
+        for param in params
+        if isinstance(param, dict) and param.get("name") != "viewcondition"
+    ]
+    _write_har(path, entries)
+
+    with pytest.raises(SmokeError, match="todo_list_entry_not_found"):
+        extract_todo_list_contract(path)
 
 
 def test_extract_todo_list_contract_accepts_identical_repeated_sequence(
@@ -2195,13 +3071,16 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         assert value not in report
     for forbidden in ("隐式输入", "mock", "错误分类", "结构错误"):
         assert forbidden not in report
-    assert "输入时屏幕不会显示内容" in report
-    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" in report
-    assert "如果看到登录页，就在浏览器登录" in report
-    assert "登录后只查询一次" in report
-    assert "完成后回到命令行运行 `./smoke.ps1 verify`" in report
+    assert "输入时屏幕不会显示内容" not in report
+    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" not in report
+    assert "如果看到登录页，就在浏览器登录" not in report
+    assert "登录后只查询一次" not in report
+    assert "完成后回到命令行运行 `./smoke.ps1 verify`" not in report
+    assert "到内网后，在项目目录运行 `./smoke.ps1 start`" not in report
     assert "任一命令失败就马上停止" in report
+    assert "保留屏幕上的错误和已经生成的报告" in report
     assert "不要自行改文件，也不要切换运行模式" in report
+    assert "不以完整运行时链路的通过替代 Provider 协议检查" in report
     assert "传输失败细分：remote_disconnected" in report
     assert "HTTP 状态码：502" in report
     assert "完整运行时链路：passed" in report
@@ -4047,6 +4926,11 @@ def test_verify_full_chain_failure_writes_safe_report_and_returns_one(
         )
         == 1
     )
+    assert "到内网后，在项目目录运行 `./smoke.ps1 start`" not in report_text
+    assert "命令行里的登录只是在检查 OA；浏览器登录是另外一回事" not in report_text
+    assert "任一命令失败就马上停止" in report_text
+    assert "保留屏幕上的错误和已经生成的报告" in report_text
+    assert "不以完整运行时链路的通过替代 Provider 协议检查" in report_text
 
 
 def test_verify_full_chain_failure_prints_exact_run_pass_fail_counts(

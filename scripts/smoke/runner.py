@@ -75,6 +75,7 @@ from scripts.smoke.environment import (
     prepare_environment,
 )
 from scripts.smoke.errors import SmokeError
+from scripts.smoke.freshness import SourceFreshness, inspect_source_freshness
 from scripts.smoke.full_chain_contract import (
     FULL_CHAIN_FAILURE_CODES,
     FULL_CHAIN_SCHEMA_VERSION,
@@ -315,6 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _build_parser().parse_args(argv)
         layout = _resolve_layout()
+        _print_source_freshness(inspect_source_freshness(layout.repo_root))
         if args.command == "prepare":
             return _command_prepare(
                 layout,
@@ -347,6 +349,47 @@ def main(argv: list[str] | None = None) -> int:
         print("smoke failed: unexpected_error", file=sys.stderr)
         _print_stop_instruction(file=sys.stderr)
         return 1
+
+
+def _print_source_freshness(freshness: SourceFreshness) -> None:
+    dirty = (
+        _bool(freshness.dirty)
+        if isinstance(freshness.dirty, bool)
+        else freshness.dirty
+    )
+    print(f"source_target_commit={freshness.target_commit}")
+    print(f"source_head_attachment={freshness.head_attachment}")
+    print(f"source_dirty={dirty}")
+    print(f"source_main_ref={freshness.main_ref}")
+    print(f"source_known_main_commit={freshness.known_main_commit}")
+    print(f"source_history={freshness.history}")
+    print(f"source_relation={freshness.relation}")
+    print(f"source_behind_commits={freshness.behind_commits}")
+    print(f"source_main_evidence={freshness.main_evidence}")
+    print(f"source_remote_check={freshness.remote_check}")
+    print(f"source_gate={freshness.gate}")
+    if freshness.relation == "behind":
+        behind_commits = freshness.behind_commits
+        if isinstance(behind_commits, int) and behind_commits >= 1:
+            print(
+                "source_freshness_warning="
+                f"当前运行版本落后已知主干 {behind_commits} 个提交；"
+                "建议更新或重建工作树后再复核；本次命令继续执行。"
+            )
+        return
+    if freshness.relation == "diverged":
+        print(
+            "source_freshness_warning="
+            "当前运行版本与已知主干分叉；"
+            "建议核对工作树版本后再决定是否更新；本次命令继续执行。"
+        )
+        return
+    if freshness.relation == "unknown":
+        print(
+            "source_freshness_warning="
+            "当前运行版本与已知主干关系未知；"
+            "建议检查本地 Git 与主干引用后再判断；本次命令继续执行。"
+        )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -2541,23 +2584,14 @@ def _build_report(
             f"待办 {pending.protocol.record_count} 条/{pending.protocol.response_count} 次响应。"
         ),
         "",
-        "## 给雨爷的现场操作",
+        "## 下一步处置",
         "",
         (
-            "1. 到内网后，在项目目录运行 `./smoke.ps1 start`。按提示输入 OA 账号和"
-            "密码；输入时屏幕不会显示内容，这是正常的。"
+            "1. 本报告已分别列出完整运行时链路、Provider 协议证据和失败诊断；"
+            "请依据这些已有结果处置，不以完整运行时链路的通过替代 Provider 协议检查。"
         ),
         (
-            "2. 命令行里的登录只是在检查 OA；浏览器登录是另外一回事。"
-            "`start` 成功后，打开上面打印的 `/chat` 地址；如果看到登录页，"
-            "就在浏览器登录。登录后只查询一次。"
-        ),
-        (
-            "3. 完成后回到命令行运行 `./smoke.ps1 verify`；"
-            "再次输入时屏幕同样不会显示内容。"
-        ),
-        (
-            "4. 任一命令失败就马上停止；保留屏幕上的错误和已经生成的报告，"
+            "2. 任一命令失败就马上停止；保留屏幕上的错误和已经生成的报告，"
             "不要自行改文件，也不要切换运行模式。"
         ),
     ]
