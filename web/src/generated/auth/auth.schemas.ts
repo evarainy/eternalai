@@ -8,6 +8,11 @@ export interface LoginResponse {
   authenticated: boolean;
 }
 
+export const LogoutResponseValue = {
+  authenticated: false,
+} as const;
+export type LogoutResponse = typeof LogoutResponseValue;
+
 /**
  * One-shot OA login credential accepted only by the authentication adapter.
  */

@@ -24,6 +24,7 @@ from app.ports.trace import TraceEvent
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -210,6 +211,7 @@ def _client(
         create_app(
             runtime=runtime,
             admin_registry_service=service,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

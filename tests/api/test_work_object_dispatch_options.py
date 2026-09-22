@@ -11,6 +11,7 @@ from app.api.v1 import work_objects as api
 from app.ports import work_object_scope as policy
 from tests.api.test_work_object_dispatch import assert_error, expire_directory, request_body
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
+from tests.auth_fakes import MemorySessionRevocations
 
 
 def options(db, query="kind=department"):
@@ -454,6 +455,7 @@ def test_unconfigured_service_precedes_invalid_parameters(dispatch_db):
     db = dispatch_db
     with TestClient(
         create_app(
+            session_revocations=MemorySessionRevocations(),
             session_tokens=db.tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

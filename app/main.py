@@ -32,6 +32,7 @@ from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
     AuthenticationPort,
     Principal,
+    SessionRevocationStorePort,
     SessionTokenPort,
 )
 from app.ports.runtime import RuntimePort
@@ -49,6 +50,7 @@ def create_app(
     user_profile: UserProfilePort | None = None,
     authentication: AuthenticationPort | None = None,
     session_tokens: SessionTokenPort | None = None,
+    session_revocations: SessionRevocationStorePort | None = None,
     session_binder: Callable[[Principal, str], str] | None = None,
     session_cookie_ttl_seconds: int | None = None,
     session_cookie_secure: bool = True,
@@ -77,7 +79,7 @@ def create_app(
                 await credential_polling_scheduler.stop()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
-    require_principal = make_require_principal(session_tokens)
+    require_principal = make_require_principal(session_tokens, session_revocations)
     require_csrf = make_require_csrf(csrf_allowed_origins)
     csrf_protected_principal = make_csrf_protected_principal(
         require_principal,
@@ -96,6 +98,7 @@ def create_app(
             authentication,
             session_tokens,
             require_csrf=require_csrf,
+            session_revocations=session_revocations,
             session_cookie_ttl_seconds=session_cookie_ttl_seconds,
             session_cookie_secure=session_cookie_secure,
         ),
@@ -149,6 +152,7 @@ def create_production_app(
         user_profile=components.user_profile,
         authentication=components.authentication,
         session_tokens=components.session_tokens,
+        session_revocations=components.session_revocations,
         session_binder=components.session_binder.bind,
         session_cookie_ttl_seconds=components.session_cookie_ttl_seconds,
         session_cookie_secure=resolved_settings.session_cookie_secure,

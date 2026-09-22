@@ -26,6 +26,7 @@ from app.runtime.runtime import RuntimeImpl
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -339,6 +340,7 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
     client = TestClient(
         create_app(
             runtime=runtime,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=session_tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,

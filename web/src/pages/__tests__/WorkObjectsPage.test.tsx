@@ -1,10 +1,13 @@
+import { assertLogoutCache, trackAuthGenerations } from '../../test/logoutCache';
 import { MemoryRouter } from 'react-router-dom';
 import WorkDispatchPage from '../../features/work-dispatch/WorkDispatchPage';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App as AntApp, ConfigProvider } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { ApiError } from '../../api/mutator';
+import { customInstance } from '../../api/mutator';
+import { AuthenticationEffects } from '../../App';
 import { AIDock } from '../../app/AIDock';
 import type {
   InternalWorkObjectView,
@@ -144,6 +147,11 @@ function renderPage(
   return { queryClient, ...rendered };
 }
 
+function AuthenticatedWorkObjects() {
+  const status = useAuthStore((state) => state.status);
+  return <><AuthenticationEffects />{status === 'authenticated' ? <WorkObjectsPage /> : <p>合成退出状态</p>}</>;
+}
+
 describe('WorkObjectsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -184,6 +192,90 @@ describe('WorkObjectsPage', () => {
     expect(screen.getByTestId('work-count-todo')).toHaveTextContent('1');
     fireEvent.click(screen.getByRole('radio', { name: /待办/ }));
     expect(screen.getByText('内部任务责任人')).toBeInTheDocument();
+  });
+
+  it('logout_discards_all_views_without_breaking_revision_merge', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      authenticated: true, display_name: 'Synthetic A', org: null, org_status: 'unavailable', avatar_path: null,
+    })));
+    let mounted: ReturnType<typeof render> | undefined;
+    try {
+      apiMocks.completedWorkObjects.mockResolvedValue(listResponse({ items: [COMPLETED_INTERNAL] }));
+      mounted = render(<ConfigProvider><AntApp><QueryClientProvider client={client}>
+        <AuthenticatedWorkObjects />
+      </QueryClientProvider></AntApp></ConfigProvider>);
+      await screen.findByText(WORK_OBJECT.source_title!);
+      fireEvent.click(within(screen.getByText(WORK_OBJECT.source_title!).closest('tr')!).getByRole('button'));
+      await waitFor(() => expect(apiMocks.getWorkObject).toHaveBeenCalled());
+      await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })
+        .filter((query) => query.state.data !== undefined)).toHaveLength(4));
+      const activeKey = ['work-objects', 1, 'list', 'active', 'active'];
+      const completedKey = ['work-objects', 1, 'list', 'active', 'completed'];
+      const newer = listResponse({
+        items: [{ ...WORK_OBJECT, oa_observation: { ...WORK_OBJECT.oa_observation, revision: 2 } }],
+        oa_sync: { ...listResponse().oa_sync, revision: 2, attempt_revision: 2 },
+      });
+      apiMocks.listWorkObjects.mockResolvedValueOnce(newer);
+      await act(async () => { await client.refetchQueries({ queryKey: activeKey }); });
+      apiMocks.listWorkObjects.mockResolvedValueOnce(listResponse());
+      apiMocks.completedWorkObjects.mockResolvedValueOnce(listResponse({
+        items: [{ ...COMPLETED_INTERNAL, version: 3, title: 'Synthetic stale completed title' }],
+      }));
+      await act(async () => {
+        await client.refetchQueries({ queryKey: activeKey });
+        await client.refetchQueries({ queryKey: completedKey });
+      });
+      expect(client.getQueryData<WorkObjectListResponse>(activeKey)?.oa_sync.revision).toBe(2);
+      expect(client.getQueryData<WorkObjectListResponse>(activeKey)?.items[0]).toMatchObject({
+        oa_observation: { revision: 2 },
+      });
+      expect(client.getQueryData<WorkObjectListResponse>(completedKey)?.items[0]).toMatchObject({
+        version: 4, title: COMPLETED_INTERNAL.title, handling_action: 'view_only',
+      });
+      let release!: (value: WorkObjectListResponse) => void;
+      apiMocks.listWorkObjects.mockReturnValueOnce(new Promise<WorkObjectListResponse>((done) => { release = done; }));
+      const late = client.refetchQueries({ queryKey: ['work-objects', 1, 'list', 'active', 'active'] });
+      await waitFor(() => expect(client.isFetching()).toBe(1));
+      fetchSpy.mockResolvedValueOnce(new Response('', { status: 401 }));
+      await act(async () => {
+        await expect(customInstance({ url: '/api/v1/me', method: 'GET' })).rejects.toMatchObject({ status: 401 });
+      });
+      expect(screen.getByText('合成退出状态')).toBeVisible();
+      expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+      for (const query of client.getQueryCache().getAll()) expect(query.state.data).toBeUndefined();
+      await act(async () => { release(listResponse()); await late; });
+      expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+      apiMocks.listWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
+      apiMocks.syncWorkObjects.mockResolvedValue(listResponse({ items: [OTHER_USER_WORK_OBJECT] }));
+      apiMocks.completedWorkObjects.mockResolvedValue(listResponse({ items: [] }));
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({
+        authenticated: true, display_name: 'Synthetic B', org: null, org_status: 'unavailable', avatar_path: null,
+      })));
+      act(() => useAuthStore.getState().markAuthenticated());
+      await screen.findByText(OTHER_USER_WORK_OBJECT.source_title!);
+      expect(screen.queryByText(WORK_OBJECT.source_title!)).toBeNull();
+      expect(client.getQueryCache().findAll({ queryKey: ['work-objects', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+      for (const query of client.getQueryCache().getAll()) {
+        if (query.state.data === undefined) continue;
+        if (query.queryKey[0] === 'me') {
+          expect(query.state.data).toMatchObject({ display_name: 'Synthetic B' });
+        } else {
+          expect(query.queryKey[0]).toBe('work-objects');
+          const data = query.state.data as WorkObjectListResponse;
+          expect(data.items).toBeDefined();
+          for (const item of data.items) expect(item).toEqual(OTHER_USER_WORK_OBJECT);
+        }
+      }
+    } finally {
+      mounted?.unmount();
+      fetchSpy.mockRestore();
+    }
   });
 
   it('registers the visible Work Objects page through the nine-field contract', async () => {

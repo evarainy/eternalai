@@ -14,6 +14,19 @@
         ],
         "title": "LoginResponse",
         "type": "object"
+      },
+      "LogoutResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "authenticated": {
+            "const": false,
+            "default": false,
+            "title": "Authenticated",
+            "type": "boolean"
+          }
+        },
+        "title": "LogoutResponse",
+        "type": "object"
       }
     }
   },
@@ -70,6 +83,30 @@
           }
         },
         "summary": "Login"
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "CSRF validation failed"
+          },
+          "503": {
+            "description": "Logout is temporarily unavailable"
+          }
+        },
+        "summary": "Logout"
       }
     }
   }

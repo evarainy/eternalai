@@ -555,7 +555,7 @@ describe('AppShell topbar', () => {
     );
   });
 
-  it('carries logout in the user menu instead of the sidebar and keeps the help entry honest', () => {
+  it('carries logout in the user menu instead of the sidebar and keeps the help entry honest', async () => {
     renderShell();
 
     const sidebar = screen.getByRole('complementary', { name: '主导航' });
@@ -585,9 +585,10 @@ describe('AppShell topbar', () => {
     expect(menu.textContent).not.toContain('8012');
     expect(menu.textContent).not.toContain('内线');
 
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     fireEvent.click(logout);
-
-    expect(useAuthStore.getState().status).toBe('unauthenticated');
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    fetchSpy.mockRestore();
   });
 
   it('switches the background image from the style control and remembers the choice', () => {
@@ -941,5 +942,84 @@ describe('AppShell topbar popovers follow the finalized canvas', () => {
     expect(submitRule).toContain('var(--workbench-control-ring)');
     expect(submitRule).toContain('var(--workbench-control-glow)');
     expect(css).not.toContain('ant-input-group-addon');
+  });
+});
+
+
+describe('server confirmed logout', () => {
+  beforeEach(resetStores);
+
+  it.each([200, 401, 503])('late_logout_response_does_not_change_new_identity %s', async (status) => {
+    let release!: (value: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise<Response>((resolve) => { release = resolve; }));
+    const mounted = renderShell();
+    try {
+      fireEvent.click(screen.getByTestId('topbar-avatar'));
+      fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+      expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
+      act(() => useAuthStore.getState().markAuthenticated());
+      const newGeneration = useAuthStore.getState().generation;
+      await act(async () => {
+        release(new Response(JSON.stringify(status === 200 ? { authenticated: false } : {
+          detail: { code: 'authentication_required', message: 'Synthetic old failure' },
+        }), { status }));
+      });
+      expect(useAuthStore.getState().status).toBe('authenticated');
+      expect(useAuthStore.getState().generation).toBe(newGeneration);
+      expect(screen.queryByText('退出未完成，请重试')).not.toBeInTheDocument();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      mounted.unmount();
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it.each([201, 202, 204])('logout_non_200_success_is_not_confirmed %s', async (status) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      status === 204 ? null : JSON.stringify({ authenticated: false }), { status },
+    )).mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
+    useAIDockStore.setState({ draft: 'Synthetic private draft' });
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /退出登录/ })); });
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(screen.getByText('退出未完成，请重试')).toBeInTheDocument();
+    expect(useAIDockStore.getState().draft).toBe('Synthetic private draft');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    fetchSpy.mockRestore();
+  });
+
+  it('logout_waits_for_server_before_leaving', async () => {
+    let resolve!: (value: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValue(new Promise((done) => { resolve = done; }));
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+    expect(screen.getByRole('button', { name: /正在退出/ })).toBeDisabled();
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/v1/auth/logout', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'X-EternalAI-CSRF': '1' }) }));
+    await act(async () => { resolve(new Response(JSON.stringify({ authenticated: false }))); });
+    expect(useAuthStore.getState().status).toBe('unauthenticated');
+    fetchSpy.mockRestore();
+  });
+
+  it.each(['403', '503', 'network', 'wrong-payload'])('logout_failure_is_visible_and_retry_is_user_driven %s', async (failure) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    if (failure === 'network') fetchSpy.mockRejectedValueOnce(new TypeError('Synthetic response lost'));
+    else if (failure === 'wrong-payload') fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: true })));
+    else fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ detail: { code: 'logout_unavailable', message: 'Synthetic failure' } }), { status: Number(failure) }));
+    fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false })));
+    renderShell();
+    fireEvent.click(screen.getByTestId('topbar-avatar'));
+    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+    expect(await screen.findByText('退出未完成，请重试')).toBeInTheDocument();
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    fetchSpy.mockRestore();
   });
 });

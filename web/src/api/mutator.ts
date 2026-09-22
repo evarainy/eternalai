@@ -77,6 +77,12 @@ export const customInstance = async <T>(
       'Authentication is required.',
     );
   }
+  if (
+    method.toUpperCase() === 'POST' && url === '/api/v1/auth/logout' &&
+    response.ok && response.status !== 200
+  ) {
+    throw new ApiError(response.status, 'logout_unconfirmed', 'Logout was not confirmed.');
+  }
   const payload: unknown = await response.json();
   if (!response.ok) {
     if (isAdminErrorEnvelope(payload)) {

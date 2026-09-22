@@ -4,11 +4,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import InternalWorkLifecyclePanel from '../InternalWorkLifecyclePanel';
 import { useAuthStore } from '../../../stores/authStore';
+import { AuthenticationEffects } from '../../../App';
+import { customInstance } from '../../../api/mutator';
 
 const etag = `"wolc-${'a'.repeat(64)}"`;
 const moment = '2026-09-20T01:00:00.000001Z';
 type Operation = 'accept' | 'feedback' | 'complete';
-function harness(initial = 'assigned', strict = false) {
+function AuthenticatedLifecycle() {
+  const status = useAuthStore((value) => value.status);
+  return <><AuthenticationEffects />{status === 'authenticated' ? <InternalWorkLifecyclePanel workObjectId="internal-one" /> : <p>合成已退出</p>}</>;
+}
+function harness(initial = 'assigned', strict = false, authentication = false) {
   let state = initial;
   let version = initial === 'assigned' ? 1 : 2;
   const events: object[] = [];
@@ -34,7 +40,7 @@ function harness(initial = 'assigned', strict = false) {
   });
   vi.stubGlobal('fetch', fetcher);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  const element = <QueryClientProvider client={client}><InternalWorkLifecyclePanel workObjectId="internal-one" /></QueryClientProvider>;
+  const element = <QueryClientProvider client={client}>{authentication ? <AuthenticatedLifecycle /> : <InternalWorkLifecyclePanel workObjectId="internal-one" />}</QueryClientProvider>;
   render(strict ? <StrictMode>{element}</StrictMode> : element);
   return { fetcher, writes };
 }
@@ -96,6 +102,38 @@ it('clears_private_text_and_discards_late_results_on_generation_change', async (
   await act(async () => { reject(new Error('Late synthetic failure')); });
   expect(screen.queryByText('结果待确认，请重试同一次请求')).toBeNull();
   expect(screen.queryByDisplayValue('上一身份的正文')).toBeNull();
+});
+
+it('logout_discards_pending_key_body_etag_and_events', async () => {
+  useAuthStore.setState({ generation: 80, status: 'authenticated' });
+  const { fetcher } = harness('in_progress', false, true);
+  fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Synthetic old private body' } });
+  let reject!: (reason: unknown) => void;
+  fetcher.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+  fireEvent.click(screen.getByRole('button', { name: '反馈进展' }));
+  const oldRequest = fetcher.mock.calls.find(([url]) => url.endsWith('/commands'))!;
+  expect(JSON.parse(oldRequest[1]!.body as string)).toEqual({ operation: 'feedback', text: 'Synthetic old private body' });
+  fetcher.mockResolvedValueOnce(new Response('', { status: 401 }));
+  await act(async () => {
+    await expect(customInstance({ url: '/api/v1/me', method: 'GET' })).rejects.toMatchObject({ status: 401 });
+  });
+  expect(screen.getByText('合成已退出')).toBeVisible();
+  expect(screen.queryByDisplayValue('Synthetic old private body')).toBeNull();
+  act(() => useAuthStore.getState().markAuthenticated());
+  await screen.findByRole('textbox');
+  await act(async () => { reject(new Error('Synthetic old failure')); });
+  expect(screen.queryByText('结果待确认，请重试同一次请求')).toBeNull();
+  expect(screen.queryByRole('button', { name: '重试同一次请求' })).toBeNull();
+  expect(screen.queryByDisplayValue('Synthetic old private body')).toBeNull();
+  expect(document.querySelectorAll('article')).toHaveLength(0);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Synthetic new body' } });
+  fireEvent.click(screen.getByRole('button', { name: '反馈进展' }));
+  await screen.findByText('Synthetic new body', { selector: 'p' });
+  const commands = fetcher.mock.calls.filter(([url]) => url.endsWith('/commands'));
+  expect(commands).toHaveLength(2);
+  expect(commands[1]![1]!.body).not.toEqual(oldRequest[1]!.body);
+  expect((commands[1]![1]!.headers as Record<string, string>)['Idempotency-Key'])
+    .not.toEqual((oldRequest[1]!.headers as Record<string, string>)['Idempotency-Key']);
 });
 
 it('loads_later_events_and_renders_feedback_as_text', async () => {

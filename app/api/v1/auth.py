@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict
@@ -14,10 +14,13 @@ from app.ports.auth import (
     AuthenticationPort,
     LoginCredential,
     Principal,
+    SessionRevocationStorePort,
+    SessionTokenError,
     SessionTokenPort,
 )
 
 SESSION_COOKIE_NAME = "eternalai_session"
+SESSION_COOKIE_PATH = "/api/v1"
 PrincipalDependency = Callable[[Request], Awaitable[Principal]]
 _MAX_LOGIN_BODY_BYTES = 16_384
 
@@ -47,18 +50,44 @@ class LoginResponse(BaseModel):
     authenticated: bool
 
 
+class LogoutResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: Literal[False] = False
+
+
 def make_require_principal(
     session_tokens: SessionTokenPort | None,
+    session_revocations: SessionRevocationStorePort | None = None,
 ) -> PrincipalDependency:
     async def require_principal(request: Request) -> Principal:
         token = request.cookies.get(SESSION_COOKIE_NAME)
         token_port = session_tokens
-        if token_port is None or token is None:
+        if token is None:
             _raise_authentication_required()
+        if token_port is None:
+            _raise_unavailable(logout=False)
+        invalid = False
         try:
-            return token_port.verify(token)
+            metadata = token_port.inspect(token)
+        except SessionTokenError:
+            invalid = True
         except Exception:
+            pass
+        else:
+            if session_revocations is None:
+                _raise_unavailable(logout=False)
+            try:
+                revoked = await session_revocations.is_revoked(metadata.fingerprint)
+            except Exception:
+                pass
+            else:
+                if revoked:
+                    _raise_authentication_required()
+                return metadata.principal
+        if invalid:
             _raise_authentication_required()
+        _raise_unavailable(logout=False)
 
     return require_principal
 
@@ -67,6 +96,7 @@ def make_router(
     authentication: AuthenticationPort | None,
     session_tokens: SessionTokenPort | None,
     *,
+    session_revocations: SessionRevocationStorePort | None = None,
     require_csrf: CSRFDependency,
     session_cookie_ttl_seconds: int | None,
     session_cookie_secure: bool,
@@ -106,9 +136,64 @@ def make_router(
             httponly=True,
             secure=session_cookie_secure,
             samesite="lax",
-            path="/api/v1",
+            path=SESSION_COOKIE_PATH,
         )
         return LoginResponse(authenticated=True)
+
+    async def logout_csrf(request: Request) -> None:
+        try:
+            await require_csrf(request)
+        except HTTPException as exc:
+            exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
+            raise
+
+    @router.post(
+        "/logout",
+        operation_id="logout_api_v1_auth_logout_post",
+        response_model=LogoutResponse,
+        responses={
+            403: {"description": "CSRF validation failed"},
+            503: {"description": "Logout is temporarily unavailable"},
+        },
+        dependencies=[Depends(logout_csrf)],
+    )
+    async def logout(request: Request, response: Response) -> LogoutResponse:
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token is not None:
+            if session_tokens is None:
+                _raise_unavailable(logout=True)
+            invalid = False
+            metadata = None
+            try:
+                metadata = session_tokens.inspect(token)
+            except SessionTokenError:
+                invalid = True
+            except Exception:
+                pass
+            if metadata is None and not invalid:
+                _raise_unavailable(logout=True)
+            if metadata is not None:
+                if session_revocations is None:
+                    _raise_unavailable(logout=True)
+                committed = False
+                try:
+                    await session_revocations.revoke(
+                        metadata.fingerprint, expires_at=metadata.expires_at
+                    )
+                    committed = True
+                except Exception:
+                    pass
+                if not committed:
+                    _raise_unavailable(logout=True)
+        response.headers["Cache-Control"] = "no-store"
+        response.delete_cookie(
+            SESSION_COOKIE_NAME,
+            path=SESSION_COOKIE_PATH,
+            secure=session_cookie_secure,
+            httponly=True,
+            samesite="lax",
+        )
+        return LogoutResponse()
 
     return router
 
@@ -162,6 +247,21 @@ def _raise_authentication_failed() -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=_AUTHENTICATION_FAILED_DETAIL,
+    )
+
+
+def _raise_unavailable(*, logout: bool) -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "logout_unavailable" if logout else "authentication_unavailable",
+            "message": (
+                "Logout is temporarily unavailable."
+                if logout
+                else "Authentication is temporarily unavailable."
+            ),
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 

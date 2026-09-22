@@ -1,3 +1,4 @@
+import { assertLogoutCache, trackAuthGenerations } from '../test/logoutCache';
 import { renderHook } from '@testing-library/react';
 import { useDraftSession } from '../stores/sessionDraftStore';
 import { loadDraft, saveDraft, parseDraft } from '../features/work-dispatch/dispatchDraft';
@@ -5,7 +6,7 @@ import { loadNewSoftwareDraft, saveNewSoftwareDraft, parseNewSoftwareDraft } fro
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import App, {
   AuthenticationEffects,
   LoginRoute,
@@ -336,6 +337,8 @@ describe('application authentication boundary', () => {
   it('clears private query data when reauthentication is required', async () => {
     const client = new QueryClient();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
     client.setQueryData(['private'], { value: 'cached private response' });
     useAIDockStore.setState({
       sessionId: '11111111-1111-4111-8111-111111111111',
@@ -348,7 +351,12 @@ describe('application authentication boundary', () => {
     );
 
     act(() => useAuthStore.getState().markUnauthenticated());
-    await waitFor(() => expect(client.getQueryCache().getAll()).toHaveLength(0));
+    await waitFor(() => {
+      for (const query of client.getQueryCache().getAll()) expect(query.state.data).toBeUndefined();
+      expect(client.getQueryCache().findAll({ queryKey: ['private'] })).toEqual([]);
+      expect(client.getQueryCache().findAll({ queryKey: ['me', 1] })).toEqual([]);
+      assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    });
     expect(useAIDockStore.getState().sessionId).toBeNull();
     expect(useAIDockStore.getState().transcript).toHaveLength(0);
   });
@@ -363,9 +371,10 @@ describe('application authentication boundary', () => {
     saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'A-private' }), a);
     // 2026-09-02 定稿把「退出登录」从左导航底部移进顶栏头像的用户菜单（画板 `TopPops.dc.html`）。
     fireEvent.click(screen.getByTestId('topbar-avatar'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
-
-    expect(useAuthStore.getState().status).toBe('unauthenticated');
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    fetchSpy.mockRestore();
     expect(loadDraft(a).title).toBe('');
     expect(loadNewSoftwareDraft(a).name).toBe('');
     act(() => useAuthStore.getState().markAuthenticated());
@@ -374,6 +383,36 @@ describe('application authentication boundary', () => {
     expect(loadNewSoftwareDraft(b).name).toBe('');
     fireEvent.click(screen.getByRole('link', { name: '任务交办' }));
     expect(await screen.findByLabelText('标题')).toHaveValue('');
+  });
+
+  it.each([403, 503])('logout_preserves_draft_isolation_contract after %s', async (status) => {
+    useAuthStore.getState().markAuthenticated();
+    window.history.pushState({}, '', '/');
+    const mounted = render(<App />);
+    const token = draftToken();
+    expect(saveDraft(parseDraft({ title: 'Synthetic saved task' }), token)).toBe(true);
+    expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'Synthetic saved software' }), token)).toBe(true);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(
+      JSON.stringify({ detail: { code: 'logout_unavailable', message: 'Synthetic failure' } }), { status },
+    )).mockResolvedValueOnce(new Response(JSON.stringify({ authenticated: false })));
+    try {
+      fireEvent.click(screen.getByTestId('topbar-avatar'));
+      fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+      expect(await screen.findByText('退出未完成，请重试')).toBeInTheDocument();
+      expect(useAuthStore.getState().status).toBe('authenticated');
+      expect(loadDraft(token).title).toBe('Synthetic saved task');
+      expect(loadNewSoftwareDraft(token).name).toBe('Synthetic saved software');
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('button', { name: /退出登录/ }));
+      await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+      expect(loadDraft(token).title).toBe('');
+      expect(loadNewSoftwareDraft(token).name).toBe('');
+      expect(saveDraft(parseDraft({ title: 'Late old task' }), token)).toBe(false);
+      expect(saveNewSoftwareDraft(parseNewSoftwareDraft({ name: 'Late old software' }), token)).toBe(false);
+    } finally {
+      mounted.unmount();
+      fetchSpy.mockRestore();
+    }
   });
 
   it('clears_drafts_through_a_current_generation_fetch_401', async () => {
@@ -478,3 +517,191 @@ describe('application authentication boundary', () => {
 });
 
 function draftToken() { const hook = renderHook(useDraftSession); const value = hook.result.current; hook.unmount(); return value; }
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+class SyntheticAuthChannel {
+  static instances: SyntheticAuthChannel[] = [];
+  onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
+  closed = false;
+  constructor(public name: string) { SyntheticAuthChannel.instances.push(this); }
+  postMessage() {}
+  close() { this.closed = true; }
+  static notify() {
+    for (const channel of this.instances) {
+      if (!channel.closed) channel.onmessage?.({ data: 'recheck-identity' } as MessageEvent);
+    }
+  }
+}
+
+function seededPrivateKeys(g: number) {
+  return [['private'], ['private', 'unobserved'], ['me', g],
+    ['work-objects', g, 'list', 'active', 'active'],
+    ['work-objects', g, 'list', 'unconfirmed', ''],
+    ['work-objects', g, 'list', 'active', 'completed'],
+    ['work-objects', g, 'detail', 'synthetic-a'],
+    ['work-objects', g, 'search', 'all', 'synthetic'],
+    ['credential-binding', g, 'oa'], ['admin', 'registry']];
+}
+
+describe('logout cache isolation with real transport', () => {
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    SyntheticAuthChannel.instances = [];
+    vi.stubGlobal('BroadcastChannel', SyntheticAuthChannel);
+    useAuthStore.setState({ generation: 40, status: 'authenticated' });
+    const actual = await vi.importActual<typeof import('../generated/me/me')>('../generated/me/me');
+    apiMocks.readMe.mockReset();
+    apiMocks.readMe.mockImplementation(actual.readMeApiV1MeGet);
+  });
+
+  it('logout_cache_has_no_previous_identity_data_after_401_and_late_results', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const late = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(late.promise)
+      .mockResolvedValueOnce(new Response('', { status: 401 }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const key of seededPrivateKeys(40).filter((k) => k[0] !== 'me')) client.setQueryData(key, { owner: 'A' });
+    const events: { type: string; key: readonly unknown[] }[] = [];
+    const unsubscribe = client.getQueryCache().subscribe((event) => events.push({ type: event.type, key: event.query.queryKey }));
+    const mounted = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    await act(async () => { SyntheticAuthChannel.notify(); });
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    const current = client.getQueryCache().find({ queryKey: ['me', 41], exact: true });
+    expect(current).toBeDefined();
+    expect(current?.isActive()).toBe(false);
+    await act(async () => { late.resolve(new Response(JSON.stringify(meResponse()))); });
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    mounted.rerender(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(events.some((e) => e.type === 'removed' && e.key[0] === 'private')).toBe(true);
+    expect(events.some((e) => e.type === 'added' && e.key[0] === 'me' && e.key[1] === 41)).toBe(true);
+    unsubscribe(); mounted.unmount(); fetchSpy.mockRestore();
+  });
+
+  it('new_identity_empty_query_is_allowed_but_old_identity_data_is_rejected', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const old = deferred<Response>();
+    const fresh = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockReturnValueOnce(old.promise)
+      .mockResolvedValueOnce(new Response('', { status: 401 })).mockReturnValueOnce(fresh.promise);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const key of seededPrivateKeys(40).filter((k) => k[0] !== 'me')) client.setQueryData(key, { owner: 'A' });
+    const mounted = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    await act(async () => { SyntheticAuthChannel.notify(); });
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    act(() => useAuthStore.getState().markAuthenticated());
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    expect(client.getQueryCache().find({ queryKey: ['me', 42], exact: true })).toBeDefined();
+    assertLogoutCache(client, { generations, phase: 'identity-pending', currentGeneration: useAuthStore.getState().generation });
+    const b = { ...meResponse(), display_name: 'Synthetic B' };
+    await act(async () => { fresh.resolve(new Response(JSON.stringify(b))); });
+    await waitFor(() => expect(client.getQueryData(['me', 42])).toEqual(b));
+    assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+    for (const query of client.getQueryCache().getAll()) {
+      if (query.state.data !== undefined) {
+        expect(query.queryKey).toEqual(['me', 42]);
+        expect(query.state.data).toEqual(b);
+      }
+    }
+    await act(async () => { old.resolve(new Response(JSON.stringify(meResponse()))); });
+    assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+    for (const query of client.getQueryCache().getAll()) {
+      if (query.state.data !== undefined) {
+        expect(query.queryKey).toEqual(['me', 42]);
+        expect(query.state.data).toEqual(b);
+      }
+    }
+    mounted.unmount(); fetchSpy.mockRestore();
+  });
+
+  it('late_revalidation_failure_does_not_pollute_new_identity', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const late = deferred<Response>();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify(meResponse())))
+      .mockReturnValueOnce(late.promise)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...meResponse(), display_name: 'Synthetic B' })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mounted = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    await waitFor(() => expect(client.getQueryData(['me', 40])).toBeDefined());
+    act(() => SyntheticAuthChannel.notify());
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    act(() => { useAuthStore.getState().markUnauthenticated(); useAuthStore.getState().markAuthenticated(); });
+    await waitFor(() => expect(client.getQueryData(['me', 42])).toMatchObject({ display_name: 'Synthetic B' }));
+    await act(async () => { late.resolve(new Response(JSON.stringify({ detail: { code: 'authentication_unavailable', message: 'Synthetic failure' } }), { status: 503 })); });
+    expect(screen.queryByText('暂时无法确认登录状态')).not.toBeInTheDocument();
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+    for (const query of client.getQueryCache().getAll()) {
+      if (query.state.data !== undefined) {
+        expect(query.queryKey).toEqual(['me', 42]);
+        expect(query.state.data).toEqual({ ...meResponse(), display_name: 'Synthetic B' });
+      }
+    }
+    mounted.unmount();
+    act(() => SyntheticAuthChannel.notify());
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    fetchSpy.mockRestore();
+  });
+
+  it('batched_logout_and_login_do_not_reuse_previous_generation', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(meResponse())));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const key of seededPrivateKeys(40)) client.setQueryData(key, { owner: 'A' });
+    const mounted = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    act(() => { useAuthStore.getState().markUnauthenticated(); useAuthStore.getState().markAuthenticated(); });
+    await waitFor(() => expect(client.getQueryData(['me', 42])).toEqual(meResponse()));
+    assertLogoutCache(client, { generations, phase: 'identity-ready', currentGeneration: useAuthStore.getState().generation });
+    for (const query of client.getQueryCache().getAll()) {
+      if (query.state.data !== undefined) {
+        expect(query.queryKey).toEqual(['me', 42]);
+        expect(query.state.data).toEqual(meResponse());
+      }
+    }
+    mounted.unmount(); fetchSpy.mockRestore();
+  });
+
+  it('logout_refresh_and_other_tab_revalidate_with_server', async () => {
+    const generations = trackAuthGenerations(useAuthStore);
+    onTestFinished(generations.stop);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(meResponse())));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    for (const key of seededPrivateKeys(40)) client.setQueryData(key, meResponse());
+    const mounted = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    await act(async () => { SyntheticAuthChannel.notify(); });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenLastCalledWith('/api/v1/me', expect.objectContaining({ method: 'GET' }));
+    expect(useAuthStore.getState().status).toBe('authenticated');
+    fetchSpy.mockResolvedValueOnce(new Response('', { status: 401 }));
+    await act(async () => { SyntheticAuthChannel.notify(); });
+    expect(useAuthStore.getState().status).toBe('unauthenticated');
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    mounted.unmount();
+    const callsAfterUnmount = fetchSpy.mock.calls.length;
+    act(() => { SyntheticAuthChannel.notify(); window.dispatchEvent(new Event('focus')); });
+    expect(fetchSpy).toHaveBeenCalledTimes(callsAfterUnmount);
+    useAuthStore.setState({ status: 'unknown' });
+    fetchSpy.mockResolvedValueOnce(new Response('', { status: 401 }));
+    const refreshed = render(<QueryClientProvider client={client}><AuthenticationEffects /></QueryClientProvider>);
+    await waitFor(() => expect(useAuthStore.getState().status).toBe('unauthenticated'));
+    expect(fetchSpy).toHaveBeenCalledTimes(callsAfterUnmount + 1);
+    assertLogoutCache(client, { generations, phase: 'unauthenticated', currentGeneration: useAuthStore.getState().generation });
+    refreshed.unmount(); fetchSpy.mockRestore();
+  });
+});

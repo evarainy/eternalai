@@ -13,6 +13,7 @@ from sqlalchemy import event, text
 
 from app.event_loop import make_event_loop
 from app.infra.auth.crypto import HMACSessionToken
+from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
 from app.main import create_app
 from app.ports.auth import Principal, PrincipalOrgContext
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
@@ -29,6 +30,7 @@ def lifecycle_http(dispatch_db):
     client = TestClient(
         create_app(
             work_object_service=db.service,
+            session_revocations=PostgreSQLSessionRevocationStore(db.factory),
             session_tokens=tokens,
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -107,6 +109,55 @@ def assert_error(response, status, code):
     assert response.json()["detail"]["code"] == code
     assert set(response.json()["detail"]) == {"code", "message"}
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_logout_replay_of_original_key_cannot_read_event(lifecycle_http):
+    db, client, actor, _ = lifecycle_http
+    object_id = publish(client)["items"][0]["work_object_id"]
+    actor("local-recipient")
+    base = f"/api/v1/work-objects/{object_id}/lifecycle"
+    before = client.get(base)
+    assert before.status_code == 200
+    key, etag = str(uuid4()), before.headers["etag"]
+    accepted = command(client, object_id, "accept", key=key, etag=etag)
+    assert accepted.status_code == 200
+    replay = command(client, object_id, "accept", key=key, etag=etag)
+    assert replay.status_code == 200
+    assert replay.json()["replayed"] is True
+    assert client.get(base + "/events").status_code == 200
+    original = client.cookies.get("eternalai_session")
+    assert client.post("/api/v1/auth/logout", headers=TEST_CSRF_HEADERS).status_code == 200
+    client.cookies.clear()
+    client.cookies.set("eternalai_session", original)
+    statements = []
+
+    def record(_c, _cur, statement, _params, _ctx, _many):
+        if "work_object" in statement.lower():
+            statements.append(statement)
+
+    event.listen(db.engine.sync_engine, "before_cursor_execute", record)
+    try:
+        for response in (
+            client.get(base),
+            client.get(base + "/events"),
+            command(client, object_id, "accept", key=key, etag=etag),
+        ):
+            assert_error(response, 401, "authentication_required")
+            assert response.headers["www-authenticate"] == "Session"
+            assert set(response.json()) == {"detail"}
+        assert statements == []
+    finally:
+        event.remove(db.engine.sync_engine, "before_cursor_execute", record)
+    with db.sql.connect() as c:
+        count = c.execute(
+            text("SELECT count(*) FROM work_object_lifecycle_events WHERE work_object_id=:id"),
+            {"id": object_id},
+        ).scalar_one()
+    assert count == 1
+    actor("local-recipient")
+    assert client.get(base).status_code == 200
+    assert client.get(base + "/events").status_code == 200
+    assert command(client, object_id, "accept", key=key, etag=etag).json()["replayed"] is True
 
 
 def test_event_insert_failure_returns_503_and_rolls_back(lifecycle_http):

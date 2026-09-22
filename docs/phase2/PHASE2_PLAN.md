@@ -73,6 +73,12 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 ## 3. 活欠债登记
 
+### 当前会话注销候选的剩余义务（2026-09-21）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| D1 过期吊销记录有界保留/清理 | 本棒只追加持久吊销，不实现定时 DELETE；长期积累，保留期/批量/时钟条件未定 | P2-AUDIT-LOGOUT-002（先交付表与正确吊销，不阻塞本棒安全功能） | 待 GOV-SYNC 分配，不自行编造已生效 task_id | 获得明确保留期/清理授权，证明不删除仍可能验签接受的票据记录；真 PG 跨实例负向通过，非空回退仍拒绝 | `app/infra/auth/session_revocations.py::PostgreSQLSessionRevocationStore`；`tests/infra/auth/test_session_revocations.py`；`tests/db/test_auth_session_revocations_migration.py`；本棒候选 PR 的迁移与非空回退实证 |
+
 ### 内部事项生命周期已合并后的剩余义务（2026-09-20）
 
 `P2-AUDIT-WO-LIFECYCLE-001` 已合并交付最小内部接单、文本反馈、自行办结及近 30 天完成列表；Monitor r1 与 Opus 桥均 PASS，PR #200 checks 与 merge Actions 均 success。这里只同步本棒事实与欠债，不关闭软件登记审核、OA 可信已办来源或真实目录 Source 的既有义务，不重排 DAG。
@@ -81,7 +87,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|---|---|
 | 办理人离岗或调部门后的交接 | 当前最小状态机不含转派；接单后失去 owner 部门 membership 即拒绝写入，事项可能保持 in_progress，不以管理员旁路解决 | P2-AUDIT-WO-LIFECYCLE-001 已交付；重新指派合同尚未批准 | 待 GOV-SYNC 按真实交接需求分配 | 获批交接或代理权限、并发版本、前后办理人证据与隔离完整落地；此前不自动更换办理人 | `app/ports/work_object_lifecycle.py::lifecycle_role_allowed`；`tests/api/test_work_object_lifecycle.py::test_same_key_replay_reauthorizes_current_actor` |
 | 跨刷新未决生命周期命令精确恢复 | key/body/ETag 只在当前认证代次内存；刷新后能查看状态和活动，但不能保证将相同正文唯一归因于原请求 | P2-AUDIT-WO-LIFECYCLE-001 已交付；稳定身份与恢复合同尚未批准 | 待 GOV-SYNC 分配，可协调未决发布恢复债但不自动合并 | 同可信主体可核对原命令且不重复执行，跨身份不能恢复正文或补发；真实失回包和刷新回归通过 | `web/src/features/work-dispatch/InternalWorkLifecyclePanel.tsx::LifecyclePanel`；`web/src/features/work-dispatch/__tests__/InternalWorkLifecyclePanel.test.tsx` |
-| 生命周期已吊销票据与注销后原 key 重放验证 | 当前主干 HMAC 只验签名和有效期，旧 LOGOUT 未交付，新棒已获准重开；已验证真实缺失、无效、过期票据拒绝及前端代次隔离，未用 mock 冒充吊销语义 | P2-AUDIT-LOGOUT-002（方案须先更新并重评） | P2-AUDIT-LOGOUT-002，按 2026-09-20 裁决承接 #7 吊销相关验收 | 实际吊销链上三条生命周期端点拒绝旧票据，注销后原 key 不能读取事件，并通过真实认证与前端回归 | `app/infra/auth/crypto.py::HMACSessionToken.verify`；`tests/api/test_work_object_lifecycle.py::test_all_new_routes_require_auth_and_command_csrf`；`P2-AUDIT-WO-LIFECYCLE-001` 启动合同“相对方案的已知变化”第 2 条；`DECISIONS.md` 2026-09-20 LOGOUT 重开裁决 |
 
 `P2-AUDIT-EVAL-POSTCOND-001` 已合并，PR #199 的实现阶段“新增欠债：无”不包含随后桥审的四项发现；该四项现补登如下。首例读取核验只证明本次源观察到概览的保真；通用 Registry 返回侧校验、OA 审批后态协议与真实部署验收既有义务保持，不因首例规则落地而核销。
 
@@ -269,7 +274,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `getResourceBaseTitle` 的 `isMobx` query 参数取值未知，当前不发送该参数 | **reason**：2026-09-02 落盘的接口结构只记了三个 query 参数名（`id`、`isMobx`、`__random__`），没有记 `isMobx` 的取值。`P2-USER-PROFILE-READ-001` 不猜取值，只发送语义明确的 `id` 与 `__random__`（后者与现役 `getUserIcon` 调用同体例）。若 OA 实际要求 `isMobx`，该端点会 fail-closed 成 `org_status="unavailable"`，姓名仍可显示，但部门取不到——**该请求形态未在真实 OA 上实证** | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 在真实 OA 上确认该接口不带 `isMobx` 可正常返回，或取得其取值后补上（配置化或常量），且有实测证据 | `app/infra/adapters/oa/profile.py::LiveOAProfileTransport.fetch_profile`；`docs/phase2/DECISIONS.md` 2026-09-02「事实确认：OA 用户信息接口的路径与返回形态」请求段 |
 | `organization_directory` 快照未用作部门名交叉校验 | **reason**：`app/ports/organization_directory.py` 的快照已能由 `user_id → department_id` 取到部门显示名，但该快照依赖导入作业跑过、新鲜度无保证。引入第二个部门名真值源会产生「两处不一致时信谁」的问题，`P2-USER-PROFILE-READ-001` 因此只用 `orginfo` 一个来源 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 目录快照新鲜度有保证，且确认确需交叉校验时，落盘「两处不一致时以谁为准」的裁决并据此实现 | `app/ports/organization_directory.py`；`app/infra/adapters/oa/profile.py::OAUserProfileAdapter.get_profile`（只读 `orginfo`） |
 | `sex` / `workcode` / `requestParams` 三个字段未消费 | **reason**：`getResourceBaseTitle` 还返回 `sex`（`{name, value}`）、`workcode`（本例为空串）与被二次序列化的 `requestParams`。三者当前没有消费点，且取值闭集按 2026-09-02 边界 3 无证据，`P2-USER-PROFILE-READ-001` 的 port 契约按最小化原则不收这三项 | 无（不被任务阻塞） | 出现真实需求时 | 出现需要这些字段的界面需求，且其取值闭集已落盘 | `app/ports/user_profile.py::UserOrgProfile`（字段闭集）；`docs/phase2/DECISIONS.md` 2026-09-02 边界 3 |
-| 没有服务端注销端点，退出登录只清前端状态 | **reason**：本棒把登录态恢复改为「以后端确认为准」，但退出登录仍只清空前端 store，签名会话票据在其自然过期前对服务端始终有效。共享工位上「退出」后重放该票据仍可取到身份与头像。这不是本棒引入的（此前也没有注销端点），但本棒把票据变成了唯一登录态真值源，使该缺口的后果更明确 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 存在服务端注销端点（票据失效或加入吊销名单），前端退出调用它，且有「注销后重放旧票据返回 401」的测试 | `web/src/stores/authStore.ts`（退出只清客户端状态）；`app/infra/auth/crypto.py`（票据无吊销机制）；`app/api/v1/me.py`（无 logout 路由） |
 | `/api/v1/me` 与头像端点的错误响应未设缓存头 | **reason**：成功响应已由 `P2-USER-PROFILE-READ-001` 统一为 `Cache-Control: no-store`，但 401 / 404 / 503 三条失败响应走的是异常处理路径，不经过设置缓存头的代码。默认无 `Cache-Control` 的 401/404 按 HTTP 语义通常不被共享缓存存储，风险低于成功响应；但内网若存在反向代理缓存，行为取决于代理配置而非我们的声明 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | 两个端点的全部响应（含失败路径）都显式带 `Cache-Control: no-store`，且有覆盖 401 / 404 / 503 的断言 | `app/api/v1/me.py::_NO_STORE`（仅成功路径设置）；`tests/api/test_me.py::test_identity_answers_are_never_stored_by_the_browser`（仅覆盖成功路径） |
 | replay / mock 模式仍装配 `LiveOAProfileTransport`，与其余适配器体例不一致 | **reason**：`build_oa_read_adapter` 按 `oa_read_adapter_mode` 分 mock / replay / live 三支，`build_user_profile_port` 则在所有模式下都返回 `LiveOAProfileTransport`。这是刻意设计（让 `/api/v1/me` 在 OA 不可达时仍能凭签名票据答 `authenticated`，避免 503 把整个工作台挡在启动会话检查后面），且 mock 模式已被 `_require_safe_mock_oa_configuration` 锁在 `ENV=testing` 或 `phase0_mock_mode`，因此不构成部署风险。但 **replay 离线开发**下每次开页仍会向真实 OA 发起一次请求并等到超时，既与「离线回放」的用意相悖，也带来每次加载的超时延迟。由 kimi k3 静态评审发现 | 无（不被任务阻塞） | 待 GOV-SYNC 分配 | replay / mock 模式装配不发起真实网络请求的 profile transport（身份仍从签名票据取，`org` 走回放件或直接 `org_status`），且有「replay 模式下传输层零调用」的断言 | `app/composition.py::build_user_profile_port`（无模式分支）对比 `app/composition.py::build_oa_read_adapter`（三支）；`app/composition.py::_require_safe_mock_oa_configuration` |
 | `STATUS.md` 登记数字与最终候选同步/来源绑定仍需制度化 | 历史上 `P2-RUNTIME-NO-CAPABILITY-COPY-001` 登记的 `2832 passed` 比主干实测 `2862` 少 30；本次同步前 `STATUS.md` 仍为 `2884` / 前端 `487`，而两根后续合并棒最终候选已实测后端 `3027`、前端 `566`。本棒更正当前数字，但仓库仍没有自动把每条登记绑定到最终候选的方法，后续仍可能发生增量归因失真 | 无 | 待 GOV-SYNC 分配 | 确立并落实「A 类同步登记的测试数字必须取自最终候选」的可检查做法（例如收口前重跑、或由 CI 产出可绑定 SHA 的数字），且当前历史失真与本次 2884/487→3027/566 更正均有来源日期说明 | `docs/phase2/STATUS.md` 已登记验证基线；`_scratch/GOVSYNC_待办_Opus非阻断发现.md` 第 5、15 条；`P2-INTERNAL-WO-SCOPE-001` 与 `P2-WO-SEARCH-NORMALIZE-001` 最终候选实测记录 |
@@ -290,6 +294,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 已结项事项 | 仍生效的规则 / 测试 / 守卫指针 |
 |---|---|
+| 没有服务端注销端点，退出登录只清前端状态 | `P2-AUDIT-LOGOUT-002` 候选按 expiry_condition 关闭：真实 HMAC+PG 当前票据提交后吊销、同票据/签名编码等价别名重放为 401、其他会话保留；前端服务端确认、失败反馈、三时点旧数据/旧键清理均已实证。`tests/api/test_auth.py`、`tests/runtime/test_runtime_composition.py`、`web/src/__tests__/App.test.tsx`、`web/src/pages/__tests__/ChatPage.test.tsx` 及生产反证锁定合同；独立审查与集成状态见 `STATUS.md`，不宣称生产部署。 |
+| 生命周期已吊销票据与注销后原 key 重放验证 | `P2-AUDIT-LOGOUT-002` 候选已取得真实注销链实证：三个生命周期端点拒绝旧票据，原已提交 key 重放与事件读取均为 401、业务 SQL 零增量、事件数不变；同主体未注销票据仍可读和合法重放。依据 `tests/api/test_work_object_lifecycle.py::test_logout_replay_of_original_key_cannot_read_event`、生产装配全路由用例及断开认证读库后的反证。按既定 expiry_condition 关闭该验证义务，独立审查与集成状态见 `STATUS.md`。 |
 | OA 返回 `jobtitle: 0` 会中止整份组织目录快照 | `P2-ORGDIR-PERSON-SYNC-001` 按本次人工 R5 裁决把整数/文本零归一为无岗位；缺失/null/空串同义，其他非法值整批拒绝。importer→真实 PG→HTTP 验证科室/监区零岗位同部/跨部派发与重放均拒绝、候选拒绝；有权负责人仍可选无岗位目标。无岗位经真实 Store 保留现役本人/本部门查看，跨部/跨租户不可见且本人处理边界不扩大。该兼容欠债按已批语义与回归关闭；未声称真实 OA 采集已验收。**evidence**：`tests/infra/organization_directory/test_importer.py`；`tests/api/test_work_object_dispatch.py::test_zero_jobtitle_imported_to_pg_denies_dispatch_and_replay`；`tests/infra/persistence/work_object/test_postgresql_work_object_store.py::test_no_job_keeps_only_existing_visibility`。 |
 | `monotonic_deadline` 严格递增断言偶发失败 | `P2-TEST-MONOTONIC-DEADLINE-001`：测试夹具在首次请求前接入可控 UTC / 单调时钟，两次确认间明确推进 1 秒；保留严格 `>` 并校验两个 deadline 的增量。**evidence**：`tests/runtime/test_runtime_user_action.py::test_second_structured_confirmation_uses_fresh_claim_and_succeeds` 修复前隔离重复跑 28/30 失败，修复后 30/30 通过；冻结单调时钟时严格递增断言变红，恢复后变绿；弱测试检查通过。该欠债按 expiry_condition 关闭；整文件验证另有已登记的 `InMemoryHumanGate` 幂等语义欠债失败（基线同样复现），不在本条关闭范围。 |
 | 顶栏「部门 / 姓名」与用户头像无数据源 | `P2-USER-PROFILE-READ-001`：顶栏一行显示 `部门 / 姓名`，姓名取自服务端签名的会话票据（`Principal.display_name`），部门取自后端解析的 `orginfo`；头像走后端代理 `GET /api/v1/me/avatar`，前端只看到常量路径。取不到部门时顶栏只显示姓名且不加一个字的提示，取不到照片时退回姓氏首字、不留空位。`web/src/app/__tests__/AppShell.test.tsx` 覆盖真实值、缺部门、缺照片、`<img>` onError 与「后端未答复时不写占位」五条分支。 |
@@ -468,8 +474,8 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | task_id | depends_on | 预判档位 | BLOCKED / 边界 |
 |---|---|---|---|
-| `P2-AUDIT-LOGOUT-002` | P2-AUDIT-WO-LIFECYCLE-001（已合并的新基线） | **A** | 2026-09-20 明确批准一次重开；复用旧方案/可用实现前先更新基线、迁移父版本、文件面及 #7 吊销验收并重新评审；新棒三轮上限，旧 001 三轮 FAIL/未交付、不再开 r4；换 ID 不豁免 |
-| `P2-WO-COMPLETED-MERGE-001` | P2-AUDIT-WO-LIFECYCLE-001（已合并） | **B** | 串行修复已办结查询未接既有列表版本合并：只接 `completedQuery` 到 `mergeListResponse`、新增专门前端回归；不改合并算法、认证代次、缓存隔离或公共合同。`P2-AUDIT-LOGOUT-002` 暂停，待本棒合入后以新 head 继续。无新增欠债。 |
+| `P2-AUDIT-LOGOUT-002` | P2-AUDIT-WO-LIFECYCLE-001（已合并的新基线） | **A** | 方案已更新并通过两轮独立评审；当前候选完成本地实现、验证与 high 自核，待独立 Monitor → 静态评审桥及集成；新棒三轮上限不变，旧 001 未交付不作为通过证据；不新增后继或重排 DAG |
+| `P2-WO-COMPLETED-MERGE-001` | P2-AUDIT-WO-LIFECYCLE-001（已合并） | **B** | 串行修复已办结查询未接既有列表版本合并：只接 `completedQuery` 到 `mergeListResponse`、新增专门前端回归；不改合并算法、认证代次、缓存隔离或公共合同。已合并（PR #206），`P2-AUDIT-LOGOUT-002` 已合入修复并继续验证。无新增欠债。 |
 | `P2-LOW-RISK-WRITE-001` | P2-GOLDEN-001、P2-CONFIRM-BINDING-001、P2-SDUI-RENDERER-001、P2-ENVELOPE-MESSAGE-REDACTION-001（均已完成） | **A** | **是：OA 审批提交协议结构未知；输入到位前不开棒** |
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
 | `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 是：获批知识语料与用户数据边界未到位；机会层 |

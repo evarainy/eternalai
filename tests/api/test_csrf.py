@@ -32,6 +32,7 @@ from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
     TEST_ORIGIN,
+    MemorySessionRevocations,
     StaticSessionTokens,
     auth_cookies,
     make_session_binder,
@@ -168,6 +169,7 @@ def _client(
             runtime=runtime,
             admin_registry_service=admin_service,
             authentication=authentication,
+            session_revocations=MemorySessionRevocations(),
             session_tokens=StaticSessionTokens(),
             session_binder=make_session_binder(),
             session_cookie_ttl_seconds=3600,
@@ -451,6 +453,51 @@ def test_login_without_csrf_headers_is_rejected_before_authentication() -> None:
     assert response.content != b""
     assert authentication.calls == 0
     assert "set-cookie" not in response.headers
+
+
+@pytest.mark.parametrize("ticket", ["valid", "invalid", "absent"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [],
+        [("Origin", TEST_ORIGIN)],
+        [("X-EternalAI-CSRF", "1")],
+        [("Origin", "https://evil.example.gov.cn"), ("X-EternalAI-CSRF", "1")],
+        [("Origin", TEST_ORIGIN), ("X-EternalAI-CSRF", "0")],
+        [("Origin", TEST_ORIGIN), ("Origin", TEST_ORIGIN), ("X-EternalAI-CSRF", "1")],
+        [("Origin", TEST_ORIGIN), ("X-EternalAI-CSRF", "1"), ("X-EternalAI-CSRF", "1")],
+    ],
+)
+def test_logout_rejects_the_complete_invalid_csrf_matrix(ticket, headers):
+    class SpyTokens(StaticSessionTokens):
+        inspections = 0
+
+        def inspect(self, token):
+            self.inspections += 1
+            return super().inspect(token)
+
+    tokens, store = SpyTokens(), MemorySessionRevocations()
+    client = TestClient(
+        create_app(
+            session_tokens=tokens,
+            session_revocations=store,
+            csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+        ),
+        base_url=TEST_ORIGIN,
+    )
+    if ticket == "valid":
+        client.cookies.update(auth_cookies())
+    elif ticket == "invalid":
+        client.cookies.set("eternalai_session", "invalid")
+    response = client.post("/api/v1/auth/logout", headers=headers)
+    assert response.status_code == 403
+    assert response.json() == _CSRF_REJECTION
+    assert response.headers["cache-control"] == "no-store"
+    assert "set-cookie" not in response.headers
+    assert tokens.inspections == 0
+    assert store.revoked == set()
+    assert client.get("/api/v1/auth/logout").status_code == 405
+    client.close()
 
 
 def test_login_with_same_origin_custom_header_succeeds() -> None:
