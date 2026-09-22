@@ -2,7 +2,7 @@
 
 - 当前治理基线 task_id：`P2-GOV-SYNC-065`（C 档、串行；2026-09-20 同步已合并事实、评审桥非阻断欠债及已决后继，承担 A 类机械同步）。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
-- 当前实现后继指针：`P2-AUDIT-LOGOUT-002` 为已决后继之一，须先更新方案并重新评审再施工；其余依赖与阻塞沿现役 DAG，不新增里程碑或重排。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留。
+- 当前实现后继指针：`P2-AUDIT-LOGOUT-002` 为已决后继之一；在 `P2-WO-COMPLETED-MERGE-001` 完成已办结列表版本合并后，才从新主干以最终 head 继续更新方案与重新评审。其余依赖与阻塞沿现役 DAG，不新增里程碑或重排。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留。
 - 审计 #1：旧 `P2-AUDIT-LOGOUT-001` 三轮监理 FAIL、未交付，不开第 4 轮。第 3 轮未变异用例在 `/me` 401 广播后缓存应为空而实测剩 1 项，未证实数据泄漏。2026-09-20 明确批准新 `002` 重新立项及新的三轮监理周期，换 ID 本身不产生豁免；新方案须承接生命周期吊销验收，见 `DECISIONS.md` 同日裁决。
 
 ## 已登记验证基线
@@ -25,6 +25,7 @@
 |---|---|
 | `P2-AUDIT-EVAL-POSTCOND-001` | 首例 `oa.read_overview/1.1.0` 确定性后置核验已合并。2026-09-19 历史实测为后端 3906、架构 133、Golden 34/34（负向/边界 21/21），不替换上面的当前基线；通用返回校验、审批后态和真实现场验收仍未完成。 |
 | `P2-AUDIT-WO-LIFECYCLE-001` | 内部事项接单、文本反馈、自行办结、活动分页和近 30 天内部完成列表已合并；仅接单人可反馈/办结，发布回执仍为初始快照，不将 OA 消失视为办结。 |
+| `P2-WO-COMPLETED-MERGE-001` | 已办结查询与 active/history 一样接入既有列表版本合并；专门前端回归先等 active/history 协调刷新完成，再注入旧 internal version，断言缓存每次成功更新不降版本、较新版本仍可更新且最终可见内容正确。未改合并算法、认证代次、缓存隔离或公共合同。 |
 | `P2-AUDIT-CAPABILITY-TOPK-001` | 确定性 Top-K、安全摘要、完整同分组与预算边界已合并；b1/b2/b3 结项，组织 metadata、文本误伤与语义召回局限保留。 |
 | `P2-AUDIT-LIST-ORDER-001` | 有界列表服务端稳定默认排序与超限说明已合并；D-6 有限例外已登记，分页和第二真实查询消费者债保留。 |
 | `P2-AUDIT-WORKFLOW-WIRING-001` | 真实生产入口装配 Workflow/adapter，版本化概览经 Gateway 执行；生产装配旧债结项，不代表真实 OA 现场验收。 |
@@ -41,7 +42,7 @@
 
 ## 当前实现摘要
 
-- 页面合同：既有交办结构与控件闭集、附件禁用、草稿失败反馈及软件中心合同保留；`P2-FE-DISPATCH-WIRING-001` 已接通目录选择、派发、时区与内部只读事项。列表保留有界稳定排序与超限说明；已合并 P 段新增完整批次消失对账、未再确认历史区、同步状态与成功空态，未接 D 可信办结源。草稿沿用会话内存；解析、附件上传、服务端草稿、软件登记审核和用户侧软件列表接口仍未接入。生产选人仍受真实目录 Source/首同步阻塞。
+- 页面合同：既有交办结构与控件闭集、附件禁用、草稿失败反馈及软件中心合同保留；`P2-FE-DISPATCH-WIRING-001` 已接通目录选择、派发、时区与内部只读事项。列表保留有界稳定排序与超限说明；已办结查询与 active/history 同样经既有列表合并保留较新的 internal version。已合并 P 段新增完整批次消失对账、未再确认历史区、同步状态与成功空态，未接 D 可信办结源。草稿沿用会话内存；解析、附件上传、服务端草稿、软件登记审核和用户侧软件列表接口仍未接入。生产选人仍受真实目录 Source/首同步阻塞。
 - 运行时基线沿用已合并的 `P2-RUNTIME-NO-CAPABILITY-COPY-001`：2026-09-10 实测 `http://34.74.11.38:8011/v1` HTTP 可达，`/v1/models` 返回单一 `glm-4.7`（`root=/mnt/models/GLM-4.7-Flash`，`max_model_len=200000`）；现役 provider → raw JSON mode 4 次真实推理成功，内存意图路由 3/3 通过。完整 OA E2E 尚未完成，冒烟包本地缺 `sqlalchemy`，且全链路涉及真实配置读取与持久化；`IntentRouter` 的 `match=none` 不能单独证明下游 `no_capability_found` 终态；剩余义务与边界见 `PHASE2_PLAN.md`，不得通过修改仓库 URL 或配置规避。
 - 意图输出必须显式给出 `match`；完整候选的 `none` 进入 `no_capability_found`，reason 为 `no_matching_capability`；不完整候选的 `none` 为 `capability_candidates_low_confidence`。候选内标签碰撞保留冻结 `no_unique_active_candidate` 无匹配语义；候选外引用与约束矛盾拒绝执行。漏字段与矛盾组合保持 `schema_invalid`。Golden 为合成 LLM 输出经过真实 JSON 解析器的路由证据，未实测真实 vLLM 的语义判定；聊天回退后继仍为 `P2-RUNTIME-DIRECT-ANSWER-001`。
 - 身份读取：`GET /api/v1/me` 与 `GET /api/v1/me/avatar` 均为零参数端点，身份来自服务端 HMAC 签名会话票据；姓名不依赖 OA 可达，未认证一律 401。
