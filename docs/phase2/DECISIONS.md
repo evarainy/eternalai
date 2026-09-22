@@ -3048,3 +3048,32 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 本批 `P2-AUDIT-EVAL-POSTCOND-001` 与 `P2-AUDIT-WO-LIFECYCLE-001` 在桥 PASS 后未改候选代码，避免使已绑定候选的 Monitor 与桥结论失效；4 + 6 条非阻断发现由本棒按五字段登记。生命周期 `completion` 的未知值回显与重复值 schema 不符作为同一合同缺口登记；时间格式重复为维护依赖方向的已知取舍，不派生抽取公共函数义务。
 
 这是本批处置记录，不是“桥 PASS 后一律禁改代码”的通用规则。后续仍可按 AGENTS 修改代码并重新验证、重评与绑定最终候选；历史 2026-08-30“Opus PASS 即终局”处置不得解释为覆盖现役规则。
+
+## 2026-09-22 — P2-GOV-SYNC-066：LOGOUT-002 缓存 B2 判据精化
+
+依据雨爷常设授权第 16 条由 codex 代裁，雨爷于 2026-09-22 再次确认；原始咨询记录见 `_scratch/lanes/CONSULT_logout002_generation.log`。
+
+- 未认证过渡代次的空身份查询仅在以下条件同时成立时豁免：key 精确为 `['me', g]`；`g` 经实测确证从未认证；`data === undefined`；无启用 observer；`fetchStatus === 'idle'`。
+- “曾认证代次”必须由 auth store 初始快照及同步 `subscribe` 记录每次转换前后的 `status` / `generation` 实测确定。状态为 unknown 或来源不明的代次一律不豁免，不得用“当前代次 − 1”推定。
+- observer 被禁用不等于写保护；每个检查时点必须重新验证全部豁免条件。本条是 LOGOUT-002 测试语义精化，不修改生产代码。
+
+## 2026-09-22 — P2-GOV-SYNC-066：本批两棒返修边界
+
+依据雨爷常设授权第 16 条由 codex 代裁，范围仅限 `P2-AUDIT-LOGOUT-002` 与 `P2-WO-COMPLETED-MERGE-001`，原始记录见 `_scratch/lanes/CONSULT_wo_completed_merge.log`。
+
+- LOGOUT-002 返修中发现的主干既有缺陷拆为独立棒 `P2-WO-COMPLETED-MERGE-001` 修复，未扩大 LOGOUT-002 的生产范围。
+- LOGOUT-002 随后在新 head 上依次完成前后端全量、high 自审、独立监理（计入三轮上限，第 3 轮 PASS）与评审桥，之后普通 merge 主干。本条为本批处置记录，不固化为长期合同。
+
+## 2026-09-22 — P2-GOV-SYNC-066：子进程集成用例计时预算
+
+依据雨爷常设授权第 16 条由 codex 代裁，原始记录见 `_scratch/lanes/CONSULT_openapi_timeout.log`。
+
+`web/src/api/__tests__/apiClientsOpenapi.test.ts::classifies the actual Work Object directory failure by its backend code` 设显式 60s 计时预算，断言不变；这是子进程集成用例的计时预算修正。全量超时的唯一根因未证实，不构成放宽超时掩盖失败的先例。本条限本批记录。
+
+## 2026-09-22 — P2-GOV-SYNC-066：桥 PASS 后非阻断发现处置
+
+本批 LOGOUT-002 的 Opus 桥非阻断发现，在桥 PASS 后未改候选，转入 `PHASE2_PLAN.md` 按子项登记；本条只记录本批处置，不写成通用规则。
+
+## 2026-09-22 — P2-GOV-SYNC-066：前端首屏构建优化后继分配
+
+依据雨爷常设授权第 16 条由 codex 代裁，分配本批活欠债“前端首屏 JS 体积随 `@ant-design/x` 增长并触发 Vite chunk 警告”的 `activation_task_id` 为 `P2-FE-BUNDLE-SPLIT-001`，预判 **B 档**。分配只建立后继指针，不等于排期、施工授权或 DAG 重排；其余字段语义保持不变。
