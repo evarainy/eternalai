@@ -6,7 +6,7 @@ import type {
   MouseEvent as ReactMouseEvent,
 } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import Button from 'antd/es/button/button';
+import Button from 'antd/es/button';
 import TextArea from 'antd/es/input/TextArea';
 import type { PageContextDeclaration } from '../contracts/pageContext';
 import { projectResponse } from '../contracts/runtimeProjection';
