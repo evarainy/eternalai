@@ -154,15 +154,22 @@ def test_logout_changes_only_one_of_two_same_user_sessions(dispatch_db):
         _principal("other"),
         a.model_copy(update={"org_ctx": PrincipalOrgContext(tenant_id="synthetic-second")}),
     )
-    tickets = [tokens.issue(p) for p in principals]
-    for ticket in tickets:
-        set_ticket(client, ticket)
-        assert client.get("/api/v1/me").status_code == 200
+    second_tokens = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="synthetic-second"
+    )
+    second_client, _, _ = logout_client(dispatch_db, tokens=second_tokens)
+    issuers = (tokens, tokens, tokens, second_tokens)
+    clients = (client, client, client, second_client)
+    tickets = [issuer.issue(p) for issuer, p in zip(issuers, principals, strict=True)]
+    for scoped_client, ticket in zip(clients, tickets, strict=True):
+        set_ticket(scoped_client, ticket)
+        assert scoped_client.get("/api/v1/me").status_code == 200
     set_ticket(client, tickets[0])
     assert client.post("/api/v1/auth/logout", headers=TEST_CSRF_HEADERS).status_code == 200
-    for index, ticket in enumerate(tickets):
-        set_ticket(client, ticket)
-        assert client.get("/api/v1/me").status_code == (401 if index == 0 else 200)
+    for index, (scoped_client, ticket) in enumerate(zip(clients, tickets, strict=True)):
+        set_ticket(scoped_client, ticket)
+        assert scoped_client.get("/api/v1/me").status_code == (401 if index == 0 else 200)
+    second_client.close()
     client.close()
 
 
@@ -190,6 +197,7 @@ def test_logout_does_not_revoke_oa_bindings_or_background_credentials(dispatch_d
                 cookies={"synthetic": SecretStr(uuid4().hex)},
                 expires_at=datetime.now(UTC) + timedelta(hours=1),
             ),
+            tenant_id="default",
         )
     )
     run(
@@ -200,13 +208,14 @@ def test_logout_does_not_revoke_oa_bindings_or_background_credentials(dispatch_d
                 login_id=SecretStr(uuid4().hex),
                 password=SecretStr(uuid4().hex),
             ),
+            tenant_id="default",
         )
     )
     with dispatch_db.sql.connect() as connection:
         before = list(connection.execute(text("SELECT * FROM oa_session_credentials")))
     assert len(before) == 1
-    assert run(store.load(principal.ai_user_id, "oa")) is not None
-    assert run(store.get_password_binding(principal.ai_user_id, "oa")).bound
+    assert run(store.load(principal.ai_user_id, "oa", tenant_id="default")) is not None
+    assert run(store.get_password_binding(principal.ai_user_id, "oa", tenant_id="default")).bound
     touched = []
 
     def observe(_connection, _cursor, statement, _parameters, _context, _many):
@@ -225,8 +234,8 @@ def test_logout_does_not_revoke_oa_bindings_or_background_credentials(dispatch_d
     with dispatch_db.sql.connect() as connection:
         preserved = list(connection.execute(text("SELECT * FROM oa_session_credentials"))) == before
     assert preserved
-    assert run(store.load(principal.ai_user_id, "oa")) is not None
-    assert run(store.get_password_binding(principal.ai_user_id, "oa")).bound
+    assert run(store.load(principal.ai_user_id, "oa", tenant_id="default")) is not None
+    assert run(store.get_password_binding(principal.ai_user_id, "oa", tenant_id="default")).bound
     assert revocation_count(dispatch_db) == 1
 
 
@@ -376,12 +385,12 @@ def _principal(label: str, *, roles: tuple[str, ...] = ("admin",)) -> Principal:
         ai_user_id=f"usr_v1_{label}",
         display_name=f"Synthetic {label}",
         roles=roles,
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
 
 
 def _token_port() -> HMACSessionToken:
-    return HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+    return HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default")
 
 
 def _binder() -> PrincipalSessionBinder:
@@ -779,3 +788,191 @@ def test_legacy_ticket_copies_are_one_session_without_revoking_other_tickets(dis
         set_ticket(client, ticket)
         assert client.get("/api/v1/me").status_code == 200
     client.close()
+
+
+@pytest.mark.parametrize("tenant", ["default", "synthetic-TA"])
+def test_profile_tenant_login_without_directory(dispatch_db, tenant):
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore, PostgreSQLPrincipalRoleReader
+    from tests.infra.auth.test_oa_credential_verifier import _fixture
+
+    store = PostgreSQLCredentialStore(
+        session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+    )
+    verifier, _, _, credential = _fixture(
+        login_succeeds=True,
+        credential_store=store,
+        tenant_id=tenant,
+        role_reader=PostgreSQLPrincipalRoleReader(session_factory=dispatch_db.factory),
+    )
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id=tenant)
+    app = create_app(
+        authentication=verifier,
+        session_tokens=tokens,
+        user_profile=StubUserProfile(),
+        session_revocations=MemorySessionRevocations(),
+        session_cookie_ttl_seconds=3600,
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+    )
+    with TestClient(
+        app, base_url="https://testserver", backend_options={"loop_factory": make_event_loop}
+    ) as client:
+        response = client.post(
+            "/api/v1/auth/login",
+            headers=TEST_CSRF_HEADERS,
+            json={
+                "loginid": credential.loginid.get_secret_value(),
+                "userpassword": credential.userpassword.get_secret_value(),
+            },
+        )
+        assert response.status_code == 200
+        principal = tokens.verify(client.cookies.get("eternalai_session"))
+        assert principal.org_ctx.tenant_id == tenant
+        assert principal.roles == ()
+        assert client.get("/api/v1/me").status_code == 200
+    with dispatch_db.sql.connect() as connection:
+        assert connection.execute(
+            text("SELECT tenant_id FROM oa_session_credentials")
+        ).scalars().all() == [tenant]
+
+
+@pytest.mark.parametrize("invalid", ["foreign", "missing"])
+def test_signed_tenant_matches_profile(invalid):
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    signer = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="synthetic-TA"
+    )
+    verifier = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="synthetic-TB"
+    )
+    principal = _principal("same").model_copy(
+        update={"org_ctx": PrincipalOrgContext(tenant_id="synthetic-TA")}
+    )
+    ticket = signer.issue(principal)
+    if invalid == "missing":
+        _, encoded, _ = ticket.split(".")
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        del payload["principal"]["org_ctx"]["tenant_id"]
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+        signed = f"v2.{encoded}"
+        signature = (
+            base64.urlsafe_b64encode(
+                hmac.new(bytes(range(32)), signed.encode(), hashlib.sha256).digest()
+            )
+            .rstrip(b"=")
+            .decode()
+        )
+        ticket = f"{signed}.{signature}"
+    runtime = RecordingRuntime()
+    app = create_app(
+        runtime=runtime,
+        session_tokens=verifier,
+        session_revocations=MemorySessionRevocations(),
+        session_binder=_binder().bind,
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+    )
+    with TestClient(app, base_url="https://testserver") as client:
+        set_ticket(client, ticket)
+        assert_auth_denied(client.get("/api/v1/me"))
+        assert_auth_denied(
+            client.post(
+                "/api/v1/runtime/handle",
+                headers=TEST_CSRF_HEADERS,
+                json={
+                    "channel": "web",
+                    "session_id": "synthetic",
+                    "message": "read",
+                    "client_capabilities": {},
+                },
+            )
+        )
+        assert_auth_denied(
+            client.post("/api/v1/runtime/action", headers=TEST_CSRF_HEADERS, json=_action_body())
+        )
+        assert runtime.calls == []
+
+
+def test_existing_v2_survives_tenant_binding(dispatch_db):
+    from unittest.mock import Mock
+
+    from tests.infra.auth.test_crypto import encode, signed_claims
+
+    now = int(datetime.now(UTC).timestamp())
+    principal = _principal("old-v2")
+    original = signed_claims(
+        "v2",
+        {
+            "v": 2,
+            "principal": principal.model_dump(mode="json"),
+            "iat": now - 10,
+            "exp": now + 3600,
+            "nonce": encode(bytes(range(32))),
+        },
+    )
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default")
+    assert tokens.inspect(original).principal == principal
+    tokens.issue = Mock(side_effect=AssertionError("old session must not be reissued"))
+    client, _, profile = logout_client(dispatch_db, tokens=tokens)
+    set_ticket(client, original)
+    assert client.get("/api/v1/me").status_code == 200
+    assert len(profile.profile_calls) == 1
+    tokens.issue.assert_not_called()
+    assert client.post("/api/v1/auth/logout", headers=TEST_CSRF_HEADERS).status_code == 200
+    set_ticket(client, original)
+    assert_auth_denied(client.get("/api/v1/me"))
+    assert revocation_count(dispatch_db) == 1
+    client.close()
+
+
+def test_roles_are_tenant_scoped(dispatch_db):
+    from app.infra.auth.crypto import identity_surrogate
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore, PostgreSQLPrincipalRoleReader
+    from tests.api.test_work_object_dispatch import run
+    from tests.infra.auth.test_oa_credential_verifier import _fixture
+
+    async def exercise():
+        store = PostgreSQLCredentialStore(
+            session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+        )
+        reader = PostgreSQLPrincipalRoleReader(session_factory=dispatch_db.factory)
+        a, _, _, credential = _fixture(
+            login_succeeds=True,
+            credential_store=store,
+            role_reader=reader,
+            tenant_id="synthetic-TA",
+        )
+        b, _, _, _ = _fixture(
+            login_succeeds=True,
+            credential_store=store,
+            role_reader=reader,
+            tenant_id="synthetic-TB",
+        )
+        user = identity_surrogate(credential.loginid.get_secret_value(), key=a._identity_hmac_key)
+        async with dispatch_db.factory() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO principal_roles (tenant_id, ai_user_id, role) "
+                    "VALUES ('synthetic-TA', :user, :role)"
+                ),
+                [{"user": user, "role": role} for role in ("admin", "audit_reader")],
+            )
+            await session.commit()
+        pa = await a.authenticate(credential)
+        pb = await b.authenticate(credential)
+        assert pa.ai_user_id == pb.ai_user_id == user
+        assert pa.roles == ("admin", "audit_reader") and pb.roles == ()
+        assert pa.org_ctx.tenant_id == "synthetic-TA" and pb.org_ctx.tenant_id == "synthetic-TB"
+        async with dispatch_db.factory() as session:
+            assert (
+                await session.execute(text("SELECT count(*) FROM principal_roles"))
+            ).scalar_one() == 2
+            assert set(
+                (
+                    await session.execute(text("SELECT tenant_id FROM oa_session_credentials"))
+                ).scalars()
+            ) == {"synthetic-TA", "synthetic-TB"}
+
+    run(exercise())

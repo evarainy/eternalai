@@ -23,7 +23,7 @@ class PrincipalOrgContext(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    tenant_id: str = "default"
+    tenant_id: str = Field(min_length=1)
     org_id: str | None = None
     department_id: str | None = None
     # Stable directory join key only; mutable authorization attributes stay in the mirror.
@@ -93,6 +93,7 @@ class AuthenticationPort(Protocol):
         credential: LoginCredential,
         *,
         reactivate_revoked_session: bool = True,
+        expected_subject: tuple[str, str] | None = None,
     ) -> Principal: ...
 
 
@@ -111,13 +112,12 @@ class CredentialStorePort(Protocol):
         target_system: str,
         credential: OASessionCredential,
         *,
+        tenant_id: str,
         reactivate_revoked_session: bool = True,
     ) -> None: ...
 
     async def load(
-        self,
-        ai_user_id: str,
-        target_system: str,
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
     ) -> OASessionCredential | None: ...
 
 

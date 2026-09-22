@@ -78,7 +78,7 @@ class SpySessionStore:
         self.created.append(record)
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
         return None
 
 
@@ -258,7 +258,9 @@ def test_handle_user_message_creates_running_task_executes_gateway_and_completes
         assert len(task_store.created) == 1
         assert task_store.created[0].status == "running"
         assert task_store.created[0].tenant_id == "tenant-test"
-        assert session_store.created == [SessionRecord(session_id="session-1")]
+        assert session_store.created == [
+            SessionRecord(session_id="session-1", tenant_id="tenant-test")
+        ]
         assert len(gateway.calls) == 1
         assert gateway.calls[0]["capability_id"] == "test.cap"
         assert task_store.status_updates[-1][1] == "completed"

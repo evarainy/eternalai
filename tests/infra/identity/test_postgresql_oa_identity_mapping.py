@@ -24,6 +24,8 @@ from app.infra.policy.minimal_policy_guard import MinimalPolicyGuard
 from app.ports.auth import OASessionCredential
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
+from tests.api.test_work_object_dispatch import run as run_synthetic_db
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 NOW = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
@@ -56,7 +58,7 @@ def _ai_user_id() -> str:
 
 
 def _request_context(**overrides: str) -> RequestOrgContext:
-    return RequestOrgContext(request_id="oa-identity-test", **overrides)
+    return RequestOrgContext(request_id="oa-identity-test", **overrides, tenant_id="default")
 
 
 def test_active_projection_uses_only_metadata_and_returns_namespaced_reference() -> None:
@@ -75,10 +77,10 @@ def test_active_projection_uses_only_metadata_and_returns_namespaced_reference()
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -102,8 +104,8 @@ def test_active_projection_uses_only_metadata_and_returns_namespaced_reference()
                 execution_identity="user_delegated",
                 request_context=_request_context(),
             )
-            fetched = await mapping.get_mapping(ai_user_id, "oa")
-            listed = await mapping.list_mappings(ai_user_id)
+            fetched = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
+            listed = await mapping.list_mappings(ai_user_id, tenant_id="default")
 
             assert resolved.model_dump() == {
                 "bind_status": "active",
@@ -122,10 +124,7 @@ def test_active_projection_uses_only_metadata_and_returns_namespaced_reference()
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -158,8 +157,8 @@ def test_missing_projection_is_unbound_and_absent_from_management_reads() -> Non
             assert resolved.bind_status == "unbound"
             assert resolved.binding_id is None
             assert resolved.reason_code == "identity_unbound"
-            assert await mapping.get_mapping(ai_user_id, "oa") is None
-            assert await mapping.list_mappings(ai_user_id, "oa") == []
+            assert await mapping.get_mapping(ai_user_id, "oa", tenant_id="default") is None
+            assert await mapping.list_mappings(ai_user_id, "oa", tenant_id="default") == []
         finally:
             await engine.dispose()
 
@@ -189,10 +188,10 @@ def test_expired_projection_never_emits_a_binding_reference(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -229,10 +228,7 @@ def test_expired_projection_never_emits_a_binding_reference(
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -266,10 +262,10 @@ def test_revoked_projection_precedes_expiry_and_preserves_binding_reference(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
                         " :expires_at, :revoked_at, :updated_at)"
                     ),
                     {
@@ -297,8 +293,8 @@ def test_revoked_projection_precedes_expiry_and_preserves_binding_reference(
             assert resolved.bind_status == "revoked"
             assert resolved.binding_id == binding_id
             assert resolved.reason_code == "identity_revoked"
-            assert await mapping.get_mapping(ai_user_id, "oa") == resolved
-            assert await mapping.list_mappings(ai_user_id, "oa") == [resolved]
+            assert await mapping.get_mapping(ai_user_id, "oa", tenant_id="default") == resolved
+            assert await mapping.list_mappings(ai_user_id, "oa", tenant_id="default") == [resolved]
         finally:
             async with factory() as session:
                 await session.execute(
@@ -328,10 +324,10 @@ def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() ->
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
                         " :expires_at, NULL, :updated_at)"
                     ),
                     {
@@ -348,9 +344,9 @@ def test_revoke_and_reset_are_idempotent_and_preserve_credential_timestamps() ->
                 session_factory=factory,
                 now=lambda: next(clock_values),
             )
-            first = await mapping.revoke_mapping(binding_id)
-            repeated_revoke = await mapping.revoke_mapping(binding_id)
-            reset = await mapping.reset_mapping(binding_id)
+            first = await mapping.revoke_mapping(binding_id, tenant_id="default")
+            repeated_revoke = await mapping.revoke_mapping(binding_id, tenant_id="default")
+            reset = await mapping.reset_mapping(binding_id, tenant_id="default")
 
             assert first is not None
             assert first.previous_bind_status == "active"
@@ -405,10 +401,10 @@ def test_revoke_reports_expired_previous_status_without_changing_expires_at() ->
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, revoked_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, 'unused', :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, 'unused', :nonce, :encrypted_payload,"
                         " :expires_at, NULL, :updated_at)"
                     ),
                     {
@@ -425,7 +421,7 @@ def test_revoke_reports_expired_previous_status_without_changing_expires_at() ->
                 session_factory=factory,
                 now=lambda: NOW,
             )
-            result = await mapping.revoke_mapping(binding_id)
+            result = await mapping.revoke_mapping(binding_id, tenant_id="default")
 
             assert result is not None
             assert result.previous_bind_status == "expired"
@@ -489,9 +485,11 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             self,
             stored_ai_user_id: str,
             target_system: str,
+            *,
+            tenant_id: str,
         ) -> OASessionCredential | None:
             self.load_calls += 1
-            return await super().load(stored_ai_user_id, target_system)
+            return await super().load(stored_ai_user_id, target_system, tenant_id=tenant_id)
 
     class CountingSecretProvider(CredentialStoreSecretProvider):
         def __init__(self, **kwargs: Any) -> None:
@@ -543,17 +541,13 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
                 "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr("synthetic-" + uuid4().hex),
-                    cookies={
-                        "synthetic_name": SecretStr(
-                            "synthetic-" + uuid4().hex
-                        )
-                    },
+                    cookies={"synthetic_name": SecretStr("synthetic-" + uuid4().hex)},
                     expires_at=NOW + timedelta(minutes=5),
                 ),
+                tenant_id="default",
             )
             secret_provider = CountingSecretProvider(
-                credential_store=credential_store,
-                now=lambda: NOW,
+                credential_store=credential_store, now=lambda: NOW, tenant_id="default"
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
@@ -572,9 +566,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
                 system_messages_select_state="system-selection-state",
                 timeout_seconds=2.0,
                 pending_workflows_contract_pack_dir=CONTRACT_PACK,
-                system_messages_contract_pack_dir=(
-                    SYSTEM_MESSAGE_CONTRACT_PACK
-                ),
+                system_messages_contract_pack_dir=(SYSTEM_MESSAGE_CONTRACT_PACK),
                 opener_factory=forbidden_opener_factory,
                 clock=lambda: NOW,
             )
@@ -595,7 +587,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
             assert active.bind_status == "active"
             assert active.binding_id == binding_id
 
-            revoked = await identity_mapping.revoke_mapping(binding_id)
+            revoked = await identity_mapping.revoke_mapping(binding_id, tenant_id="default")
             assert revoked is not None
             assert revoked.previous_bind_status == "active"
             assert revoked.changed is True
@@ -607,6 +599,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
                 identity_mapping=identity_mapping,
                 policy_guard=MinimalPolicyGuard(),
                 adapters={"oa": adapter},
+                tenant_id="default",
             )
             result = await gateway.execute_capability(
                 "task-revoked-001",
@@ -614,7 +607,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
                 ai_user_id,
                 capability.capability_id,
                 {},
-                RequestOrgContext(request_id="trace-revoked-001"),
+                RequestOrgContext(request_id="trace-revoked-001", tenant_id="default"),
             )
 
             assert result.status == "binding_required"
@@ -641,10 +634,7 @@ def test_committed_revocation_blocks_new_and_stale_prechecked_requests() -> None
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -728,17 +718,19 @@ async def test_management_filters_never_broaden_to_unscoped_oa_binding() -> None
     )
     ai_user_id = _ai_user_id()
 
-    assert await mapping.get_mapping(
-        ai_user_id,
-        "oa",
-        binding_scope="unsupported",
-    ) is None
-    assert await mapping.list_mappings(
-        ai_user_id,
-        "oa",
-        account_set_id="unsupported",
-    ) == []
-    assert await mapping.list_mappings(ai_user_id, "u8") == []
+    assert (
+        await mapping.get_mapping(
+            ai_user_id, "oa", binding_scope="unsupported", tenant_id="default"
+        )
+        is None
+    )
+    assert (
+        await mapping.list_mappings(
+            ai_user_id, "oa", account_set_id="unsupported", tenant_id="default"
+        )
+        == []
+    )
+    assert await mapping.list_mappings(ai_user_id, "u8", tenant_id="default") == []
 
 
 def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None:
@@ -818,17 +810,13 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
                 "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr("synthetic-" + uuid4().hex),
-                    cookies={
-                        "synthetic_name": SecretStr(
-                            "synthetic-" + uuid4().hex
-                        )
-                    },
+                    cookies={"synthetic_name": SecretStr("synthetic-" + uuid4().hex)},
                     expires_at=NOW + timedelta(minutes=5),
                 ),
+                tenant_id="default",
             )
             secret_provider = CountingSecretProvider(
-                credential_store=credential_store,
-                now=lambda: NOW,
+                credential_store=credential_store, now=lambda: NOW, tenant_id="default"
             )
             live_provider = LiveOAReadProvider(
                 base_url="https://oa.synthetic.invalid",
@@ -847,9 +835,7 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
                 system_messages_select_state="system-selection-state",
                 timeout_seconds=2.0,
                 pending_workflows_contract_pack_dir=CONTRACT_PACK,
-                system_messages_contract_pack_dir=(
-                    SYSTEM_MESSAGE_CONTRACT_PACK
-                ),
+                system_messages_contract_pack_dir=(SYSTEM_MESSAGE_CONTRACT_PACK),
                 opener_factory=forbidden_opener_factory,
                 clock=lambda: NOW,
             )
@@ -874,6 +860,7 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
                 identity_mapping=identity_mapping,
                 policy_guard=MinimalPolicyGuard(),
                 adapters={"oa": adapter},
+                tenant_id="default",
             )
 
             result = await gateway.execute_capability(
@@ -882,7 +869,7 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
                 user_a_id,
                 capability.capability_id,
                 {},
-                RequestOrgContext(request_id="trace-cross-user-001"),
+                RequestOrgContext(request_id="trace-cross-user-001", tenant_id="default"),
             )
 
             assert result.status == "binding_required"
@@ -894,10 +881,7 @@ def test_user_a_cannot_resolve_user_b_oa_credential_or_reach_live_http() -> None
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": user_b_id},
                 )
                 await session.commit()
@@ -913,3 +897,49 @@ def test_identity_mapping_source_cannot_select_or_decrypt_credential_material() 
     assert "cipher_version" not in source
     assert "aesgcm" not in source
     assert "secretstr" not in source
+
+
+def test_same_user_tenant_projection(dispatch_db):
+    from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+
+    async def exercise():
+        store = PostgreSQLCredentialStore(
+            session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+        )
+        mapping = PostgreSQLOAIdentityMapping(session_factory=dispatch_db.factory)
+        user = "usr_v1_" + "b" * 43
+        for tenant in ("synthetic-TA", "synthetic-TB"):
+            await store.store(
+                user,
+                "oa",
+                OASessionCredential(
+                    oa_user_id=SecretStr("synthetic"),
+                    cookies={},
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ),
+                tenant_id=tenant,
+            )
+        assert (
+            await mapping.revoke_mapping(f"oa-session-v1:{user}", tenant_id="synthetic-TB")
+        ).changed
+        for tenant, expected in (
+            ("synthetic-TA", "active"),
+            ("synthetic-TB", "revoked"),
+            ("synthetic-TC", "unbound"),
+        ):
+            context = RequestOrgContext(request_id="synthetic", tenant_id=tenant)
+            result = await mapping.resolve_execution_identity(user, "oa", "user_delegated", context)
+            assert result.bind_status == expected
+            if expected == "unbound":
+                assert result.reason_code == "identity_unbound"
+                assert await mapping.get_mapping(user, "oa", tenant_id=tenant) is None
+                assert await mapping.list_mappings(user, tenant_id=tenant) == []
+            else:
+                assert (
+                    await mapping.get_mapping(user, "oa", tenant_id=tenant)
+                ).bind_status == expected
+                assert [
+                    item.bind_status for item in await mapping.list_mappings(user, tenant_id=tenant)
+                ] == [expected]
+
+    run_synthetic_db(exercise())

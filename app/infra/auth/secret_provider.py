@@ -29,8 +29,12 @@ class CredentialStoreSecretProvider:
         self,
         *,
         credential_store: CredentialStorePort,
+        tenant_id: str,
         now: Callable[[], datetime] | None = None,
     ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+        self._tenant_id = tenant_id
         self._credential_store = credential_store
         self._now = _utc_now if now is None else now
 
@@ -66,7 +70,9 @@ class CredentialStoreSecretProvider:
         credential: OASessionCredential | None = None
         load_failed = False
         try:
-            credential = await self._credential_store.load(ai_user_id, "oa")
+            credential = await self._credential_store.load(
+                ai_user_id, "oa", tenant_id=self._tenant_id
+            )
         except Exception:
             load_failed = True
 

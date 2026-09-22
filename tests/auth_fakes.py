@@ -30,7 +30,7 @@ class StaticSessionTokens:
             ai_user_id="usr_v1_synthetic",
             display_name="Synthetic User",
             roles=roles,
-            org_ctx=PrincipalOrgContext(),
+            org_ctx=PrincipalOrgContext(tenant_id="default"),
         )
 
     def issue(self, principal: Principal) -> str:

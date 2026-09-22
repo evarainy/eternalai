@@ -913,8 +913,7 @@ def test_known_behind_warns_and_continues_to_all_command_handlers(
         ),
         (
             "diverged",
-            "当前运行版本与已知主干分叉；"
-            "建议核对工作树版本后再决定是否更新；本次命令继续执行。",
+            "当前运行版本与已知主干分叉；建议核对工作树版本后再决定是否更新；本次命令继续执行。",
         ),
     ],
 )
@@ -3040,6 +3039,8 @@ def test_report_is_built_only_from_structural_metadata() -> None:
         error_kind="normalization_or_structure_drift",
     )
     sensitive_values = {
+        "OA_SOURCE_PROFILE_ID": "synthetic-oa",
+        "OA_TENANT_ID": "default",
         "OA_BASE_URL": "https://private.synthetic.invalid",
         "OA_MESSAGE_CENTER_PATH": "/private/synthetic/path",
         "OA_PENDING_WORKFLOWS_SPLIT_PAGE_KEY_PATH": "/private/todo/split",
@@ -3636,6 +3637,8 @@ def test_verify_none_for_both_capabilities_returns_success(
 
 def test_configuration_fingerprint_is_deterministic_and_value_free() -> None:
     environment = {
+        "OA_SOURCE_PROFILE_ID": "synthetic-oa",
+        "OA_TENANT_ID": "default",
         "OA_BASE_URL": "https://private.synthetic.invalid",
         "ETERNALAI_SESSION_SIGNING_KEY_B64": "sensitive-key-value-003",
     }
@@ -4005,7 +4008,11 @@ def test_failed_start_cleanup_terminates_only_new_processes(
         scratch=tmp_path / "_scratch",
     )
     layout.scratch.mkdir()
-    environment = {"OA_BASE_URL": "https://synthetic.invalid"}
+    environment = {
+        "OA_SOURCE_PROFILE_ID": "synthetic-oa",
+        "OA_TENANT_ID": "default",
+        "OA_BASE_URL": "https://synthetic.invalid",
+    }
     backend_reused_pid = 41001
     frontend_new = _FakeProcess(41002)
     (layout.scratch / "smoke_processes.json").write_text(
@@ -5941,6 +5948,7 @@ def test_verify_reachable_authentication_error_is_classified_without_details(
         oa_timeout_seconds=5,
         identity_hmac_key="synthetic-hmac-key",
         oa_credential_ttl_seconds=60,
+        source_tenant_id="default",
     )
     monkeypatch.setattr(
         smoke_runner,
@@ -6006,6 +6014,7 @@ def test_verify_typed_authentication_error_prints_fixed_stage_without_values(
         oa_timeout_seconds=5,
         identity_hmac_key="synthetic-hmac-key",
         oa_credential_ttl_seconds=60,
+        source_tenant_id="default",
     )
     monkeypatch.setattr(smoke_runner, "_oa_endpoint_reachable", lambda _url: True)
     monkeypatch.setattr(
@@ -6045,3 +6054,52 @@ def test_verify_typed_authentication_error_prints_fixed_stage_without_values(
     assert "synthetic-sensitive-detail" not in output
     assert "synthetic-account" not in output
     assert "synthetic-password" not in output
+
+
+@pytest.mark.parametrize("mode", ["persisted", "login"])
+def test_verification_credential_lookup_uses_configured_tenant(monkeypatch, mode):
+    from unittest.mock import AsyncMock, Mock
+
+    from app.ports.auth import Principal, PrincipalOrgContext
+
+    settings = SimpleNamespace(
+        database_url="postgresql://synthetic.invalid/db",
+        credential_encryption_key=bytes(range(32)),
+        identity_hmac_key=bytes(range(32)),
+        source_tenant_id="synthetic-TA",
+        oa_base_url="https://synthetic.invalid",
+        oa_timeout_seconds=5,
+        oa_credential_ttl_seconds=3600,
+    )
+    user = "synthetic-same-user"
+    principal = Principal(
+        ai_user_id=user,
+        display_name="Synthetic",
+        roles=(),
+        org_ctx=PrincipalOrgContext(tenant_id=settings.source_tenant_id),
+    )
+    store, engine = AsyncMock(), AsyncMock()
+    authentication = AsyncMock()
+    authentication.authenticate.return_value = principal
+    build_auth = Mock(return_value=authentication)
+    results = (object(), object())
+    monkeypatch.setattr(smoke_runner, "make_async_engine", lambda _url: engine)
+    monkeypatch.setattr(smoke_runner, "make_async_session_factory", lambda _engine: object())
+    monkeypatch.setattr(smoke_runner, "build_credential_store", lambda **_kwargs: store)
+    monkeypatch.setattr(smoke_runner, "build_principal_role_reader", lambda **_kwargs: object())
+    monkeypatch.setattr(smoke_runner, "build_authentication_port", build_auth)
+    monkeypatch.setattr(smoke_runner, "identity_surrogate", lambda *args, **kwargs: user)
+    monkeypatch.setattr(smoke_runner, "_run_both_live_checks", AsyncMock(return_value=results))
+    monkeypatch.setattr(smoke_runner, "_oa_endpoint_reachable", lambda _url: True)
+    monkeypatch.setattr(smoke_runner, "_prompt_credentials", lambda: ("synthetic", "synthetic"))
+    if mode == "persisted":
+        outcome = asyncio.run(
+            smoke_runner._run_persisted_provider_checks(settings, account="synthetic")
+        )
+        build_auth.assert_not_called()
+    else:
+        outcome = asyncio.run(smoke_runner._run_live_checks(settings))
+        assert build_auth.call_args.kwargs["tenant_id"] == settings.source_tenant_id
+    assert outcome == results
+    store.load.assert_awaited_once_with(user, "oa", tenant_id="synthetic-TA")
+    engine.dispose.assert_awaited_once()

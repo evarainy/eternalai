@@ -21,6 +21,8 @@ from app.infra.auth.postgresql import (
     credential_associated_data,
 )
 from app.ports.auth import CredentialStoreError, OASessionCredential
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
+from tests.api.test_work_object_dispatch import run as run_synthetic_db
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
@@ -69,6 +71,7 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
                     cookies={"loginuuids": SecretStr(cookie_value)},
                     expires_at=expires_at,
                 ),
+                tenant_id="default",
             )
             async with factory() as session:
                 row = (
@@ -82,10 +85,7 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
                     )
                 ).one()
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -99,12 +99,14 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
                 credential_associated_data(ai_user_id),
             )
             decoded = json.loads(plaintext)
-            assert hashlib.sha256(decoded["oa_user_id"].encode()).digest() == hashlib.sha256(
-                oa_user_id.encode()
-            ).digest()
-            assert hashlib.sha256(
-                decoded["cookies"]["loginuuids"].encode()
-            ).digest() == hashlib.sha256(cookie_value.encode()).digest()
+            assert (
+                hashlib.sha256(decoded["oa_user_id"].encode()).digest()
+                == hashlib.sha256(oa_user_id.encode()).digest()
+            )
+            assert (
+                hashlib.sha256(decoded["cookies"]["loginuuids"].encode()).digest()
+                == hashlib.sha256(cookie_value.encode()).digest()
+            )
             assert row.cipher_version == "aes256gcm-v1"
             assert row.expires_at == expires_at
         finally:
@@ -124,17 +126,18 @@ def test_principal_roles_are_local_sorted_and_absent_is_empty() -> None:
         factory = make_async_session_factory(engine)
         try:
             reader = PostgreSQLPrincipalRoleReader(session_factory=factory)
-            assert await reader.list_roles(ai_user_id) == ()
+            assert await reader.list_roles(ai_user_id, tenant_id="default") == ()
             async with factory() as session:
                 await session.execute(
                     text(
-                        "INSERT INTO principal_roles (ai_user_id, role)"
-                        " VALUES (:ai_user_id, 'viewer'), (:ai_user_id, 'admin')"
+                        "INSERT INTO principal_roles (tenant_id, ai_user_id, role)"
+                        " VALUES ('default', :ai_user_id, 'viewer'),"
+                        " ('default', :ai_user_id, 'admin')"
                     ),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
-            assert await reader.list_roles(ai_user_id) == ("admin", "viewer")
+            assert await reader.list_roles(ai_user_id, tenant_id="default") == ("admin", "viewer")
             async with factory() as session:
                 await session.execute(
                     text("DELETE FROM principal_roles WHERE ai_user_id = :ai_user_id"),
@@ -173,17 +176,22 @@ def test_oa_credential_round_trips_through_authenticated_load() -> None:
                     cookies={"synthetic_name": SecretStr(cookie_value)},
                     expires_at=expires_at,
                 ),
+                tenant_id="default",
             )
 
-            loaded = await store.load(ai_user_id, "oa")
+            loaded = await store.load(ai_user_id, "oa", tenant_id="default")
 
             assert loaded is not None
-            assert hashlib.sha256(
-                loaded.oa_user_id.get_secret_value().encode()
-            ).digest() == hashlib.sha256(oa_user_id.encode()).digest()
-            assert hashlib.sha256(
-                loaded.cookies["synthetic_name"].get_secret_value().encode()
-            ).digest() == hashlib.sha256(cookie_value.encode()).digest()
+            assert (
+                hashlib.sha256(loaded.oa_user_id.get_secret_value().encode()).digest()
+                == hashlib.sha256(oa_user_id.encode()).digest()
+            )
+            assert (
+                hashlib.sha256(
+                    loaded.cookies["synthetic_name"].get_secret_value().encode()
+                ).digest()
+                == hashlib.sha256(cookie_value.encode()).digest()
+            )
             assert loaded.expires_at == expires_at
             rendered = repr(loaded) + loaded.model_dump_json()
             assert oa_user_id not in rendered
@@ -191,10 +199,7 @@ def test_oa_credential_round_trips_through_authenticated_load() -> None:
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -228,6 +233,7 @@ def test_successful_credential_upsert_clears_revocation() -> None:
                     cookies={"synthetic_name": SecretStr(f"synthetic-{uuid4().hex}")},
                     expires_at=initial_expires_at,
                 ),
+                tenant_id="default",
             )
             revoked_at = datetime.now(UTC)
             async with factory() as session:
@@ -252,6 +258,7 @@ def test_successful_credential_upsert_clears_revocation() -> None:
                     cookies={"synthetic_name": SecretStr(f"synthetic-{uuid4().hex}")},
                     expires_at=reauthenticated_expires_at,
                 ),
+                tenant_id="default",
             )
 
             async with factory() as session:
@@ -271,10 +278,7 @@ def test_successful_credential_upsert_clears_revocation() -> None:
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -315,6 +319,7 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
                     cookies={"synthetic_name": SecretStr(cookie_value)},
                     expires_at=datetime.now(UTC) + timedelta(hours=2),
                 ),
+                tenant_id="default",
             )
             async with factory() as session:
                 await session.execute(
@@ -334,7 +339,7 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
             setattr(store, "_cipher", decrypt_guard)
 
             with pytest.raises(CredentialStoreError) as exc_info:
-                await store.load(ai_user_id, "oa")
+                await store.load(ai_user_id, "oa", tenant_id="default")
 
             assert decrypt_guard.call_count == 0
             rendered = repr(exc_info.value) + str(exc_info.value)
@@ -346,10 +351,7 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
@@ -414,7 +416,7 @@ def test_revocation_check_precedes_decryption_without_a_session_exit_gap() -> No
         )
         setattr(store, "_cipher", OrderingCipher())
 
-        loaded = await store.load(ai_user_id, "oa")
+        loaded = await store.load(ai_user_id, "oa", tenant_id="default")
 
         assert loaded is not None
         assert loaded.oa_user_id.get_secret_value() == oa_user_id
@@ -437,7 +439,7 @@ def test_oa_credential_load_returns_none_for_missing_row() -> None:
                 session_factory=factory,
                 encryption_key=bytes(range(32)),
             )
-            assert await store.load(ai_user_id, "oa") is None
+            assert await store.load(ai_user_id, "oa", tenant_id="default") is None
         finally:
             await engine.dispose()
 
@@ -528,10 +530,10 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " (:ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
+                        " ('default', :ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -550,7 +552,7 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
                 encryption_key=key,
             )
             with pytest.raises(CredentialStoreError) as exc_info:
-                await store.load(ai_user_id, "oa")
+                await store.load(ai_user_id, "oa", tenant_id="default")
 
             rendered = repr(exc_info.value) + str(exc_info.value)
             assert oa_user_id not in rendered
@@ -561,13 +563,66 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
         finally:
             async with factory() as session:
                 await session.execute(
-                    text(
-                        "DELETE FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                    ),
+                    text("DELETE FROM oa_session_credentials WHERE ai_user_id = :ai_user_id"),
                     {"ai_user_id": ai_user_id},
                 )
                 await session.commit()
             await engine.dispose()
 
     asyncio.run(exercise())
+
+
+def test_credential_reads_require_tenant(dispatch_db):
+    from app.infra.auth.secret_provider import CredentialStoreSecretProvider
+    from app.ports.secret_provider import CredentialNotFoundError
+
+    async def exercise():
+        store = PostgreSQLCredentialStore(
+            session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+        )
+        user = "usr_v1_" + "a" * 43
+        tenants = ("synthetic-TA", "synthetic-TB")
+        for tenant in tenants:
+            await store.store(
+                user,
+                "oa",
+                OASessionCredential(
+                    oa_user_id=SecretStr(tenant),
+                    cookies={},
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ),
+                tenant_id=tenant,
+            )
+        for tenant in tenants:
+            credential = await store.load(user, "oa", tenant_id=tenant)
+            assert credential is not None
+            assert credential.oa_user_id.get_secret_value() == tenant
+            provider = CredentialStoreSecretProvider(credential_store=store, tenant_id=tenant)
+            assert await provider.resolve_oa_session(f"oa-session-v1:{user}") == credential
+            from dataclasses import replace
+
+            from app.composition import build_oa_read_adapter, build_user_profile_port
+            from tests.runtime.test_runtime_composition import _oa_mode_settings
+
+            settings = replace(
+                _oa_mode_settings("live"),
+                source_tenant_id=tenant,
+            )
+            for consumer in (
+                build_user_profile_port(settings=settings, credential_store=store),
+                build_oa_read_adapter(settings=settings, credential_store=store),
+            ):
+                assert (
+                    await consumer._secret_provider.resolve_oa_session(f"oa-session-v1:{user}")
+                    == credential
+                )
+        assert await store.load(user, "oa", tenant_id="synthetic-TC") is None
+        provider = CredentialStoreSecretProvider(credential_store=store, tenant_id="synthetic-TC")
+        with pytest.raises(CredentialNotFoundError):
+            await provider.resolve_oa_session(f"oa-session-v1:{user}")
+        async with dispatch_db.factory() as session:
+            assert (
+                await session.execute(text("SELECT count(*) FROM oa_session_credentials"))
+            ).scalar_one() == 2
+
+    run_synthetic_db(exercise())

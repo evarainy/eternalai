@@ -84,7 +84,7 @@ def test_request_org_context_field_set_matches_spec_8_6_1() -> None:
 
 
 def test_request_org_context_defaults_match_spec_8_6_1() -> None:
-    context = RequestOrgContext(request_id="request-001")
+    context = RequestOrgContext(request_id="request-001", tenant_id="default")
 
     assert context.request_id == "request-001"
     assert context.tenant_id == "default"
@@ -99,8 +99,8 @@ def test_request_org_context_defaults_match_spec_8_6_1() -> None:
 
 
 def test_request_org_context_roles_default_is_isolated_between_instances() -> None:
-    first = RequestOrgContext(request_id="request-001")
-    second = RequestOrgContext(request_id="request-002")
+    first = RequestOrgContext(request_id="request-001", tenant_id="default")
+    second = RequestOrgContext(request_id="request-002", tenant_id="default")
 
     first.roles.append("operator")
 
@@ -110,7 +110,7 @@ def test_request_org_context_roles_default_is_isolated_between_instances() -> No
 
 def test_request_org_context_rejects_channel_outside_spec_8_6_1() -> None:
     with pytest.raises(ValidationError) as exc_info:
-        RequestOrgContext(request_id="request-001", channel="mobile")
+        RequestOrgContext(request_id="request-001", channel="mobile", tenant_id="default")
 
     assert "Input should be" in str(exc_info.value)
 

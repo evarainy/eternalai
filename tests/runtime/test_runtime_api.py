@@ -50,6 +50,7 @@ from tests.runtime.registry_fakes import (
     runtime_output_schema,
     schema_digest,
 )
+from tests.runtime.test_production_workflow import pg_workflow_factory as pg_workflow_factory
 from tests.runtime.test_runtime_capability_selection import (
     ExistingSessionStore,
     RecordingTaskStore,
@@ -416,7 +417,7 @@ def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> No
     from tests.runtime.test_runtime_user_action import _START_MESSAGE, _build_harness
 
     harness = asyncio.run(_build_harness())
-    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default")
     binder = PrincipalSessionBinder(binding_key=bytes(reversed(range(32))))
     client = TestClient(
         create_app(
@@ -460,7 +461,7 @@ def test_terminal_actions_follow_authenticated_csrf_bound_route(kind: str) -> No
     if kind == "expired":
         body["action"]["confirmed"] = True
         pending = harness.runtime._pending_workflows[
-            (card["session_id"], harness.principal.ai_user_id)
+            (harness.principal.org_ctx.tenant_id, card["session_id"], harness.principal.ai_user_id)
         ]
         harness.runtime._utc_clock = lambda: pending.expires_at + timedelta(microseconds=1)
     invalid = {
@@ -594,6 +595,23 @@ def _topk_client(
     adapter = _CountingAdapter()
     trace_port = RecordingTracePort()
     builder = ResponseEnvelopeBuilder()
+    gateways = {
+        tenant: CapabilityGateway(
+            adapter=adapter,
+            capability_registry=registry,
+            identity_mapping=identity_mapping,
+            policy_guard=MinimalPolicyGuard(),
+            trace_port=trace_port,
+            tenant_id=tenant,
+        )
+        for tenant in ("default", "tenant-a", "tenant-b")
+    }
+
+    class ScopedTestGateway:
+        async def execute_capability(self, *args, **kwargs):
+            context = kwargs.get("request_context") or args[-1]
+            return await gateways[context.tenant_id].execute_capability(*args, **kwargs)
+
     runtime = RuntimeImpl(
         candidate_policy=candidate_policy,
         task_store=RecordingTaskStore(),
@@ -601,13 +619,7 @@ def _topk_client(
         capability_registry=registry,
         orchestration=AgentOrchestrationAdapter(
             capability_registry=registry,
-            gateway=CapabilityGateway(
-                adapter=adapter,
-                capability_registry=registry,
-                identity_mapping=identity_mapping,
-                policy_guard=MinimalPolicyGuard(),
-                trace_port=trace_port,
-            ),
+            gateway=ScopedTestGateway(),
             workflow_engine=None,
             response_builder=builder,
         ),
@@ -678,14 +690,16 @@ def topk_identity_mapping(request: pytest.FixtureRequest) -> Iterator[Any]:
             MockIdentityMapping(
                 rows=[
                     {
+                        "tenant_id": f"tenant-{subject}",
                         "ai_user_id": user,
                         "target_system": "oa",
                         "execution_identity": "user_delegated",
                         "bind_status": "active",
                         "binding_id": f"oa-session-v1:{user}",
                     }
-                    for user in subjects.values()
-                ]
+                    for subject, user in subjects.items()
+                ],
+                tenant_id="default",
             ),
             subjects,
         )
@@ -711,15 +725,16 @@ def topk_identity_mapping(request: pytest.FixtureRequest) -> Iterator[Any]:
 
     async def insert_bindings() -> None:
         async with engine.begin() as connection:
-            for user in subjects.values():
+            for subject, user in subjects.items():
                 await connection.execute(
                     text(
                         "INSERT INTO oa_session_credentials "
-                        "(ai_user_id, cipher_version, nonce, encrypted_payload, "
+                        "(tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload, "
                         "expires_at, updated_at) "
-                        "VALUES (:user, 'synthetic-unused', :blob, :blob, :expiry, :now)"
+                        "VALUES (:tenant, :user, 'synthetic-unused', :blob, :blob, :expiry, :now)"
                     ),
                     {
+                        "tenant": f"tenant-{subject}",
                         "user": user,
                         "blob": b"synthetic-unused-ciphertext",
                         "expiry": now + timedelta(hours=1),
@@ -836,3 +851,268 @@ def test_topk_does_not_cross_principal_or_session(topk_identity_mapping: Any) ->
     ]
     assert llm.offered[2] == ["zz.shared", "zz.tenant-a-only"]
     assert adapter.execution_contexts[2] == {"credential_ref": f"oa-session-v1:{subjects['a']}"}
+
+
+@pytest.mark.parametrize(
+    "endpoint,body",
+    [
+        ("handle", _valid_body()),
+        ("action", _valid_action_body()),
+    ],
+)
+def test_client_tenant_is_not_an_authority(endpoint, body):
+    from app.infra.auth.crypto import HMACSessionToken
+
+    runtime = FakeRuntime()
+    tokens = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="synthetic-TB"
+    )
+    principal = Principal(
+        ai_user_id="synthetic-same",
+        display_name="Synthetic",
+        roles=(),
+        org_ctx=PrincipalOrgContext(tenant_id="synthetic-TB"),
+    )
+    app = create_app(
+        runtime=runtime,
+        session_tokens=tokens,
+        session_revocations=MemorySessionRevocations(),
+        session_binder=make_session_binder(),
+        csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+    )
+    with TestClient(app, base_url="https://testserver") as client:
+        client.cookies.set("eternalai_session", tokens.issue(principal))
+        response = client.post(
+            f"/api/v1/runtime/{endpoint}",
+            json={**body, "tenant_id": "synthetic-TA"},
+            headers=TEST_CSRF_HEADERS,
+        )
+    assert response.status_code == 422
+    assert any(
+        item["loc"] == ["body", "tenant_id"] and item["type"] == "extra_forbidden"
+        for item in response.json()["detail"]
+    )
+    assert runtime.calls == 0
+
+
+@pytest.mark.parametrize("mode", ["handle", "action", "directory-outage"])
+def test_same_bound_session_uses_verified_tenant(pg_workflow_factory, mode):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy import text
+
+    from app.infra.auth.crypto import HMACSessionToken
+    from app.ports.task_store import SessionRecord
+    from tests.runtime.test_production_workflow import _run_pg
+
+    async def exercise():
+        async with pg_workflow_factory(confirmation=True) as h:
+            runtime = h.runtime
+            a = h.principal
+            b = a.model_copy(update={"org_ctx": PrincipalOrgContext(tenant_id="synthetic-TB")})
+            sid = h.components.session_binder.bind(a, "synthetic-shared-session")
+            assert h.components.session_binder.bind(b, sid) == sid
+            for principal in (a, b):
+                await runtime._session_store.create_session(
+                    SessionRecord(session_id=sid, tenant_id=principal.org_ctx.tenant_id)
+                )
+            pending = await runtime.handle_user_message(
+                channel="web",
+                principal=a,
+                session_id=sid,
+                message=h.message,
+                client_capabilities={},
+            )
+            assert pending.status == "waiting_user"
+            now = datetime.now(UTC)
+            runtime._utc_clock = lambda: now
+            tasks = runtime._task_store
+            task_a = await tasks.get_task(pending.task_id)
+            pending_a = dict(runtime._pending_workflows)
+            claims_a = deepcopy(runtime._claimed_pending_confirmations)
+            queried_sessions = []
+            get_session = runtime._session_store.get_session
+
+            async def observe_session(session_id, *, tenant_id):
+                record = await get_session(session_id, tenant_id=tenant_id)
+                queried_sessions.append((tenant_id, record))
+                return record
+
+            runtime._session_store.get_session = observe_session
+            trace_query = h.components.admin_registry_service._trace_query
+            trace_a = await trace_query.list_events_by_task(
+                pending.task_id, tenant_id=a.org_ctx.tenant_id
+            )
+            gate = runtime._human_gate_port
+            gate.record_decision = AsyncMock(wraps=gate.record_decision)
+            engine = runtime._orchestration._workflow_engine
+            engine.resume = AsyncMock(wraps=engine.resume)
+            directory = h.components.work_object_service._organization_directory
+            directory.get_user_memberships = AsyncMock(
+                side_effect=RuntimeError("synthetic-directory-outage")
+            )
+            gateway = h.gateway
+            bound = {
+                tenant: CapabilityGateway(
+                    capability_registry=gateway._capability_registry,
+                    identity_mapping=gateway._identity_mapping,
+                    policy_guard=gateway._policy_guard,
+                    adapters=gateway._adapters,
+                    trace_port=gateway._trace_port,
+                    human_gate_port=gateway._human_gate_port,
+                    tenant_id=tenant,
+                )
+                for tenant in (a.org_ctx.tenant_id, b.org_ctx.tenant_id)
+            }
+
+            async def dispatch_scope(*args, **kwargs):
+                context = kwargs.get("request_context") or args[-1]
+                return await bound[context.tenant_id].execute_capability(*args, **kwargs)
+
+            gateway.execute_capability = AsyncMock(side_effect=dispatch_scope)
+            h.llm.register(
+                "synthetic-read",
+                LLMCompletionResponse(
+                    content=json.dumps(
+                        {
+                            "match": "capability",
+                            "capability_id": "oa.list_pending_workflows",
+                            "capability_type": "query",
+                            "arguments": {},
+                        }
+                    )
+                ),
+            )
+            tokens = HMACSessionToken(
+                signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id=b.org_ctx.tenant_id
+            )
+            app = create_app(
+                runtime=runtime,
+                session_tokens=tokens,
+                session_revocations=MemorySessionRevocations(),
+                session_binder=h.components.session_binder.bind,
+                csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+            )
+            before_calls = len(h.adapter.calls)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="https://testserver",
+                cookies={"eternalai_session": tokens.issue(b)},
+            ) as client:
+                if mode == "action":
+                    response = await client.post(
+                        "/api/v1/runtime/action",
+                        headers=TEST_CSRF_HEADERS,
+                        json={
+                            "channel": "web",
+                            "session_id": sid,
+                            "action": {
+                                "action_type": "confirm",
+                                "response_id": pending.response_id,
+                                "confirmed": True,
+                            },
+                        },
+                    )
+                    assert response.status_code == 200
+                    result = response.json()
+                    assert result["status"] == "confirmation_invalidated"
+                    assert result["data"] == {
+                        "action_outcome": "confirmation_invalidated",
+                        "result": None,
+                    }
+                    assert len(h.adapter.calls) == before_calls
+                    gate.record_decision.assert_not_awaited()
+                    engine.resume.assert_not_awaited()
+                else:
+                    response = await client.post(
+                        "/api/v1/runtime/handle",
+                        headers=TEST_CSRF_HEADERS,
+                        json={
+                            "channel": "web",
+                            "session_id": sid,
+                            "message": "synthetic-read",
+                            "client_capabilities": {},
+                        },
+                    )
+                    assert response.status_code == 200 and response.json()["status"] == "completed"
+                    task_b = await tasks.get_task(response.json()["task_id"])
+                    assert task_b.tenant_id == b.org_ctx.tenant_id and task_b.session_id == sid
+                    assert len(h.adapter.calls) == before_calls + 1
+                    gate.record_decision.assert_not_awaited()
+                    if mode == "directory-outage":
+                        response = await client.post(
+                            "/api/v1/runtime/handle",
+                            headers=TEST_CSRF_HEADERS,
+                            json={
+                                "channel": "web",
+                                "session_id": sid,
+                                "message": h.message,
+                                "client_capabilities": {},
+                            },
+                        )
+                        assert (
+                            response.status_code == 200
+                            and response.json()["status"] == "waiting_user"
+                        )
+                        response = await client.post(
+                            "/api/v1/runtime/action",
+                            headers=TEST_CSRF_HEADERS,
+                            json={
+                                "channel": "web",
+                                "session_id": sid,
+                                "action": {
+                                    "action_type": "confirm",
+                                    "response_id": response.json()["response_id"],
+                                    "confirmed": True,
+                                },
+                            },
+                        )
+                        assert (
+                            response.status_code == 200 and response.json()["status"] == "completed"
+                        )
+                        assert response.json()["data"]["action_outcome"] == "accepted"
+                        gate.record_decision.assert_awaited_once()
+                        engine.resume.assert_awaited_once()
+            assert await tasks.get_task(pending.task_id) == task_a
+            assert await trace_query.list_events_by_task(
+                pending.task_id, tenant_id=a.org_ctx.tenant_id
+            ) == trace_a
+            assert len(queried_sessions) == {
+                "action": 0, "handle": 1, "directory-outage": 2
+            }[mode]
+            assert all(
+                tenant == b.org_ctx.tenant_id
+                and record == SessionRecord(tenant_id=b.org_ctx.tenant_id, session_id=sid)
+                for tenant, record in queried_sessions
+            )
+            assert all(runtime._pending_workflows[key] is value for key, value in pending_a.items())
+            assert all(
+                runtime._claimed_pending_confirmations[key] == value
+                for key, value in claims_a.items()
+            )
+            assert await gate.get_decision(pending.response_id) is None
+            assert await tasks.list_tasks(session_id=sid, tenant_id=b.org_ctx.tenant_id) != [task_a]
+            assert task_a not in await tasks.list_tasks(
+                session_id=sid, tenant_id=b.org_ctx.tenant_id
+            )
+            directory.get_user_memberships.assert_not_awaited()
+            async with tasks._session_factory() as session:
+                assert (
+                    await session.execute(text("SELECT count(*) FROM sessions"))
+                ).scalar_one() == 2
+                assert (
+                    await session.execute(
+                        text("SELECT count(*) FROM tasks WHERE tenant_id=:tenant"),
+                        {"tenant": a.org_ctx.tenant_id},
+                    )
+                ).scalar_one() == 1
+                assert (
+                    await session.execute(
+                        text("SELECT count(*) FROM tasks WHERE tenant_id=:tenant"),
+                        {"tenant": b.org_ctx.tenant_id},
+                    )
+                ).scalar_one() == {"action": 0, "handle": 1, "directory-outage": 2}[mode]
+
+    _run_pg(exercise())

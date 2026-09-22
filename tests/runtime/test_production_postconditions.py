@@ -176,6 +176,28 @@ def test_cross_scope_observation_is_rejected_with_real_stores(pg_workflow_factor
                 return result
 
             engine.execute = execute
+            from unittest.mock import AsyncMock
+
+            from app.infra.gateway.capability_gateway import CapabilityGateway
+
+            bound = {
+                tenant: CapabilityGateway(
+                    capability_registry=h.gateway._capability_registry,
+                    identity_mapping=h.gateway._identity_mapping,
+                    policy_guard=h.gateway._policy_guard,
+                    adapters=h.gateway._adapters,
+                    trace_port=h.gateway._trace_port,
+                    human_gate_port=h.gateway._human_gate_port,
+                    tenant_id=tenant,
+                )
+                for tenant in (h.principal.org_ctx.tenant_id, "other-tenant")
+            }
+
+            async def dispatch_scope(*args, **kwargs):
+                context = kwargs.get("request_context") or args[-1]
+                return await bound[context.tenant_id].execute_capability(*args, **kwargs)
+
+            h.gateway.execute_capability = AsyncMock(side_effect=dispatch_scope)
             first = await h.start()
             assert first.status == "completed"
             first_task = await h.runtime._task_store.get_task(first.task_id)

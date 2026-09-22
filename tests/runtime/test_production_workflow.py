@@ -134,7 +134,7 @@ class OwnedTrace(Trace):
         await self.record_step(*args, event_type="gateway_pre_recorded", **kwargs)
 
 
-def component_harness(*, data=None, arguments=None):
+def component_harness(*, data=None, arguments=None, tenant="synthetic-tenant"):
     """Real Runtime/engine/Gateway/Policy, explicitly in-memory persistence."""
     definitions = production_workflow_definitions()
     descriptors = {item.capability_id: item for item in production_workflow_capabilities()}
@@ -161,6 +161,7 @@ def component_harness(*, data=None, arguments=None):
         adapters={"oa": adapter},
         trace_port=trace,
         human_gate_port=gate,
+        tenant_id=tenant,
     )
     gateway.execute_capability = AsyncMock(wraps=gateway.execute_capability)
     engine = WorkflowEngine(
@@ -440,10 +441,10 @@ def test_enabled_contract_drift_after_start_is_fail_closed(window) -> None:
 
 
 def test_request_owner_reaches_each_leaf_and_trace() -> None:
-    h = component_harness()
+    harnesses = [component_harness(tenant=f"tenant-{suffix}") for suffix in ("one", "two")]
 
     async def exercise():
-        for suffix in ("one", "two"):
+        for suffix, h in zip(("one", "two"), harnesses, strict=True):
             response = await run_overview(
                 h, user=f"user-{suffix}", tenant=f"tenant-{suffix}", sid=f"chat-{suffix}"
             )
@@ -458,12 +459,13 @@ def test_request_owner_reaches_each_leaf_and_trace() -> None:
     asyncio.run(exercise())
     owners = [
         (call.args[1], call.args[2], call.args[-1].tenant_id)
+        for h in harnesses
         for call in h.gateway.execute_capability.await_args_list
     ]
     assert owners == [
         (f"chat-{s}", f"user-{s}", f"tenant-{s}") for s in ("one", "two") for _ in range(2)
     ]
-    assert {(tenant, user) for tenant, user in h.trace.owners} == {
+    assert {(tenant, user) for h in harnesses for tenant, user in h.trace.owners} == {
         ("tenant-one", "user-one"),
         ("tenant-two", "user-two"),
     }
@@ -613,6 +615,7 @@ def pg_workflow_factory(migrated_database_url, monkeypatch):
         settings = replace(
             ProductionSettings.from_environment(),
             database_url=database_url,
+            source_tenant_id="synthetic-workflow-tenant",
             oa_read_adapter_mode="mock",
         )
 
@@ -764,7 +767,9 @@ def test_production_confirm_and_text_resume_share_pg_claim(pg_workflow_factory, 
         async with pg_workflow_factory(confirmation=True) as h:
             waiting = await h.start()
             assert waiting.status == "waiting_user"
-            pending = h.runtime._pending_workflows[(h.sid, h.principal.ai_user_id)]
+            pending = h.runtime._pending_workflows[
+                (h.principal.org_ctx.tenant_id, h.sid, h.principal.ai_user_id)
+            ]
             fixed_time = h.runtime._utc_clock()
             h.runtime._utc_clock = lambda: fixed_time
             request = await h.runtime._human_gate_port.get_request(pending.gate_request_id)
@@ -807,7 +812,9 @@ def test_production_reject_cancel_and_duplicate_are_once_only(pg_workflow_factor
         async with pg_workflow_factory(confirmation=True) as h:
             waiting = await h.start()
             assert waiting.status == "waiting_user"
-            pending = h.runtime._pending_workflows[(h.sid, h.principal.ai_user_id)]
+            pending = h.runtime._pending_workflows[
+                (h.principal.org_ctx.tenant_id, h.sid, h.principal.ai_user_id)
+            ]
             fixed_time = h.runtime._utc_clock()
             h.runtime._utc_clock = lambda: fixed_time
             action = (
@@ -879,7 +886,7 @@ def test_production_confirmation_rejects_foreign_reference_and_version_drift(
             if fault == "foreign":
                 principal = runtime_principal("synthetic-foreign", tenant_id="synthetic-other")
             elif fault == "digest":
-                key = (h.sid, h.principal.ai_user_id)
+                key = (h.principal.org_ctx.tenant_id, h.sid, h.principal.ai_user_id)
                 pending = h.runtime._pending_workflows[key]
                 h.runtime._pending_workflows[key] = replace(pending, action_digest="0" * 64)
             else:

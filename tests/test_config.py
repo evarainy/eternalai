@@ -15,6 +15,8 @@ _TEST_KEY_B64 = base64.b64encode(_TEST_KEY).decode("ascii")
 
 def _environment() -> dict[str, str]:
     return {
+        "OA_SOURCE_PROFILE_ID": "synthetic-oa",
+        "OA_TENANT_ID": "default",
         "ENV": "production",
         "DATABASE_URL": "postgresql://user:database-secret@db.invalid/eternalai",
         "REDIS_URL": "redis://:redis-secret@redis.invalid:6379/0",

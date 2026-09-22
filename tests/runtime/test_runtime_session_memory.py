@@ -62,14 +62,14 @@ class RecordingTaskStore:
 
 class InMemorySessionStore:
     def __init__(self) -> None:
-        self.sessions: dict[str, SessionRecord] = {}
+        self.sessions: dict[tuple[str, str], SessionRecord] = {}
 
     async def create_session(self, record: SessionRecord) -> SessionRecord:
-        self.sessions[record.session_id] = record
+        self.sessions[(record.tenant_id, record.session_id)] = record
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return self.sessions.get(session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return self.sessions.get((tenant_id, session_id))
 
 
 class RecordingTracePort:

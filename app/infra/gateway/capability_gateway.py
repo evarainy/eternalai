@@ -77,7 +77,12 @@ class CapabilityGateway:
         adapters: dict[str, AdapterPort] | None = None,
         human_gate_port: HumanGatePort | None = None,
         unbound_task_capability_ids: frozenset[str] = frozenset(),
+        *,
+        tenant_id: str,
     ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+        self._tenant_id = tenant_id
         self._adapter = adapter
         self._adapters = adapters
         self._capability_registry = capability_registry
@@ -114,6 +119,8 @@ class CapabilityGateway:
         request_context: RequestOrgContext,
     ) -> ExecutionResult:
         trace_id = request_context.request_id
+        if request_context.tenant_id != self._tenant_id:
+            return ExecutionResult(status="denied", error_code="policy_denied", trace_id=trace_id)
 
         capability_spec = None
         credential_ref: str | None = None

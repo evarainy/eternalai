@@ -39,15 +39,13 @@ class RecordingMutationPort:
         self.calls: list[tuple[str, str]] = []
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         self.calls.append(("revoke", binding_id))
         return self._result()
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         self.calls.append(("reset", binding_id))
         return self._result()
@@ -72,7 +70,7 @@ def _context(*roles: str) -> AdminRequestContext:
         session_id="admin-session",
         ai_user_id=ADMIN_AI_USER_ID,
         roles=roles,
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
         principal_authenticated=True,
     )
 

@@ -24,6 +24,7 @@ _CREDENTIAL_REF_PREFIX = "oa-session-v1:"
 
 @dataclass(frozen=True, slots=True)
 class _IdentityMappingRow:
+    tenant_id: str
     ai_user_id: str
     result: IdentityCheckResult
 
@@ -145,9 +146,10 @@ _DEFAULT_ROWS: tuple[dict[str, _RowValue], ...] = (
 class MockIdentityMapping:
     """Deterministic mock implementation of IdentityMappingPort."""
 
-    def __init__(self, rows: Iterable[_RowInput] | None = None) -> None:
+    def __init__(self, rows: Iterable[_RowInput] | None = None, *, tenant_id: str) -> None:
+        self._tenant_id = tenant_id
         source_rows = _DEFAULT_ROWS if rows is None else rows
-        self._rows = tuple(self._coerce_row(row) for row in source_rows)
+        self._rows = tuple(self._coerce_row({"tenant_id": tenant_id, **row}) for row in source_rows)
 
     async def resolve_execution_identity(
         self,
@@ -170,10 +172,12 @@ class MockIdentityMapping:
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
     ) -> IdentityCheckResult:
+        tenant_id = request_context.tenant_id
         matches = [
             row.result
             for row in self._rows
-            if row.ai_user_id == ai_user_id
+            if row.tenant_id == tenant_id
+            and row.ai_user_id == ai_user_id
             and row.result.target_system == target_system
             and row.result.execution_identity == execution_identity
         ]
@@ -220,6 +224,8 @@ class MockIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> IdentityCheckResult | None:
         results = await self.list_mappings(
             ai_user_id=ai_user_id,
@@ -227,6 +233,7 @@ class MockIdentityMapping:
             binding_scope=binding_scope,
             account_set_id=account_set_id,
             device_domain_id=device_domain_id,
+            tenant_id=tenant_id,
         )
         if len(results) != 1:
             return None
@@ -239,11 +246,14 @@ class MockIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> list[IdentityCheckResult]:
         return [
             row.result
             for row in self._rows
-            if row.ai_user_id == ai_user_id
+            if row.tenant_id == tenant_id
+            and row.ai_user_id == ai_user_id
             and (target_system is None or row.result.target_system == target_system)
             and self._matches_filters(
                 row.result,
@@ -254,20 +264,17 @@ class MockIdentityMapping:
         ]
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
-        return self._mutate_mapping(binding_id)
+        return self._mutate_mapping(binding_id, tenant_id=tenant_id)
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
-        return self._mutate_mapping(binding_id)
+        return self._mutate_mapping(binding_id, tenant_id=tenant_id)
 
     def _mutate_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         ai_user_id = _parse_binding_id(binding_id)
         if ai_user_id is None:
@@ -276,7 +283,8 @@ class MockIdentityMapping:
         matching_indexes = [
             index
             for index, row in enumerate(self._rows)
-            if row.ai_user_id == ai_user_id
+            if row.tenant_id == tenant_id
+            and row.ai_user_id == ai_user_id
             and f"{_CREDENTIAL_REF_PREFIX}{row.ai_user_id}" == binding_id
             and row.result.target_system == "oa"
             and row.result.execution_identity == "user_delegated"
@@ -298,6 +306,7 @@ class MockIdentityMapping:
         if changed:
             rows = list(self._rows)
             rows[row_index] = _IdentityMappingRow(
+                tenant_id=row.tenant_id,
                 ai_user_id=row.ai_user_id,
                 result=revoked_mapping,
             )
@@ -327,6 +336,7 @@ class MockIdentityMapping:
     @classmethod
     def _coerce_row(cls, row: _RowInput) -> _IdentityMappingRow:
         return _IdentityMappingRow(
+            tenant_id=cls._required(row, "tenant_id"),
             ai_user_id=cls._required(row, "ai_user_id"),
             result=IdentityCheckResult(
                 bind_status=cast(IdentityBindStatus, cls._required(row, "bind_status")),

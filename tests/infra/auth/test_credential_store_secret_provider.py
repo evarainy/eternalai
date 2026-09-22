@@ -34,13 +34,13 @@ class RecordingCredentialStore:
         ai_user_id: str,
         target_system: str,
         credential: OASessionCredential,
+        *,
+        tenant_id: str,
     ) -> None:
         raise AssertionError("read provider must not write credentials")
 
     async def load(
-        self,
-        ai_user_id: str,
-        target_system: str,
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
     ) -> OASessionCredential | None:
         assert target_system == "oa"
         self.loaded_ai_user_ids.append(ai_user_id)
@@ -59,13 +59,13 @@ class ExplodingCredentialStore:
         ai_user_id: str,
         target_system: str,
         credential: OASessionCredential,
+        *,
+        tenant_id: str,
     ) -> None:
         raise AssertionError
 
     async def load(
-        self,
-        ai_user_id: str,
-        target_system: str,
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
     ) -> OASessionCredential | None:
         del ai_user_id, target_system
         raise RuntimeError(self._sensitive_marker)
@@ -84,8 +84,7 @@ async def test_resolve_oa_session_loads_exact_namespaced_surrogate() -> None:
     credential = _credential(expires_at=NOW + timedelta(minutes=5))
     store = RecordingCredentialStore(credential)
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     resolved = await provider.resolve_oa_session(CREDENTIAL_REF)
@@ -100,15 +99,14 @@ async def test_resolve_oa_session_does_not_cache_plaintext_credential() -> None:
         _credential(expires_at=NOW + timedelta(minutes=5))
     )
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     await provider.resolve_oa_session(CREDENTIAL_REF)
     await provider.resolve_oa_session(CREDENTIAL_REF)
 
     assert store.loaded_ai_user_ids == [AI_USER_ID, AI_USER_ID]
-    assert set(vars(provider)) == {"_credential_store", "_now"}
+    assert set(vars(provider)) == {"_credential_store", "_now", "_tenant_id"}
 
 
 @pytest.mark.anyio
@@ -130,8 +128,7 @@ async def test_invalid_reference_is_rejected_before_storage_lookup(
         _credential(expires_at=NOW + timedelta(minutes=5))
     )
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     with pytest.raises(InvalidCredentialReferenceError) as exc_info:
@@ -147,8 +144,7 @@ async def test_invalid_reference_is_rejected_before_storage_lookup(
 async def test_non_string_reference_is_typed_fail_closed() -> None:
     store = RecordingCredentialStore(None)
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     with pytest.raises(InvalidCredentialReferenceError):
@@ -161,8 +157,7 @@ async def test_non_string_reference_is_typed_fail_closed() -> None:
 async def test_missing_credential_is_typed_unavailable() -> None:
     store = RecordingCredentialStore(None)
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     with pytest.raises(CredentialNotFoundError) as exc_info:
@@ -186,8 +181,7 @@ async def test_expired_credential_is_rechecked_after_storage_load(
 ) -> None:
     store = RecordingCredentialStore(_credential(expires_at=expires_at))
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     with pytest.raises(CredentialExpiredError) as exc_info:
@@ -214,8 +208,7 @@ async def test_storage_exception_repr_and_logs_do_not_retain_sensitive_context(
     sensitive_marker = "synthetic-" + uuid4().hex
     store = ExplodingCredentialStore(sensitive_marker)
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
     caplog.set_level(logging.DEBUG)
 
@@ -240,8 +233,7 @@ async def test_invalid_ttl_is_typed_storage_failure_without_context() -> None:
     naive_expiry = datetime(2026, 7, 30, 13, 0)
     store = RecordingCredentialStore(_credential(expires_at=naive_expiry))
     provider = CredentialStoreSecretProvider(
-        credential_store=store,
-        now=lambda: NOW,
+        credential_store=store, now=lambda: NOW, tenant_id="default"
     )
 
     with pytest.raises(CredentialStorageError) as exc_info:
@@ -253,8 +245,7 @@ async def test_invalid_ttl_is_typed_storage_failure_without_context() -> None:
 @pytest.mark.anyio
 async def test_legacy_methods_remain_redacted_and_ignore_execution_context() -> None:
     provider = CredentialStoreSecretProvider(
-        credential_store=RecordingCredentialStore(None),
-        now=lambda: NOW,
+        credential_store=RecordingCredentialStore(None), now=lambda: NOW, tenant_id="default"
     )
     sensitive_marker = "synthetic-" + uuid4().hex
 

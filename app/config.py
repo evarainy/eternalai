@@ -139,6 +139,8 @@ class RedisConnectionURL:
 class ProductionSettings:
     """Validated values needed to construct the production application."""
 
+    source_profile_id: str
+    source_tenant_id: str
     environment_name: str
     database_url: str = field(repr=False)
     redis_url: RedisConnectionURL
@@ -201,6 +203,11 @@ class ProductionSettings:
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
 
+    def __post_init__(self) -> None:
+        for value in (self.source_profile_id, self.source_tenant_id):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("source_profile_configuration_invalid")
+
     @classmethod
     def from_environment(
         cls,
@@ -245,6 +252,8 @@ class ProductionSettings:
                 "or PHASE0_MOCK_MODE=true"
             )
         settings = cls(
+            source_profile_id=source.get("OA_SOURCE_PROFILE_ID", ""),
+            source_tenant_id=source.get("OA_TENANT_ID", ""),
             environment_name=environment_name,
             database_url=get_database_url(source),
             redis_url=_redis_url(source),

@@ -1554,7 +1554,9 @@ def test_replay_adapter_returns_every_normalized_field_exactly() -> None:
 
 
 def test_replay_adapter_runs_through_gateway_with_completed_status() -> None:
-    gateway = CapabilityGateway(OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK)))
+    gateway = CapabilityGateway(
+        OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK)), tenant_id="default"
+    )
 
     result = asyncio.run(
         gateway.execute_capability(
@@ -1563,7 +1565,7 @@ def test_replay_adapter_runs_through_gateway_with_completed_status() -> None:
             "ai-user-replay-001",
             "oa.list_pending_workflows",
             {},
-            RequestOrgContext(request_id="trace-replay-001"),
+            RequestOrgContext(request_id="trace-replay-001", tenant_id="default"),
         )
     )
 
@@ -1574,7 +1576,7 @@ def test_replay_adapter_runs_through_gateway_with_completed_status() -> None:
 
 def test_system_message_replay_runs_through_gateway_without_silent_truncation() -> None:
     gateway = CapabilityGateway(
-        OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK))
+        OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)), tenant_id="default"
     )
 
     result = asyncio.run(
@@ -1584,7 +1586,7 @@ def test_system_message_replay_runs_through_gateway_without_silent_truncation() 
             "ai-user-system-message-001",
             "oa.list_system_messages",
             {},
-            RequestOrgContext(request_id="trace-system-message-001"),
+            RequestOrgContext(request_id="trace-system-message-001", tenant_id="default"),
         )
     )
 
@@ -1666,7 +1668,7 @@ def test_unknown_capability_returns_adapter_error_and_gateway_failed() -> None:
     adapter = OAReadAdapter(provider)
     direct_result = asyncio.run(adapter.execute("oa.unlisted_capability", {}, {}))
 
-    gateway = CapabilityGateway(adapter)
+    gateway = CapabilityGateway(adapter, tenant_id="default")
     gateway_result = asyncio.run(
         gateway.execute_capability(
             "task-unknown-001",
@@ -1674,7 +1676,7 @@ def test_unknown_capability_returns_adapter_error_and_gateway_failed() -> None:
             "ai-user-unknown-001",
             "oa.unlisted_capability",
             {},
-            RequestOrgContext(request_id="trace-unknown-001"),
+            RequestOrgContext(request_id="trace-unknown-001", tenant_id="default"),
         )
     )
 
@@ -1994,9 +1996,12 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
             self,
             loaded_ai_user_id: str,
             target_system: str,
+            *,
+            tenant_id: str,
         ) -> OASessionCredential | None:
             assert target_system == "oa"
             assert loaded_ai_user_id == trusted_ai_user_id
+            assert tenant_id == "default"
             return credential
 
     sessionkey = _session_key()
@@ -2006,7 +2011,7 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
         FakeHTTPResponse(_pending_datas_payload([_raw_workflow(1)])),
     )
     secret_provider = CredentialStoreSecretProvider(
-        credential_store=cast(Any, CredentialStore()),
+        credential_store=cast(Any, CredentialStore()), tenant_id="default"
     )
     adapter = OAReadAdapter(
         _live_provider(opener),
@@ -2022,6 +2027,7 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
         policy_guard=MinimalPolicyGuard(),
         trace_port=trace,
         adapters={"oa": adapter},
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -2031,7 +2037,7 @@ def test_server_mapped_live_cookie_never_enters_gateway_trace(
             trusted_ai_user_id,
             capability.capability_id,
             {},
-            RequestOrgContext(request_id="trace-live-cookie-001"),
+            RequestOrgContext(request_id="trace-live-cookie-001", tenant_id="default"),
         )
     )
     rendered_trace = "\n".join(
@@ -3382,6 +3388,7 @@ def test_unexpected_failure_preserves_gateway_response_and_trace(
     gateway = CapabilityGateway(
         adapter=OAReadAdapter(ExplodingProvider()),
         trace_port=NoopTraceWriter(logger=trace_logger),
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -3391,7 +3398,7 @@ def test_unexpected_failure_preserves_gateway_response_and_trace(
             "ai-user-adapter-error-001",
             "oa.list_pending_workflows",
             {},
-            RequestOrgContext(request_id="trace-adapter-error-001"),
+            RequestOrgContext(request_id="trace-adapter-error-001", tenant_id="default"),
         )
     )
     trace_events = [
@@ -3439,8 +3446,7 @@ def test_argument_keys_are_sorted_and_values_never_reach_logs_or_trace(
     caplog.set_level(logging.DEBUG, logger=trace_logger.name)
     adapter = OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK))
     gateway = CapabilityGateway(
-        adapter=adapter,
-        trace_port=NoopTraceWriter(logger=trace_logger),
+        adapter=adapter, trace_port=NoopTraceWriter(logger=trace_logger), tenant_id="default"
     )
     arguments = {
         "password": password_value_canary,
@@ -3460,7 +3466,7 @@ def test_argument_keys_are_sorted_and_values_never_reach_logs_or_trace(
             "ai-user-argument-keys-001",
             "oa.list_pending_workflows",
             arguments,
-            RequestOrgContext(request_id="trace-argument-keys-001"),
+            RequestOrgContext(request_id="trace-argument-keys-001", tenant_id="default"),
         )
     )
     trace_events = [
@@ -3525,6 +3531,7 @@ def test_success_trace_persists_empty_keys_and_explicit_none_stage(
     gateway = CapabilityGateway(
         adapter=OAReadAdapter(ReplayOAReadProvider(CONTRACT_PACK)),
         trace_port=NoopTraceWriter(logger=trace_logger),
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -3534,7 +3541,7 @@ def test_success_trace_persists_empty_keys_and_explicit_none_stage(
             "ai-user-success-metadata-001",
             "oa.list_pending_workflows",
             {},
-            RequestOrgContext(request_id="trace-success-metadata-001"),
+            RequestOrgContext(request_id="trace-success-metadata-001", tenant_id="default"),
         )
     )
     adapter_called = next(

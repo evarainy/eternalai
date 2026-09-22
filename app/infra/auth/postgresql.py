@@ -54,6 +54,7 @@ class PostgreSQLCredentialStore:
         target_system: str,
         credential: OASessionCredential,
         *,
+        tenant_id: str,
         reactivate_revoked_session: bool = True,
     ) -> None:
         if not ai_user_id:
@@ -79,14 +80,14 @@ class PostgreSQLCredentialStore:
             await session.execute(
                 text(
                     "INSERT INTO oa_session_credentials"
-                    " (ai_user_id, target_system, cipher_version, nonce,"
+                    " (tenant_id, ai_user_id, target_system, cipher_version, nonce,"
                     " encrypted_payload,"
                     " expires_at, updated_at)"
                     " VALUES"
-                    " (:ai_user_id, :target_system, :cipher_version, :nonce,"
+                    " (:tenant_id, :ai_user_id, :target_system, :cipher_version, :nonce,"
                     " :encrypted_payload,"
                     " :expires_at, :updated_at)"
-                    " ON CONFLICT (ai_user_id, target_system) DO UPDATE SET"
+                    " ON CONFLICT (tenant_id, ai_user_id, target_system) DO UPDATE SET"
                     " cipher_version = EXCLUDED.cipher_version,"
                     " nonce = EXCLUDED.nonce,"
                     " encrypted_payload = EXCLUDED.encrypted_payload,"
@@ -97,6 +98,7 @@ class PostgreSQLCredentialStore:
                     " updated_at = EXCLUDED.updated_at"
                 ),
                 {
+                    "tenant_id": tenant_id,
                     "ai_user_id": ai_user_id,
                     "target_system": target_system,
                     "cipher_version": _CIPHER_VERSION,
@@ -110,9 +112,7 @@ class PostgreSQLCredentialStore:
             await session.commit()
 
     async def load(
-        self,
-        ai_user_id: str,
-        target_system: str,
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
     ) -> OASessionCredential | None:
         """Decrypt one OA Session row or fail with a context-free safe error."""
 
@@ -124,18 +124,21 @@ class PostgreSQLCredentialStore:
         try:
             async with self._session_factory() as session:
                 row: RowMapping | None = (
-                    await session.execute(
-                        text(
-                            "SELECT cipher_version, nonce, encrypted_payload, expires_at,"
-                            " revoked_at"
-                            " FROM oa_session_credentials"
-                            " WHERE ai_user_id = :ai_user_id"
-                            " AND target_system = :target_system"
-                        ),
-                        {
-                            "ai_user_id": ai_user_id,
-                            "target_system": target_system,
-                        },
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT cipher_version, nonce, encrypted_payload, expires_at,"
+                                " revoked_at"
+                                " FROM oa_session_credentials"
+                                " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
+                                " AND target_system = :target_system"
+                            ),
+                            {
+                                "tenant_id": tenant_id,
+                                "ai_user_id": ai_user_id,
+                                "target_system": target_system,
+                            },
+                        )
                     )
                 ).mappings().one_or_none()
                 if row is None:
@@ -160,6 +163,8 @@ class PostgreSQLCredentialStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
+        *,
+        tenant_id: str,
     ) -> CredentialBindingView:
         _validate_binding_key(ai_user_id, target_system)
         nonce = os.urandom(_GCM_NONCE_BYTES)
@@ -182,13 +187,13 @@ class PostgreSQLCredentialStore:
             await session.execute(
                 text(
                     "INSERT INTO oa_session_credentials"
-                    " (ai_user_id, target_system, password_cipher_version,"
+                    " (tenant_id, ai_user_id, target_system, password_cipher_version,"
                     " password_nonce, encrypted_password_payload, poll_status,"
                     " poll_failure_count, updated_at) VALUES"
-                    " (:ai_user_id, :target_system, :password_cipher_version,"
+                    " (:tenant_id, :ai_user_id, :target_system, :password_cipher_version,"
                     " :password_nonce, :encrypted_password_payload, 'active', 0,"
                     " :updated_at)"
-                    " ON CONFLICT (ai_user_id, target_system) DO UPDATE SET"
+                    " ON CONFLICT (tenant_id, ai_user_id, target_system) DO UPDATE SET"
                     " password_cipher_version = :password_cipher_version,"
                     " password_nonce = :password_nonce,"
                     " encrypted_password_payload = :encrypted_password_payload,"
@@ -199,6 +204,7 @@ class PostgreSQLCredentialStore:
                     " updated_at = :updated_at"
                 ),
                 {
+                    "tenant_id": tenant_id,
                     "ai_user_id": ai_user_id,
                     "target_system": target_system,
                     "password_cipher_version": _PASSWORD_CIPHER_VERSION,
@@ -217,24 +223,30 @@ class PostgreSQLCredentialStore:
         )
 
     async def get_password_binding(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         _validate_binding_key(ai_user_id, target_system)
         async with self._session_factory() as session:
             row = (
-                await session.execute(
-                    text(
-                        "SELECT poll_status, poll_failure_count, updated_at,"
-                        " encrypted_password_payload"
-                        " FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                        " AND target_system = :target_system"
-                    ),
-                    {"ai_user_id": ai_user_id, "target_system": target_system},
+                (
+                    await session.execute(
+                        text(
+                            "SELECT poll_status, poll_failure_count, updated_at,"
+                            " encrypted_password_payload"
+                            " FROM oa_session_credentials"
+                            " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
+                            " AND target_system = :target_system"
+                        ),
+                        {
+                            "tenant_id": tenant_id,
+                            "ai_user_id": ai_user_id,
+                            "target_system": target_system,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         if row is None:
             return CredentialBindingView(
                 target_system=target_system,
@@ -246,9 +258,7 @@ class PostgreSQLCredentialStore:
         return _binding_view(row, target_system)
 
     async def unbind_password(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         _validate_binding_key(ai_user_id, target_system)
         now = datetime.now(UTC)
@@ -260,10 +270,11 @@ class PostgreSQLCredentialStore:
                     " encrypted_password_payload = NULL, poll_status = 'unbound',"
                     " poll_failure_count = 0,"
                     " updated_at = :updated_at"
-                    " WHERE ai_user_id = :ai_user_id"
+                    " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                     " AND target_system = :target_system"
                 ),
                 {
+                    "tenant_id": tenant_id,
                     "ai_user_id": ai_user_id,
                     "target_system": target_system,
                     "updated_at": now,
@@ -278,59 +289,69 @@ class PostgreSQLCredentialStore:
             bound=False,
         )
 
-    async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+    async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]:
         async with self._session_factory() as session:
             rows = (
-                await session.execute(
-                    text(
-                        "SELECT ai_user_id, target_system, poll_failure_count,"
-                        " updated_at FROM oa_session_credentials"
-                        " WHERE encrypted_password_payload IS NOT NULL"
-                        " AND target_system = 'oa'"
-                        " AND revoked_at IS NULL"
-                        " AND poll_status IN ('active', 'retrying')"
-                        " ORDER BY updated_at ASC, ai_user_id ASC, target_system ASC"
+                (
+                    await session.execute(
+                        text(
+                            "SELECT tenant_id, ai_user_id, target_system, poll_failure_count,"
+                            " updated_at FROM oa_session_credentials"
+                            " WHERE tenant_id = :tenant_id"
+                            " AND encrypted_password_payload IS NOT NULL"
+                            " AND target_system = 'oa'"
+                            " AND revoked_at IS NULL"
+                            " AND poll_status IN ('active', 'retrying')"
+                            " ORDER BY updated_at ASC, ai_user_id ASC, target_system ASC"
+                        ),
+                        {"tenant_id": tenant_id},
                     )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         return [
             CredentialPollCandidate.model_validate(dict(row), strict=True)
             for row in rows
         ]
 
     async def refresh_poll_candidate(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialPollCandidate | None:
         _validate_binding_key(ai_user_id, target_system)
         async with self._session_factory() as session:
             row = (
-                await session.execute(
-                    text(
-                        "SELECT ai_user_id, target_system, poll_failure_count,"
-                        " updated_at FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
-                        " AND target_system = :target_system"
-                        " AND encrypted_password_payload IS NOT NULL"
-                        " AND revoked_at IS NULL"
-                        " AND poll_status IN ('active', 'retrying')"
-                    ),
-                    {"ai_user_id": ai_user_id, "target_system": target_system},
+                (
+                    await session.execute(
+                        text(
+                            "SELECT tenant_id, ai_user_id, target_system, poll_failure_count,"
+                            " updated_at FROM oa_session_credentials"
+                            " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
+                            " AND target_system = :target_system"
+                            " AND encrypted_password_payload IS NOT NULL"
+                            " AND revoked_at IS NULL"
+                            " AND poll_status IN ('active', 'retrying')"
+                        ),
+                        {
+                            "tenant_id": tenant_id,
+                            "ai_user_id": ai_user_id,
+                            "target_system": target_system,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
         if row is None:
             return None
         return CredentialPollCandidate.model_validate(dict(row), strict=True)
 
     @asynccontextmanager
     async def poll_lock(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> AsyncIterator[bool]:
         _validate_binding_key(ai_user_id, target_system)
-        lock_key = _advisory_lock_key(ai_user_id, target_system)
+        lock_key = _advisory_lock_key(tenant_id, ai_user_id, target_system)
         async with self._session_factory() as session:
             acquired = bool(
                 (
@@ -350,28 +371,29 @@ class PostgreSQLCredentialStore:
                     )
 
     async def load_password_for_poll(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> PasswordBindingCredential:
         _validate_binding_key(ai_user_id, target_system)
         try:
             async with self._session_factory() as session:
                 row = (
-                    await session.execute(
-                        text(
-                            "SELECT password_cipher_version, password_nonce,"
-                            " encrypted_password_payload"
-                            " FROM oa_session_credentials"
-                            " WHERE ai_user_id = :ai_user_id"
-                            " AND target_system = :target_system"
-                            " AND revoked_at IS NULL"
-                            " AND poll_status IN ('active', 'retrying')"
-                        ),
-                        {
-                            "ai_user_id": ai_user_id,
-                            "target_system": target_system,
-                        },
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT password_cipher_version, password_nonce,"
+                                " encrypted_password_payload"
+                                " FROM oa_session_credentials"
+                                " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
+                                " AND target_system = :target_system"
+                                " AND revoked_at IS NULL"
+                                " AND poll_status IN ('active', 'retrying')"
+                            ),
+                            {
+                                "tenant_id": tenant_id,
+                                "ai_user_id": ai_user_id,
+                                "target_system": target_system,
+                            },
+                        )
                     )
                 ).mappings().one_or_none()
             if row is None:
@@ -386,43 +408,40 @@ class PostgreSQLCredentialStore:
             raise CredentialStoreError("password binding cannot be loaded") from None
 
     async def mark_poll_succeeded(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         await self._update_poll_state(
             ai_user_id,
             target_system,
+            tenant_id=tenant_id,
             status="active",
             revoke_session=False,
             increment_non_authentication_failure=False,
         )
 
     async def mark_non_authentication_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         """Count only transport, 5xx, timeout, or invalid-response failures."""
 
         await self._update_poll_state(
             ai_user_id,
             target_system,
+            tenant_id=tenant_id,
             status="retrying",
             revoke_session=False,
             increment_non_authentication_failure=True,
         )
 
     async def mark_non_counted_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         """Delay an unknown/local failure without consuming the external counter."""
 
         await self._update_poll_state(
             ai_user_id,
             target_system,
+            tenant_id=tenant_id,
             status="retrying",
             revoke_session=False,
             increment_non_authentication_failure=False,
@@ -434,12 +453,15 @@ class PostgreSQLCredentialStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         failure: CredentialTerminalFailure,
+        *,
+        tenant_id: str,
     ) -> None:
         """Stop polling; only an explicit authentication denial revokes the Session."""
 
         await self._update_poll_state(
             ai_user_id,
             target_system,
+            tenant_id=tenant_id,
             status=failure,
             revoke_session=failure == "invalid",
             increment_non_authentication_failure=False,
@@ -450,6 +472,7 @@ class PostgreSQLCredentialStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         *,
+        tenant_id: str,
         status: str,
         revoke_session: bool,
         increment_non_authentication_failure: bool,
@@ -470,13 +493,14 @@ class PostgreSQLCredentialStore:
                     "UPDATE oa_session_credentials SET poll_status = :poll_status,"
                     f" poll_failure_count = {failure_expression},"
                     f" revoked_at = {revoked_expression}, updated_at = :updated_at"
-                    " WHERE ai_user_id = :ai_user_id"
+                    " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                     " AND target_system = :target_system"
                     " AND encrypted_password_payload IS NOT NULL"
                     " AND revoked_at IS NULL"
                     " AND poll_status IN ('active', 'retrying')"
                 ),
                 {
+                    "tenant_id": tenant_id,
                     "ai_user_id": ai_user_id,
                     "target_system": target_system,
                     "poll_status": status,
@@ -496,16 +520,16 @@ class PostgreSQLPrincipalRoleReader:
     ) -> None:
         self._session_factory = session_factory
 
-    async def list_roles(self, ai_user_id: str) -> tuple[str, ...]:
+    async def list_roles(self, ai_user_id: str, *, tenant_id: str) -> tuple[str, ...]:
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
                     text(
                         "SELECT role FROM principal_roles"
-                        " WHERE ai_user_id = :ai_user_id"
+                        " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                         " ORDER BY role ASC"
                     ),
-                    {"ai_user_id": ai_user_id},
+                    {"tenant_id": tenant_id, "ai_user_id": ai_user_id},
                 )
             ).fetchall()
         return tuple(str(row.role) for row in rows)
@@ -539,10 +563,15 @@ def _validate_binding_key(
 
 
 def _advisory_lock_key(
+    tenant_id: str,
     ai_user_id: str,
     target_system: CredentialTargetSystem,
 ) -> int:
-    digest = sha256(f"credential-poll\x00{ai_user_id}\x00{target_system}".encode()).digest()
+    digest = sha256(
+        json.dumps(
+            ["credential-poll", tenant_id, ai_user_id, target_system], separators=(",", ":")
+        ).encode()
+    ).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 

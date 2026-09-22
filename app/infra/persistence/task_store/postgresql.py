@@ -207,35 +207,35 @@ class PostgreSQLSessionStore:
         self._session_factory = session_factory
 
     async def create_session(self, record: SessionRecord) -> SessionRecord:
-        # Idempotent: return existing record if session_id already exists.
-        # SessionStorePort does not require duplicate rejection (unlike TaskStorePort).
+        if not record.tenant_id.strip():
+            raise ValueError("tenant_id must not be blank")
         async with self._session_factory() as session:
-            existing = (
-                await session.execute(
-                    text("SELECT session_id FROM sessions WHERE session_id = :session_id"),
-                    {"session_id": record.session_id},
-                )
-            ).fetchone()
-            if existing is not None:
-                return SessionRecord(session_id=existing.session_id)
             await session.execute(
-                text("INSERT INTO sessions (session_id) VALUES (:session_id)"),
-                {"session_id": record.session_id},
+                text(
+                    "INSERT INTO sessions (tenant_id, session_id) VALUES (:tenant_id, :session_id) "
+                    "ON CONFLICT (tenant_id, session_id) DO NOTHING"
+                ),
+                {"tenant_id": record.tenant_id, "session_id": record.session_id},
             )
             await session.commit()
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        if not tenant_id.strip():
+            raise ValueError("tenant_id must not be blank")
         async with self._session_factory() as session:
             row = (
                 await session.execute(
-                    text("SELECT session_id FROM sessions WHERE session_id = :session_id"),
-                    {"session_id": session_id},
+                    text(
+                        "SELECT tenant_id, session_id FROM sessions "
+                        "WHERE tenant_id = :tenant_id AND session_id = :session_id"
+                    ),
+                    {"tenant_id": tenant_id, "session_id": session_id},
                 )
             ).fetchone()
         if row is None:
             return None
-        return SessionRecord(session_id=row.session_id)
+        return SessionRecord(tenant_id=row.tenant_id, session_id=row.session_id)
 
 
 if TYPE_CHECKING:

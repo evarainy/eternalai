@@ -305,6 +305,7 @@ async def _run_pilot_request() -> PilotObservation:
         role_reader=build_principal_role_reader(session_factory=session_factory),
         identity_hmac_key=settings.identity_hmac_key,
         credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        tenant_id="default",
     )
     llm_opener = RecordingLLMOpener()
     llm_provider = OpenAICompatibleLLMProvider(
@@ -330,7 +331,8 @@ async def _run_pilot_request() -> PilotObservation:
                 "device_domain_id": None,
                 "reason_code": None,
             },
-        )
+        ),
+        tenant_id="default",
     )
     adapter = MockOAAdapter()
     adapter.set_state(

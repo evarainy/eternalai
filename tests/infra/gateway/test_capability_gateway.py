@@ -28,8 +28,8 @@ def _execute_gateway(
     arguments: dict[str, Any],
     request_id: str = "trace-001",
 ) -> ExecutionResult:
-    gateway = CapabilityGateway(MockOAAdapter())
-    request_context = RequestOrgContext(request_id=request_id)
+    gateway = CapabilityGateway(MockOAAdapter(), tenant_id="default")
+    request_context = RequestOrgContext(request_id=request_id, tenant_id="default")
 
     return asyncio.run(
         gateway.execute_capability(
@@ -349,7 +349,7 @@ def _execute_gateway_with_ports(
     gateway: CapabilityGateway,
     arguments: dict[str, Any] | None = None,
 ) -> ExecutionResult:
-    request_context = RequestOrgContext(request_id="trace-short-001")
+    request_context = RequestOrgContext(request_id="trace-short-001", tenant_id="default")
 
     return asyncio.run(
         gateway.execute_capability(
@@ -415,6 +415,7 @@ def test_version_binding_drift_stops_before_identity_policy_and_adapter() -> Non
         policy_guard=policy,
         trace_port=trace,
         human_gate_port=gate,
+        tenant_id="default",
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -441,6 +442,7 @@ def test_missing_task_binding_stops_before_identity_policy_and_adapter() -> None
         policy_guard=policy,
         trace_port=trace,
         human_gate_port=gate,
+        tenant_id="default",
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -467,6 +469,7 @@ def test_declared_unbound_query_uses_the_asserted_gateway_layers() -> None:
         trace_port=trace,
         human_gate_port=gate,
         unbound_task_capability_ids=frozenset({"oa.workflow_status.get"}),
+        tenant_id="default",
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -499,6 +502,7 @@ def test_declared_policy_marker_drift_stops_before_policy_and_adapter() -> None:
         policy_guard=policy,
         trace_port=FakeTrace(),
         human_gate_port=gate,
+        tenant_id="default",
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -514,7 +518,7 @@ def test_capability_registry_missing_short_circuits_without_adapter_and_records_
     registry = FakeRegistry(None)
     trace = FakeTrace()
     adapter = SentinelAdapter()
-    gateway = CapabilityGateway(adapter, registry, trace_port=trace)
+    gateway = CapabilityGateway(adapter, registry, trace_port=trace, tenant_id="default")
 
     result = _execute_gateway_with_ports(gateway)
 
@@ -546,11 +550,7 @@ def test_registry_input_schema_rejects_extra_argument_before_identity_and_policy
     adapter = SentinelAdapter()
     trace = FakeTrace()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway, {"user": canary})
@@ -593,11 +593,7 @@ def test_registry_input_schema_defers_missing_required_argument_until_identity()
     adapter = SentinelAdapter()
     trace = FakeTrace()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway, {})
@@ -636,11 +632,7 @@ def test_invalid_argument_answer_is_identical_with_and_without_a_binding(
     adapter = SentinelAdapter()
     trace = FakeTrace()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway, {"user": "probe"})
@@ -676,10 +668,7 @@ def test_registry_input_schema_accepts_empty_arguments_through_existing_path() -
     adapter = FakeAdapter()
     trace = FakeTrace()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        policy_guard=policy_guard,
-        trace_port=trace,
+        adapter, registry, policy_guard=policy_guard, trace_port=trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway, {})
@@ -702,11 +691,7 @@ def test_identity_unbound_short_circuits_without_adapter_and_records_trace() -> 
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -727,11 +712,7 @@ def test_identity_expired_short_circuits_without_adapter_and_records_trace() -> 
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -752,11 +733,7 @@ def test_identity_revoked_short_circuits_without_adapter_and_records_trace() -> 
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -778,11 +755,7 @@ def test_identity_needs_binding_scope_short_circuits_without_adapter_and_records
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -803,11 +776,7 @@ def test_identity_verification_failed_maps_to_identity_unbound_and_records_trace
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -828,11 +797,7 @@ def test_policy_deny_short_circuits_without_adapter_and_records_trace() -> None:
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -855,11 +820,7 @@ def test_policy_confirm_short_circuits_without_adapter_and_records_trace() -> No
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -886,11 +847,7 @@ def test_happy_path_runs_prechecks_and_records_trace_without_task_finalize() -> 
         call_log,
     )
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -921,11 +878,7 @@ def test_active_user_delegated_oa_binding_injects_only_server_mapping_ref() -> N
     trace = FakeTrace()
     adapter = FakeAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -959,11 +912,7 @@ def test_active_identity_result_with_mismatched_domain_fails_before_policy_or_ad
     trace = FakeTrace()
     adapter = SentinelAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -987,6 +936,7 @@ def test_client_credential_ref_argument_is_never_copied_to_execution_context() -
         identity_mapping,
         FakePolicyGuard(PolicyDecision(decision="allow")),
         FakeTrace(),
+        tenant_id="default",
     )
 
     result = _execute_gateway_with_ports(
@@ -1002,7 +952,7 @@ def test_adapter_session_expiry_maps_to_binding_required_reauthentication_path()
     adapter = FakeAdapter(
         AdapterResult(status="error", data=None, error_code="identity_expired")
     )
-    gateway = CapabilityGateway(adapter)
+    gateway = CapabilityGateway(adapter, tenant_id="default")
 
     result = _execute_gateway_with_ports(gateway)
 
@@ -1017,11 +967,7 @@ def test_target_system_none_skips_identity_mapping_and_continues_to_policy_and_a
     trace = FakeTrace()
     adapter = FakeAdapter()
     gateway = CapabilityGateway(
-        adapter,
-        registry,
-        identity_mapping,
-        policy_guard,
-        trace,
+        adapter, registry, identity_mapping, policy_guard, trace, tenant_id="default"
     )
 
     result = _execute_gateway_with_ports(gateway)
@@ -1051,6 +997,7 @@ def test_adapters_path_dispatches_oa_target_to_oa_adapter() -> None:
     gateway = CapabilityGateway(
         adapters={"oa": oa_adapter, "u8": u8_sentinel, "hikvision_ivms": hik_sentinel},
         capability_registry=registry,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1060,7 +1007,7 @@ def test_adapters_path_dispatches_oa_target_to_oa_adapter() -> None:
             "ai-1",
             "oa.workflow_status.get",
             {},
-            RequestOrgContext(request_id="t-oa-1"),
+            RequestOrgContext(request_id="t-oa-1", tenant_id="default"),
         )
     )
 
@@ -1079,6 +1026,7 @@ def test_adapters_path_dispatches_u8_target_to_u8_adapter() -> None:
     gateway = CapabilityGateway(
         adapters={"oa": oa_sentinel, "u8": u8_adapter, "hikvision_ivms": hik_sentinel},
         capability_registry=registry,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1088,7 +1036,7 @@ def test_adapters_path_dispatches_u8_target_to_u8_adapter() -> None:
             "ai-1",
             "u8.document.get",
             {},
-            RequestOrgContext(request_id="t-u8-1"),
+            RequestOrgContext(request_id="t-u8-1", tenant_id="default"),
         )
     )
 
@@ -1106,6 +1054,7 @@ def test_adapters_path_dispatches_hikvision_target_to_hikvision_adapter() -> Non
     gateway = CapabilityGateway(
         adapters={"oa": oa_sentinel, "u8": u8_sentinel, "hikvision_ivms": hik_adapter},
         capability_registry=registry,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1115,7 +1064,7 @@ def test_adapters_path_dispatches_hikvision_target_to_hikvision_adapter() -> Non
             "ai-1",
             "hik.device.status",
             {},
-            RequestOrgContext(request_id="t-hik-1"),
+            RequestOrgContext(request_id="t-hik-1", tenant_id="default"),
         )
     )
 
@@ -1133,6 +1082,7 @@ def test_adapters_path_target_system_none_returns_no_capability_found_without_ca
         adapters={"oa": sentinel, "u8": sentinel, "hikvision_ivms": sentinel},
         capability_registry=registry,
         trace_port=trace,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1142,7 +1092,7 @@ def test_adapters_path_target_system_none_returns_no_capability_found_without_ca
             "ai-1",
             "cap-1",
             {},
-            RequestOrgContext(request_id="t-none-1"),
+            RequestOrgContext(request_id="t-none-1", tenant_id="default"),
         )
     )
 
@@ -1173,6 +1123,7 @@ def test_adapters_path_calls_only_the_matching_adapter_not_others() -> None:
     gateway = CapabilityGateway(
         adapters={"oa": oa_fake, "u8": u8_fake, "hikvision_ivms": hik_fake},
         capability_registry=registry,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1182,7 +1133,7 @@ def test_adapters_path_calls_only_the_matching_adapter_not_others() -> None:
             "ai-1",
             "u8.doc",
             {},
-            RequestOrgContext(request_id="t-only-1"),
+            RequestOrgContext(request_id="t-only-1", tenant_id="default"),
         )
     )
 
@@ -1219,6 +1170,7 @@ def test_adapters_path_error_modes_return_mapped_status_and_error_code(
             "hikvision_ivms": SentinelAdapter(),
         },
         capability_registry=registry,
+        tenant_id="default",
     )
 
     result = asyncio.run(
@@ -1228,7 +1180,7 @@ def test_adapters_path_error_modes_return_mapped_status_and_error_code(
             "ai-1",
             "oa.workflow_status.get",
             {"mock_error_mode": mock_error_mode},
-            RequestOrgContext(request_id="t-err-1"),
+            RequestOrgContext(request_id="t-err-1", tenant_id="default"),
         )
     )
 
@@ -1267,3 +1219,33 @@ def test_gateway_production_code_has_no_mock_adapter_imports() -> None:
                     hits.append(f"{fname}: contains {pat}")
 
     assert not hits, f"Mock adapter imports found in production code: {hits}"
+
+
+def test_profile_mismatch_stops_before_all_gateway_dependencies():
+    from unittest.mock import AsyncMock
+
+    from app.ports.request_context import RequestOrgContext
+
+    dependencies = [AsyncMock() for _ in range(5)]
+    registry, identity, policy, adapter, trace = dependencies
+    gateway = CapabilityGateway(
+        capability_registry=registry,
+        identity_mapping=identity,
+        policy_guard=policy,
+        adapter=adapter,
+        trace_port=trace,
+        tenant_id="synthetic-TA",
+    )
+    result = asyncio.run(
+        gateway.execute_capability(
+            "synthetic-task",
+            "synthetic-session",
+            "synthetic-user",
+            "oa.synthetic",
+            {},
+            RequestOrgContext(request_id="synthetic-trace", tenant_id="synthetic-TB"),
+        )
+    )
+    assert result.status == "denied" and result.error_code == "policy_denied"
+    assert result.data is None
+    assert [dependency.mock_calls for dependency in dependencies] == [[], [], [], [], []]

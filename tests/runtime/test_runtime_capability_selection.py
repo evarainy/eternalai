@@ -80,8 +80,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord.model_validate({"session_id": session_id})
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord.model_validate({"tenant_id": tenant_id, "session_id": session_id})
 
 
 class RecordingTracePort:
@@ -829,6 +829,7 @@ def test_runtime_real_gateway_rejects_schema_invalid_arguments_before_policy_ada
         capability_registry=registry,
         policy_guard=policy,
         trace_port=trace,
+        tenant_id="tenant-test",
     )
     message = "query pending workflows"
     llm_provider = MockLLMProvider()
@@ -1110,6 +1111,7 @@ def test_preview_never_replaces_gateway_authorization() -> None:
             identity_mapping=cast(Any, identity),
             policy_guard=policy,
             trace_port=RecordingTracePort(),
+            tenant_id="tenant-test",
         )
 
         _envelope, task_store, _trace, _llm = _handle_with(
@@ -1344,7 +1346,8 @@ def test_topk_gateway_resolves_binding_rows_before_execution(
                 "binding_id": "foreign-binding",
                 "binding_scope": "foreign",
             }
-        ]
+        ],
+        tenant_id="tenant-test",
     )
     registry = StaticRegistry([_capability("oa.target")])
     adapter = CountingSuccessAdapter()
@@ -1355,6 +1358,7 @@ def test_topk_gateway_resolves_binding_rows_before_execution(
         identity_mapping=identity,
         policy_guard=MinimalPolicyGuard(),
         trace_port=gateway_trace,
+        tenant_id="tenant-test",
     )
     arguments = {} if requested_scope is None else {"resource_scope": requested_scope}
     envelope, store, _trace, llm = _handle_with(

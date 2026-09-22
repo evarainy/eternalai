@@ -86,6 +86,7 @@ OAAuthenticationFailureStage: TypeAlias = Literal[
     "local_principal_build_failed",
 ]
 OAAuthenticationFailureKind: TypeAlias = Literal[
+    "identity_mismatch",
     "credentials_rejected",
     "network_unreachable",
     "timeout",
@@ -148,7 +149,7 @@ class OAHttpSession(Protocol):
 
 
 class PrincipalRoleReader(Protocol):
-    async def list_roles(self, ai_user_id: str) -> tuple[str, ...]: ...
+    async def list_roles(self, ai_user_id: str, *, tenant_id: str) -> tuple[str, ...]: ...
 
 
 class UrllibOASession:
@@ -262,8 +263,12 @@ class OACredentialVerifier:
         role_reader: PrincipalRoleReader,
         identity_hmac_key: bytes,
         credential_ttl_seconds: int,
+        tenant_id: str,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+        self._tenant_id = tenant_id
         self._session_factory = session_factory
         self._credential_store = credential_store
         self._role_reader = role_reader
@@ -281,10 +286,12 @@ class OACredentialVerifier:
         credential: LoginCredential,
         *,
         reactivate_revoked_session: bool = True,
+        expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         return await self._authenticate_once(
             credential,
             persist_session=True,
+            expected_subject=expected_subject,
             reactivate_revoked_session=reactivate_revoked_session,
         )
 
@@ -302,6 +309,7 @@ class OACredentialVerifier:
         credential: LoginCredential,
         *,
         persist_session: bool,
+        expected_subject: tuple[str, str] | None = None,
         reactivate_revoked_session: bool,
     ) -> Principal:
         failure_stage: OAAuthenticationFailureStage = "oa_session_setup_failed"
@@ -386,8 +394,16 @@ class OACredentialVerifier:
 
             failure_stage = "local_identity_derivation_failed"
             ai_user_id = identity_surrogate(loginid, key=self._identity_hmac_key)
+            if expected_subject is not None and expected_subject != (self._tenant_id, ai_user_id):
+                raise OAAuthenticationError(
+                    "local_identity_derivation_failed", failure_kind="identity_mismatch"
+                )
             failure_stage = "local_role_lookup_failed"
-            roles = tuple(sorted(set(await self._role_reader.list_roles(ai_user_id))))
+            roles = tuple(
+                sorted(
+                    set(await self._role_reader.list_roles(ai_user_id, tenant_id=self._tenant_id))
+                )
+            )
             if persist_session:
                 failure_stage = "local_credential_store_failed"
                 await self._credential_store.store(
@@ -395,13 +411,10 @@ class OACredentialVerifier:
                     "oa",
                     OASessionCredential(
                         oa_user_id=SecretStr(oa_user_id),
-                        cookies={
-                            name: SecretStr(value)
-                            for name, value in sorted(cookies.items())
-                        },
-                        expires_at=now
-                        + timedelta(seconds=self._credential_ttl_seconds),
+                        cookies={name: SecretStr(value) for name, value in sorted(cookies.items())},
+                        expires_at=now + timedelta(seconds=self._credential_ttl_seconds),
                     ),
+                    tenant_id=self._tenant_id,
                     reactivate_revoked_session=reactivate_revoked_session,
                 )
             failure_stage = "local_principal_build_failed"
@@ -409,8 +422,12 @@ class OACredentialVerifier:
                 ai_user_id=ai_user_id,
                 display_name=display_name,
                 roles=roles,
-                org_ctx=PrincipalOrgContext(directory_user_id=oa_user_id),
+                org_ctx=PrincipalOrgContext(
+                    tenant_id=self._tenant_id, directory_user_id=oa_user_id
+                ),
             )
+        except OAAuthenticationError:
+            raise
         except Exception as error:
             failure_kind = _authentication_failure_kind(failure_stage, error)
             logging.getLogger(__name__).warning(

@@ -134,6 +134,8 @@ class RecordingIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> IdentityCheckResult | None:
         raise AssertionError("Admin evidence routes only list mappings")
 
@@ -144,6 +146,8 @@ class RecordingIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> list[IdentityCheckResult]:
         self.calls.append(
             (

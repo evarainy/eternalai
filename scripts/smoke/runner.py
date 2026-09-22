@@ -2164,7 +2164,7 @@ async def _run_persisted_provider_checks(
             encryption_key=settings.credential_encryption_key,
         )
         try:
-            credential = await store.load(ai_user_id)
+            credential = await store.load(ai_user_id, "oa", tenant_id=settings.source_tenant_id)
         except Exception:
             raise SmokeError("oa_credential_not_persisted") from None
         if credential is None:
@@ -2208,6 +2208,7 @@ async def _run_live_checks(
             ),
             identity_hmac_key=settings.identity_hmac_key,
             credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+            tenant_id=settings.source_tenant_id,
         )
         try:
             principal = await authentication.authenticate(
@@ -2225,7 +2226,9 @@ async def _run_live_checks(
             raise SmokeError(exc.stage) from None
         except AuthenticationError:
             raise SmokeError("authentication_failed") from None
-        credential = await store.load(principal.ai_user_id)
+        credential = await store.load(
+            principal.ai_user_id, "oa", tenant_id=settings.source_tenant_id
+        )
         if credential is None:
             raise SmokeError("oa_credential_not_persisted")
         return await _run_both_live_checks(settings, credential)

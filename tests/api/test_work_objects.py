@@ -1439,6 +1439,7 @@ def test_visibility_reads_current_directory_on_each_request(
         org_ctx=PrincipalOrgContext(
             directory_user_id="synthetic-directory-user",
             department_id="stale-token-department",
+            tenant_id="default",
         ),
     )
 
@@ -1486,7 +1487,7 @@ def test_list_and_detail_apply_computed_visibility_scope(monkeypatch: pytest.Mon
         ai_user_id="user-a",
         display_name="Synthetic",
         roles=("user",),
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
 
     async def exercise() -> None:
@@ -1549,7 +1550,7 @@ def test_admin_cannot_read_others_work_object_by_id(migrated_database_url: str) 
                 ai_user_id="synthetic-scope001-admin",
                 display_name="Synthetic admin",
                 roles=("admin",),
-                org_ctx=PrincipalOrgContext(),
+                org_ctx=PrincipalOrgContext(tenant_id="default"),
             )
             record_id = records[0].work_object_id
             assert await service.get_for_principal(record_id, admin) is None
@@ -1593,7 +1594,9 @@ def test_directory_failure_does_not_expose_join_key_or_return_success(
         ai_user_id="user-a",
         display_name="Synthetic",
         roles=("user",),
-        org_ctx=PrincipalOrgContext(directory_user_id="synthetic-private-join-key"),
+        org_ctx=PrincipalOrgContext(
+            directory_user_id="synthetic-private-join-key", tenant_id="default"
+        ),
     )
     with pytest.raises(HTTPException) as error:
         asyncio.run(service.list_for_principal(principal))

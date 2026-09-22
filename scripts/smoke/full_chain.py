@@ -405,11 +405,10 @@ def _build_replay_dependencies(
             session_factory=session_factory,
             encryption_key=settings.credential_encryption_key,
         ),
-        role_reader=build_principal_role_reader(
-            session_factory=session_factory
-        ),
+        role_reader=build_principal_role_reader(session_factory=session_factory),
         identity_hmac_key=settings.identity_hmac_key,
         credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+        tenant_id=settings.source_tenant_id,
     )
     llm_provider = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,

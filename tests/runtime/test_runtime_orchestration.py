@@ -162,7 +162,9 @@ async def _start(h: SimpleNamespace) -> Any:
 
 
 def _pending(h: SimpleNamespace) -> Any:
-    return h.runtime._pending_workflows[(h.session_id, h.principal.ai_user_id)]
+    return h.runtime._pending_workflows[
+        (h.principal.org_ctx.tenant_id, h.session_id, h.principal.ai_user_id)
+    ]
 
 
 async def _confirm(h: SimpleNamespace, *, response_id: str | None = None) -> Any:
@@ -391,7 +393,7 @@ def test_resumed_preview_contract_error_propagates_without_discard_or_binding_ou
         h = _harness(two=True)
         await _start(h)
         pending = _pending(h)
-        key = (h.session_id, h.principal.ai_user_id)
+        key = (h.principal.org_ctx.tenant_id, h.session_id, h.principal.ai_user_id)
         claim_key = _pending_confirmation_claim_key(key, pending)
         port = h.runtime._orchestration
         workflow_port = h.runtime._workflow_engine
@@ -735,7 +737,7 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
         h = _harness()
         await _start(h)
         pending = _pending(h)
-        key = (h.session_id, h.principal.ai_user_id)
+        key = (h.principal.org_ctx.tenant_id, h.session_id, h.principal.ai_user_id)
         claim_key = _pending_confirmation_claim_key(key, pending)
         resume = AsyncMock(wraps=h.runtime._orchestration.resume_capability)
         monkeypatch.setattr(h.runtime._orchestration, "resume_capability", resume)
@@ -867,7 +869,7 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
         assert isinstance(h.runtime._workflow_engine, WorkflowEngineAdapter)
         discard = Mock(wraps=h.runtime._workflow_engine.discard_checkpoint)
         monkeypatch.setattr(h.runtime._workflow_engine, "discard_checkpoint", discard)
-        key = (h.session_id, h.principal.ai_user_id)
+        key = (h.principal.org_ctx.tenant_id, h.session_id, h.principal.ai_user_id)
         preserved: dict[str, Any] = {}
         if site == "initial-gate":
             monkeypatch.setattr(

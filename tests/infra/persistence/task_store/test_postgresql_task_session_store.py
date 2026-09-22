@@ -14,6 +14,9 @@ from datetime import datetime, timezone
 
 import pytest
 
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
+from tests.api.test_work_object_dispatch import run as run_synthetic_db
+
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
@@ -635,11 +638,13 @@ def test_create_session_returns_session_record_and_round_trips():
         engine = _make_engine()
         try:
             store = _session_store(_make_factory(engine))
-            result = await store.create_session(SessionRecord(session_id=session_id))
+            result = await store.create_session(
+                SessionRecord(session_id=session_id, tenant_id="default")
+            )
             assert isinstance(result, SessionRecord)
             assert result.session_id == session_id
 
-            fetched = await store.get_session(session_id)
+            fetched = await store.get_session(session_id, tenant_id="default")
             assert fetched is not None
             assert isinstance(fetched, SessionRecord)
             assert fetched.session_id == session_id
@@ -656,9 +661,31 @@ def test_get_session_returns_none_for_unknown_session_id():
         engine = _make_engine()
         try:
             store = _session_store(_make_factory(engine))
-            result = await store.get_session(str(uuid.uuid4()))
+            result = await store.get_session(str(uuid.uuid4()), tenant_id="default")
             assert result is None
         finally:
             await engine.dispose()
 
     asyncio.run(_run())
+
+
+def test_same_session_two_tenants(dispatch_db):
+    from sqlalchemy import text
+
+    from app.infra.persistence.task_store.postgresql import PostgreSQLSessionStore
+    from app.ports.task_store import SessionRecord
+
+    async def exercise():
+        store = PostgreSQLSessionStore(dispatch_db.factory)
+        a = SessionRecord(tenant_id="synthetic-TA", session_id="synthetic-shared")
+        b = SessionRecord(tenant_id="synthetic-TB", session_id=a.session_id)
+        assert await store.create_session(a) == a
+        assert await store.create_session(b) == b
+        assert await store.create_session(a) == a
+        assert await store.get_session(a.session_id, tenant_id=a.tenant_id) == a
+        assert await store.get_session(a.session_id, tenant_id=b.tenant_id) == b
+        assert await store.get_session(a.session_id, tenant_id="synthetic-TC") is None
+        async with dispatch_db.factory() as session:
+            assert (await session.execute(text("SELECT count(*) FROM sessions"))).scalar_one() == 2
+
+    run_synthetic_db(exercise())

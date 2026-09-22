@@ -76,6 +76,7 @@ class RecordingCredentialStore:
         target_system: str,
         credential: OASessionCredential,
         *,
+        tenant_id: str,
         reactivate_revoked_session: bool = True,
     ) -> None:
         assert target_system == "oa"
@@ -83,16 +84,14 @@ class RecordingCredentialStore:
         self.reactivation_flags.append(reactivate_revoked_session)
 
     async def load(
-        self,
-        ai_user_id: str,
-        target_system: str,
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
     ) -> OASessionCredential | None:
         del ai_user_id, target_system
         raise AssertionError("authentication write path must not load credentials")
 
 
 class StaticRoleReader:
-    async def list_roles(self, ai_user_id: str) -> tuple[str, ...]:
+    async def list_roles(self, ai_user_id: str, *, tenant_id: str) -> tuple[str, ...]:
         assert ai_user_id.startswith("usr_v1_")
         return ("viewer", "admin", "admin")
 
@@ -289,6 +288,8 @@ def _fixture(
     credential_store: CredentialStorePort | None = None,
     loginid_override: str | None = None,
     oa_user_id: object = 123,
+    tenant_id: str = "default",
+    role_reader: Any = None,
 ) -> tuple[
     OACredentialVerifier,
     RecordingCredentialStore,
@@ -333,13 +334,12 @@ def _fixture(
             timeout_seconds=3,
             opener_factory=opener_factory,
         ),
-        credential_store=(
-            credential_store if credential_store is not None else store
-        ),
-        role_reader=StaticRoleReader(),
+        credential_store=(credential_store if credential_store is not None else store),
+        role_reader=role_reader or StaticRoleReader(),
         identity_hmac_key=bytes(range(32)),
         credential_ttl_seconds=7200,
         clock=lambda: datetime(2026, 7, 24, tzinfo=UTC),
+        tenant_id=tenant_id,
     )
     credential = LoginCredential(
         loginid=loginid,
@@ -484,7 +484,7 @@ def test_integer_and_string_userid_share_one_principal_credential_and_mapping() 
             assert integer_openers[0].requested_user_ids == ["123"]
             assert string_openers[0].requested_user_ids == ["123"]
 
-            stored_credential = await store.load(expected_ai_user_id, "oa")
+            stored_credential = await store.load(expected_ai_user_id, "oa", tenant_id="default")
             assert stored_credential is not None
             assert stored_credential.oa_user_id.get_secret_value() == "123"
 
@@ -504,8 +504,7 @@ def test_integer_and_string_userid_share_one_principal_credential_and_mapping() 
                 now=lambda: datetime(2026, 7, 24, tzinfo=UTC),
             )
             identity_mappings = await mapping.list_mappings(
-                expected_ai_user_id,
-                "oa",
+                expected_ai_user_id, "oa", tenant_id="default"
             )
 
             assert credential_row_count == 1
@@ -568,6 +567,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
         target_system="oa",
         poll_failure_count=0,
         updated_at=datetime(2026, 8, 21, 1, 0, tzinfo=UTC),
+        tenant_id="default",
     )
 
     class _NoCaptchaSession:
@@ -593,9 +593,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
 
     class _PasswordReader:
         async def load_password_for_poll(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> PasswordBindingCredential:
             assert (ai_user_id, target_system) == (
                 candidate.ai_user_id,
@@ -611,13 +609,11 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             self.terminal: list[CredentialTerminalFailure] = []
             self.counted_failures = 0
 
-        async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+        async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]:
             return [candidate]
 
         async def refresh_poll_candidate(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> CredentialPollCandidate | None:
             assert (ai_user_id, target_system) == (
                 candidate.ai_user_id,
@@ -627,9 +623,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
 
         @asynccontextmanager
         async def poll_lock(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> AsyncIterator[bool]:
             del ai_user_id, target_system
             yield True
@@ -639,29 +633,25 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             ai_user_id: str,
             target_system: CredentialTargetSystem,
             failure: CredentialTerminalFailure,
+            *,
+            tenant_id: str,
         ) -> None:
             del ai_user_id, target_system
             self.terminal.append(failure)
 
         async def mark_non_authentication_failure(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> None:
             del ai_user_id, target_system
             self.counted_failures += 1
 
         async def mark_non_counted_failure(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> None:
             raise AssertionError((ai_user_id, target_system))
 
         async def mark_poll_succeeded(
-            self,
-            ai_user_id: str,
-            target_system: CredentialTargetSystem,
+            self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
         ) -> None:
             raise AssertionError((ai_user_id, target_system))
 
@@ -674,6 +664,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
         session_factory=_NoCaptchaSession,
         authentication=verifier,
         binding_store=_PasswordReader(),
+        tenant_id="default",
     )
     polling = CredentialPollingService(
         binding_store=polling_store,
@@ -689,6 +680,7 @@ def test_oa_http_authentication_denial_is_terminal_after_one_request(
             scheduler_tick_seconds=60,
         ),
         clock=lambda: datetime(2026, 8, 21, 2, 0, tzinfo=UTC),
+        tenant_id="default",
     )
 
     with caplog.at_level("WARNING", logger="app.infra.auth.oa"):
@@ -761,11 +753,10 @@ def test_failed_oa_login_preserves_existing_revocation_timestamp() -> None:
                 "oa",
                 OASessionCredential(
                     oa_user_id=SecretStr(f"synthetic-{uuid4().hex}"),
-                    cookies={
-                        "loginuuids": SecretStr(f"synthetic-{uuid4().hex}")
-                    },
+                    cookies={"loginuuids": SecretStr(f"synthetic-{uuid4().hex}")},
                     expires_at=datetime(2099, 1, 1, tzinfo=UTC),
                 ),
+                tenant_id="default",
             )
             async with factory() as session:
                 await session.execute(

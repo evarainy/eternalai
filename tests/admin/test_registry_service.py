@@ -154,7 +154,7 @@ def _context(*roles: str) -> AdminRequestContext:
         session_id="admin-lite",
         ai_user_id="unverified-admin-request",
         roles=roles,
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
 
 
@@ -165,7 +165,7 @@ def _service(
     return AdminRegistryService(
         capability_registry=registry,
         task_store=EmptyTaskStore(),
-        identity_mapping=MockIdentityMapping(rows=[]),
+        identity_mapping=MockIdentityMapping(rows=[], tenant_id="default"),
         policy_guard=MinimalPolicyGuard(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
             audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,
@@ -181,7 +181,7 @@ def test_management_builder_injects_the_closed_admin_action_allowlist() -> None:
     service = build_admin_registry_service(
         capability_registry=registry,
         task_store=EmptyTaskStore(),
-        identity_mapping=MockIdentityMapping(rows=[]),
+        identity_mapping=MockIdentityMapping(rows=[], tenant_id="default"),
         trace_port=trace,
         trace_query=EmptyTraceQuery(),
     )

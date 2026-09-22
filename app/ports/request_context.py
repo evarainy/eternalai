@@ -11,7 +11,7 @@ RequestChannel: TypeAlias = Literal["web", "cli", "api", "mock"]
 
 class RequestOrgContext(BaseModel):
     request_id: str
-    tenant_id: str = "default"
+    tenant_id: str = Field(min_length=1)
     org_id: str | None = None
     department_id: str | None = None
     roles: list[str] = Field(default_factory=list)

@@ -162,6 +162,7 @@ def _execute_gateway(adapter_result: AdapterResult) -> tuple[ExecutionResult, Fa
         identity_mapping=ActiveIdentityMapping(),
         policy_guard=AllowPolicyGuard(),
         trace_port=trace,
+        tenant_id="default",
     )
     result = asyncio.run(
         gateway.execute_capability(
@@ -170,7 +171,7 @@ def _execute_gateway(adapter_result: AdapterResult) -> tuple[ExecutionResult, Fa
             "ai-user-001",
             "oa.workflow_status.get",
             {},
-            RequestOrgContext(request_id="trace-001"),
+            RequestOrgContext(request_id="trace-001", tenant_id="default"),
         )
     )
     return result, trace
