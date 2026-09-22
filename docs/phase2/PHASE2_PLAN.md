@@ -100,7 +100,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | E-2 测试矩阵落点及普通 internal_error 负例 | 方案 §4 的引擎观察移至 Runtime 测试、adapter 输入移至 overview 测试、历史 Trace 行移至 production 测试；`build_response` 的普通概览 internal_error 不冒充核验失败仍缺独立用例 | 无（非阻断） | 待 GOV-SYNC 分配核验测试收口任务 | 落点映射可追溯且补独立负例，保留测试只破坏响应门禁时该断言变红 | `P2-AUDIT-EVAL-POSTCOND-001/bridge-opus/review-output.md` 非阻断 2；`tests/runtime/test_runtime_postconditions.py`；`tests/infra/orchestration/test_overview_evaluation.py`；`tests/runtime/test_production_postconditions.py`；PR #199 |
 | E-3 raw_execution 采集时点 | 在 Runtime 自身版本绑定/人工门 internal_error 覆盖后采集，部分 execution_status/error_code 并非编排原值；不影响首例门禁 | 无（非阻断）；需先明确原值记录边界 | 待 GOV-SYNC 分配核验追踪语义任务 | 原值/覆盖值语义明确，并有覆盖路径的 Trace 与错误码回归；不凭变量名承诺原始值 | `P2-AUDIT-EVAL-POSTCOND-001/bridge-opus/review-output.md` 非阻断 3；`app/runtime/runtime.py` 的 raw_execution |
 | E-4 概览 resume 无核验证据 | resume 不携带 evidence，恒为 evidence_missing；当前概览无确认步骤，路径不可达，符合不得伪造证据 | 无（当前不可达）；未来可恢复概览合同尚未批准 | 未来获批的概览 resume 任务，task_id 待分配 | 开放该路径前具备真实绑定证据及缺证据 fail-closed 回归；此前维持不可达，不降低核验要求 | `P2-AUDIT-EVAL-POSTCOND-001/bridge-opus/review-output.md` 非阻断 4；`app/infra/orchestration/agent_adapter.py::resume_capability` |
-| L-1 completion 422 错误合同缺口 | 未知 completion 枚举走默认 422 并回显 input；重复传参虽固定 422，实际 body 却与声明的 HTTPValidationError schema 不一致；为本桥唯一合同缺口 | 无（非阻断） | 待 GOV-SYNC 分配列表参数错误合同修复任务 | 未知/重复值均固定不回显 422，声明与实际 body 同形，OpenAPI/生成端及正负例一致 | `P2-AUDIT-WO-LIFECYCLE-001/bridge-opus/review-output.md` 非阻断 1；`app/api/v1/work_objects.py::list_work_objects`；PR #200 |
+| L-1 completion 422 错误合同缺口 | 未知 completion 枚举走默认 422 并回显 input；重复传参虽固定 422，实际 body 却与声明的 HTTPValidationError schema 不一致；为本桥唯一合同缺口 | 无（非阻断） | `P2-WO-ERROR-CONTRACT-001` | 未知/重复值均固定不回显 422，声明与实际 body 同形，OpenAPI/生成端及正负例一致 | `P2-AUDIT-WO-LIFECYCLE-001/bridge-opus/review-output.md` 非阻断 1；`app/api/v1/work_objects.py::list_work_objects`；PR #200 |
 | L-2 missing 被报成 stale | 读取中途目录失效时固定 organization_directory_stale，实际 missing 亦被报 stale | 无（非阻断） | 待 GOV-SYNC 分配目录错误准确性任务 | 失效重查按真实 missing/stale 分类，并有具名回归，拒绝语义不放宽 | `P2-AUDIT-WO-LIFECYCLE-001/bridge-opus/review-output.md` 非阻断 2；`app/api/v1/work_objects.py::get_lifecycle_for_principal` |
 | L-3 时间格式重复与 monotonic 来源（已知取舍） | store 的 `_lifecycle_representation.utc` 与服务 `_utc_text` 同形但独立；共用会反转依赖，保留重复是已知取舍，不派生抽取公共函数义务。store 用 time.monotonic、service 用注入时钟，生产一致、测试注入可能不同 | 无（非阻断，保留取舍） | 后续修改生命周期时间/时钟合同时复核，task_id 待分配 | 变更时保持序列化/ETag 同值、依赖方向和时效回归；测试注入明确双时钟边界，不以抽函数为结项条件 | `P2-AUDIT-WO-LIFECYCLE-001/bridge-opus/review-output.md` 非阻断 3；`app/infra/persistence/work_object/postgresql.py`；`app/api/v1/work_objects.py::_utc_text` |
 | L-4 对象读取先于 membership 拒绝 | 命令先查对象，失去 membership 且非发起人得到 404 而非 403；符合不可见与不存在同 404，但与方案 §3.3 枚举顺序不同 | 无（非阻断）；需保留不可区分边界 | 待 GOV-SYNC 分配错误优先级对齐任务 | 明确现役顺序与方案枚举关系，具名覆盖 404/403，不能泄露不可见对象存在性 | `P2-AUDIT-WO-LIFECYCLE-001/bridge-opus/review-output.md` 非阻断 4；`app/api/v1/work_objects.py::command_lifecycle_for_principal` |
@@ -389,7 +389,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
 | D2-1 STATUS 审阅状态过时（已关闭） | 合并前 STATUS 仍写 Monitor r2 FAIL、待第 3 轮，未反映最终合并事实 | `P2-AUDIT-LOGOUT-002` | `P2-GOV-SYNC-066` | 已满足：STATUS 改写为已合并事实并同步最终验证基线 | PR #207 body D2-1；本次 `docs/phase2/STATUS.md` 同步 |
-| D2-2 生命周期路由吊销存储读故障 503 无独立用例（开放） | 行为由 `/me` 503 用例与全路由装配测试间接覆盖，尚无独立生命周期路由用例 | `P2-AUDIT-LOGOUT-002` | 待后续 GOV-SYNC 分配 | 补独立用例，直接锁定生命周期路由在吊销存储读故障时返回 503，并通过对应弱测试/路由验证 | PR #207 body D2-2；`bridge-opus/review-output.md` Non-blocking 2 |
+| D2-2 生命周期路由吊销存储读故障 503 无独立用例（开放） | 行为由 `/me` 503 用例与全路由装配测试间接覆盖，尚无独立生命周期路由用例 | `P2-AUDIT-LOGOUT-002` | `P2-WO-ERROR-CONTRACT-001` | 补独立用例，直接锁定生命周期路由在吊销存储读故障时返回 503，并通过对应弱测试/路由验证 | PR #207 body D2-2；`bridge-opus/review-output.md` Non-blocking 2 |
 | D2-3 `auth.py` `__all__` 未列 `LogoutResponse`（开放） | 公开导出列表未包含该响应模型，当前行为未证明需要导出或已由其他路径替代 | `P2-AUDIT-LOGOUT-002` | 待后续 GOV-SYNC 分配 | 补齐导出并保留导入/生成合同，或记录有依据的裁定说明不需要导出 | PR #207 body D2-3；`bridge-opus/review-output.md` Non-blocking 3 |
 | D2-4 方案 §4 拟名用例以同义用例覆盖（保留） | 桥已逐项对照，实际以同义用例覆盖；不以名称差异宣称缺测 | `P2-AUDIT-LOGOUT-002` | 待后续 GOV-SYNC 分配 | 保留 Opus 桥逐项对应证据；PR #207 的 expiry_condition 未覆盖此项，继续保留开放状态 | PR #207 body D2-4；`C:/Users/Administrator/.claude-codex-scratch/v5-runs/P2-AUDIT-LOGOUT-002/bridge-opus/review-output.md` Non-blocking 1 |
 
@@ -491,6 +491,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 |---|---|---|---|
 | `P2-AUDIT-LOGOUT-002` | P2-AUDIT-WO-LIFECYCLE-001（已合并的新基线） | **A** | **已完成并合并（PR #207）**：当前会话服务端注销、持久吊销、票据 v2 nonce、前端注销确认与缓存 B2 合同已交付；独立监理第 3 轮与静态评审桥均 PASS。D1 与 D2 剩余义务见活欠债表；不新增后继或重排 DAG |
 | `P2-WO-COMPLETED-MERGE-001` | P2-AUDIT-WO-LIFECYCLE-001（已合并） | **B** | 串行修复已办结查询未接既有列表版本合并：只接 `completedQuery` 到 `mergeListResponse`、新增专门前端回归；不改合并算法、认证代次、缓存隔离或公共合同。已合并（PR #206），`P2-AUDIT-LOGOUT-002` 已合入修复并继续验证。无新增欠债。 |
+| `P2-WO-ERROR-CONTRACT-001` | P2-AUDIT-WO-LIFECYCLE-001、P2-AUDIT-LOGOUT-002（均已合并） | **A** | 修复活欠债 L-1：未知/重复 `completion` 固定、不回显输入的 422，响应与 OpenAPI 声明一致；补 LOGOUT D2-2 生命周期路由吊销存储读故障 503 独立用例。恢复既有合同，不改权限设计 |
 | `P2-LOW-RISK-WRITE-001` | P2-GOLDEN-001、P2-CONFIRM-BINDING-001、P2-SDUI-RENDERER-001、P2-ENVELOPE-MESSAGE-REDACTION-001（均已完成） | **A** | **是：OA 审批提交协议结构未知；输入到位前不开棒** |
 | `P2-GOLDEN-002` | P2-GOLDEN-001、P2-LOW-RISK-WRITE-001 | **A** | 是：等待低风险写入落地；fixture 增量授权已到位不等于任务完成 |
 | `P2-MEMORY-001` | P2-PILOT-FOUNDATION-001 | **A（预判）** | 是：获批知识语料与用户数据边界未到位；机会层 |
@@ -503,9 +504,10 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | `P2-FE-DISPATCH-WIRING-001` | P2-ORGDIR-PERSON-SYNC-001、P2-INTERNAL-WO-DISPATCH-001（均已合并） | **B** | **已完成并合并至 `phase0/main`**；目录选择、只读摘要、截止时区、派发与页内重试、显示名及内部 `view_only` 已接线。生产目录前置保留；解析/服务端草稿本棒不做，解析与服务端草稿分别保留活债，承担 task_id 尚待分配 |
 | `P2-TENANT-IDENTITY-001` | P2-OA-ORGANIZATION-DIRECTORY-001、P2-AUDIT-READ-AUTHZ-001、P2-AUDIT-TRACE-SCOPE-001、P2-TASK-TENANT-COLUMN-001（均已完成） | **A** | `tasks` 切片完成后仍待真实组织身份来源、sessions、identity binding、组织目录等剩余 scope 的独立授权与实现；第二租户硬前置 |
 | `P2-FEEDBACK-LOOP-001` | 无 | **A（预判）** | 是：获批 Scope 未定义；机会层 |
-| `P2-WO-SEARCH-TEST-FIDELITY-001` | P2-WO-SEARCH-SERVER-001（已完成） | **C** | 否；只改前端测试的名称或断言，不动生产代码 |
+| `P2-WO-SEARCH-TEST-FIDELITY-001` | P2-WO-SEARCH-SERVER-001（已完成） | **C** | **已完成并合并至 `phase0/main`**：前端搜索测试名称、断言与负向覆盖已对齐；不动生产代码，两条相关欠债已解除 |
 | `P2-SEARCH-QUERY-EXPOSURE-001` | P2-WO-SEARCH-SERVER-001（已完成） | **A（预判）** | 是：已裁定保留 URL 查询串，当前只剩核查部署侧访问日志是否记录 query string；本棒不执行 |
 | `P2-FE-VISUAL-REFACTOR-001` | P2-FE-NAV-SHELL-001（已完成） | **B** | **已完成并合并至 `phase0/main`**：玻璃拟态视觉、五页按定稿画板落地及五轮实机返修；交办页、软件中心与新建表单主体已建成，合同守卫与空态收口由 `P2-FE-PAGE-CONTRACT-001` 承接 |
+| `P2-FE-BUNDLE-SPLIT-001` | P2-FE-VISUAL-REFACTOR-001（已完成） | **B** | **已完成并合并（PR #209）**：路由级代码分割、认证后壳层隔离、AI Dock 首开按需加载并常驻；无新增依赖，Vite 500 kB 警告已消除 |
 | `P2-FE-DISPATCH-FORM-001` | P2-FE-VISUAL-REFACTOR-001（已完成） | **B** | **已合并交付并关闭**：雨爷 2026-09-07 裁定由 `P2-FE-PAGE-CONTRACT-001` 承担合同守卫与空态收口；页面形态已由 `P2-FE-VISUAL-REFACTOR-001` 建成，不再单独开棒 |
 | `P2-FE-APPS-001` | P2-FE-VISUAL-REFACTOR-001（已完成） | **B** | **已合并交付并关闭**：雨爷 2026-09-07 裁定由 `P2-FE-PAGE-CONTRACT-001` 承担合同守卫、状态/版本整块留位与命名守卫；软件中心与新建表单已由视觉棒建成，后端不做，不再单独开棒 |
 | `P2-RUNTIME-DIRECT-ANSWER-001` | P2-RUNTIME-NO-CAPABILITY-COPY-001（已完成） | **A** | 是；按雨爷 2026-09-07 拆棒决定独立设计聊天回退的终态、部门名 + 当前时间注入、脱敏与 Trace 语义；不注入姓名，前棒不预留终态 |

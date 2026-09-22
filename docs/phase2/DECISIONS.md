@@ -3077,3 +3077,7 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 ## 2026-09-22 — P2-GOV-SYNC-066：前端首屏构建优化后继分配
 
 依据雨爷常设授权第 16 条由 codex 代裁，分配本批活欠债“前端首屏 JS 体积随 `@ant-design/x` 增长并触发 Vite chunk 警告”的 `activation_task_id` 为 `P2-FE-BUNDLE-SPLIT-001`，预判 **B 档**。分配只建立后继指针，不等于排期、施工授权或 DAG 重排；其余字段语义保持不变。
+
+## 2026-09-22 — P2-GOV-SYNC-067：主链后继与错误合同修复安排
+
+依据雨爷授权台账第 16 条 2026-09-22 再次确认；代裁依据见 `E:/code/eternalai/_scratch/lanes/CONSULT_next_20260922.log`。主链剩余项需雨爷本人或外部输入；本批登记 `P2-GOV-SYNC-067` → `P2-WO-ERROR-CONTRACT-001` 的串行安排。该登记不构成后继施工、红线或合并授权；其余小欠债继续挂账。`P2-SKILL-CANDIDATE-001` 不阻塞但暂不排期。本条措辞限本批，不固化为长期规则。
