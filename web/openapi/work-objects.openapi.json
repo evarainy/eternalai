@@ -1721,11 +1721,27 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WorkObjectError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HTTPValidationError"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid completion uses WorkObjectError without input echo and with Cache-Control: no-store. Other query validation retains HTTPValidationError.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Present on fixed completion validation failures.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "503": {
             "content": {

@@ -15,6 +15,8 @@ import { ApiError, customInstance } from '../mutator';
 import { UserActionOutcome as GeneratedOutcomes } from '../../generated/runtime/runtime.schemas';
 import { TaskStatus as GeneratedTaskStatuses } from '../../generated/admin/admin.schemas';
 import { USER_ACTION_OUTCOMES } from '../../contracts/userActionOutcome';
+import { listWorkObjectsApiV1WorkObjectsGet } from '../../generated/work-objects/work-objects';
+import { useAuthStore } from '../../stores/authStore';
 
 interface OpenApiSchema {
   format?: string;
@@ -288,6 +290,50 @@ const webRoot = process.cwd();
 const repositoryRoot = resolve(webRoot, '..');
 const mutatorPath = './src/api/mutator.ts';
 
+it('maps actual completion 422 to ApiError', async () => {
+  const script = EXPORT_SCRIPT.split('output_dir = Path(sys.argv[1])')[0] + String.raw`
+from fastapi.testclient import TestClient
+from tests.auth_fakes import StaticSessionTokens, MemorySessionRevocations, auth_cookies, make_session_binder
+
+with TestClient(create_app(
+    session_tokens=StaticSessionTokens(roles=("user",)),
+    session_revocations=MemorySessionRevocations(), session_binder=make_session_binder(),
+    session_cookie_ttl_seconds=3600, csrf_allowed_origins=("https://testserver",),
+), base_url="https://testserver") as client:
+    client.cookies.update(auth_cookies())
+    response = client.get("/api/v1/work-objects", params={"completion": "SYNTHETIC_UNKNOWN"})
+    print(json.dumps({"status": response.status_code, "body": response.json()}))
+`;
+  const result = spawnSync(process.platform === 'win32' ? 'uv.exe' : 'uv',
+    ['run', 'python', '-c', script],
+    { cwd: repositoryRoot, encoding: 'utf8', env: process.env, windowsHide: true });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const response: { status: number; body: unknown } = JSON.parse(result.stdout);
+  expect(response.status).toBe(422);
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(response.body), {
+    status: response.status, headers: { 'Content-Type': 'application/json' },
+  }));
+  const previousAuth = useAuthStore.getState();
+  useAuthStore.getState().markAuthenticated();
+  const generation = useAuthStore.getState().generation;
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    // Deliberately send an invalid runtime value through the generated client.
+    await expect(listWorkObjectsApiV1WorkObjectsGet({ completion: 'SYNTHETIC_UNKNOWN' as 'active' })).rejects.toEqual(
+      expect.objectContaining<ApiError>({
+        name: 'ApiError', status: 422, code: 'work_object_lifecycle_request_invalid',
+        message: 'Invalid work object lifecycle request.',
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState()).toMatchObject({ status: 'authenticated', generation });
+  } finally {
+    vi.unstubAllGlobals();
+    useAuthStore.setState(previousAuth);
+  }
+}, 60_000);
+
 it('classifies the actual Work Object directory failure by its backend code', async () => {
   const script = EXPORT_SCRIPT.split('output_dir = Path(sys.argv[1])')[0] + String.raw`
 from fastapi.testclient import TestClient
@@ -403,6 +449,17 @@ describe('FastAPI-derived Orval clients', () => {
     }
     expect(document.paths[base]!.get!.responses!['200']).toMatchObject({ headers: { ETag: { schema: { pattern: '"wolc-[0-9a-f]{64}"' } } } });
     expect(document.paths['/api/v1/work-objects']!.get!.parameters).toContainEqual(expect.objectContaining({ name: 'completion', in: 'query' }));
+    expect(document.paths['/api/v1/work-objects']!.get!.responses!['422']).toEqual({
+      description: 'Invalid completion uses WorkObjectError without input echo and with Cache-Control: no-store. Other query validation retains HTTPValidationError.',
+      content: { 'application/json': { schema: { oneOf: [
+        { $ref: '#/components/schemas/WorkObjectError' },
+        { $ref: '#/components/schemas/HTTPValidationError' },
+      ] } } },
+      headers: { 'Cache-Control': {
+        description: 'Present on fixed completion validation failures.',
+        schema: { type: 'string', const: 'no-store' },
+      } },
+    });
   });
   it(
     're-exports six FastAPI specs, copies curated Admin, and regenerates byte-identical clients',

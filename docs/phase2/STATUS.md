@@ -1,24 +1,26 @@
 # Phase 2 当前状态
 
+- 当前实现候选：`P2-WO-ERROR-CONTRACT-001`（A 档、串行、承担 A 类机械同步）；L-1 固定 completion 422 与 D2-2 三生命周期吊销读故障回归已满足验收，待主控独立 Monitor 和静态评审桥；尚未 push、未合并，后继未指定。
+
 - 当前治理基线 task_id：`P2-GOV-SYNC-066`（C 档、串行；2026-09-22 同步本批已合并事实、评审桥非阻断欠债及已决后继，承担 A 类机械同步）。
 - 当前已合并实现：`P2-AUDIT-LOGOUT-002`（PR #207）与 `P2-WO-COMPLETED-MERGE-001`（PR #206）；前者已完成最后一轮独立监理与静态评审桥，后者已完成已办结查询版本合并修复。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
-- 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；当前后继指针为 `P2-WO-ERROR-CONTRACT-001`。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。
+- 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；已决后继 `P2-WO-ERROR-CONTRACT-001` 已形成上述实现候选。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。
 - 审计 #1：`P2-AUDIT-LOGOUT-002` 已合并服务端当前票据持久吊销、旧票据/等价别名重放拒绝，以及前端确认成功后的旧身份数据清理与当前代空身份查询。旧 `P2-AUDIT-LOGOUT-001` 未交付的历史不作为新棒证据；重开裁决仍见 `DECISIONS.md` 2026-09-20。
 
 ## 已登记验证基线
 
-### 最近合并基线（2026-09-22，来源 P2-AUDIT-LOGOUT-002 最终候选）
+### 当前候选验证基线（2026-09-22，来源 P2-WO-ERROR-CONTRACT-001）
 
-后端、架构与 Golden 三项为 LOGOUT-002 最终候选的既有验证基线；该棒已合并，Golden 行如实注明其来自 r2 实测。前端最终全量及其他定向证据见合并棒 PR，未在本治理棒重跑。
+后端与架构数字为本棒实测；Golden 沿用已合并 LOGOUT-002 的 r2 证据，本棒未单跑 Golden。候选验证不代表已取得独立审查或合并授权。
 
-- pytest：`4086 passed, 0 failed, 0 skipped`（固定测试库后端全量，113 warnings；exit=0、后台 status=passed，P4 observer authoritative PASS；无 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录。
-- `tests/architecture/`：`135 passed`（本轮定向及后端全量覆盖；A 类文档同步后另做 SSOT 定向验证）。
-- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（本棒 r2，positive 13/13、negative/boundary 21/21；相关生产路径未再改变）。
-- 前端最终全量 998 项通过（组件 480、单元 513、OpenAPI 5），入口 exit=0；各组件文件独立进程，原 N2 断言/时限未改。
-- 本轮前端 lint/typecheck/build、改动测试逐文件弱测试检查通过；Ruff、mypy（137 source files）沿用合并棒既有证据。新增认证、吊销、并发/故障、缓存代次、迟到结果及真实生成接口均有定向证据；生产变异与全前缀判据自身反证均已闭环，逐项证据留 PR。
-- 仓库迁移 head：`20260920_180000`，父为 `20260920_120000`。固定测试库收口无吊销残留并回到 `20260920_120000`；已过期/未过期行拒降与空态往返沿用未改迁移的 r2 实证。本治理棒不查数据库，不宣称测试库当前版本。
-- 合成真实浏览器已证明服务器注销、另一标签页/旧票据拒绝和刷新仍为登录页；未访问真实 OA。真实目录 Source、真实 OA 账号、OA 已办源与生产部署仍未验收；D1 过期吊销清理、离岗交接及跨刷新未决命令恢复见 `PHASE2_PLAN.md`。
+- pytest：`4128 passed, 0 failed, 0 skipped`（2026-09-22 固定测试库后端全量，113 warnings；exit=0、后台 status=passed，P4 observer authoritative PASS；无 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录。
+- `tests/architecture/`：`135 passed`（本棒定向；全量亦覆盖。机械同步后另核 SSOT）。
+- Golden Gate：`34/34 passed, 0 skipped, 0 failed`（沿用 2026-09-22 已登记的 P2-AUDIT-LOGOUT-002 r2 实测，positive 13/13、negative/boundary 21/21；本棒未重跑）。
+- 前端本棒全量 1003 项通过（组件 484、单元 513、OpenAPI 6），入口 exit=0；各组件文件独立进程。
+- 本棒 lint/typecheck/build、Ruff、mypy（137 source files）、依赖检查、三个改动测试逐文件弱测试检查通过；后端定向 310 项、前端列表/搜索/传输层定向通过。19 项生产变异逐项绿→红→原样恢复绿；非目标路由兼容性在 base 与候选均通过。OpenAPI 再生成字节一致，Orval 全部诊断与 base 逐字一致；生成门禁吞诊断的新债见 PHASE2_PLAN。
+- 仓库迁移 head：`20260920_180000`，父为 `20260920_120000`。本棒按当次授权确认固定测试库目标后升级已合并迁移，收口复查处于 `20260920_180000`；未新增迁移、未手工降级。
+- 沿用 P2-AUDIT-LOGOUT-002 的合成真实浏览器证据：服务器注销、另一标签页/旧票据拒绝和刷新仍为登录页；本棒未重跑浏览器、未访问真实 OA。真实目录 Source、真实 OA 账号、OA 已办源与生产部署仍未验收；D1 过期吊销清理、离岗交接及跨刷新未决命令恢复见 `PHASE2_PLAN.md`。
 
 ### 当前前端合并基线（2026-09-22，`P2-FE-BUNDLE-SPLIT-001`）
 
