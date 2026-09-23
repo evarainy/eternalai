@@ -77,7 +77,6 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
 |---|---|---|---|---|---|
-| MiMo 评审桥通道验收未通过，MiMo 保持未启用 | 桥已能取得服务端实际模型并通过离线拒绝路径测试。历史候选盲测未通过：`P2-CONFIRM-BINDING-001` 首轮候选判 BLOCKED（仅 diff 材料，未识别已知阻断项）；两份修复版候选均判 FAIL，其发现尚未逐条归因为真问题或误报；另两次重放因 OpenRouter 余额不足（HTTP 402）中止。真问题、漏报、误报归因尚未完成。验收前 A/B 静态评审继续使用 Opus 评审桥 | 外部输入：OpenRouter 余额（雨爷） | 待 GOV-SYNC 分配，不自行编造已生效 task_id | 按 `DECISIONS.md` 2026-09-23「P2-GOV-SYNC-068：开发助手模型路由与四档施工」第 3 条完成历史候选盲测（含修复版），逐项核对真问题、漏报与误报并达标；或雨爷裁定放弃 MiMo | 本棒 PR 验证段的 MiMo 桥离线测试与重放记录；桥脚本在仓库外 `~/.codex/mimo-review/` |
 | Fable 5.1 在本账户需额外用量额度 | 2026-09-23 冒烟：`claude-fable-5-1` 返回需要 usage credits（HTTP 429），当前主控与 plan 编写按回退链由 Opus 5.5 xhigh 承担 | 外部输入：Claude 账户 Fable 用量额度（雨爷） | 无（不需新棒） | Fable 5.1 冒烟调用成功，或雨爷改定主控模型 | 本棒 PR 验证段的冒烟记录 |
 
 ### 当前会话注销候选的剩余义务（2026-09-21）
@@ -306,6 +305,7 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 | 已结项事项 | 仍生效的规则 / 测试 / 守卫指针 |
 |---|---|
+| `MiMo 评审桥通道验收` | 雨爷 2026-09-24 裁定 MiMo 改为可选试跑、不作合并依据（DECISIONS 2026-09-24「P2-GOV-SYNC-069：静态评审按作者交叉评审」第 4 条）；两轮验收未通过的证据留本棒 PR。 |
 | 前端首屏 JS 体积随 `@ant-design/x` 增长并触发 Vite chunk 警告 | `P2-FE-BUNDLE-SPLIT-001` 按第一条 expiry path 关闭：路由级 `React.lazy` 将壳层、所有叶页与未打开 Dock 移出入口静态闭包；认证后才加载 `AntApp`，Dock 只在首次显式打开后常驻。带 manifest 的构建入口静态集合为 337,124 B JS + 9,657 B CSS，`index.html` 无未访问页 modulepreload，壳层、所有叶页与 Dock 均为 dynamic entry，且 Vite 无默认 500 kB chunk 警告；`/chat` 自动加载集合另行去重报告，不冒充入口下载量。`web/src/__tests__/App.test.tsx`、`web/src/app/__tests__/AppShell.test.tsx` 与 `blurBudget.test.tsx` 锁住加载/失败、401 迟到模块、首开常驻和原 6 层预算。未新增依赖、未改 Vite 阈值；目标 ARM 终端性能仍未实测。 |
 | 没有服务端注销端点，退出登录只清前端状态 | `P2-AUDIT-LOGOUT-002` 已按 expiry_condition 关闭：真实 HMAC+PG 当前票据提交后吊销、同票据/签名编码等价别名重放为 401、其他会话保留；前端服务端确认、失败反馈、三时点旧数据/旧键清理均已实证。`tests/api/test_auth.py`、`tests/runtime/test_runtime_composition.py`、`web/src/__tests__/App.test.tsx`、`web/src/pages/__tests__/ChatPage.test.tsx` 及生产反证锁定合同；独立审查与集成状态见 `STATUS.md`，不宣称生产部署。 |
 | 生命周期已吊销票据与注销后原 key 重放验证 | `P2-AUDIT-LOGOUT-002` 已取得真实注销链实证：三个生命周期端点拒绝旧票据，原已提交 key 重放与事件读取均为 401、业务 SQL 零增量、事件数不变；同主体未注销票据仍可读和合法重放。依据 `tests/api/test_work_object_lifecycle.py::test_logout_replay_of_original_key_cannot_read_event`、生产装配全路由用例及断开认证读库后的反证。按既定 expiry_condition 关闭该验证义务，独立审查与集成状态见 `STATUS.md`。 |
