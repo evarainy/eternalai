@@ -12,4 +12,4 @@ Rules:
 - Check the assigned import/dependency/test concern against its actual contract; do not turn one concern into a whole-repository checklist.
 - Do not read raw or unconfirmed sanitized material. Any authorized leakage check is limited to permitted generated artifacts.
 - Separate static findings from dynamic claims; give evidence paths, commands actually run and limits of the conclusion.
-- This optional investigation neither replaces Monitor/Opus evidence nor authorizes merge. Do not create a Task Record or an extra review gate.
+- This optional investigation neither replaces Monitor or static review bridge evidence nor authorizes merge. Do not create a Task Record or an extra review gate.

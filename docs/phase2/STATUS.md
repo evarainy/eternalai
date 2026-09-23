@@ -1,8 +1,8 @@
 # Phase 2 当前状态
 
-- 当前实现候选：`P2-TENANT-IDENTITY-001` S1（A 档、串行、承担 A 类机械同步）；已完成显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离，待主控独立 Monitor 和静态评审桥；尚未 push、未合并。总欠债保持开放，全链验收前维持单租户运行；S2/S3 开棒标识待 GOV-SYNC 分配。
+- 最近已合并实现：`P2-TENANT-IDENTITY-001` S1（PR #212，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。总欠债保持开放，全链验收前维持单租户运行；S2/S3 开棒标识待 GOV-SYNC 分配。
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-066`（C 档、串行；2026-09-22 同步本批已合并事实、评审桥非阻断欠债及已决后继，承担 A 类机械同步）。
+- 当前治理基线 task_id：`P2-GOV-SYNC-068`（按 `AGENTS.md` v3.0.0 为 D 档、非高风险、串行，承担 A 类机械同步）；2026-09-23 落实四档施工与风险标记，开发助手路由见 `DECISIONS.md` 同日裁决。本棒不新增已决后继，既有指针不变；新任务按四档规则定档。
 - 当前已合并实现：`P2-AUDIT-LOGOUT-002`（PR #207）与 `P2-WO-COMPLETED-MERGE-001`（PR #206）；前者已完成最后一轮独立监理与静态评审桥，后者已完成已办结查询版本合并修复。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
 - 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；已决后继 `P2-WO-ERROR-CONTRACT-001` 已形成此前记录的实现候选。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。

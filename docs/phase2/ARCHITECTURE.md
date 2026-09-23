@@ -397,9 +397,9 @@ JuggleIM 目前**只是架构完善所做的初步筛查对象，不构成已定
 
 | # | 待裁决项 | 为什么需要裁决 |
 |---|---|---|
-| D-1 | **Work Object 层怎么建、什么时候建** | 它是三表面的共同枢纽（§5），代码中零存在，且不能由 `TaskRecord` 改造而来。它一旦开建就会影响 DB schema、`app/ports/` 契约和几乎所有后续前端棒——属 A 档触碰面。**这是当前最大的单点未决**。 |
+| D-1 | **Work Object 层怎么建、什么时候建** | 它是三表面的共同枢纽（§5），代码中零存在，且不能由 `TaskRecord` 改造而来。它一旦开建就会影响 DB schema、`app/ports/` 契约和几乎所有后续前端棒——在 2026-08 三档规则下属 A 档触碰面；现行档位与风险标记按 `AGENTS.md` 四档判据判定，涉及 DB schema 即为高风险。**这是当前最大的单点未决**。 |
 | D-2 | **`AgentOrchestrationPort` / `WorkflowEnginePort` 接缝棒的排期与形状** | 四步走第三步收口后即是「留孔」，蓝图 §11.3 已给出可替换矩阵（编排器候选 PydanticAI / OpenAI Agents SDK / Microsoft Agent Framework / 自研 Runner；状态机候选 LangGraph / Temporal / DBOS）。**接缝形状要不要按某个具体候选反推，是设计决定**。 |
-| D-3 | **`CredentialBindingPort` 与 `HumanGatePort` 是否需要独立端口** | 两者的语义目前分别寄生在 `auth.py` 和 `policy_guard` / `response_envelope` 中。蓝图列为必须保留的端口，但现有形态也能工作。**独立成端口是契约变更（A 档），不独立则需明确记录偏差理由**。 |
+| D-3 | **`CredentialBindingPort` 与 `HumanGatePort` 是否需要独立端口** | 两者的语义目前分别寄生在 `auth.py` 和 `policy_guard` / `response_envelope` 中。蓝图列为必须保留的端口，但现有形态也能工作。**独立成端口是契约变更（2026-08 三档规则下定为 A 档；现行档位按 `AGENTS.md` 四档判据判定），不独立则需明确记录偏差理由**。 |
 | D-4 | **G-6 版本锁定的排期** | 低风险写入棒最需要它，而 `P2-LOW-RISK-WRITE-001` 当前只依赖 `P2-GOLDEN-001`。**要不要把版本锁定加为它的前置，是 DAG 调整（归 GOV-SYNC）**。 |
 | D-5 | **`P2-PILOT-OPS-001` 并进工作台后的 DAG 重排** | 2026-08-18 决定已明写该重排「归 GOV-SYNC，实现棒不得自行改写」，且依赖它的 `P2-SKILL-CANDIDATE-001`、`P2-GOLDEN-001` 需一并重排。**至今未执行**。 |
 | D-6 | **工作台薄查询层的归属** | ProComponents 已移出基线，工作台表格需先建「antd 6 原生 `Table` + 项目自有薄查询层」，该层目前不存在，2026-08-18 决定称其为「并进后的第一项前置」。**是独立一棒还是并进工作台首棒，未定**。 |
