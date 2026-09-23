@@ -43,12 +43,12 @@ def _mock_class() -> type[Any]:
 def _mapping(rows: list[dict[str, str | None]] | None = None) -> Any:
     mapping_class = _mock_class()
     if rows is None:
-        return mapping_class()
-    return mapping_class(rows=rows)
+        return mapping_class(tenant_id="default")
+    return mapping_class(rows=rows, tenant_id="default")
 
 
 def _context(**overrides: str) -> RequestOrgContext:
-    return RequestOrgContext(request_id="identity-test-request", **overrides)
+    return RequestOrgContext(request_id="identity-test-request", **overrides, tenant_id="default")
 
 
 def _oa_mutation_row(*, bind_status: str = "active") -> dict[str, str | None]:
@@ -104,6 +104,7 @@ def test_get_mapping_returns_identity_check_result_for_known_mapping() -> None:
             ai_user_id="ai-user-001",
             target_system="oa",
             binding_scope="oa-finance",
+            tenant_id="default",
         )
     )
 
@@ -117,6 +118,7 @@ def test_get_mapping_returns_none_for_unknown_without_raising() -> None:
             ai_user_id="unknown-ai-user",
             target_system="oa",
             binding_scope="oa-finance",
+            tenant_id="default",
         )
     )
 
@@ -124,7 +126,9 @@ def test_get_mapping_returns_none_for_unknown_without_raising() -> None:
 
 
 def test_list_mappings_filters_by_target_system() -> None:
-    results = _run(_mapping().list_mappings(ai_user_id="ai-user-001", target_system="oa"))
+    results = _run(
+        _mapping().list_mappings(ai_user_id="ai-user-001", target_system="oa", tenant_id="default")
+    )
 
     assert results
     assert all(result.target_system == "oa" for result in results)
@@ -132,7 +136,9 @@ def test_list_mappings_filters_by_target_system() -> None:
 
 def test_list_mappings_filters_by_binding_scope() -> None:
     results = _run(
-        _mapping().list_mappings(ai_user_id="ai-user-001", binding_scope="oa-admin-proxy")
+        _mapping().list_mappings(
+            ai_user_id="ai-user-001", binding_scope="oa-admin-proxy", tenant_id="default"
+        )
     )
 
     assert [result.binding_id for result in results] == ["bind-oa-admin-001"]
@@ -140,7 +146,9 @@ def test_list_mappings_filters_by_binding_scope() -> None:
 
 def test_list_mappings_filters_by_account_set_id() -> None:
     results = _run(
-        _mapping().list_mappings(ai_user_id="ai-user-multi-u8", account_set_id="u8-acct-a")
+        _mapping().list_mappings(
+            ai_user_id="ai-user-multi-u8", account_set_id="u8-acct-a", tenant_id="default"
+        )
     )
 
     assert [result.binding_id for result in results] == ["bind-u8-user-a"]
@@ -152,6 +160,7 @@ def test_list_mappings_filters_by_device_domain_id() -> None:
         _mapping().list_mappings(
             ai_user_id="ai-user-multi-hikvision",
             device_domain_id="camera-domain-west",
+            tenant_id="default",
         )
     )
 
@@ -265,6 +274,7 @@ def test_get_mapping_fails_closed_when_filters_still_match_multiple_bindings() -
             ai_user_id="ai-user-ambiguous",
             target_system="oa",
             binding_scope="shared-resource",
+            tenant_id="default",
         )
     )
 
@@ -365,7 +375,7 @@ def test_mock_produced_statuses_cover_phase0_statuses_except_verification_failed
             "ai-user-revoked",
             "ai-user-unbound",
         )
-        for result in _run(mapping.list_mappings(ai_user_id=ai_user_id))
+        for result in _run(mapping.list_mappings(ai_user_id=ai_user_id, tenant_id="default"))
     }
     ambiguous = _run(
         mapping.resolve_execution_identity(
@@ -393,7 +403,7 @@ def test_mock_never_produces_verification_failed() -> None:
             "ai-user-revoked",
             "ai-user-unbound",
         )
-        for result in _run(mapping.list_mappings(ai_user_id=ai_user_id))
+        for result in _run(mapping.list_mappings(ai_user_id=ai_user_id, tenant_id="default"))
     ]
 
     assert results
@@ -423,6 +433,7 @@ def test_arbitrary_strings_round_trip_through_model_and_mock_lookup() -> None:
             binding_scope="scope.custom.alpha",
             account_set_id="account.custom.alpha",
             device_domain_id="device.custom.alpha",
+            tenant_id="default",
         )
     )
 
@@ -462,8 +473,11 @@ def test_protocol_methods_return_identity_check_result_instances() -> None:
             ai_user_id="ai-user-001",
             target_system="oa",
             binding_scope="oa-finance",
+            tenant_id="default",
         )
-        mappings = await port.list_mappings(ai_user_id="ai-user-001", target_system="oa")
+        mappings = await port.list_mappings(
+            ai_user_id="ai-user-001", target_system="oa", tenant_id="default"
+        )
         return resolved, mapping, mappings
 
     resolved_result, mapping_result, mapping_results = _run(exercise(_mapping()))
@@ -478,7 +492,7 @@ def test_protocol_methods_return_identity_check_result_instances() -> None:
 def test_mutation_changes_active_mapping_to_revoked(method_name: str) -> None:
     mapping = _mapping([_oa_mutation_row()])
 
-    result = _run(getattr(mapping, method_name)(BINDING_ID))
+    result = _run(getattr(mapping, method_name)(BINDING_ID, tenant_id="default"))
 
     assert isinstance(result, IdentityMappingMutationResult)
     assert result.previous_bind_status == "active"
@@ -486,18 +500,18 @@ def test_mutation_changes_active_mapping_to_revoked(method_name: str) -> None:
     assert result.mapping.bind_status == "revoked"
     assert result.mapping.binding_id == BINDING_ID
     assert result.mapping.reason_code == "identity_revoked"
-    assert _run(mapping.get_mapping(AI_USER_ID, "oa")) == result.mapping
+    assert _run(mapping.get_mapping(AI_USER_ID, "oa", tenant_id="default")) == result.mapping
 
 
 def test_mutation_preserves_expired_previous_status_and_binding_reference() -> None:
     mapping = _mapping([_oa_mutation_row(bind_status="expired")])
 
-    before = _run(mapping.get_mapping(AI_USER_ID, "oa"))
+    before = _run(mapping.get_mapping(AI_USER_ID, "oa", tenant_id="default"))
     assert before is not None
     assert before.bind_status == "expired"
     assert before.binding_id is None
 
-    result = _run(mapping.reset_mapping(BINDING_ID))
+    result = _run(mapping.reset_mapping(BINDING_ID, tenant_id="default"))
 
     assert isinstance(result, IdentityMappingMutationResult)
     assert result.previous_bind_status == "expired"
@@ -509,8 +523,8 @@ def test_mutation_preserves_expired_previous_status_and_binding_reference() -> N
 def test_repeated_named_mutations_are_idempotent() -> None:
     mapping = _mapping([_oa_mutation_row()])
 
-    first = _run(mapping.revoke_mapping(BINDING_ID))
-    repeated = _run(mapping.reset_mapping(BINDING_ID))
+    first = _run(mapping.revoke_mapping(BINDING_ID, tenant_id="default"))
+    repeated = _run(mapping.reset_mapping(BINDING_ID, tenant_id="default"))
 
     assert isinstance(first, IdentityMappingMutationResult)
     assert isinstance(repeated, IdentityMappingMutationResult)
@@ -534,8 +548,8 @@ def test_repeated_named_mutations_are_idempotent() -> None:
 def test_mutation_rejects_noncanonical_binding_references(binding_id: str) -> None:
     mapping = _mapping([_oa_mutation_row()])
 
-    assert _run(mapping.revoke_mapping(binding_id)) is None
-    current = _run(mapping.get_mapping(AI_USER_ID, "oa"))
+    assert _run(mapping.revoke_mapping(binding_id, tenant_id="default")) is None
+    current = _run(mapping.get_mapping(AI_USER_ID, "oa", tenant_id="default"))
     assert current is not None
     assert current.bind_status == "active"
 
@@ -545,7 +559,7 @@ def test_mutation_returns_none_for_canonical_but_missing_binding() -> None:
     missing_binding_id = f"oa-session-v1:{missing_ai_user_id}"
     mapping = _mapping([_oa_mutation_row()])
 
-    assert _run(mapping.reset_mapping(missing_binding_id)) is None
+    assert _run(mapping.reset_mapping(missing_binding_id, tenant_id="default")) is None
 
 
 def test_concrete_precheck_is_not_added_to_identity_mapping_port_protocol() -> None:

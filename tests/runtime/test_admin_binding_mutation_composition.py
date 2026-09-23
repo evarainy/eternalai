@@ -31,15 +31,13 @@ class MutationPort:
         self.calls: list[tuple[str, str]] = []
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult:
         self.calls.append(("revoke", binding_id))
         return self._result()
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult:
         self.calls.append(("reset", binding_id))
         return self._result()
@@ -89,7 +87,7 @@ async def test_builder_returns_the_additive_subclass_with_working_mutations() ->
             session_id="admin-session",
             ai_user_id="usr_v1_synthetic",
             roles=("admin",),
-            org_ctx=PrincipalOrgContext(),
+            org_ctx=PrincipalOrgContext(tenant_id="default"),
             principal_authenticated=True,
         ),
     )

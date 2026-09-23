@@ -198,7 +198,7 @@ def _client(
     service = AdminRegistryService(
         capability_registry=registry,
         task_store=EmptyTaskStore(),
-        identity_mapping=MockIdentityMapping(rows=[]),
+        identity_mapping=MockIdentityMapping(rows=[], tenant_id="default"),
         policy_guard=MinimalPolicyGuard(
             admin_capability_ids=ADMIN_LITE_POLICY_CAPABILITY_IDS,
             audit_read_capability_ids=ADMIN_AUDIT_READ_POLICY_CAPABILITY_IDS,

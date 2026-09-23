@@ -82,8 +82,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord(session_id=session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord(session_id=session_id, tenant_id=tenant_id)
 
 
 class SpyTracePort:
@@ -358,6 +358,7 @@ def test_runtime_and_gateway_share_trace_id_and_gateway_steps_are_visible() -> N
         identity_mapping=identity_mapping,
         policy_guard=policy_guard,
         trace_port=trace_port,
+        tenant_id="tenant-test",
     )
 
     _run_runtime(
@@ -499,6 +500,7 @@ def test_b3_negative_prechecks_close_runtime_task_trace_and_sdui_loop(
         identity_mapping=identity_mapping,
         policy_guard=policy_guard,
         trace_port=trace_port,
+        tenant_id="tenant-test",
     )
 
     envelope, task_store = _run_runtime(

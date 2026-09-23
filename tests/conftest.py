@@ -17,6 +17,8 @@ _DOTENV_ASSIGNMENT = re.compile(
 # replaced by fixtures, while the module-level app still builds every dependency.
 os.environ["ENV"] = "testing"
 os.environ["REDIS_URL"] = "redis://redis.invalid:6379/0"
+os.environ["OA_SOURCE_PROFILE_ID"] = "synthetic-oa"
+os.environ["OA_TENANT_ID"] = "default"
 os.environ["OA_BASE_URL"] = "https://oa.invalid"
 os.environ["OA_CREDENTIAL_TTL_S"] = "3600"
 os.environ["SESSION_COOKIE_TTL_S"] = "3600"

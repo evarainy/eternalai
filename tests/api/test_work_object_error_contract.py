@@ -67,9 +67,7 @@ class RecordingRevocations(MemorySessionRevocations):
 def http():
     clock = [datetime.now(UTC).timestamp()]
     tokens = HMACSessionToken(
-        signing_key=bytes(range(32)),
-        ttl_seconds=3600,
-        clock=lambda: clock[0],
+        signing_key=bytes(range(32)), ttl_seconds=3600, clock=lambda: clock[0], tenant_id="default"
     )
     principal = Principal(
         ai_user_id="ai-synthetic-error-contract",

@@ -85,8 +85,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord(session_id=session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord(session_id=session_id, tenant_id=tenant_id)
 
 
 class SpyTracePort:
@@ -307,6 +307,7 @@ def test_runtime_api_denies_active_admin_capability_before_gateway_pre_record_or
             capability_registry=registry,
             policy_guard=policy_guard,
             trace_port=trace_port,
+            tenant_id="default",
         )
     )
     structured_output = MockStructuredOutputProvider()

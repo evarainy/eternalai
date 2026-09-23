@@ -72,8 +72,8 @@ async def test_noncanonical_binding_reference_never_queries_storage(
         now=lambda: NOW,
     )
 
-    assert await mapping.revoke_mapping(binding_id) is None
-    assert await mapping.reset_mapping(binding_id) is None
+    assert await mapping.revoke_mapping(binding_id, tenant_id="default") is None
+    assert await mapping.reset_mapping(binding_id, tenant_id="default") is None
 
 
 @pytest.mark.anyio
@@ -92,7 +92,7 @@ async def test_storage_failure_raises_safe_mutation_error_without_context(
     caplog.set_level(logging.DEBUG)
 
     with pytest.raises(IdentityMappingMutationError) as exc_info:
-        await mapping.revoke_mapping(BINDING_ID)
+        await mapping.revoke_mapping(BINDING_ID, tenant_id="default")
 
     error = exc_info.value
     assert str(error) == "identity mapping mutation failed"
@@ -119,7 +119,7 @@ async def test_clock_failure_raises_safe_mutation_error_without_context() -> Non
     )
 
     with pytest.raises(IdentityMappingMutationError) as exc_info:
-        await mapping.reset_mapping(BINDING_ID)
+        await mapping.reset_mapping(BINDING_ID, tenant_id="default")
 
     error = exc_info.value
     assert error.__cause__ is None
@@ -147,7 +147,9 @@ async def test_revoked_projection_precedes_clock_and_carries_binding_reference()
         ai_user_id=AI_USER_ID,
         target_system="oa",
         execution_identity="user_delegated",
-        request_context=RequestOrgContext(request_id="revoked-projection-unit"),
+        request_context=RequestOrgContext(
+            request_id="revoked-projection-unit", tenant_id="default"
+        ),
     )
 
     assert result.bind_status == "revoked"

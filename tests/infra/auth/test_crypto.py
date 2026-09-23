@@ -25,7 +25,7 @@ def _principal(label: str = "a") -> Principal:
         ai_user_id=f"usr_v1_{label}",
         display_name=f"Synthetic {label}",
         roles=("admin",),
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
 
 
@@ -46,7 +46,7 @@ def test_all_hmac_boundaries_reject_undersized_keys(key: bytes) -> None:
     with pytest.raises(ValueError, match="at least 32 bytes"):
         identity_surrogate("synthetic", key=key)
     with pytest.raises(ValueError, match="at least 32 bytes"):
-        HMACSessionToken(signing_key=key, ttl_seconds=60)
+        HMACSessionToken(signing_key=key, ttl_seconds=60, tenant_id="default")
     with pytest.raises(ValueError, match="at least 32 bytes"):
         PrincipalSessionBinder(binding_key=key)
 
@@ -57,6 +57,7 @@ def test_session_token_round_trip_rejects_tampering_and_expiry() -> None:
         signing_key=bytes(range(32)),
         ttl_seconds=60,
         clock=lambda: current_time[0],
+        tenant_id="default",
     )
     token = tokens.issue(_principal())
 
@@ -112,7 +113,9 @@ def encoding_alias(token: str) -> str:
 
 
 def test_new_sessions_are_unique_with_same_principal_and_clock() -> None:
-    port = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000)
+    port = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000, tenant_id="default"
+    )
     a, b = port.issue(_principal()), port.issue(_principal())
     different = a != b and port.inspect(a).fingerprint != port.inspect(b).fingerprint
     assert different
@@ -121,7 +124,9 @@ def test_new_sessions_are_unique_with_same_principal_and_clock() -> None:
 
 @pytest.mark.parametrize("version", [1, 2])
 def test_signature_encoding_alias_cannot_change_revocation_identity(version: int) -> None:
-    port = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000)
+    port = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000, tenant_id="default"
+    )
     token = legacy_ticket(_principal(), 1000) if version == 1 else port.issue(_principal())
     alias = encoding_alias(token)
     same = port.inspect(token).fingerprint == port.inspect(alias).fingerprint
@@ -144,7 +149,9 @@ def test_signature_encoding_alias_cannot_change_revocation_identity(version: int
     ],
 )
 def test_inspect_accepts_legacy_and_rejects_invalid_version_nonce_and_time(case: str) -> None:
-    port = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000)
+    port = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: 1000, tenant_id="default"
+    )
     assert port.inspect(legacy_ticket(_principal(), 1000)).version == 1
     token = port.issue(_principal())
     claims = json.loads(
@@ -176,7 +183,7 @@ def test_inspect_accepts_legacy_and_rejects_invalid_version_nonce_and_time(case:
 
 
 def test_invalid_ticket_error_has_no_parser_exception_chain() -> None:
-    port = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60)
+    port = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60, tenant_id="default")
     for invalid in ("synthetic-invalid", signed_claims("v1", {"principal": "synthetic-invalid"})):
         with pytest.raises(SessionTokenError) as error:
             port.inspect(invalid)
@@ -186,10 +193,14 @@ def test_invalid_ticket_error_has_no_parser_exception_chain() -> None:
 
 
 def test_directory_join_key_survives_session_without_mutable_authorization_fields() -> None:
-    principal = _principal().model_copy(update={
-        "org_ctx": PrincipalOrgContext(directory_user_id="synthetic-directory-user"),
-    })
-    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60)
+    principal = _principal().model_copy(
+        update={
+            "org_ctx": PrincipalOrgContext(
+                directory_user_id="synthetic-directory-user", tenant_id="default"
+            ),
+        }
+    )
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=60, tenant_id="default")
     restored = tokens.verify(tokens.issue(principal))
     assert restored.org_ctx.directory_user_id == "synthetic-directory-user"
     assert restored.org_ctx.department_id is None

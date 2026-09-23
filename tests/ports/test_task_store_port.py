@@ -103,10 +103,10 @@ def test_task_record_allows_explicit_null_only_for_historical_hydration() -> Non
 
 
 def test_session_record_stays_minimal_without_invented_identity_semantics() -> None:
-    record = SessionRecord(session_id="session-001")
+    record = SessionRecord(session_id="session-001", tenant_id="default")
 
     assert record.session_id == "session-001"
-    assert set(SessionRecord.model_fields) == {"session_id"}
+    assert set(SessionRecord.model_fields) == {"tenant_id", "session_id"}
 
 
 def test_task_event_record_is_passive_event_contract() -> None:
@@ -221,7 +221,9 @@ class TestSessionStorePortProtocol:
         hints = get_type_hints(SessionStorePort.get_session)
         signature = inspect.signature(SessionStorePort.get_session)
 
-        assert list(signature.parameters) == ["self", "session_id"]
+        assert list(signature.parameters) == ["self", "session_id", "tenant_id"]
+        assert hints["tenant_id"] is str
+        assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
         assert hints["session_id"] is str
         assert hints["return"] == SessionRecord | None
         assert inspect.iscoroutinefunction(SessionStorePort.get_session)

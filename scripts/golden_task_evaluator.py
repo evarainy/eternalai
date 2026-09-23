@@ -167,8 +167,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord(session_id=session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord(session_id=session_id, tenant_id=tenant_id)
 
 
 class SpyTracePort:
@@ -411,6 +411,8 @@ class FakeIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> IdentityCheckResult | None:
         return await self.resolve_execution_identity(
             ai_user_id=ai_user_id,
@@ -421,6 +423,7 @@ class FakeIdentityMapping:
                 account_set_id=account_set_id,
                 device_domain_id=device_domain_id,
                 resource_scope=binding_scope,
+                tenant_id=tenant_id,
             ),
         )
 
@@ -431,6 +434,8 @@ class FakeIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> list[IdentityCheckResult]:
         results: list[IdentityCheckResult] = []
         for mapping in self._mappings:
@@ -443,6 +448,7 @@ class FakeIdentityMapping:
                 binding_scope=binding_scope,
                 account_set_id=account_set_id,
                 device_domain_id=device_domain_id,
+                tenant_id=tenant_id,
             )
             if result is not None:
                 results.append(result)
@@ -687,6 +693,7 @@ async def _run_fixture(
         trace_port=trace_port,
         adapters=adapters,
         human_gate_port=human_gate_port,
+        tenant_id="golden-test",
     )
     definitions = _build_workflow_definitions(given.get("workflow_definitions", ()))
     workflow_engine = (

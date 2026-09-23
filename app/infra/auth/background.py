@@ -30,19 +30,24 @@ class OAPasswordCredentialAcquirer:
         session_factory: Callable[[], OAHttpSession],
         authentication: AuthenticationPort,
         binding_store: PasswordBindingReaderPort,
+        tenant_id: str,
     ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+        self._tenant_id = tenant_id
         self._session_factory = session_factory
         self._authentication = authentication
         self._binding_store = binding_store
 
     async def acquire(self, candidate: CredentialPollCandidate) -> Principal:
+        if candidate.tenant_id != self._tenant_id:
+            raise CredentialAcquisitionError("identity_mismatch")
         if candidate.target_system != "oa":
             raise CredentialAcquisitionError("unsupported_target")
         await self._ensure_captcha_is_not_required()
         try:
             binding = await self._binding_store.load_password_for_poll(
-                candidate.ai_user_id,
-                candidate.target_system,
+                candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
             )
             principal = await self._authentication.authenticate(
                 LoginCredential(
@@ -50,6 +55,7 @@ class OAPasswordCredentialAcquirer:
                     userpassword=binding.password,
                 ),
                 reactivate_revoked_session=False,
+                expected_subject=(candidate.tenant_id, candidate.ai_user_id),
             )
         except OAAuthenticationError as error:
             raise CredentialAcquisitionError(error.failure_kind) from None
@@ -57,7 +63,10 @@ class OAPasswordCredentialAcquirer:
             raise CredentialAcquisitionError("local_failure") from None
         except Exception:
             raise CredentialAcquisitionError("local_failure") from None
-        if principal.ai_user_id != candidate.ai_user_id:
+        if (principal.org_ctx.tenant_id, principal.ai_user_id) != (
+            candidate.tenant_id,
+            candidate.ai_user_id,
+        ):
             raise CredentialAcquisitionError("identity_mismatch")
         return principal
 

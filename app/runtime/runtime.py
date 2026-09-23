@@ -228,15 +228,19 @@ class RuntimeImpl:
         )
         self._human_gate_port = human_gate_port
         self._intent_version_binding = self._intent_router.version_binding()
-        self._pending_workflows: dict[tuple[str, str], _PendingWorkflow] = {}
+        self._pending_workflows: dict[tuple[str, str, str], _PendingWorkflow] = {}
         self._pending_confirmation_claim_lock = Lock()
         self._utc_clock = utc_clock or (lambda: datetime.now(UTC))
         self._monotonic_clock = monotonic_clock
         if confirmation_claim_limit < 1:
             raise ValueError("confirmation_claim_limit must be positive")
         self._confirmation_claim_limit = confirmation_claim_limit
-        self._claimed_pending_confirmations: dict[tuple[str, str, str], _ConfirmationClaim] = {}
-        self._confirmation_references: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
+        self._claimed_pending_confirmations: dict[
+            tuple[str, str, str, str], _ConfirmationClaim
+        ] = {}
+        self._confirmation_references: dict[
+            tuple[str, str, str, str], tuple[str, str, str, str]
+        ] = {}
 
     async def handle_user_message(
         self,
@@ -253,7 +257,7 @@ class RuntimeImpl:
             ai_user_id=ai_user_id,
         )
         await self._expire_pending_confirmations()
-        pending_key = _pending_workflow_key(session_id, ai_user_id)
+        pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
         if pending is not None and pending.owner == memory_key:
             if _is_explicit_workflow_confirmation(message, pending):
@@ -315,9 +319,11 @@ class RuntimeImpl:
         trace_id = str(uuid4())
         response_id = str(uuid4())
 
-        existing = await self._session_store.get_session(session_id)
+        existing = await self._session_store.get_session(session_id, tenant_id=memory_key.tenant_id)
         if existing is None:
-            await self._session_store.create_session(SessionRecord(session_id=session_id))
+            await self._session_store.create_session(
+                SessionRecord(tenant_id=memory_key.tenant_id, session_id=session_id)
+            )
 
         await self._task_store.create_task(
             TaskRecord(
@@ -851,7 +857,7 @@ class RuntimeImpl:
             attributes={"phase": "inbound", "action_type": action.action_type},
         )
 
-        pending_key = _pending_workflow_key(session_id, principal.ai_user_id)
+        pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, principal.ai_user_id)
         if self._human_gate_port is None:
             return await self._finish_user_action_attempt(
                 action_trace_id=action_trace_id,
@@ -975,12 +981,12 @@ class RuntimeImpl:
 
     def _forget_confirmation_claim(
         self,
-        key: tuple[str, str, str],
+        key: tuple[str, str, str, str],
         claim: _ConfirmationClaim,
     ) -> None:
         del self._claimed_pending_confirmations[key]
         self._confirmation_references.pop(
-            (claim.tenant_id, key[0], key[1], claim.response_id),
+            (*key[:3], claim.response_id),
             None,
         )
 
@@ -1029,7 +1035,7 @@ class RuntimeImpl:
 
     def _new_confirmation_claim(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str],
         pending: _PendingWorkflow,
         owner: SessionMemoryKey,
     ) -> _ConfirmationClaim | None:
@@ -1045,14 +1051,12 @@ class RuntimeImpl:
             retain_until=self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS,
         )
         self._claimed_pending_confirmations[claim_key] = claim
-        self._confirmation_references[(owner.tenant_id, key[0], key[1], claim.response_id)] = (
-            claim_key
-        )
+        self._confirmation_references[(*key, claim.response_id)] = claim_key
         return claim
 
     def _claim_confirmation(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str],
         pending: _PendingWorkflow,
         owner: SessionMemoryKey,
     ) -> UserActionOutcome | None:
@@ -1106,7 +1110,7 @@ class RuntimeImpl:
     async def _retire_pending_confirmation(
         self,
         *,
-        pending_key: tuple[str, str],
+        pending_key: tuple[str, str, str],
         pending: _PendingWorkflow,
         status: Literal["cancelled", "confirmation_invalidated"],
         reason: Literal["cancelled", "expired", "exception"],
@@ -1251,7 +1255,7 @@ class RuntimeImpl:
     async def _process_pending_confirmation(
         self,
         *,
-        pending_key: tuple[str, str],
+        pending_key: tuple[str, str, str],
         pending: _PendingWorkflow,
         session_id: str,
         memory_key: SessionMemoryKey,
@@ -1327,7 +1331,7 @@ class RuntimeImpl:
 
     def _archive_confirmation(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str],
         pending: _PendingWorkflow,
         *,
         cleanup_complete: bool,
@@ -1343,7 +1347,7 @@ class RuntimeImpl:
 
     def _publish_pending_workflow(
         self,
-        pending_key: tuple[str, str],
+        pending_key: tuple[str, str, str],
         *,
         expected: _PendingWorkflow | None,
         replacement: _PendingWorkflow,
@@ -1362,7 +1366,7 @@ class RuntimeImpl:
 
     def _compare_and_swap_pending_workflow(
         self,
-        pending_key: tuple[str, str],
+        pending_key: tuple[str, str, str],
         *,
         expected: _PendingWorkflow,
         replacement: _PendingWorkflow | None,
@@ -1462,7 +1466,7 @@ class RuntimeImpl:
     async def _resume_pending_workflow(
         self,
         *,
-        pending_key: tuple[str, str],
+        pending_key: tuple[str, str, str],
         pending: _PendingWorkflow,
         session_id: str,
         memory_key: SessionMemoryKey,
@@ -2206,14 +2210,14 @@ def _is_stale_workflow_confirmation_message(message: str) -> bool:
     return False
 
 
-def _pending_workflow_key(session_id: str, ai_user_id: str) -> tuple[str, str]:
-    return session_id, ai_user_id
+def _pending_workflow_key(tenant_id: str, session_id: str, ai_user_id: str) -> tuple[str, str, str]:
+    return tenant_id, session_id, ai_user_id
 
 
 def _pending_confirmation_claim_key(
-    pending_key: tuple[str, str],
+    pending_key: tuple[str, str, str],
     pending: _PendingWorkflow,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     return (*pending_key, pending.gate_request_id or pending.response_id)
 
 

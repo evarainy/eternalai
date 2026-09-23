@@ -117,9 +117,9 @@ class SessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
         sid = session_id
-        return SessionRecord(session_id=sid)
+        return SessionRecord(session_id=sid, tenant_id=tenant_id)
 
 
 class Trace:
@@ -1605,7 +1605,7 @@ def test_bare_confirmation_claim_blocks_resurrected_pending(with_gate: bool) -> 
             )
 
         assert (await confirm_text()).status == "confirmation_invalidated"
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         assert key not in harness.runtime._pending_workflows
         # Deliberately resurrect only captured state; the independent claim must win.
         harness.runtime._pending_workflows[key] = captured

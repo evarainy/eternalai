@@ -38,7 +38,7 @@ def test_principal_contract_forbids_raw_extra_identity_fields() -> None:
                 "ai_user_id": "usr_v1_synthetic",
                 "display_name": "Synthetic User",
                 "roles": [],
-                "org_ctx": PrincipalOrgContext().model_dump(),
+                "org_ctx": PrincipalOrgContext(tenant_id="default").model_dump(),
                 "loginid": "forbidden",
             }
         )
@@ -48,8 +48,10 @@ def test_credential_store_load_contract_returns_typed_optional_credential() -> N
     signature = inspect.signature(CredentialStorePort.load)
     hints = get_type_hints(CredentialStorePort.load)
 
-    assert list(signature.parameters) == ["self", "ai_user_id", "target_system"]
+    assert list(signature.parameters) == ["self", "ai_user_id", "target_system", "tenant_id"]
     assert hints["ai_user_id"] is str
+    assert hints["tenant_id"] is str
+    assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
     assert hints["target_system"] is str
     assert hints["return"] == OASessionCredential | None
     assert inspect.iscoroutinefunction(CredentialStorePort.load)
@@ -95,7 +97,7 @@ def test_verified_session_metadata_repr_hides_identity_and_fingerprint() -> None
             ai_user_id=uuid4().hex,
             display_name=uuid4().hex,
             roles=(),
-            org_ctx=PrincipalOrgContext(),
+            org_ctx=PrincipalOrgContext(tenant_id="default"),
         ),
         fingerprint=uuid4().bytes + uuid4().bytes,
         expires_at=datetime.now(UTC),

@@ -94,8 +94,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord(session_id=session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord(session_id=session_id, tenant_id=tenant_id)
 
 
 class SpyTracePort:
@@ -352,6 +352,7 @@ def test_system_message_replay_runs_from_natural_language_through_real_gateway()
         gateway = CapabilityGateway(
             adapter=OAReadAdapter(ReplayOAReadProvider(SYSTEM_MESSAGE_CONTRACT_PACK)),
             capability_registry=registry,
+            tenant_id="tenant-test",
         )
         orchestration_registry = registry
         orchestration_workflow = None

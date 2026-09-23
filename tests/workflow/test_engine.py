@@ -237,6 +237,7 @@ def _run_engine(
             capability_registry=registry,
             policy_guard=policy_guard,
             trace_port=trace,
+            tenant_id="tenant-workflow",
         )
         engine = WorkflowEngine(
             definitions=definitions or {definition.workflow_id: definition},
@@ -297,7 +298,9 @@ def _run_engine_with_gateway(
             session_id="session-retry",
             ai_user_id="user-retry",
             initial_input={"secret_token": "private-marker-123"},
-            request_context=RequestOrgContext(request_id="trace-retry", channel="mock"),
+            request_context=RequestOrgContext(
+                request_id="trace-retry", channel="mock", tenant_id="default"
+            ),
         )
         return result, trace, task_store, engine
 
@@ -776,6 +779,7 @@ def test_confirm_checkpoint_resumes_with_confirmed_variant_and_locked_definition
             capability_registry=registry,
             policy_guard=policy_guard,
             trace_port=trace,
+            tenant_id="default",
         )
         engine = WorkflowEngine(
             definitions=definitions,
@@ -800,8 +804,7 @@ def test_confirm_checkpoint_resumes_with_confirmed_variant_and_locked_definition
                 sensitive_key: sensitive_value,
             },
             request_context=RequestOrgContext(
-                request_id="trace-confirm",
-                channel="mock",
+                request_id="trace-confirm", channel="mock", tenant_id="default"
             ),
         )
 
@@ -1160,10 +1163,17 @@ def test_missing_selected_output_cannot_finish_successfully() -> None:
         )
         with pytest.raises(ValueError, match="Workflow selected output is unavailable"):
             await engine._run_steps(
-                definition=definition, task_id="task-output", session_id="session-output",
-                ai_user_id="owner-output", initial_input={},
-                request_context=RequestOrgContext(request_id="trace-output", channel="mock"),
-                start_index=0, confirmed_step_index=None, step_outputs=MissingOutput(),
+                definition=definition,
+                task_id="task-output",
+                session_id="session-output",
+                ai_user_id="owner-output",
+                initial_input={},
+                request_context=RequestOrgContext(
+                    request_id="trace-output", channel="mock", tenant_id="default"
+                ),
+                start_index=0,
+                confirmed_step_index=None,
+                step_outputs=MissingOutput(),
             )
         assert not any(event.event_type == "workflow_completed" for event in store.events)
         assert gateway.calls == [("oa.first", {})]

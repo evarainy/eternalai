@@ -37,6 +37,7 @@ def factory(store, acquirer, *, transport_factory=transport, user=CANDIDATE.ai_u
         acquirer=acquirer,
         credential_store=credentials,
         transport_factory=transport_factory,
+        tenant_id="default",
     )
     return result, credentials
 
@@ -90,14 +91,18 @@ def test_actual_acquirer_keeps_revoked_session_closed_and_checks_identity():
             session_factory=lambda: session,
             authentication=authentication,
             binding_store=store,
+            tenant_id="default",
         )
         bound, credentials = factory(store, acquirer)
         async with bound() as source:
             assert source is not None
         assert authentication.authenticate.await_args.kwargs == {
-            "reactivate_revoked_session": False
+            "reactivate_revoked_session": False,
+            "expected_subject": (CANDIDATE.tenant_id, CANDIDATE.ai_user_id),
         }
-        credentials.load.assert_awaited_once_with(CANDIDATE.ai_user_id, "oa")
+        credentials.load.assert_awaited_once_with(
+            CANDIDATE.ai_user_id, "oa", tenant_id=CANDIDATE.tenant_id
+        )
         assert store.successes == store.counted_failures == 0
         authentication.authenticate.return_value = PRINCIPAL.model_copy(
             update={
@@ -128,7 +133,7 @@ def test_missing_factory_and_busy_binding_do_not_login():
             assert credentials.load.await_count == 0
 
         @asynccontextmanager
-        async def busy(user, target):
+        async def busy(user, target, *, tenant_id):
             yield False
 
         store.poll_lock = busy
@@ -159,14 +164,14 @@ def test_directory_source_lock_delays_only_the_same_users_real_polling_path(disp
         store = FakeBindingStore()
         store.poll_lock = actual_store.poll_lock
 
-        async def listed():
+        async def listed(*, tenant_id):
             return list(candidates.values())
 
-        async def refresh(user, target):
+        async def refresh(user, target, *, tenant_id):
             assert target == "oa"
             return candidates.get(user)
 
-        async def succeeded(user, target):
+        async def succeeded(user, target, *, tenant_id):
             store.successes += 1
             candidates.pop(user)
 
@@ -199,6 +204,7 @@ def test_directory_source_lock_delays_only_the_same_users_real_polling_path(disp
                 scheduler_tick_seconds=60,
             ),
             clock=lambda: NOW,
+            tenant_id="default",
         )
         async with bound():
             assert await polling.run_due() == 2

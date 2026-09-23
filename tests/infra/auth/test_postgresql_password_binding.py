@@ -67,10 +67,10 @@ class UserScopedCredentialStore(PostgreSQLCredentialStore):
         super().__init__(**kwargs)
         self._test_ai_user_id = ai_user_id
 
-    async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+    async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]:
         return [
             candidate
-            for candidate in await super().list_poll_candidates()
+            for candidate in await super().list_poll_candidates(tenant_id="default")
             if candidate.ai_user_id == self._test_ai_user_id
         ]
 
@@ -89,12 +89,12 @@ def test_unbind_password_preserves_active_oa_session() -> None:
         mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
         session_credential = _session_credential()
         try:
-            await store.store(ai_user_id, "oa", session_credential)
-            await store.bind_password(ai_user_id, "oa", _password())
+            await store.store(ai_user_id, "oa", session_credential, tenant_id="default")
+            await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
 
-            view = await store.unbind_password(ai_user_id, "oa")
-            binding = await mapping.get_mapping(ai_user_id, "oa")
-            loaded = await store.load(ai_user_id, "oa")
+            view = await store.unbind_password(ai_user_id, "oa", tenant_id="default")
+            binding = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
+            loaded = await store.load(ai_user_id, "oa", tenant_id="default")
 
             assert view.bound is False
             assert view.poll_status == "unbound"
@@ -130,18 +130,20 @@ def test_bind_password_does_not_clear_administrator_revocation() -> None:
         )
         mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
         try:
-            await store.store(ai_user_id, "oa", _session_credential())
-            revoked = await mapping.revoke_mapping(f"oa-session-v1:{ai_user_id}")
+            await store.store(ai_user_id, "oa", _session_credential(), tenant_id="default")
+            revoked = await mapping.revoke_mapping(
+                f"oa-session-v1:{ai_user_id}", tenant_id="default"
+            )
             assert revoked is not None
             assert revoked.mapping.bind_status == "revoked"
 
-            await store.bind_password(ai_user_id, "oa", _password())
+            await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
 
-            binding = await mapping.get_mapping(ai_user_id, "oa")
+            binding = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
             assert binding is not None
             assert binding.bind_status == "revoked"
             with pytest.raises(CredentialStoreError):
-                await store.load(ai_user_id, "oa")
+                await store.load(ai_user_id, "oa", tenant_id="default")
         finally:
             async with factory() as session:
                 await session.execute(
@@ -171,11 +173,11 @@ def test_unbind_without_password_is_a_session_preserving_no_op() -> None:
         mapping = PostgreSQLOAIdentityMapping(session_factory=factory)
         session_credential = _session_credential()
         try:
-            await store.store(ai_user_id, "oa", session_credential)
+            await store.store(ai_user_id, "oa", session_credential, tenant_id="default")
 
-            view = await store.unbind_password(ai_user_id, "oa")
-            binding = await mapping.get_mapping(ai_user_id, "oa")
-            loaded = await store.load(ai_user_id, "oa")
+            view = await store.unbind_password(ai_user_id, "oa", tenant_id="default")
+            binding = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
+            loaded = await store.load(ai_user_id, "oa", tenant_id="default")
 
             assert view.bound is False
             assert binding is not None
@@ -212,10 +214,10 @@ def test_password_only_row_is_encrypted_and_supports_independent_systems() -> No
         oa_password = _password()
         u8_password = _password()
         try:
-            await store.bind_password(ai_user_id, "oa", oa_password)
-            await store.bind_password(ai_user_id, "u8", u8_password)
-            loaded_oa = await store.load_password_for_poll(ai_user_id, "oa")
-            loaded_u8 = await store.load_password_for_poll(ai_user_id, "u8")
+            await store.bind_password(ai_user_id, "oa", oa_password, tenant_id="default")
+            await store.bind_password(ai_user_id, "u8", u8_password, tenant_id="default")
+            loaded_oa = await store.load_password_for_poll(ai_user_id, "oa", tenant_id="default")
+            loaded_u8 = await store.load_password_for_poll(ai_user_id, "u8", tenant_id="default")
             assert loaded_oa.login_id.get_secret_value() == (
                 oa_password.login_id.get_secret_value()
             )
@@ -224,7 +226,7 @@ def test_password_only_row_is_encrypted_and_supports_independent_systems() -> No
             )
             candidates = [
                 candidate
-                for candidate in await store.list_poll_candidates()
+                for candidate in await store.list_poll_candidates(tenant_id="default")
                 if candidate.ai_user_id == ai_user_id
             ]
             assert [candidate.target_system for candidate in candidates] == ["oa"]
@@ -252,16 +254,18 @@ def test_password_only_row_is_encrypted_and_supports_independent_systems() -> No
                 assert oa_password.password.get_secret_value().encode() not in encrypted
                 assert u8_password.password.get_secret_value().encode() not in encrypted
 
-            await store.mark_terminal_authentication_failure(ai_user_id, "oa", "invalid")
-            oa_view = await store.get_password_binding(ai_user_id, "oa")
-            u8_view = await store.get_password_binding(ai_user_id, "u8")
+            await store.mark_terminal_authentication_failure(
+                ai_user_id, "oa", "invalid", tenant_id="default"
+            )
+            oa_view = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
+            u8_view = await store.get_password_binding(ai_user_id, "u8", tenant_id="default")
             assert oa_view.poll_status == "invalid"
             assert oa_view.poll_failure_count == 0
             assert u8_view.poll_status == "active"
             assert u8_view.poll_failure_count == 0
-            assert (await store.load_password_for_poll(ai_user_id, "u8")).password == (
-                u8_password.password
-            )
+            assert (
+                await store.load_password_for_poll(ai_user_id, "u8", tenant_id="default")
+            ).password == (u8_password.password)
         finally:
             async with factory() as session:
                 await session.execute(
@@ -303,26 +307,27 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
         )
         now = datetime.now(UTC) + timedelta(minutes=11)
         try:
-            await store.bind_password(ai_user_id, "oa", _password())
+            await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
             service = CredentialPollingService(
                 binding_store=store,
                 acquirer=RejectingAcquirer(),
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
             assert await service.run_due() == 1
-            view = await store.get_password_binding(ai_user_id, "oa")
+            view = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert view.poll_status == "invalid"
             assert view.poll_failure_count == 0
-            assert await store.refresh_poll_candidate(ai_user_id, "oa") is None
+            assert await store.refresh_poll_candidate(ai_user_id, "oa", tenant_id="default") is None
             assert not any(
                 candidate.ai_user_id == ai_user_id
-                for candidate in await store.list_poll_candidates()
+                for candidate in await store.list_poll_candidates(tenant_id="default")
             )
 
-            await store.mark_non_authentication_failure(ai_user_id, "oa")
-            unchanged = await store.get_password_binding(ai_user_id, "oa")
+            await store.mark_non_authentication_failure(ai_user_id, "oa", tenant_id="default")
+            unchanged = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert unchanged.poll_status == "invalid"
             assert unchanged.poll_failure_count == 0
             async with factory() as session:
@@ -337,9 +342,9 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
                 ).scalar_one()
             assert revoked_at is not None
 
-            rebound = await store.bind_password(ai_user_id, "oa", _password())
-            current = await store.get_password_binding(ai_user_id, "oa")
-            refreshed = await store.refresh_poll_candidate(ai_user_id, "oa")
+            rebound = await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
+            current = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
+            refreshed = await store.refresh_poll_candidate(ai_user_id, "oa", tenant_id="default")
             assert rebound.bound is True
             assert rebound.poll_status == "active"
             assert current.bound is True
@@ -348,9 +353,8 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
             assert refreshed.ai_user_id == ai_user_id
             assert refreshed.target_system == "oa"
             assert any(
-                candidate.ai_user_id == ai_user_id
-                and candidate.target_system == "oa"
-                for candidate in await store.list_poll_candidates()
+                candidate.ai_user_id == ai_user_id and candidate.target_system == "oa"
+                for candidate in await store.list_poll_candidates(tenant_id="default")
             )
             async with factory() as session:
                 reactivated_at = (
@@ -400,29 +404,30 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
         session_credential = _session_credential()
         now = datetime.now(UTC) + timedelta(minutes=11)
         try:
-            await store.store(ai_user_id, "oa", session_credential)
-            await store.bind_password(ai_user_id, "oa", _password())
+            await store.store(ai_user_id, "oa", session_credential, tenant_id="default")
+            await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
             service = CredentialPollingService(
                 binding_store=store,
                 acquirer=CaptchaAcquirer(),
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
             assert await service.run_due() == 1
-            view = await store.get_password_binding(ai_user_id, "oa")
+            view = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert view.poll_status == "captcha_required"
             assert view.poll_failure_count == 0
-            assert await store.refresh_poll_candidate(ai_user_id, "oa") is None
-            binding = await mapping.get_mapping(ai_user_id, "oa")
-            loaded = await store.load(ai_user_id, "oa")
+            assert await store.refresh_poll_candidate(ai_user_id, "oa", tenant_id="default") is None
+            binding = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
+            loaded = await store.load(ai_user_id, "oa", tenant_id="default")
             assert binding is not None
             assert binding.bind_status == "active"
             assert loaded is not None
             assert loaded.oa_user_id == session_credential.oa_user_id
 
-            await store.mark_non_authentication_failure(ai_user_id, "oa")
-            unchanged = await store.get_password_binding(ai_user_id, "oa")
+            await store.mark_non_authentication_failure(ai_user_id, "oa", tenant_id="default")
+            unchanged = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert unchanged.poll_status == "captcha_required"
             assert unchanged.poll_failure_count == 0
         finally:
@@ -459,7 +464,7 @@ class BlockingAcquirer:
             ai_user_id=candidate.ai_user_id,
             display_name="Synthetic User",
             roles=(),
-            org_ctx=PrincipalOrgContext(),
+            org_ctx=PrincipalOrgContext(tenant_id="default"),
         )
 
 
@@ -483,7 +488,7 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
         acquirer = BlockingAcquirer()
         now = datetime.now(UTC)
         try:
-            await store_a.bind_password(ai_user_id, "oa", _password())
+            await store_a.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
             async with factory() as session:
                 await session.execute(
                     text(
@@ -499,9 +504,8 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
                 await session.commit()
             stale_candidate = next(
                 candidate
-                for candidate in await store_a.list_poll_candidates()
-                if candidate.ai_user_id == ai_user_id
-                and candidate.target_system == "oa"
+                for candidate in await store_a.list_poll_candidates(tenant_id="default")
+                if candidate.ai_user_id == ai_user_id and candidate.target_system == "oa"
             )
             service_a = CredentialPollingService(
                 binding_store=store_a,
@@ -509,6 +513,7 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
             service_b = CredentialPollingService(
                 binding_store=store_b,
@@ -516,6 +521,7 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
             first = asyncio.create_task(service_a.run_due())
             await acquirer.started.wait()
@@ -527,7 +533,9 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
             assert acquirer.maximum_active == 1
 
             class StaleListingStore(PostgreSQLCredentialStore):
-                async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+                async def list_poll_candidates(
+                    self, *, tenant_id: str
+                ) -> list[CredentialPollCandidate]:
                     return [stale_candidate]
 
             stale_store = StaleListingStore(
@@ -540,6 +548,7 @@ def test_advisory_lock_prevents_multi_instance_concurrent_authentication() -> No
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
             assert await stale_service.run_due() == 1
             assert acquirer.calls == 1
@@ -600,6 +609,7 @@ class RevocationRaceAuthentication:
         credential: LoginCredential,
         *,
         reactivate_revoked_session: bool = True,
+        expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         del credential
         self.calls += 1
@@ -611,13 +621,14 @@ class RevocationRaceAuthentication:
             "oa",
             _session_credential(),
             reactivate_revoked_session=reactivate_revoked_session,
+            tenant_id="default",
         )
         self.store_completed = True
         return Principal(
             ai_user_id=self._ai_user_id,
             display_name="Synthetic User",
             roles=(),
-            org_ctx=PrincipalOrgContext(),
+            org_ctx=PrincipalOrgContext(tenant_id="default"),
         )
 
 
@@ -641,8 +652,8 @@ def test_revocation_committed_during_poll_is_not_reactivated() -> None:
         now = datetime.now(UTC)
         polling_task: asyncio.Task[int] | None = None
         try:
-            await store.store(ai_user_id, "oa", _session_credential())
-            await store.bind_password(ai_user_id, "oa", _password())
+            await store.store(ai_user_id, "oa", _session_credential(), tenant_id="default")
+            await store.bind_password(ai_user_id, "oa", _password(), tenant_id="default")
             async with factory() as session:
                 await session.execute(
                     text(
@@ -662,15 +673,19 @@ def test_revocation_committed_during_poll_is_not_reactivated() -> None:
                     session_factory=CaptchaNotRequiredSession,
                     authentication=authentication,
                     binding_store=store,
+                    tenant_id="default",
                 ),
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
+                tenant_id="default",
             )
 
             polling_task = asyncio.create_task(service.run_due())
             await authentication.started.wait()
-            revoked = await mapping.revoke_mapping(f"oa-session-v1:{ai_user_id}")
+            revoked = await mapping.revoke_mapping(
+                f"oa-session-v1:{ai_user_id}", tenant_id="default"
+            )
             assert revoked is not None
             assert revoked.mapping.bind_status == "revoked"
             authentication.release.set()
@@ -679,13 +694,13 @@ def test_revocation_committed_during_poll_is_not_reactivated() -> None:
             assert authentication.calls == 1
             assert authentication.reactivation_flags == [False]
             assert authentication.store_completed is True
-            binding = await mapping.get_mapping(ai_user_id, "oa")
+            binding = await mapping.get_mapping(ai_user_id, "oa", tenant_id="default")
             assert binding is not None
             assert binding.bind_status == "revoked"
-            assert await store.refresh_poll_candidate(ai_user_id, "oa") is None
+            assert await store.refresh_poll_candidate(ai_user_id, "oa", tenant_id="default") is None
             assert not any(
                 candidate.ai_user_id == ai_user_id
-                for candidate in await store.list_poll_candidates()
+                for candidate in await store.list_poll_candidates(tenant_id="default")
             )
         finally:
             authentication.release.set()

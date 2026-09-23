@@ -20,8 +20,7 @@ from app.ports.policy_guard import ManagementPlanePolicyContext, PolicyDecision
 
 def _request_context(*, roles: list[str] | None = None) -> RequestOrgContext:
     return RequestOrgContext(
-        request_id="policy-test-request",
-        roles=roles or [],
+        request_id="policy-test-request", roles=roles or [], tenant_id="default"
     )
 
 

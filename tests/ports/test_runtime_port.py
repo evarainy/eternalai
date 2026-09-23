@@ -158,7 +158,7 @@ def test_concrete_runtime_mock_accepts_structured_user_action() -> None:
                 ai_user_id="user-action",
                 display_name="Action User",
                 roles=("user",),
-                org_ctx=PrincipalOrgContext(),
+                org_ctx=PrincipalOrgContext(tenant_id="default"),
             ),
             "session-action",
             ConfirmUserAction(

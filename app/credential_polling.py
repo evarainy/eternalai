@@ -52,11 +52,15 @@ class CredentialPollingService:
         self,
         *,
         binding_store: CredentialPollingStorePort,
+        tenant_id: str,
         acquirer: BackgroundCredentialAcquirerPort,
         work_objects: BackgroundWorkObjectSyncPort,
         policy: CredentialPollingPolicy,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
+        if not tenant_id.strip():
+            raise ValueError("source_profile_configuration_invalid")
+        self._tenant_id = tenant_id
         self._binding_store = binding_store
         self._acquirer = acquirer
         self._work_objects = work_objects
@@ -69,28 +73,33 @@ class CredentialPollingService:
             return 0
         candidates = [
             candidate
-            for candidate in await self._binding_store.list_poll_candidates()
-            if self._is_due(candidate, now)
+            for candidate in await self._binding_store.list_poll_candidates(
+                tenant_id=self._tenant_id
+            )
+            if candidate.tenant_id == self._tenant_id and self._is_due(candidate, now)
         ][: self._policy.global_concurrency]
         await asyncio.gather(*(self._run_candidate(candidate) for candidate in candidates))
         return len(candidates)
 
     async def _run_candidate(self, candidate: CredentialPollCandidate) -> None:
         async with self._binding_store.poll_lock(
-            candidate.ai_user_id,
-            candidate.target_system,
+            candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
         ) as acquired:
             if not acquired:
                 return
             refreshed = await self._binding_store.refresh_poll_candidate(
-                candidate.ai_user_id,
-                candidate.target_system,
+                candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
             )
             now = self._validated_now()
             if refreshed is None or not self._is_due(refreshed, now):
                 return
             try:
                 principal = await self._acquirer.acquire(refreshed)
+                if (principal.org_ctx.tenant_id, principal.ai_user_id) != (
+                    candidate.tenant_id,
+                    candidate.ai_user_id,
+                ):
+                    raise CredentialAcquisitionError("identity_mismatch")
                 await self._work_objects.sync_for_background(principal)
             except CredentialAcquisitionError as error:
                 if error.code in {"credentials_rejected", "identity_mismatch"}:
@@ -98,22 +107,22 @@ class CredentialPollingService:
                         candidate.ai_user_id,
                         candidate.target_system,
                         "invalid",
+                        tenant_id=candidate.tenant_id,
                     )
                 elif error.code == "captcha_required":
                     await self._binding_store.mark_terminal_authentication_failure(
                         candidate.ai_user_id,
                         candidate.target_system,
                         "captcha_required",
+                        tenant_id=candidate.tenant_id,
                     )
                 elif error.code in _COUNTED_NON_AUTHENTICATION_FAILURES:
                     await self._binding_store.mark_non_authentication_failure(
-                        candidate.ai_user_id,
-                        candidate.target_system,
+                        candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                     )
                 else:
                     await self._binding_store.mark_non_counted_failure(
-                        candidate.ai_user_id,
-                        candidate.target_system,
+                        candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                     )
             except BackgroundWorkObjectSyncError as error:
                 if error.authentication_denied:
@@ -121,26 +130,23 @@ class CredentialPollingService:
                         candidate.ai_user_id,
                         candidate.target_system,
                         "invalid",
+                        tenant_id=candidate.tenant_id,
                     )
                 elif error.failure_code in _COUNTED_NON_AUTHENTICATION_FAILURES:
                     await self._binding_store.mark_non_authentication_failure(
-                        candidate.ai_user_id,
-                        candidate.target_system,
+                        candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                     )
                 else:
                     await self._binding_store.mark_non_counted_failure(
-                        candidate.ai_user_id,
-                        candidate.target_system,
+                        candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                     )
             except Exception:
                 await self._binding_store.mark_non_counted_failure(
-                    candidate.ai_user_id,
-                    candidate.target_system,
+                    candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                 )
             else:
                 await self._binding_store.mark_poll_succeeded(
-                    candidate.ai_user_id,
-                    candidate.target_system,
+                    candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
                 )
 
     def _is_due(self, candidate: CredentialPollCandidate, now: datetime) -> bool:

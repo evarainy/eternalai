@@ -390,6 +390,7 @@ class AdminRegistryService:
             binding_scope=binding_scope,
             account_set_id=account_set_id,
             device_domain_id=device_domain_id,
+            tenant_id=context.org_ctx.tenant_id,
         )
         views = [
             AdminBindingView.from_result(mapping) for mapping in mappings[:TASK_STORE_QUERY_LIMIT]
@@ -701,9 +702,13 @@ class AdminBindingMutationService:
         mutation_failed = False
         try:
             if operation == "revoke":
-                mutation_result = await self._identity_mapping.revoke_mapping(binding_id)
+                mutation_result = await self._identity_mapping.revoke_mapping(
+                    binding_id, tenant_id=context.org_ctx.tenant_id
+                )
             else:
-                mutation_result = await self._identity_mapping.reset_mapping(binding_id)
+                mutation_result = await self._identity_mapping.reset_mapping(
+                    binding_id, tenant_id=context.org_ctx.tenant_id
+                )
         except IdentityMappingMutationError:
             mutation_failed = True
 

@@ -193,6 +193,7 @@ def build_authentication_port(
     role_reader: PrincipalRoleReader,
     identity_hmac_key: bytes,
     credential_ttl_seconds: int,
+    tenant_id: str,
 ) -> AuthenticationPort:
     """Build the OA verifier without introducing a production HTTP dependency."""
 
@@ -205,6 +206,7 @@ def build_authentication_port(
         role_reader=role_reader,
         identity_hmac_key=identity_hmac_key,
         credential_ttl_seconds=credential_ttl_seconds,
+        tenant_id=tenant_id,
     )
 
 
@@ -212,10 +214,11 @@ def build_session_token_port(
     *,
     signing_key: bytes,
     ttl_seconds: int,
+    tenant_id: str,
 ) -> SessionTokenPort:
     """Build the EternalAI session-token signer with an explicit key."""
 
-    return HMACSessionToken(signing_key=signing_key, ttl_seconds=ttl_seconds)
+    return HMACSessionToken(signing_key=signing_key, ttl_seconds=ttl_seconds, tenant_id=tenant_id)
 
 
 def build_session_binder(
@@ -244,7 +247,7 @@ def build_user_profile_port(
 
     return OAUserProfileAdapter(
         secret_provider=CredentialStoreSecretProvider(
-            credential_store=credential_store,
+            credential_store=credential_store, tenant_id=settings.source_tenant_id
         ),
         transport=LiveOAProfileTransport(
             base_url=settings.oa_base_url,
@@ -350,7 +353,9 @@ def build_oa_read_adapter(
                 drift_reporter=report_oa_structural_drift,
                 page_size=settings.oa_message_center_page_size,
             ),
-            secret_provider=CredentialStoreSecretProvider(credential_store=credential_store),
+            secret_provider=CredentialStoreSecretProvider(
+                credential_store=credential_store, tenant_id=settings.source_tenant_id
+            ),
         )
     raise RuntimeError("OA_READ_ADAPTER_MODE is invalid")
 
@@ -532,6 +537,7 @@ def build_production_components(
         adapters=resolved_adapters,
         human_gate_port=human_gate_port,
         unbound_task_capability_ids=frozenset({OA_PENDING_WORKFLOWS_CAPABILITY_ID}),
+        tenant_id=settings.source_tenant_id,
     )
     gateway.assert_production_wiring()
     definitions = deepcopy(production_workflow_definitions())
@@ -605,6 +611,7 @@ def build_production_components(
             role_reader=build_principal_role_reader(session_factory=session_factory),
             identity_hmac_key=settings.identity_hmac_key,
             credential_ttl_seconds=settings.oa_credential_ttl_seconds,
+            tenant_id=settings.source_tenant_id,
         )
         if authentication is None
         else authentication
@@ -619,6 +626,7 @@ def build_production_components(
     session_tokens = build_session_token_port(
         signing_key=settings.session_signing_key,
         ttl_seconds=settings.session_cookie_ttl_seconds,
+        tenant_id=settings.source_tenant_id,
     )
     session_binder = build_session_binder(binding_key=settings.session_binding_key)
     admin_registry_service = build_admin_registry_service(
@@ -633,11 +641,16 @@ def build_production_components(
         polling_store=credential_store,
         acquirer=OAPasswordCredentialAcquirer(
             session_factory=make_urllib_session_factory(
-                base_url=settings.oa_base_url, timeout_seconds=settings.oa_timeout_seconds,
+                base_url=settings.oa_base_url,
+                timeout_seconds=settings.oa_timeout_seconds,
             ),
-            authentication=resolved_authentication, binding_store=credential_store,
+            authentication=resolved_authentication,
+            binding_store=credential_store,
+            tenant_id=settings.source_tenant_id,
         ),
-        credential_store=credential_store, transport_factory=None,
+        credential_store=credential_store,
+        transport_factory=None,
+        tenant_id=settings.source_tenant_id,
     )
     organization_directory = PostgreSQLOrganizationDirectory(session_factory)
     directory_sync_state = PostgreSQLOrganizationDirectorySync(session_factory)
@@ -690,9 +703,11 @@ def build_production_components(
             session_factory=session_factory_for_background,
             authentication=resolved_authentication,
             binding_store=credential_store,
+            tenant_id=settings.source_tenant_id,
         ),
         work_objects=work_object_service,
         policy=credential_polling_policy,
+        tenant_id=settings.source_tenant_id,
     )
 
     async def run_credential_polling_job(payload: dict[str, Any]) -> int:

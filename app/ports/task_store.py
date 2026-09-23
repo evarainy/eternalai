@@ -51,6 +51,7 @@ class TaskEventRecord(BaseModel):
 
 
 class SessionRecord(BaseModel):
+    tenant_id: str
     session_id: str
 
 
@@ -82,4 +83,4 @@ class TaskStorePort(Protocol):
 class SessionStorePort(Protocol):
     async def create_session(self, record: SessionRecord) -> SessionRecord: ...
 
-    async def get_session(self, session_id: str) -> SessionRecord | None: ...
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None: ...

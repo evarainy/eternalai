@@ -47,8 +47,7 @@ class CredentialBindingService:
     ) -> CredentialBindingView:
         try:
             return await self._store.get_password_binding(
-                principal.ai_user_id,
-                target_system,
+                principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
             )
         except Exception:
             _raise_binding_unavailable()
@@ -67,12 +66,16 @@ class CredentialBindingService:
                         userpassword=credential.password,
                     )
                 )
-                if verified.ai_user_id != principal.ai_user_id:
+                if (verified.org_ctx.tenant_id, verified.ai_user_id) != (
+                    principal.org_ctx.tenant_id,
+                    principal.ai_user_id,
+                ):
                     _raise_binding_failed()
             return await self._store.bind_password(
                 principal.ai_user_id,
                 target_system,
                 credential,
+                tenant_id=principal.org_ctx.tenant_id,
             )
         except HTTPException:
             raise
@@ -86,8 +89,7 @@ class CredentialBindingService:
     ) -> CredentialBindingView:
         try:
             return await self._store.unbind_password(
-                principal.ai_user_id,
-                target_system,
+                principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
             )
         except Exception:
             _raise_binding_unavailable()

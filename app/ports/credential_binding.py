@@ -63,6 +63,7 @@ class CredentialPollCandidate(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    tenant_id: str
     ai_user_id: str
     target_system: CredentialTargetSystem
     poll_failure_count: int
@@ -83,18 +84,16 @@ class CredentialBindingStorePort(Protocol):
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
+        *,
+        tenant_id: str,
     ) -> CredentialBindingView: ...
 
     async def get_password_binding(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView: ...
 
     async def unbind_password(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView: ...
 
 
@@ -103,36 +102,26 @@ class CredentialBindingVerifierPort(Protocol):
 
 
 class CredentialPollingStorePort(Protocol):
-    async def list_poll_candidates(self) -> list[CredentialPollCandidate]: ...
+    async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]: ...
 
     async def refresh_poll_candidate(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialPollCandidate | None: ...
 
     def poll_lock(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> AsyncContextManager[bool]: ...
 
     async def mark_poll_succeeded(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None: ...
 
     async def mark_non_authentication_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None: ...
 
     async def mark_non_counted_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None: ...
 
     async def mark_terminal_authentication_failure(
@@ -140,14 +129,14 @@ class CredentialPollingStorePort(Protocol):
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         failure: CredentialTerminalFailure,
+        *,
+        tenant_id: str,
     ) -> None: ...
 
 
 class PasswordBindingReaderPort(Protocol):
     async def load_password_for_poll(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> PasswordBindingCredential: ...
 
 

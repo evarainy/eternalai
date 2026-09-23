@@ -62,8 +62,8 @@ def test_session_columns_are_all_nullable_but_guarded_as_one_record() -> None:
                 connection.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, target_system, cipher_version, updated_at)"
-                        " VALUES (:ai_user_id, 'u8', 'aes256gcm-v1', :updated_at)"
+                        " (tenant_id, ai_user_id, target_system, cipher_version, updated_at)"
+                        " VALUES ('default', :ai_user_id, 'u8', 'aes256gcm-v1', :updated_at)"
                     ),
                     {
                         "ai_user_id": f"usr_v1_{uuid4().hex}",
@@ -74,12 +74,12 @@ def test_session_columns_are_all_nullable_but_guarded_as_one_record() -> None:
         engine.dispose()
 
 
-def test_primary_key_is_user_and_target_system() -> None:
+def test_primary_key_is_tenant_user_and_target_system() -> None:
     command.upgrade(_alembic_config(), "head")
     engine = create_engine(normalize_database_url(_database_url()))
     try:
         primary_key = inspect(engine).get_pk_constraint("oa_session_credentials")
-        assert primary_key["constrained_columns"] == ["ai_user_id", "target_system"]
+        assert primary_key["constrained_columns"] == ["tenant_id", "ai_user_id", "target_system"]
     finally:
         engine.dispose()
 
@@ -177,7 +177,7 @@ def test_existing_oa_session_survives_upgrade_and_remains_loadable() -> None:
                 encryption_key=encryption_key,
             )
             try:
-                loaded = await store.load(ai_user_id, "oa")
+                loaded = await store.load(ai_user_id, "oa", tenant_id="default")
                 assert loaded is not None
                 assert loaded.oa_user_id.get_secret_value() == oa_user_id
                 assert (

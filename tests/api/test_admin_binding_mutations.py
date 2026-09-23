@@ -25,6 +25,7 @@ from app.ports.identity_mapping import (
 )
 from app.ports.task_store import TaskStorePort
 from app.ports.trace import TraceEvent, TracePort, TraceQueryPort
+from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.auth_fakes import (
     TEST_CSRF_ALLOWED_ORIGINS,
     TEST_CSRF_HEADERS,
@@ -50,15 +51,13 @@ class APIMutationPort:
         self.calls: list[tuple[str, str]] = []
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         self.calls.append(("revoke", binding_id))
         return self._result()
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         self.calls.append(("reset", binding_id))
         return self._result()
@@ -350,3 +349,186 @@ def test_mutation_routes_do_not_accept_a_client_supplied_actor_payload() -> None
     assert response.status_code == 403
     assert port.calls == []
     assert trace.events[0].attributes["role_claim_source"] == "authenticated_principal"
+
+
+def _exercise_tenant_mutation(db, operation, local_exists):
+    from datetime import UTC, datetime, timedelta
+
+    from pydantic import SecretStr
+    from sqlalchemy import event, text
+
+    from app.event_loop import make_event_loop
+    from app.infra.auth.crypto import HMACSessionToken
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore
+    from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+    from app.ports.auth import OASessionCredential, Principal, PrincipalOrgContext
+    from tests.api.test_work_object_dispatch import run
+
+    store = PostgreSQLCredentialStore(session_factory=db.factory, encryption_key=bytes(range(32)))
+    tenants = ("synthetic-TA", "synthetic-TB") if local_exists else ("synthetic-TB",)
+    for tenant in tenants:
+        run(
+            store.store(
+                TARGET_AI_USER_ID,
+                "oa",
+                OASessionCredential(
+                    oa_user_id=SecretStr("synthetic"),
+                    cookies={},
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ),
+                tenant_id=tenant,
+            )
+        )
+    service = build_admin_registry_service(
+        capability_registry=cast(CapabilityRegistryPort, object()),
+        task_store=cast(TaskStorePort, object()),
+        identity_mapping=PostgreSQLOAIdentityMapping(session_factory=db.factory),
+        trace_port=cast(TracePort, RecordingTrace()),
+        trace_query=cast(TraceQueryPort, object()),
+    )
+    tokens = HMACSessionToken(
+        signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="synthetic-TA"
+    )
+    principal = Principal(
+        ai_user_id="synthetic-admin",
+        display_name="Synthetic",
+        roles=("admin",),
+        org_ctx=PrincipalOrgContext(tenant_id="synthetic-TA"),
+    )
+    updates = []
+
+    def observed(_connection, cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("UPDATE OA_SESSION_CREDENTIALS"):
+            updates.append(cursor.rowcount)
+
+    event.listen(db.engine.sync_engine, "after_cursor_execute", observed)
+    try:
+        with TestClient(
+            create_app(
+                admin_registry_service=service,
+                session_tokens=tokens,
+                session_revocations=MemorySessionRevocations(),
+                csrf_allowed_origins=TEST_CSRF_ALLOWED_ORIGINS,
+            ),
+            base_url="https://testserver",
+            backend_options={"loop_factory": make_event_loop},
+        ) as client:
+            client.cookies.set("eternalai_session", tokens.issue(principal))
+            response = client.post(
+                f"/api/v1/admin/bindings/{BINDING_ID}/{operation}", headers=TEST_CSRF_HEADERS
+            )
+        assert response.status_code == (200 if local_exists else 404)
+        if local_exists:
+            assert response.json()["changed"] is True
+            assert response.json()["binding"]["bind_status"] == "revoked"
+        else:
+            assert response.json()["detail"]["code"] == "binding_not_found"
+        assert sum(updates) == int(local_exists)
+        with db.sql.connect() as connection:
+            rows = dict(
+                connection.execute(
+                    text("SELECT tenant_id, revoked_at FROM oa_session_credentials")
+                ).all()
+            )
+        assert rows["synthetic-TB"] is None
+        assert set(rows) == set(tenants)
+        if local_exists:
+            assert rows["synthetic-TA"] is not None
+    finally:
+        event.remove(db.engine.sync_engine, "after_cursor_execute", observed)
+    return response.status_code
+
+
+@pytest.mark.parametrize("operation", ["revoke", "reset"])
+def test_only_foreign_binding_not_found(dispatch_db, operation):
+    assert _exercise_tenant_mutation(dispatch_db, operation, False) == 404
+
+
+@pytest.mark.parametrize("operation", ["revoke", "reset"])
+def test_equal_reference_mutates_local_binding_only(dispatch_db, operation):
+    assert _exercise_tenant_mutation(dispatch_db, operation, True) == 200
+
+
+@pytest.mark.parametrize(
+    "tenant,roles,expected",
+    [
+        ("synthetic-TA", ("audit_reader",), "active"),
+        ("synthetic-TB", ("audit_reader",), None),
+        ("synthetic-TA", ("admin",), "denied"),
+    ],
+)
+def test_binding_audit_reads_local_tenant_only(dispatch_db, tenant, roles, expected):
+    from datetime import UTC, datetime, timedelta
+
+    from pydantic import SecretStr
+
+    from app.event_loop import make_event_loop
+    from app.infra.auth.crypto import HMACSessionToken
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore
+    from app.infra.identity.postgresql import PostgreSQLOAIdentityMapping
+    from app.infra.persistence.task_store.postgresql import PostgreSQLTaskStore
+    from app.ports.auth import OASessionCredential, Principal, PrincipalOrgContext
+    from app.ports.task_store import TaskRecord
+    from tests.api.test_work_object_dispatch import run
+
+    tasks = PostgreSQLTaskStore(dispatch_db.factory)
+    store = PostgreSQLCredentialStore(
+        session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+    )
+    # Both tenants have a Task for the target; the credential predicate must decide visibility.
+    for scope in ("synthetic-TA", "synthetic-TB"):
+        run(
+            tasks.create_task(
+                TaskRecord(
+                    task_id=scope,
+                    session_id="synthetic-shared",
+                    ai_user_id=TARGET_AI_USER_ID,
+                    tenant_id=scope,
+                    status="completed",
+                )
+            )
+        )
+    run(
+        store.store(
+            TARGET_AI_USER_ID,
+            "oa",
+            OASessionCredential(
+                oa_user_id=SecretStr("synthetic"),
+                cookies={},
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            ),
+            tenant_id="synthetic-TA",
+        )
+    )
+    service = build_admin_registry_service(
+        capability_registry=cast(CapabilityRegistryPort, object()),
+        task_store=tasks,
+        identity_mapping=PostgreSQLOAIdentityMapping(session_factory=dispatch_db.factory),
+        trace_port=cast(TracePort, RecordingTrace()),
+        trace_query=cast(TraceQueryPort, object()),
+    )
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id=tenant)
+    actor = Principal(
+        ai_user_id="synthetic-other-reader",
+        display_name="Synthetic",
+        roles=roles,
+        org_ctx=PrincipalOrgContext(tenant_id=tenant),
+    )
+    with TestClient(
+        create_app(
+            admin_registry_service=service,
+            session_tokens=tokens,
+            session_revocations=MemorySessionRevocations(),
+        ),
+        base_url="https://testserver",
+        backend_options={"loop_factory": make_event_loop},
+    ) as client:
+        client.cookies.set("eternalai_session", tokens.issue(actor))
+        response = client.get("/api/v1/admin/bindings", params={"ai_user_id": TARGET_AI_USER_ID})
+    if expected == "denied":
+        assert response.status_code == 403
+    else:
+        assert response.status_code == 200
+        assert [item["bind_status"] for item in response.json()["items"]] == (
+            [] if expected is None else [expected]
+        )

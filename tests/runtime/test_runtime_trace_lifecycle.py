@@ -85,8 +85,8 @@ class ExistingSessionStore:
     async def create_session(self, record: SessionRecord) -> SessionRecord:
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
-        return SessionRecord(session_id=session_id)
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
+        return SessionRecord(session_id=session_id, tenant_id=tenant_id)
 
 
 class SuccessfulAdapter:
@@ -188,7 +188,9 @@ def test_real_writer_cross_layer_success_has_one_complete_lifecycle() -> None:
         capability_registry=orchestration_registry,
         orchestration=AgentOrchestrationAdapter(
             capability_registry=orchestration_registry,
-            gateway=CapabilityGateway(adapter=SuccessfulAdapter(), trace_port=writer),
+            gateway=CapabilityGateway(
+                adapter=SuccessfulAdapter(), trace_port=writer, tenant_id="tenant-test"
+            ),
             workflow_engine=orchestration_workflow,
             response_builder=orchestration_builder,
         ),

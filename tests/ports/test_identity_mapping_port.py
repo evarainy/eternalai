@@ -296,11 +296,15 @@ def test_get_mapping_signature_supports_scope_filters() -> None:
         "binding_scope",
         "account_set_id",
         "device_domain_id",
+        "tenant_id",
     ]
     assert hints["ai_user_id"] is str
     assert hints["target_system"] is TargetSystem
     assert hints["binding_scope"] == str | None
     assert hints["account_set_id"] == str | None
+    assert hints["tenant_id"] is str
+    assert signature.parameters["tenant_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
     assert hints["device_domain_id"] == str | None
     assert hints["return"] == IdentityCheckResult | None
 
@@ -316,11 +320,15 @@ def test_list_mappings_signature_supports_scope_filters() -> None:
         "binding_scope",
         "account_set_id",
         "device_domain_id",
+        "tenant_id",
     ]
     assert hints["ai_user_id"] is str
     assert hints["target_system"] == TargetSystem | None
     assert hints["binding_scope"] == str | None
     assert hints["account_set_id"] == str | None
+    assert hints["tenant_id"] is str
+    assert signature.parameters["tenant_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
     assert hints["device_domain_id"] == str | None
     assert hints["return"] == list[IdentityCheckResult]
 
@@ -331,7 +339,10 @@ def test_identity_mapping_mutation_signature_is_minimal(method_name: str) -> Non
     hints = get_type_hints(method)
     signature = inspect.signature(method)
 
-    assert list(signature.parameters) == ["self", "binding_id"]
+    assert list(signature.parameters) == ["self", "binding_id", "tenant_id"]
+    assert hints["tenant_id"] is str
+    assert signature.parameters["tenant_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["tenant_id"].default is inspect.Parameter.empty
     assert hints["binding_id"] is str
     assert hints["return"] == IdentityMappingMutationResult | None
     assert inspect.iscoroutinefunction(method)
@@ -365,6 +376,8 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
             binding_scope: str | None = None,
             account_set_id: str | None = None,
             device_domain_id: str | None = None,
+            *,
+            tenant_id: str,
         ) -> IdentityCheckResult | None:
             assert ai_user_id == "ai-user-1"
             assert target_system == "oa"
@@ -380,6 +393,8 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
             binding_scope: str | None = None,
             account_set_id: str | None = None,
             device_domain_id: str | None = None,
+            *,
+            tenant_id: str,
         ) -> list[IdentityCheckResult]:
             assert ai_user_id == "ai-user-1"
             assert target_system == "oa"
@@ -389,8 +404,7 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
             return [expected]
 
         async def revoke_mapping(
-            self,
-            binding_id: str,
+            self, binding_id: str, *, tenant_id: str
         ) -> IdentityMappingMutationResult | None:
             assert binding_id == "oa-session-v1:usr_v1_" + "a" * 43
             return IdentityMappingMutationResult(
@@ -400,8 +414,7 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
             )
 
         async def reset_mapping(
-            self,
-            binding_id: str,
+            self, binding_id: str, *, tenant_id: str
         ) -> IdentityMappingMutationResult | None:
             assert binding_id == "oa-session-v1:usr_v1_" + "a" * 43
             return IdentityMappingMutationResult(
@@ -419,18 +432,22 @@ def test_concrete_mock_identity_mapping_port_can_be_instantiated_and_called() ->
         IdentityMappingMutationResult | None,
         IdentityMappingMutationResult | None,
     ]:
-        request_context = RequestOrgContext(request_id="test-req-1")
+        request_context = RequestOrgContext(request_id="test-req-1", tenant_id="default")
         resolved = await port.resolve_execution_identity(
             ai_user_id="ai-user-1",
             target_system="oa",
             execution_identity="user_delegated",
             request_context=request_context,
         )
-        mapping = await port.get_mapping(ai_user_id="ai-user-1", target_system="oa")
-        mappings = await port.list_mappings(ai_user_id="ai-user-1", target_system="oa")
+        mapping = await port.get_mapping(
+            ai_user_id="ai-user-1", target_system="oa", tenant_id="default"
+        )
+        mappings = await port.list_mappings(
+            ai_user_id="ai-user-1", target_system="oa", tenant_id="default"
+        )
         binding_id = "oa-session-v1:usr_v1_" + "a" * 43
-        revoked = await port.revoke_mapping(binding_id)
-        reset = await port.reset_mapping(binding_id)
+        revoked = await port.revoke_mapping(binding_id, tenant_id="default")
+        reset = await port.reset_mapping(binding_id, tenant_id="default")
         return resolved, mapping, mappings, revoked, reset
 
     resolved_result, mapping_result, mapping_results, revoked, reset = asyncio.run(

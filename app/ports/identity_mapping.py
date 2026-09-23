@@ -65,6 +65,8 @@ class IdentityMappingPort(Protocol):
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> IdentityCheckResult | None: ...
 
     async def list_mappings(
@@ -74,14 +76,14 @@ class IdentityMappingPort(Protocol):
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> list[IdentityCheckResult]: ...
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None: ...
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None: ...

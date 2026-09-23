@@ -132,7 +132,7 @@ class TestPolicyGuardPortProtocol:
 
 
 def test_policy_request_context_keeps_business_and_management_planes_distinct() -> None:
-    business = RequestOrgContext(request_id="runtime-request", roles=["admin"])
+    business = RequestOrgContext(request_id="runtime-request", roles=["admin"], tenant_id="default")
     management = ManagementPlanePolicyContext(
         request_id="admin-request",
         tenant_id="tenant-admin",

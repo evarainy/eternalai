@@ -25,7 +25,7 @@ PRINCIPAL = Principal(
     ai_user_id="usr_v1_synthetic",
     display_name="Synthetic User",
     roles=(),
-    org_ctx=PrincipalOrgContext(),
+    org_ctx=PrincipalOrgContext(tenant_id="default"),
 )
 
 
@@ -52,6 +52,8 @@ class FakeStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
+        *,
+        tenant_id: str,
     ) -> CredentialBindingView:
         assert ai_user_id == PRINCIPAL.ai_user_id
         assert credential.password.get_secret_value()
@@ -66,9 +68,7 @@ class FakeStore:
         return view
 
     async def get_password_binding(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         assert ai_user_id == PRINCIPAL.ai_user_id
         return self.views.get(
@@ -83,14 +83,12 @@ class FakeStore:
         )
 
     async def unbind_password(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         assert ai_user_id == PRINCIPAL.ai_user_id
-        view = (await self.get_password_binding(ai_user_id, target_system)).model_copy(
-            update={"poll_status": "unbound", "bound": False}
-        )
+        view = (
+            await self.get_password_binding(ai_user_id, target_system, tenant_id="default")
+        ).model_copy(update={"poll_status": "unbound", "bound": False})
         self.views[target_system] = view
         return view
 

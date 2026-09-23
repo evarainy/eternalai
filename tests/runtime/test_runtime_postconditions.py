@@ -245,6 +245,29 @@ def test_observations_are_per_run_and_do_not_create_extra_calls():
 
     h.runtime._overview_evaluator.evaluate = record
 
+    from unittest.mock import AsyncMock
+
+    from app.infra.gateway.capability_gateway import CapabilityGateway
+
+    bound = {
+        tenant: CapabilityGateway(
+            capability_registry=h.gateway._capability_registry,
+            identity_mapping=h.gateway._identity_mapping,
+            policy_guard=h.gateway._policy_guard,
+            adapters=h.gateway._adapters,
+            trace_port=h.gateway._trace_port,
+            human_gate_port=h.gateway._human_gate_port,
+            tenant_id=tenant,
+        )
+        for tenant in ("tenant-a", "tenant-b")
+    }
+
+    async def dispatch_scope(*args, **kwargs):
+        context = kwargs.get("request_context") or args[-1]
+        return await bound[context.tenant_id].execute_capability(*args, **kwargs)
+
+    h.gateway.execute_capability = AsyncMock(side_effect=dispatch_scope)
+
     async def concurrent():
         return await asyncio.gather(
             run_overview(h, user="alpha", tenant="tenant-a", sid="same-session"),

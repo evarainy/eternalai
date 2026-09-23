@@ -26,7 +26,7 @@ def lifecycle_http(dispatch_db):
     db = dispatch_db
     clock = [datetime.now(UTC).timestamp()]
     tokens = HMACSessionToken(
-        signing_key=bytes(range(32)), ttl_seconds=3600, clock=lambda: clock[0]
+        signing_key=bytes(range(32)), ttl_seconds=3600, clock=lambda: clock[0], tenant_id="default"
     )
     client = TestClient(
         create_app(
@@ -546,12 +546,35 @@ def test_invisible_missing_cross_tenant_and_external_boundaries(lifecycle_http):
         ("outsider", "office-b", "default"),
         ("local-recipient", "office-a", "other"),
     ):
-        actor(user, dept, tenant, roles=("admin",))
-        for suffix in ("", "/events"):
-            invisible = client.get(f"/api/v1/work-objects/{object_id}/lifecycle{suffix}")
-            missing = client.get(f"/api/v1/work-objects/nonexistent/lifecycle{suffix}")
-            assert_error(invisible, 404, "work_object_not_found")
-            assert invisible.json() == missing.json()
+        principal = actor(user, dept, roles=("admin",))
+        # A distinct configured profile authenticates the foreign tenant; it still
+        # cannot see this object's lifecycle. Keep testing the 404 object boundary.
+        tokens = HMACSessionToken(
+            signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id=tenant
+        )
+        principal = principal.model_copy(
+            update={"org_ctx": principal.org_ctx.model_copy(update={"tenant_id": tenant})}
+        )
+        with TestClient(
+            create_app(
+                work_object_service=db.service,
+                session_revocations=PostgreSQLSessionRevocationStore(db.factory),
+                session_tokens=tokens,
+                session_binder=make_session_binder(),
+            ),
+            base_url="https://testserver",
+            backend_options={"loop_factory": make_event_loop},
+        ) as scoped_client:
+            scoped_client.cookies.set("eternalai_session", tokens.issue(principal))
+            for suffix in ("", "/events"):
+                invisible = scoped_client.get(
+                    f"/api/v1/work-objects/{object_id}/lifecycle{suffix}"
+                )
+                missing = scoped_client.get(
+                    f"/api/v1/work-objects/nonexistent/lifecycle{suffix}"
+                )
+                assert_error(invisible, 404, "work_object_not_found")
+                assert invisible.json() == missing.json()
     actor("local-recipient")
     for external in (True, False):
         row = _legacy_row(external=external)

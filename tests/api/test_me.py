@@ -46,7 +46,7 @@ def principal(ai_user_id: str, display_name: str) -> Principal:
         ai_user_id=ai_user_id,
         display_name=display_name,
         roles=("staff",),
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
 
 
@@ -143,14 +143,11 @@ def test_unauthenticated_reads_are_rejected(
 def test_expired_and_wrong_version_tokens_are_rejected(path: str) -> None:
     stale_clock = 1_000_000.0
     issuer = HMACSessionToken(
-        signing_key=bytes(range(32)),
-        ttl_seconds=60,
-        clock=lambda: stale_clock,
+        signing_key=bytes(range(32)), ttl_seconds=60, clock=lambda: stale_clock, tenant_id="default"
     )
-    live = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+    live = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default")
     other_key = HMACSessionToken(
-        signing_key=bytes(reversed(range(32))),
-        ttl_seconds=3600,
+        signing_key=bytes(reversed(range(32))), ttl_seconds=3600, tenant_id="default"
     )
     client = TestClient(
         create_app(
@@ -388,7 +385,7 @@ def test_one_users_cookie_never_yields_another_users_identity() -> None:
             BOB_ID: UserAvatar(media_type="image/png", content=BOB_IMAGE),
         },
     )
-    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600)
+    tokens = HMACSessionToken(signing_key=bytes(range(32)), ttl_seconds=3600, tenant_id="default")
     client = TestClient(
         create_app(
             session_revocations=MemorySessionRevocations(),

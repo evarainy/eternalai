@@ -31,12 +31,13 @@ CANDIDATE = CredentialPollCandidate(
     target_system="oa",
     poll_failure_count=0,
     updated_at=datetime(2026, 8, 21, tzinfo=UTC),
+    tenant_id="default",
 )
 PRINCIPAL = Principal(
     ai_user_id=CANDIDATE.ai_user_id,
     display_name="Synthetic User",
     roles=(),
-    org_ctx=PrincipalOrgContext(),
+    org_ctx=PrincipalOrgContext(tenant_id="default"),
 )
 
 
@@ -81,9 +82,7 @@ class FakePasswordReader:
         self.calls = 0
 
     async def load_password_for_poll(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> PasswordBindingCredential:
         assert (ai_user_id, target_system) == (CANDIDATE.ai_user_id, "oa")
         self.calls += 1
@@ -103,6 +102,7 @@ class FakeAuthentication:
         credential: LoginCredential,
         *,
         reactivate_revoked_session: bool = True,
+        expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         assert credential.loginid.get_secret_value() == "LOGIN-CANARY"
         assert credential.userpassword.get_secret_value() == "PASSWORD-CANARY"
@@ -126,6 +126,7 @@ def _acquirer(
             session_factory=lambda: session,
             authentication=resolved_authentication,
             binding_store=resolved_reader,
+            tenant_id="default",
         ),
         resolved_authentication,
         resolved_reader,

@@ -50,12 +50,13 @@ CANDIDATE = CredentialPollCandidate(
     target_system="oa",
     poll_failure_count=0,
     updated_at=NOW - timedelta(minutes=11),
+    tenant_id="default",
 )
 PRINCIPAL = Principal(
     ai_user_id=CANDIDATE.ai_user_id,
     display_name="Synthetic User",
     roles=(),
-    org_ctx=PrincipalOrgContext(),
+    org_ctx=PrincipalOrgContext(tenant_id="default"),
 )
 
 
@@ -69,13 +70,11 @@ class FakeBindingStore:
         self.successes = 0
         self.refreshes = 0
 
-    async def list_poll_candidates(self) -> list[CredentialPollCandidate]:
+    async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]:
         return [self.listed_candidate] if self.listed_candidate is not None else []
 
     async def refresh_poll_candidate(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialPollCandidate | None:
         assert (ai_user_id, target_system) == (
             CANDIDATE.ai_user_id,
@@ -86,34 +85,26 @@ class FakeBindingStore:
 
     @asynccontextmanager
     async def poll_lock(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> AsyncIterator[bool]:
         del ai_user_id, target_system
         yield True
 
     async def mark_poll_succeeded(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         del ai_user_id, target_system
         self.successes += 1
         self.candidate = None
 
     async def mark_non_authentication_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         del ai_user_id, target_system
         self.counted_failures += 1
 
     async def mark_non_counted_failure(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> None:
         del ai_user_id, target_system
         self.non_counted_failures += 1
@@ -123,6 +114,8 @@ class FakeBindingStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         failure: CredentialTerminalFailure,
+        *,
+        tenant_id: str,
     ) -> None:
         del ai_user_id, target_system
         self.terminal.append(failure)
@@ -133,27 +126,23 @@ class FakeBindingStore:
         ai_user_id: str,
         target_system: CredentialTargetSystem,
         credential: PasswordBindingCredential,
+        *,
+        tenant_id: str,
     ) -> CredentialBindingView:
         raise AssertionError
 
     async def get_password_binding(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         raise AssertionError
 
     async def unbind_password(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> CredentialBindingView:
         raise AssertionError
 
     async def load_password_for_poll(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> PasswordBindingCredential:
         raise AssertionError
 
@@ -221,6 +210,7 @@ class CanaryAuthentication:
         credential: LoginCredential,
         *,
         reactivate_revoked_session: bool = True,
+        expected_subject: tuple[str, str] | None = None,
     ) -> Principal:
         assert credential.loginid.get_secret_value() == "synthetic-login"
         assert credential.userpassword.get_secret_value() == self._canary
@@ -235,9 +225,7 @@ class CanaryBindingStore(FakeBindingStore):
         self._canary = canary
 
     async def load_password_for_poll(
-        self,
-        ai_user_id: str,
-        target_system: CredentialTargetSystem,
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
     ) -> PasswordBindingCredential:
         assert (ai_user_id, target_system) == (
             CANDIDATE.ai_user_id,
@@ -316,6 +304,7 @@ def _service(
             scheduler_tick_seconds=60,
         ),
         clock=lambda: clock,
+        tenant_id="default",
     )
 
 
@@ -337,6 +326,7 @@ def _service_with_work_objects(
             scheduler_tick_seconds=60,
         ),
         clock=lambda: NOW,
+        tenant_id="default",
     )
 
 
@@ -471,6 +461,7 @@ def test_password_canary_stops_before_trace_and_response_envelope_boundary(
         session_factory=CanaryCaptchaSession,
         authentication=authentication,
         binding_store=binding_store,
+        tenant_id="default",
     )
     service = CredentialPollingService(
         binding_store=binding_store,
@@ -486,6 +477,7 @@ def test_password_canary_stops_before_trace_and_response_envelope_boundary(
             scheduler_tick_seconds=60,
         ),
         clock=lambda: NOW,
+        tenant_id="default",
     )
 
     assert asyncio.run(service.run_due()) == 1
@@ -641,6 +633,7 @@ def test_committed_sync_is_not_classified_as_directory_failure(dispatch_db, monk
             scheduler_tick_seconds=60,
         ),
         clock=lambda: NOW,
+        tenant_id="default",
     )
     assert run(polling.run_due()) == 1
     assert binding_store.successes == 1
@@ -669,10 +662,20 @@ def test_superseded_and_local_storage_failure_are_not_poll_success(failure):
     objects = WorkObjectService(store=FailingReconciliation(), gateway=RecordingGateway(),
                                 capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
     service = CredentialPollingService(
-        binding_store=bindings, acquirer=FakeAcquirer(), work_objects=objects,
-        policy=CredentialPollingPolicy(interval_seconds=600, maximum_backoff_seconds=3600,
-            work_start_hour=8, work_end_hour=18, timezone_name="Asia/Shanghai",
-            global_concurrency=4, scheduler_tick_seconds=60), clock=lambda: NOW,
+        binding_store=bindings,
+        acquirer=FakeAcquirer(),
+        work_objects=objects,
+        policy=CredentialPollingPolicy(
+            interval_seconds=600,
+            maximum_backoff_seconds=3600,
+            work_start_hour=8,
+            work_end_hour=18,
+            timezone_name="Asia/Shanghai",
+            global_concurrency=4,
+            scheduler_tick_seconds=60,
+        ),
+        clock=lambda: NOW,
+        tenant_id="default",
     )
     assert asyncio.run(service.run_due()) == 1
     assert bindings.successes == 0
@@ -711,10 +714,20 @@ def test_diagnostic_write_failure_preserves_original_poll_classification(
     objects = WorkObjectService(store=records, gateway=gateway,
         capability_registry=StaticCapabilityRegistry(), clock=lambda: NOW)
     service = CredentialPollingService(
-        binding_store=bindings, acquirer=FakeAcquirer(), work_objects=objects,
-        policy=CredentialPollingPolicy(interval_seconds=600, maximum_backoff_seconds=3600,
-            work_start_hour=8, work_end_hour=18, timezone_name="Asia/Shanghai",
-            global_concurrency=1, scheduler_tick_seconds=60), clock=lambda: NOW,
+        binding_store=bindings,
+        acquirer=FakeAcquirer(),
+        work_objects=objects,
+        policy=CredentialPollingPolicy(
+            interval_seconds=600,
+            maximum_backoff_seconds=3600,
+            work_start_hour=8,
+            work_end_hour=18,
+            timezone_name="Asia/Shanghai",
+            global_concurrency=1,
+            scheduler_tick_seconds=60,
+        ),
+        clock=lambda: NOW,
+        tenant_id="default",
     )
     assert asyncio.run(service.run_due()) == 1
     assert len(gateway.calls) == len(attempts) == 1
@@ -731,3 +744,116 @@ def test_diagnostic_write_failure_preserves_original_poll_classification(
     assert bindings.counted_failures == counted
     assert bindings.non_counted_failures == 0
     assert bindings.successes == 0
+
+
+@pytest.mark.parametrize("wrong_tenant", [False, True])
+def test_poll_scope_and_identity_mismatch(dispatch_db, wrong_tenant):
+    from sqlalchemy import text
+
+    from app.infra.auth.crypto import identity_surrogate
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore
+    from tests.api.test_work_object_dispatch import run
+    from tests.infra.auth.test_background_credential_acquirer import FakeSession
+    from tests.infra.auth.test_oa_credential_verifier import _fixture
+
+    async def exercise():
+        store = PostgreSQLCredentialStore(
+            session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+        )
+        verifier, _, _, credential = _fixture(
+            login_succeeds=True,
+            credential_store=store,
+            tenant_id="synthetic-TA" if wrong_tenant else "synthetic-TB",
+        )
+        user = identity_surrogate(
+            credential.loginid.get_secret_value(), key=verifier._identity_hmac_key
+        )
+        password = PasswordBindingCredential(
+            login_id=credential.loginid, password=credential.userpassword
+        )
+        for tenant in ("synthetic-TA", "synthetic-TB"):
+            await store.bind_password(user, "oa", password, tenant_id=tenant)
+        async with dispatch_db.factory() as session:
+            await session.execute(
+                text("UPDATE oa_session_credentials SET updated_at=:old"),
+                {"old": datetime.now(UTC) - timedelta(hours=1)},
+            )
+            await session.commit()
+
+        async def row(tenant):
+            async with dispatch_db.factory() as session:
+                return dict(
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT * FROM oa_session_credentials "
+                                "WHERE tenant_id=:tenant AND ai_user_id=:user"
+                            ),
+                            {"tenant": tenant, "user": user},
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+
+        before_a, before_b = await row("synthetic-TA"), await row("synthetic-TB")
+        acquirer = OAPasswordCredentialAcquirer(
+            session_factory=FakeSession,
+            authentication=verifier,
+            binding_store=store,
+            tenant_id="synthetic-TB",
+        )
+        store.store = AsyncMock(wraps=store.store)
+        store.mark_terminal_authentication_failure = AsyncMock(
+            wraps=store.mark_terminal_authentication_failure
+        )
+        sync = AsyncMock()
+        service = CredentialPollingService(
+            binding_store=store,
+            acquirer=acquirer,
+            work_objects=sync,
+            policy=CredentialPollingPolicy(
+                interval_seconds=600,
+                maximum_backoff_seconds=3600,
+                work_start_hour=0,
+                work_end_hour=24,
+                timezone_name="UTC",
+                global_concurrency=4,
+                scheduler_tick_seconds=60,
+            ),
+            tenant_id="synthetic-TB",
+        )
+        candidates = await store.list_poll_candidates(tenant_id="synthetic-TB")
+        assert len(candidates) == 1 and candidates[0].tenant_id == "synthetic-TB"
+        async with store.poll_lock(user, "oa", tenant_id="synthetic-TA") as a_locked:
+            assert a_locked
+            async with store.poll_lock(user, "oa", tenant_id="synthetic-TB") as b_locked:
+                assert b_locked
+            if wrong_tenant:
+                with pytest.raises(CredentialAcquisitionError) as captured:
+                    await acquirer.acquire(candidates[0])
+                assert captured.value.code == "identity_mismatch"
+                store.store.assert_not_awaited()
+                assert await row("synthetic-TA") == before_a
+                assert await row("synthetic-TB") == before_b
+            assert await service.run_due() == 1
+        assert await row("synthetic-TA") == before_a
+        after_b = await row("synthetic-TB")
+        if wrong_tenant:
+            store.store.assert_not_awaited()
+            sync.sync_for_background.assert_not_awaited()
+            store.mark_terminal_authentication_failure.assert_awaited_once_with(
+                user, "oa", "invalid", tenant_id="synthetic-TB"
+            )
+            assert after_b["poll_status"] == "invalid" and after_b["revoked_at"] is not None
+            assert after_b["encrypted_payload"] is None
+        else:
+            store.store.assert_awaited_once()
+            assert store.store.call_args.kwargs["tenant_id"] == "synthetic-TB"
+            store.mark_terminal_authentication_failure.assert_not_awaited()
+            sync.sync_for_background.assert_awaited_once()
+            principal = sync.sync_for_background.call_args.args[0]
+            assert (principal.org_ctx.tenant_id, principal.ai_user_id) == ("synthetic-TB", user)
+            assert after_b["poll_status"] == "active" and after_b["encrypted_payload"] is not None
+
+    run(exercise())

@@ -69,15 +69,21 @@ class HMACSessionToken:
         *,
         signing_key: bytes,
         ttl_seconds: int,
+        tenant_id: str,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._signing_key = require_hmac_key(signing_key, purpose="session token")
         if ttl_seconds <= 0:
             raise ValueError("session token TTL must be positive")
+        if not tenant_id.strip():
+            raise ValueError("source profile tenant must not be blank")
+        self._tenant_id = tenant_id
         self._ttl_seconds = ttl_seconds
         self._clock = clock
 
     def issue(self, principal: Principal) -> str:
+        if principal.org_ctx.tenant_id != self._tenant_id:
+            raise SessionTokenError("session token is invalid")
         issued_at = int(self._clock())
         claims = _TokenClaimsV2(
             v=2,
@@ -127,7 +133,8 @@ class HMACSessionToken:
                 if len(nonce) != 32 or _base64url_encode(nonce) != claims.nonce:
                     raise ValueError
             if (
-                claims.v != int(version[1:])
+                claims.principal.org_ctx.tenant_id != self._tenant_id
+                or claims.v != int(version[1:])
                 or claims.iat > now
                 or claims.exp <= now
                 or claims.exp <= claims.iat

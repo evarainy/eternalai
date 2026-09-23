@@ -240,6 +240,7 @@ def test_production_entry_request_reaches_agent_and_real_gateway_once(
     settings = replace(
         ProductionSettings.from_environment(),
         database_url=orchestration_clean_database_url,
+        source_tenant_id="synthetic-production-tenant",
         oa_read_adapter_mode="mock",
     )
     assert settings.oa_read_adapter_mode == "mock"
@@ -312,9 +313,10 @@ def test_production_entry_request_reaches_agent_and_real_gateway_once(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
                         " expires_at, updated_at)"
-                        " VALUES (:user, :cipher, :nonce, :payload, :expires, :updated)"
+                        " VALUES ('synthetic-production-tenant', :user, :cipher, :nonce,"
+                        " :payload, :expires, :updated)"
                     ),
                     {
                         "user": user_id,
@@ -466,7 +468,7 @@ class RecordingSessionStore:
         self.created.append(record)
         return record
 
-    async def get_session(self, session_id: str) -> SessionRecord | None:
+    async def get_session(self, session_id: str, *, tenant_id: str) -> SessionRecord | None:
         return None
 
 
@@ -1279,7 +1281,7 @@ def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, 
         ai_user_id="synthetic-wiring",
         display_name="Synthetic wiring",
         roles=("admin",),
-        org_ctx=PrincipalOrgContext(),
+        org_ctx=PrincipalOrgContext(tenant_id="default"),
     )
     original, independent = (components.session_tokens.issue(principal) for _ in range(2))
     common = {
@@ -1390,3 +1392,21 @@ def test_production_revocation_store_reaches_all_protected_routers(monkeypatch, 
         for method, url, body, spy in probes:
             client.request(method, url, json=body, headers=common)
             assert spy.await_count == 2, url
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source_profile_id", ""),
+        ("source_tenant_id", ""),
+        ("source_tenant_id", "   "),
+        ("source_profile_id", ["one", "two"]),
+    ],
+)
+def test_profile_tenant_required(field, value, monkeypatch):
+    settings = ProductionSettings.from_environment()
+    factory = Mock(side_effect=AssertionError("invalid profile reached persistence"))
+    monkeypatch.setattr("app.composition.make_async_session_factory", factory)
+    with pytest.raises(ValueError, match="source_profile_configuration_invalid"):
+        build_production_components(replace(settings, **{field: value}))
+    factory.assert_not_called()

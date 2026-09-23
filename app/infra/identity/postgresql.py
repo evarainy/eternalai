@@ -71,7 +71,9 @@ class PostgreSQLOAIdentityMapping:
         if _AI_USER_ID_RE.fullmatch(ai_user_id) is None:
             return _verification_failed_result()
 
-        query_failed, projection = await self._load_projection(ai_user_id)
+        query_failed, projection = await self._load_projection(
+            ai_user_id, tenant_id=request_context.tenant_id
+        )
         if query_failed:
             return _verification_failed_result()
         if projection is None:
@@ -88,6 +90,8 @@ class PostgreSQLOAIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> IdentityCheckResult | None:
         if (
             target_system != "oa"
@@ -98,7 +102,7 @@ class PostgreSQLOAIdentityMapping:
         ):
             return None
 
-        query_failed, projection = await self._load_projection(ai_user_id)
+        query_failed, projection = await self._load_projection(ai_user_id, tenant_id=tenant_id)
         if query_failed:
             return _verification_failed_result()
         if projection is None:
@@ -112,6 +116,8 @@ class PostgreSQLOAIdentityMapping:
         binding_scope: str | None = None,
         account_set_id: str | None = None,
         device_domain_id: str | None = None,
+        *,
+        tenant_id: str,
     ) -> list[IdentityCheckResult]:
         if (
             target_system not in (None, "oa")
@@ -122,7 +128,7 @@ class PostgreSQLOAIdentityMapping:
         ):
             return []
 
-        query_failed, projection = await self._load_projection(ai_user_id)
+        query_failed, projection = await self._load_projection(ai_user_id, tenant_id=tenant_id)
         if query_failed:
             return [_verification_failed_result()]
         if projection is None:
@@ -130,20 +136,17 @@ class PostgreSQLOAIdentityMapping:
         return [self._project_status(projection)]
 
     async def revoke_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
-        return await self._mutate_mapping(binding_id)
+        return await self._mutate_mapping(binding_id, tenant_id=tenant_id)
 
     async def reset_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
-        return await self._mutate_mapping(binding_id)
+        return await self._mutate_mapping(binding_id, tenant_id=tenant_id)
 
     async def _mutate_mapping(
-        self,
-        binding_id: str,
+        self, binding_id: str, *, tenant_id: str
     ) -> IdentityMappingMutationResult | None:
         ai_user_id = _parse_binding_id(binding_id)
         if ai_user_id is None:
@@ -157,11 +160,11 @@ class PostgreSQLOAIdentityMapping:
                     text(
                         "SELECT ai_user_id, expires_at, revoked_at"
                         " FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
+                        " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                         " AND target_system = 'oa'"
                         " FOR UPDATE"
                     ),
-                    {"ai_user_id": ai_user_id},
+                    {"tenant_id": tenant_id, "ai_user_id": ai_user_id},
                 )
                 row = query_result.mappings().one_or_none()
                 if row is None:
@@ -176,12 +179,13 @@ class PostgreSQLOAIdentityMapping:
                             text(
                                 "UPDATE oa_session_credentials"
                                 " SET revoked_at = :revoked_at"
-                                " WHERE ai_user_id = :ai_user_id"
+                                " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                                 " AND target_system = 'oa'"
                                 " AND revoked_at IS NULL"
                                 " RETURNING ai_user_id"
                             ),
                             {
+                                "tenant_id": tenant_id,
                                 "ai_user_id": ai_user_id,
                                 "revoked_at": now,
                             },
@@ -208,8 +212,7 @@ class PostgreSQLOAIdentityMapping:
         return result
 
     async def _load_projection(
-        self,
-        ai_user_id: str,
+        self, ai_user_id: str, *, tenant_id: str
     ) -> tuple[bool, _CredentialProjection | None]:
         row: RowMapping | None = None
         query_failed = False
@@ -219,10 +222,10 @@ class PostgreSQLOAIdentityMapping:
                     text(
                         "SELECT ai_user_id, expires_at, revoked_at"
                         " FROM oa_session_credentials"
-                        " WHERE ai_user_id = :ai_user_id"
+                        " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                         " AND target_system = 'oa'"
                     ),
-                    {"ai_user_id": ai_user_id},
+                    {"tenant_id": tenant_id, "ai_user_id": ai_user_id},
                 )
                 row = query_result.mappings().one_or_none()
         except Exception:

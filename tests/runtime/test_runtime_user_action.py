@@ -221,10 +221,10 @@ class InjectingGateway(Gateway):
         return result
 
 
-class AlternatingPendingMap(dict[tuple[str, str], _PendingWorkflow]):
+class AlternatingPendingMap(dict[tuple[str, str, str], _PendingWorkflow]):
     def __init__(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str],
         observed: _PendingWorkflow,
         winner: _PendingWorkflow,
     ) -> None:
@@ -234,7 +234,7 @@ class AlternatingPendingMap(dict[tuple[str, str], _PendingWorkflow]):
 
     def get(
         self,
-        key: tuple[str, str],
+        key: tuple[str, str, str],
         default: _PendingWorkflow | None = None,
     ) -> _PendingWorkflow | None:
         self._reads += 1
@@ -455,7 +455,9 @@ def _assert_envelope_omits(envelope: Any, marker: str) -> None:
 
 
 def _pending(harness: Harness) -> _PendingWorkflow:
-    return harness.runtime._pending_workflows[("session-action", harness.principal.ai_user_id)]
+    return harness.runtime._pending_workflows[
+        (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
+    ]
 
 
 def _winner(pending: _PendingWorkflow, suffix: str) -> _PendingWorkflow:
@@ -544,7 +546,7 @@ def test_missing_binding_digest_is_rejected_without_resume_or_routing() -> None:
     async def exercise() -> tuple[Harness, Any, int, int]:
         harness = await _build_harness()
         pending = _pending(harness)
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         harness.runtime._pending_workflows[key] = replace(pending, action_digest=None)
         gateway_calls = len(harness.gateway.calls)
         llm_calls = len(harness.llm.calls)
@@ -1107,7 +1109,7 @@ def test_publish_refuses_to_overwrite_a_newer_generation_without_any_claim() -> 
 
     async def exercise() -> tuple[Harness, _PendingWorkflow, _PendingWorkflow, bool]:
         harness = await _build_harness()
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         stale = harness.runtime._pending_workflows[key]
         winner = _winner(stale, "identity-cas")
         harness.runtime._pending_workflows[key] = winner
@@ -1120,7 +1122,7 @@ def test_publish_refuses_to_overwrite_a_newer_generation_without_any_claim() -> 
         return harness, winner, loser, published
 
     harness, winner, loser, published = asyncio.run(exercise())
-    key = ("session-action", harness.principal.ai_user_id)
+    key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
 
     assert harness.runtime._claimed_pending_confirmations == {}
     assert published is False
@@ -1140,7 +1142,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
         int,
     ]:
         harness = await _build_harness()
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         original = _pending(harness)
         assert harness.runtime._claim_confirmation(key, original, original.owner) is None
         harness.structured_output.register(
@@ -1196,7 +1198,7 @@ def test_claim_and_pending_writer_each_win_without_overwriting_the_winner() -> N
     assert writer_loses.status == "failed"
     assert after_claim_wins is original
     assert _outcome(action_loses) == "action_pending_changed"
-    key = ("session-action", harness.principal.ai_user_id)
+    key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
     assert harness.runtime._pending_workflows[key] is writer_winner
     assert len(harness.gateway.calls) == gateway_calls
     assert len(harness.llm.calls) == llm_calls
@@ -1227,7 +1229,7 @@ def test_each_resume_pending_mutation_preserves_a_concurrent_winner(cas_site: st
             gateway=gateway,
             definition=definition,
         )
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         original = _pending(harness)
         winner = _winner(original, cas_site)
 
@@ -1253,7 +1255,7 @@ def test_each_resume_pending_mutation_preserves_a_concurrent_winner(cas_site: st
 
     harness, winner, response = asyncio.run(exercise())
 
-    key = ("session-action", harness.principal.ai_user_id)
+    key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
     assert harness.runtime._pending_workflows[key] is winner
     if cas_site == "version_pop":
         assert _outcome(response) == "action_version_conflict"
@@ -1457,9 +1459,9 @@ def test_terminal_claim_blocks_resurrected_old_confirmation() -> None:
         request = await harness.gate.get_request(pending.gate_request_id)
         harness.runtime._utc_clock = lambda: request.requested_at + timedelta(seconds=1)
         await _dispatch(harness)
-        harness.runtime._pending_workflows[("session-action", harness.principal.ai_user_id)] = (
-            pending
-        )
+        harness.runtime._pending_workflows[
+            (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
+        ] = pending
         harness.engine._checkpoints[pending.task_id] = checkpoint
         response = await _dispatch(harness)
         assert _outcome(response) == "confirmation_invalidated"
@@ -1554,9 +1556,17 @@ def test_unknown_and_cross_identity_references_are_byte_identical(own_pending: b
         other = await _build_harness(tenant_id="other-tenant")
         foreign_pending = _pending(other)
         # Install a foreign owner in the same runtime to prove lookup does not enumerate it.
-        harness.runtime._pending_workflows[("foreign-session", "foreign-user")] = foreign_pending
+        harness.runtime._pending_workflows[("other-tenant", "foreign-session", "foreign-user")] = (
+            foreign_pending
+        )
         if not own_pending:
-            harness.runtime._pending_workflows.pop(("session-action", harness.principal.ai_user_id))
+            harness.runtime._pending_workflows.pop(
+                (
+                    harness.principal.org_ctx.tenant_id,
+                    "session-action",
+                    harness.principal.ai_user_id,
+                )
+            )
         unknown = await _terminal_action(harness, "confirm", "nonexistent-reference")
         foreign = await _terminal_action(harness, "confirm", other.waiting.response_id)
         expected = "action_reference_mismatch" if own_pending else "confirmation_invalidated"
@@ -1583,7 +1593,7 @@ def test_unknown_and_cross_identity_references_are_byte_identical(own_pending: b
             ("default", harness.principal.ai_user_id, "session-action")
         }
         assert (
-            harness.runtime._pending_workflows[("foreign-session", "foreign-user")]
+            harness.runtime._pending_workflows[("other-tenant", "foreign-session", "foreign-user")]
             is foreign_pending
         )
         assert harness.engine.resume_calls == harness.gate.record_decision_calls == 0
@@ -1749,7 +1759,7 @@ def test_retirement_and_expiry_preserve_concurrent_winner(site: str) -> None:
         )
         pending = _pending(harness)
         winner = _winner(pending, "terminal-cas")
-        key = ("session-action", harness.principal.ai_user_id)
+        key = (harness.principal.org_ctx.tenant_id, "session-action", harness.principal.ai_user_id)
         checkpoint = harness.engine._checkpoints[pending.task_id]
         original = harness.runtime._retire_pending_confirmation
 
@@ -1805,5 +1815,169 @@ def test_terminal_claim_retention_is_bounded_without_replay(eviction: str) -> No
         assert next(iter(harness.runtime._claimed_pending_confirmations.values())) is retained
         assert harness.gate.record_decision_calls == 2
         assert current.response_id != _pending(harness).response_id
+
+    asyncio.run(exercise())
+
+
+async def _tenant_pair():
+    from app.runtime.runtime import _pending_workflow_key
+
+    # Both pending workflows are produced by one real Runtime/engine/gate.
+    now = datetime.now(UTC)
+    h = await _build_harness(
+        tenant_id="synthetic-TA", utc_clock=lambda: now, monotonic_clock=lambda: 100.0
+    )
+    ka = _pending_workflow_key("synthetic-TA", "session-action", h.principal.ai_user_id)
+    a = h.runtime._pending_workflows[ka]
+    other = _principal(h.principal.ai_user_id, tenant_id="synthetic-TB")
+    waiting = await h.runtime.handle_user_message(
+        channel="web",
+        principal=other,
+        session_id="session-action",
+        message=_START_MESSAGE,
+        client_capabilities={},
+    )
+    assert waiting.status == "waiting_user"
+    kb = _pending_workflow_key(other.org_ctx.tenant_id, "session-action", other.ai_user_id)
+    b = h.runtime._pending_workflows[kb]
+    assert len(h.runtime._pending_workflows) == 2
+    assert h.runtime._pending_workflows[ka] is a
+    assert (a.owner.tenant_id, b.owner.tenant_id) == ("synthetic-TA", "synthetic-TB")
+    assert a.gate_request_id != b.gate_request_id
+    return h, other, a, b
+
+
+def test_pending_claim_collision_isolated():
+    async def exercise():
+        h, other, a, b = await _tenant_pair()
+        for principal, pending in ((h.principal, a), (other, b)):
+            untouched = b if pending is a else a
+            before = h.runtime._task_store.records[untouched.task_id].model_copy(deep=True)
+            result = await h.runtime.handle_user_action(
+                channel="web",
+                principal=principal,
+                session_id="session-action",
+                action=_action(pending.gate_request_id),
+            )
+            assert result.status == "completed" and _outcome(result) == "accepted"
+            assert h.runtime._task_store.records[untouched.task_id] == before
+            decision = await h.gate.get_decision(pending.gate_request_id)
+            assert decision.decided_tenant_id == principal.org_ctx.tenant_id
+        assert h.gate.record_decision_calls == h.engine.resume_calls == 2
+        assert [call[0] for call in h.gateway.calls].count(_EXECUTE_ID) == 2
+        assert len(h.runtime._claimed_pending_confirmations) == 2
+        assert {key[0] for key in h.runtime._claimed_pending_confirmations} == {
+            "synthetic-TA",
+            "synthetic-TB",
+        }
+        assert h.runtime._pending_workflows == {}
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("own_pending", [False, True])
+def test_cross_tenant_reference_invalidated(reverse, own_pending):
+    from copy import deepcopy
+
+    async def exercise():
+        h, other, a, b = await _tenant_pair()
+        actor, foreign = (h.principal, b) if reverse else (other, a)
+        if not own_pending:
+            h.runtime._pending_workflows.pop(
+                (actor.org_ctx.tenant_id, "session-action", actor.ai_user_id)
+            )
+        pending = dict(h.runtime._pending_workflows)
+        tasks = deepcopy(h.runtime._task_store.records)
+        claims = dict(h.runtime._claimed_pending_confirmations)
+        references = dict(h.runtime._confirmation_references)
+        requests = dict(h.gate._requests)
+        calls = list(h.gateway.calls)
+        response = await h.runtime.handle_user_action(
+            channel="web",
+            principal=actor,
+            session_id="session-action",
+            action=_action(foreign.gate_request_id),
+        )
+        assert response.status == ("failed" if own_pending else "confirmation_invalidated")
+        assert _outcome(response) == (
+            "action_reference_mismatch" if own_pending else "confirmation_invalidated"
+        )
+        assert response.data["result"] is None
+        assert h.runtime._pending_workflows == pending
+        assert h.runtime._task_store.records == tasks
+        assert h.runtime._claimed_pending_confirmations == claims
+        assert h.runtime._confirmation_references == references
+        assert h.gate._requests == requests and h.gate._decisions == {}
+        assert h.gate.record_decision_calls == h.engine.resume_calls == 0
+        assert h.gateway.calls == calls
+
+    asyncio.run(exercise())
+
+
+def test_identical_reference_claim_keys_include_tenant():
+    from app.runtime.runtime import _pending_workflow_key
+
+    async def exercise():
+        h, other, a, b = await _tenant_pair()
+        # Index-only collision proof; do not forge a duplicate persistent Gate ID.
+        a = replace(a, response_id="synthetic-collision", gate_request_id="synthetic-collision")
+        b = replace(b, response_id="synthetic-collision", gate_request_id="synthetic-collision")
+        ka = _pending_workflow_key(a.owner.tenant_id, a.owner.session_id, a.owner.ai_user_id)
+        kb = _pending_workflow_key(b.owner.tenant_id, b.owner.session_id, b.owner.ai_user_id)
+        assert ka != kb and ka[1:] == kb[1:]
+        h.runtime._pending_workflows[ka] = a
+        h.runtime._pending_workflows[kb] = b
+        assert h.runtime._claim_confirmation(ka, a, a.owner) is None
+        assert h.runtime._claim_confirmation(kb, b, b.owner) is None
+        assert len(h.runtime._claimed_pending_confirmations) == 2
+        claims = list(h.runtime._claimed_pending_confirmations.items())
+        assert claims[0][0][1:] == claims[1][0][1:]
+        assert (
+            h.runtime._lookup_confirmation_outcome(a.owner, a.gate_request_id)
+            == "action_already_claimed"
+        )
+        assert (
+            h.runtime._lookup_confirmation_outcome(b.owner, b.gate_request_id)
+            == "action_already_claimed"
+        )
+        h.runtime._forget_confirmation_claim(*claims[0])
+        assert h.runtime._lookup_confirmation_outcome(a.owner, a.gate_request_id) is None
+        assert (
+            h.runtime._lookup_confirmation_outcome(b.owner, b.gate_request_id)
+            == "action_already_claimed"
+        )
+        assert h.runtime._compare_and_swap_pending_workflow(ka, expected=a, replacement=None)
+        assert h.runtime._pending_workflows[kb] is b
+        assert h.gate.record_decision_calls == h.engine.resume_calls == 0
+
+    asyncio.run(exercise())
+
+
+def test_expire_forget_cas_keeps_other_tenant():
+    async def exercise():
+        h, other, a, b = await _tenant_pair()
+        ka = (a.owner.tenant_id, a.owner.session_id, a.owner.ai_user_id)
+        kb = (b.owner.tenant_id, b.owner.session_id, b.owner.ai_user_id)
+        expired = replace(a, monotonic_deadline=99.0)
+        assert h.runtime._compare_and_swap_pending_workflow(ka, expected=a, replacement=expired)
+        assert h.runtime._pending_workflows[kb] is b
+        await h.runtime._expire_pending_confirmations()
+        assert h.runtime._task_store.records[a.task_id].status == "confirmation_invalidated"
+        assert h.runtime._pending_workflows[kb] is b
+        assert h.gate.record_decision_calls == h.engine.resume_calls == 0
+        for key, claim in list(h.runtime._claimed_pending_confirmations.items()):
+            h.runtime._forget_confirmation_claim(key, claim)
+        assert h.runtime._confirmation_references == {}
+        assert h.runtime._pending_workflows[kb] is b
+        result = await h.runtime.handle_user_action(
+            channel="web",
+            principal=other,
+            session_id="session-action",
+            action=_action(b.gate_request_id),
+        )
+        assert result.status == "completed" and _outcome(result) == "accepted"
+        assert h.gate.record_decision_calls == h.engine.resume_calls == 1
+        assert [call[0] for call in h.gateway.calls].count(_EXECUTE_ID) == 1
 
     asyncio.run(exercise())
