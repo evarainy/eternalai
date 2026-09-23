@@ -3095,7 +3095,7 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 | B 档施工 | Opus 5.5 high（简单任务 medium），或 GPT-6 Sol max |
 | C 档施工 | GPT-6 Sol，medium～high；MiMo v2.6 Pro 仅作可选试跑，不自动派发 |
 | D 档施工 | GPT-6 Luna，medium |
-| 完成后静态评审 | MiMo 评审桥（通道验收通过后启用，effort high）；验收前及 MiMo 不可用时用 Opus 评审桥（`claude-opus-5-5`，effort high；`high` 输出明显敷衍时升 `xhigh` 重跑）；两者都不可用时按 2026-09-17「不可用评审桥的替代静态评审方」经当次授权替代 |
+| 完成后静态评审 | MiMo 评审桥（通道验收通过后启用，effort high）；验收前及 MiMo 不可用时用 Opus 评审桥（`claude-opus-5-5`，effort high；`high` 输出明显敷衍时升 `xhigh` 重跑）；两者都不可用时按 2026-09-17「裁决：不可用评审桥的替代静态评审方」经当次授权替代 |
 
 1. **Fable 不可用时的回退**（雨爷 2026-09-23）：Fable 5.1 因额度、服务故障或安全拒绝不可用时，主控、plan 编写与 A 档改派 Fable 的施工依次回退到 Opus 5.5 xhigh、astra max。Fable 与 Opus 共用 Claude 账户额度，额度耗尽时通常一起不可用，因此设第二级。任务本身失败不算不可用，不触发回退。回退按实际模型如实记录；plan 由 astra 写成时，plan 评审另开独立上下文的 astra max 会话，并在评审结论中注明作者与评审同源。
 2. **effort 必须显式传**：Opus 5.5 在 API 上的默认 effort 是 medium，派发时不写即静默降档。Opus 施工默认不用 xhigh（雨爷 2026-09-23：测评中与 high 差距很小），需要时以实测收益为依据；第 1 条的回退用 xhigh 是雨爷另行指定。
@@ -3106,7 +3106,7 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 
 **替代关系**（历史正文不改写，事故记录与当时结果保持原意）：
 - 2026-09-07「裁决：开发助手的模型路由」全文。
-- 2026-09-07「开发助手治理与 skills 收敛（P2-GOV-SYNC-ASTRA-001）」中的分档、工作树、自审 effort 与路由部分；该条的覆盖性修正、执行边界与知识组织继续有效。
+- 2026-09-07「开发助手治理与 skills 收敛（P2-GOV-SYNC-ASTRA-001）」中的分档、工作树、自审 effort 与路由部分；该条的覆盖性修正、执行边界（其中工作树一句除外）与知识组织继续有效。
 - 2026-08-31「流程违规记录：`P2-OA-ORGANIZATION-DIRECTORY-001` 在缺 Review 前置时被合并」第五节：第 2 项写死 Opus `review-meta.json` 的部分改为现役静态评审桥的合规摘要；A/B 档均核对静态评审，Monitor PASS 仅在现役审查矩阵要求时核对。「不得以 PR 状态色作为 Review 前置判据」与逐项核对最终候选绑定继续有效。
 - 2026-09-09/10「决定：评审桥的 grok-cli 试验通道」与 2026-09-10「决定：Codex 开发完成后的静态评审桥允许 grok」，含其中「plan 的评审仍使用 Opus 5」。
 - 2026-08-20「裁决：Opus 终审默认档位改为 `high`」：effort 由本条路由表承接；`observed_model=claude-opus-5` 的型号锁定改为现役桥各自的模型核验合同（桥脚本按实际请求型号核验，PR 以 `observed_model` 如实记录）。
