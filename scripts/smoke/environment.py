@@ -354,6 +354,8 @@ def _desired_smoke_values(
         "API_PORT": "8000",
         "REDIS_URL": "redis://127.0.0.1:6379/0",
         "OA_BASE_URL": contract.base_url,
+        "OA_SOURCE_PROFILE_ID": "oa-primary",
+        "OA_TENANT_ID": "default",
         "OA_TIMEOUT_S": "30",
         "OA_CREDENTIAL_TTL_S": "14400",
         "SESSION_COOKIE_TTL_S": "14400",

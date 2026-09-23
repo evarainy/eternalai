@@ -60,6 +60,8 @@ services:
       API_PORT: 8000
       DATABASE_URL: postgresql://${POSTGRES_USER:-eternalai}:${POSTGRES_PASSWORD:-change_me}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-eternalai}
       REDIS_URL: redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}/0
+      OA_SOURCE_PROFILE_ID: ${OA_SOURCE_PROFILE_ID:-}
+      OA_TENANT_ID: ${OA_TENANT_ID:-}
       OA_BASE_URL: ${OA_BASE_URL:-}
       OA_TIMEOUT_S: ${OA_TIMEOUT_S:-30}
       OA_CREDENTIAL_TTL_S: ${OA_CREDENTIAL_TTL_S:-}

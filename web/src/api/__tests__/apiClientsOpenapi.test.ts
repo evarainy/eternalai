@@ -197,6 +197,8 @@ from typing import Any
 key = base64.b64encode(bytes(range(32))).decode("ascii")
 os.environ.update({
     "ENV": "testing",
+    "OA_SOURCE_PROFILE_ID": "openapi-export",
+    "OA_TENANT_ID": "default",
     "DATABASE_URL": "postgresql+psycopg://database.invalid/eternalai",
     "REDIS_URL": "redis://redis.invalid:6379/0",
     "OA_BASE_URL": "https://oa.invalid",
