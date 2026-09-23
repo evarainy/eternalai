@@ -19,7 +19,7 @@
 - Golden Gate：`34/34 passed, 0 skipped, 0 failed`（本棒实测，positive 13/13、negative/boundary 21/21，含 GT-012）。
 - Ruff、mypy（137 source files）、依赖检查与 61 个改动测试逐文件弱测试检查通过；DB/冒烟消费者定向 295 项、机械适配定向 289 项、认证/轮询定向 95 项、Runtime 确认定向 71 项、Gateway port 16 项。9 项生产变异均红，逐项精确恢复后绿。
 - 新迁移仅 `sessions`、`principal_roles`、`oa_session_credentials`：空库/含 default 存量往返及三表非 default 拒降共 5 项通过；拒降时 revision/catalog/行内容不变。仓库唯一 head 为 `20260922_190000`，父为 `20260920_180000`；固定测试库已在本工作树无旁路降回开工登记的 `20260920_180000`，catalog 与行内容核对恢复。
-- 本棒未改前端、未运行前端/浏览器或真实 OA；既有前端合并证据见下节。S2 Work Object、S3 目录/G2、登录 membership、live roles、AAD v2、credential_ref v2 与 cache_scope 保留欠债，不以 S1 证明第二租户已可上线。
+- 本棒前端仅改 OpenAPI 导出测试的 `EXPORT_SCRIPT` 环境（补必填 `OA_SOURCE_PROFILE_ID` / `OA_TENANT_ID`，与 `.env.example`、`docker-compose.yml`、`scripts/smoke/environment.py` 同批补全，共 4 文件 9 行）；前端 lint、typecheck 通过，`test:openapi` 6 项、前端全量 1,003 项（组件 484、单元 513、OpenAPI 6）通过，由独立监理在最终候选上实测。未运行浏览器或真实 OA；既有前端合并证据见下节。S2 Work Object、S3 目录/G2、登录 membership、live roles、AAD v2、credential_ref v2 与 cache_scope 保留欠债，不以 S1 证明第二租户已可上线。
 
 ### 当前前端合并基线（2026-09-22，`P2-FE-BUNDLE-SPLIT-001`）
 
