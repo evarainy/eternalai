@@ -1,18 +1,18 @@
 # Phase 2 当前状态
 
-- 最近已合并实现：`P2-TENANT-IDENTITY-001` S1（PR #212，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。总欠债保持开放，全链验收前维持单租户运行；S2/S3 开棒标识待 GOV-SYNC 分配。
+- 最近已合并实现：`P2-TENANT-IDENTITY-001` S1（PR #212，2026-09-23 合并，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。S1 合并不核销总欠债；S2/S3 未施工、开棒标识待 GOV-SYNC 分配；全链验收前维持单租户运行，第二租户禁止启用。
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-069`（D 档、非高风险、串行，承担 A 类机械同步）；2026-09-24 静态评审改为按作者交叉评审，见 `DECISIONS.md` 同日裁决。本棒不新增已决后继，既有指针不变；新任务按四档规则定档。
+- 当前治理基线 task_id：`P2-GOV-SYNC-070`（D 档、非高风险、串行，承担 A 类机械同步）；2026-09-29 开发助手路由、MiMo 静态审核与审查矩阵更新见 `DECISIONS.md` 同日裁决。本棒已决后继为 `P2-ADMIN-EVENTS-UNIFORM-001`（2026-09-08 方向 A 已批准；待 GPT Pro 计划与 Astra 评审；尚未生产实现；登记不构成施工或合并授权）；新任务按四档规则定档。
 - 当前已合并实现：`P2-AUDIT-LOGOUT-002`（PR #207）与 `P2-WO-COMPLETED-MERGE-001`（PR #206）；前者已完成最后一轮独立监理与静态评审桥，后者已完成已办结查询版本合并修复。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
-- 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；已决后继 `P2-WO-ERROR-CONTRACT-001` 已形成此前记录的实现候选。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。
+- 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；已决后继 `P2-WO-ERROR-CONTRACT-001` 已于 2026-09-22 合并（PR #211）。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。
 - 审计 #1：`P2-AUDIT-LOGOUT-002` 已合并服务端当前票据持久吊销、旧票据/等价别名重放拒绝，以及前端确认成功后的旧身份数据清理与当前代空身份查询。旧 `P2-AUDIT-LOGOUT-001` 未交付的历史不作为新棒证据；重开裁决仍见 `DECISIONS.md` 2026-09-20。
 
 ## 已登记验证基线
 
-### 当前候选验证基线（2026-09-23，来源 P2-TENANT-IDENTITY-001 S1）
+### 当前已合并验证基线（2026-09-23 实测，来源 P2-TENANT-IDENTITY-001 S1；PR #212 于 2026-09-23 合并）
 
-后端、架构与 Golden 数字均为本棒实测；候选验证不代表已取得独立审查或合并授权。
+后端、架构与 Golden 数字均为该棒 2026-09-23 实测，来源日期保持不变，不是本治理棒（2026-09-29）实测；合并事实以 PR #212 为准。
 
 - pytest：`4170 passed, 0 failed, 0 skipped`（固定测试库后端全量，exit=0、后台 status=passed；无 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录。
 - `tests/architecture/`：`135 passed`（本棒定向；全量亦覆盖。机械同步后另核 SSOT）。
@@ -62,9 +62,9 @@
 
 ## 组织目录与前端机会层指针
 
-- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已合并交付姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；既有验收只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 的 S1 候选已交付显式 source tenant、sessions、角色、凭证/binding 与 Runtime 索引切片；S2 Work Object、S3 目录/G2 仍待后续分段完成，现役单目录仅服务 default 租户，全链验收前不启用第二租户。内部生命周期、前端接线与显示名已合并；真实目录、多 membership 与人工授权集合维护的剩余义务见 `PHASE2_PLAN.md`。
+- 组织目录与身份：`P2-ORGDIR-PERSON-SYNC-001` 已合并交付姓名镜像、零岗位归一化、候选读端点、同步状态/调度、陈旧度授权门、本人读取回落与非阻断诊断。生产 OA HTTP Source 仍缺失，首次真实目录及真实周期更新未交付；既有验收只有合成 Source + 真实 PG/HTTP 验收。`P2-TENANT-IDENTITY-001` 的 S1 已合并交付（PR #212，2026-09-23）显式 source tenant、sessions、角色、凭证/binding 与 Runtime 索引切片；S2 Work Object、S3 目录/G2 仍待后续分段完成，现役单目录仅服务 default 租户，全链验收前不启用第二租户。内部生命周期、前端接线与显示名已合并；真实目录、多 membership 与人工授权集合维护的剩余义务见 `PHASE2_PLAN.md`。
 - 编排接缝：`P2-AGENT-ORCH-SEAM-001` 已合并交付；`AgentOrchestrationPort` 的生产接线已收口。`P2-AUDIT-WORKFLOW-WIRING-001` 也已合并，生产入口已实例化 `WorkflowEngineAdapter` 并注入 Runtime；旧装配债已结项。
-- 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未查询数据库；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
+- 租户切片历史：2026-09-01 开工时连接库 tasks=0、distinct task_id=0；更早的 115/115 也仅为历史快照。本治理棒未重测 tasks 租户聚合；升级前 Task 保持 `tenant_id=NULL`，对 Admin fail-closed 不可见，不猜值、不回填。
 - 前端后继：原 `P2-FE-DISPATCH-FORM-001` / `P2-FE-APPS-001` 已由 `P2-FE-PAGE-CONTRACT-001` 合并交付并关闭，不再单独开棒；页面主体来源为已完成并合并的 `P2-FE-VISUAL-REFACTOR-001`。`P2-INTERNAL-WO-DISPATCH-001` 的后端合同现已到位，前端选择、发布接线、结果呈现与显示名语义已由 `P2-FE-DISPATCH-WIRING-001` 合并交付；解析与服务端草稿分别保留独立义务，承担 task_id 尚待 GOV-SYNC 分配，均不再挂已完成的 FE 接线棒，不改变必达链的 BLOCKED 状态。
 - 已完成视觉：导航/顶栏/浮动面板、玻璃拟态 theme、三套底图切换、`@ant-design/x` AI 助手页及可执行模糊层预算检查；字体跟随已批准画板，聊天问候语独立。历史返修过程留 Git。
 - 剩余缺口：AppShell 手写 CSS module 的 antd Layout/Menu 欠债、职务来源、头像取图三项未知仍保留；用户身份读取棒另登记多部门 `orginfo` 形态、`isMobx` 取值、目录快照交叉校验、`sex` / `workcode` / `requestParams` 未消费等活欠债。
