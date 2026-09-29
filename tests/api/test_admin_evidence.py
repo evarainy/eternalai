@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -634,7 +635,7 @@ def test_authorized_invalid_binding_query_is_checked_after_role_guard(
     assert trace.events[0].attributes["reason_code"] == reason_code
 
 
-def test_authorized_task_events_report_not_found_without_listing_events() -> None:
+def test_authorized_missing_task_events_return_empty_without_listing_events() -> None:
     task_store = RecordingTaskStore()
     trace = RecordingTrace()
     client = _client(task_store, RecordingIdentityMapping(), trace)
@@ -644,12 +645,76 @@ def test_authorized_task_events_report_not_found_without_listing_events() -> Non
         cookies=ADMIN_COOKIES,
     )
 
-    assert response.status_code == 404
-    assert response.json() == {
-        "detail": {"code": "task_not_found", "message": "Task was not found."}
-    }
+    assert response.status_code == 200
+    assert response.content == b'{"items":[]}'
     assert task_store.calls == [("get_task", "missing-task")]
     assert trace.events[-1].status == "failed"
+    assert trace.events[-1].attributes["reason_code"] == "task_not_found"
+
+
+def test_missing_and_cross_tenant_task_events_have_identical_http_responses() -> None:
+    task_store = RecordingTaskStore(
+        [_task(0, tenant_id="other-tenant")],
+        [_event(0)],
+    )
+    assert [event.event_id for event in asyncio.run(task_store.list_events("task-000"))] == [
+        "event-000"
+    ]
+    task_store.calls.clear()
+    trace = RecordingTrace()
+    client = _client(task_store, RecordingIdentityMapping(), trace)
+
+    missing = client.get(
+        "/api/v1/admin/tasks/missing-task/events",
+        cookies=ADMIN_COOKIES,
+    )
+    cross_tenant = client.get(
+        "/api/v1/admin/tasks/task-000/events",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert missing.status_code == cross_tenant.status_code == 200
+    assert missing.content == cross_tenant.content == b'{"items":[]}'
+    for header in ("content-type", "content-length", "cache-control"):
+        assert (header in missing.headers, missing.headers.get(header)) == (
+            header in cross_tenant.headers,
+            cross_tenant.headers.get(header),
+        )
+    assert task_store.calls == [
+        ("get_task", "missing-task"),
+        ("get_task", "task-000"),
+    ]
+    assert trace.events[0].status == "failed"
+    assert trace.events[0].attributes["reason_code"] == "task_not_found"
+    assert trace.events[1].status == "ok"
+    assert trace.events[1].attributes["result_count"] == 0
+
+
+def test_unauthenticated_task_events_do_not_access_task_store() -> None:
+    task_store = RecordingTaskStore([_task(0)], [_event(0)])
+    client = _client(task_store, RecordingIdentityMapping(), RecordingTrace())
+
+    response = client.get("/api/v1/admin/tasks/task-000/events")
+
+    assert response.status_code == 401
+    assert task_store.calls == []
+
+
+def test_same_tenant_task_without_events_returns_empty() -> None:
+    task_store = RecordingTaskStore([_task(0)])
+    client = _client(task_store, RecordingIdentityMapping(), RecordingTrace())
+
+    response = client.get(
+        "/api/v1/admin/tasks/task-000/events",
+        cookies=ADMIN_COOKIES,
+    )
+
+    assert response.status_code == 200
+    assert response.content == b'{"items":[]}'
+    assert task_store.calls == [
+        ("get_task", "task-000"),
+        ("list_events", "task-000"),
+    ]
 
 
 def test_authorized_task_list_requires_a_bounded_filter() -> None:
