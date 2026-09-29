@@ -79,9 +79,6 @@
           "403": {
             "$ref": "#/components/responses/RoleNotAllowed"
           },
-          "404": {
-            "$ref": "#/components/responses/TaskNotFound"
-          },
           "503": {
             "$ref": "#/components/responses/RegistryUnavailable"
           }

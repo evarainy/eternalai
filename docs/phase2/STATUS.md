@@ -1,8 +1,9 @@
 # Phase 2 当前状态
 
-- 最近已合并实现：`P2-TENANT-IDENTITY-001` S1（PR #212，2026-09-23 合并，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。S1 合并不核销总欠债；S2/S3 未施工、开棒标识待 GOV-SYNC 分配；全链验收前维持单租户运行，第二租户禁止启用。
+- 组织身份 S1 已合并实现：`P2-TENANT-IDENTITY-001`（PR #212，2026-09-23 合并，A 档）；显式 source tenant、旧 v2 等值验票、三表复合键及全部直接消费者、pending/claim 隔离已合并，审查证据留 PR。S1 合并不核销总欠债；S2/S3 未施工、开棒标识待 GOV-SYNC 分配；全链验收前维持单租户运行，第二租户禁止启用。
 
-- 当前治理基线 task_id：`P2-GOV-SYNC-070`（D 档、非高风险、串行，承担 A 类机械同步）；2026-09-29 开发助手路由、MiMo 静态审核与审查矩阵更新见 `DECISIONS.md` 同日裁决。本棒已决后继为 `P2-ADMIN-EVENTS-UNIFORM-001`（2026-09-08 方向 A 已批准；待 GPT Pro 计划与 Astra 评审；尚未生产实现；登记不构成施工或合并授权）；新任务按四档规则定档。
+- 当前实现 task_id：`P2-ADMIN-EVENTS-UNIFORM-001`（B 档、高风险、串行，承担 A 类机械同步）；2026-09-08 已批准的方向 A 已实现并通过本地验证。新上下文自审、独立 Monitor、MiMo 静态审核及集成证据以本棒 PR 为准，本地验证不替代这些义务；本棒不裁定新后继。
+- 当前已合并治理基线 task_id：`P2-GOV-SYNC-070`；2026-09-29 开发助手路由、MiMo 静态审核与审查矩阵更新见 `DECISIONS.md` 同日裁决。其已决后继为 `P2-ADMIN-EVENTS-UNIFORM-001`，不把后继登记外推为合并授权。
 - 当前已合并实现：`P2-AUDIT-LOGOUT-002`（PR #207）与 `P2-WO-COMPLETED-MERGE-001`（PR #206）；前者已完成最后一轮独立监理与静态评审桥，后者已完成已办结查询版本合并修复。
 - 最近已合并实现：`P2-AUDIT-EVAL-POSTCOND-001`（PR #199）与 `P2-AUDIT-WO-LIFECYCLE-001`（PR #200）。两棒均已取得独立 Monitor r1 PASS、Opus 评审桥 PASS，PR checks 与对应 merge Actions 均 success；证据留各 PR。
 - 当前已合并实现：`P2-FE-BUNDLE-SPLIT-001`（PR #209，B 档；路由级代码分割、认证后壳层与 Dock 首开按需加载）。PR checks 全绿且无新增依赖；已决后继 `P2-WO-ERROR-CONTRACT-001` 已于 2026-09-22 合并（PR #211）。组织身份 `P2-TENANT-IDENTITY-001`、聊天回退 `P2-RUNTIME-DIRECT-ANSWER-001` 的既有指针保留，其他依赖与阻塞沿现役 DAG。
@@ -10,9 +11,15 @@
 
 ## 已登记验证基线
 
-### 当前已合并验证基线（2026-09-23 实测，来源 P2-TENANT-IDENTITY-001 S1；PR #212 于 2026-09-23 合并）
+### 本棒候选验证（2026-09-29 实测，`P2-ADMIN-EVENTS-UNIFORM-001`）
 
-后端、架构与 Golden 数字均为该棒 2026-09-23 实测，来源日期保持不变，不是本治理棒（2026-09-29）实测；合并事实以 PR #212 为准。
+- 固定测试库后端全量 `4173 passed, 116 warnings`，后台 `status=passed`、exit=0；定向 Admin 三文件 `68 passed`，架构 `135 passed`，三份改动测试逐文件弱测试检查、Ruff 与 mypy（137 source files）通过。Windows access violation 依 2026-09-10 裁决留原始运行证据，不冒充 CI 结果。
+- 前端组件 `486 passed`（23 个独立文件）、单元 `513 passed`、OpenAPI `6 passed`，共 `1005 passed`；lint、typecheck 通过。候选只改 Admin events 的 OpenAPI 声明与页面空态，本地 build 未触发；required checks 以本棒 PR 的 CI 为准。
+- 同一 audit_reader 的不存在与外租户事件响应状态、body 原始字节和稳定头一致；外租户合成 Task 确有非空事件，测量时零次 `list_events`。临时放宽租户谓词后成对字节断言变红，原字节恢复后变绿。base/candidate 在独立镜像用同一 `generate:api` 脚本生成，16 份生成物字节无新增差异；WOERR-1 仍开放。
+
+### P2-TENANT-IDENTITY-001 S1 来源验证基线（2026-09-23 实测；PR #212 于 2026-09-23 合并）
+
+后端、架构与 Golden 数字均为该棒 2026-09-23 实测，来源日期保持不变，不是本棒候选（2026-09-29）实测；合并事实以 PR #212 为准。
 
 - pytest：`4170 passed, 0 failed, 0 skipped`（固定测试库后端全量，exit=0、后台 status=passed；无 `--ignore=`）。Windows access violation 按 2026-09-10 裁决记录。
 - `tests/architecture/`：`135 passed`（本棒定向；全量亦覆盖。机械同步后另核 SSOT）。

@@ -245,15 +245,17 @@ describe('Admin Registry curated OpenAPI', () => {
     });
   });
 
-  it('uses AdminErrorResponse for the service-owned Task and Binding errors', () => {
+  it('keeps Task and Binding errors while events no longer declare 404', () => {
     const spec = loadSpec();
     const taskResponses = requiredPath(spec, '/api/v1/admin/tasks').get?.responses;
     const eventResponses = requiredPath(spec, '/api/v1/admin/tasks/{task_id}/events').get
       ?.responses;
     const bindingResponses = requiredPath(spec, '/api/v1/admin/bindings').get?.responses;
 
+    expect(Object.keys(taskResponses ?? {})).toEqual(['200', '403', '422', '503']);
+    expect(Object.keys(eventResponses ?? {})).toEqual(['200', '403', '503']);
+    expect(Object.keys(bindingResponses ?? {})).toEqual(['200', '403', '422', '503']);
     expect(taskResponses?.['422']?.$ref).toBe('#/components/responses/TaskFilterRequired');
-    expect(eventResponses?.['404']?.$ref).toBe('#/components/responses/TaskNotFound');
     expect(bindingResponses?.['422']?.$ref).toBe(
       '#/components/responses/BindingQueryInvalid',
     );

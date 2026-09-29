@@ -168,9 +168,29 @@ describe('TasksPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows task_not_found when the selected Task events no longer exist', async () => {
+  it.each([
+    { taskId: 'task-1', buttonIndex: 0, caseName: 'missing Task' },
+    { taskId: 'task-2', buttonIndex: 1, caseName: 'Task without events' },
+  ])('shows the shared empty state for $caseName', async ({ taskId, buttonIndex }) => {
+    renderPage();
+    submitSessionFilter();
+    await screen.findByText(taskId);
+
+    const viewEvidenceButton = screen.getAllByRole('button', { name: '查看证据' })[
+      buttonIndex
+    ];
+    if (!viewEvidenceButton) {
+      throw new Error(`Missing evidence button for ${taskId}`);
+    }
+    fireEvent.click(viewEvidenceButton);
+
+    expect(await screen.findByText('任务不存在或暂无事件')).toBeInTheDocument();
+    expect(apiMocks.listTaskEvents).toHaveBeenCalledWith(taskId);
+  });
+
+  it('shows a real Task event request error without the empty state', async () => {
     apiMocks.listTaskEvents.mockRejectedValueOnce(
-      new ApiError(404, 'task_not_found', 'Task was not found.'),
+      new ApiError(503, 'admin_registry_unavailable', 'Admin Registry provider is not configured.'),
     );
     renderPage();
     submitSessionFilter();
@@ -183,7 +203,10 @@ describe('TasksPage', () => {
     fireEvent.click(viewEvidenceButton);
 
     expect(
-      await screen.findByText('task_not_found: Task was not found.'),
+      await screen.findByText(
+        'admin_registry_unavailable: Admin Registry provider is not configured.',
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByText('任务不存在或暂无事件')).not.toBeInTheDocument();
   });
 });

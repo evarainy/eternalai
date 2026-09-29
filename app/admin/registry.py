@@ -331,7 +331,7 @@ class AdminRegistryService:
                 decision="allow",
                 attributes={"reason_code": "task_not_found"},
             )
-            raise AdminTaskNotFoundError(task_id)
+            return []
         if task.tenant_id != context.org_ctx.tenant_id:
             await self._record(
                 action="task_events_list",

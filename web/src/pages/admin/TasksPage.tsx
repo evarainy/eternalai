@@ -221,7 +221,7 @@ export default function TasksPage() {
             })}
           </Space>
         ) : (
-          !eventError && <Empty description="暂无 Task 事件" />
+          !eventError && <Empty description="任务不存在或暂无事件" />
         )}
       </Drawer>
     </Space>
