@@ -3135,3 +3135,33 @@ grok 额度不可用期间，本批 A 档静态评审使用现役 Opus 评审桥
 4. **MiMo**：保留为可选试跑，不作合并依据，不生成 PR 合规摘要。两轮通道验收未通过（官方源重跑中已知阻断候选判 PASS；同批修复版两轮结论相反），证据留本棒 PR。
 
 **替代关系**（历史正文不改写）：2026-09-23「P2-GOV-SYNC-068：开发助手模型路由与四档施工」路由表「完成后静态评审」行、第 3 条 MiMo 启用条件、第 5 条「厂商不同不作为通过条件」。该条其余内容继续有效：独立上下文、完整候选材料与职责分离；plan 评审与回退约定；校准记录。
+
+## 2026-09-29 — P2-GOV-SYNC-070：开发助手路由更新、MiMo 恢复静态审核与本批状态同步
+
+**决定**：雨爷 2026-09-29 明确指定下列路由与审查安排，覆盖 2026-09-23「P2-GOV-SYNC-068：开发助手模型路由与四档施工」与 2026-09-24「P2-GOV-SYNC-069：静态评审按作者交叉评审」的对应条目；历史条目正文不改写。分档、风险、验证与红线的规则正文仍唯一见 `AGENTS.md`；本条只维护派工模型、effort、审查顺序与记录形式，且是现役路由型号的唯一载体（`AGENTS.md` 不维护型号表）。
+
+| 环节 | 模型与 effort |
+|---|---|
+| 主控（Codex） | astra（`gpt-6-astra`），ultra |
+| A/B 档 plan | GPT Pro，经 codex-chatgpt-web 浏览器通道（slug `chatgpt-web/gpt-6-pro`，effort=max，Browser-only） |
+| plan 独立评审 | astra，ultra（新上下文；没有额外的 MiMo plan 复审） |
+| A 档施工 | astra，high |
+| B 档施工 | sol，max |
+| C 档施工 | MiMo V2.6 Pro（`mimo-v2.6-pro`），max |
+| D 档施工 | MiMo V2.6 Flash（`mimo-v2.6-flash`），max |
+| A 完成后 | Astra medium 新上下文自审 + MiMo Pro max 静态审核 |
+| B 完成后 | Sol xhigh 新上下文自审 + MiMo Pro max 静态审核 |
+| C 完成后 | Sol high 独立静态审核（本条新增；C 不加自审、plan 或 Monitor） |
+| D 完成后 | 无独立审核；保留 diff、解析与真实结果核对（D 不加 plan 或 Monitor） |
+| Monitor（A 档与高风险 B 档） | astra，high |
+
+1. **顺序与不变量**：A 与高风险 B 的顺序固定为新上下文自审 → 适用 Monitor → MiMo 静态审核；Monitor 的动态取证职责、三轮上限、权限红线、候选 base/head 绑定与合并授权全部不变。C/D 不新增 plan 或 Monitor。新鲜上下文的同系列自审即满足自审要求，不在同一施工上下文再增一道自审。
+2. **静态审核记录形式**：静态桥摘要允许 MiMo 标题（如 `### MiMo 评审桥`）。经 OpenCode 原生会话完成、未运行桥脚本时，PR 验证段用简短的 `### OpenCode 静态评审` 记录：请求模型与 effort、实际取得的模型证据（能取得才填）、PASS/FAIL/BLOCKED、最终 base/head 与会话产物位置；不伪造原桥闭集字段，不把模型自述当服务端证明。这是雨爷本次指定路线，不是为失败换桥；现役桥脚本运行时仍按原闭集字段与真证据约束执行。D 档不加此类摘要要求。
+3. **MiMo 准入与历史事实**：取消 2026-09-23 第 3 条的历史盲测前置，以及 2026-09-24 第 4 条「MiMo 仅可选试跑、不作合并依据、不生成 PR 合规摘要」的处置，MiMo 恢复为实际静态审核方。2026-09-24 记录的两轮通道验收未通过的误报/漏报事实保留不改写，不宣称 MiMo 评审质量与其他方等价。本批简单实测只证明最小可用：MiMo Pro 正确指出合成区间函数遗漏上界、Flash 生成样例成功——不证明真实项目质量。原临时严格 VERDICT 解析对「Pro 同行附带解释」记 BLOCKED 的旧结果不改写。恢复 Claude 或更换路线须雨爷明确决定，不自动回退。
+4. **`max` 的含义**：MiMo 的 `max` 是本地配置路由名（`opencode.json` 的 `variants.max`），实际为 `thinking.type=enabled` + `reasoning_effort=high`；官方当前非 none 档不区分额外强度，不宣称独立的 max 比 high 更强。
+5. **GPT Pro 通道**：Browser-only 只写 plan，不需要 MCP/API key；全量 Codex 上下文会经本地桥送到 ChatGPT，plan 应新建会话、只提供必要已脱敏上下文。浏览器登录未完成前如实报告不可用，不以 Astra 旧稿冒充 Pro 产物。codex-chatgpt-web 的安装与登录进度属外部证据，不写入本条等稳定路由文档。
+6. **配置落点**：`.codex/config.toml` 只设 `model='gpt-6-astra'`、`model_reasoning_effort='ultra'`，不改权限、用户默认 provider 或全局配置；`.codex/agents/*.toml` 为原生角色文件（name、description、developer_instructions、model、model_reasoning_effort），不使用过时的 `agents.<role>.config_file` 注册；`opencode.json` 仅在 `provider.mimo.models` 的 `mimo-v2.6-pro` / `mimo-v2.6-flash` 下新增 `variants.max`，并新增只评审 packet 的 `packet-review` agent，不设全局/项目 default model、不含 key/baseURL、不改默认 build agent 权限。使用文档见 `docs/dev/codex_orchestration.md`。角色文件在新会话生效，当前窗口不会自动换模型；显式 CLI 模型与 effort 可复现。
+7. **本棒 A 类机械同步**：PR #211 `P2-WO-ERROR-CONTRACT-001` 已于 2026-09-22 合并；PR #212 `P2-TENANT-IDENTITY-001` S1 已于 2026-09-23 合并。`STATUS.md` / `PHASE2_PLAN.md` 中把两者写成候选、待审、未 push 或未合并的陈旧表述据此更正。S2/S3 未施工、开棒标识待 GOV-SYNC 分配；全链验收前维持单租户运行，第二租户禁止启用，相关义务不因 S1 合并核销。已决后继分配为 `P2-ADMIN-EVENTS-UNIFORM-001`：2026-09-08 方向 A 已批准，待 GPT Pro 计划与 Astra 评审，尚未生产实现；该登记不构成施工或合并授权。`P2-LOW-RISK-WRITE-001 → P2-GOLDEN-002` 必达链的 OA 审批提交协议结构阻塞保持不变。
+8. **测试库事实（不外推）**：固定测试库已获当次专项授权迁移到 `20260922_190000`，三表行数与 tenant 列、复合主键、索引核验及环境诊断通过；该授权仅限本次动作，不外推到其他 DB 或其他 schema 操作。
+
+**替代关系**（历史正文不改写）：2026-09-23「P2-GOV-SYNC-068」的路由表与第 3 条 MiMo 通道验收（历史盲测前置）；2026-09-24「P2-GOV-SYNC-069」的交叉评审路由表与第 4 条 MiMo 处置。两条的其余结论继续有效：独立上下文、完整候选材料与职责分离；校准记录；模型证据类型与只读边界判据。本条不改变 Monitor 三轮上限、最终候选 base/head 绑定、合并授权规则与 Runtime LLM 合同（`AGENTS.md` 不变量 2）。

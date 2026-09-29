@@ -1,0 +1,42 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "mimo": {
+      "models": {
+        "mimo-v2.6-pro": {
+          "variants": {
+            "max": {
+              "reasoningEffort": "high",
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        },
+        "mimo-v2.6-flash": {
+          "variants": {
+            "max": {
+              "reasoningEffort": "high",
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "packet-review": {
+      "description": "只读审查主控提供的完整静态材料",
+      "mode": "primary",
+      "tools": {
+        "*": false
+      },
+      "permission": {
+        "*": "deny"
+      },
+      "prompt": "你是静态评审方。只依据已附入的完整规则、合同、raw diff 与候选 base/head 审查；材料不足返回 BLOCKED，不猜测通过。不执行命令、测试、构建、编辑、委派或读取外部文件。输出独立一行 VERDICT: PASS / FAIL / BLOCKED，再给具体发现。不把自述模型当服务端证据。"
+    }
+  }
+}

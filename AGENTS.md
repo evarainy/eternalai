@@ -39,25 +39,25 @@
 
 | 档 | 普通 | 高风险 |
 |---|---|---|
-| A | 独立 Monitor PASS → 静态评审桥 PASS，串行 | 同左，并按全量测试触发条件跑全量 |
-| B | 静态评审桥 PASS | 有界 Monitor（只对风险路径取证）PASS → 静态评审桥 PASS，串行，并按全量测试触发条件跑全量 |
-| C | 匹配改动的确定性验证，自行核对 | 不适用，遇到即升 B |
-| D | 核对 diff、来源与测试结果 | 不适用，遇到即升 B |
+| A | 新上下文自审 PASS → 独立 Monitor PASS → 静态审核 PASS，串行 | 同左，并按全量测试触发条件跑全量 |
+| B | 新上下文自审 PASS → 静态审核 PASS | 新上下文自审 PASS → 有界 Monitor（只对风险路径取证）PASS → 静态审核 PASS，串行，并按全量测试触发条件跑全量 |
+| C | 匹配改动的确定性验证，自行核对 + 独立静态审核（组合见 `docs/phase2/DECISIONS.md` 最新路由裁决） | 不适用，遇到即升 B |
+| D | 核对 diff、解析与真实结果；无独立审核 | 不适用，遇到即升 B |
 
-- A/B 施工方交付前自审；C/D 无自审门禁。各档均须完成匹配实际改动的确定性验证；C/D 取消的是独立审查环节，不免除核对 diff、文档冲突、测试有效性与实际结果。
+- A/B 施工方交付前在**新上下文**自审：同系列新鲜上下文即满足要求，不在同一施工上下文再增一道自审；C/D 无自审门禁，C 档另按上表接受独立静态审核，D 档保留 diff、解析与真实结果核对。C/D 不新增 plan 或 Monitor。各档均须完成匹配实际改动的确定性验证；D 档免于独立审核，各档均不免除核对 diff、文档冲突、测试有效性与实际结果。
 - 人工停点来自红线、扩域、新增或变更架构/框架/公共契约/API/协议/信任边界/核心不变量、重大未决选择或批次/里程碑验收。恢复已批准合同的缺陷修复按当前 Goal 推进，不因档位或风险标记而另设人工 Gate；改变权限设计或合同仍须先批。保持既有架构的内部 ports 变更本身不增设停点。
 - 不设独立 local-commit Gate。各档合并授权须在开棒时明确；未明确时先完成可做工作，在合并处等待。A/B 档另须满足下述审查。
 
 ### A/B 档独立证据
 
-顺序为施工方自审 → 需要 Monitor 时（A 档、高风险 B 档）独立 Monitor PASS → 静态评审桥 PASS → 合并；Monitor FAIL 时不得先跑静态评审桥。分工单位是**具体事实能否静态判定**，不是主题名。
+顺序为施工方新上下文自审 PASS → 需要 Monitor 时（A 档、高风险 B 档）独立 Monitor PASS → 静态审核 PASS → 合并；Monitor FAIL 时不得先跑静态审核。分工单位是**具体事实能否静态判定**，不是主题名。plan 只由 DECISIONS 最新路由指定的独立评审方评审，不增设额外模型的 plan 复审。
 
 - A 档 Monitor 执行五类取证：变异与故障注入、真实授权路径的攻击矩阵、fixture 合法取值充分性、真实依赖保真度、实测数字复核。高风险 B 档的有界 Monitor 只对风险路径执行其中适用的类别，并写明取证范围。禁止改写未经批准的 Golden fixture / `FROZEN_GT_IDS`；改用临时用例或书面推演，并标明未经执行验证。
-- 静态评审桥只读：可用只读命令查阅代码、历史与合同，不运行测试、构建或任何写操作，越界执行即判 BLOCKED；只判静态事实：合同完整性、类型层可达性、scope 与 diff、显式授权判断完整性、文件落点和直接 import、声明缺失、跨文件一致性。上述静态项不重复列入 Monitor 必做项；动态越权、门禁接线、动态 import / registry 解析不交给静态评审桥。
+- 静态审核只读（评审桥脚本或 OpenCode 原生会话同样适用）：可用只读命令查阅代码、历史与合同，不运行测试、构建或任何写操作，越界执行即判 BLOCKED；只判静态事实：合同完整性、类型层可达性、scope 与 diff、显式授权判断完整性、文件落点和直接 import、声明缺失、跨文件一致性。上述静态项不重复列入 Monitor 必做项；动态越权、门禁接线、动态 import / registry 解析不交给静态审核方。
 - 静态评审方须与施工方为不同厂商的模型（交叉评审），组合见 `docs/phase2/DECISIONS.md` 最新路由裁决；Monitor 与静态评审可同厂商，但须独立会话。
 - 生成监理任务时才读 `docs/phase2/MONITOR_PROMPT_TEMPLATE.md`，其中维护具体操作、负向形态与输出格式。必需证据取不到即停手报告，不以推演或工具失败冒充 PASS。
 - 同一 task_id 最多发出三份监理提示词；中止或未产出结论也计轮次，覆盖/改名/修订不减计。第三轮仍非 PASS 即停手交雨爷裁决，不开第四轮。
-- 合并前核对静态评审桥合规摘要（需要 Monitor 时还有 Monitor PASS 文件）均绑定最终 base/head；任一变化，旧结论失效，须重评。评审桥现役模型与 effort 配置由主窗口维护，PR 摘要中以 `observed_model` 如实记录。
+- 合并前核对静态审核记录（评审桥合规摘要，或下述 `OpenCode 静态评审` 记录；需要 Monitor 时还有 Monitor PASS 文件）均绑定最终 base/head；任一变化，旧结论失效，须重评。评审桥现役模型与 effort 配置由主窗口维护，PR 摘要中以 `observed_model` 如实记录。
 
 ## Git 与永久任务记录
 
@@ -65,7 +65,8 @@
 - A 档棒将纯格式化改动与功能改动分开提交；本条不增加 CI 检查。
 - 集成只走任务分支普通 push → PR → required checks 最终全绿 → 获准的 PR 合并；不得本地合完直推主分支。验证、所需 Review、候选 freshness、分支保护与 required checks 均须满足；绿灯本身不是合并授权。每次合并后检查对应 merge SHA 的远端 GitHub Actions 结果。
 - 不建 per-task Task Record。PR body 合并前必须完整包含 `## Scope`、`## 验证结果`、`## 本棒新增欠债`。验证段逐条记录实际命令、最小充分原始结果、未执行项理由、候选 commit 与 CI run；欠债每条带 reason、blocked_by_task_id、activation_task_id、expiry_condition、evidence，无新增则写明。
-- A/B 档验证段还须含 `### Opus 评审桥` 或 `### Codex 评审桥` JSON 摘要（组合见 DECISIONS 最新路由裁决），由桥脚本生成，字段闭集：`requested_model`、`observed_model`、`model_evidence`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。`model_evidence` 为 `server`（服务端响应中的模型）或 `cli_session`（与本次运行对应的 codex 会话记录，非服务端证据）；`review_model_verified` 指按该证据类型核验一致。合规要求 `review_model_verified=true`、PR 摘要如实记录实际 `observed_model`、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
+- A/B 档验证段还须含静态评审桥 JSON 摘要（标题按现役路由可用 `### Opus 评审桥`、`### Codex 评审桥` 或 `### MiMo 评审桥`，组合见 DECISIONS 最新路由裁决），由桥脚本生成，字段闭集：`requested_model`、`observed_model`、`model_evidence`、`review_model_verified`、`requested_effort`、`verdict`、`base_sha`、`head_sha`、`provider_error`、`invalid_stream_lines`、`termination_reason`。`model_evidence` 为 `server`（服务端响应中的模型）或 `cli_session`（与本次运行对应的 codex 会话记录，非服务端证据）；`review_model_verified` 指按该证据类型核验一致。合规要求 `review_model_verified=true`、PR 摘要如实记录实际 `observed_model`、`verdict=PASS`、`provider_error=false`、`termination_reason=completed`，base/head 绑定最终候选；不得放响应原文或敏感值。PR 三段、欠债字段和摘要均不得合并后补写。
+- A/B 档静态审核经 OpenCode 原生会话完成、未运行桥脚本时，PR 验证段改用简短的 `### OpenCode 静态评审` 记录，写清：请求模型与 effort、实际取得的模型证据（能取得才填）、verdict（PASS / FAIL / BLOCKED）、绑定的最终 `base_sha` 与 `head_sha`、会话产物位置。**不伪造上一条的桥脚本闭集字段，不把模型自述当服务端证明**；这是雨爷 2026-09-29 指定的路线，不是为失败换桥。桥脚本实际运行时仍按上一条的闭集字段与真证据约束执行。D 档不要求该记录。
 - 评审桥因额度耗尽或服务故障不可用时，经雨爷当次明确授权，可由**替代静态评审方**（如子智能体）承担 A/B 档静态评审。此时 PR 验证段改用 `### 静态评审（替代评审桥）` 段落，如实记录：替代授权的来源与日期、实际使用的模型、`verdict`、绑定的 `base_sha` 与 `head_sha`、以及未运行评审桥的原因。**不得伪造 `review_model_verified`、`termination_reason`、`provider_error`、`invalid_stream_lines` 等由桥脚本产出的闭集字段**——没有跑桥就不写这些字段。替代评审方的判据、只读边界与「不重复 Monitor 已取证的动态事实」要求与评审桥一致。
 - Owner 已登记待办：为主分支保护开启 **Do not allow bypassing the above settings**；无专项授权不得代改。
 
