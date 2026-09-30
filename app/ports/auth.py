@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Protocol
@@ -67,6 +68,21 @@ class VerifiedSessionToken:
     fingerprint: bytes = field(repr=False)
     expires_at: datetime
     version: Literal[1, 2]
+
+
+@dataclass(frozen=True)
+class AuthenticatedSessionContext:
+    principal: Principal
+    fingerprint: bytes = field(repr=False)
+    expires_at: datetime
+
+
+# Request tasks inherit this only from the verified HTTP authentication dependency.
+# Never populated from Runtime arguments or a client-provided principal object.
+authenticated_session: ContextVar[AuthenticatedSessionContext | None] = ContextVar(
+    "authenticated_session",
+    default=None,
+)
 
 
 class SessionRevocationStoreError(RuntimeError):

@@ -14,7 +14,7 @@ from app.ports.policy_guard import (
     PolicyGuardPort,
     PolicyRequestContext,
 )
-from app.ports.request_context import RequestOrgContext
+from app.ports.request_context import GovernedPolicyContext, RequestOrgContext
 
 
 def _is_management_plane_capability(capability_id: str) -> bool:
@@ -28,9 +28,13 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
         self,
         admin_capability_ids: Collection[str] = (),
         audit_read_capability_ids: Collection[str] = (),
+        governed_outer_ids: Collection[str] = (),
+        governed_leaf_ids: Collection[str] = (),
     ) -> None:
         self._admin_capability_ids = frozenset(admin_capability_ids)
         self._audit_read_capability_ids = frozenset(audit_read_capability_ids)
+        self._governed_outer_ids = frozenset(governed_outer_ids)
+        self._governed_leaf_ids = frozenset(governed_leaf_ids)
 
     async def decide(
         self,
@@ -40,6 +44,25 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
         request_context: PolicyRequestContext,
     ) -> PolicyDecision:
         if arguments is None:
+            return PolicyDecision(
+                decision="deny",
+                reason_code="policy_denied",
+            )
+        if capability_id in self._governed_outer_ids:
+            return PolicyDecision(
+                decision="confirm", reason_code="high_risk_action_requires_confirm"
+            )
+        if capability_id in self._governed_leaf_ids:
+            return PolicyDecision(
+                decision="allow"
+                if (
+                    type(request_context) is GovernedPolicyContext
+                    and request_context.leaf_capability_id == capability_id
+                )
+                else "deny",
+                reason_code="policy_denied",
+            )
+        if capability_id.startswith("business.") and ".internal." in capability_id:
             return PolicyDecision(
                 decision="deny",
                 reason_code="policy_denied",
@@ -82,6 +105,10 @@ class MinimalPolicyGuard(PolicyGuardPort, CapabilityCandidatePolicyPort):
         request_context: RequestOrgContext,
     ) -> CandidateVisibility:
         """Exclude only what ``decide`` always denies on the business plane."""
+        if capability_id in self._governed_leaf_ids or (
+            capability_id.startswith("business.") and ".internal." in capability_id
+        ):
+            return "exclude"
         if _is_management_plane_capability(capability_id) and not isinstance(
             request_context, ManagementPlanePolicyContext
         ):

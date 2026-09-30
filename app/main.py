@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from app.admin.registry import AdminRegistryService
 from app.api.v1.admin import make_router as make_admin_router
@@ -21,6 +22,8 @@ from app.api.v1.csrf import (
 )
 from app.api.v1.health import HealthCheck
 from app.api.v1.health import make_router as make_health_router
+from app.api.v1.mcp import McpApiService
+from app.api.v1.mcp import make_router as make_mcp_router
 from app.api.v1.me import make_router as make_me_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_objects import WorkObjectService
@@ -28,6 +31,7 @@ from app.api.v1.work_objects import make_router as make_work_object_router
 from app.composition import build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
     AuthenticationPort,
@@ -61,6 +65,7 @@ def create_app(
     organization_directory_scheduler: OrganizationDirectoryScheduler | None = None,
     diagnostic_checks: dict[str, HealthCheck] | None = None,
     validate_workflows: Callable[[], Awaitable[None]] | None = None,
+    mcp_service: McpApiService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -79,11 +84,23 @@ def create_app(
                 await credential_polling_scheduler.stop()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
+
+    @application.exception_handler(McpFailure)
+    async def mcp_failure_handler(_request: object, _exc: McpFailure) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": {"code": "mcp_action_unavailable"}},
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
     require_principal = make_require_principal(session_tokens, session_revocations)
     require_csrf = make_require_csrf(csrf_allowed_origins)
     csrf_protected_principal = make_csrf_protected_principal(
         require_principal,
         require_csrf,
+    )
+    application.include_router(
+        make_mcp_router(mcp_service, csrf_protected_principal), prefix="/api/v1/mcp"
     )
     application.include_router(
         make_health_router(
@@ -163,6 +180,7 @@ def create_production_app(
         organization_directory_scheduler=components.organization_directory_scheduler,
         diagnostic_checks=dict(components.diagnostic_checks),
         validate_workflows=components.validate_workflows,
+        mcp_service=components.mcp_service,
     )
 
 

@@ -7,8 +7,10 @@ from typing import Any, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, Field, field_validator
 
 from app.ports.evaluation import OverviewEvaluationInput
+from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
 from app.ports.request_context import RequestChannel as RequestChannel
 from app.ports.request_context import RequestOrgContext as RequestOrgContext
+from app.ports.workflow_store import GovernedWorkflowAuthorization
 
 ErrorCode: TypeAlias = Literal[
     "identity_unbound",
@@ -32,6 +34,8 @@ ErrorCode: TypeAlias = Literal[
     "capability_catalog_invalid",
     "capability_candidate_out_of_scope",
     "capability_candidate_stale",
+    "mcp_contract_unconfirmed",
+    "mcp_outcome_unknown",
 ]
 
 ExecutionStatus: TypeAlias = Literal[
@@ -50,6 +54,8 @@ class ExecutionResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     trace_id: str
+    mcp_outcome: McpValidatedOutcome | None = Field(default=None, exclude=True, repr=False)
+    mcp_read: McpValidatedRead | None = Field(default=None, exclude=True, repr=False)
     postcondition_input: OverviewEvaluationInput | None = Field(
         default=None, exclude=True, repr=False,
     )
@@ -71,4 +77,6 @@ class CapabilityGatewayPort(Protocol):
         capability_id: str,
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
+        *,
+        workflow_authorization: GovernedWorkflowAuthorization | None = None,
     ) -> ExecutionResult: ...

@@ -548,6 +548,17 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 
 已决架构与历史 supersede 唯一见 `docs/phase2/DECISIONS.md`；未决项以上方五字段活欠债为准。
 
+### MCP 离线接入后的启用义务（2026-09-30）
+
+`P2-MCP-PLATFORM-001` 提供通用多服务底层及 13 工具离线开发候选；公司未确认事项按以下插口保持关闭。此记录不分配后继、不改变原 OA 必达链或第二租户禁启裁决。
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| MCP 公司身份、13 输出与业务恢复合同 | 同主体证据、分用途输出、网页确认原子保障、业务后态/规则及原制品恢复尚未签收；合成测试不能代替公司合同 | `P2-MCP-PLATFORM-001`（启用前外部输入） | 待 GOV-SYNC 分配 | 公司签收版本化合同并接入既有身份/输出/规则/恢复插口，对应真实用户与获准写入验收通过后逐工具解除关闭 | `docs/dev/mcp_company_questions.md` MCP-Q01–Q11；`docs/dev/mcp_offline_acceptance.md` 13 工具矩阵 |
+| MCP 数据保留与配置版本升级 | 未决操作不得丢失原 client/制品/期限；公司尚未确定最小保留及销毁条件，当前不自动清理，配置漂移默认拒绝 | `P2-MCP-PLATFORM-001`（公司保留/恢复规则待确认） | 待 GOV-SYNC 分配 | 批准保留/结案规则、旧注册兼容升级和精确删除/迁移动作，复验 UNKNOWN 恢复不受损 | `docs/dev/mcp_company_questions.md` MCP-Q07/Q08/Q12；`docs/dev/mcp_activation_checklist.md` |
+| MCP 真实部署与业务验收 | 当前证据为合成合同、真实本地 SDK/HTTP/PG 及生产装配；未使用正式业务账号，未执行真实写或生产迁移 | `P2-MCP-PLATFORM-001`（正式服务及真实动作专项授权待具备） | 待 GOV-SYNC 分配 | 正式服务可用，专项授权齐备，逐工具完成普通用户权限、确认/恢复与可核验业务后态验收 | `docs/dev/mcp_activation_checklist.md`；候选及 PR 验证记录 |
+| 开发诊断敏感输出处置 | 固定测试库连接敏感值曾出现于工具会话，未撤回/轮换；官方后台原始日志接缝未修改，补丁两次被自动审批拒绝。本棒内存 wrapper 仅约束本次验证 | `P2-MCP-PLATFORM-001`（owner 处置及工具修复授权待安排） | 待 GOV-SYNC 分配 | owner 在明确授权范围内完成既有会话风险处置与诊断输出安全改进并验证；不得自行读原素材或改凭证 | `docs/dev/mcp_offline_acceptance.md` 结果与限制；仓库外事件/拒绝/等价全量授权证据 |
+
 ## 6. P2 不做什么
 
 - 不把“能连到接口”当试点完成；缺可信身份、正式凭证、审计、Evaluator 或负向 Golden 时仍是半成品。（蓝图 §3.2 L176-L186、§7.0 L1383-L1404、§13 L2701-L2717）

@@ -203,7 +203,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },
@@ -253,7 +254,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },
@@ -527,7 +529,8 @@
                 "enum": [
                   "oa",
                   "u8",
-                  "hikvision_ivms"
+                  "hikvision_ivms",
+                  "business_platform"
                 ],
                 "type": "string"
               },

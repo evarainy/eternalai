@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import ipaddress
+import json
 import math
 import os
 import re
@@ -16,6 +17,7 @@ from urllib.parse import quote, unquote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.db.config import get_database_url
+from app.mcp.models import ServiceConfig
 
 _DEFAULT_LLM_BASE_URL = "http://34.74.11.38:8011/v1"
 _DEFAULT_LLM_MODEL = "glm-4.7"
@@ -202,8 +204,14 @@ class ProductionSettings:
     organization_directory_max_age_s: int = 172800
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
+    mcp_services: tuple[ServiceConfig, ...] = ()
 
     def __post_init__(self) -> None:
+        ids = [profile.service_config_id for profile in self.mcp_services]
+        if len(ids) != len(set(ids)) or any(
+            p.tenant_id != self.source_tenant_id for p in self.mcp_services
+        ):
+            raise ValueError("mcp_configuration_invalid")
         for value in (self.source_profile_id, self.source_tenant_id):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError("source_profile_configuration_invalid")
@@ -499,6 +507,7 @@ class ProductionSettings:
                 maximum=600,
             ),
             phase0_mock_mode=phase0_mock_mode,
+            mcp_services=_mcp_services(source),
         )
         if (
             settings.credential_poll_maximum_backoff_seconds
@@ -892,3 +901,16 @@ def _directory_source_user(source: Mapping[str, str]) -> str | None:
             "ORGANIZATION_DIRECTORY_SYNC_SOURCE_AI_USER_ID must be a nonblank identifier"
         )
     return raw
+
+
+def _mcp_services(source: Mapping[str, str]) -> tuple[ServiceConfig, ...]:
+    raw = source.get("MCP_SERVICE_CONFIGS_JSON", "[]")
+    try:
+        if len(raw.encode()) > 65536:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) > 16:
+            raise ValueError
+        return tuple(ServiceConfig.model_validate(value) for value in values)
+    except (ValueError, TypeError):
+        raise RuntimeError("mcp_configuration_invalid") from None

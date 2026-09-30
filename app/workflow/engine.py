@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hmac import compare_digest
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 from uuid import uuid4
 
 from app.evaluator.overview import canonical_object, required_postcondition_rule
@@ -31,12 +31,16 @@ from app.version_binding import (
     workflow_version_binding,
 )
 from app.workflow.models import (
+    GovernedWorkflowDefinition,
     WorkflowDefinition,
     WorkflowInputRef,
     WorkflowRunResult,
     WorkflowRunStatus,
     WorkflowStep,
 )
+
+if TYPE_CHECKING:
+    from app.mcp.operations import GovernedOperations
 
 RETRYABLE_ERROR_CODES: frozenset[ErrorCode] = frozenset({"adapter_timeout"})
 MAX_STEP_RETRIES = 1
@@ -74,6 +78,7 @@ class WorkflowEngine:
         task_store: TaskStorePort,
         trace_port: TracePort,
         human_gate_port: HumanGatePort | None = None,
+        governed_operations: GovernedOperations | None = None,
     ) -> None:
         self._definitions = definitions
         self._capability_registry = capability_registry
@@ -82,6 +87,7 @@ class WorkflowEngine:
         self._trace_port = trace_port
         self._human_gate_port = human_gate_port
         self._checkpoints: dict[str, _WorkflowCheckpoint] = {}
+        self._governed = governed_operations
 
     def configure_human_gate_port(self, human_gate_port: HumanGatePort) -> None:
         """Attach the shared Task-binding store before the first execution."""
@@ -121,17 +127,33 @@ class WorkflowEngine:
     ) -> tuple[VersionBinding, ...]:
         """Resolve what the saved checkpoint would execute, not the latest definition."""
 
+        if self._governed is not None:
+            operation = await self._governed.store.by_task(task_id)
+            if operation is not None:
+                await self._governed.owned(operation)
+                return await self._definition_version_bindings(
+                    self._snapshot_definition(
+                        operation.outer_capability_id, operation.outer_version
+                    )
+                )
         checkpoint = self._checkpoints.get(task_id)
         if checkpoint is None:
             raise ValueError("no waiting Workflow checkpoint exists for task")
         return await self._definition_version_bindings(checkpoint.definition)
 
-    def discard_checkpoint(self, task_id: str) -> None:
+    async def discard_checkpoint(self, task_id: str) -> None:
+        if self._governed is not None and await self._governed.discard(task_id):
+            return
         self._checkpoints.pop(task_id, None)
 
-    def pending_confirmation_action_digest(self, task_id: str) -> str:
+    async def pending_confirmation_action_digest(self, task_id: str) -> str:
         """Recompute the exact resolved action saved in the waiting checkpoint."""
 
+        if self._governed is not None:
+            operation = await self._governed.store.by_task(task_id)
+            if operation is not None:
+                await self._governed.owned(operation)
+                return operation.action_digest
         checkpoint = self._checkpoints.get(task_id)
         if checkpoint is None:
             raise VersionBindingMismatchError("No waiting Workflow action is available")
@@ -177,6 +199,15 @@ class WorkflowEngine:
                 workflow_capability=workflow_capability,
             )
             await self._human_gate_port.assert_task_bindings(task_id, bindings)
+        if self._governed is not None and self._governed.admitted(definition):
+            return await self._governed.start(
+                definition,
+                task_id=task_id,
+                session_id=session_id,
+                ai_user_id=ai_user_id,
+                initial_input=initial_input,
+                request_context=request_context,
+            )
         await self._append_state(
             task_id,
             "workflow_started",
@@ -220,6 +251,14 @@ class WorkflowEngine:
     ) -> WorkflowRunResult:
         if confirmed is not True:
             raise ValueError("explicit Workflow confirmation is required")
+        if self._governed is not None and await self._governed.store.by_task(task_id) is not None:
+            bindings = await self.resume_version_bindings(task_id=task_id)
+            if self._human_gate_port is None:
+                raise VersionBindingMismatchError("Human gate unavailable")
+            await self._human_gate_port.assert_task_bindings(task_id, bindings)
+            return await self._governed.resume(
+                task_id, confirmed=confirmed, expected_action_digest=expected_action_digest
+            )
         checkpoint = self._checkpoints.get(task_id)
         if checkpoint is None:
             raise ValueError("no waiting Workflow checkpoint exists for task")
@@ -227,7 +266,7 @@ class WorkflowEngine:
         try:
             if expected_action_digest is not None and not compare_digest(
                 expected_action_digest,
-                self.pending_confirmation_action_digest(task_id),
+                await self.pending_confirmation_action_digest(task_id),
             ):
                 raise VersionBindingMismatchError("Pending Workflow action changed after preview")
             if self._human_gate_port is not None:
@@ -566,13 +605,22 @@ class WorkflowEngine:
 
     async def _validate_steps(self, definition: WorkflowDefinition) -> None:
         self.validate_structure(definition)
+        governed = self._governed is not None and self._governed.admitted(definition)
         for step in definition.steps:
             capability = await self._capability_registry.get(step.capability_id)
             if (
                 capability is None
                 or capability.status != "active"
-                or capability.risk_level != "low"
+                or capability.risk_level != ("high" if governed else "low")
                 or capability.type == "workflow"
+                or (
+                    governed
+                    and (
+                        capability.target_system != "business_platform"
+                        or capability.version != definition.version
+                        or capability.type != "action"
+                    )
+                )
             ):
                 raise ValueError(
                     "each Workflow step must reference an active low-risk registered capability"
@@ -625,6 +673,9 @@ class WorkflowEngine:
             workflow_binding = workflow_version_binding(workflow_capability, definition)
         groups: list[tuple[VersionBinding, ...]] = [(workflow_binding,)]
         capability_ids: set[str] = set()
+        if isinstance(definition, GovernedWorkflowDefinition) and definition.policy is not None:
+            if definition.policy.recovery_capability_id is not None:
+                capability_ids.add(definition.policy.recovery_capability_id)
         for step in definition.steps:
             capability_ids.add(step.capability_id)
             if step.confirmed_capability_id is not None:

@@ -879,6 +879,7 @@ def test_production_app_warns_when_session_cookie_secure_is_disabled(
         session_binder=SimpleNamespace(bind=lambda *_args: "unused"),
         session_cookie_ttl_seconds=settings.session_cookie_ttl_seconds,
         health_checks={},
+        mcp_service=None,
         health_timeout_seconds=settings.health_timeout_seconds,
         user_profile=None,
     )
@@ -1021,6 +1022,7 @@ def _oa_mode_settings(mode: str) -> ProductionSettings:
         oa_system_messages_bizstate=("system-business-state" if mode == "live" else None),
         oa_system_messages_select_state=("system-selection-state" if mode == "live" else None),
     )
+
 
 @pytest.mark.parametrize(
     ("mode", "provider_type"),
@@ -1189,7 +1191,6 @@ def test_live_production_rejects_static_identity_and_adapter_overrides(
 
     with pytest.raises(RuntimeError, match="does not allow"):
         build_production_components(settings, **overrides)
-
 
 
 def test_dispatch_policy_diagnostic_is_wired_to_health(monkeypatch, dispatch_db):

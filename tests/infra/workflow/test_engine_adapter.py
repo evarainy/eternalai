@@ -118,10 +118,10 @@ class _SpyWorkflowEngine:
         self.resume_version_bindings_calls.append(kwargs)
         return self.resume_version_bindings_result
 
-    def discard_checkpoint(self, task_id: str) -> None:
+    async def discard_checkpoint(self, task_id: str) -> None:
         self.discard_checkpoint_calls.append(task_id)
 
-    def pending_confirmation_action_digest(self, task_id: str) -> str:
+    async def pending_confirmation_action_digest(self, task_id: str) -> str:
         self.pending_confirmation_action_digest_calls.append(task_id)
         return self.pending_confirmation_action_digest_result
 
@@ -235,7 +235,7 @@ def test_discard_checkpoint_forwards_task_id() -> None:
     spy = _SpyWorkflowEngine()
     adapter = WorkflowEngineAdapter(spy)  # type: ignore[arg-type]
 
-    adapter.discard_checkpoint("task-5")
+    asyncio.run(adapter.discard_checkpoint("task-5"))
 
     assert spy.discard_checkpoint_calls == ["task-5"]
 
@@ -244,7 +244,7 @@ def test_pending_confirmation_action_digest_forwards_task_id_and_returns_engine_
     spy = _SpyWorkflowEngine()
     adapter = WorkflowEngineAdapter(spy)  # type: ignore[arg-type]
 
-    result = adapter.pending_confirmation_action_digest("task-6")
+    result = asyncio.run(adapter.pending_confirmation_action_digest("task-6"))
 
     assert spy.pending_confirmation_action_digest_calls == ["task-6"]
     assert result == spy.pending_confirmation_action_digest_result

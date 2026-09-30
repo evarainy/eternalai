@@ -17,6 +17,8 @@ from app.ports.capability_gateway import (
     RequestChannel,
     RequestOrgContext,
 )
+from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
+from app.ports.workflow_store import GovernedWorkflowAuthorization
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CAPABILITY_GATEWAY_SOURCE = REPO_ROOT / "app" / "ports" / "capability_gateway.py"
@@ -58,6 +60,8 @@ EXPECTED_ERROR_CODE_VALUES = (
     "capability_catalog_invalid",
     "capability_candidate_out_of_scope",
     "capability_candidate_stale",
+    "mcp_contract_unconfirmed",
+    "mcp_outcome_unknown",
 )
 
 EXPECTED_EXECUTION_RESULT_FIELDS = {
@@ -66,6 +70,8 @@ EXPECTED_EXECUTION_RESULT_FIELDS = {
     "data",
     "error_code",
     "trace_id",
+    "mcp_outcome",
+    "mcp_read",
 }
 
 EXPECTED_EXECUTION_STATUS_VALUES = (
@@ -184,6 +190,7 @@ class TestCapabilityGatewayPortProtocol:
             "capability_id",
             "arguments",
             "request_context",
+            "workflow_authorization",
         ]
         assert hints["task_id"] is str
         assert hints["session_id"] is str
@@ -191,8 +198,26 @@ class TestCapabilityGatewayPortProtocol:
         assert hints["capability_id"] is str
         assert hints["arguments"] == dict[str, Any]
         assert hints["request_context"] is RequestOrgContext
+        assert hints["workflow_authorization"] == GovernedWorkflowAuthorization | None
+        assert signature.parameters["workflow_authorization"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert signature.parameters["workflow_authorization"].default is None
         assert hints["return"] is ExecutionResult
         assert inspect.iscoroutinefunction(CapabilityGatewayPort.execute_capability)
+
+
+def test_mcp_validated_evidence_stays_out_of_public_serialization_and_repr() -> None:
+    result = ExecutionResult(
+        status="completed", trace_id="synthetic",
+        mcp_read=McpValidatedRead(data={"private_canary": "synthetic-not-public"}),
+        mcp_outcome=McpValidatedOutcome(
+            state="VERIFIED_SUCCESS", persistence={"reference": "synthetic-reference"}
+        ),
+    )
+    assert result.model_dump() == {
+        "status": "completed", "trace_id": "synthetic", "data": None, "error_code": None
+    }
+    assert "synthetic-not-public" not in repr(result)
+    assert "synthetic-reference" not in repr(result)
 
 
 def test_capability_gateway_source_does_not_contain_concrete_execution_dependencies() -> None:

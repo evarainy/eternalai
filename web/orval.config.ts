@@ -1,6 +1,17 @@
 import { defineConfig } from 'orval';
 
 export default defineConfig({
+  mcp: {
+    input: './openapi/mcp.openapi.json',
+    output: {
+      mode: 'split',
+      target: './src/generated/mcp/mcp.ts',
+      mock: false,
+      override: {
+        mutator: { path: './src/api/mutator.ts', name: 'customInstance' },
+      },
+    },
+  },
   api: {
     input: './openapi/health.openapi.json',
     output: {

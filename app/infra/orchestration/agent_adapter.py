@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Mapping
 
@@ -320,7 +321,7 @@ class AgentOrchestrationAdapter:
                 execution.trace_id or context.trace_id,
             )
         if execution.status == "failed":
-            return self._response_builder.build_failed(
+            response = self._response_builder.build_failed(
                 context.response_id,
                 context.task_id,
                 context.session_id,
@@ -328,6 +329,8 @@ class AgentOrchestrationAdapter:
                 "Operation failed.",
                 execution.trace_id or context.trace_id,
             )
+            recovery = _mcp_recovery_reference(context.capability_id, execution.data)
+            return response.model_copy(update={"data": recovery}) if recovery else response
         if execution.status == "no_capability_found":
             return self._response_builder.build_no_capability_found(
                 context.response_id,
@@ -345,7 +348,7 @@ class AgentOrchestrationAdapter:
             )
         if confirmation.target_system != target_system:
             raise OrchestrationContractError("Confirmation preview target differs from response")
-        return self._response_builder.build_confirm_card(
+        response = self._response_builder.build_confirm_card(
             context.response_id,
             context.task_id,
             context.session_id,
@@ -355,6 +358,8 @@ class AgentOrchestrationAdapter:
             payload=confirmation.to_payload(),
             target_system=target_system,
         )
+        recovery = _mcp_recovery_reference(context.capability_id, execution.data)
+        return response.model_copy(update={"data": recovery}) if recovery else response
 
 
 def _normalize_intent_tag(value: str) -> str:
@@ -409,6 +414,7 @@ def _workflow_execution_result(
     if result.status == "waiting_confirm":
         return ExecutionResult(
             status="waiting_user",
+            data=_mcp_recovery_reference(result.workflow_id, result.output),
             error_code=result.error_code,
             trace_id=result.trace_id,
         )
@@ -421,10 +427,37 @@ def _workflow_execution_result(
     if result.status == "failed":
         return ExecutionResult(
             status="failed",
+            data=_mcp_recovery_reference(result.workflow_id, result.output),
             error_code=result.error_code,
             trace_id=result.trace_id,
         )
     raise AssertionError("unsupported Workflow terminal status")
+
+
+def _mcp_recovery_reference(
+    capability_id: str, data: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    if not capability_id.startswith("business.") or not isinstance(data, dict):
+        return None
+    operation_id, state = data.get("operation_id"), data.get("state")
+    if (
+        not isinstance(operation_id, str)
+        or re.fullmatch(r"[a-f0-9]{32}", operation_id) is None
+        or state
+        not in {
+            "READY",
+            "WAITING_LOCAL_CONFIRM",
+            "WAITING_EXTERNAL_CONFIRM",
+            "SENDING",
+            "UNKNOWN",
+            "VERIFIED_SUCCESS",
+            "FAILED",
+            "CANCELLED",
+            "EXPIRED",
+        }
+    ):
+        return None
+    return {"operation_id": operation_id, "state": state}
 
 
 def _identity_block_message(error_code: str | None) -> tuple[str, str]:
@@ -439,6 +472,8 @@ def _identity_block_message(error_code: str | None) -> tuple[str, str]:
 
 
 def _target_system_for_capability(capability_id: str) -> TargetSystem | None:
+    if capability_id.startswith("business."):
+        return "business_platform"
     if capability_id.startswith("oa."):
         return "oa"
     if capability_id.startswith("u8."):

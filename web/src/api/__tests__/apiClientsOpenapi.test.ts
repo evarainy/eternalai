@@ -43,6 +43,19 @@ interface OpenApiDocument {
 
 const PROJECTS = [
   {
+    project: 'mcp', input: './openapi/mcp.openapi.json', target: './src/generated/mcp/mcp.ts',
+    operations: [
+      { path: '/api/v1/mcp/connections', method: 'get', operationId: 'connections_api_v1_mcp_connections_get' },
+      { path: '/api/v1/mcp/connections/{connection_id}/disconnect', method: 'post', operationId: 'disconnect_api_v1_mcp_connections__connection_id__disconnect_post' },
+      { path: '/api/v1/mcp/connections/{service_config_id}/authorize', method: 'post', operationId: 'authorize_api_v1_mcp_connections__service_config_id__authorize_post' },
+      { path: '/api/v1/mcp/oauth/callback', method: 'get', operationId: 'callback_api_v1_mcp_oauth_callback_get' },
+      { path: '/api/v1/mcp/operations', method: 'get', operationId: 'operations_api_v1_mcp_operations_get' },
+      { path: '/api/v1/mcp/operations/{operation_id}', method: 'get', operationId: 'operation_api_v1_mcp_operations__operation_id__get' },
+      { path: '/api/v1/mcp/operations/{operation_id}/resume', method: 'post', operationId: 'resume_api_v1_mcp_operations__operation_id__resume_post' },
+      { path: '/api/v1/mcp/services', method: 'get', operationId: 'services_api_v1_mcp_services_get' },
+    ],
+  },
+  {
     project: 'auth',
     input: './openapi/auth.openapi.json',
     target: './src/generated/auth/auth.ts',
@@ -464,7 +477,7 @@ describe('FastAPI-derived Orval clients', () => {
     });
   });
   it(
-    're-exports six FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
+    're-exports seven FastAPI specs, copies curated Admin, and regenerates byte-identical clients',
     () => {
       const temporaryRoot = mkdtempSync(join(tmpdir(), 'eternalai-openapi-'));
       const temporaryWeb = join(temporaryRoot, 'web');
@@ -477,8 +490,8 @@ describe('FastAPI-derived Orval clients', () => {
           expect(configSource).toContain(`input: '${target.input}'`);
           expect(configSource).toContain(`target: '${target.target}'`);
         }
-        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(8);
-        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(8);
+        expect(configSource.match(/path: '\.\/src\/api\/mutator\.ts'/g)).toHaveLength(9);
+        expect(configSource.match(/name: 'customInstance'/g)).toHaveLength(9);
 
         const exportTargets = PROJECTS.map((target) => ({
           filename: basename(target.input),

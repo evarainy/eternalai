@@ -73,7 +73,10 @@ capabilities = sa.Table(
         name="ck_capabilities_status",
     ),
     sa.CheckConstraint(
-        "target_system IS NULL OR target_system IN ('oa','u8','hikvision_ivms')",
+        (
+            "target_system IS NULL OR target_system IN ('oa','u8','h"
+            "ikvision_ivms','business_platform')"
+        ),
         name="ck_capabilities_target_system",
     ),
     sa.CheckConstraint(

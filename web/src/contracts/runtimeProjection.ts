@@ -34,6 +34,7 @@ const generatedTargetSystemMembership = {
   oa: true,
   u8: true,
   hikvision_ivms: true,
+  business_platform: true,
 } as const satisfies Record<GeneratedTargetSystem, true>;
 const confirmPayloadKeys = new Set([
   'capability_id',
@@ -116,6 +117,7 @@ export type RecordsView =
     };
 
 export interface ProjectedResponse {
+  mcpRecoveryPath?: string;
   role: 'assistant';
   text: string;
   status?: ResponseEnvelopeStatus;
@@ -646,6 +648,7 @@ export function projectResponse(
     confirm: null,
     records: data.records,
     actionOutcome: data.actionOutcome,
+    ...mcpRecoveryReference(value.data),
   };
 
   if (status === 'cancelled' || status === 'confirmation_invalidated') {
@@ -694,4 +697,15 @@ export function projectResponse(
     return { ...base, presentationKind: 'failed' };
   }
   return incompatibleResponse();
+}
+
+function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {
+  const reference = isRecord(data) && 'action_outcome' in data ? data.result : data;
+  if (!isRecord(reference) || Object.keys(reference).sort().join(',') !== 'operation_id,state' ||
+      typeof reference.operation_id !== 'string' || !/^[a-f0-9]{32}$/.test(reference.operation_id) ||
+      typeof reference.state !== 'string' || ![
+        'READY', 'WAITING_LOCAL_CONFIRM', 'WAITING_EXTERNAL_CONFIRM', 'SENDING', 'UNKNOWN',
+        'VERIFIED_SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED',
+      ].includes(reference.state)) return {};
+  return { mcpRecoveryPath: `/apps?operation=${reference.operation_id}` };
 }

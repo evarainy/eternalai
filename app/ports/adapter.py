@@ -8,6 +8,7 @@ from typing import Any, Literal, Mapping, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ports.capability_gateway import ErrorCode
+from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
 
 AdapterStatus: TypeAlias = Literal["success", "error", "timeout", "permission_denied"]
 
@@ -63,6 +64,8 @@ class AdapterResult(BaseModel):
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None
     raw_payload_ref: str | None = None
+    mcp_outcome: McpValidatedOutcome | None = Field(default=None, exclude=True, repr=False)
+    mcp_read: McpValidatedRead | None = Field(default=None, exclude=True, repr=False)
     trace_metadata: AdapterTraceMetadata | None = Field(
         default=None,
         exclude=True,
