@@ -20,6 +20,8 @@ class UnconfiguredIdentityMapping:
         target_system: TargetSystem,
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
+        *,
+        service_config_id: str | None = None,
     ) -> IdentityCheckResult:
         return IdentityCheckResult(
             bind_status="unbound",

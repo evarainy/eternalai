@@ -50,7 +50,7 @@ EXPECTED_IDENTITY_BIND_STATUS_VALUES = (
     "needs_binding_scope",
 )
 
-EXPECTED_TARGET_SYSTEM_VALUES = ("oa", "u8", "hikvision_ivms")
+EXPECTED_TARGET_SYSTEM_VALUES = ("oa", "u8", "hikvision_ivms", "business_platform")
 
 EXPECTED_EXECUTION_IDENTITY_VALUES = (
     "user_delegated",
@@ -276,11 +276,21 @@ def test_resolve_execution_identity_signature_matches_spec_8_6_8() -> None:
         "target_system",
         "execution_identity",
         "request_context",
+        "service_config_id",
     ]
     assert hints["ai_user_id"] is str
     assert hints["target_system"] is TargetSystem
     assert hints["execution_identity"] is ExecutionIdentity
     assert hints["request_context"] is RequestOrgContext
+    assert hints["service_config_id"] == str | None
+    assert signature.parameters["service_config_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["service_config_id"].default is None
+    legacy_call = signature.bind(
+        object(), "synthetic-user", "oa", "user_delegated",
+        RequestOrgContext(request_id="synthetic-request", tenant_id="default"),
+    )
+    legacy_call.apply_defaults()
+    assert legacy_call.arguments["service_config_id"] is None
     assert hints["return"] is IdentityCheckResult
     assert inspect.iscoroutinefunction(IdentityMappingPort.resolve_execution_identity)
 

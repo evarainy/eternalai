@@ -126,6 +126,15 @@ function confirmEnvelope(overrides: Record<string, unknown> = {}) {
   });
 }
 
+it('provides the bound Apps recovery link after an unknown business operation', () => {
+  useAIDockStore.setState({ transcript: [projectResponse(envelope({ status: 'failed',
+    data: { action_outcome: 'accepted', result: { operation_id: 'a'.repeat(32), state: 'UNKNOWN' } },
+  }))] });
+  renderChat();
+  expect(screen.getByRole('link', { name: '查看原操作并恢复' })).toHaveAttribute('href', `/apps?operation=${'a'.repeat(32)}`);
+  expect(runtimeMock.action).not.toHaveBeenCalled();
+});
+
 function pendingWorkflow(overrides: Record<string, unknown> = {}) {
   return {
     todo_id: 'todo-001',
@@ -1008,7 +1017,8 @@ describe('ChatPage response projection', () => {
     expect(screen.queryByText('RAW_POLICY_REASON')).not.toBeInTheDocument();
   });
 
-  it('shows only an allowlisted target-system label for binding', async () => {
+  it.each([['oa', 'OA'], ['business_platform', '业务平台']] as const)(
+    'shows only an allowlisted target-system label for binding: %s', async (target, label) => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -1019,7 +1029,7 @@ describe('ChatPage response projection', () => {
             ui: {
               component_type: 'operator_handback_card',
               action: 'bind_required',
-              target_system: 'oa',
+              target_system: target,
               reason_code: 'RAW_BIND_REASON',
               payload: {},
             },
@@ -1031,7 +1041,7 @@ describe('ChatPage response projection', () => {
 
     sendMessage('查询 OA 待办');
 
-    expect(await screen.findByText('目标系统：OA')).toBeInTheDocument();
+    expect(await screen.findByText(`目标系统：${label}`)).toBeInTheDocument();
     expect(screen.queryByText('RAW_BIND_REASON')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /绑定|解绑/ })).not.toBeInTheDocument();
   });

@@ -68,6 +68,7 @@ const targetSystemLabels: Record<
   oa: 'OA',
   u8: 'U8',
   hikvision_ivms: '海康 iVMS',
+  business_platform: '业务平台',
 };
 
 /**
@@ -145,6 +146,7 @@ function AssistantDetails({
   }
   return (
     <>
+      {entry.mcpRecoveryPath && <a href={entry.mcpRecoveryPath}>查看原操作并恢复</a>}
       {entry.actionOutcome === null ? null : (
         <Text strong className={styles.outcomeNotice}>
           {userActionOutcomeMessages[entry.actionOutcome]}

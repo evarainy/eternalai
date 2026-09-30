@@ -8,6 +8,8 @@ from typing import Any, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
+from app.mcp.connections import McpExecutionContextFactory
+from app.mcp.models import McpFailure
 from app.ports.adapter import AdapterPort, AdapterResult
 from app.ports.capability_gateway import (
     ErrorCode,
@@ -18,8 +20,11 @@ from app.ports.capability_gateway import (
 from app.ports.capability_registry import CapabilityRegistryPort
 from app.ports.human_gate import HumanGatePort, VersionBindingMismatchError
 from app.ports.identity_mapping import IdentityMappingPort
+from app.ports.mcp import McpAuthorizationContext
 from app.ports.policy_guard import PolicyGuardPort
+from app.ports.request_context import GovernedPolicyContext
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
+from app.ports.workflow_store import GovernedWorkflowAuthorization
 from app.version_binding import capability_version_bindings
 
 _SAFE_ERROR_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
@@ -79,10 +84,12 @@ class CapabilityGateway:
         unbound_task_capability_ids: frozenset[str] = frozenset(),
         *,
         tenant_id: str,
+        mcp_contexts: McpExecutionContextFactory | None = None,
     ) -> None:
         if not tenant_id.strip():
             raise ValueError("source_profile_configuration_invalid")
         self._tenant_id = tenant_id
+        self._mcp_contexts = mcp_contexts
         self._adapter = adapter
         self._adapters = adapters
         self._capability_registry = capability_registry
@@ -117,6 +124,8 @@ class CapabilityGateway:
         capability_id: str,
         arguments: dict[str, Any],
         request_context: RequestOrgContext,
+        *,
+        workflow_authorization: GovernedWorkflowAuthorization | None = None,
     ) -> ExecutionResult:
         trace_id = request_context.request_id
         if request_context.tenant_id != self._tenant_id:
@@ -124,6 +133,8 @@ class CapabilityGateway:
 
         capability_spec = None
         credential_ref: str | None = None
+        mcp_context: McpAuthorizationContext | None = None
+        service_config_id: str | None = None
         if self._capability_registry is not None:
             capability_spec = await self._capability_registry.get(capability_id)
             if capability_spec is None:
@@ -193,6 +204,44 @@ class CapabilityGateway:
                     caller_diagnostics,
                 )
 
+        if capability_spec is not None and capability_spec.target_system == "business_platform":
+            try:
+                if self._mcp_contexts is None or capability_spec.status != "active":
+                    raise McpFailure("mcp_authorization_invalid")
+                mapping = await self._mcp_contexts.store.mapping(
+                    capability_id, capability_spec.version
+                )
+                if mapping is None or capability_spec.type == "workflow":
+                    raise McpFailure("mcp_workflow_authorization_invalid")
+                if mapping.internal_only and workflow_authorization is None:
+                    raise McpFailure("mcp_workflow_authorization_invalid")
+                service_config_id = mapping.service_config_id
+                mcp_context = await self._mcp_contexts.build(
+                    task_id=task_id,
+                    chat_session_id=session_id,
+                    user_id=ai_user_id,
+                    tenant_id=request_context.tenant_id,
+                    mapping=mapping,
+                    authorization=workflow_authorization,
+                )
+                if mapping.internal_only:
+                    assert workflow_authorization is not None
+                    await self._mcp_contexts.verify_write(
+                        mcp_context, workflow_authorization, arguments
+                    )
+                    request_context = GovernedPolicyContext(
+                        **request_context.model_dump(),
+                        operation_id=workflow_authorization.operation_id,
+                        leaf_capability_id=capability_id,
+                        attempt_id=workflow_authorization.attempt_id,
+                    )
+            except McpFailure:
+                return ExecutionResult(
+                    status="denied",
+                    error_code="policy_denied",
+                    trace_id=trace_id,
+                )
+
         if (
             capability_spec is not None
             and capability_spec.target_system is not None
@@ -203,6 +252,11 @@ class CapabilityGateway:
                 target_system=capability_spec.target_system,
                 execution_identity=capability_spec.execution_identity,
                 request_context=request_context,
+                **(
+                    {"service_config_id": service_config_id}
+                    if service_config_id is not None
+                    else {}
+                ),
             )
             identity_result_matches_request = (
                 identity_result.target_system == capability_spec.target_system
@@ -413,6 +467,9 @@ class CapabilityGateway:
             )
 
         execution_context: dict[str, Any] = {}
+        if mcp_context is not None:
+            execution_context["mcp_authorization"] = mcp_context
+            execution_context["workflow_authorization"] = workflow_authorization
         if credential_ref is not None:
             execution_context["credential_ref"] = credential_ref
         if "mock_error_mode" in arguments:
@@ -429,6 +486,8 @@ class CapabilityGateway:
             data=adapter_result.data,
             error_code=adapter_result.error_code,
             trace_id=trace_id,
+            mcp_outcome=adapter_result.mcp_outcome,
+            mcp_read=adapter_result.mcp_read,
         )
         await self._record_step(
             trace_id,

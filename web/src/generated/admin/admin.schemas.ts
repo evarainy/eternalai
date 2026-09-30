@@ -27,6 +27,7 @@ export const TargetSystem = {
   oa: 'oa',
   u8: 'u8',
   hikvision_ivms: 'hikvision_ivms',
+  business_platform: 'business_platform',
 } as const;
 
 export type ExecutionIdentity = typeof ExecutionIdentity[keyof typeof ExecutionIdentity];
@@ -267,6 +268,7 @@ export const CapabilityTargetSystem = {
   oa: 'oa',
   u8: 'u8',
   hikvision_ivms: 'hikvision_ivms',
+  business_platform: 'business_platform',
 } as const;
 
 export type CapabilityExecutionIdentity = typeof CapabilityExecutionIdentity[keyof typeof CapabilityExecutionIdentity];

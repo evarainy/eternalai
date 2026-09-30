@@ -78,7 +78,7 @@ export interface CancelUserAction {
 
 export type ConfirmCardReasonCode = string | null;
 
-export type ConfirmCardTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+export type ConfirmCardTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | 'business_platform' | null;
 
 export interface ConfirmCard {
   action: 'confirm';
@@ -90,7 +90,7 @@ export interface ConfirmCard {
 
 export type ConfirmCardPayloadDisplayedArgumentValues = {[key: string]: string};
 
-export type ConfirmCardPayloadTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+export type ConfirmCardPayloadTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | 'business_platform' | null;
 
 /**
  * Runtime-owned payload contract for operation confirmation cards.
@@ -211,7 +211,7 @@ export type UIComponentPayload = { [key: string]: unknown };
 
 export type UIComponentReasonCode = string | null;
 
-export type UIComponentTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | null;
+export type UIComponentTargetSystem = 'oa' | 'u8' | 'hikvision_ivms' | 'business_platform' | null;
 
 export interface UIComponent {
   action?: UIComponentAction;

@@ -690,6 +690,7 @@ def test_ungated_execute_preserves_invalid_input_mapping_error_identity() -> Non
 
 class RecordingMinimalPolicyGuard(MinimalPolicyGuard):
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[str] = []
 
     async def decide(
@@ -1189,7 +1190,6 @@ def test_output_selection_is_part_of_workflow_binding() -> None:
     assert workflow_version_binding(capability, definition).digest != workflow_version_binding(
         capability, replace(definition, output_step_ids=("first",)),
     ).digest
-
 
 
 def test_output_selection_checkpoint_keeps_original_definition() -> None:

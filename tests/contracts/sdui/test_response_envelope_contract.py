@@ -71,7 +71,7 @@ def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
         "clarify_scope",
         "none",
     )
-    assert _literal_values(TargetSystem) == ("oa", "u8", "hikvision_ivms")
+    assert _literal_values(TargetSystem) == ("oa", "u8", "hikvision_ivms", "business_platform")
     assert TargetSystem is CapabilityTargetSystem
     assert _literal_values(ResponseEnvelopeStatus) == (
         "completed",
@@ -111,6 +111,7 @@ def test_ui_component_fields_types_defaults_and_extra_forbid_are_exact() -> None
         "oa",
         "u8",
         "hikvision_ivms",
+        "business_platform",
     )
     assert _optional_type_args(hints["reason_code"]) == (str, NoneType)
     assert _dict_args(hints["payload"]) == (str, Any)

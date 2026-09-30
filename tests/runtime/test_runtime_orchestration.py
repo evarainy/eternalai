@@ -400,7 +400,7 @@ def test_resumed_preview_contract_error_propagates_without_discard_or_binding_ou
         assert isinstance(port, AgentOrchestrationAdapter)
         assert isinstance(workflow_port, WorkflowEngineAdapter)
         resume = AsyncMock(wraps=workflow_port.resume)
-        discard = Mock(wraps=workflow_port.discard_checkpoint)
+        discard = AsyncMock(wraps=workflow_port.discard_checkpoint)
         retire = AsyncMock(wraps=h.runtime._retire_pending_confirmation)
         archive = Mock(wraps=h.runtime._archive_confirmation)
         failed = Mock(wraps=h.runtime._response_builder.build_failed)
@@ -704,7 +704,7 @@ def test_gate_or_publish_failure_drops_preview_and_keeps_failure(
 ) -> None:
     h = _harness()
     build = Mock(wraps=h.runtime._orchestration.build_response)
-    discard = Mock(wraps=h.runtime._workflow_engine.discard_checkpoint)
+    discard = AsyncMock(wraps=h.runtime._workflow_engine.discard_checkpoint)
     monkeypatch.setattr(h.runtime._orchestration, "build_response", build)
     monkeypatch.setattr(h.runtime._workflow_engine, "discard_checkpoint", discard)
     if fault == "gate":
@@ -867,7 +867,7 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
     async def exercise() -> None:
         h = _harness(two=site == "resume-request")
         assert isinstance(h.runtime._workflow_engine, WorkflowEngineAdapter)
-        discard = Mock(wraps=h.runtime._workflow_engine.discard_checkpoint)
+        discard = AsyncMock(wraps=h.runtime._workflow_engine.discard_checkpoint)
         monkeypatch.setattr(h.runtime._workflow_engine, "discard_checkpoint", discard)
         key = (h.principal.org_ctx.tenant_id, h.session_id, h.principal.ai_user_id)
         preserved: dict[str, Any] = {}

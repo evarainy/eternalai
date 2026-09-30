@@ -82,11 +82,11 @@ class WorkflowEngineAdapter:
     ) -> tuple[VersionBinding, ...]:
         return await self._engine.resume_version_bindings(task_id=task_id)
 
-    def discard_checkpoint(self, task_id: str) -> None:
-        self._engine.discard_checkpoint(task_id)
+    async def discard_checkpoint(self, task_id: str) -> None:
+        await self._engine.discard_checkpoint(task_id)
 
-    def pending_confirmation_action_digest(self, task_id: str) -> str:
-        return self._engine.pending_confirmation_action_digest(task_id)
+    async def pending_confirmation_action_digest(self, task_id: str) -> str:
+        return await self._engine.pending_confirmation_action_digest(task_id)
 
 
 __all__ = ("WorkflowEngineAdapter",)

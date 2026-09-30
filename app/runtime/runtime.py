@@ -672,7 +672,9 @@ class RuntimeImpl:
                     raise VersionBindingMismatchError(
                         "Waiting Workflow has no immutable action digest"
                     )
-                action_digest = self._workflow_engine.pending_confirmation_action_digest(task_id)
+                action_digest = await self._workflow_engine.pending_confirmation_action_digest(
+                    task_id
+                )
                 confirmation = self._orchestration.prepare_confirmation(
                     capability_id=selected_capability.capability_id,
                     arguments=capability_ref.arguments,
@@ -700,7 +702,7 @@ class RuntimeImpl:
                 )
             except (HumanGateConflictError, VersionBindingMismatchError):
                 if self._workflow_engine is not None:
-                    self._workflow_engine.discard_checkpoint(task_id)
+                    await self._workflow_engine.discard_checkpoint(task_id)
                 exec_result = ExecutionResult(
                     status="failed",
                     error_code="internal_error",
@@ -732,7 +734,7 @@ class RuntimeImpl:
                 replacement=replacement,
             ):
                 if self._workflow_engine is not None:
-                    self._workflow_engine.discard_checkpoint(task_id)
+                    await self._workflow_engine.discard_checkpoint(task_id)
                 exec_result = ExecutionResult(
                     status="failed",
                     error_code="internal_error",
@@ -1155,7 +1157,7 @@ class RuntimeImpl:
             return envelope
         # No await between CAS removal and discarding this captured checkpoint.
         if self._workflow_engine is not None:
-            self._workflow_engine.discard_checkpoint(pending.task_id)
+            await self._workflow_engine.discard_checkpoint(pending.task_id)
         await self._finish_confirmation_terminal(
             pending=pending,
             status=status,
@@ -1296,7 +1298,7 @@ class RuntimeImpl:
                 pending_key, expected=pending, replacement=None
             ):
                 if self._workflow_engine is not None:
-                    self._workflow_engine.discard_checkpoint(pending.task_id)
+                    await self._workflow_engine.discard_checkpoint(pending.task_id)
             self._archive_confirmation(pending_key, pending, cleanup_complete=False)
             return self._response_builder.build_failed(
                 str(uuid4()),
@@ -1435,7 +1437,7 @@ class RuntimeImpl:
             resume_bindings,
             exact=True,
         )
-        current_action_digest = self._workflow_engine.pending_confirmation_action_digest(
+        current_action_digest = await self._workflow_engine.pending_confirmation_action_digest(
             pending.task_id
         )
         if not compare_digest(
@@ -1501,7 +1503,7 @@ class RuntimeImpl:
                         "Resumed Workflow has no immutable human gate request"
                     )
                 next_gate_request_id = response_id
-                next_action_digest = self._workflow_engine.pending_confirmation_action_digest(
+                next_action_digest = await self._workflow_engine.pending_confirmation_action_digest(
                     pending.task_id
                 )
                 confirmation = self._orchestration.prepare_confirmation(
@@ -1543,7 +1545,7 @@ class RuntimeImpl:
                         "The confirmation state changed; execution did not continue.",
                         pending.trace_id,
                     )
-                self._workflow_engine.discard_checkpoint(pending.task_id)
+                await self._workflow_engine.discard_checkpoint(pending.task_id)
                 return await self._finish_version_binding_failure(
                     response_id=response_id,
                     task_id=pending.task_id,
@@ -1673,7 +1675,6 @@ class RuntimeImpl:
                 capability_id=pending.capability_id,
             )
         return envelope
-
 
     async def _visible_capabilities(
         self,
@@ -1862,7 +1863,6 @@ class RuntimeImpl:
             error_code=error_code,
         )
         return envelope
-
 
     async def _finish_intent_failure(
         self,

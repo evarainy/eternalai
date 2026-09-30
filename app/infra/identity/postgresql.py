@@ -53,6 +53,8 @@ class PostgreSQLOAIdentityMapping:
         target_system: TargetSystem,
         execution_identity: ExecutionIdentity,
         request_context: RequestOrgContext,
+        *,
+        service_config_id: str | None = None,
     ) -> IdentityCheckResult:
         if target_system != "oa" or execution_identity != "user_delegated":
             return _unbound_result(

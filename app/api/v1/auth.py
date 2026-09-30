@@ -11,12 +11,14 @@ from pydantic import BaseModel, ConfigDict
 
 from app.api.v1.csrf import CSRFDependency
 from app.ports.auth import (
+    AuthenticatedSessionContext,
     AuthenticationPort,
     LoginCredential,
     Principal,
     SessionRevocationStorePort,
     SessionTokenError,
     SessionTokenPort,
+    authenticated_session,
 )
 
 SESSION_COOKIE_NAME = "eternalai_session"
@@ -56,11 +58,12 @@ class LogoutResponse(BaseModel):
     authenticated: Literal[False] = False
 
 
-def make_require_principal(
+def make_require_session(
     session_tokens: SessionTokenPort | None,
     session_revocations: SessionRevocationStorePort | None = None,
-) -> PrincipalDependency:
-    async def require_principal(request: Request) -> Principal:
+) -> Callable[[Request], Awaitable[AuthenticatedSessionContext]]:
+    async def require_session(request: Request) -> AuthenticatedSessionContext:
+        authenticated_session.set(None)
         token = request.cookies.get(SESSION_COOKIE_NAME)
         token_port = session_tokens
         if token is None:
@@ -84,10 +87,28 @@ def make_require_principal(
             else:
                 if revoked:
                     _raise_authentication_required()
-                return metadata.principal
+                context = AuthenticatedSessionContext(
+                    metadata.principal,
+                    metadata.fingerprint,
+                    metadata.expires_at,
+                )
+                authenticated_session.set(context)
+                return context
         if invalid:
             _raise_authentication_required()
         _raise_unavailable(logout=False)
+
+    return require_session
+
+
+def make_require_principal(
+    session_tokens: SessionTokenPort | None,
+    session_revocations: SessionRevocationStorePort | None = None,
+) -> PrincipalDependency:
+    require_session = make_require_session(session_tokens, session_revocations)
+
+    async def require_principal(request: Request) -> Principal:
+        return (await require_session(request)).principal
 
     return require_principal
 

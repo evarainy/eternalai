@@ -19,6 +19,7 @@ from app.ports.adapter import (
     MockErrorMode,
 )
 from app.ports.capability_gateway import ErrorCode
+from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ADAPTER_SOURCE = REPO_ROOT / "app" / "ports" / "adapter.py"
@@ -29,6 +30,8 @@ EXPECTED_ADAPTER_RESULT_FIELDS = {
     "error_code",
     "raw_payload_ref",
     "trace_metadata",
+    "mcp_outcome",
+    "mcp_read",
 }
 
 EXPECTED_ADAPTER_STATUS_VALUES = (
@@ -91,6 +94,33 @@ def test_adapter_result_defaults_match_contract() -> None:
     assert result.error_code is None
     assert result.raw_payload_ref is None
     assert result.trace_metadata is None
+    assert result.mcp_outcome is None
+    assert result.mcp_read is None
+
+
+def test_adapter_mcp_evidence_has_exact_types_and_never_serializes() -> None:
+    fields = AdapterResult.model_fields
+    assert fields["mcp_outcome"].annotation == McpValidatedOutcome | None
+    assert fields["mcp_read"].annotation == McpValidatedRead | None
+    for name in ("mcp_outcome", "mcp_read"):
+        assert fields[name].default is None
+        assert not fields[name].is_required()
+        assert fields[name].exclude is True
+        assert fields[name].repr is False
+    result = AdapterResult(
+        status="success",
+        mcp_outcome=McpValidatedOutcome(
+            state="VERIFIED_SUCCESS", persistence={"reference": "synthetic-private-receipt"}
+        ),
+        mcp_read=McpValidatedRead(data={"reference": "synthetic-private-read"}),
+    )
+    assert result.model_dump(mode="json") == {
+        "status": "success", "data": None, "error_code": None, "raw_payload_ref": None
+    }
+    assert "synthetic-private-receipt" not in repr(result)
+    assert "synthetic-private-read" not in repr(result)
+    with pytest.raises(ValidationError):
+        AdapterResult(status="success", mcp_outcome={"state": "UNKNOWN", "persistence": {}})
 
 
 def test_adapter_trace_metadata_is_bounded_frozen_and_not_business_serialized() -> None:
