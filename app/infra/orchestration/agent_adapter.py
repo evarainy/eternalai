@@ -34,7 +34,7 @@ from app.ports.response_projection_contract import ProjectionContractSnapshot
 from app.ports.workflow_engine import WorkflowEnginePort
 from app.runtime.response_projection import project_response_data
 from app.version_binding import capability_version_bindings, merge_version_bindings
-from app.workflow.models import WorkflowRunResult
+from app.workflow.models import GovernedFinalizationError, GovernedTerminalResult, WorkflowRunResult
 
 
 class AgentOrchestrationAdapter:
@@ -215,7 +215,15 @@ class AgentOrchestrationAdapter:
             confirmed=confirmed,
             expected_action_digest=expected_action_digest,
         )
-        return _workflow_execution_result(result)
+        try:
+            execution = _workflow_execution_result(result)
+            if isinstance(result, GovernedTerminalResult):
+                execution._governed_terminal = result
+            return execution
+        except Exception as exc:
+            if isinstance(result, GovernedTerminalResult):
+                raise GovernedFinalizationError(result) from exc
+            raise
 
     def prepare_confirmation(
         self,

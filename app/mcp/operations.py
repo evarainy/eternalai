@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Mapping
 from uuid import uuid4
@@ -22,6 +23,8 @@ from app.ports.workflow_store import (
     WorkflowStorePort,
 )
 from app.workflow.models import (
+    GovernedFinalizationError,
+    GovernedTerminalResult,
     GovernedWorkflowDefinition,
     GovernedWorkflowPolicy,
     WorkflowDefinition,
@@ -402,11 +405,18 @@ class GovernedOperations:
         op = await self.store.by_task(task_id)
         if op is None:
             raise McpFailure("mcp_operation_unavailable")
-        async with self.store.execution_guard(op):
-            current = await self.store.by_task(task_id)
-            if current is None:
-                raise McpFailure("mcp_operation_unavailable")
-            return await self._resume_locked(current, confirmed, expected_action_digest)
+        result = None
+        try:
+            async with self.store.execution_guard(op):
+                current = await self.store.by_task(task_id)
+                if current is None:
+                    raise McpFailure("mcp_operation_unavailable")
+                result = await self._resume_locked(current, confirmed, expected_action_digest)
+            return result
+        except (Exception, asyncio.CancelledError) as exc:
+            if isinstance(result, GovernedTerminalResult):
+                raise GovernedFinalizationError(result) from exc
+            raise
 
     async def _resume_locked(
         self, op: WorkflowOperation, confirmed: bool, expected_action_digest: str | None
@@ -666,7 +676,12 @@ class GovernedOperations:
             if op.state == "VERIFIED_SUCCESS"
             else ("waiting_confirm" if op.state == "WAITING_LOCAL_CONFIRM" else "failed")
         )
-        return WorkflowRunResult(
+        result_type = (
+            GovernedTerminalResult
+            if op.state in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}
+            else WorkflowRunResult
+        )
+        return result_type(
             workflow_id=op.outer_capability_id,
             workflow_version=op.outer_version,
             trace_id=trace_id,

@@ -1,6 +1,7 @@
 """Owner-bound terminal repair with the real Runtime and Workflow engine."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -55,6 +56,165 @@ async def governed_chat():
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     return chat, h, pending, session
+
+
+@pytest.mark.parametrize("state", ["VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"])
+@pytest.mark.parametrize("fault", [
+    "first_read", "response_trace", "response_after_write", "task", "envelope", "cancel_wait",
+    "guard_exit", "guard_cancel",
+])
+def test_durable_terminal_survives_entire_runtime_completion(state, fault):
+    async def run():
+        chat, h, pending, session = await governed_chat()
+        h.store.op = h.op = h.op.model_copy(update={"state": "WAITING_LOCAL_CONFIRM"})
+        sends = failures = 0
+        resumed = False
+        original_resume = h.operations.resume
+        original_guard = h.store.execution_guard
+        original_read = h.store.by_task
+        original_step = chat.trace.record_step
+        original_once = chat.trace.record_event_once
+        original_update = chat.runtime._task_store.update_status
+        original_envelope = chat.runtime._build_envelope
+
+        async def resume(*args, **kwargs):
+            nonlocal resumed
+            result = await original_resume(*args, **kwargs)
+            resumed = True
+            return result
+
+        @asynccontextmanager
+        async def guard(op):
+            nonlocal failures
+            async with original_guard(op):
+                yield
+            if (
+                fault in {"guard_exit", "guard_cancel"}
+                and not failures and h.store.op.state == state
+            ):
+                failures += 1
+                if fault == "guard_cancel":
+                    raise asyncio.CancelledError("synthetic guard exit cancellation")
+                raise RuntimeError("synthetic guard exit failure")
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+            if state == "FAILED":
+                h.store.op = h.store.op.model_copy(update={"state": "FAILED"})
+            if state == "EXPIRED":
+                h.store.op = h.store.op.model_copy(
+                    update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+                )
+
+        async def execute(*args, **kwargs):
+            nonlocal sends
+            if state == "CANCELLED":
+                return ExecutionResult(status="denied", trace_id=pending.trace_id)
+            sends += 1
+            await h.store.transition(h.store.op, state="SENDING")
+            return ExecutionResult(
+                status="completed", trace_id=pending.trace_id,
+                mcp_outcome=McpValidatedOutcome(state="VERIFIED_SUCCESS", persistence={}),
+            )
+
+        def fail_once():
+            nonlocal failures
+            if resumed and not failures and h.store.op.state == state:
+                failures += 1
+                if fault == "cancel_wait":
+                    raise asyncio.CancelledError("synthetic completion cancellation")
+                raise RuntimeError("synthetic completion I/O failure")
+
+        async def read(task_id):
+            if fault in {"first_read", "cancel_wait"}:
+                fail_once()
+            return await original_read(task_id)
+
+        async def step(trace_id, task_id, *args, **kwargs):
+            if fault == "response_trace" and task_id == pending.task_id and kwargs.get(
+                "event_type"
+            ) == "response_envelope_created":
+                fail_once()
+            return await original_step(trace_id, task_id, *args, **kwargs)
+
+        async def update(task_id, *args, **kwargs):
+            if fault == "task" and task_id == pending.task_id:
+                fail_once()
+            return await original_update(task_id, *args, **kwargs)
+
+        async def once(event, key):
+            await original_once(event, key)
+            if fault == "response_after_write" and event.event_type == "response_envelope_created":
+                fail_once()
+
+        def envelope(*args, **kwargs):
+            if fault == "envelope":
+                fail_once()
+            return original_envelope(*args, **kwargs)
+
+        h.operations.owned = owned
+        h.operations.gateway = SimpleNamespace(execute_capability=execute)
+        h.operations.resume = resume
+        h.store.execution_guard = guard
+        h.store.by_task = read
+        chat.trace.record_step = step
+        chat.trace.record_event_once = once
+        chat.runtime._task_store.update_status = update
+        chat.runtime._build_envelope = envelope
+        expected = {
+            "VERIFIED_SUCCESS": "completed", "FAILED": "completed", "CANCELLED": "cancelled",
+            "EXPIRED": "confirmation_invalidated",
+        }[state]
+        token = authenticated_session.set(session)
+        try:
+            with pytest.raises(
+                asyncio.CancelledError if fault in {"cancel_wait", "guard_cancel"}
+                else GovernedFinalizationError
+            ):
+                await _dispatch(chat)
+            assert failures == 1 and h.store.op.state == state
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            assert claim.state == expected and not claim.cleanup_complete
+            assert claim.pending is pending
+            assert list(chat.runtime._pending_workflows.values()) == [pending]
+            assert len(chat.runtime._session_memory.recall(pending.owner)) == (
+                1 if state == "VERIFIED_SUCCESS" else 0
+            )
+            response = await _dispatch(chat)
+            assert _outcome(response) == (
+                "action_already_claimed" if expected == "completed" else expected
+            )
+            if state == "VERIFIED_SUCCESS":
+                assert "nothing was executed" not in response.model_dump_json()
+                assert "本次未执行" not in response.model_dump_json()
+            record = chat.runtime._task_store.records[pending.task_id]
+            assert record.status == ("failed" if state == "FAILED" else expected)
+            if state == "FAILED":
+                assert record.error_code == "policy_denied"
+            assert claim.cleanup_complete and claim.pending is None
+            assert not chat.runtime._pending_workflows
+            assert sends == (1 if state == "VERIFIED_SUCCESS" else 0)
+            assert chat.engine.resume_calls == 1
+            assert len(chat.runtime._session_memory.recall(pending.owner)) == (
+                1 if state == "VERIFIED_SUCCESS" else 0
+            )
+            events = [
+                item["event_type"] for item in chat.trace.steps
+                if item["task_id"] == pending.task_id
+            ]
+            assert events.count("task_completed" if state == "VERIFIED_SUCCESS" else (
+                "task_failed" if state == "FAILED" else
+                "task_cancelled" if state == "CANCELLED" else "task_confirmation_invalidated"
+            )) == 1
+            assert events.count("evaluation_recorded") == 1
+            # One initial preview response and exactly one terminal response trace.
+            assert events.count("response_envelope_created") == (
+                1 if fault in {"envelope", "guard_exit", "guard_cancel"} else 2
+            )
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("fault", ["task", "terminal", "evaluation"])
@@ -121,7 +281,10 @@ def test_real_chat_confirmation_finalizer_failure_preserves_business_terminal(fa
             assert chat.runtime._task_store.records[pending.task_id].status == "completed"
             assert sends == chat.engine.resume_calls == 1
             assert len(chat.runtime._session_memory.recall(pending.owner)) == 1
-            assert len(chat.trace.once) == 2 and not chat.runtime._pending_workflows
+            assert sorted(event.event_type for event in chat.trace.once.values()) == [
+                "evaluation_recorded", "response_envelope_created", "task_completed",
+            ]
+            assert not chat.runtime._pending_workflows
         finally:
             authenticated_session.reset(token)
 

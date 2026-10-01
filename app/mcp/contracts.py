@@ -160,11 +160,23 @@ class OutputContract:
                     if name not in selected:
                         selected[name] = deepcopy(definitions[name])
                         collect(selected[name])
-                for child in value.values():
-                    collect(child)
-            elif isinstance(value, list):
-                for child in value:
-                    collect(child)
+                # Walk schema positions only. Property names and annotation or
+                # validation data (examples/default/enum/const) are not schemas.
+                for keyword in ("properties", "patternProperties", "dependentSchemas"):
+                    children = value.get(keyword)
+                    if isinstance(children, Mapping):
+                        for child in children.values():
+                            collect(child)
+                for keyword in (
+                    "items", "additionalProperties", "contains", "propertyNames",
+                    "unevaluatedProperties", "unevaluatedItems", "not", "if", "then", "else",
+                ):
+                    collect(value.get(keyword))
+                for keyword in ("anyOf", "allOf", "oneOf", "prefixItems"):
+                    children = value.get(keyword)
+                    if isinstance(children, list):
+                        for child in children:
+                            collect(child)
 
         collect(result_schema)
         output: dict[str, Any] = {"anyOf": [result_schema, {"type": "null"}]}

@@ -79,6 +79,10 @@ class WorkflowRunResult:
     evaluation_observations: tuple[StepObservation, ...] = ()
 
 
+class GovernedTerminalResult(WorkflowRunResult):
+    """Typed in-process proof returned only after a durable governed terminal."""
+
+
 class GovernedFinalizationError(RuntimeError):
     """Business terminal is durable; task/trace writes still require repair."""
 
@@ -89,6 +93,7 @@ class GovernedFinalizationError(RuntimeError):
 
 __all__ = (
     "GovernedFinalizationError",
+    "GovernedTerminalResult",
     "WorkflowCondition",
     "WorkflowDefinition",
     "WorkflowInputRef",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 from app.ports.evaluation import OverviewEvaluationInput
 from app.ports.mcp import McpValidatedOutcome, McpValidatedRead
@@ -50,6 +50,8 @@ ExecutionStatus: TypeAlias = Literal[
 
 
 class ExecutionResult(BaseModel):
+    # Internal workflow provenance, never accepted from or serialized into JSON.
+    _governed_terminal: object | None = PrivateAttr(default=None)
     status: ExecutionStatus
     data: dict[str, Any] | None = None
     error_code: ErrorCode | None = None

@@ -87,6 +87,36 @@ class Store:
         return self.op
 
 
+@pytest.mark.parametrize("annotation", ["examples", "default", "enum"])
+def test_public_schema_ref_named_property_and_annotation_data(annotation):
+    value = {"$ref": "literal business value"}
+    field = {
+        "type": "object", "properties": {"$ref": {"type": "string"}},
+        "additionalProperties": False,
+        annotation: [value] if annotation != "default" else value,
+    }
+    contract = OutputContract(
+        "synthetic-literal", {"type": "object", "properties": {"payload": field}},
+        ("payload",), ("payload",), ("payload",), "synthetic-literal",
+    )
+    output = {"payload": value}
+    schema = contract.public_result_schema()
+    assert "$defs" not in schema
+    assert schema["anyOf"][0]["properties"]["payload"] == field
+    assert project_response_data(output, schema) == output
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/missing", "https://example.invalid/schema"])
+def test_public_schema_real_unresolved_refs_still_fail_closed(reference):
+    contract = OutputContract(
+        "synthetic-ref", {"type": "object", "properties": {"value": {"$ref": reference}}},
+        ("value",), ("value",), ("value",), "synthetic-ref",
+    )
+    with pytest.raises(McpFailure) as rejected:
+        contract.public_result_schema()
+    assert rejected.value.code == "mcp_output_contract_invalid"
+
+
 def test_public_result_local_refs_work_at_standalone_and_outer_roots():
     contract = OutputContract(
         "synthetic-ref",

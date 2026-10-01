@@ -79,8 +79,12 @@ from app.ports.task_store import (
     TaskStatus,
     TaskStorePort,
 )
-from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
-from app.ports.workflow_engine import GovernedFinalizationError, WorkflowEnginePort
+from app.ports.trace import TraceEvent, TraceEventStatus, TraceEventType, TracePort
+from app.ports.workflow_engine import (
+    GovernedFinalizationError,
+    GovernedTerminalResult,
+    WorkflowEnginePort,
+)
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef
 from app.version_binding import (
@@ -171,6 +175,9 @@ class _ConfirmationClaim:
     error_code: ErrorCode | None = None
     cleanup_in_progress: bool = False
     cleanup_reason: Literal["cancelled", "expired", "exception"] | None = None
+    governed_terminal: GovernedTerminalResult | None = None
+    response_trace_pending: bool = False
+    completion_remembered: bool = False
 
 
 class _ActionAlreadyClaimedError(RuntimeError):
@@ -1215,6 +1222,9 @@ class RuntimeImpl:
                     reason=claim.cleanup_reason,
                     error_code=claim.error_code,
                 )
+            if claim.response_trace_pending:
+                await self._record_governed_response(pending)
+                claim.response_trace_pending = False
             with self._pending_confirmation_claim_lock:
                 if self._pending_workflows.get(pending_key) is pending:
                     del self._pending_workflows[pending_key]
@@ -1319,20 +1329,25 @@ class RuntimeImpl:
             result = await self._workflow_engine.finalize_governed_task(task_id=pending.task_id)
             if result is None:
                 continue
+            if claim is not None and claim.response_trace_pending:
+                await self._record_governed_response(pending)
+                claim.response_trace_pending = False
             with self._pending_confirmation_claim_lock:
                 if self._pending_workflows.get(key) is not pending:
                     continue
-                remember_completed = claim is None or claim.state != "completed"
                 if claim is None:
                     claim = self._new_confirmation_claim(key, pending, owner)
                 if claim is None:
                     raise RuntimeError("Confirmation cleanup capacity exhausted")
+            if isinstance(result, GovernedTerminalResult):
+                self._retain_governed_terminal(key, pending, result)
+            else:
                 claim.state = "completed"
+            with self._pending_confirmation_claim_lock:
                 claim.pending = None
                 claim.cleanup_complete = True
-                del self._pending_workflows[key]
-            if result.status == "completed" and remember_completed:
-                self._session_memory.remember_completed(owner, capability_id=pending.capability_id)
+                if self._pending_workflows.get(key) is pending:
+                    del self._pending_workflows[key]
 
     async def _expire_pending_confirmations(self, owner: SessionMemoryKey) -> None:
         await self._repair_owner_pending(owner)
@@ -1384,6 +1399,12 @@ class RuntimeImpl:
                 memory_key=memory_key,
             )
         except asyncio.CancelledError:
+            claim = self._claimed_pending_confirmations[
+                _pending_confirmation_claim_key(pending_key, pending)
+            ]
+            if claim.governed_terminal is not None:
+                self._retain_governed_terminal(pending_key, pending, claim.governed_terminal)
+                raise
             await self._retire_pending_confirmation(
                 pending_key=pending_key,
                 pending=pending,
@@ -1415,22 +1436,11 @@ class RuntimeImpl:
         except OrchestrationContractError:
             raise
         except GovernedFinalizationError as exc:
-            if exc.result.output.get("state") not in {"VERIFIED_SUCCESS", "FAILED"}:
+            if not isinstance(exc.result, GovernedTerminalResult):
                 raise
-            # A durable business fact cannot become "nothing was executed".
-            # Keep the captured pending for owner-bound finalizer repair only.
-            with self._pending_confirmation_claim_lock:
-                claim = self._claimed_pending_confirmations[
-                    _pending_confirmation_claim_key(pending_key, pending)
-                ]
-                claim.state = "completed"
-                claim.cleanup_complete = False
-                claim.pending = pending
-                claim.error_code = exc.result.error_code
-            if exc.result.status == "completed":
-                self._session_memory.remember_completed(
-                    memory_key, capability_id=pending.capability_id
-                )
+            self._retain_governed_terminal(pending_key, pending, exc.result)
+            if isinstance(exc.__cause__, asyncio.CancelledError):
+                raise exc.__cause__
             raise
         except Exception as exc:
             claim = self._claimed_pending_confirmations[
@@ -1451,7 +1461,62 @@ class RuntimeImpl:
             )
             return envelope, "confirmation_invalidated"
         self._archive_confirmation(pending_key, pending, cleanup_complete=True)
+        claim = self._claimed_pending_confirmations[
+            _pending_confirmation_claim_key(pending_key, pending)
+        ]
+        if claim.state == "cancelled":
+            return envelope, "cancelled"
+        if claim.state == "confirmation_invalidated":
+            return envelope, "confirmation_invalidated"
         return envelope, "accepted"
+
+    def _retain_governed_terminal(
+        self,
+        key: tuple[str, str, str],
+        pending: _PendingWorkflow,
+        result: GovernedTerminalResult,
+    ) -> None:
+        """Keep all four durable outcomes repairable; never replay their send."""
+        with self._pending_confirmation_claim_lock:
+            claim = self._claimed_pending_confirmations[
+                _pending_confirmation_claim_key(key, pending)
+            ]
+            state = result.output["state"]
+            claim.state = (
+                "cancelled" if state == "CANCELLED" else
+                "confirmation_invalidated" if state == "EXPIRED" else "completed"
+            )
+            claim.error_code = (
+                None if state == "CANCELLED" else
+                "confirm_required" if state == "EXPIRED" else result.error_code
+            )
+            claim.governed_terminal = result
+            if state in {"CANCELLED", "EXPIRED"}:
+                claim.cleanup_reason = "cancelled" if state == "CANCELLED" else "expired"
+            claim.cleanup_complete = False
+            claim.pending = pending
+            remember = state == "VERIFIED_SUCCESS" and not claim.completion_remembered
+        if remember:
+            assert pending.owner is not None
+            self._session_memory.remember_completed(
+                pending.owner, capability_id=pending.capability_id
+            )
+            claim.completion_remembered = True
+
+    async def _record_governed_response(self, pending: _PendingWorkflow) -> None:
+        assert pending.owner is not None
+        event = TraceEvent(
+            trace_id=pending.trace_id, task_id=pending.task_id,
+            session_id=pending.owner.session_id, tenant_id=pending.owner.tenant_id,
+            ai_user_id=pending.owner.ai_user_id,
+            event_type="response_envelope_created", status="ok",
+        )
+        key = "mcp-response:" + sha256(canonical_object({
+            "owner": [pending.owner.tenant_id, pending.owner.ai_user_id, pending.owner.session_id],
+            "task": pending.task_id, "trace": pending.trace_id,
+            "action": pending.action_digest, "gate": pending.gate_request_id,
+        }).encode("utf-8")).hexdigest()
+        await self._trace_port.record_event_once(event, key)
 
     def _archive_confirmation(
         self,
@@ -1464,7 +1529,8 @@ class RuntimeImpl:
             claim = self._claimed_pending_confirmations[
                 _pending_confirmation_claim_key(key, pending)
             ]
-            claim.state = "completed"
+            if claim.state == "processing":
+                claim.state = "completed"
             claim.pending = None
             claim.cleanup_complete = cleanup_complete
             claim.retain_until = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
@@ -1612,6 +1678,34 @@ class RuntimeImpl:
                 confirmed=True,
                 expected_action_digest=pending.action_digest,
             )
+        terminal = exec_result._governed_terminal
+        if isinstance(terminal, GovernedTerminalResult):
+            self._claimed_pending_confirmations[
+                _pending_confirmation_claim_key(pending_key, pending)
+            ].governed_terminal = terminal
+        try:
+            return await self._complete_resumed_workflow(
+                pending_key=pending_key, pending=pending, session_id=session_id,
+                memory_key=memory_key, response_id=response_id, exec_result=exec_result,
+            )
+        except GovernedFinalizationError:
+            raise
+        except Exception as exc:
+            if isinstance(terminal, GovernedTerminalResult):
+                raise GovernedFinalizationError(terminal) from exc
+            raise
+
+    async def _complete_resumed_workflow(
+        self,
+        *,
+        pending_key: tuple[str, str, str],
+        pending: _PendingWorkflow,
+        session_id: str,
+        memory_key: SessionMemoryKey,
+        response_id: str,
+        exec_result: ExecutionResult,
+    ) -> ResponseEnvelope:
+        assert self._workflow_engine is not None
         confirmation: ConfirmationPreview | None = None
         requested_at = self._utc_clock()
         gate_expires_at = requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS)
@@ -1728,6 +1822,11 @@ class RuntimeImpl:
                 business_verification if business_verification.rule_id else None
             ),
         )
+        claim = self._claimed_pending_confirmations[
+            _pending_confirmation_claim_key(pending_key, pending)
+        ]
+        if claim.governed_terminal is not None:
+            claim.response_trace_pending = True
         governed_result = None
         if exec_result.status == "waiting_user":
             next_pending = _PendingWorkflow(
@@ -1753,12 +1852,31 @@ class RuntimeImpl:
             governed_result = await self._workflow_engine.finalize_governed_task(
                 task_id=pending.task_id,
             )
-            owns_pending = self._compare_and_swap_pending_workflow(
-                pending_key,
-                expected=pending,
-                replacement=None,
+            if governed_result is None and claim.governed_terminal is not None:
+                # A replaced generation is repaired using the captured gate;
+                # it cannot fall through to the ordinary Workflow finalizer.
+                raise GovernedFinalizationError(claim.governed_terminal)
+            owns_pending = (
+                self._pending_workflows.get(pending_key) is pending
+                if isinstance(governed_result, GovernedTerminalResult)
+                else self._compare_and_swap_pending_workflow(
+                    pending_key, expected=pending, replacement=None,
+                )
             )
         if not owns_pending:
+            return envelope
+        if isinstance(governed_result, GovernedTerminalResult):
+            await self._record_governed_response(pending)
+            claim.response_trace_pending = False
+            self._retain_governed_terminal(pending_key, pending, governed_result)
+            if claim.state in {"cancelled", "confirmation_invalidated"}:
+                envelope = self._confirmation_terminal_envelope(
+                    task_id=pending.task_id, trace_id=pending.trace_id, session_id=session_id,
+                    status=(
+                        "cancelled" if claim.state == "cancelled" else "confirmation_invalidated"
+                    ),
+                )
+            self._compare_and_swap_pending_workflow(pending_key, expected=pending, replacement=None)
             return envelope
         await self._trace_port.record_step(
             pending.trace_id,

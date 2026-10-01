@@ -28,7 +28,7 @@ from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
 from app.ports.human_gate import VersionBinding, VersionBindingMismatchError
 from app.ports.response_projection_contract import ProjectionContractSnapshot
 from app.ports.workflow_engine import WorkflowEnginePort, WorkflowVersionBindings
-from app.workflow.models import WorkflowRunResult
+from app.workflow.models import GovernedFinalizationError, GovernedTerminalResult, WorkflowRunResult
 
 
 def _capability(capability_id: str = "oa.synthetic.action", **overrides: Any) -> CapabilitySpec:
@@ -449,6 +449,40 @@ def test_resume_forwards_digest_and_maps_every_status(
     }
     assert engine.discard_checkpoint.call_args_list == []
     assert gateway.mock_calls == registry.mock_calls == []
+
+
+@pytest.mark.parametrize("typed", [False, True])
+def test_resume_terminal_provenance_is_internal_and_not_inferred_from_payload(typed):
+    adapter, _, _, engine = _adapter()
+    raw = _workflow_result("completed", None)
+    values = {**vars(raw), "output": {"operation_id": "a" * 32, "state": "VERIFIED_SUCCESS"}}
+    terminal = (GovernedTerminalResult if typed else WorkflowRunResult)(**values)
+    engine.resume.return_value = terminal
+    result = asyncio.run(adapter.resume_capability(task_id="task-resume", confirmed=True))
+    assert result._governed_terminal is (terminal if typed else None)
+    assert "_governed_terminal" not in result.model_dump()
+    assert "_governed_terminal" not in ExecutionResult.model_json_schema()["properties"]
+    reconstructed = ExecutionResult.model_validate({
+        **result.model_dump(), "_governed_terminal": terminal,
+    })
+    assert reconstructed._governed_terminal is None
+
+
+def test_resume_conversion_failure_keeps_known_terminal(monkeypatch):
+    adapter, _, _, engine = _adapter()
+    terminal = GovernedTerminalResult(**vars(_workflow_result("completed", None)))
+    engine.resume.return_value = terminal
+
+    def fail(result):
+        assert result is terminal
+        raise RuntimeError("synthetic conversion failure")
+
+    monkeypatch.setattr(module, "_workflow_execution_result", fail)
+    with pytest.raises(GovernedFinalizationError) as interrupted:
+        asyncio.run(adapter.resume_capability(task_id="task-resume", confirmed=True))
+    assert interrupted.value.result is terminal
+    assert str(interrupted.value.__cause__) == "synthetic conversion failure"
+    assert engine.discard_checkpoint.call_args_list == []
 
 
 @pytest.mark.parametrize(
