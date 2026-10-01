@@ -27,8 +27,9 @@ from app.ports.human_gate import (
     VersionBinding,
     VersionBindingMismatchError,
 )
-from app.ports.task_store import TaskEventRecord, TaskStatus, TaskStorePort
+from app.ports.task_store import TaskEventRecord, TaskRecord, TaskStatus, TaskStorePort
 from app.ports.trace import TraceEvent, TraceEventStatus, TraceEventType, TracePort
+from app.ports.workflow_store import WorkflowOperation
 from app.version_binding import (
     capability_version_bindings,
     merge_version_bindings,
@@ -36,6 +37,7 @@ from app.version_binding import (
     workflow_version_binding,
 )
 from app.workflow.models import (
+    GovernedFinalizationError,
     GovernedWorkflowDefinition,
     WorkflowDefinition,
     WorkflowInputRef,
@@ -132,9 +134,33 @@ class WorkflowEngine:
             expected_gate_request_id,
             reason,
         )
-        if retired:
+        if retired == "superseded":
+            current = await self._governed.store.by_task(task_id)
+            task = await self._task_store.get_task(task_id)
+            if (
+                current is None
+                or task is None
+                or not task.trace_id
+                or (task.tenant_id, task.ai_user_id, task.session_id)
+                != (
+                    current.context.tenant_id,
+                    current.context.user_id,
+                    current.context.chat_session_id,
+                )
+            ):
+                raise McpFailure("mcp_checkpoint_inconsistent")
+            self._governed.lifecycle_owner(current)
+            old = current.model_copy(
+                update={
+                    "state": "EXPIRED",
+                    "action_digest": expected_action_digest,
+                    "gate_request_id": expected_gate_request_id,
+                }
+            )
+            await self._finalize_governed_operation(old, task, update_task=False)
+        elif retired:
             await self.finalize_governed_task(task_id=task_id)
-        return retired
+        return bool(retired)
 
     async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None:
         if self._governed is None:
@@ -145,42 +171,65 @@ class WorkflowEngine:
         self._governed.lifecycle_owner(op)
         if op.state not in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}:
             return None
-        async with self._governed.store.execution_guard(op):
-            op = await self._governed.store.by_task(task_id)
-            if op is None:
-                raise McpFailure("mcp_operation_unavailable")
-            self._governed.lifecycle_owner(op)
-            if op.state not in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}:
-                return None
-            task = await self._task_store.get_task(task_id)
-            if (
-                task is None
-                or not task.trace_id
-                or task.tenant_id != op.context.tenant_id
-                or task.ai_user_id != op.context.user_id
-                or task.session_id != op.context.chat_session_id
-            ):
-                raise McpFailure("mcp_checkpoint_inconsistent")
-            status: TaskStatus
-            event_type: TraceEventType
-            trace_status: TraceEventStatus
-            terminal: dict[str, tuple[TaskStatus, TraceEventType, TraceEventStatus]] = {
-                "VERIFIED_SUCCESS": ("completed", "task_completed", "ok"),
-                "FAILED": ("failed", "task_failed", "failed"),
-                "CANCELLED": ("cancelled", "task_cancelled", "blocked"),
-                "EXPIRED": ("confirmation_invalidated", "task_confirmation_invalidated", "failed"),
-            }
-            status, event_type, trace_status = terminal[op.state]
-            error: ErrorCode | None = (
-                None
-                if status in {"completed", "cancelled"}
-                else (
-                    "confirm_required"
-                    if status == "confirmation_invalidated"
-                    else "mcp_outcome_unknown"
-                )
+        terminal = op
+        try:
+            async with self._governed.store.execution_guard(op):
+                op = await self._governed.store.by_task(task_id)
+                if op is None:
+                    raise McpFailure("mcp_operation_unavailable")
+                self._governed.lifecycle_owner(op)
+                if op.state not in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}:
+                    return None
+                task = await self._task_store.get_task(task_id)
+                if (
+                    task is None
+                    or not task.trace_id
+                    or task.tenant_id != op.context.tenant_id
+                    or task.ai_user_id != op.context.user_id
+                    or task.session_id != op.context.chat_session_id
+                ):
+                    raise McpFailure("mcp_checkpoint_inconsistent")
+                return await self._finalize_governed_operation(op, task)
+        except GovernedFinalizationError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, McpFailure) and exc.code in {
+                "mcp_authorization_invalid",
+                "mcp_checkpoint_inconsistent",
+                "mcp_operation_unavailable",
+            }:
+                raise
+            # The durable owner-bound operation was already terminal. An I/O
+            # failure before Task lookup has no trace identity yet; do not invent
+            # one or translate the business fact into confirmation invalidation.
+            raise GovernedFinalizationError(self._governed.result(terminal, "")) from exc
+
+    async def _finalize_governed_operation(
+        self, op: WorkflowOperation, task: TaskRecord, *, update_task: bool = True
+    ) -> WorkflowRunResult:
+        assert self._governed is not None and task.trace_id is not None
+        task_id = op.context.task_id
+        status: TaskStatus
+        event_type: TraceEventType
+        trace_status: TraceEventStatus
+        terminal: dict[str, tuple[TaskStatus, TraceEventType, TraceEventStatus]] = {
+            "VERIFIED_SUCCESS": ("completed", "task_completed", "ok"),
+            "FAILED": ("failed", "task_failed", "failed"),
+            "CANCELLED": ("cancelled", "task_cancelled", "blocked"),
+            "EXPIRED": ("confirmation_invalidated", "task_confirmation_invalidated", "failed"),
+        }
+        status, event_type, trace_status = terminal[op.state]
+        error: ErrorCode | None = (
+            None
+            if status in {"completed", "cancelled"}
+            else (
+                "confirm_required"
+                if status == "confirmation_invalidated"
+                else self._governed.result(op, task.trace_id).error_code
             )
-            if task.status != status or task.error_code != error:
+        )
+        try:
+            if update_task and (task.status != status or task.error_code != error):
                 await self._task_store.update_status(task_id, status, error)
             event = TraceEvent(
                 trace_id=task.trace_id,
@@ -218,7 +267,8 @@ class WorkflowEngine:
                         "task": task_id,
                         "trace": task.trace_id,
                         "operation": op.operation_id,
-                        "revision": op.revision,
+                        "action": op.action_digest,
+                        "gate": op.gate_request_id,
                         "event_type": item.event_type,
                     }
                 )
@@ -234,6 +284,8 @@ class WorkflowEngine:
                 error_code=error,
             )
             return self._governed.result(op, task.trace_id)
+        except Exception as exc:
+            raise GovernedFinalizationError(self._governed.result(op, task.trace_id)) from exc
 
     def configure_human_gate_port(self, human_gate_port: HumanGatePort) -> None:
         """Attach the shared Task-binding store before the first execution."""

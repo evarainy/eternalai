@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 from uuid import uuid4
 
 from app.mcp.connections import McpExecutionContextFactory
@@ -276,7 +276,7 @@ class GovernedOperations:
         expected_action_digest: str,
         expected_gate_request_id: str,
         reason: str,
-    ) -> bool:
+    ) -> bool | Literal["superseded"]:
         op = await self.store.by_task(task_id)
         if op is None:
             return False
@@ -287,6 +287,37 @@ class GovernedOperations:
                 raise McpFailure("mcp_operation_unavailable")
             self.lifecycle_owner(current)
             if current.action_digest != expected_action_digest:
+                old = await self.gates.get_request(expected_gate_request_id)
+                new = (
+                    await self.gates.get_request(current.gate_request_id)
+                    if current.gate_request_id
+                    else None
+                )
+                manifest = await self.gates.get_task_binding(task_id)
+                # A trusted expired gate may have been explicitly replaced while
+                # its task/trace cleanup was interrupted. Audit it without retiring
+                # the new generation or invoking ordinary discard.
+                if (
+                    reason == "expired"
+                    and old is not None
+                    and new is not None
+                    and manifest is not None
+                    and old.request_id != new.request_id
+                    and old.action_digest == expected_action_digest
+                    and old.expires_at <= datetime.now(UTC)
+                    and new.requested_at >= old.expires_at
+                    and new.action_digest == current.action_digest
+                    and new.expires_at == current.expires_at
+                    and all(
+                        request.task_id == task_id
+                        and request.requested_for_ai_user_id == current.context.user_id
+                        and request.requested_tenant_id == current.context.tenant_id
+                        and request.requested_session_id == current.context.chat_session_id
+                        and request.binding_manifest_digest == manifest.manifest_digest
+                        for request in (old, new)
+                    )
+                ):
+                    return "superseded"
                 raise McpFailure("mcp_operation_conflict")
             request = (
                 await self.gates.get_request(current.gate_request_id)
@@ -614,6 +645,7 @@ class GovernedOperations:
             }
         )
         request = await self._gate(op, context, action_digest, expires)
+        now = datetime.now(UTC)
         if request.expires_at <= now:
             if op.state == "WAITING_LOCAL_CONFIRM" and op.expires_at <= now:
                 await self.store.transition(op, state="EXPIRED")

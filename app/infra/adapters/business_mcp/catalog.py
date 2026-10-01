@@ -111,6 +111,9 @@ def catalog(
                 output["properties"]["result"] = (
                     policy.public_result_schema() if policy else {"type": "null"}
                 )
+                definitions = output["properties"]["result"].pop("$defs", None)
+                if definitions:
+                    output["$defs"] = definitions
             capabilities.append(
                 CapabilitySpec(
                     capability_id=capability_id,

@@ -142,7 +142,35 @@ class OutputContract:
             "required": [key for key in self.schema.get("required", []) if key in fields],
             "additionalProperties": False,
         }
-        return {"anyOf": [result_schema, {"type": "null"}]}
+        # Preserve only definitions reachable from approved fields. Local refs
+        # resolve at the schema root, including when this schema is embedded.
+        definitions = self.schema.get("$defs", {})
+        selected: dict[str, Any] = {}
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                reference = value.get("$ref")
+                if reference is not None:
+                    prefix = "#/$defs/"
+                    if not isinstance(reference, str) or not reference.startswith(prefix):
+                        raise McpFailure("mcp_output_contract_invalid")
+                    name = reference[len(prefix) :]
+                    if not name or "/" in name or name not in definitions:
+                        raise McpFailure("mcp_output_contract_invalid")
+                    if name not in selected:
+                        selected[name] = deepcopy(definitions[name])
+                        collect(selected[name])
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(result_schema)
+        output: dict[str, Any] = {"anyOf": [result_schema, {"type": "null"}]}
+        if selected:
+            output["$defs"] = selected
+        return output
 
 
 def input_digest(tool: str) -> str:

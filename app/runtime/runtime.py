@@ -80,7 +80,7 @@ from app.ports.task_store import (
     TaskStorePort,
 )
 from app.ports.trace import TraceEventStatus, TraceEventType, TracePort
-from app.ports.workflow_engine import WorkflowEnginePort
+from app.ports.workflow_engine import GovernedFinalizationError, WorkflowEnginePort
 from app.runtime.intent_router import IntentFailureReason, IntentRouter
 from app.runtime.models import CapabilityRef
 from app.version_binding import (
@@ -952,8 +952,12 @@ class RuntimeImpl:
                 str(uuid4()),
                 action_task_id,
                 session_id,
-                "结构化操作未被受理，本次未执行。",
-                "The structured action was not accepted; nothing was executed.",
+                "此确认已处理，本次没有再次执行。"
+                if outcome == "action_already_claimed"
+                else "结构化操作未被受理，本次未执行。",
+                "This confirmation was already handled; no additional execution was started."
+                if outcome == "action_already_claimed"
+                else "The structured action was not accepted; nothing was executed.",
                 action_trace_id,
                 data={"action_outcome": outcome, "result": None},
             )
@@ -1318,6 +1322,7 @@ class RuntimeImpl:
             with self._pending_confirmation_claim_lock:
                 if self._pending_workflows.get(key) is not pending:
                     continue
+                remember_completed = claim is None or claim.state != "completed"
                 if claim is None:
                     claim = self._new_confirmation_claim(key, pending, owner)
                 if claim is None:
@@ -1326,7 +1331,7 @@ class RuntimeImpl:
                 claim.pending = None
                 claim.cleanup_complete = True
                 del self._pending_workflows[key]
-            if result.status == "completed":
+            if result.status == "completed" and remember_completed:
                 self._session_memory.remember_completed(owner, capability_id=pending.capability_id)
 
     async def _expire_pending_confirmations(self, owner: SessionMemoryKey) -> None:
@@ -1408,6 +1413,24 @@ class RuntimeImpl:
                 pending.trace_id,
             ), outcome
         except OrchestrationContractError:
+            raise
+        except GovernedFinalizationError as exc:
+            if exc.result.output.get("state") not in {"VERIFIED_SUCCESS", "FAILED"}:
+                raise
+            # A durable business fact cannot become "nothing was executed".
+            # Keep the captured pending for owner-bound finalizer repair only.
+            with self._pending_confirmation_claim_lock:
+                claim = self._claimed_pending_confirmations[
+                    _pending_confirmation_claim_key(pending_key, pending)
+                ]
+                claim.state = "completed"
+                claim.cleanup_complete = False
+                claim.pending = pending
+                claim.error_code = exc.result.error_code
+            if exc.result.status == "completed":
+                self._session_memory.remember_completed(
+                    memory_key, capability_id=pending.capability_id
+                )
             raise
         except Exception as exc:
             claim = self._claimed_pending_confirmations[

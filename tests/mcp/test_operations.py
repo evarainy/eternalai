@@ -76,12 +76,190 @@ class Store:
             ("renewed_action_digest", "action_digest"),
             ("renewed_gate_expires_at", "expires_at"),
             ("gate_request_id", "gate_request_id"),
+            ("public_result", "public_result"),
+            ("safe_output", "safe_output"),
+            ("attempt_id", "attempt_id"),
         ):
             if source in changes:
                 update[target] = changes[source]
         self.op = op.model_copy(update=update)
         self.transitions.append(state)
         return self.op
+
+
+def test_public_result_local_refs_work_at_standalone_and_outer_roots():
+    contract = OutputContract(
+        "synthetic-ref",
+        {
+            "type": "object",
+            "$defs": {
+                "artifact": {"type": "string", "pattern": "^[a-f0-9]{32}$"},
+                "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+                "private": {"type": "object", "properties": {"access_token": {"type": "string"}}},
+            },
+            "properties": {
+                "artifactId": {"$ref": "#/$defs/artifact"},
+                "payloadHash": {"$ref": "#/$defs/hash"},
+                "internal": {"type": "integer"},
+            },
+            "required": ["artifactId", "payloadHash"],
+            "additionalProperties": False,
+        },
+        ("artifactId", "payloadHash"),
+        ("artifactId", "payloadHash"),
+        ("artifactId", "payloadHash", "internal"),
+        "synthetic-ref",
+    )
+    expected = {"artifactId": "a" * 32, "payloadHash": "b" * 64}
+    assert (
+        project_response_data({**expected, "internal": 7}, contract.public_result_schema())
+        == expected
+    )
+    with serving(Peer("2025-11-25")) as profile:
+        specs, _ = catalog(profile, {"clothing_plan_preview": contract})
+    outer = next(item for item in specs if item.type == "workflow" and item.status == "active")
+    for state, result in [("WAITING_LOCAL_CONFIRM", None), ("VERIFIED_SUCCESS", expected)]:
+        output = {"operation_id": "a" * 32, "state": state, "result": result}
+        assert project_response_data(output, outer.output_schema) == output
+    legacy = {"operation_id": "a" * 32, "state": "VERIFIED_SUCCESS"}
+    assert project_response_data(legacy, outer.output_schema) == legacy
+
+
+@pytest.mark.parametrize("state", ["WAITING_LOCAL_CONFIRM", "UNKNOWN"])
+def test_gate_await_crossing_deadline_never_publishes_expired_wait(monkeypatch, state):
+    async def run():
+        h = await fixture()
+        h.op = h.store.op = h.op.model_copy(update={"state": state})
+        token = authenticated_session.set(h.session)
+        entered, release = asyncio.Event(), asyncio.Event()
+        original = h.operations._gate
+        clock = [datetime.now(UTC)]
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock[0]
+
+        async def paused(*args, **kwargs):
+            gate = await original(*args, **kwargs)
+            clock[0] = gate.expires_at + timedelta(seconds=1)
+            entered.set()
+            await release.wait()
+            return gate
+
+        monkeypatch.setattr("app.mcp.operations.datetime", Clock)
+        h.operations._gate = paused
+        try:
+            pending = asyncio.create_task(
+                h.operations._renew_confirmation(h.op, h.op.context, "policy")
+            )
+            await entered.wait()
+            release.set()
+            with pytest.raises(McpFailure, match="mcp_confirmation_expired"):
+                await pending
+            assert h.store.op.state == (
+                "EXPIRED" if state == "WAITING_LOCAL_CONFIRM" else "UNKNOWN"
+            )
+            assert "WAITING_LOCAL_CONFIRM" not in h.store.transitions
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+def test_coordinator_persists_adapter_public_result_before_delivery():
+    from app.ports.capability_gateway import ExecutionResult
+    from app.ports.mcp import McpValidatedOutcome
+
+    async def run():
+        h = await fixture()
+        token = authenticated_session.set(h.session)
+        gate = await h.operations._gate(h.op, h.op.context, h.op.action_digest, h.op.expires_at)
+        h.store.op = h.op = h.op.model_copy(update={"gate_request_id": gate.request_id})
+        await h.gates.record_decision(
+            HumanGateDecisionRecord(
+                request_id=gate.request_id,
+                task_id=gate.task_id,
+                decided_by_ai_user_id=gate.requested_for_ai_user_id,
+                decided_session_id=gate.requested_session_id,
+                decided_tenant_id=gate.requested_tenant_id,
+                decision="confirmed",
+                request_digest=gate.request_digest,
+                binding_manifest_digest=gate.binding_manifest_digest,
+                decided_at=gate.requested_at,
+            )
+        )
+        visible = {"artifactId": "a" * 32, "payloadHash": "b" * 64}
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+
+        sends = 0
+
+        async def execute(*args, **kwargs):
+            nonlocal sends
+            assert h.store.op.state == "READY"
+            sends += 1
+            await h.store.transition(h.store.op, state="SENDING")
+            return ExecutionResult(
+                status="completed",
+                trace_id="synthetic",
+                mcp_outcome=McpValidatedOutcome(
+                    state="VERIFIED_SUCCESS",
+                    persistence={**visible, "internal": 7},
+                    public_result=visible,
+                ),
+            )
+
+        h.operations.owned = owned
+        h.operations.gateway = SimpleNamespace(execute_capability=execute)
+        try:
+            result = await h.operations.resume(
+                h.op.context.task_id, confirmed=True, expected_action_digest=h.op.action_digest
+            )
+            reloaded = WorkflowOperation.model_validate_json(h.store.op.model_dump_json())
+            assert sends == 1 and result.output["result"] == reloaded.public_result == visible
+            assert reloaded.safe_output["internal"] == 7
+            assert "internal" not in result.output["result"]
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("requested_for_ai_user_id", "other-user"),
+        ("binding_manifest_digest", "c" * 64),
+        ("action_digest", "d" * 64),
+    ],
+)
+def test_superseded_cleanup_still_rejects_corrupt_captured_binding(field, value):
+    async def run():
+        h = await fixture()
+        gate = await h.operations._gate(h.op, h.op.context, h.op.action_digest, h.op.expires_at)
+        expired = datetime.now(UTC) - timedelta(minutes=2)
+        gate = gate.model_copy(
+            update={"requested_at": expired - timedelta(minutes=10), "expires_at": expired}
+        )
+        h.gates._requests[gate.request_id] = gate
+        h.op = h.store.op = h.op.model_copy(
+            update={"state": "EXPIRED", "expires_at": expired, "gate_request_id": gate.request_id}
+        )
+        token = authenticated_session.set(h.session)
+        try:
+            newer = await h.operations._renew_confirmation(h.op, h.op.context, "synthetic")
+            h.gates._requests[gate.request_id] = gate.model_copy(update={field: value})
+            with pytest.raises(McpFailure, match="mcp_operation_conflict"):
+                await h.operations.retire_owned_confirmation(
+                    h.op.context.task_id, h.op.action_digest, gate.request_id, "expired"
+                )
+            assert h.store.op == newer
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
 
 
 async def fixture():

@@ -79,7 +79,16 @@ class WorkflowRunResult:
     evaluation_observations: tuple[StepObservation, ...] = ()
 
 
+class GovernedFinalizationError(RuntimeError):
+    """Business terminal is durable; task/trace writes still require repair."""
+
+    def __init__(self, result: WorkflowRunResult) -> None:
+        super().__init__("governed terminal finalizer incomplete")
+        self.result = result
+
+
 __all__ = (
+    "GovernedFinalizationError",
     "WorkflowCondition",
     "WorkflowDefinition",
     "WorkflowInputRef",
