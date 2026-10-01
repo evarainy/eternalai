@@ -122,6 +122,28 @@ class OutputContract:
         }[purpose]
         return {key: validated[key] for key in fields if key in validated}
 
+    def public_result(self, validated: dict[str, Any]) -> dict[str, Any] | None:
+        fields = set(self.model_fields) & set(self.ui_fields) & set(self.persistence_fields)
+        result = {key: validated[key] for key in sorted(fields) if key in validated}
+        return result or None
+
+    def public_result_schema(self) -> dict[str, Any]:
+        from copy import deepcopy
+
+        fields = set(self.model_fields) & set(self.ui_fields) & set(self.persistence_fields)
+        properties = self.schema.get("properties", {})
+        if not fields:
+            return {"type": "null"}
+        if not fields <= properties.keys():
+            raise McpFailure("mcp_output_contract_invalid")
+        result_schema = {
+            "type": "object",
+            "properties": {key: deepcopy(properties[key]) for key in sorted(fields)},
+            "required": [key for key in self.schema.get("required", []) if key in fields],
+            "additionalProperties": False,
+        }
+        return {"anyOf": [result_schema, {"type": "null"}]}
+
 
 def input_digest(tool: str) -> str:
     return digest(INPUT_SCHEMAS[tool])

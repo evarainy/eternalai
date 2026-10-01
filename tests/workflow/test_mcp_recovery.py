@@ -46,7 +46,6 @@ from app.ports.auth import (
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.human_gate import (
     HumanGateDecisionRecord,
-    HumanGateRequest,
     build_task_version_binding_manifest,
 )
 from app.ports.mcp import McpSubmitPermit
@@ -378,20 +377,9 @@ async def harness(
 
 async def confirm(h: dict[str, Any], *, decide: bool = True) -> None:
     op, gates = h["op"], h["gates"]
-    binding = await gates.get_task_binding(op.context.task_id)
-    request = HumanGateRequest(
-        request_id=uuid4().hex,
-        task_id=op.context.task_id,
-        requested_for_ai_user_id=op.context.user_id,
-        requested_session_id=op.context.chat_session_id,
-        requested_tenant_id=op.context.tenant_id,
-        action_digest=op.action_digest,
-        request_digest="c" * 64,
-        binding_manifest_digest=binding.manifest_digest,
-        requested_at=datetime.now(UTC),
-        expires_at=op.expires_at,
-    )
-    await gates.create_request(request)
+    request = await h["workflow"].governed_confirmation(op.context.task_id)
+    assert request is not None and request.action_digest == op.action_digest
+    h["op"] = await h["operations"].store.by_task(op.context.task_id)
     if not decide:
         return
     await gates.record_decision(

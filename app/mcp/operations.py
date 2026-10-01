@@ -12,7 +12,7 @@ from app.mcp.models import McpFailure, digest
 from app.ports.auth import authenticated_session
 from app.ports.capability_gateway import CapabilityGatewayPort, RequestOrgContext
 from app.ports.capability_registry import CapabilityRegistryPort
-from app.ports.human_gate import HumanGatePort, HumanGateRequest
+from app.ports.human_gate import HumanGateConflictError, HumanGatePort, HumanGateRequest
 from app.ports.mcp import McpAuthorizationContext, McpSubmitPreconditionPort
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.workflow_store import (
@@ -147,6 +147,8 @@ class GovernedOperations:
                 artifact_deadline.tzinfo is None or artifact_deadline <= datetime.now(UTC)
             ):
                 raise McpFailure("mcp_artifact_expired")
+        if artifact_deadline is not None:
+            expires = min(expires, artifact_deadline)
         operation = WorkflowOperation(
             operation_id=operation_id,
             context=context,
@@ -175,7 +177,145 @@ class GovernedOperations:
                 }
             ),
         )
-        return self.result(await self.store.create(operation), request_context.request_id)
+        operation = await self.store.create(operation)
+        operation, _ = await self.ensure_confirmation(operation)
+        return self.result(operation, request_context.request_id)
+
+    @staticmethod
+    def lifecycle_owner(op: WorkflowOperation) -> None:
+        session = authenticated_session.get()
+        if (
+            session is None
+            or session.expires_at <= datetime.now(UTC)
+            or session.principal.ai_user_id != op.context.user_id
+            or session.principal.org_ctx.tenant_id != op.context.tenant_id
+        ):
+            raise McpFailure("mcp_authorization_invalid")
+
+    async def _gate(
+        self,
+        op: WorkflowOperation,
+        context: McpAuthorizationContext,
+        action_digest: str,
+        expires: datetime,
+        *,
+        legacy: bool = False,
+    ) -> HumanGateRequest:
+        manifest = await self.gates.get_task_binding(op.context.task_id)
+        if manifest is None:
+            raise McpFailure("mcp_workflow_authorization_invalid")
+        request_digest = digest({"operation_id": op.operation_id, "action_digest": action_digest})
+        request_id = request_digest[:32]
+        if legacy and op.gate_request_id:
+            request = await self.gates.get_request(op.gate_request_id)
+            if request is None:
+                raise McpFailure("mcp_checkpoint_inconsistent")
+        elif legacy:
+            request = await self.store.confirmation(op)
+        else:
+            request = await self.gates.get_request(request_id)
+        if request is None:
+            candidate = HumanGateRequest(
+                request_id=request_id,
+                task_id=context.task_id,
+                requested_for_ai_user_id=context.user_id,
+                requested_session_id=context.chat_session_id,
+                requested_tenant_id=context.tenant_id,
+                action_digest=action_digest,
+                request_digest=request_digest,
+                binding_manifest_digest=manifest.manifest_digest,
+                requested_at=datetime.now(UTC),
+                expires_at=expires,
+            )
+            try:
+                request = await self.gates.create_request(candidate)
+            except HumanGateConflictError:
+                request = await self.gates.get_request(request_id)
+                if request is None:
+                    raise
+        if (
+            request.task_id != context.task_id
+            or request.requested_for_ai_user_id != context.user_id
+            or request.requested_session_id != context.chat_session_id
+            or request.requested_tenant_id != context.tenant_id
+            or request.action_digest != action_digest
+            or request.binding_manifest_digest != manifest.manifest_digest
+            or (request.request_id == request_id and request.request_digest != request_digest)
+            or len(request.request_digest) != 64
+            or request.requested_at > datetime.now(UTC)
+            or request.expires_at > expires
+        ):
+            raise McpFailure("mcp_checkpoint_inconsistent")
+        return request
+
+    async def ensure_confirmation(
+        self,
+        op: WorkflowOperation,
+    ) -> tuple[WorkflowOperation, HumanGateRequest]:
+        await self.owned(op)
+        if op.state != "WAITING_LOCAL_CONFIRM":
+            raise McpFailure("mcp_confirmation_unavailable")
+        request = await self._gate(op, op.context, op.action_digest, op.expires_at, legacy=True)
+        if request.expires_at <= datetime.now(UTC):
+            await self.store.transition(op, state="EXPIRED")
+            raise McpFailure("mcp_confirmation_expired")
+        if op.gate_request_id != request.request_id or op.expires_at != request.expires_at:
+            op = await self.store.transition(
+                op,
+                state="WAITING_LOCAL_CONFIRM",
+                gate_request_id=request.request_id,
+                renewed_context=op.context,
+                renewed_action_digest=op.action_digest,
+                renewed_gate_expires_at=request.expires_at,
+            )
+        return op, request
+
+    async def retire_owned_confirmation(
+        self,
+        task_id: str,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+        reason: str,
+    ) -> bool:
+        op = await self.store.by_task(task_id)
+        if op is None:
+            return False
+        self.lifecycle_owner(op)
+        async with self.store.execution_guard(op):
+            current = await self.store.by_task(task_id)
+            if current is None:
+                raise McpFailure("mcp_operation_unavailable")
+            self.lifecycle_owner(current)
+            if current.action_digest != expected_action_digest:
+                raise McpFailure("mcp_operation_conflict")
+            request = (
+                await self.gates.get_request(current.gate_request_id)
+                if current.gate_request_id
+                else await self.store.confirmation(current)
+            )
+            manifest = await self.gates.get_task_binding(task_id)
+            if (
+                request is None
+                or manifest is None
+                or request.request_id != expected_gate_request_id
+                or request.task_id != task_id
+                or request.action_digest != expected_action_digest
+                or request.requested_for_ai_user_id != current.context.user_id
+                or request.requested_tenant_id != current.context.tenant_id
+                or request.requested_session_id != current.context.chat_session_id
+                or request.binding_manifest_digest != manifest.manifest_digest
+            ):
+                raise McpFailure("mcp_operation_conflict")
+            if current.state in {"WAITING_LOCAL_CONFIRM", "READY"} and not current.send_started:
+                if reason == "expired" and current.expires_at > datetime.now(UTC):
+                    raise McpFailure("mcp_confirmation_not_expired")
+                await self.store.transition(
+                    current,
+                    state="EXPIRED" if reason == "expired" else "CANCELLED",
+                )
+            elif current.state not in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}:
+                raise McpFailure("mcp_outcome_unknown")
+        return True
 
     async def _preview(
         self, capability_id: str, version: str, arguments: Mapping[str, Any]
@@ -249,7 +389,11 @@ class GovernedOperations:
             return self.result(await self.store.transition(op, state="EXPIRED"), op.operation_id)
         if not confirmed or expected_action_digest != op.action_digest:
             raise McpFailure("mcp_workflow_authorization_invalid")
-        request = await self.store.confirmation(op)
+        request = (
+            await self.gates.get_request(op.gate_request_id)
+            if op.gate_request_id
+            else await self.store.confirmation(op)
+        )
         if request is None:
             raise McpFailure("mcp_workflow_authorization_invalid")
         decision = await self.gates.get_decision(request.request_id)
@@ -289,6 +433,7 @@ class GovernedOperations:
                     current,
                     state=result.mcp_outcome.state,
                     safe_output=result.mcp_outcome.persistence,
+                    public_result=result.mcp_outcome.public_result,
                     review_url=result.mcp_outcome.review_url,
                 )
             else:
@@ -468,35 +613,18 @@ class GovernedOperations:
                 "recovery_policy": policy_version,
             }
         )
-        manifest = await self.gates.get_task_binding(op.context.task_id)
-        if manifest is None:
-            raise McpFailure("mcp_workflow_authorization_invalid")
-        # Persist the future-action gate first. A crash cannot expose a checkpoint with
-        # a missing gate; a retry finds this deterministic request before the CAS.
-        request_id = digest({"operation_id": op.operation_id, "action_digest": action_digest})[:32]
-        if await self.gates.get_request(request_id) is None:
-            await self.gates.create_request(
-                HumanGateRequest(
-                    request_id=request_id,
-                    task_id=op.context.task_id,
-                    requested_for_ai_user_id=op.context.user_id,
-                    requested_session_id=op.context.chat_session_id,
-                    requested_tenant_id=op.context.tenant_id,
-                    action_digest=action_digest,
-                    request_digest=digest(
-                        {"operation_id": op.operation_id, "action_digest": action_digest}
-                    ),
-                    binding_manifest_digest=manifest.manifest_digest,
-                    requested_at=datetime.now(UTC),
-                    expires_at=expires,
-                )
-            )
+        request = await self._gate(op, context, action_digest, expires)
+        if request.expires_at <= now:
+            if op.state == "WAITING_LOCAL_CONFIRM" and op.expires_at <= now:
+                await self.store.transition(op, state="EXPIRED")
+            raise McpFailure("mcp_confirmation_expired")
         return await self.store.transition(
             op,
             state="WAITING_LOCAL_CONFIRM",
             renewed_context=context,
             renewed_action_digest=action_digest,
-            renewed_gate_expires_at=expires,
+            renewed_gate_expires_at=request.expires_at,
+            gate_request_id=request.request_id,
         )
 
     @staticmethod
@@ -511,7 +639,11 @@ class GovernedOperations:
             workflow_version=op.outer_version,
             trace_id=trace_id,
             status=status,
-            output={"operation_id": op.operation_id, "state": op.state},
+            output={
+                "operation_id": op.operation_id,
+                "state": op.state,
+                "result": op.public_result if op.state == "VERIFIED_SUCCESS" else None,
+            },
             step_outputs={},
             error_code=None
             if status in {"completed", "waiting_confirm"}

@@ -125,6 +125,32 @@ class _SpyWorkflowEngine:
         self.pending_confirmation_action_digest_calls.append(task_id)
         return self.pending_confirmation_action_digest_result
 
+    async def governed_confirmation(self, task_id):
+        self.governed_task = task_id
+        return "synthetic-gate"
+
+    async def finalize_governed_task(self, **kwargs):
+        self.finalized_task = kwargs
+        return self.execute_result
+
+    async def retire_owned_confirmation(self, *args):
+        self.retired_confirmation = args
+        return True
+
+
+def test_governed_lifecycle_methods_forward_exact_identity():
+    async def run():
+        spy = _SpyWorkflowEngine()
+        adapter = WorkflowEngineAdapter(spy)
+        assert await adapter.governed_confirmation("task-1") == "synthetic-gate"
+        assert spy.governed_task == "task-1"
+        assert await adapter.finalize_governed_task(task_id="task-1") is spy.execute_result
+        assert spy.finalized_task == {"task_id": "task-1"}
+        assert await adapter.retire_owned_confirmation("task-1", "action", "gate", "expired")
+        assert spy.retired_confirmation == ("task-1", "action", "gate", "expired")
+
+    asyncio.run(run())
+
 
 def test_execute_forwards_every_argument_and_returns_engine_result_unchanged() -> None:
     async def exercise() -> None:

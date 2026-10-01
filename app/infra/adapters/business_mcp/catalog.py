@@ -106,7 +106,11 @@ def catalog(
                 f"business.{profile.service_config_id}.internal.{tool}" if internal else outer_id
             )
             outer = tool in WRITE_TOOLS and not internal
-            output = OPERATION_OUTPUT if outer else business_output
+            output = deepcopy(OPERATION_OUTPUT) if outer else business_output
+            if outer:
+                output["properties"]["result"] = (
+                    policy.public_result_schema() if policy else {"type": "null"}
+                )
             capabilities.append(
                 CapabilitySpec(
                     capability_id=capability_id,

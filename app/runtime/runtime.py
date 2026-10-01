@@ -16,11 +16,7 @@ from uuid import UUID, uuid4
 from pydantic import TypeAdapter, ValidationError
 
 from app.contracts.sdui.models import UserAction
-from app.evaluator import (
-    EvaluationConclusion,
-    TerminalBusinessStatus,
-    TerminalEvaluator,
-)
+from app.evaluator import TerminalBusinessStatus, TerminalEvaluator
 from app.evaluator.overview import (
     OVERVIEW_VERSION,
     OverviewPostconditionEvaluator,
@@ -30,6 +26,7 @@ from app.evaluator.overview import (
     unevaluated,
     verification,
 )
+from app.evaluator.trace import terminal_evaluation_attributes
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
 from app.knowledge import BasicKnowledge
 from app.knowledge.capability_selection import (
@@ -172,6 +169,8 @@ class _ConfirmationClaim:
     retain_until: float
     cleanup_complete: bool = False
     error_code: ErrorCode | None = None
+    cleanup_in_progress: bool = False
+    cleanup_reason: Literal["cancelled", "expired", "exception"] | None = None
 
 
 class _ActionAlreadyClaimedError(RuntimeError):
@@ -256,7 +255,7 @@ class RuntimeImpl:
             session_id=session_id,
             ai_user_id=ai_user_id,
         )
-        await self._expire_pending_confirmations()
+        await self._expire_pending_confirmations(memory_key)
         pending_key = _pending_workflow_key(memory_key.tenant_id, session_id, ai_user_id)
         pending = self._pending_workflows.get(pending_key)
         if pending is not None and pending.owner == memory_key:
@@ -659,6 +658,7 @@ class RuntimeImpl:
             selected_capability.type == "workflow" and exec_result.status == "waiting_user"
         )
         requested_at = self._utc_clock()
+        gate_expires_at = requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS)
         monotonic_deadline = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
         if workflow_waiting and self._human_gate_port is not None:
             try:
@@ -686,20 +686,32 @@ class RuntimeImpl:
                     preview=confirmation.to_payload(),
                     binding_manifest_digest=gate_manifest_digest,
                 )
-                await self._human_gate_port.create_request(
-                    HumanGateRequest(
-                        request_id=gate_request_id,
-                        task_id=task_id,
-                        requested_for_ai_user_id=ai_user_id,
-                        requested_session_id=session_id,
-                        requested_tenant_id=memory_key.tenant_id,
-                        action_digest=action_digest,
-                        request_digest=request_digest,
-                        binding_manifest_digest=gate_manifest_digest,
-                        requested_at=requested_at,
-                        expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                persisted_gate = await self._workflow_engine.governed_confirmation(task_id)
+                if persisted_gate is not None:
+                    gate_request_id = persisted_gate.request_id
+                    action_digest = persisted_gate.action_digest
+                    request_digest = persisted_gate.request_digest
+                    gate_manifest_digest = persisted_gate.binding_manifest_digest
+                    gate_expires_at = persisted_gate.expires_at
+                    monotonic_deadline = self._monotonic_clock() + max(
+                        0,
+                        (gate_expires_at - self._utc_clock()).total_seconds(),
                     )
-                )
+                else:
+                    await self._human_gate_port.create_request(
+                        HumanGateRequest(
+                            request_id=gate_request_id,
+                            task_id=task_id,
+                            requested_for_ai_user_id=ai_user_id,
+                            requested_session_id=session_id,
+                            requested_tenant_id=memory_key.tenant_id,
+                            action_digest=action_digest,
+                            request_digest=request_digest,
+                            binding_manifest_digest=gate_manifest_digest,
+                            requested_at=requested_at,
+                            expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                        )
+                    )
             except (HumanGateConflictError, VersionBindingMismatchError):
                 if self._workflow_engine is not None:
                     await self._workflow_engine.discard_checkpoint(task_id)
@@ -722,10 +734,10 @@ class RuntimeImpl:
                 request_digest=request_digest,
                 binding_manifest_digest=gate_manifest_digest,
                 owner=memory_key,
-                expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                expires_at=gate_expires_at,
                 monotonic_deadline=monotonic_deadline,
             )
-            await self._expire_pending_confirmations()
+            await self._expire_pending_confirmations(memory_key)
             if pending is not None and self._pending_workflows.get(pending_key) is None:
                 pending = None
             if not self._publish_pending_workflow(
@@ -753,7 +765,11 @@ class RuntimeImpl:
         exec_result, business_verification = self._evaluate_required_postconditions(
             exec_result,
             scope=EvaluationScope(
-                task_id, trace_id, session_id, memory_key.tenant_id, memory_key.ai_user_id,
+                task_id,
+                trace_id,
+                session_id,
+                memory_key.tenant_id,
+                memory_key.ai_user_id,
             ),
             capability_id=selected_capability.capability_id,
             version=selected_capability.version,
@@ -869,7 +885,7 @@ class RuntimeImpl:
                 outcome="action_gate_unavailable",
             )
 
-        await self._expire_pending_confirmations()
+        await self._expire_pending_confirmations(memory_key)
         cached = self._lookup_confirmation_outcome(memory_key, action.response_id)
         pending = self._pending_workflows.get(pending_key)
         outcome: UserActionOutcome | None = cached
@@ -1129,8 +1145,6 @@ class RuntimeImpl:
             if claim is None:
                 raise RuntimeError("Confirmation cleanup capacity exhausted")
             if claim.state != "processing":
-                if not claim.cleanup_complete:
-                    raise RuntimeError("Confirmation cleanup is incomplete")
                 return self._confirmation_terminal_envelope(
                     task_id=pending.task_id,
                     trace_id=pending.trace_id,
@@ -1139,12 +1153,11 @@ class RuntimeImpl:
                 )
             claim.state = status
             claim.error_code = error_code
-            claim.pending = None
+            claim.cleanup_reason = reason
+            claim.pending = pending
             claim.retain_until = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
             owns_pending = self._pending_workflows.get(pending_key) is pending
-            if owns_pending:
-                del self._pending_workflows[pending_key]
-            else:
+            if not owns_pending:
                 # A CAS loser owns no cleanup work; the winner must stay untouched.
                 claim.cleanup_complete = True
         envelope = self._confirmation_terminal_envelope(
@@ -1155,18 +1168,57 @@ class RuntimeImpl:
         )
         if not owns_pending:
             return envelope
-        # No await between CAS removal and discarding this captured checkpoint.
-        if self._workflow_engine is not None:
-            await self._workflow_engine.discard_checkpoint(pending.task_id)
-        await self._finish_confirmation_terminal(
-            pending=pending,
-            status=status,
-            reason=reason,
-            error_code=error_code,
-        )
-        with self._pending_confirmation_claim_lock:
-            claim.cleanup_complete = True
+        await self._retry_confirmation_cleanup(pending_key, claim)
         return envelope
+
+    async def _retry_confirmation_cleanup(
+        self,
+        pending_key: tuple[str, str, str],
+        claim: _ConfirmationClaim,
+    ) -> None:
+        with self._pending_confirmation_claim_lock:
+            if claim.cleanup_complete or claim.cleanup_in_progress:
+                return
+            pending = claim.pending
+            if pending is None or claim.cleanup_reason is None:
+                return
+            claim.cleanup_in_progress = True
+        try:
+            assert pending.owner is not None
+            governed = False
+            if self._workflow_engine is not None:
+                task = await self._task_store.get_task(pending.task_id)
+                if task is None or (task.tenant_id, task.ai_user_id, task.session_id) != (
+                    pending.owner.tenant_id,
+                    pending.owner.ai_user_id,
+                    pending.owner.session_id,
+                ):
+                    raise RuntimeError("Confirmation cleanup owner mismatch")
+                governed = await self._workflow_engine.retire_owned_confirmation(
+                    pending.task_id,
+                    pending.action_digest or "",
+                    pending.gate_request_id or "",
+                    claim.cleanup_reason,
+                )
+                if not governed:
+                    await self._workflow_engine.discard_checkpoint(pending.task_id)
+            if not governed:
+                await self._finish_confirmation_terminal(
+                    pending=pending,
+                    status="cancelled"
+                    if claim.state == "cancelled"
+                    else "confirmation_invalidated",
+                    reason=claim.cleanup_reason,
+                    error_code=claim.error_code,
+                )
+            with self._pending_confirmation_claim_lock:
+                if self._pending_workflows.get(pending_key) is pending:
+                    del self._pending_workflows[pending_key]
+                claim.cleanup_complete = True
+                claim.pending = None
+        finally:
+            with self._pending_confirmation_claim_lock:
+                claim.cleanup_in_progress = False
 
     async def _finish_confirmation_terminal(
         self,
@@ -1179,13 +1231,18 @@ class RuntimeImpl:
         owner = pending.owner
         assert owner is not None
         record = await self._task_store.get_task(pending.task_id)
-        if record is not None and record.status in {
-            "completed",
-            "failed",
-            "no_capability_found",
-            "cancelled",
-            "confirmation_invalidated",
-        }:
+        if (
+            record is not None
+            and record.status != status
+            and record.status
+            in {
+                "completed",
+                "failed",
+                "no_capability_found",
+                "cancelled",
+                "confirmation_invalidated",
+            }
+        ):
             return
         await self._task_store.update_status(pending.task_id, status, error_code)
         trace_status: TraceEventStatus = "blocked" if status == "cancelled" else "failed"
@@ -1232,11 +1289,53 @@ class RuntimeImpl:
             error_code=error_code,
         )
 
-    async def _expire_pending_confirmations(self) -> None:
+    async def _repair_owner_pending(self, owner: SessionMemoryKey) -> None:
+        for claim_key, cleanup_claim in list(self._claimed_pending_confirmations.items()):
+            if (
+                cleanup_claim.pending is not None
+                and cleanup_claim.pending.owner == owner
+                and cleanup_claim.state
+                in {
+                    "cancelled",
+                    "confirmation_invalidated",
+                }
+            ):
+                await self._retry_confirmation_cleanup(claim_key[:3], cleanup_claim)
+        if self._workflow_engine is None:
+            return
+        for key, pending in list(self._pending_workflows.items()):
+            if pending.owner != owner:
+                continue
+            with self._pending_confirmation_claim_lock:
+                claim = self._claimed_pending_confirmations.get(
+                    _pending_confirmation_claim_key(key, pending),
+                )
+                if claim is not None and claim.state == "processing":
+                    continue
+            result = await self._workflow_engine.finalize_governed_task(task_id=pending.task_id)
+            if result is None:
+                continue
+            with self._pending_confirmation_claim_lock:
+                if self._pending_workflows.get(key) is not pending:
+                    continue
+                if claim is None:
+                    claim = self._new_confirmation_claim(key, pending, owner)
+                if claim is None:
+                    raise RuntimeError("Confirmation cleanup capacity exhausted")
+                claim.state = "completed"
+                claim.pending = None
+                claim.cleanup_complete = True
+                del self._pending_workflows[key]
+            if result.status == "completed":
+                self._session_memory.remember_completed(owner, capability_id=pending.capability_id)
+
+    async def _expire_pending_confirmations(self, owner: SessionMemoryKey) -> None:
+        await self._repair_owner_pending(owner)
         for key, pending in list(self._pending_workflows.items()):
             with self._pending_confirmation_claim_lock:
                 if (
-                    not self._confirmation_expired(pending)
+                    pending.owner != owner
+                    or not self._confirmation_expired(pending)
                     or self._pending_workflows.get(key) is not pending
                     or _pending_confirmation_claim_key(key, pending)
                     in self._claimed_pending_confirmations
@@ -1492,6 +1591,7 @@ class RuntimeImpl:
             )
         confirmation: ConfirmationPreview | None = None
         requested_at = self._utc_clock()
+        gate_expires_at = requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS)
         monotonic_deadline = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
         next_gate_request_id = pending.gate_request_id
         next_action_digest = pending.action_digest
@@ -1517,20 +1617,31 @@ class RuntimeImpl:
                     preview=confirmation.to_payload(),
                     binding_manifest_digest=pending.binding_manifest_digest,
                 )
-                await self._human_gate_port.create_request(
-                    HumanGateRequest(
-                        request_id=next_gate_request_id,
-                        task_id=pending.task_id,
-                        requested_for_ai_user_id=memory_key.ai_user_id,
-                        requested_session_id=session_id,
-                        requested_tenant_id=memory_key.tenant_id,
-                        action_digest=next_action_digest,
-                        request_digest=next_request_digest,
-                        binding_manifest_digest=pending.binding_manifest_digest,
-                        requested_at=requested_at,
-                        expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                persisted_gate = await self._workflow_engine.governed_confirmation(pending.task_id)
+                if persisted_gate is not None:
+                    next_gate_request_id = persisted_gate.request_id
+                    next_action_digest = persisted_gate.action_digest
+                    next_request_digest = persisted_gate.request_digest
+                    gate_expires_at = persisted_gate.expires_at
+                    monotonic_deadline = self._monotonic_clock() + max(
+                        0,
+                        (gate_expires_at - self._utc_clock()).total_seconds(),
                     )
-                )
+                else:
+                    await self._human_gate_port.create_request(
+                        HumanGateRequest(
+                            request_id=next_gate_request_id,
+                            task_id=pending.task_id,
+                            requested_for_ai_user_id=memory_key.ai_user_id,
+                            requested_session_id=session_id,
+                            requested_tenant_id=memory_key.tenant_id,
+                            action_digest=next_action_digest,
+                            request_digest=next_request_digest,
+                            binding_manifest_digest=pending.binding_manifest_digest,
+                            requested_at=requested_at,
+                            expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                        )
+                    )
             except (HumanGateConflictError, VersionBindingMismatchError):
                 if not self._compare_and_swap_pending_workflow(
                     pending_key,
@@ -1568,13 +1679,17 @@ class RuntimeImpl:
         exec_result, business_verification = self._evaluate_required_postconditions(
             exec_result,
             scope=EvaluationScope(
-                pending.task_id, pending.trace_id, session_id,
-                memory_key.tenant_id, memory_key.ai_user_id,
+                pending.task_id,
+                pending.trace_id,
+                session_id,
+                memory_key.tenant_id,
+                memory_key.ai_user_id,
             ),
             capability_id=pending.capability_id,
             version=(
                 pending.projection_snapshot.capability_version
-                if pending.projection_snapshot is not None else ""
+                if pending.projection_snapshot is not None
+                else ""
             ),
         )
         envelope = self._build_envelope(
@@ -1590,6 +1705,7 @@ class RuntimeImpl:
                 business_verification if business_verification.rule_id else None
             ),
         )
+        governed_result = None
         if exec_result.status == "waiting_user":
             next_pending = _PendingWorkflow(
                 task_id=pending.task_id,
@@ -1602,7 +1718,7 @@ class RuntimeImpl:
                 request_digest=next_request_digest,
                 binding_manifest_digest=pending.binding_manifest_digest,
                 owner=memory_key,
-                expires_at=requested_at + timedelta(seconds=_CONFIRMATION_TTL_SECONDS),
+                expires_at=gate_expires_at,
                 monotonic_deadline=monotonic_deadline,
             )
             owns_pending = self._compare_and_swap_pending_workflow(
@@ -1611,6 +1727,9 @@ class RuntimeImpl:
                 replacement=next_pending,
             )
         else:
+            governed_result = await self._workflow_engine.finalize_governed_task(
+                task_id=pending.task_id,
+            )
             owns_pending = self._compare_and_swap_pending_workflow(
                 pending_key,
                 expected=pending,
@@ -1627,6 +1746,13 @@ class RuntimeImpl:
             event_type="response_envelope_created",
             status="ok",
         )
+        if governed_result is not None:
+            if governed_result.status == "completed":
+                self._session_memory.remember_completed(
+                    memory_key,
+                    capability_id=pending.capability_id,
+                )
+            return envelope
         final_task_status = _map_exec_to_task_status(exec_result.status)
         await self._task_store.update_status(
             pending.task_id,
@@ -2025,7 +2151,10 @@ class RuntimeImpl:
                 else:
                     try:
                         conclusion = self._overview_evaluator.evaluate(
-                            scope, capability_id, version, evidence,
+                            scope,
+                            capability_id,
+                            version,
+                            evidence,
                         )
                         if type(conclusion) is not BusinessVerification or (
                             conclusion.rule_id != required_postcondition_rule(capability_id)
@@ -2034,8 +2163,12 @@ class RuntimeImpl:
                             raise ValueError("Invalid required verification conclusion")
                         if conclusion.result == "passed":
                             if conclusion != verification(
-                                "passed", "postconditions_satisfied", structure="passed",
-                                source="passed", pending="passed", messages="passed",
+                                "passed",
+                                "postconditions_satisfied",
+                                structure="passed",
+                                source="passed",
+                                pending="passed",
+                                messages="passed",
                             ):
                                 raise ValueError("Incomplete required verification")
                             return execution.model_copy(
@@ -2044,7 +2177,9 @@ class RuntimeImpl:
                     except Exception:
                         conclusion = verification("error", "evaluator_error")
         return ExecutionResult(
-            status="failed", error_code="internal_error", trace_id=execution.trace_id,
+            status="failed",
+            error_code="internal_error",
+            trace_id=execution.trace_id,
         ), conclusion
 
     async def _record_terminal_evaluation(
@@ -2060,33 +2195,14 @@ class RuntimeImpl:
         raw_execution: ExecutionResult | None = None,
         business_verification: BusinessVerification | None = None,
     ) -> None:
-        try:
-            conclusion = self._evaluator.evaluate(business_status, error_code)
-        except Exception:
-            conclusion = EvaluationConclusion(
-                business_status=business_status,
-                business_error_code=error_code,
-                evaluation_result="error",
-                reason="evaluator_error",
-            )
-        business = business_verification or unevaluated(capability_id)
-        attributes = conclusion.trace_attributes()
-        attributes.update({
-            "evaluation_scope": "terminal_status",
-            "execution_status": raw_execution.status if raw_execution else business_status,
-            "execution_error_code": raw_execution.error_code if raw_execution else error_code,
-            "business_verification": {
-                "rule_id": business.rule_id,
-                "result": business.result,
-                "structure_result": business.structure_result,
-                "reason": business.reason,
-                "checks": {
-                    "source_binding": business.checks.source_binding,
-                    "pending_preserved": business.checks.pending_preserved,
-                    "messages_preserved": business.checks.messages_preserved,
-                },
-            },
-        })
+        status, attributes = terminal_evaluation_attributes(
+            self._evaluator,
+            business_status=business_status,
+            error_code=error_code,
+            capability_id=capability_id,
+            raw_execution=raw_execution,
+            business_verification=business_verification,
+        )
         await self._trace_port.record_step(
             trace_id,
             task_id,
@@ -2094,10 +2210,7 @@ class RuntimeImpl:
             tenant_id=memory_key.tenant_id,
             ai_user_id=memory_key.ai_user_id,
             event_type="evaluation_recorded",
-            status=(
-                "ok" if conclusion.evaluation_result == "passed"
-                and business.result not in {"failed", "error"} else "failed"
-            ),
+            status=status,
             capability_id=capability_id,
             error_code=error_code,
             attributes=attributes,

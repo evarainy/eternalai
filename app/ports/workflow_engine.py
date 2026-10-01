@@ -25,7 +25,7 @@ from typing import Any, Mapping, Protocol
 
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.human_gate import VersionBinding
+from app.ports.human_gate import HumanGateRequest, VersionBinding
 from app.workflow.models import WorkflowRunResult
 
 
@@ -83,6 +83,18 @@ class WorkflowEnginePort(Protocol):
     async def discard_checkpoint(self, task_id: str) -> None: ...
 
     async def pending_confirmation_action_digest(self, task_id: str) -> str: ...
+
+    async def governed_confirmation(self, task_id: str) -> HumanGateRequest | None: ...
+
+    async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None: ...
+
+    async def retire_owned_confirmation(
+        self,
+        task_id: str,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+        reason: str,
+    ) -> bool: ...
 
 
 __all__ = ("WorkflowEnginePort", "WorkflowVersionBindings")

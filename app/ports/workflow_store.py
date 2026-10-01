@@ -43,6 +43,7 @@ class WorkflowOperation(BaseModel):
     external_confirmation_required: bool = False
     review_url: str | None = None
     safe_output: dict[str, Any] = Field(default_factory=dict)
+    public_result: dict[str, Any] | None = None
     identity_evidence_digest: str = "unconfirmed"
     previous_attempts: tuple[str, ...] = ()
 
@@ -69,6 +70,7 @@ class WorkflowStorePort(Protocol):
         gate_request_id: str | None = None,
         attempt_id: str | None = None,
         safe_output: dict[str, Any] | None = None,
+        public_result: dict[str, Any] | None = None,
         review_url: str | None = None,
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
