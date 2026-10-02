@@ -18,9 +18,10 @@ from sqlalchemy import text
 from app.infra.auth.postgresql import (
     PostgreSQLCredentialStore,
     PostgreSQLPrincipalRoleReader,
+    _v2_aad,
     credential_associated_data,
 )
-from app.ports.auth import CredentialStoreError, OASessionCredential
+from app.ports.auth import CredentialSnapshot, CredentialStoreError, OASessionCredential
 from tests.api.test_work_object_dispatch import dispatch_db as dispatch_db
 from tests.api.test_work_object_dispatch import run as run_synthetic_db
 
@@ -72,12 +73,16 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
                     expires_at=expires_at,
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
             async with factory() as session:
                 row = (
                     await session.execute(
                         text(
-                            "SELECT cipher_version, nonce, encrypted_payload, expires_at"
+                            "SELECT cipher_version, nonce, encrypted_payload, expires_at,"
+                            " binding_id"
                             " FROM oa_session_credentials"
                             " WHERE ai_user_id = :ai_user_id"
                         ),
@@ -96,7 +101,10 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
             plaintext = AESGCM(key).decrypt(
                 bytes(row.nonce),
                 encrypted_payload,
-                credential_associated_data(ai_user_id),
+                _v2_aad(
+                    CredentialSnapshot("default", ai_user_id, "oa", row.binding_id, 1, 0, 0),
+                    "session",
+                ),
             )
             decoded = json.loads(plaintext)
             assert (
@@ -107,7 +115,7 @@ def test_oa_credential_is_ciphertext_with_ttl() -> None:
                 hashlib.sha256(decoded["cookies"]["loginuuids"].encode()).digest()
                 == hashlib.sha256(cookie_value.encode()).digest()
             )
-            assert row.cipher_version == "aes256gcm-v1"
+            assert row.cipher_version == "aes256gcm-session-v2"
             assert row.expires_at == expires_at
         finally:
             await engine.dispose()
@@ -177,6 +185,9 @@ def test_oa_credential_round_trips_through_authenticated_load() -> None:
                     expires_at=expires_at,
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
 
             loaded = await store.load(ai_user_id, "oa", tenant_id="default")
@@ -234,6 +245,9 @@ def test_successful_credential_upsert_clears_revocation() -> None:
                     expires_at=initial_expires_at,
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
             revoked_at = datetime.now(UTC)
             async with factory() as session:
@@ -259,6 +273,9 @@ def test_successful_credential_upsert_clears_revocation() -> None:
                     expires_at=reauthenticated_expires_at,
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
 
             async with factory() as session:
@@ -320,6 +337,9 @@ def test_revoked_credential_is_rejected_before_decryption() -> None:
                     expires_at=datetime.now(UTC) + timedelta(hours=2),
                 ),
                 tenant_id="default",
+                expected_write=await store.claim_write(
+                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
+                ),
             )
             async with factory() as session:
                 await session.execute(
@@ -506,9 +526,7 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
         ).encode()
 
     aad_ai_user_id = (
-        f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}"
-        if corruption == "aad"
-        else ai_user_id
+        f"usr_v1_{uuid4().hex}{uuid4().hex[:11]}" if corruption == "aad" else ai_user_id
     )
     encrypted_payload = AESGCM(key).encrypt(
         nonce,
@@ -516,9 +534,7 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
         credential_associated_data(aad_ai_user_id),
     )
     stored_nonce = b"short" if corruption == "nonce" else nonce
-    stored_cipher_version = (
-        "unsupported-v2" if corruption == "cipher_version" else "aes256gcm-v1"
-    )
+    stored_cipher_version = "unsupported-v2" if corruption == "cipher_version" else "aes256gcm-v1"
     if corruption == "authentication_tag":
         encrypted_payload = encrypted_payload[:-1] + bytes([encrypted_payload[-1] ^ 1])
 
@@ -530,10 +546,12 @@ def test_oa_credential_load_rejects_corrupted_rows_without_sensitive_context(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, updated_at)"
                         " VALUES"
-                        " ('default', :ai_user_id, :cipher_version, :nonce, :encrypted_payload,"
+                        " (md5(random()::text),'default', :ai_user_id,"
+                        " :cipher_version, :nonce, :encrypted_payload,"
                         " :expires_at, :updated_at)"
                     ),
                     {
@@ -592,6 +610,9 @@ def test_credential_reads_require_tenant(dispatch_db):
                     expires_at=datetime.now(UTC) + timedelta(hours=1),
                 ),
                 tenant_id=tenant,
+                expected_write=await store.claim_write(
+                    await store.snapshot(user, "oa", tenant_id=tenant)
+                ),
             )
         for tenant in tenants:
             credential = await store.load(user, "oa", tenant_id=tenant)

@@ -7,7 +7,13 @@ from typing import AsyncContextManager, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from app.ports.auth import LoginCredential, Principal
+from app.ports.auth import (
+    CredentialAuthenticationResult,
+    CredentialSnapshot,
+    CredentialWriteStamp,
+    LoginCredential,
+    Principal,
+)
 
 CredentialTargetSystem: TypeAlias = Literal["oa", "u8", "hikvision_ivms"]
 CredentialPollStatus: TypeAlias = Literal[
@@ -68,6 +74,8 @@ class CredentialPollCandidate(BaseModel):
     target_system: CredentialTargetSystem
     poll_failure_count: int
     updated_at: datetime
+    snapshot: CredentialSnapshot
+    write_stamp: CredentialWriteStamp | None = None
 
 
 class CredentialAcquisitionError(RuntimeError):
@@ -79,6 +87,16 @@ class CredentialAcquisitionError(RuntimeError):
 
 
 class CredentialBindingStorePort(Protocol):
+    async def snapshot(
+        self, ai_user_id: str, target_system: str, *, tenant_id: str
+    ) -> CredentialSnapshot: ...
+
+    async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
+    def poll_lock(
+        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+    ) -> AsyncContextManager[bool]: ...
+
     async def bind_password(
         self,
         ai_user_id: str,
@@ -86,6 +104,7 @@ class CredentialBindingStorePort(Protocol):
         credential: PasswordBindingCredential,
         *,
         tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> CredentialBindingView: ...
 
     async def get_password_binding(
@@ -102,6 +121,8 @@ class CredentialBindingVerifierPort(Protocol):
 
 
 class CredentialPollingStorePort(Protocol):
+    async def claim_write(self, snapshot: CredentialSnapshot) -> CredentialWriteStamp: ...
+
     async def list_poll_candidates(self, *, tenant_id: str) -> list[CredentialPollCandidate]: ...
 
     async def refresh_poll_candidate(
@@ -113,15 +134,30 @@ class CredentialPollingStorePort(Protocol):
     ) -> AsyncContextManager[bool]: ...
 
     async def mark_poll_succeeded(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_non_authentication_failure(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_non_counted_failure(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
     async def mark_terminal_authentication_failure(
@@ -131,17 +167,25 @@ class CredentialPollingStorePort(Protocol):
         failure: CredentialTerminalFailure,
         *,
         tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> None: ...
 
 
 class PasswordBindingReaderPort(Protocol):
     async def load_password_for_poll(
-        self, ai_user_id: str, target_system: CredentialTargetSystem, *, tenant_id: str
+        self,
+        ai_user_id: str,
+        target_system: CredentialTargetSystem,
+        *,
+        tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> PasswordBindingCredential: ...
 
 
 class BackgroundCredentialAcquirerPort(Protocol):
-    async def acquire(self, candidate: CredentialPollCandidate) -> Principal: ...
+    async def acquire(
+        self, candidate: CredentialPollCandidate
+    ) -> CredentialAuthenticationResult: ...
 
 
 class BackgroundWorkObjectSyncPort(Protocol):

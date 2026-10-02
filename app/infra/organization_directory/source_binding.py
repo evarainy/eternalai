@@ -62,8 +62,14 @@ class BoundOrganizationDirectorySourceFactory:
                     or candidate.target_system != "oa"
                 ):
                     raise DirectorySourceError("source_binding_unavailable")
+                stamp = await self._polling_store.claim_write(candidate.snapshot)
+                candidate = candidate.model_copy(update={"write_stamp": stamp})
                 try:
-                    principal = await self._acquirer.acquire(candidate)
+                    result = await self._acquirer.acquire(candidate)
+                    if result.write_stamp is None:
+                        raise CredentialAcquisitionError("local_failure")
+                    stamp = result.write_stamp
+                    principal = result.principal
                     if (
                         principal.ai_user_id != user
                         or principal.org_ctx.tenant_id != self._tenant_id
@@ -80,6 +86,7 @@ class BoundOrganizationDirectorySourceFactory:
                             "oa",
                             "captcha_required" if exc.code == "captcha_required" else "invalid",
                             tenant_id=self._tenant_id,
+                            expected_write=stamp,
                         )
                         raise DirectorySourceError("source_authentication_failed") from None
                     if exc.code == "timeout":

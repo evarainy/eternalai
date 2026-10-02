@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock
 
@@ -14,7 +15,13 @@ from pydantic import SecretStr
 from app.api.v1.credential_bindings import CredentialBindingService, make_router
 from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
 from app.infra.sdui.response_envelope_builder import ResponseEnvelopeBuilder
-from app.ports.auth import LoginCredential, Principal, PrincipalOrgContext
+from app.ports.auth import (
+    CredentialSnapshot,
+    CredentialWriteStamp,
+    LoginCredential,
+    Principal,
+    PrincipalOrgContext,
+)
 from app.ports.credential_binding import (
     CredentialBindingView,
     CredentialTargetSystem,
@@ -47,6 +54,20 @@ class FakeStore:
     def __init__(self) -> None:
         self.views: dict[CredentialTargetSystem, CredentialBindingView] = {}
 
+    async def snapshot(self, ai_user_id, target_system, *, tenant_id):
+        return CredentialSnapshot(
+            tenant_id, ai_user_id, target_system, "synthetic-binding", 1, 0, 0
+        )
+
+    async def claim_write(self, snapshot):
+        return CredentialWriteStamp(
+            snapshot, "synthetic-operation", datetime(2099, 1, 1, tzinfo=UTC)
+        )
+
+    @asynccontextmanager
+    async def poll_lock(self, ai_user_id, target_system, *, tenant_id):
+        yield True
+
     async def bind_password(
         self,
         ai_user_id: str,
@@ -54,6 +75,7 @@ class FakeStore:
         credential: PasswordBindingCredential,
         *,
         tenant_id: str,
+        expected_write: CredentialWriteStamp,
     ) -> CredentialBindingView:
         assert ai_user_id == PRINCIPAL.ai_user_id
         assert credential.password.get_secret_value()

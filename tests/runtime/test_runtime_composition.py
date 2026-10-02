@@ -313,9 +313,11 @@ def test_production_entry_request_reaches_agent_and_real_gateway_once(
                 await session.execute(
                     text(
                         "INSERT INTO oa_session_credentials"
-                        " (tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload,"
+                        " (binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload,"
                         " expires_at, updated_at)"
-                        " VALUES ('synthetic-production-tenant', :user, :cipher, :nonce,"
+                        " VALUES (md5(random()::text),'synthetic-production-tenant',"
+                        " :user, :cipher, :nonce,"
                         " :payload, :expires, :updated)"
                     ),
                     {

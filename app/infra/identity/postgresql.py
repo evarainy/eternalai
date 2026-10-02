@@ -158,9 +158,14 @@ class PostgreSQLOAIdentityMapping:
         mutation_failed = False
         try:
             async with self._session_factory() as session:
+                # Same BRDB01 DDL marker as the credential writer; no refresh-slot wait.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock_shared(:key)"), {"key": 746420210000}
+                )
                 query_result = await session.execute(
                     text(
-                        "SELECT ai_user_id, expires_at, revoked_at"
+                        "SELECT ai_user_id, expires_at, revoked_at, binding_id, binding_revision,"
+                        "credential_write_revision,refresh_epoch"
                         " FROM oa_session_credentials"
                         " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                         " AND target_system = 'oa'"
@@ -180,16 +185,28 @@ class PostgreSQLOAIdentityMapping:
                         await session.execute(
                             text(
                                 "UPDATE oa_session_credentials"
-                                " SET revoked_at = :revoked_at"
+                                " SET revoked_at = :revoked_at,binding_state='revoked',"
+                                "binding_revision=binding_revision+1,"
+                                "credential_write_revision=credential_write_revision+1,"
+                                "refresh_epoch=refresh_epoch+1,refresh_operation_id=NULL,"
+                                "refresh_deadline=NULL,binding_subject_digest=NULL,"
+                                "binding_subject_verified_at=NULL"
                                 " WHERE tenant_id = :tenant_id AND ai_user_id = :ai_user_id"
                                 " AND target_system = 'oa'"
-                                " AND revoked_at IS NULL"
+                                " AND revoked_at IS NULL AND binding_id=:stable_binding_id"
+                                " AND binding_revision=:binding_revision"
+                                " AND credential_write_revision=:credential_write_revision"
+                                " AND refresh_epoch=:refresh_epoch"
                                 " RETURNING ai_user_id"
                             ),
                             {
                                 "tenant_id": tenant_id,
                                 "ai_user_id": ai_user_id,
                                 "revoked_at": now,
+                                "stable_binding_id": row["binding_id"],
+                                "binding_revision": row["binding_revision"],
+                                "credential_write_revision": row["credential_write_revision"],
+                                "refresh_epoch": row["refresh_epoch"],
                             },
                         )
                     ).scalar_one()

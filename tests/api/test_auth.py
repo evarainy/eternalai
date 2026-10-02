@@ -198,7 +198,7 @@ def test_logout_does_not_revoke_oa_bindings_or_background_credentials(dispatch_d
                 expires_at=datetime.now(UTC) + timedelta(hours=1),
             ),
             tenant_id="default",
-        )
+         expected_write=run(store.claim_write(run(store.snapshot(principal.ai_user_id,'oa',tenant_id='default')))))
     )
     run(
         store.bind_password(
@@ -209,7 +209,7 @@ def test_logout_does_not_revoke_oa_bindings_or_background_credentials(dispatch_d
                 password=SecretStr(uuid4().hex),
             ),
             tenant_id="default",
-        )
+         expected_write=run(store.claim_write(run(store.snapshot(principal.ai_user_id,'oa',tenant_id='default')))))
     )
     with dispatch_db.sql.connect() as connection:
         before = list(connection.execute(text("SELECT * FROM oa_session_credentials")))
