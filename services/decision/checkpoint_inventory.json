@@ -1,0 +1,22 @@
+{
+  "schema_version": "decision_checkpoint_inventory.v1",
+  "status": "WAITING_ENV",
+  "preferred_repository": "cklxx/laya-browser",
+  "challenger_repository": "ichenney/laya-browser-v32b",
+  "arbiter_reference": "bf71358774c85aeff2051ec7b1dcc4577a87706d",
+  "arbiter_proof_scope": "A0_reference_only",
+  "required_operator_inputs": [
+    "approved_immutable_checkpoint_revision_and_subfolder",
+    "tokenizer_revision_and_exact_files",
+    "dtype_and_audited_model_code",
+    "approved_target_choice_input_adapter",
+    "input_output_schema_digests",
+    "registered_projection_policy",
+    "weights_and_all_artifact_hashes_and_sizes",
+    "checkpoint_bound_calibration_evidence",
+    "exact_offline_runtime_dependency_lock",
+    "authorized_artifact_root_and_loaded_backend",
+    "real_A1_A2_A3_A4_A5_environment_evidence"
+  ],
+  "launchable": false
+}

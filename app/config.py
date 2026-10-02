@@ -138,6 +138,40 @@ class RedisConnectionURL:
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserSettings:
+    """Isolated opt-in configuration; disabled mode reads only its switch.
+
+    No credentials or provider instances are loaded here. Composition remains
+    disconnected until the browser execution and source manifest gates are ready.
+    """
+
+    enabled: bool = False
+    transport: Literal["playwright", "cdp"] | None = None
+    decision_origin: str | None = None
+    request_model: str | None = None
+    deployment_model: str | None = None
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> BrowserSettings:
+        if not _boolean(source, "BROWSER_ENABLED", default=False):
+            return cls()
+        transport = _required(source, "BROWSER_TRANSPORT")
+        if transport not in {"playwright", "cdp"}:
+            raise RuntimeError("BROWSER_TRANSPORT must be playwright or cdp")
+        deployment = _required(source, "BROWSER_DECISION_DEPLOYMENT_MODEL")
+        if "latest" in deployment.casefold():
+            raise RuntimeError("BROWSER_DECISION_DEPLOYMENT_MODEL must be pinned")
+        origin = _http_base_url(source, "BROWSER_DECISION_ORIGIN")
+        _canonical_http_origin(origin, "BROWSER_DECISION_ORIGIN")
+        return cls(
+            enabled=True, transport=cast(Literal["playwright", "cdp"], transport),
+            decision_origin=origin,
+            request_model=_required(source, "BROWSER_DECISION_REQUEST_MODEL"),
+            deployment_model=deployment,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionSettings:
     """Validated values needed to construct the production application."""
 
@@ -205,6 +239,7 @@ class ProductionSettings:
     organization_directory_sync_source_ai_user_id: str | None = field(default=None, repr=False)
     phase0_mock_mode: bool = False
     mcp_services: tuple[ServiceConfig, ...] = ()
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
 
     def __post_init__(self) -> None:
         ids = [profile.service_config_id for profile in self.mcp_services]
@@ -508,6 +543,7 @@ class ProductionSettings:
             ),
             phase0_mock_mode=phase0_mock_mode,
             mcp_services=_mcp_services(source),
+            browser=BrowserSettings.from_env(source),
         )
         if (
             settings.credential_poll_maximum_backoff_seconds

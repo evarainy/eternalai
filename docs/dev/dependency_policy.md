@@ -99,6 +99,8 @@ explicitly names a future dedicated allowlist file.
 |---|---|---|---|---|---|
 | python | mcp | ==2.2.0 | production | public_registry_development_only | P2-MCP-PLATFORM-001 approved SDK boundary |
 | python | httpx2 | >=2.5.0,<3 | production | public_registry_development_only | P2-MCP-PLATFORM-001 bounded MCP HTTP transport |
+| python | playwright | ==1.63.0 | production | public_registry_development_only | User 2026-10-02 v4.2 approved Python async Playwright; browser binaries and deployment verification remain separate |
+| python | pyee | ==13.0.1 | production-transitive | public_registry_development_only | User 2026-10-02 v4.2 Playwright 1.63.0 required dependency, pinned by uv.lock |
 | python | openai | >=1.0.0 | spike | pending_internal_mirror_confirmation | P0-SPIKE-001/P0-SPIKE-002/P0-SPIKE-007 spike requirements |
 | python | fastapi | >=0.115,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P0-INFRA-002 backend skeleton (FastAPI backend skeleton / API app foundation) |
 | python | uvicorn | >=0.34,<1.0 | backend-runtime | pending_internal_mirror_confirmation | P2-PILOT-FOUNDATION-001; 雨爷批准 2026-07-27（生产 ASGI 进程入口） |
