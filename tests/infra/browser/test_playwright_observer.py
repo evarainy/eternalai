@@ -127,11 +127,13 @@ class Frame:
         self.child_frames: list[Frame] = []
         self.url = origin
         self.observable = True
+        self.evaluations = 0
         self.selectors: dict[str, Any] = {}
         if parent is not None:
             parent.child_frames.append(self)
 
     async def evaluate(self, expression: str) -> bool:
+        self.evaluations += 1
         if not self.observable:
             raise RuntimeError("browser detail must not escape")
         return True
@@ -469,6 +471,115 @@ def test_unsupported_parent_still_obeys_child_budget() -> None:
         assert exc.value.failure.code == "overloaded"
 
     asyncio.run(run())
+
+
+class CountedChildren(list[Frame]):
+    def __init__(self, children: list[Frame], reads: list[int]) -> None:
+        super().__init__(children)
+        self.reads = reads
+
+    def __len__(self) -> int:
+        self.reads.append(1)
+        return super().__len__()
+
+
+def wide_tree(root: Frame, node_count: int) -> list[Frame]:
+    branches = (Frame(parent=root), Frame(parent=root))
+    frames = [root, *branches]
+    for branch, leaf_count in zip(branches, (128, node_count - 131), strict=True):
+        frames.extend(Frame(parent=branch) for _ in range(leaf_count))
+    return frames
+
+
+def test_signature_stops_at_total_frame_budget_before_reading_remaining_nodes() -> None:
+    root = Frame()
+    frames = wide_tree(root, 259)
+    reads: list[int] = []
+    for frame in frames:
+        frame.child_frames = CountedChildren(frame.child_frames, reads)
+    with pytest.raises(BrowserOperationError) as exc:
+        PlaywrightObserver._signature(root)
+    assert exc.value.failure.code == "overloaded"
+    assert len(reads) == 256
+
+
+def test_initial_signature_rejects_wide_tree_before_frame_dom_evaluation() -> None:
+    async def run() -> None:
+        observer, _, session, root, _, _, policy = fixture(nested=False)
+        frames = wide_tree(root, 259)
+        with pytest.raises(BrowserOperationError) as exc:
+            await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert exc.value.failure.code == "overloaded"
+        assert sum(frame.evaluations for frame in frames) == 0
+
+    asyncio.run(run())
+
+
+def test_final_signature_rejects_tree_growth_with_the_same_total_budget() -> None:
+    async def run() -> None:
+        observer, _, session, root, _, _, policy = fixture(nested=False)
+        frames = wide_tree(root, 256)
+        reads: list[int] = []
+        for frame in frames:
+            frame.child_frames = CountedChildren(frame.child_frames, reads)
+        original_snapshot = observer._snapshot
+        captured: list[Handle] = []
+
+        async def snapshot_then_grow(
+            element: Handle, current_policy: ObservationPolicy, site: RegisteredRegion
+        ) -> tuple[dict[str, Any], list[Any]]:
+            metadata, nodes = await original_snapshot(element, current_policy, site)
+            captured.extend([element, *nodes])
+            for _ in range(3):
+                added = Frame(parent=root.child_frames[1])
+                added.child_frames = CountedChildren([], reads)
+            reads.clear()
+            return metadata, nodes
+
+        observer._snapshot = snapshot_then_grow  # type: ignore[method-assign]
+        with pytest.raises(BrowserOperationError) as exc:
+            await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert exc.value.failure.code == "overloaded"
+        assert len(reads) == 256
+        assert captured and all(handle.disposed for handle in captured)
+
+    asyncio.run(run())
+
+
+def test_256_frame_boundary_supports_initial_and_final_signatures() -> None:
+    async def run() -> None:
+        observer, _, session, root, _, _, policy = fixture(nested=False)
+        wide_tree(root, 256)
+        first = await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert len(first.frames.children) == 2
+        assert len(first.frames.children[0].children) == 128
+        assert len(first.frames.children[1].children) == 125
+        again = await observer.observe(
+            session, ObservationRequest(region_id="inbox", expected_scope=first.scope), policy
+        )
+        assert again.scope == first.scope
+        assert again.candidates[0].ref == first.candidates[0].ref
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("limit", ["depth", "children"])
+def test_signature_retains_depth_and_child_limits(limit: str) -> None:
+    root = Frame()
+    if limit == "depth":
+        last = root
+        for _ in range(31):
+            last = Frame(parent=last)
+        assert PlaywrightObserver._signature(root)[0] == id(root)
+        Frame(parent=last)
+    else:
+        for _ in range(128):
+            Frame(parent=root)
+        assert len(PlaywrightObserver._signature(root)[1]) == 128
+        Frame(parent=root)
+    with pytest.raises(BrowserOperationError) as exc:
+        PlaywrightObserver._signature(root)
+    assert exc.value.failure.code == "overloaded"
 
 
 def test_trusted_empty_requires_site_marker_and_relevant_frame_coverage() -> None:

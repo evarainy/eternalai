@@ -219,3 +219,68 @@ def test_candidate_cannot_move_to_sibling_frame_or_ancestor_scope() -> None:
     )
     with pytest.raises(ValueError, match="candidate_scope_invalid"):
         scope_snapshot(item.model_copy(update={"candidates": (moved,)}), binding(), policy())
+
+
+@pytest.mark.parametrize("relationship", ["ancestor", "cousin"])
+def test_frame_ids_are_unique_across_the_whole_tree(relationship: str) -> None:
+    item = projection()
+    complete = Coverage(state="complete", reason="complete")
+    if relationship == "ancestor":
+        descendant = FrameObservation(
+            frame=item.frames.frame.model_copy(update={"frame_epoch": 9}),
+            coverage=complete,
+        )
+        children = (item.frames.children[0].model_copy(update={"children": (descendant,)}),)
+    else:
+        leaf = FrameObservation(
+            frame=item.frames.frame.model_copy(update={"frame_id": "shared-leaf"}),
+            coverage=complete,
+        )
+        children = (
+            item.frames.children[0].model_copy(update={"children": (leaf,)}),
+            FrameObservation(
+                frame=item.frames.frame.model_copy(update={"frame_id": "other-branch"}),
+                coverage=Coverage(state="unsupported", reason="unobservable"),
+                children=(
+                    leaf.model_copy(
+                        update={"frame": leaf.frame.model_copy(update={"frame_epoch": 9})}
+                    ),
+                ),
+            ),
+        )
+    tree = item.frames.model_copy(update={"children": children})
+    with pytest.raises(ValueError, match="browser_frame_tree_invalid"):
+        scope_snapshot(item.model_copy(update={"frames": tree}), binding(), policy())
+
+
+def test_distinct_frame_ids_preserve_selected_scope_and_unrelated_tree() -> None:
+    item = projection()
+    complete = Coverage(state="complete", reason="complete")
+    first_leaf = FrameObservation(
+        frame=item.frames.frame.model_copy(update={"frame_id": "first-leaf"}),
+        coverage=complete,
+    )
+    tree = item.frames.model_copy(
+        update={
+            "children": (
+                item.frames.children[0].model_copy(update={"children": (first_leaf,)}),
+                FrameObservation(
+                    frame=item.frames.frame.model_copy(update={"frame_id": "other-branch"}),
+                    coverage=Coverage(state="unsupported", reason="unobservable"),
+                    children=(
+                        first_leaf.model_copy(
+                            update={
+                                "frame": first_leaf.frame.model_copy(
+                                    update={"frame_id": "second-leaf"}
+                                )
+                            }
+                        ),
+                    ),
+                ),
+            ),
+        }
+    )
+    snapshot = scope_snapshot(item.model_copy(update={"frames": tree}), binding(), policy())
+    assert snapshot.scope == item.scope
+    assert snapshot.candidates == item.candidates
+    assert snapshot.frames == tree

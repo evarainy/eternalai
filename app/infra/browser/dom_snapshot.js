@@ -69,8 +69,8 @@
   };
 
   let coverage = { state: "partial", reason: "unobservable", trusted_empty: false };
-  if (marker(site.virtualizedSelector)) coverage = { state: "partial", reason: "virtualized", trusted_empty: false };
-  else if (marker(site.paginationSelector)) coverage = { state: "partial", reason: "pagination", trusted_empty: false };
+  if (matches(site.virtualizedSelector).length > 0) coverage = { state: "partial", reason: "virtualized", trusted_empty: false };
+  else if (matches(site.paginationSelector).length > 0) coverage = { state: "partial", reason: "pagination", trusted_empty: false };
   else if (marker(site.completeSelector) && region.getAttribute("aria-busy") !== "true") coverage = { state: "complete", reason: "complete", trusted_empty: false };
 
   const nodes = [];

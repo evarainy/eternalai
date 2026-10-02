@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compareBrowserRunUpdate,
   isParsedBrowserRunView,
@@ -181,6 +181,103 @@ describe('unwired browser run projection', () => {
     expect(view.draft?.state).toBe('validated');
     expect(view.draft?.executable).toBe(false);
     expect(Object.keys(view.artifacts[0] ?? {})).not.toContain('url');
+  });
+
+  it.each([
+    { name: 'empty', parameterNames: [] },
+    { name: 'dense', parameterNames: ['business_key', 'amount-2'] },
+    {
+      name: 'maximum',
+      parameterNames: Array.from({ length: 64 }, (_, index) => `parameter_${index}`),
+    },
+  ])('copies and freezes $name draft parameters', ({ parameterNames }) => {
+    const view = parsed({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    });
+    expect(view.draft?.parameter_names).toEqual(parameterNames);
+    expect(view.draft?.parameter_names).not.toBe(parameterNames);
+    expect(Object.isFrozen(view.draft?.parameter_names)).toBe(true);
+    parameterNames.push('changed');
+    expect(view.draft?.parameter_names).not.toContain('changed');
+  });
+
+  it.each([1, 3])('rejects sparse draft parameters of length %i', (length) => {
+    const parameterNames = Array<string>(length);
+    if (length === 3) {
+      parameterNames[0] = 'business_key';
+      parameterNames[2] = 'amount';
+    }
+    expect(parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    })).toBeNull();
+  });
+
+  it('rejects inherited draft parameters', () => {
+    const parameterNames = Array<string>(1);
+    Object.setPrototypeOf(parameterNames, Object.create(Array.prototype, {
+      0: { value: 'business_key' },
+    }));
+    expect(parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    })).toBeNull();
+  });
+
+  it('rejects draft parameter accessors without reading them', () => {
+    const readParameter = vi.fn(() => 'business_key');
+    const parameterNames = ['business_key'];
+    Object.defineProperty(parameterNames, '0', { get: readParameter });
+    const view = parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    });
+    expect(readParameter).not.toHaveBeenCalled();
+    expect(view).toBeNull();
+  });
+
+  it.each([
+    { name: 'helper', key: 'every' },
+    { name: 'iterator', key: Symbol.iterator },
+  ])('copies draft parameters without reading the array $name', ({ key }) => {
+    const readHelper = vi.fn(() => { throw new Error('synthetic_array_helper'); });
+    const parameterNames = ['business_key'];
+    Object.defineProperty(parameterNames, key, { get: readHelper });
+    const view = parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    });
+    expect(readHelper).not.toHaveBeenCalled();
+    expect(view?.draft?.parameter_names).toEqual(['business_key']);
+    expect(isParsedBrowserRunView(view)).toBe(true);
+  });
+
+  it('copies draft parameters without reading proxy properties', () => {
+    const readProperty = vi.fn(() => { throw new Error('synthetic_array_property'); });
+    const parameterNames = new Proxy(['business_key'], { get: readProperty });
+    const view = parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    });
+    expect(readProperty.mock.calls.length).toBe(0);
+    expect(view?.draft?.parameter_names).toEqual(['business_key']);
+    expect(isParsedBrowserRunView(view)).toBe(true);
+  });
+
+  it('rejects a failing draft parameter descriptor trap', () => {
+    const parameterNames = new Proxy(['business_key'], {
+      getOwnPropertyDescriptor() { throw new Error('synthetic_descriptor_failure'); },
+    });
+    expect(parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    })).toBeNull();
+  });
+
+  it.each([
+    ['business_key', 'business_key'],
+    ['unsafe/name'],
+    [''],
+    ['x'.repeat(97)],
+    Array.from({ length: 65 }, (_, index) => `parameter_${index}`),
+  ])('rejects invalid or oversized draft parameters %#', (...parameterNames) => {
+    expect(parseBrowserRunProjection({
+      ...running(), draft: { ...draft(), parameter_names: parameterNames },
+    })).toBeNull();
   });
 
   it('orders by local generation, exact Task/Run and revision', () => {

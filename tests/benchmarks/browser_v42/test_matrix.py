@@ -23,6 +23,7 @@ from benchmarks.browser_v42.models import (
     DecisionProof,
     OracleEvidence,
     SuiteSpec,
+    _digest,
     load_suite,
 )
 from benchmarks.browser_v42.report import summarize_results
@@ -73,8 +74,14 @@ def _single_result(suite: SuiteSpec, arm: ArmSpec, candidate_digest: str = HEX) 
     assert arm.serving_version is not None
     assert arm.dtype is not None
     assert arm.transport is not None
+    browser_receipt_digest = _digest(["synthetic.browser", arm.browser_backend, case.case_id])
     browser = BrowserEvidence(
-        "real_browser", arm.browser_backend, suite.fixture_digest, HEX, candidate_digest, HEX
+        "real_browser",
+        arm.browser_backend,
+        suite.fixture_digest,
+        HEX,
+        candidate_digest,
+        browser_receipt_digest,
     )
     request = DecisionInput(HEX, candidate_digest, suite.fixture_digest)
     invocation_id = f"call.{arm.browser_backend}.{arm.decision_backend}"
@@ -96,13 +103,15 @@ def _single_result(suite: SuiteSpec, arm: ArmSpec, candidate_digest: str = HEX) 
         (attempt,),
         OracleEvidence(True, True, frozenset(), HEX),
         browser_proof=BrowserProof(
-            "synthetic.browser",
-            HEX,
+            f"synthetic.browser.{arm.browser_backend}",
+            browser_receipt_digest,
             arm.browser_backend,
             arm.transport.browser,
             suite.fixture_digest,
             HEX,
             candidate_digest,
+            case.case_id,
+            case.case_parameters_digest,
         ),
         decision_proofs=(
             DecisionProof(
@@ -121,6 +130,10 @@ def _single_result(suite: SuiteSpec, arm: ArmSpec, candidate_digest: str = HEX) 
                 3,
                 96,
                 1000,
+                "browser_choice.v1",
+                "/select",
+                HEX,
+                OTHER_HEX,
             ),
         ),
     )
@@ -270,3 +283,31 @@ def test_comparison_recomputes_reports_and_rejects_missing_or_duplicate_cells() 
     falsified = ArmReport(spec.arms[0], (one,), summarize_results((), suite))
     with pytest.raises(ValueError, match="raw accounting"):
         compare_arms((falsified, *reports[1:]), suite)
+
+
+def test_same_frozen_browser_sample_can_feed_distinct_decision_arms() -> None:
+    suite = load_suite()
+    spec = _spec(suite, configured=True)
+    results = tuple(_single_result(suite, arm) for arm in spec.arms)
+    proofs = tuple(result.browser_proof for result in results)
+    assert all(proof is not None for proof in proofs)
+    assert proofs[0].receipt_digest == proofs[1].receipt_digest
+    assert proofs[2].receipt_digest == proofs[3].receipt_digest
+    assert proofs[0].receipt_digest != proofs[2].receipt_digest
+    reports = tuple(
+        ArmReport(arm, (result,), summarize_results((result,), suite))
+        for arm, result in zip(spec.arms, results, strict=True)
+    )
+    assert compare_arms(reports, suite).gate == "WAITING_ENV"
+    first, second = results[0], results[1]
+    assert first.decision_proofs[0] is not None and second.decision_proofs[0] is not None
+    repeated = replace(
+        second,
+        attempts=(replace(second.attempts[0], invocation_id=first.attempts[0].invocation_id),),
+        decision_proofs=(
+            replace(second.decision_proofs[0], invocation_id=first.attempts[0].invocation_id),
+        ),
+    )
+    invalid = ArmReport(spec.arms[1], (repeated,), summarize_results((repeated,), suite))
+    with pytest.raises(ValueError, match="invocation reused across matrix arms"):
+        compare_arms((reports[0], invalid, *reports[2:]), suite)

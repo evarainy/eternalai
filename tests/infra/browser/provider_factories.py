@@ -75,6 +75,8 @@ def state():
 class Authority:
     def __init__(self):
         self.binding = binding()
+        self.cleanup_binding = self.binding
+        self.cleanup_calls = []
         self.registration = source()
         self.subject_digest = DIGEST
         self.calls = 0
@@ -85,6 +87,10 @@ class Authority:
 
     async def source(self, expected):
         return self.registration
+
+    async def cleanup(self, original):
+        self.cleanup_calls.append(original)
+        return self.cleanup_binding
 
     async def subject(self, session, live):
         return SubjectEvidence(

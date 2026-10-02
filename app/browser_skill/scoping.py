@@ -20,15 +20,19 @@ def scope_snapshot(
     if (projection.policy_id, projection.policy_digest) != (policy.policy_id, policy.digest):
         raise ValueError("browser_projection_policy_mismatch")
     paths: dict[tuple[tuple[str, int], ...], Coverage] = {}
+    seen_frame_ids: set[str] = set()
 
     def walk(frame: FrameObservation, parent: tuple[tuple[str, int], ...]) -> None:
         path = (*parent, (frame.frame.frame_id, frame.frame.frame_epoch))
-        if len(path) > 32 or path in paths or len(paths) >= 256:
+        if (
+            len(path) > 32
+            or path in paths
+            or len(paths) >= 256
+            or frame.frame.frame_id in seen_frame_ids
+        ):
             raise ValueError("browser_frame_tree_invalid")
+        seen_frame_ids.add(frame.frame.frame_id)
         paths[path] = frame.coverage
-        ids = [child.frame.frame_id for child in frame.children]
-        if len(ids) != len(set(ids)):
-            raise ValueError("browser_frame_tree_invalid")
         for child in frame.children:
             walk(child, path)
 

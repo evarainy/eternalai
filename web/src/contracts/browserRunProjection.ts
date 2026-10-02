@@ -243,6 +243,26 @@ function parseArtifact(value: unknown): BrowserArtifactView | null {
   };
 }
 
+/** Snapshot each own data entry without invoking input array helpers or accessors. */
+function parseParameterNames(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (lengthDescriptor === undefined || !('value' in lengthDescriptor)) return null;
+  const length: unknown = lengthDescriptor.value;
+  if (!revision(length) || length > MAX_PARAMETERS) return null;
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !('value' in descriptor)) return null;
+    const name: unknown = descriptor.value;
+    if (!isSafeBrowserId(name) || seen.has(name)) return null;
+    seen.add(name);
+    names.push(name);
+  }
+  return Object.freeze(names);
+}
+
 function parseDraft(value: unknown): BrowserDraftView | null {
   const record = closedRecord(value, [
     'draft_id', 'draft_revision', 'base_revision', 'base_publication_digest',
@@ -253,12 +273,10 @@ function parseDraft(value: unknown): BrowserDraftView | null {
       || !revision(record.base_revision) || !digest(record.base_publication_digest)
       || !digest(record.draft_digest) || !enumValue(record.state, draftStates)
       || (record.rejection !== null && !enumValue(record.rejection, rejections))
-      || !Array.isArray(record.parameter_names)
-      || record.parameter_names.length > MAX_PARAMETERS
-      || !record.parameter_names.every(isSafeBrowserId)
-      || new Set(record.parameter_names).size !== record.parameter_names.length
       || record.executable !== false) return null;
   if ((record.state === 'rejected') !== (record.rejection !== null)) return null;
+  const parameterNames = parseParameterNames(record.parameter_names);
+  if (parameterNames === null) return null;
   return {
     draft_id: record.draft_id,
     draft_revision: record.draft_revision,
@@ -267,7 +285,7 @@ function parseDraft(value: unknown): BrowserDraftView | null {
     draft_digest: record.draft_digest,
     state: record.state,
     rejection: record.rejection,
-    parameter_names: [...record.parameter_names],
+    parameter_names: parameterNames,
     executable: false,
   };
 }

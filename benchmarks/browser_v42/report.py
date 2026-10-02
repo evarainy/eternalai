@@ -152,6 +152,17 @@ def summarize_results(results: Iterable[CaseResult], suite: SuiteSpec) -> SuiteR
             if key in seen_invocations:
                 raise ValueError("verified decision invocation reused across cases")
             seen_invocations.add(key)
+    cases = {case.case_id: case for case in suite.cases}
+    seen_browser_receipts: set[str] = set()
+    for result in by_id.values():
+        browser_proof = result.browser_proof
+        if browser_proof is None:
+            continue
+        if browser_proof.case_parameters_digest != cases[result.case_id].case_parameters_digest:
+            raise ValueError("browser proof differs from frozen case parameters")
+        if browser_proof.receipt_digest in seen_browser_receipts:
+            raise ValueError("verified browser receipt reused across cases")
+        seen_browser_receipts.add(browser_proof.receipt_digest)
     paired = tuple(
         (case, by_id.get(case.case_id, CaseResult(case.case_id, "WAITING_ENV")))
         for case in suite.cases

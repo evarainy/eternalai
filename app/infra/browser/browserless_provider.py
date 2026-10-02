@@ -44,6 +44,13 @@ class BindingAuthority(Protocol):
     async def current(self, binding: ScopeBinding) -> ScopeBinding: ...
     async def source(self, binding: ScopeBinding) -> SyntheticSource: ...
 
+    async def cleanup(self, original: ScopeBinding) -> ScopeBinding:
+        """Authorize this caller to clean the exact original owner/session claim.
+
+        Independent from revoked business grants; an old handle alone is not a grant.
+        """
+        ...
+
     async def subject(self, session: BrowserSessionRef, live: LiveBrowser) -> SubjectEvidence:
         """Use independent site authority, not the selected row, URL or title."""
         ...
@@ -147,6 +154,9 @@ class BrowserlessProvider:
                 if current != binding:
                     raise BrowserProviderError("stale", phase, "binding")
                 source = await authority.source(binding)
+                # Source resolution can suspend while a lease/grant/owner changes.
+                if await authority.current(binding) != binding:
+                    raise BrowserProviderError("stale", phase, "binding")
         except BrowserProviderError:
             raise
         except TimeoutError:
@@ -256,6 +266,8 @@ class BrowserlessProvider:
                 raise
             except Exception:
                 raise BrowserProviderError("unsupported", "restore", "unsupported") from None
+            # Profile/capability preparation precedes this last pre-dispatch check.
+            await self._current(session, item, "restore")
             wire = self._client()
             # Set before the first network await. Cancellation must never free this slot.
             item.record.state = "acquiring"
@@ -268,6 +280,10 @@ class BrowserlessProvider:
                 item.record.resource_digest = sha256(
                     (session.session_ref + ":" + endpoint).encode()
                 ).hexdigest()
+                if item.remote is not None:
+                    # CDP session creation was an external await: retain its proof
+                    # identity, but do not connect after authorization changed.
+                    await self._current(session, item, "restore")
                 async with asyncio.timeout(deployment.timeout_seconds):
                     item.live = await connector.connect(endpoint, session, deployment, item.source)
                 if item.live.session != session:
@@ -407,12 +423,29 @@ class BrowserlessProvider:
     async def release(self, session: BrowserSessionRef) -> ResourceOutcome:
         return await self.terminate(session)
 
+    async def _authorize_cleanup(self, session: BrowserSessionRef) -> None:
+        deployment, authority = self._configuration("terminate")
+        try:
+            async with asyncio.timeout(deployment.timeout_seconds):
+                claim = await authority.cleanup(session.binding)
+            if type(claim) is not ScopeBinding or claim != session.binding:
+                raise BrowserProviderError("denied", "terminate", "binding")
+        except BrowserProviderError:
+            raise
+        except TimeoutError:
+            raise BrowserProviderError("timeout", "terminate", "deadline") from None
+        except asyncio.CancelledError:
+            raise asyncio.CancelledError from None
+        except Exception:
+            raise BrowserProviderError("denied", "terminate", "binding") from None
+
     async def terminate(self, session: BrowserSessionRef) -> ResourceOutcome:
         deployment, _ = self._configuration("terminate")
         item = self._lookup(session, "terminate")
-        # Current grants may be revoked. Cleanup of this exact owned resource must
-        # remain possible; the immutable session owner check above is still required.
+        # Lookup proves resource identity, not the caller's current cleanup grant.
+        # Independent cleanup authority permits legitimate cleanup after revocation.
         async with item.lock:
+            await self._authorize_cleanup(session)
             record = item.record
             if record.outcome is not None and record.state == "terminated":
                 return record.outcome
@@ -425,6 +458,7 @@ class BrowserlessProvider:
                         await item.live.close()
                         item.live = None
                     if item.remote is not None and not item.stop_acknowledged:
+                        await self._authorize_cleanup(session)
                         await self._client().stop(item.remote)
                         item.stop_acknowledged = True
                 if self._prover is None or record.resource_digest is None:
@@ -437,10 +471,12 @@ class BrowserlessProvider:
                     record.challenge,
                     item.remote,
                 )
+                await self._authorize_cleanup(session)
                 async with asyncio.timeout(deployment.timeout_seconds):
                     proof = await self._prover(request)
                 if proof is None:
                     return self._ledger.quarantine(record)
+                await self._authorize_cleanup(session)
                 outcome = self._ledger.finish(record, proof, deployment.manifest_digest)
                 if outcome.status == "terminated":
                     item.remote = None

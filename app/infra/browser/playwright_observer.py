@@ -347,12 +347,18 @@ class PlaywrightObserver:
         )
 
     @staticmethod
-    def _signature(frame: Any, depth: int = 1) -> tuple[Any, ...]:
-        if depth > 32 or len(frame.child_frames) > 128:
+    def _signature(frame: Any, depth: int = 1, budget: list[int] | None = None) -> tuple[Any, ...]:
+        if budget is None:
+            budget = [0]
+        budget[0] += 1
+        if budget[0] > 256 or depth > 32 or len(frame.child_frames) > 128:
             raise _failure("overloaded")
         return (
             id(frame),
-            tuple(PlaywrightObserver._signature(child, depth + 1) for child in frame.child_frames),
+            tuple(
+                PlaywrightObserver._signature(child, depth + 1, budget)
+                for child in frame.child_frames
+            ),
         )
 
     @staticmethod

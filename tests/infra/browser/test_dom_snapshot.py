@@ -66,10 +66,38 @@ if (!project(empty, config).metadata.coverage.trusted_empty) throw Error('truste
 empty.markers['[next]'] = [new Element('button')];
 const partial = project(empty, config).metadata.coverage;
 if (partial.state !== 'partial' || partial.reason !== 'pagination' || partial.trusted_empty) throw Error('pagination claimed complete');
+const markerElements = (count, hidden = false) => Array.from({length: count}, () => {
+  const element = new Element('span'); element.hidden = hidden; return element;
+});
+const coverageCases = [
+  {name: 'multiple-pagination', pagination: 2, virtualized: 0, expected: ['partial', 'pagination', false]},
+  {name: 'multiple-virtualized', pagination: 0, virtualized: 3, expected: ['partial', 'virtualized', false]},
+  {name: 'virtualized-precedes-pagination', pagination: 2, virtualized: 2, expected: ['partial', 'virtualized', false]},
+  {name: 'single-virtualized', pagination: 0, virtualized: 1, expected: ['partial', 'virtualized', false]},
+  {name: 'hidden-markers', pagination: 0, virtualized: 0, expected: ['complete', 'complete', true]},
+  {name: 'single-pagination-with-hidden', pagination: 1, virtualized: 0, expected: ['partial', 'pagination', false]},
+  {name: 'ambiguous-complete', pagination: 0, virtualized: 0, complete: 2, expected: ['partial', 'unobservable', false]},
+  {name: 'ambiguous-empty', pagination: 0, virtualized: 0, empty: 2, expected: ['complete', 'complete', false]},
+];
+const coverageFailures = [];
+for (const scenario of coverageCases) {
+  const scopedEmpty = new Region([], {
+    '[complete]': markerElements(scenario.complete ?? 1),
+    '[empty]': markerElements(scenario.empty ?? 1),
+    '[next]': [...markerElements(scenario.pagination), ...markerElements(2, true)],
+    '[virtual]': [...markerElements(scenario.virtualized), ...markerElements(2, true)],
+  });
+  const observed = project(scopedEmpty, config).metadata;
+  const actual = [observed.coverage.state, observed.coverage.reason, observed.coverage.trusted_empty];
+  if (observed.candidates.length || JSON.stringify(actual) !== JSON.stringify(scenario.expected)) {
+    coverageFailures.push(`${scenario.name}: ${JSON.stringify(actual)}`);
+  }
+}
+if (coverageFailures.length) throw Error(`coverage regressions: ${coverageFailures.join('; ')}`);
 const bounded = new Region([allowed, duplicate, field], {'[complete]': [complete]});
 const resultBounded = project(bounded, {...config, policy: {...config.policy, maximumCandidates: 2}});
 if (!resultBounded.metadata.overflow || resultBounded.metadata.candidates.length) throw Error('overflow silently truncated');
-process.stdout.write(JSON.stringify({candidateCount: result.metadata.candidates.length, partialReason: partial.reason, overflow: resultBounded.metadata.overflow}));
+process.stdout.write(JSON.stringify({candidateCount: result.metadata.candidates.length, partialReason: partial.reason, overflow: resultBounded.metadata.overflow, coverageCases: coverageCases.length}));
 """
     result = subprocess.run(
         ["node", "--permission", f"--allow-fs-read={SCRIPT}", "-e", harness, str(SCRIPT)],
@@ -83,4 +111,5 @@ process.stdout.write(JSON.stringify({candidateCount: result.metadata.candidates.
         "candidateCount": 3,
         "partialReason": "pagination",
         "overflow": True,
+        "coverageCases": 8,
     }

@@ -16,10 +16,12 @@ from benchmarks.browser_v42.models import (
     DecisionInput,
     DecisionProof,
     DecisionReceipt,
+    ExpectedDecisionWire,
     OracleEvidence,
     RegisteredBrowser,
     RegisteredDecision,
     SuiteSpec,
+    _digest,
     load_suite,
 )
 from benchmarks.browser_v42.report import summarize_results
@@ -67,7 +69,9 @@ def _result(
     source: str | None = None,
     first_correct: bool | None = None,
 ) -> CaseResult:
-    browser = _browser(suite)
+    browser = replace(
+        _browser(suite), source_evidence_digest=_digest(["synthetic.browser", case.case_id])
+    )
     request = DecisionInput(
         browser.observation_digest, browser.candidate_digest, suite.fixture_digest
     )
@@ -97,6 +101,10 @@ def _result(
             3,
             96,
             1000,
+            "browser_choice.v1",
+            "/select",
+            HEX,
+            OTHER_HEX,
         )
         if source in {"real_model", "deterministic"}
         else None
@@ -110,12 +118,14 @@ def _result(
         None if success else "ORACLE_REJECTED",
         browser_proof=BrowserProof(
             "synthetic.browser",
-            HEX,
+            browser.source_evidence_digest,
             "cloud",
             "cdp",
             suite.fixture_digest,
             HEX,
             HEX,
+            case.case_id,
+            case.case_parameters_digest,
         ),
         decision_proofs=(proof,),
     )
@@ -390,7 +400,15 @@ def test_registered_collector_checks_transport_correlation_and_unknown_source() 
     )
     attempt = _attempt(request)
     browser_receipt = BrowserReceipt(
-        "registered.browser", "cloud", "cdp", suite.fixture_digest, HEX, HEX, HEX
+        "registered.browser",
+        "cloud",
+        "cdp",
+        suite.fixture_digest,
+        HEX,
+        HEX,
+        HEX,
+        case.case_id,
+        case.case_parameters_digest,
     )
     decision_receipt = DecisionReceipt(
         "registered.decision",
@@ -409,6 +427,8 @@ def test_registered_collector_checks_transport_correlation_and_unknown_source() 
         96,
         1000,
         HEX,
+        "browser_choice.v1",
+        "/select",
     )
     registered_browser = RegisteredBrowser(
         "registered.browser",
@@ -428,6 +448,20 @@ def test_registered_collector_checks_transport_correlation_and_unknown_source() 
         96,
         1000,
     )
+    # Digest-only hypothetical registration tests the matching predicate here;
+    # test_source_binding freezes bytes from both actual codecs independently.
+    frozen_wire = ExpectedDecisionWire(
+        case.case_id,
+        case.case_parameters_digest,
+        request.request_digest,
+        1,
+        1,
+        registered_decision.contract_digest,
+        "browser_choice.v1",
+        OTHER_HEX,
+        HEX,
+    )
+    registered_decision = replace(registered_decision, expected_wires=(frozen_wire,))
 
     def collector(receipt: DecisionReceipt) -> RegistryTransportCollector:
         return RegistryTransportCollector(
@@ -444,6 +478,7 @@ def test_registered_collector_checks_transport_correlation_and_unknown_source() 
         replace(decision_receipt, source_id="unknown.source"),
         replace(decision_receipt, request_digest=OTHER_HEX),
         replace(decision_receipt, wire_request_digest="invalid"),
+        replace(decision_receipt, wire_request_digest=HEX),
         replace(decision_receipt, response_deployment="old.checkpoint"),
         replace(decision_receipt, attempt_number=2),
         replace(decision_receipt, reserved_calls=0),

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, cast
 
@@ -15,6 +15,7 @@ Dataset = Literal[
 CaseStatus = Literal["PASS", "FAIL", "WAITING_ENV"]
 SourceKind = Literal["real_model", "deterministic", "fake", "mock", "bypassed", "fault_injection"]
 BrowserKind = Literal["real_browser", "fake_browser", "mock_browser"]
+DecisionWireCodec = Literal["typesafe.systemone.v1", "browser_choice.v1"]
 Hazard = Literal["wrong_object", "leak", "unauthorized", "duplicate_send"]
 
 FLOWS: dict[str, str] = {
@@ -74,6 +75,15 @@ class CaseSpec:
     parameter_digest: str
     expected: Literal["business", "target", "abstain"]
     critical: bool
+
+    @property
+    def case_parameters_digest(self) -> str:
+        """Bind the entire frozen synthetic spec, rather than only its reference.
+
+        CaseSpec contains synthetic references and approved metadata, never raw
+        business parameters. This digest is not a sanitizer for private values.
+        """
+        return _digest({"purpose": "browser_v42.case_parameters.v1", "case": asdict(self)})
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, object]) -> CaseSpec:
@@ -316,6 +326,12 @@ class BrowserReceipt:
     observation_digest: str
     candidate_digest: str
     receipt_digest: str
+    case_id: str
+    case_parameters_digest: str
+
+    def __post_init__(self) -> None:
+        _safe_id(self.case_id, "receipt case_id")
+        _hex(self.case_parameters_digest, "receipt case parameters")
 
 
 @dataclass(frozen=True)
@@ -338,6 +354,59 @@ class DecisionReceipt:
     max_tokens: int
     timeout_ms: int
     receipt_digest: str
+    codec: DecisionWireCodec | None = None
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class ExpectedDecisionWire:
+    """Trusted, pre-dispatch registration of exact codec bytes, without values.
+
+    DecisionInput's digests cannot reconstruct either supported codec's scope,
+    criteria/options or request alias/id. The composition owner must freeze this
+    record from the actual codec plus complete approved input before sending,
+    independently of the receipt/response. provenance_digest refers to that
+    preparation artifact; it is not a model claim or authenticity by itself.
+
+    wire_request_digest is SHA256 of exact encoded bytes. registration_digest
+    separately binds the full serving/budget contract; those budgets are not
+    fields serialized by TypeSafeCodec or LocalChoiceCodec.
+    """
+
+    case_id: str
+    case_parameters_digest: str
+    request_digest: str
+    attempt_number: int
+    reserved_calls: int
+    registration_digest: str
+    codec: DecisionWireCodec
+    wire_request_digest: str
+    provenance_digest: str
+
+    def __post_init__(self) -> None:
+        _safe_id(self.case_id, "wire case_id")
+        for name in (
+            "case_parameters_digest",
+            "request_digest",
+            "registration_digest",
+            "wire_request_digest",
+            "provenance_digest",
+        ):
+            _hex(getattr(self, name), name)
+        if self.codec not in ("typesafe.systemone.v1", "browser_choice.v1"):
+            raise ValueError("unsupported frozen wire codec")
+        if (
+            any(
+                type(value) is not int or value < 1
+                for value in (self.attempt_number, self.reserved_calls)
+            )
+            or self.attempt_number > self.reserved_calls
+        ):
+            raise ValueError("invalid frozen wire reservation")
+
+    @property
+    def path(self) -> str:
+        return "/v1/systemone" if self.codec == "typesafe.systemone.v1" else "/select"
 
 
 @dataclass(frozen=True)
@@ -360,6 +429,26 @@ class RegisteredDecision:
     max_calls: int
     max_tokens: int
     timeout_ms: int
+    expected_wires: tuple[ExpectedDecisionWire, ...] = ()
+
+    @property
+    def contract_digest(self) -> str:
+        """Canonical registration material, excluding request-specific entries."""
+        return _digest(
+            {
+                "purpose": "browser_v42.decision_registration.v1",
+                "source_id": self.source_id,
+                "kind": self.kind,
+                "checkpoint": self.checkpoint,
+                "manifest_digest": self.manifest_digest,
+                "serving_version": self.serving_version,
+                "dtype": self.dtype,
+                "transport": self.transport,
+                "max_calls": self.max_calls,
+                "max_tokens": self.max_tokens,
+                "timeout_ms": self.timeout_ms,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -371,6 +460,12 @@ class BrowserProof:
     fixture_digest: str
     observation_digest: str
     candidate_digest: str
+    case_id: str
+    case_parameters_digest: str
+
+    def __post_init__(self) -> None:
+        _safe_id(self.case_id, "proof case_id")
+        _hex(self.case_parameters_digest, "proof case parameters")
 
 
 @dataclass(frozen=True)
@@ -390,6 +485,10 @@ class DecisionProof:
     max_calls: int
     max_tokens: int
     timeout_ms: int
+    codec: DecisionWireCodec
+    path: str
+    wire_registration_digest: str
+    wire_provenance_digest: str
 
 
 @dataclass(frozen=True)
@@ -426,6 +525,8 @@ class CaseResult:
             raise ValueError("pass contradicts independent oracle")
         if self.browser_proof is not None and (
             self.browser is None
+            or self.browser_proof.case_id != self.case_id
+            or self.browser.source != "real_browser"
             or self.browser_proof.receipt_digest != self.browser.source_evidence_digest
             or self.browser_proof.backend != self.browser.backend
             or self.browser_proof.fixture_digest != self.browser.fixture_digest

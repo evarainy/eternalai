@@ -88,11 +88,15 @@ class RegistryTransportCollector:
         if registered is None or evidence.source != "real_browser":
             return None
         if (
-            receipt.receipt_digest != evidence.source_evidence_digest
+            case not in suite.cases
+            or receipt.case_id != case.case_id
+            or receipt.case_parameters_digest != case.case_parameters_digest
+            or receipt.receipt_digest != evidence.source_evidence_digest
             or registered.source_id != receipt.source_id
             or registered.backend != receipt.backend
             or registered.transport != receipt.transport
             or registered.fixture_digest != suite.fixture_digest
+            or evidence.fixture_digest != suite.fixture_digest
             or receipt.fixture_digest != evidence.fixture_digest
             or receipt.backend != evidence.backend
             or receipt.observation_digest != evidence.observation_digest
@@ -107,6 +111,8 @@ class RegistryTransportCollector:
             receipt.fixture_digest,
             receipt.observation_digest,
             receipt.candidate_digest,
+            receipt.case_id,
+            receipt.case_parameters_digest,
         )
 
     def verify_decision(
@@ -122,12 +128,31 @@ class RegistryTransportCollector:
         registered = self.decision_registrations.get(receipt.source_id)
         if registered is None or evidence.source != registered.kind:
             return None
+        # Only the trusted, frozen registration can supply expected wire bytes.
+        # No receipt field or response claim participates in that expectation.
+        expected = tuple(
+            wire
+            for wire in registered.expected_wires
+            if wire.case_id == case.case_id
+            and wire.case_parameters_digest == case.case_parameters_digest
+            and wire.request_digest == request.request_digest
+            and wire.attempt_number == attempt_number
+            and wire.reserved_calls == receipt.reserved_calls
+            and wire.registration_digest == registered.contract_digest
+        )
+        if registered.transport != "http_json" or len(expected) != 1:
+            return None
+        wire = expected[0]
         try:
             _hex(receipt.wire_request_digest, "wire request digest")
         except ValueError:
             return None
         if (
-            receipt.invocation_id != evidence.invocation_id
+            registered.source_id != receipt.source_id
+            or receipt.codec != wire.codec
+            or receipt.path != wire.path
+            or receipt.wire_request_digest != wire.wire_request_digest
+            or receipt.invocation_id != evidence.invocation_id
             or receipt.receipt_digest != evidence.source_evidence_digest
             or receipt.attempt_number != attempt_number
             or receipt.fixture_digest != request.fixture_digest
@@ -161,6 +186,10 @@ class RegistryTransportCollector:
             registered.max_calls,
             registered.max_tokens,
             registered.timeout_ms,
+            wire.codec,
+            wire.path,
+            wire.registration_digest,
+            wire.provenance_digest,
         )
 
 
