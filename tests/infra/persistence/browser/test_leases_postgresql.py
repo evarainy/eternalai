@@ -1,8 +1,8 @@
 """Real PostgreSQL lease transactions with explicitly synthetic provider/auth authority.
 
 Run only through the attested isolated runner and existing migrated_database_url.
-Rows are unique per test and intentionally retained; these tests perform no cleanup
-deletion, schema changes or provider network IO. They do not certify real providers.
+INSERT receipts record exact fixture ownership for dependency-ordered row cleanup.
+No schema changes or provider network IO occur. These tests do not certify real providers.
 """
 
 from __future__ import annotations
@@ -100,6 +100,11 @@ class PgHarness:
         self.tenant = "tenant_" + uuid4().hex
         self.user = "user_" + uuid4().hex
         self.sid = "sid_v1." + uuid4().hex
+        # Immutable keys are recorded only after this fixture's INSERT returns.
+        # A conflicting quota row belongs to someone else and is never recorded.
+        self._owned_bindings: set[BrowserBindingKey] = set()
+        self._owned_sessions: set[tuple[str, str]] = set()
+        self._owned_quotas: set[tuple[str, str, str | None]] = set()
         self.authority = SyntheticAuthority()
         self.registry = BrowserProviderPoolRegistry((
             BrowserProviderPool(self.pool, (self.pool + "_a", self.pool + "_b"), b"m" * 32),))
@@ -125,25 +130,41 @@ class PgHarness:
         async with self.factories[0]() as session, session.begin():
             now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
             assert isinstance(now, datetime)
-            await session.execute(text(
+            created_session = (await session.execute(text(
                 "INSERT INTO sessions(tenant_id,session_id) VALUES(:tenant,:sid)"
-            ), {"tenant": tenant, "sid": sid})
-            await session.execute(text(
+                " RETURNING tenant_id,session_id"
+            ), {"tenant": tenant, "sid": sid})).one()
+            self._owned_sessions.add((created_session.tenant_id, created_session.session_id))
+            created_binding = (await session.execute(text(
                 "INSERT INTO oa_session_credentials(tenant_id,ai_user_id,target_system,binding_id,"
                 "binding_revision,binding_state,binding_subject_digest,binding_subject_verified_at,"
                 "cipher_version,nonce,encrypted_payload,expires_at,updated_at) VALUES"
                 "(:tenant,:user,'oa',:binding,3,'active',:subject,clock_timestamp(),"
                 "'aes256gcm-session-v2',:nonce,:encrypted,:expires,clock_timestamp())"
+                " RETURNING tenant_id,ai_user_id,target_system,binding_id"
             ), {"tenant": tenant, "user": user, "binding": binding_id, "subject": b"s" * 32,
-                "nonce": b"n" * 12, "encrypted": b"c" * 16, "expires": now + timedelta(hours=1)})
-            await session.execute(text(
+                "nonce": b"n" * 12, "encrypted": b"c" * 16,
+                "expires": now + timedelta(hours=1)})).one()
+            self._owned_bindings.add(BrowserBindingKey(
+                created_binding.tenant_id, created_binding.ai_user_id,
+                created_binding.target_system, created_binding.binding_id))
+            created_global = (await session.execute(text(
                 "INSERT INTO browser_capacity_limits(quota_id,provider_key,tenant_id,max_active)"
                 " VALUES(:id,:pool,NULL,:limit) ON CONFLICT DO NOTHING"
-            ), {"id": uuid4().hex, "pool": self.pool, "limit": global_limit})
-            await session.execute(text(
+                " RETURNING quota_id,provider_key,tenant_id"
+            ), {"id": uuid4().hex, "pool": self.pool, "limit": global_limit})).one_or_none()
+            if created_global is not None:
+                self._owned_quotas.add((created_global.quota_id, created_global.provider_key,
+                                       created_global.tenant_id))
+            created_tenant = (await session.execute(text(
                 "INSERT INTO browser_capacity_limits(quota_id,provider_key,tenant_id,max_active)"
                 " VALUES(:id,:pool,:tenant,:limit) ON CONFLICT DO NOTHING"
-            ), {"id": uuid4().hex, "pool": self.pool, "tenant": tenant, "limit": tenant_limit})
+                " RETURNING quota_id,provider_key,tenant_id"
+            ), {"id": uuid4().hex, "pool": self.pool, "tenant": tenant,
+                "limit": tenant_limit})).one_or_none()
+            if created_tenant is not None:
+                self._owned_quotas.add((created_tenant.quota_id, created_tenant.provider_key,
+                                       created_tenant.tenant_id))
         owner = BrowserOwner(tenant_id=tenant, user_id=user, session_id=sid)
         auth = BrowserAuthFact(owner, 19, b"a" * 32, now + timedelta(hours=1))
         binding = BrowserBindingFact(tenant, user, "oa", binding_id, 3, b"s" * 32)
@@ -171,6 +192,35 @@ class PgHarness:
             ), {"pool": self.pool})).scalar_one()
         return int(value)
 
+    async def cleanup_fixture_rows(self) -> None:
+        """Delete only receipt-owned synthetic rows, never a tenant/pool-wide range.
+
+        The journal is populated before commit so a failed/ambiguous seed commit
+        can still be cleaned by its exact keys. Rolled-back inserts match no rows.
+        Any cleanup error rolls back the complete cleanup transaction, preserving
+        remaining evidence and surfacing the failure through the harness teardown.
+        """
+        if not (self._owned_bindings or self._owned_sessions or self._owned_quotas):
+            return
+        full_binding = ("tenant_id=:tenant AND ai_user_id=:user AND target_system=:target"
+                        " AND binding_id=:binding")
+        async with self.factories[0]() as session, session.begin():
+            for table in ("browser_binding_leases", "oa_session_credentials"):
+                for key in self._owned_bindings:
+                    await session.execute(text(f"DELETE FROM {table} WHERE {full_binding}"), {
+                        "tenant": key.tenant_id, "user": key.ai_user_id,
+                        "target": key.target_system, "binding": key.binding_id,
+                    })
+            for tenant, sid in self._owned_sessions:
+                await session.execute(text(
+                    "DELETE FROM sessions WHERE tenant_id=:tenant AND session_id=:sid"
+                ), {"tenant": tenant, "sid": sid})
+            for quota_id, provider, tenant in self._owned_quotas:
+                await session.execute(text(
+                    "DELETE FROM browser_capacity_limits WHERE quota_id=:quota"
+                    " AND provider_key=:provider AND tenant_id IS NOT DISTINCT FROM :tenant"
+                ), {"quota": quota_id, "provider": provider, "tenant": tenant})
+
 
 @asynccontextmanager
 async def harness(database_url: str) -> AsyncIterator[PgHarness]:
@@ -179,15 +229,35 @@ async def harness(database_url: str) -> AsyncIterator[PgHarness]:
     name = "browser_lease_waiter_" + uuid4().hex
     first = create_async_engine(url, connect_args={"application_name": name + "_one"})
     second = create_async_engine(url, connect_args={"application_name": name})
+    fixture = PgHarness(first, second, name)
+    body_error: BaseException | None = None
     try:
         async with first.connect() as one, second.connect() as two:
             first_pid = (await one.execute(text("SELECT pg_backend_pid()"))).scalar_one()
             second_pid = (await two.execute(text("SELECT pg_backend_pid()"))).scalar_one()
             assert first_pid != second_pid
-        yield PgHarness(first, second, name)
+        yield fixture
+    except BaseException as error:
+        body_error = error
+        raise
     finally:
-        await first.dispose()
-        await second.dispose()
+        teardown_errors: list[BaseException] = []
+        try:
+            await fixture.cleanup_fixture_rows()
+        except BaseException as error:
+            teardown_errors.append(error)
+        for engine in (first, second):
+            try:
+                await engine.dispose()
+            except BaseException as error:
+                teardown_errors.append(error)
+        if teardown_errors:
+            if body_error is not None:
+                raise BaseExceptionGroup(
+                    "lease test failed and fixture teardown also failed",
+                    [body_error, *teardown_errors],
+                ) from None
+            raise BaseExceptionGroup("lease fixture teardown failed", teardown_errors) from None
 
 
 def test_two_connections_serialize_same_full_binding(migrated_database_url: str) -> None:
@@ -413,4 +483,43 @@ def test_restarted_store_recovers_cleanup_after_unbind_without_old_subject(
             row = await h.row(binding)
             assert row["capacity_held"] is False and row["encrypted_resource_ref"] is None
             assert row["lease_epoch"] == original.lease_epoch
+    asyncio.run(scenario())
+
+
+def test_fixture_teardown_removes_owned_rows_and_preserves_other_fixture_in_same_tenant(
+    migrated_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        async with harness(migrated_database_url) as retained:
+            retained_auth, retained_binding = await retained.seed()
+            retained_claim = await retained.reserve(retained_auth, retained_binding)
+            retained_row = await retained.row(retained_binding)
+            async with harness(migrated_database_url) as removed:
+                owned_auth, owned_binding = await removed.seed(tenant=retained.tenant)
+                await removed.reserve(owned_auth, owned_binding)
+                owned_quotas = tuple(removed._owned_quotas)
+                assert len(owned_quotas) == 2
+            assert await retained.row(retained_binding) == retained_row
+            assert await retained.count() == 1
+            renewed = await retained.stores[0].renew(retained_claim, ttl_seconds=60)
+            assert renewed.lease_revision == retained_claim.lease_revision + 1
+            async with retained.factories[0]() as session:
+                for table in ("browser_binding_leases", "oa_session_credentials"):
+                    remaining = (await session.execute(text(
+                        f"SELECT count(*) FROM {table} WHERE {_WHERE}"
+                    ), {"tenant": owned_binding.tenant_id, "user": owned_binding.ai_user_id,
+                        "binding": owned_binding.binding_id})).scalar_one()
+                    assert remaining == 0
+                session_exists = (await session.execute(text(
+                    "SELECT EXISTS(SELECT 1 FROM sessions"
+                    " WHERE tenant_id=:tenant AND session_id=:sid)"
+                ), {"tenant": owned_auth.owner.tenant_id,
+                    "sid": owned_auth.owner.session_id})).scalar_one()
+                assert session_exists is False
+                for quota_id, provider, tenant in owned_quotas:
+                    quota_exists = (await session.execute(text(
+                        "SELECT EXISTS(SELECT 1 FROM browser_capacity_limits WHERE quota_id=:quota"
+                        " AND provider_key=:provider AND tenant_id IS NOT DISTINCT FROM :tenant)"
+                    ), {"quota": quota_id, "provider": provider, "tenant": tenant})).scalar_one()
+                    assert quota_exists is False
     asyncio.run(scenario())

@@ -25,6 +25,7 @@ from app.ports.auth import (
     OASessionCredential,
     Principal,
     PrincipalOrgContext,
+    StaleCredentialWrite,
 )
 from app.ports.credential_binding import (
     CredentialAcquisitionError,
@@ -360,8 +361,11 @@ def test_password_only_row_is_encrypted_and_supports_independent_systems() -> No
 
 
 class RejectingAcquirer:
+    def __init__(self) -> None:
+        self.write_stamp: CredentialWriteStamp | None = None
+
     async def acquire(self, candidate: CredentialPollCandidate) -> Principal:
-        del candidate
+        self.write_stamp = candidate.write_stamp
         raise CredentialAcquisitionError("credentials_rejected")
 
 
@@ -394,9 +398,10 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
                     await store.snapshot(ai_user_id, "oa", tenant_id="default")
                 ),
             )
+            acquirer = RejectingAcquirer()
             service = CredentialPollingService(
                 binding_store=store,
-                acquirer=RejectingAcquirer(),
+                acquirer=acquirer,
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
@@ -412,14 +417,14 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
                 for candidate in await store.list_poll_candidates(tenant_id="default")
             )
 
-            await store.mark_non_authentication_failure(
-                ai_user_id,
-                "oa",
-                tenant_id="default",
-                expected_write=await store.claim_write(
-                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
-                ),
-            )
+            assert acquirer.write_stamp is not None
+            with pytest.raises(StaleCredentialWrite):
+                await store.mark_non_authentication_failure(
+                    ai_user_id,
+                    "oa",
+                    tenant_id="default",
+                    expected_write=acquirer.write_stamp,
+                )
             unchanged = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert unchanged.poll_status == "invalid"
             assert unchanged.poll_failure_count == 0
@@ -481,8 +486,11 @@ def test_password_rejection_persists_invalid_until_rebind_restores_polling() -> 
 
 
 class CaptchaAcquirer:
+    def __init__(self) -> None:
+        self.write_stamp: CredentialWriteStamp | None = None
+
     async def acquire(self, candidate: CredentialPollCandidate) -> Principal:
-        del candidate
+        self.write_stamp = candidate.write_stamp
         raise CredentialAcquisitionError("captcha_required")
 
 
@@ -520,9 +528,10 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
                     await store.snapshot(ai_user_id, "oa", tenant_id="default")
                 ),
             )
+            acquirer = CaptchaAcquirer()
             service = CredentialPollingService(
                 binding_store=store,
-                acquirer=CaptchaAcquirer(),
+                acquirer=acquirer,
                 work_objects=SuccessfulWorkObjects(),
                 policy=_policy(),
                 clock=lambda: now,
@@ -540,14 +549,14 @@ def test_captcha_terminal_state_is_persistent_and_stale_update_cannot_revive_it(
             assert loaded is not None
             assert loaded.oa_user_id == session_credential.oa_user_id
 
-            await store.mark_non_authentication_failure(
-                ai_user_id,
-                "oa",
-                tenant_id="default",
-                expected_write=await store.claim_write(
-                    await store.snapshot(ai_user_id, "oa", tenant_id="default")
-                ),
-            )
+            assert acquirer.write_stamp is not None
+            with pytest.raises(StaleCredentialWrite):
+                await store.mark_non_authentication_failure(
+                    ai_user_id,
+                    "oa",
+                    tenant_id="default",
+                    expected_write=acquirer.write_stamp,
+                )
             unchanged = await store.get_password_binding(ai_user_id, "oa", tenant_id="default")
             assert unchanged.poll_status == "captcha_required"
             assert unchanged.poll_failure_count == 0

@@ -41,16 +41,18 @@ async def isolated(url):
     try:
         yield engine, factory, store, tenant, user
     finally:
-        async with factory() as session:
-            await session.execute(
-                text(
-                    "DELETE FROM oa_session_credentials WHERE tenant_id=:tenant AND"
-                    " ai_user_id=:user"
-                ),
-                {"tenant": tenant, "user": user},
-            )
-            await session.commit()
-        await engine.dispose()
+        try:
+            async with factory() as session:
+                await session.execute(
+                    text(
+                        "DELETE FROM oa_session_credentials WHERE tenant_id=:tenant AND"
+                        " ai_user_id=:user AND target_system='oa'"
+                    ),
+                    {"tenant": tenant, "user": user},
+                )
+                await session.commit()
+        finally:
+            await engine.dispose()
 
 
 async def claim(store, tenant, user):
@@ -351,7 +353,7 @@ def test_identity_revocation_is_idempotent_and_fences_existing_writer(migrated_d
                     await session.execute(
                         text(
                             "DELETE FROM oa_session_credentials WHERE tenant_id=:tenant AND"
-                            " ai_user_id=:user"
+                            " ai_user_id=:user AND target_system='oa'"
                         ),
                         {"tenant": tenant, "user": user},
                     )
