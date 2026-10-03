@@ -205,9 +205,9 @@ class PostgreSQLCredentialStore:
                     "INSERT INTO oa_session_credentials (tenant_id,ai_user_id,"
                     "target_system,binding_id,"
                     "binding_state,binding_revision,credential_write_revision,refresh_epoch,"
-                    "refresh_operation_id,refresh_deadline) VALUES"
+                    "refresh_operation_id,refresh_deadline,updated_at) VALUES"
                     " (:tenant_id,:ai_user_id,:target_system,:binding_id,'unverified',1,0,1,"
-                    ":operation_id,clock_timestamp()+interval '120 seconds')"
+                    ":operation_id,clock_timestamp()+interval '120 seconds',clock_timestamp())"
                     " ON CONFLICT (tenant_id,ai_user_id,target_system) DO NOTHING"
                 )
             else:
@@ -469,9 +469,9 @@ class PostgreSQLCredentialStore:
                             "INSERT INTO oa_session_credentials (tenant_id,ai_user_id,"
                             "target_system,binding_id,"
                             "binding_state,binding_revision,credential_write_revision,"
-                            "refresh_epoch)"
+                            "refresh_epoch,updated_at)"
                             " VALUES (:tenant_id,:ai_user_id,:target_system,:binding_id,"
-                            "'unbound',1,1,1)"
+                            "'unbound',1,1,1,clock_timestamp())"
                             " ON CONFLICT (tenant_id,ai_user_id,target_system) DO UPDATE SET"
                             " password_cipher_version=NULL,password_nonce=NULL,"
                             "encrypted_password_payload=NULL,"
