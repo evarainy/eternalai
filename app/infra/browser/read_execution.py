@@ -165,7 +165,7 @@ class VerifiedBrowserReadExecution:
                 arguments = private_input.get("arguments")
                 schema = manifest.capability.input_schema
                 if (
-                    private_input.get("schema_version") != "browser.request.input.v1"
+                    private_input.get("schema_version") != "browser.request.input.v2"
                     or private_input.get("capability_id") != manifest.capability.capability_id
                     or not isinstance(arguments, dict)
                     or type(arguments.get("business_key")) is not str

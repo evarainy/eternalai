@@ -227,7 +227,7 @@ class RunHarness:
         envelope = self.cipher.encrypt_input(
             identity,
             {
-                "schema_version": "browser.request.input.v1",
+                "schema_version": "browser.request.input.v2",
                 "channel": self.channel,
                 "principal": self.principal.model_dump(mode="json"),
                 "capability_id": self.capability.capability_id,

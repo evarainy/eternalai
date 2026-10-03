@@ -215,7 +215,7 @@ class BrowserChatService:
                 raise BrowserChatError("authentication_required", http_status=401)
             run_id = uuid4().hex
             payload: dict[str, object] = {
-                "schema_version": "browser.request.input.v1",
+                "schema_version": "browser.request.input.v2",
                 "channel": channel,
                 "principal": principal.model_dump(mode="json"),
                 "capability_id": capability.capability_id, "arguments": arguments,

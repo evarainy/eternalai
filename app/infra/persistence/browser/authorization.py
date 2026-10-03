@@ -130,8 +130,12 @@ class PostgreSQLBrowserCurrentAuth:
 
     def input(self, admission: RunAdmission) -> VerifiedBrowserInput:
         payload = self._cipher.decrypt_input(admission)
+        if payload.get("schema_version") == "browser.request.input.v1":
+            # The retired producer did not preserve the request channel. Never
+            # reconstruct Policy authority by assuming that it was a web request.
+            raise BrowserAuthorizationError("browser_authorization_channel_unavailable")
         if (
-            payload.get("schema_version") != "browser.request.input.v1"
+            payload.get("schema_version") != "browser.request.input.v2"
             or not isinstance(payload.get("principal"), dict)
             or not isinstance(payload.get("capability_id"), str)
             or not isinstance(payload.get("arguments"), dict)
