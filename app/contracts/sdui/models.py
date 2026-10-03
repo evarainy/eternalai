@@ -16,6 +16,7 @@ UIAction: TypeAlias = Literal[
 ]
 TargetSystem: TypeAlias = CapabilityTargetSystem
 ResponseEnvelopeStatus: TypeAlias = Literal[
+    "running",
     "completed",
     "blocked",
     "waiting_user",

@@ -106,6 +106,7 @@ def _matches(row: Row, claim: BrowserLeaseClaim, *, business: bool) -> None:
         "holder_id": claim.holder_id, "holder_session_id": claim.auth.owner.session_id,
         "binding_revision": claim.binding.binding_revision,
         "authorization_revision": claim.auth.authorization_revision,
+        "authorization_run_id": claim.auth.authorization_run_id,
         "auth_session_fingerprint": claim.auth.fingerprint,
         "auth_expires_at": claim.auth.expires_at,
         "acquisition_operation_id": claim.operation_id, "provider_key": claim.provider_key,
@@ -196,7 +197,10 @@ class PostgreSQLBrowserLeaseStore:
                              session_id=row["holder_session_id"])
         captured_auth = BrowserAuthFact(owner, row["authorization_revision"],
                                         bytes(row["auth_session_fingerprint"]),
-                                        row["auth_expires_at"])
+                                        row["auth_expires_at"],
+                                        authorization_run_id=row["authorization_run_id"],
+                                        evidence_version=("verified-session-v1"
+                                            if row["authorization_run_id"] is not None else None))
         claim = BrowserLeaseClaim(
             captured_auth, snapshot, row["lease_epoch"], row["lease_revision"],
             row["holder_id"], row["acquisition_operation_id"], row["provider_key"], row["deadline"])
@@ -272,6 +276,7 @@ class PostgreSQLBrowserLeaseStore:
                 "holder_id": claim.holder_id, "holder_session_id": auth.owner.session_id,
                 "binding_revision": binding.binding_revision,
                 "authorization_revision": auth.authorization_revision,
+                "authorization_run_id": auth.authorization_run_id,
                 "auth_session_fingerprint": auth.fingerprint, "auth_expires_at": auth.expires_at,
                 "deadline": claim.deadline, "state": "held", "capacity_held": True,
                 "provider_key": pool.provider_key, "acquisition_operation_id": claim.operation_id,
@@ -486,6 +491,7 @@ class PostgreSQLBrowserLeaseStore:
                 "lease_revision": revision, "state": "released", "capacity_held": False,
                 "holder_id": None, "holder_session_id": None, "binding_revision": None,
                 "authorization_revision": None, "auth_session_fingerprint": None,
+                "authorization_run_id": None,
                 "auth_expires_at": None, "deadline": None, "provider_key": None,
                 "acquisition_operation_id": None, "acquisition_phase": "reservation_only",
                 "acquisition_send_started": False, "resource_cipher_version": None,

@@ -13,7 +13,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Awaitable, Callable, ParamSpec, Protocol, TypeVar, cast
+from typing import Any, Awaitable, Callable, Coroutine, ParamSpec, Protocol, TypeVar, cast
 
 from app.browser_skill.models import (
     ActionCommand,
@@ -34,6 +34,7 @@ from app.browser_skill.models import (
     SealedParameter,
     SkillStep,
     TargetRef,
+    VerificationResult,
     VisibleCandidate,
     VisibleProjection,
 )
@@ -93,7 +94,7 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
-def _neutral(method: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+def _neutral(method: Callable[_P, Awaitable[_R]]) -> Callable[_P, Coroutine[Any, Any, _R]]:
     @wraps(method)
     async def invoke(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         try:
@@ -144,6 +145,11 @@ class PlaywrightWebAdapter:
         self._guards: dict[str, _OriginGuard] = {}
         self._guard_lock = asyncio.Lock()
         self._salt = secrets.token_bytes(32)
+        # One bounded private result per registered execution. Never included in
+        # ReadEvidence, projections, model input, diagnostics, or adapter repr.
+        self._private_reads: dict[
+            str, tuple[ReadSpec, ReadEvidence, tuple[tuple[str, str], ...]]
+        ] = {}
         for registration in executions:
             plan = site.bootstrap(registration.context.skill)
             plan.validate_context(registration.context)
@@ -799,7 +805,7 @@ class PlaywrightWebAdapter:
         plan: RegisteredSitePlan,
         key: SealedParameter,
         expected: dict[str, SealedParameter],
-    ) -> tuple[int, bool, tuple[ReadFieldEvidence, ...], str]:
+    ) -> tuple[int, bool, tuple[ReadFieldEvidence, ...], str, tuple[tuple[str, str], ...]]:
         dom = self._rules[plan.skill_digest].read
         step_id = plan.verifier_id
         rows = await bounded_children(region, dom.row_selector, dom.maximum_rows)
@@ -807,6 +813,7 @@ class PlaywrightWebAdapter:
         fields = tuple(ReadFieldEvidence(field_id=f, status="missing") for f in spec.fields)
         digest = hashlib.sha256(self._salt)
         byte_count = 0
+        values: list[tuple[str, str]] = []
 
         def fingerprint(value: Any) -> None:
             nonlocal byte_count
@@ -841,11 +848,14 @@ class PlaywrightWebAdapter:
                 if not owner:
                     continue
                 comparisons = []
+                values = []
                 for (field_id, location), registered in zip(
                     dom.fields, plan.read_rule.fields, strict=True
                 ):
                     raw = await read_private(row, location, dom.maximum_value_bytes)
                     fingerprint(raw)
+                    if isinstance(raw, str):
+                        values.append((field_id, raw))
                     matched = self._consume(
                         expected[field_id],
                         context,
@@ -865,7 +875,7 @@ class PlaywrightWebAdapter:
                         )
                     )
                 fields = tuple(comparisons)
-            return count, owner, fields, digest.hexdigest()
+            return count, owner, fields, digest.hexdigest(), tuple(values)
         finally:
             for row in rows:
                 await row.dispose()
@@ -874,6 +884,7 @@ class PlaywrightWebAdapter:
     async def read(
         self, session: BrowserSessionRef, spec: ReadSpec, context: ExecutionContext
     ) -> ReadEvidence:
+        self._private_reads.pop(session.session_ref, None)
         plan, _ = await self._authority(session, context, spec)
         dom = self._rules[plan.skill_digest].read
         exact = await self._observer.resolve_region(session, dom.observation, plan.policy)
@@ -908,7 +919,7 @@ class PlaywrightWebAdapter:
                 raise failure("stale")
             await self._authority(session, context, spec)
             check_liveness(context)
-            count, owner, fields, _private_signature = after
+            count, owner, fields, _private_signature, values = after
             # Hash only safe facts. Private record fingerprints never leave this method.
             safe = {
                 "scope": final.projection.scope.model_dump(),
@@ -931,6 +942,39 @@ class PlaywrightWebAdapter:
                 ).hexdigest(),
             )
             evidence.validate_for(spec, session.binding)
+            if (
+                count == 1 and owner and evidence.coverage.state == "complete"
+                and len(values) == len(spec.fields)
+                and all(item.status == "matched" for item in fields)
+            ):
+                self._private_reads[session.session_ref] = (spec, evidence, values)
             return evidence
         finally:
             await region.dispose()
+
+    def _consume_verified_result(
+        self,
+        session: BrowserSessionRef,
+        context: ExecutionContext,
+        verification: VerificationResult,
+        consumer: Callable[[dict[str, str]], _R],
+    ) -> _R:
+        """Trusted bridge only: consume values from the exact verifier read once.
+
+        This never performs another DOM read. IndependentVerifier must have
+        completed its post-read authorization/confirmation checks before entry.
+        """
+        self._registration(session, context)
+        item = self._private_reads.pop(session.session_ref, None)
+        check_liveness(context)
+        if (
+            item is None or verification.status != "verified"
+            or verification.evidence_digest is None
+            or item[1].evidence_digest != verification.evidence_digest
+            or item[0].binding != context.expected_binding
+        ):
+            raise failure("denied")
+        return consumer(dict(item[2]))
+
+    def _discard_private_result(self, session: BrowserSessionRef) -> None:
+        self._private_reads.pop(session.session_ref, None)

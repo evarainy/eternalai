@@ -64,6 +64,7 @@ function renderCard(
     runId?: string;
     requestGeneration?: number;
     currentGeneration?: number;
+    resultValue?: Record<string, unknown> | null;
     onCancel?: (taskId: string, runId: string, stateRevision: number) => void | Promise<void>;
     onArtifact?: (artifactId: string) => void | Promise<void>;
   } = {},
@@ -74,6 +75,7 @@ function renderCard(
     runId: options.runId ?? 'run_1',
     requestGeneration: options.requestGeneration ?? 3,
     currentGeneration: options.currentGeneration ?? 3,
+    resultValue: options.resultValue,
     onCancel: options.onCancel,
     onArtifact: options.onArtifact,
   };
@@ -96,6 +98,14 @@ function renderCard(
 }
 
 describe('unwired BrowserRunCard', () => {
+  it('shows only owner-read verified value on a completed projection', () => {
+    const pending = renderCard(view(running()), { resultValue: { count: 2 } });
+    expect(screen.queryByRole('region', { name: '浏览器结果' })).not.toBeInTheDocument();
+    pending.unmount();
+    renderCard(view(completed()), { resultValue: { count: 2 } });
+    expect(screen.getByRole('region', { name: '浏览器结果' })).toHaveTextContent('"count": 2');
+  });
+
   it('renders progress and throttles cancellation without claiming acknowledgement', async () => {
     let resolveCancel!: () => void;
     const pending = new Promise<void>((resolve) => { resolveCancel = resolve; });

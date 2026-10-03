@@ -4,6 +4,14 @@
  * EternalAI
  * OpenAPI spec version: 0.1.0
  */
+/**
+ * Server HMAC cache aliases; never internal IDs or authorization grants.
+ */
+export interface BrowserOwnerScope {
+  tenant_id: string;
+  user_id: string;
+}
+
 export type MeOrgDepartmentId = string | null;
 
 export type MeOrgUnitId = string | null;
@@ -21,6 +29,10 @@ export interface MeOrg {
 }
 
 export type MeResponseAvatarPath = '/api/v1/me/avatar' | null;
+
+export type MeResponseBrowserOwnerScope = BrowserOwnerScope | null;
+
+export type MeResponseBrowserSkillId = string | null;
 
 export type MeResponseOrg = MeOrg | null;
 
@@ -42,6 +54,8 @@ export const MeResponseOrgStatus = {
 export interface MeResponse {
   authenticated?: true;
   avatar_path?: MeResponseAvatarPath;
+  browser_owner_scope?: MeResponseBrowserOwnerScope;
+  browser_skill_id?: MeResponseBrowserSkillId;
   display_name: string;
   org?: MeResponseOrg;
   org_status: MeResponseOrgStatus;

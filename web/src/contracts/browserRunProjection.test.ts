@@ -147,10 +147,26 @@ describe('unwired browser run projection', () => {
     expect(parseBrowserRunProjection(input)).toBeNull();
   });
 
-  it('accepts unknown effects only as explicit non-replay failures', () => {
+  it('accepts unverified unknown effects only as explicit non-replay failures', () => {
     const view = parsed(failedUnknown());
     expect(view.result?.effect).toBe('unknown');
     expect(view.result?.automatic_replay).toBe(false);
+  });
+
+  it('retains verified read evidence when a later step fails or cancellation wins', () => {
+    const failed = parsed({
+      ...completed(), status: 'failed',
+      result: { ...completed().result, business: 'failed', effect: 'unknown',
+        error_code: 'browser_read_execution_failed' },
+    });
+    expect(failed.result?.verification).toBe('verified');
+    const cancelled = parsed({
+      ...completed(), status: 'cancelled',
+      cancel: { requested: true, acknowledged: true },
+      result: { ...completed().result, business: 'cancelled',
+        error_code: 'browser_cancelled' },
+    });
+    expect(cancelled.result?.verification).toBe('verified');
   });
 
   it.each([

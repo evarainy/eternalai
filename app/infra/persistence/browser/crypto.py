@@ -31,12 +31,15 @@ class ResourceEnvelope:
             raise ValueError("browser_resource_envelope_invalid")
 
 
-def resource_identity(claim: BrowserLeaseClaim) -> list[str | int]:
+def resource_identity(claim: BrowserLeaseClaim) -> list[object]:
     """Never add mutable deadline/revision, state or present-day authority here."""
     owner, binding = claim.auth.owner, claim.binding
+    authorization: object = claim.auth.authorization_revision
+    if claim.auth.evidence_version == "verified-session-v1":
+        authorization = ["verified-session-v1", claim.auth.authorization_run_id]
     return [owner.tenant_id, owner.user_id, owner.session_id,
             binding.target_system, binding.binding_id, binding.binding_revision,
-            claim.lease_epoch, claim.holder_id, claim.auth.authorization_revision,
+            claim.lease_epoch, claim.holder_id, authorization,
             claim.auth.fingerprint.hex(), claim.auth.expires_at.astimezone(UTC).isoformat(),
             claim.operation_id, claim.provider_key]
 

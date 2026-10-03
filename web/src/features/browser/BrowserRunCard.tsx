@@ -17,6 +17,7 @@ interface BrowserRunCardProps {
   runId: string;
   requestGeneration: number;
   currentGeneration: number;
+  resultValue?: Record<string, unknown> | null;
   onCancel?: (taskId: string, runId: string, stateRevision: number) => void | Promise<void>;
   onArtifact?: (artifactId: string) => void | Promise<void>;
 }
@@ -68,6 +69,7 @@ export function BrowserRunCard({
   runId,
   requestGeneration,
   currentGeneration,
+  resultValue,
   onCancel,
   onArtifact,
 }: BrowserRunCardProps) {
@@ -97,6 +99,13 @@ export function BrowserRunCard({
 
   const cancelPendingLocally = pendingCancel.current?.key === cancelKey;
   const terminal = view.result !== null;
+  let resultText: string | null = null;
+  if (view.status === 'completed' && view.result?.verification === 'verified'
+      && resultValue !== null && resultValue !== undefined) {
+    try {
+      resultText = JSON.stringify(resultValue, null, 2);
+    } catch { /* The owner-checked API parser normally excludes invalid values. */ }
+  }
   const canCancel = onCancel !== undefined && !terminal && !view.cancel.requested;
   const submitCancel = async () => {
     if (!canCancel || onCancel === undefined || cancelKey === null
@@ -175,6 +184,14 @@ export function BrowserRunCard({
       {view.result?.business === 'failed' && view.result.effect !== 'unknown' ? (
         <Alert type="error" showIcon title="任务未完成，请查看人工处理结果" />
       ) : null}
+
+      {resultText === null ? null : (
+        <section aria-label="浏览器结果">
+          <Text strong>浏览器结果</Text>
+          <pre style={{ maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere' }}>{resultText}</pre>
+        </section>
+      )}
 
       {view.draft !== null ? (
         <p>

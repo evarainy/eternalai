@@ -14,6 +14,7 @@ from app.api.v1.auth import (
 from app.api.v1.auth import (
     make_router as make_auth_router,
 )
+from app.api.v1.browser_runs import make_router as make_browser_runs_router
 from app.api.v1.credential_bindings import CredentialBindingService
 from app.api.v1.credential_bindings import make_router as make_credential_binding_router
 from app.api.v1.csrf import (
@@ -28,9 +29,11 @@ from app.api.v1.me import make_router as make_me_router
 from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
+from app.browser_skill.supervisor import BrowserWorkerSupervisor
 from app.composition import build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
+from app.infra.browser.composition import BrowserVerticalComponents
 from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
@@ -39,6 +42,7 @@ from app.ports.auth import (
     SessionRevocationStorePort,
     SessionTokenPort,
 )
+from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.runtime import RuntimePort
 from app.ports.user_profile import UserProfilePort
 
@@ -66,6 +70,8 @@ def create_app(
     diagnostic_checks: dict[str, HealthCheck] | None = None,
     validate_workflows: Callable[[], Awaitable[None]] | None = None,
     mcp_service: McpApiService | None = None,
+    browser_chat: BrowserChatPort | None = None,
+    browser_worker_supervisor: BrowserWorkerSupervisor | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
@@ -75,15 +81,29 @@ def create_app(
             await credential_polling_scheduler.start()
         if organization_directory_scheduler is not None:
             await organization_directory_scheduler.start()
+        if browser_worker_supervisor is not None:
+            await browser_worker_supervisor.start()
         try:
             yield
         finally:
+            if browser_worker_supervisor is not None:
+                await browser_worker_supervisor.stop()
             if organization_directory_scheduler is not None:
                 await organization_directory_scheduler.stop()
             if credential_polling_scheduler is not None:
                 await credential_polling_scheduler.stop()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
+
+    @application.exception_handler(BrowserChatError)
+    async def browser_chat_failure_handler(
+        _request: object, exc: BrowserChatError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.http_status,
+            content={"detail": {"code": exc.code, "message": "Browser request is unavailable."}},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
 
     @application.exception_handler(McpFailure)
     async def mcp_failure_handler(_request: object, _exc: McpFailure) -> JSONResponse:
@@ -122,8 +142,14 @@ def create_app(
         prefix="/api/v1/auth",
     )
     application.include_router(
-        make_runtime_router(runtime, csrf_protected_principal, session_binder),
+        make_runtime_router(
+            runtime, csrf_protected_principal, session_binder, browser_chat=browser_chat,
+        ),
         prefix="/api/v1/runtime",
+    )
+    application.include_router(
+        make_browser_runs_router(browser_chat, csrf_protected_principal, session_binder),
+        prefix="/api/v1",
     )
     application.include_router(
         make_admin_router(admin_registry_service, csrf_protected_principal),
@@ -134,7 +160,10 @@ def create_app(
         prefix="/api/v1/work-objects",
     )
     application.include_router(
-        make_me_router(user_profile, csrf_protected_principal),
+        make_me_router(
+            user_profile, csrf_protected_principal,
+            browser_chat=browser_chat,
+        ),
         prefix="/api/v1/me",
     )
     application.include_router(
@@ -149,6 +178,8 @@ def create_app(
 
 def create_production_app(
     settings: ProductionSettings | None = None,
+    *,
+    browser_vertical: BrowserVerticalComponents | None = None,
 ) -> FastAPI:
     """Create the fail-fast production application with no optional dependency gaps."""
 
@@ -181,6 +212,11 @@ def create_production_app(
         diagnostic_checks=dict(components.diagnostic_checks),
         validate_workflows=components.validate_workflows,
         mcp_service=components.mcp_service,
+        browser_chat=browser_vertical.chat if browser_vertical is not None else None,
+        browser_worker_supervisor=(
+            BrowserWorkerSupervisor(browser_vertical.run_ready)
+            if browser_vertical is not None else None
+        ),
     )
 
 

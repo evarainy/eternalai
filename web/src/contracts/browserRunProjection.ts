@@ -31,6 +31,7 @@ const errorCodes = [
   'browser_verification_failed',
   'browser_not_sent',
   'browser_cancelled',
+  'browser_read_execution_failed',
 ] as const;
 const dispatchFailureCodes = [
   'unavailable', 'overloaded', 'invalid_request', 'resource_not_found',
@@ -214,11 +215,11 @@ function parseResult(value: unknown): BrowserResultView | null {
     terminal_revision: record.terminal_revision,
     automatic_replay: false,
   };
-  if ((result.business === 'completed') !== (result.verification === 'verified')
+  if ((result.business === 'completed' && result.verification !== 'verified')
       || (result.business === 'completed' && result.error_code !== null)
       || (result.business === 'failed' && result.error_code === null)
       || (result.business === 'cancelled' && result.error_code !== 'browser_cancelled')
-      || (result.effect === 'unknown' && result.business !== 'completed'
+      || (result.effect === 'unknown' && result.verification !== 'verified'
         && (result.business !== 'failed'
           || result.error_code !== 'browser_effect_unknown'))) return null;
   return result;

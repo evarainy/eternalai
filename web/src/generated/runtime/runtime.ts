@@ -43,5 +43,10 @@ export const handleApiV1RuntimeHandlePost = (
       );
     }
 
+
+type AwaitedInput<T> = PromiseLike<T> | T;
+
+    type Awaited<O> = O extends AwaitedInput<infer T> ? T : never;
+
 export type HandleActionApiV1RuntimeActionPostResult = NonNullable<Awaited<ReturnType<typeof handleActionApiV1RuntimeActionPost>>>
 export type HandleApiV1RuntimeHandlePostResult = NonNullable<Awaited<ReturnType<typeof handleApiV1RuntimeHandlePost>>>

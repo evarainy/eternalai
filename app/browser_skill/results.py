@@ -39,7 +39,7 @@ class ResultState(Contract):
     @model_validator(mode="after")
     def consistent_business(self) -> "ResultState":
         verified = self.verification is not None and self.verification.status == "verified"
-        if (self.business == "completed") != verified:
+        if self.business == "completed" and not verified:
             raise ValueError("browser_business_verification_inconsistent")
         if self.business == "completed" and self.error_code is not None:
             raise ValueError("browser_success_has_error")

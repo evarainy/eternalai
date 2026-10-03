@@ -24,4 +24,22 @@ export const readMeApiV1MeGet = (
       );
     }
 
+/**
+ * @summary Read Avatar
+ */
+export const readAvatarApiV1MeAvatarGet = (
+
+ ) => {
+      return customInstance<unknown>(
+      {url: `/api/v1/me/avatar`, method: 'GET'
+    },
+      );
+    }
+
+
+type AwaitedInput<T> = PromiseLike<T> | T;
+
+    type Awaited<O> = O extends AwaitedInput<infer T> ? T : never;
+
 export type ReadMeApiV1MeGetResult = NonNullable<Awaited<ReturnType<typeof readMeApiV1MeGet>>>
+export type ReadAvatarApiV1MeAvatarGetResult = NonNullable<Awaited<ReturnType<typeof readAvatarApiV1MeAvatarGet>>>

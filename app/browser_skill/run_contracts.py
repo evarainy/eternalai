@@ -1,9 +1,9 @@
-"""Unwired browser projection fragment; no public API or persistence implementation.
+"""Browser projections for owner-authorized durable Run state.
 
 Trusted composition must authenticate/authorize each read against current state.
 Owner checks here supplement that boundary; identifiers never confer access.
 CommitFact is process-local provenance, not proof of a database transaction. Its
-private mint seam is reserved for the future store's completed transaction path;
+private mint seam is reserved for the store's completed transaction path;
 tests mint explicitly synthetic facts, never durable-worker acceptance evidence.
 """
 
@@ -38,6 +38,7 @@ BrowserErrorCode = Literal[
     "browser_verification_failed",
     "browser_not_sent",
     "browser_cancelled",
+    "browser_read_execution_failed",
 ]
 
 
@@ -98,7 +99,7 @@ class CommitFact(_Private):
 
 
 def _mint_commit_fact(reference: BrowserRunRef) -> CommitFact:
-    """Private future-store seam; no production caller or database proof exists yet."""
+    """Private store seam, invoked only after the Run/Task transaction commits."""
     return CommitFact(reference, _seal=_COMMIT_SEAL)
 
 
@@ -192,7 +193,7 @@ class BrowserResultView(Contract):
 
     @model_validator(mode="after")
     def consistent_result(self) -> Self:
-        if (self.business == "completed") != (self.verification == "verified"):
+        if self.business == "completed" and self.verification != "verified":
             raise ValueError("browser_result_verification_inconsistent")
         if self.business == "completed" and self.error_code is not None:
             raise ValueError("browser_result_success_has_error")
@@ -202,7 +203,7 @@ class BrowserResultView(Contract):
             raise ValueError("browser_result_cancel_code_required")
         if (
             self.effect == "unknown"
-            and self.business != "completed"
+            and self.verification != "verified"
             and (self.business != "failed" or self.error_code != "browser_effect_unknown")
         ):
             raise ValueError("browser_result_unknown_not_resolved")

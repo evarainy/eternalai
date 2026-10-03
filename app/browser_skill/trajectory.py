@@ -63,6 +63,8 @@ def _binding_copy(binding: ScopeBinding) -> ScopeBinding:
         binding_id=binding.binding_id,
         binding_revision=binding.binding_revision,
         authorization_revision=binding.authorization_revision,
+        authorization_run_id=binding.authorization_run_id,
+        evidence_version=binding.evidence_version,
         lease_epoch=binding.lease_epoch,
     )
 
@@ -70,8 +72,27 @@ def _binding_copy(binding: ScopeBinding) -> ScopeBinding:
 class BindingRevisions(Contract):
     binding_id: OpaqueId
     binding_revision: Epoch
-    authorization_revision: Epoch
+    authorization_revision: Epoch | None = None
     lease_epoch: Epoch
+    authorization_run_id: OpaqueId | None = None
+    evidence_version: Literal["verified-session-v1"] | None = None
+
+    @model_validator(mode="after")
+    def authorization_mode_is_explicit(self) -> Self:
+        revision_mode = (
+            self.authorization_revision is not None
+            and self.authorization_revision <= 9_007_199_254_740_991
+            and self.authorization_run_id is None
+            and self.evidence_version is None
+        )
+        evidence_mode = (
+            self.authorization_revision is None
+            and self.authorization_run_id is not None
+            and self.evidence_version == "verified-session-v1"
+        )
+        if not (revision_mode or evidence_mode):
+            raise ValueError("browser_authorization_mode_invalid")
+        return self
 
     @classmethod
     def from_binding(cls, binding: ScopeBinding) -> Self:
@@ -80,6 +101,8 @@ class BindingRevisions(Contract):
             binding_id=checked.binding_id,
             binding_revision=checked.binding_revision,
             authorization_revision=checked.authorization_revision,
+            authorization_run_id=checked.authorization_run_id,
+            evidence_version=checked.evidence_version,
             lease_epoch=checked.lease_epoch,
         )
 

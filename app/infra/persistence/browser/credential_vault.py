@@ -67,6 +67,8 @@ class BrowserCredentialVault:
         if (
             auth.owner != binding.owner
             or auth.authorization_revision != binding.authorization_revision
+            or auth.authorization_run_id != binding.authorization_run_id
+            or auth.evidence_version != binding.evidence_version
             or auth.expires_at <= datetime.now(UTC)
             or (fact.tenant_id, fact.ai_user_id, fact.binding_id, fact.binding_revision)
             != (

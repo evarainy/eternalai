@@ -26,25 +26,43 @@ class CredentialVaultPort(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class BrowserAuthFact:
-    """Trusted authorization capture; a version must come from its authority."""
+    """Trusted capture in exactly one mode; neither an identifier nor a grant.
+
+    Numeric revisions require a genuine authority. Verified-session evidence
+    references an immutable Run and still requires live authorization checks.
+    """
 
     owner: BrowserOwner
-    authorization_revision: int
+    authorization_revision: int | None
     fingerprint: bytes = field(repr=False)
     expires_at: datetime
+    authorization_run_id: str | None = None
+    evidence_version: Literal["verified-session-v1"] | None = None
 
     def __post_init__(self) -> None:
         if (
             not isinstance(self.owner, BrowserOwner)
             or type(self.fingerprint) is not bytes
             or not isinstance(self.expires_at, datetime)
-            or type(self.authorization_revision) is not int
-            or not 0 <= self.authorization_revision <= 9007199254740991
             or len(self.fingerprint) != 32
             or self.expires_at.tzinfo is None
             or self.expires_at.utcoffset() is None
         ):
             raise ValueError("browser_auth_fact_invalid")
+        revision_mode = (
+            type(self.authorization_revision) is int
+            and 0 <= self.authorization_revision <= 9007199254740991
+            and self.authorization_run_id is None
+            and self.evidence_version is None
+        )
+        evidence_mode = (
+            self.authorization_revision is None
+            and isinstance(self.authorization_run_id, str)
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", self.authorization_run_id) is not None
+            and self.evidence_version == "verified-session-v1"
+        )
+        if not (revision_mode or evidence_mode):
+            raise ValueError("browser_authorization_mode_invalid")
 
 
 @dataclass(frozen=True, slots=True)
