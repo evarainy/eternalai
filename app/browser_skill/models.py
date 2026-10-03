@@ -393,6 +393,9 @@ class ReadSpec(Contract):
     verifier_id: OpaqueId
     verifier_digest: Digest
     fields: Annotated[tuple[OpaqueId, ...], Field(min_length=1, max_length=32)]
+    mode: Literal["independent_confirmed_key_v1", "independent_query_detail_v1"] = (
+        "independent_confirmed_key_v1"
+    )
 
     @model_validator(mode="after")
     def unique_fields(self) -> Self:
@@ -402,18 +405,20 @@ class ReadSpec(Contract):
 
 
 class ReadFieldEvidence(Contract):
-    """Comparison against the frozen verifier's approved inputs, never raw values."""
+    """Legacy input comparison or query field presence; never raw values."""
 
     field_id: OpaqueId
-    status: Literal["matched", "mismatch", "missing", "unsupported"]
+    status: Literal["matched", "present", "mismatch", "missing", "unsupported"]
 
 
 class ReadEvidence(Contract):
     """Independent key lookup evidence. Echoing a requested key is not a match.
 
     key_match/owner_match and comparisons come from actual independently read
-    records, using the current authorized sealed inputs. Test oracle or selected
-    DOM row cannot supply expectations. Digests contain no raw sensitive values.
+    records, using the current authorized sealed key. Legacy expected values come
+    from approved inputs; query fields require actual presence and frozen schema
+    validation. Test oracle or selected DOM row cannot supply confirmation.
+    Digests contain no raw sensitive values.
     """
 
     binding: ScopeBinding = Field(repr=False)
@@ -424,6 +429,11 @@ class ReadEvidence(Contract):
     coverage: Coverage
     fields: Annotated[tuple[ReadFieldEvidence, ...], Field(min_length=1, max_length=32)]
     evidence_digest: Digest | None = None
+    mode: Literal["independent_confirmed_key_v1", "independent_query_detail_v1"] = (
+        "independent_confirmed_key_v1"
+    )
+    object_type_match: bool | None = None
+    schema_validated: bool | None = None
 
     @model_validator(mode="after")
     def consistent_read(self) -> Self:
@@ -439,6 +449,18 @@ class ReadEvidence(Contract):
         return self
 
     def validate_for(self, spec: ReadSpec, current_binding: ScopeBinding) -> None:
+        if self.mode != spec.mode:
+            raise ValueError("browser_read_mode_mismatch")
+        if self.mode == "independent_confirmed_key_v1" and (
+            self.object_type_match is not None or self.schema_validated is not None
+            or any(item.status == "present" for item in self.fields)
+        ):
+            raise ValueError("browser_read_mode_mismatch")
+        if self.mode == "independent_query_detail_v1" and (
+            self.object_type_match is None or self.schema_validated is None
+            or any(item.status == "matched" for item in self.fields)
+        ):
+            raise ValueError("browser_read_mode_mismatch")
         if self.binding != spec.binding or self.binding != current_binding:
             raise ValueError("browser_binding_stale")
         if self.business_key != spec.business_key:

@@ -216,6 +216,7 @@ class BrowserChatService:
             run_id = uuid4().hex
             payload: dict[str, object] = {
                 "schema_version": "browser.request.input.v1",
+                "channel": channel,
                 "principal": principal.model_dump(mode="json"),
                 "capability_id": capability.capability_id, "arguments": arguments,
             }

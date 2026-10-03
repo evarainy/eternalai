@@ -13,12 +13,13 @@ import html
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, TypeVar
+from typing import Annotated, Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.browser_skill.models import (
     BrowserSkill,
+    Contract,
     DecisionBudget,
     DecisionSource,
     LocatorHint,
@@ -40,6 +41,8 @@ from app.browser_skill.site_rules import (
     EffectFact,
     ExpectedField,
     FrozenSiteAdapter,
+    QueryField,
+    RegisteredQueryReadRule,
     RegisteredReadRule,
     SiteStepRule,
 )
@@ -55,7 +58,9 @@ from app.infra.browser.read_execution import BrowserReadExecutionFactory, Regist
 from app.ports.browser_publication_store import BrowserPublicationError
 from app.ports.browser_read_execution import BrowserReadExecutionError, BrowserWorkerCheckpoint
 from app.ports.browser_run_store import RunSnapshot
+from app.ports.capability_registry import CapabilitySpec
 from app.ports.llm_provider import LLMProviderPort
+from app.ports.response_projection_contract import canonical_schema_digest
 from app.ports.structured_output import StructuredOutputPort
 from app.version_binding import capability_version_bindings
 
@@ -63,6 +68,7 @@ SYNTHETIC_ORIGIN = "http://127.0.0.1:8765"
 SYNTHETIC_TENANT = "browser_fixture_tenant"
 SYNTHETIC_USER = "browser_fixture_user"
 SYNTHETIC_KEY = "fixture_system_messages"
+SYNTHETIC_DETAIL_CAPABILITY_ID = "browser.synthetic.system_message_detail"
 
 _COLLECTION = canonical_json({
     "messages": [{
@@ -85,7 +91,41 @@ _HTML = (
     f'<span id="fixture-collection">{html.escape(_COLLECTION)}</span>'
     '</div><span id="complete" aria-hidden="true">Complete</span></section></body></html>'
 ).encode("utf-8")
+_QUERY_HTML = _HTML.replace(
+    b'<span id="fixture-key">',
+    b'<span id="fixture-object-type">system_message_collection</span><span id="fixture-key">',
+)
 _T = TypeVar("_T", bound=BaseModel)
+
+
+class SyntheticDetailArguments(Contract):
+    """Admitted lookup key only; output and ownership are never input arguments."""
+
+    business_key: Annotated[
+        str, Field(min_length=1, max_length=96, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")
+    ]
+
+
+def synthetic_detail_capability_snapshot() -> CapabilitySpec:
+    """Code-owned desired snapshot, NOT a registration or execution authority.
+
+    The existing PostgreSQL registry must independently contain this exact active
+    snapshot before the publication store permits preparation/activation/admission.
+    Canonical zero-argument OA capabilities are neither changed nor shadowed.
+    """
+    input_schema = SyntheticDetailArguments.model_json_schema()
+    output_schema = expected_oa_capabilities()[1].output_schema
+    return CapabilitySpec(
+        capability_id=SYNTHETIC_DETAIL_CAPABILITY_ID, name="Synthetic message detail",
+        type="query", intent_tags=["browser.synthetic.message_detail"],
+        input_schema=input_schema, output_schema=output_schema,
+        input_schema_digest=canonical_schema_digest(input_schema),
+        output_schema_digest=canonical_schema_digest(output_schema),
+        risk_level="low", owner="eternalai-platform", version="1.0.0", status="active",
+        short_description="Read a synthetic message collection by its explicitly supplied key.",
+        target_system="oa", execution_identity="user_delegated", binding_required=True,
+        policy_digest=None,
+    )
 
 
 def _signed(model: type[_T], domain: str, **values: Any) -> _T:
@@ -130,15 +170,27 @@ class FixedSyntheticSource:
         could participate in execution. Never use this mapping as a resolver or
         populate it from observed output. Publication activation stays blocked.
         """
+        if isinstance(self.manifest.site.read_rule, RegisteredQueryReadRule):
+            raise BrowserPublicationError("browser_query_fixture_expected_values_forbidden")
         return MappingProxyType({
             "fixture_business_key": SYNTHETIC_KEY, "fixture_collection": _COLLECTION,
         })
 
 
 def build_fixed_synthetic_source(decision_manifest: ModelManifest) -> FixedSyntheticSource:
-    """Build against the existing canonical OA Capability without registering it."""
-    capability = expected_oa_capabilities()[1]
-    fixture_digest = hashlib.sha256(_HTML).hexdigest()
+    """Legacy expected-value source; never activates for the zero-argument OA query."""
+    return _build_fixed_source(decision_manifest, query=False)
+
+
+def build_fixed_synthetic_query_source(decision_manifest: ModelManifest) -> FixedSyntheticSource:
+    """Key-detail source with no expected-result oracle; local deployment stays off."""
+    return _build_fixed_source(decision_manifest, query=True)
+
+
+def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> FixedSyntheticSource:
+    capability = synthetic_detail_capability_snapshot() if query else expected_oa_capabilities()[1]
+    content = _QUERY_HTML if query else _HTML
+    fixture_digest = hashlib.sha256(content).hexdigest()
     policy = _signed(
         ObservationPolicy, "browser_observation_policy.v1", policy_id="fixture_projection",
         allowed_names=("Synthetic messages",), allowed_roles=("row",),
@@ -149,18 +201,29 @@ def build_fixed_synthetic_source(decision_manifest: ModelManifest) -> FixedSynth
         locator=LocatorHint(kind="test_id", value="fixture_row"),
     )
     observation = ObservationRequest(region_id="fixture_messages")
-    read = RegisteredReadRule(
-        object_type="system_message_collection", key_ref=ParameterRef(name="fixture_business_key"),
-        fields=(ExpectedField(field_id="collection", value_ref=ParameterRef(
-            name="fixture_collection")),),
-    )
+    read: RegisteredReadRule | RegisteredQueryReadRule
+    if query:
+        read = RegisteredQueryReadRule(
+            object_type="system_message_collection", key_ref=ParameterRef(name="business_key"),
+            fields=(QueryField(field_id="collection"),),
+            output_schema_json=canonical_json(capability.output_schema), maximum_result_bytes=8192,
+        )
+    else:
+        read = RegisteredReadRule(
+            object_type="system_message_collection",
+            key_ref=ParameterRef(name="fixture_business_key"),
+            fields=(ExpectedField(field_id="collection", value_ref=ParameterRef(
+                name="fixture_collection")),),
+        )
     verifier = _signed(
         BrowserVerifierDefinition, "browser_verifier.publication.v1",
         verifier_id="fixture_collection_verifier", version="v1", read_rule=read,
+        contract="independent_query_detail_v1" if query else "independent_confirmed_key_v1",
     )
     site = _signed(
         BrowserSiteDefinition, "browser_site.publication.v1",
-        site_id="fixed_synthetic_messages", version="v1",
+        site_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
+        version="v1",
         source=DecisionSource(source_id="fixed_synthetic_messages",
                               origin=SYNTHETIC_ORIGIN, fixture_digest=fixture_digest),
         navigation_origins=(SYNTHETIC_ORIGIN,), policy=policy,
@@ -172,10 +235,13 @@ def build_fixed_synthetic_source(decision_manifest: ModelManifest) -> FixedSynth
         read_rule=read, decision_manifest=decision_manifest, decision_budget=DecisionBudget(),
     )
     skill = _signed(
-        BrowserSkill, "browser_skill.v1", skill_id="fixed_synthetic_messages", version="v1",
+        BrowserSkill, "browser_skill.v1",
+        skill_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
+        version="v1",
         site_id=site.site_id, site_digest=site.digest,
         verifier_id=verifier.verifier_id, verifier_digest=verifier.digest,
-        parameters=("fixture_business_key", "fixture_collection"), steps=(step,),
+        parameters=("business_key",) if query else ("fixture_business_key", "fixture_collection"),
+        steps=(step,),
     )
     output = _signed(
         BrowserOutputDefinition, "browser_output.publication.v1",
@@ -199,10 +265,11 @@ def build_fixed_synthetic_source(decision_manifest: ModelManifest) -> FixedSynth
                      key=DOMValue("#fixture-key"), tenant=DOMValue("#fixture-tenant"),
                      user=DOMValue("#fixture-user"),
                      fields=(("collection", DOMValue("#fixture-collection")),),
-                     maximum_rows=1, maximum_value_bytes=8192),
+                     maximum_rows=1, maximum_value_bytes=8192,
+                     object_type=DOMValue("#fixture-object-type") if query else None),
     )
     return FixedSyntheticSource(
-        manifest, _HTML, region, rules, FrozenSiteAdapter((manifest.site_plan(),)),
+        manifest, content, region, rules, FrozenSiteAdapter((manifest.site_plan(),)),
         FixedSyntheticOutputProjector(),
     )
 
@@ -226,9 +293,17 @@ class FixedSourceReadFactory:
     ) -> RegisteredReadExecution:
         if (manifest != self.source.manifest or run.owner.tenant_id != SYNTHETIC_TENANT
                 or run.owner.user_id != SYNTHETIC_USER
-                or private_input.get("capability_id") != manifest.capability.capability_id
-                or private_input.get("arguments") != {}):
+                or private_input.get("capability_id") != manifest.capability.capability_id):
             raise BrowserReadExecutionError("denied")
+        if not isinstance(manifest.site.read_rule, RegisteredQueryReadRule):
+            raise BrowserReadExecutionError("unsupported")
+        try:
+            SyntheticDetailArguments.model_validate(private_input.get("arguments"))
+        except Exception:
+            raise BrowserReadExecutionError("denied") from None
+        # This validates shape only. The real delegate must bind this exact
+        # protected admitted key through ReadSpecResolver/SealedParameter and
+        # independently recheck its confirmation. A model/string is no authority.
         execution = await self._delegate.open(run, manifest, private_input, checkpoint)
         await checkpoint.refresh()
         if (execution.rules != (self.source.rules,)
@@ -242,12 +317,12 @@ class FixedSourceReadFactory:
 
 
 class FixedSyntheticSourceVerifier:
-    """Check code registration; refuse unsupported expected-input authority.
+    """Check code registration without inferring approved provider placement.
 
-    The fixed source is reviewable, but the existing query input schema is {} and
-    cannot independently admit the expected collection required by ReadSpec. This
-    intentional failure keeps publication inactive until that contract is approved.
-    No deployment success is inferred from matching static bytes.
+    The legacy zero-argument seed lacks independent expected-input authority.
+    The query-detail seed has its own admitted-key contract, but its local source
+    has no approved provider placement. Both remain inactive; matching static
+    bytes supplies neither deployment proof nor operator authorization.
     """
 
     def __init__(self, factory: FixedSourceReadFactory) -> None:
@@ -257,7 +332,8 @@ class FixedSyntheticSourceVerifier:
 
     async def verify(self, manifest: BrowserPublicationManifest) -> bool:
         source = self._factory.source
-        expected = build_fixed_synthetic_source(manifest.site.decision_manifest)
+        query = isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
+        expected = _build_fixed_source(manifest.site.decision_manifest, query=query)
         registered = (
             type(source) is FixedSyntheticSource
             and manifest == expected.manifest == source.manifest
@@ -266,11 +342,14 @@ class FixedSyntheticSourceVerifier:
             and source.rules == expected.rules and source.region == expected.region
             and source.site.bootstrap(manifest.skill) == manifest.site_plan()
             and type(source.projector) is FixedSyntheticOutputProjector
-            and source.fixture_reference_values == expected.fixture_reference_values
         )
         if not registered:
             return False
-        raise BrowserPublicationError("browser_fixed_seed_expected_input_contract_unapproved")
+        if not query:
+            raise BrowserPublicationError("browser_fixed_seed_expected_input_contract_unapproved")
+        # Exact code registration does not make localhost reachable by the cloud
+        # provider or approve a new local provider. No implicit placement upgrade.
+        raise BrowserPublicationError("browser_fixed_seed_source_placement_unapproved")
 
 
 def install_fixed_synthetic_seed(
@@ -280,12 +359,14 @@ def install_fixed_synthetic_seed(
 ) -> BrowserVerticalComponents | None:
     """Refuse enablement before assembling or advertising any service.
 
-    The source builder is independently reviewable. Installation stays unavailable
-    until an approved contract can admit the expected collection independently.
-    No supplied dependency, reference value or flag substitutes for that contract.
+    Source builders are independently reviewable. Query-detail installation waits
+    for approved source placement; legacy installation also lacks an approved
+    expected-input contract. Dependencies and flags cannot discharge either gate.
     """
     if type(enabled) is not bool:
         raise ValueError("browser_seed_enablement_invalid")
     if not enabled:
         return None
+    if isinstance(source.manifest.site.read_rule, RegisteredQueryReadRule):
+        raise BrowserPublicationError("browser_fixed_seed_source_placement_unapproved")
     raise BrowserPublicationError("browser_fixed_seed_expected_input_contract_unapproved")

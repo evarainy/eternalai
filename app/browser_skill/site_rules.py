@@ -5,6 +5,7 @@ not evidence: composition installs audited facts and their immutable proof refs.
 DOM selectors and private parameter values remain in the adapter/input stores.
 """
 
+import json
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
@@ -110,6 +111,36 @@ class RegisteredReadRule(Contract):
         return self
 
 
+class QueryField(Contract):
+    field_id: OpaqueId
+
+
+class RegisteredQueryReadRule(Contract):
+    """Detail lookup; dynamic output is validated, never supplied as an oracle."""
+
+    contract: Literal["independent_query_detail_v1"] = "independent_query_detail_v1"
+    object_type: OpaqueId
+    key_ref: ParameterRef
+    fields: Annotated[tuple[QueryField, ...], Field(min_length=1, max_length=32)]
+    output_schema_json: Annotated[str, Field(min_length=2, max_length=65_536, repr=False)]
+    maximum_result_bytes: Annotated[int, Field(ge=1, le=65_536)] = 16_384
+
+    @model_validator(mode="after")
+    def query_shape(self) -> Self:
+        schema = json.loads(self.output_schema_json)
+        if (
+            len({f.field_id for f in self.fields}) != len(self.fields)
+            or not isinstance(schema, dict)
+            or json.dumps(schema, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, allow_nan=False) != self.output_schema_json
+        ):
+            raise ValueError("site_query_read_invalid")
+        return self
+
+
+ReadRule = RegisteredReadRule | RegisteredQueryReadRule
+
+
 class RegisteredSitePlan(Contract):
     site_id: OpaqueId
     site_digest: Digest
@@ -122,7 +153,7 @@ class RegisteredSitePlan(Contract):
     navigation_origins: Annotated[tuple[str, ...], Field(max_length=32)]
     policy: ObservationPolicy
     steps: Annotated[tuple[SiteStepRule, ...], Field(min_length=1, max_length=64)]
-    read_rule: RegisteredReadRule
+    read_rule: ReadRule
     decision_manifest: ModelManifest
     decision_budget: DecisionBudget
 
@@ -161,7 +192,10 @@ class RegisteredSitePlan(Contract):
             )
             or tuple(rule.step for rule in self.steps) != skill.steps
             or self.read_rule.key_ref.name not in skill.parameters
-            or any(f.value_ref.name not in skill.parameters for f in self.read_rule.fields)
+            or (
+                isinstance(self.read_rule, RegisteredReadRule)
+                and any(f.value_ref.name not in skill.parameters for f in self.read_rule.fields)
+            )
         ):
             raise ValueError("site_skill_registration_mismatch")
 
@@ -171,8 +205,13 @@ class RegisteredSitePlan(Contract):
             raise ValueError("site_execution_source_mismatch")
 
     def validate_read(self, spec: ReadSpec) -> None:
+        mode = (
+            "independent_query_detail_v1" if isinstance(self.read_rule, RegisteredQueryReadRule)
+            else "independent_confirmed_key_v1"
+        )
         if (
-            (spec.verifier_id, spec.verifier_digest) != (self.verifier_id, self.verifier_digest)
+            spec.mode != mode
+            or (spec.verifier_id, spec.verifier_digest) != (self.verifier_id, self.verifier_digest)
             or spec.business_key.object_type != self.read_rule.object_type
             or spec.business_key.value_ref != self.read_rule.key_ref
             or spec.fields != tuple(f.field_id for f in self.read_rule.fields)

@@ -28,10 +28,14 @@ from app.browser_skill.models import (
     ConfirmedBusinessKey,
     DispatchPermit,
     ExecutionContext,
+    ParameterPurpose,
+    ParameterRef,
     ReadSpec,
     ScopeBinding,
+    SealedParameter,
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.site_rules import RegisteredQueryReadRule
 from app.browser_skill.verifier import IndependentVerifier, ReadSpecResolver, failure
 from app.infra.browser.playwright_dom_rules import RegisteredDOMRules
 from app.infra.browser.playwright_observer import PlaywrightObserver
@@ -85,6 +89,8 @@ class BrowserReadExecutionFactory(Protocol):
         All context callbacks must enforce current binding/lease/subject and the
         real dispatch barrier. The bridge adds Run/publication fences to them.
         The projector, DOM rules and source must be registered to this manifest.
+        Query detail confirmation must resolve the explicit protected
+        arguments.business_key; never infer it from a model choice or DOM row.
         """
         ...
 
@@ -153,8 +159,31 @@ class VerifiedBrowserReadExecution:
             if publication is None:
                 raise BrowserReadExecutionError("denied")
             manifest = publication.manifest
+            private_input = self._cipher.decrypt_input(run.admission)
+            query_business_key: str | None = None
+            if isinstance(manifest.site.read_rule, RegisteredQueryReadRule):
+                arguments = private_input.get("arguments")
+                schema = manifest.capability.input_schema
+                if (
+                    private_input.get("schema_version") != "browser.request.input.v1"
+                    or private_input.get("capability_id") != manifest.capability.capability_id
+                    or not isinstance(arguments, dict)
+                    or type(arguments.get("business_key")) is not str
+                    or not arguments["business_key"].strip()
+                    or len(arguments["business_key"].encode("utf-8")) > 512
+                    or manifest.site.read_rule.key_ref.name != "business_key"
+                    or schema.get("type") != "object"
+                    or schema.get("additionalProperties") is not False
+                    or "business_key" not in schema.get("required", [])
+                    or "business_key" not in schema.get("properties", {})
+                ):
+                    raise BrowserReadExecutionError("denied")
+                self._check_local_schema(schema)
+                Draft202012Validator.check_schema(schema)
+                Draft202012Validator(schema, registry=Registry()).validate(arguments)
+                query_business_key = arguments["business_key"]
             execution = await self._factory.open(
-                run, manifest, self._cipher.decrypt_input(run.admission), checkpoint,
+                run, manifest, private_input, checkpoint,
             )
             run = await checkpoint.refresh()
             binding = execution.context.expected_binding
@@ -172,12 +201,17 @@ class VerifiedBrowserReadExecution:
                 or execution.site.bootstrap(manifest.skill) != manifest.site_plan()
             ):
                 raise BrowserReadExecutionError("denied")
-            context = self._fenced_context(execution.context, manifest, checkpoint)
+            context = self._fenced_context(
+                execution.context, manifest, checkpoint, business_key=query_business_key,
+            )
             web = PlaywrightWebAdapter(
                 registry=execution.registry, observer=execution.observer, site=execution.site,
                 rules=execution.rules,
                 executions=(
-                    RegisteredExecution(execution.session, context, execution.confirmed_key),
+                    RegisteredExecution(
+                        execution.session, context, execution.confirmed_key,
+                        project_output=execution.project_output,
+                    ),
                 ),
             )
             # Construct the verifier here; the factory cannot substitute an
@@ -315,7 +349,7 @@ class VerifiedBrowserReadExecution:
 
     def _fenced_context(
         self, original: ExecutionContext, manifest: BrowserPublicationManifest,
-        checkpoint: BrowserWorkerCheckpoint,
+        checkpoint: BrowserWorkerCheckpoint, *, business_key: str | None = None,
     ) -> ExecutionContext:
         async def fence() -> None:
             try:
@@ -340,6 +374,26 @@ class VerifiedBrowserReadExecution:
             await original.authorize(session, skill, subject, binding)
             await fence()
 
+        async def resolve_parameter(
+            ref: ParameterRef, purpose: ParameterPurpose, binding: ScopeBinding,
+            skill_digest: str, step_id: str,
+        ) -> SealedParameter:
+            await fence()
+            if purpose == "expected_field":
+                raise failure("denied")
+            sealed = await original.resolve_parameter(ref, purpose, binding, skill_digest, step_id)
+            await fence()
+            if purpose == "business_key" and (
+                business_key is None or ref != manifest.site.read_rule.key_ref
+                or not sealed.consume(
+                    lambda value: type(value) is str and value == business_key,
+                    ref=ref, purpose=purpose, binding=binding,
+                    skill_digest=skill_digest, step_id=step_id,
+                )
+            ):
+                raise failure("denied")
+            return sealed
+
         @asynccontextmanager
         async def barrier(
             session: BrowserSessionRef, command: ActionCommand, binding: ScopeBinding,
@@ -353,6 +407,9 @@ class VerifiedBrowserReadExecution:
         return replace(
             original, current_binding=current_binding,
             authorize=authorize, dispatch_barrier=barrier,
+            resolve_parameter=(resolve_parameter
+                               if isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
+                               else original.resolve_parameter),
         )
 
     async def lookup_capture(

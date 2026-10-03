@@ -56,6 +56,7 @@ class DOMRead:
     fields: tuple[tuple[str, DOMValue], ...]
     maximum_rows: int = 128
     maximum_value_bytes: int = 4096
+    object_type: DOMValue | None = None
 
     def __post_init__(self) -> None:
         if (

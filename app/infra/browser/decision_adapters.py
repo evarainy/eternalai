@@ -20,6 +20,7 @@ from app.browser_skill.models import (
     DecisionStatus,
     OpaqueId,
     Probability,
+    SafeText,
     ScopeStamp,
 )
 
@@ -52,6 +53,18 @@ class _TypeSafeResponse(Contract):
     model: str
     answers: _Answers
     usage: _Usage
+
+
+class _OpenRouterUsage(_Usage):
+    cost: float = Field(ge=0, allow_inf_nan=False)
+
+
+class _OpenRouterJevResponse(Contract):
+    model: SafeText
+    answers: _Answers
+    usage: _OpenRouterUsage
+    id: OpaqueId
+    provider: Literal["TypeSafe"]
 
 
 class _LocalProbability(Contract):
@@ -184,6 +197,24 @@ class TypeSafeCodec:
         answer = response.answers.select_target
         # TypeSafe does not echo epochs. Bind to this HTTP request; the executor
         # must compare result.validate_for(request, current_scope) before dispatch.
+        return _selection(request, context, answer.choice, answer.probabilities, answer.confidence)
+
+
+class OpenRouterJevCodec(TypeSafeCodec):
+    """OpenRouter Decisions API Jev choice, with an explicit deployment pin."""
+
+    path = "/api/alpha/decisions"
+
+    def decode(
+        self,
+        raw: bytes,
+        request: DecisionRequest,
+        context: DecisionCallContext,
+    ) -> DecisionResult:
+        response = _OpenRouterJevResponse.model_validate(_strict_json(raw))
+        if response.model != context.manifest.deployment_model:
+            raise ModelMismatch("deployment_mismatch")
+        answer = response.answers.select_target
         return _selection(request, context, answer.choice, answer.probabilities, answer.confidence)
 
 

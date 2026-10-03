@@ -3,18 +3,19 @@
 No provider IO or plaintext input/result is handled here. All entry points require
 injected current authority; an exact-owner match or a Run FK is never a grant.
 Task/Run lifecycle locks follow Task -> Run, after authority's earlier locks.
-Queue claiming only locks Run and never takes a Task/credential/lease lock.
+Queue claiming follows the same lifecycle order, with nonblocking candidate locks.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Literal, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -57,6 +58,11 @@ _RUN = _TASK + " AND run_id=:run_id"
 _WRITER_LOCK = 746420212000
 _REQUEST_VERSION = "browser.request.v1"
 _ACTIVE = {"running", "waiting_user"}
+_CLAIM_BATCH = 16
+_CLAIM_SKIPPABLE = frozenset({
+    "browser_claim_candidate_ineligible", "browser_claim_candidate_busy",
+    "browser_run_not_found", "browser_run_stale",
+})
 _CAPTURE_TERMINAL = {"not_requested", "promoted", "failed", "quarantined"}
 _CAPTURE_TRANSITIONS = {
     "not_requested": {"prepared"},
@@ -74,6 +80,15 @@ _PHASE_TRANSITIONS = {
     "waiting_user": set(),
 }
 Row = RowMapping
+
+
+@dataclass(slots=True, repr=False)
+class _ClaimScan:
+    """Private scheduling position only; every candidate still needs real authority."""
+
+    upper: tuple[datetime, str] | None = None
+    after: tuple[datetime, str] | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _owner(owner: BrowserOwner) -> dict[str, object]:
@@ -192,6 +207,9 @@ class PostgreSQLBrowserRunStore:
         self._authority = authority
         self._digest_keys = dict(digest_keys)
         self._active_digest_key_id = active_digest_key_id
+        # Retain progress for outstanding owners; discard entries once no due
+        # work remains. A fixed cycle upper prevents new arrivals delaying wrap.
+        self._claim_scans: dict[tuple[str, str, str], _ClaimScan] = {}
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[AsyncSession]:
@@ -524,7 +542,6 @@ class PostgreSQLBrowserRunStore:
 
     async def get(self, owner: BrowserOwner, task_id: str, run_id: str) -> RunSnapshot:
         async with self._transaction() as session:
-            await self._authority.check_owner(session, owner)
             run = await self._read_run(session, owner, task_id, run_id)
             await self._authority.check_run(session, run, "read")
         return run
@@ -567,26 +584,102 @@ class PostgreSQLBrowserRunStore:
     ) -> RunSnapshot | None:
         checked_run_id(worker_id)
         ttl = _ttl(ttl_seconds)
+        _owner(owner)
+        key = (owner.tenant_id, owner.user_id, owner.session_id)
+        scan = self._claim_scans.setdefault(key, _ClaimScan())
+        async with scan.lock:
+            candidates = await self._claim_candidates(owner, scan)
+            for row in candidates:
+                try:
+                    result = await self._claim_candidate(
+                        owner, row["task_id"], row["run_id"], worker_id, ttl,
+                    )
+                except BrowserRunStoreError as exc:
+                    if exc.code not in _CLAIM_SKIPPABLE:
+                        raise
+                    result = None
+                # Only explicit candidate rejection or a committed claim advances
+                # the cursor. Infrastructure/integrity failures remain visible.
+                scan.after = (row["created_at"], row["run_id"])
+                if scan.after == scan.upper:
+                    scan.after = scan.upper = None
+                if result is not None:
+                    return result
+            return None
+
+    async def _claim_candidates(self, owner: BrowserOwner, scan: _ClaimScan) -> list[Row]:
+        eligible = (
+            f"{_OWNER} AND status IN ('running','waiting_user')"
+            " AND (worker_deadline IS NULL OR worker_deadline<=clock_timestamp())"
+        )
         async with self._transaction() as session:
-            await self._authority.check_owner(session, owner)
+            if scan.upper is None:
+                last = (await session.execute(text(
+                    "SELECT created_at,run_id FROM browser_runs WHERE " + eligible
+                    + " ORDER BY created_at DESC,run_id DESC LIMIT 1",
+                ), _owner(owner))).mappings().one_or_none()
+                if last is None:
+                    key = (owner.tenant_id, owner.user_id, owner.session_id)
+                    self._claim_scans.pop(key, None)
+                    return []
+                scan.upper = (last["created_at"], last["run_id"])
+            params = {
+                **_owner(owner), "upper_time": scan.upper[0], "upper_id": scan.upper[1],
+                "limit": _CLAIM_BATCH,
+            }
+            after_clause = ""
+            if scan.after is not None:
+                params.update(after_time=scan.after[0], after_id=scan.after[1])
+                after_clause = " AND (created_at,run_id)>(:after_time,:after_id)"
+            rows = list((await session.execute(text(
+                "SELECT task_id,run_id,created_at FROM browser_runs WHERE " + eligible
+                + " AND (created_at,run_id)<=(:upper_time,:upper_id)" + after_clause
+                + " ORDER BY created_at,run_id LIMIT :limit",
+            ), params)).mappings().all())
+        if not rows:
+            # Do not wrap in this pass: a cycle is finite even during continuous
+            # arrivals. The next scheduler pass starts a fresh bounded cycle.
+            scan.upper = scan.after = None
+        return rows
+
+    async def _claim_candidate(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+        worker_id: str, ttl: timedelta,
+    ) -> RunSnapshot:
+        async with self._transaction() as session:
+            before = await self._read_run(session, owner, task_id, run_id)
+            # Exact protected admission is checked before acquiring earlier locks.
+            # This action uses nonblocking credential -> lease -> session locks.
+            await self._authority.before_run_lock(session, before, "claim")
+            task = (await session.execute(text(
+                f"SELECT status FROM tasks WHERE {_TASK} FOR UPDATE SKIP LOCKED",
+            ), _identity(owner, task_id))).scalar_one_or_none()
+            if task is None:
+                raise BrowserRunStoreError("browser_claim_candidate_busy")
             row = (
                 (
                     await session.execute(
                         text(
-                            f"SELECT * FROM browser_runs WHERE {_OWNER}"
-                            " AND status IN ('running','waiting_user')"
-                            " AND (worker_deadline IS NULL OR worker_deadline<=clock_timestamp())"
-                            " ORDER BY created_at,run_id LIMIT 1 FOR UPDATE SKIP LOCKED",
+                            f"SELECT * FROM browser_runs WHERE {_RUN}"
+                            " FOR UPDATE SKIP LOCKED",
                         ),
-                        _owner(owner),
+                        _identity(owner, task_id, run_id),
                     )
                 )
                 .mappings()
                 .one_or_none()
             )
             if row is None:
-                return None
+                raise BrowserRunStoreError("browser_claim_candidate_busy")
             current = _snapshot(row)
+            now = await self._now(session)
+            if (
+                current.admission != before.admission
+                or current.state_revision != before.state_revision
+                or current.status not in _ACTIVE or task != current.status
+                or (current.worker_deadline is not None and current.worker_deadline > now)
+            ):
+                raise BrowserRunStoreError("browser_run_stale")
             await self._authority.check_run(session, current, "claim")
             if current.worker_epoch >= MAX_RUN_REVISION:
                 raise BrowserRunStoreError("browser_run_worker_epoch_exhausted")
@@ -596,7 +689,7 @@ class PostgreSQLBrowserRunStore:
                 {
                     "worker_id": worker_id,
                     "worker_epoch": current.worker_epoch + 1,
-                    "worker_deadline": await self._now(session) + ttl,
+                    "worker_deadline": now + ttl,
                 },
             )
         # Recovery observes persisted phase/effect/verification/capture; it is NOT queued again.
@@ -615,8 +708,6 @@ class PostgreSQLBrowserRunStore:
         if action == "cleanup":
             if cleanup_outcome is None:
                 raise BrowserRunStoreError("browser_run_cleanup_invalid")
-        else:
-            await self._authority.check_owner(session, expected.owner)
         before = await self._read_run(session, expected.owner, expected.task_id, expected.run_id)
         await self._authority.before_run_lock(session, before, action)
         task = await lock_owned_task(
@@ -876,7 +967,6 @@ class PostgreSQLBrowserRunStore:
         run_id: str,
     ) -> RunSnapshot:
         async with self._transaction() as session:
-            await self._authority.check_owner(session, owner)
             initial = await self._read_run(session, owner, task_id, run_id)
             current = await self._locked(session, initial, "cancel", worker=False, terminal_ok=True)
             if current.status not in _ACTIVE or current.cancel_requested:

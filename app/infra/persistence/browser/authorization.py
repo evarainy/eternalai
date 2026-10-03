@@ -10,10 +10,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.models import BrowserOwner
@@ -49,6 +50,7 @@ class VerifiedBrowserInput:
     principal: Principal = field(repr=False)
     capability_id: str
     arguments: dict[str, Any] = field(repr=False)
+    channel: Literal["web", "cli", "api", "mock"]
 
 
 def admission_from_row(row: RowMapping) -> RunAdmission:
@@ -133,6 +135,8 @@ class PostgreSQLBrowserCurrentAuth:
             or not isinstance(payload.get("principal"), dict)
             or not isinstance(payload.get("capability_id"), str)
             or not isinstance(payload.get("arguments"), dict)
+            or not isinstance(payload.get("channel"), str)
+            or payload.get("channel") not in {"web", "cli", "api", "mock"}
         ):
             raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
         principal = Principal.model_validate(payload["principal"])
@@ -143,7 +147,9 @@ class PostgreSQLBrowserCurrentAuth:
             != admission.owner.session_id
         ):
             raise BrowserAuthorizationError("browser_owner_or_binding_mismatch")
-        return VerifiedBrowserInput(principal, payload["capability_id"], payload["arguments"])
+        return VerifiedBrowserInput(
+            principal, payload["capability_id"], payload["arguments"], payload["channel"],
+        )
 
     async def validate(
         self, session: AsyncSession, admission: RunAdmission, *, require_active: bool = True,
@@ -230,7 +236,7 @@ class PostgreSQLBrowserCurrentAuth:
             org_id=decoded.principal.org_ctx.org_id,
             department_id=decoded.principal.org_ctx.department_id,
             roles=current_roles,
-            channel="web",
+            channel=decoded.channel,
         )
         decision = await self._policy.decide(
             admission.owner.user_id,
@@ -323,24 +329,9 @@ class PostgreSQLBrowserRunAuthority:
             if revoked is not None:
                 raise BrowserRunStoreError("browser_session_authorization_invalid")
             return
-        # Restarted trusted workers reconstruct proof from durable protected input.
-        # Public HTTP endpoints still require their normal verified session dependency.
-        row = (
-            (
-                await session.execute(
-                    text(
-                        "SELECT * FROM browser_runs WHERE tenant_id=:tenant AND ai_user_id=:user"
-                        " AND session_id=:session ORDER BY created_at DESC LIMIT 1"
-                    ),
-                    {"tenant": owner.tenant_id, "user": owner.user_id, "session": owner.session_id},
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
-        if row is None:
-            raise BrowserRunStoreError("browser_owner_authorization_invalid")
-        await self._auth.validate(session, admission_from_row(row))
+        # An owner string cannot choose evidence for an arbitrary worker Run.
+        # Existing-Run operations use check_run with that exact stored admission.
+        raise BrowserRunStoreError("browser_owner_authorization_invalid")
 
     async def check_admission(
         self,
@@ -374,6 +365,10 @@ class PostgreSQLBrowserRunAuthority:
             if self._cleanup_authorize is None:
                 raise BrowserRunStoreError("browser_cleanup_authority_unavailable")
             await self._cleanup_authorize(session, run)
+        else:
+            # Validate the actual candidate before locks. The later check_run
+            # repeats current authorization against the locked persisted row.
+            await self._check_run_authorization(session, run, action)
         params = {
             "tenant": run.owner.tenant_id,
             "user": run.owner.user_id,
@@ -381,15 +376,46 @@ class PostgreSQLBrowserRunAuthority:
             "target": run.admission.target_system,
             "binding": run.admission.binding_id,
         }
-        for statement in (
+        statements = (
             "SELECT binding_id FROM oa_session_credentials WHERE tenant_id=:tenant"
             " AND ai_user_id=:user AND target_system=:target AND binding_id=:binding FOR UPDATE",
             "SELECT lease_epoch FROM browser_binding_leases WHERE tenant_id=:tenant"
             " AND ai_user_id=:user AND target_system=:target AND binding_id=:binding FOR UPDATE",
             "SELECT session_id FROM sessions WHERE tenant_id=:tenant"
             " AND session_id=:session FOR UPDATE",
-        ):
-            await session.execute(text(statement), params)
+        )
+        try:
+            for statement in statements:
+                if action == "claim":
+                    statement += " NOWAIT"
+                await session.execute(text(statement), params)
+        except DBAPIError as exc:
+            if action == "claim" and getattr(exc.orig, "sqlstate", None) == "55P03":
+                raise BrowserRunStoreError("browser_claim_candidate_busy") from None
+            raise
+
+    async def _check_run_authorization(
+        self, session: AsyncSession, run: RunSnapshot, action: RunAction,
+    ) -> None:
+        if authenticated_session.get() is not None:
+            await self.check_owner(session, run.owner)
+        try:
+            await self._auth.validate(
+                session, run.admission,
+                require_active=not (
+                    action == "read" and run.status in {"completed", "failed", "cancelled"}
+                ),
+            )
+        except BrowserAuthorizationError as exc:
+            # Only explicit, candidate-local negative facts can be skipped.
+            # Provider/Policy failures, unavailable keys, corrupt evidence and
+            # unknown errors propagate and never become an empty queue.
+            if action == "claim" and exc.code in {
+                "browser_auth_expired", "browser_session_authorization_invalid",
+                "browser_binding_stale", "browser_policy_denied",
+            }:
+                raise BrowserRunStoreError("browser_claim_candidate_ineligible") from None
+            raise
 
     async def check_run(
         self,
@@ -400,12 +426,7 @@ class PostgreSQLBrowserRunAuthority:
         session = self._session(transaction)
         if action == "cleanup":
             raise BrowserRunStoreError("browser_cleanup_proof_required")
-        await self._auth.validate(
-            session, run.admission,
-            require_active=not (
-                action == "read" and run.status in {"completed", "failed", "cancelled"}
-            ),
-        )
+        await self._check_run_authorization(session, run, action)
         if action == "verify":
             if self._verify is None:
                 raise BrowserRunStoreError("browser_verification_proof_unavailable")

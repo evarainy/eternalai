@@ -25,7 +25,7 @@ from app.browser_skill.models import (
     SkillStep,
 )
 from app.browser_skill.registry import Publication, canonical_digest
-from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredSitePlan
+from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredReadRule, RegisteredSitePlan
 from app.browser_skill.trajectory import (
     BindingRevisions,
     CapturePermission,
@@ -198,6 +198,8 @@ def _check_event(
 def _required_purposes(
     plan: RegisteredSitePlan, skill: BrowserSkill
 ) -> dict[str, ParameterPurpose]:
+    if not isinstance(plan.read_rule, RegisteredReadRule):
+        raise TeachingError("teaching_query_read_unsupported")
     required: dict[str, ParameterPurpose] = {}
     refs: list[tuple[str, ParameterPurpose]] = [
         (plan.read_rule.key_ref.name, "business_key"),

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidateAs, ValidationError
 
 from app.api.v1.auth import PrincipalDependency
@@ -14,6 +16,30 @@ from app.ports.auth import Principal, SessionBindingError
 from app.ports.browser_chat import BrowserChatError, BrowserChatPort
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.runtime import RuntimePort, UserActionOutcome
+
+_PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+class _PrivateHandleRoute(APIRoute):
+    """Protect submitted conversation data before body validation or auth succeeds."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def handle(request: Request) -> Response:
+            try:
+                response = await original(request)
+            except RequestValidationError:
+                raise HTTPException(
+                    422, {"code": "runtime_request_input_invalid"}, headers=_PRIVATE_HEADERS,
+                ) from None
+            except HTTPException as error:
+                error.headers = {**(error.headers or {}), **_PRIVATE_HEADERS}
+                raise
+            response.headers.update(_PRIVATE_HEADERS)
+            return response
+
+        return handle
 
 
 class HandleRequest(BaseModel):
@@ -148,8 +174,9 @@ def make_router(
     browser_chat: BrowserChatPort | None = None,
 ) -> APIRouter:
     router = APIRouter()
+    handle_router = APIRouter(route_class=_PrivateHandleRoute)
 
-    @router.post("/handle", response_model=ResponseEnvelope)
+    @handle_router.post("/handle", response_model=ResponseEnvelope)
     async def handle(
         body: HandleRequest,
         response: Response,
@@ -223,4 +250,5 @@ def make_router(
         except ValidationError:
             return _failed_action_response(envelope)
 
+    router.include_router(handle_router)
     return router

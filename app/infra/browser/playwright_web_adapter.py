@@ -11,9 +11,13 @@ import hashlib
 import json
 import secrets
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Awaitable, Callable, Coroutine, ParamSpec, Protocol, TypeVar, cast
+
+from jsonschema import Draft202012Validator
+from referencing import Registry
 
 from app.browser_skill.models import (
     ActionCommand,
@@ -38,7 +42,12 @@ from app.browser_skill.models import (
     VisibleCandidate,
     VisibleProjection,
 )
-from app.browser_skill.site_rules import RegisteredSitePlan, navigation_allowed
+from app.browser_skill.site_rules import (
+    RegisteredQueryReadRule,
+    RegisteredReadRule,
+    RegisteredSitePlan,
+    navigation_allowed,
+)
 from app.browser_skill.verifier import authorize_current, check_liveness, failure
 from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import (
@@ -68,6 +77,7 @@ class RegisteredExecution:
     session: BrowserSessionRef
     context: ExecutionContext
     confirmed_key: ConfirmedBusinessKey
+    project_output: Callable[[Mapping[str, str]], Mapping[str, object]] | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -164,6 +174,9 @@ class PlaywrightWebAdapter:
                 != tuple(f.field_id for f in plan.read_rule.fields)
                 or registration.confirmed_key.object_type != plan.read_rule.object_type
                 or registration.confirmed_key.value_ref != plan.read_rule.key_ref
+                or (isinstance(plan.read_rule, RegisteredQueryReadRule) and (
+                    dom.read.object_type is None or registration.project_output is None
+                ))
             ):
                 raise ValueError("browser_adapter_registration_invalid")
 
@@ -200,6 +213,9 @@ class PlaywrightWebAdapter:
                 verifier_id=plan.verifier_id,
                 verifier_digest=plan.verifier_digest,
                 fields=tuple(f.field_id for f in plan.read_rule.fields),
+                mode=("independent_query_detail_v1"
+                      if isinstance(plan.read_rule, RegisteredQueryReadRule)
+                      else "independent_confirmed_key_v1"),
             )
         if isinstance(subject, ReadSpec):
             plan.validate_read(subject)
@@ -805,11 +821,14 @@ class PlaywrightWebAdapter:
         plan: RegisteredSitePlan,
         key: SealedParameter,
         expected: dict[str, SealedParameter],
-    ) -> tuple[int, bool, tuple[ReadFieldEvidence, ...], str, tuple[tuple[str, str], ...]]:
+    ) -> tuple[int, bool, bool | None, tuple[ReadFieldEvidence, ...], str,
+               tuple[tuple[str, str], ...]]:
         dom = self._rules[plan.skill_digest].read
+        query = isinstance(plan.read_rule, RegisteredQueryReadRule)
         step_id = plan.verifier_id
         rows = await bounded_children(region, dom.row_selector, dom.maximum_rows)
         count, owner = 0, False
+        object_match: bool | None = False if query else None
         fields = tuple(ReadFieldEvidence(field_id=f, status="missing") for f in spec.fields)
         digest = hashlib.sha256(self._salt)
         byte_count = 0
@@ -847,35 +866,43 @@ class PlaywrightWebAdapter:
                 )
                 if not owner:
                     continue
+                if query:
+                    assert dom.object_type is not None
+                    actual_type = await read_private(row, dom.object_type, dom.maximum_value_bytes)
+                    fingerprint(actual_type)
+                    object_match = actual_type == plan.read_rule.object_type
+                    if not object_match:
+                        continue
                 comparisons = []
                 values = []
-                for (field_id, location), registered in zip(
-                    dom.fields, plan.read_rule.fields, strict=True
-                ):
+                for index, (field_id, location) in enumerate(dom.fields):
                     raw = await read_private(row, location, dom.maximum_value_bytes)
                     fingerprint(raw)
                     if isinstance(raw, str):
                         values.append((field_id, raw))
-                    matched = self._consume(
-                        expected[field_id],
-                        context,
-                        registered.value_ref,
-                        "expected_field",
-                        step_id,
-                        lambda approved: raw is not None and raw == approved,
-                    )
+                    if isinstance(plan.read_rule, RegisteredReadRule):
+                        registered = plan.read_rule.fields[index]
+                        matched = self._consume(
+                            expected[field_id], context, registered.value_ref,
+                            "expected_field", step_id,
+                            lambda approved: raw is not None and raw == approved,
+                        )
+                    else:
+                        matched = False
                     comparisons.append(
                         ReadFieldEvidence(
                             field_id=field_id,
                             status="missing"
                             if raw is None
+                            else "present"
+                            if query
                             else "matched"
                             if matched
                             else "mismatch",
                         )
                     )
                 fields = tuple(comparisons)
-            return count, owner, fields, digest.hexdigest(), tuple(values)
+            return count, owner, object_match, fields, digest.hexdigest(), tuple(values)
         finally:
             for row in rows:
                 await row.dispose()
@@ -892,10 +919,12 @@ class PlaywrightWebAdapter:
         # A verifier-specific purpose binding is independent of any action step.
         step_id = plan.verifier_id
         key = await self._sealed(context, spec.business_key.value_ref, "business_key", step_id)
-        expected = {
-            f.field_id: await self._sealed(context, f.value_ref, "expected_field", step_id)
-            for f in plan.read_rule.fields
-        }
+        expected = {}
+        if isinstance(plan.read_rule, RegisteredReadRule):
+            expected = {
+                f.field_id: await self._sealed(context, f.value_ref, "expected_field", step_id)
+                for f in plan.read_rule.fields
+            }
         # Observer owns its borrowed handle. This clone survives its next observation.
         region = await exact.element.evaluate_handle("el => el")
         try:
@@ -919,7 +948,17 @@ class PlaywrightWebAdapter:
                 raise failure("stale")
             await self._authority(session, context, spec)
             check_liveness(context)
-            count, owner, fields, _private_signature, values = after
+            count, owner, object_match, fields, _private_signature, values = after
+            query = isinstance(plan.read_rule, RegisteredQueryReadRule)
+            schema_validated = None
+            if query:
+                schema_validated = False
+                if (count == 1 and owner and object_match
+                        and all(f.status == "present" for f in fields)
+                        and final.projection.coverage.state == "complete"):
+                    schema_validated = self._query_schema_valid(
+                        session, plan, dict(values),
+                    )
             # Hash only safe facts. Private record fingerprints never leave this method.
             safe = {
                 "scope": final.projection.scope.model_dump(),
@@ -929,6 +968,15 @@ class PlaywrightWebAdapter:
                 "owner": owner,
                 "fields": [field.model_dump() for field in fields],
             }
+            if query:
+                safe.update({
+                    "mode": spec.mode, "object_type_match": object_match,
+                    "schema_validated": schema_validated,
+                    "verifier": plan.verifier_digest,
+                    # Bind the result to this independent read, including when
+                    # two successful reads have identical safe metadata.
+                    "read_instance": secrets.token_hex(16),
+                })
             evidence = ReadEvidence(
                 binding=session.binding,
                 business_key=spec.business_key,
@@ -937,6 +985,9 @@ class PlaywrightWebAdapter:
                 owner_match=count == 1 and owner,
                 coverage=final.projection.coverage,
                 fields=fields,
+                mode=spec.mode,
+                object_type_match=object_match,
+                schema_validated=schema_validated,
                 evidence_digest=hashlib.sha256(
                     json.dumps(safe, sort_keys=True).encode()
                 ).hexdigest(),
@@ -945,12 +996,46 @@ class PlaywrightWebAdapter:
             if (
                 count == 1 and owner and evidence.coverage.state == "complete"
                 and len(values) == len(spec.fields)
-                and all(item.status == "matched" for item in fields)
+                and all(item.status == ("present" if query else "matched") for item in fields)
+                and (not query or (object_match and schema_validated))
             ):
                 self._private_reads[session.session_ref] = (spec, evidence, values)
             return evidence
         finally:
             await region.dispose()
+
+    def _query_schema_valid(
+        self, session: BrowserSessionRef, plan: RegisteredSitePlan, fields: dict[str, str],
+    ) -> bool:
+        rule = plan.read_rule
+        projector = self._registration(session).project_output
+        if not isinstance(rule, RegisteredQueryReadRule) or projector is None:
+            raise failure("denied")
+
+        def local(node: object) -> None:
+            if isinstance(node, dict):
+                for key in ("$ref", "$dynamicRef"):
+                    if key in node and (
+                        not isinstance(node[key], str) or not node[key].startswith("#/")
+                    ):
+                        raise ValueError("query_schema_reference_invalid")
+                for child in node.values():
+                    local(child)
+            elif isinstance(node, list):
+                for child in node:
+                    local(child)
+
+        try:
+            schema = json.loads(rule.output_schema_json)
+            local(schema)
+            Draft202012Validator.check_schema(schema)
+            value = dict(projector(fields))
+            Draft202012Validator(schema, registry=Registry()).validate(value)
+            encoded = json.dumps(value, ensure_ascii=True, allow_nan=False,
+                                 sort_keys=True, separators=(",", ":")).encode("ascii")
+            return len(encoded) <= rule.maximum_result_bytes
+        except Exception:
+            return False
 
     def _consume_verified_result(
         self,

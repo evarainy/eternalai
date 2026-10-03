@@ -126,6 +126,29 @@ class IndependentVerifier:
                 item.status == "unsupported" for item in evidence.fields
             ):
                 return VerificationResult(status="unsupported")
+            if approved.mode == "independent_query_detail_v1":
+                if evidence.match_count > 1 or (evidence.match_count == 1 and (
+                    not evidence.key_match or not evidence.owner_match
+                    or evidence.object_type_match is not True
+                )):
+                    return VerificationResult(
+                        status="mismatch", evidence_digest=evidence.evidence_digest,
+                    )
+                if (
+                    evidence.match_count == 0 or evidence.coverage.state != "complete"
+                    or any(item.status == "missing" for item in evidence.fields)
+                    or evidence.evidence_digest is None
+                ):
+                    return VerificationResult(status="incomplete")
+                if evidence.schema_validated is not True or any(
+                    item.status != "present" for item in evidence.fields
+                ):
+                    return VerificationResult(
+                        status="mismatch", evidence_digest=evidence.evidence_digest,
+                    )
+                return VerificationResult(
+                    status="verified", evidence_digest=evidence.evidence_digest,
+                )
             if (
                 evidence.coverage.state != "complete"
                 or any(item.status == "missing" for item in evidence.fields)

@@ -24,7 +24,8 @@ from app.browser_skill.models import (
     OpaqueId,
 )
 from app.browser_skill.site_rules import (
-    RegisteredReadRule,
+    ReadRule,
+    RegisteredQueryReadRule,
     RegisteredSitePlan,
     SiteStepRule,
     canonical_origin,
@@ -59,7 +60,7 @@ class BrowserSiteDefinition(Contract):
     navigation_origins: Annotated[tuple[str, ...], Field(min_length=1, max_length=32)]
     policy: ObservationPolicy
     steps: Annotated[tuple[SiteStepRule, ...], Field(min_length=1, max_length=64)]
-    read_rule: RegisteredReadRule
+    read_rule: ReadRule
     decision_manifest: ModelManifest
     decision_budget: DecisionBudget
 
@@ -85,14 +86,20 @@ class BrowserVerifierDefinition(Contract):
     verifier_id: OpaqueId
     version: OpaqueId
     digest: Digest
-    contract: Literal["independent_confirmed_key_v1"] = "independent_confirmed_key_v1"
-    read_rule: RegisteredReadRule
+    contract: Literal["independent_confirmed_key_v1", "independent_query_detail_v1"] = (
+        "independent_confirmed_key_v1"
+    )
+    read_rule: ReadRule
     require_complete_coverage: Literal[True] = True
     require_exact_owner: Literal[True] = True
     require_unique_business_key: Literal[True] = True
 
     @model_validator(mode="after")
     def integrity(self) -> Self:
+        if (self.contract == "independent_query_detail_v1") != isinstance(
+            self.read_rule, RegisteredQueryReadRule,
+        ):
+            raise ValueError("browser_publication_verifier_mode_mismatch")
         _integrity(self, self.schema_version, self.digest)
         return self
 
@@ -164,6 +171,11 @@ class BrowserPublicationManifest(Contract):
         if (self.site.read_rule != self.verifier.read_rule
                 or self.output.field_ids != tuple(f.field_id for f in self.site.read_rule.fields)):
             raise ValueError("browser_publication_verifier_output_mismatch")
+        if isinstance(self.site.read_rule, RegisteredQueryReadRule) and (
+            self.site.read_rule.output_schema_json != self.output.output_schema_json
+            or self.site.read_rule.maximum_result_bytes != self.output.maximum_bytes
+        ):
+            raise ValueError("browser_publication_query_schema_mismatch")
         _integrity(self.skill, "browser_skill.v1", self.skill.digest)
         self.site_plan().validate_skill(self.skill)
         _integrity(self, self.schema_version, self.digest)

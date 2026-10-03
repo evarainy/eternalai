@@ -13,7 +13,7 @@ import hashlib
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
 import pytest
@@ -47,6 +47,7 @@ class RecordingPolicy(MinimalPolicyGuard):
     def __init__(self) -> None:
         super().__init__()
         self.observed_roles: tuple[str, ...] | None = None
+        self.observed_channel: str | None = None
 
     async def decide(
         self,
@@ -56,6 +57,7 @@ class RecordingPolicy(MinimalPolicyGuard):
         request_context: PolicyRequestContext,
     ) -> PolicyDecision:
         self.observed_roles = tuple(request_context.roles)
+        self.observed_channel = request_context.channel
         return await super().decide(ai_user_id, capability_id, arguments, request_context)
 
 
@@ -102,6 +104,7 @@ class RunHarness:
         self.registry = PostgreSQLCapabilityRegistry(self.sessions)
         self.cipher = BrowserPayloadCipher({"fixture": b"p" * 32}, active_key_id="fixture")
         self.policy = RecordingPolicy()
+        self.channel: Literal["web", "cli", "api", "mock"] = "web"
         self.auth = PostgreSQLBrowserCurrentAuth(
             session_factory=self.sessions,
             cipher=self.cipher,
@@ -225,6 +228,7 @@ class RunHarness:
             identity,
             {
                 "schema_version": "browser.request.input.v1",
+                "channel": self.channel,
                 "principal": self.principal.model_dump(mode="json"),
                 "capability_id": self.capability.capability_id,
                 "arguments": {},
@@ -260,6 +264,22 @@ async def harness(database_url: str) -> AsyncIterator[RunHarness]:
         # Deliberately retain this unique synthetic tenant; no cleanup authorization.
         print("retained_runpg_fixture_tenant=" + h.tenant)
         await h.engine.dispose()
+
+
+@pytest.mark.parametrize("channel", ["web", "cli", "api", "mock"])
+def test_policy_receives_original_protected_channel(
+    migrated_database_url: str, channel: Literal["web", "cli", "api", "mock"],
+) -> None:
+    async def scenario() -> None:
+        async with harness(migrated_database_url) as h:
+            h.channel = channel
+            request = await h.request()
+            admission = h.admission(request)
+            await h.store.accept(request, admission)
+            assert h.auth.input(admission).channel == channel
+            assert h.policy.observed_channel == channel
+
+    asyncio.run(scenario())
 
 
 def test_canonical_race_conflict_and_wrong_owner(migrated_database_url: str) -> None:

@@ -7,9 +7,11 @@ labels. Persisted keys and real proof implementations are mandatory when enabled
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 
 from pydantic import TypeAdapter
@@ -203,6 +205,16 @@ class BrowserVerticalDependencies:
     worker_ttl_seconds: int = 60
 
 
+@dataclass(slots=True, repr=False)
+class _OwnerScan:
+    """Finite scheduling cycle, never an owner authorization cache."""
+
+    upper: tuple[str, str] | None = None
+    after: tuple[str, str] | None = None
+    cutoff: datetime | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class BrowserVerticalComponents:
     """Explicit service references; installing routes/scheduling is the caller's job."""
@@ -219,6 +231,7 @@ class BrowserVerticalComponents:
     _sessions: async_sessionmaker[AsyncSession]
     _tenant_id: str
     _seed: BrowserPublicationManifest
+    _owner_scan: _OwnerScan = field(default_factory=_OwnerScan, compare=False)
 
     async def prepare_seed(self, owner: BrowserOwner) -> BrowserPublicationRecord:
         """Explicit service operation; constructing components never calls this."""
@@ -239,16 +252,49 @@ class BrowserVerticalComponents:
         """
         if type(maximum_owners) is not int or not 1 <= maximum_owners <= 64:
             raise ValueError("browser_worker_batch_invalid")
-        async with self._sessions() as session:
-            rows = (await session.execute(text(
-                "SELECT tenant_id,ai_user_id,session_id FROM browser_runs"
-                " WHERE tenant_id=:tenant AND publication_digest=:publication"
-                " AND status IN ('running','waiting_user')"
-                " AND (worker_deadline IS NULL OR worker_deadline<=clock_timestamp())"
-                " GROUP BY tenant_id,ai_user_id,session_id ORDER BY MIN(created_at),"
-                "tenant_id,ai_user_id,session_id LIMIT :limit"
-            ), {"tenant": self._tenant_id, "publication": bytes.fromhex(self._seed.digest),
-                "limit": maximum_owners})).mappings().all()
+        eligible = (
+            "tenant_id=:tenant AND publication_digest=:publication"
+            " AND status IN ('running','waiting_user')"
+            " AND (worker_deadline IS NULL OR worker_deadline<=clock_timestamp())"
+            " AND created_at<=:cycle_time"
+        )
+        params: dict[str, object] = {
+            "tenant": self._tenant_id, "publication": bytes.fromhex(self._seed.digest),
+            "limit": maximum_owners,
+        }
+        scan = self._owner_scan
+        # Serialize only discovery/cursor movement, never provider execution. The
+        # upper key is fixed for the cycle so arriving owners cannot defer wrap.
+        async with scan.lock, self._sessions() as session:
+            if scan.upper is None:
+                scan.cutoff = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+                params["cycle_time"] = scan.cutoff
+                last = (await session.execute(text(
+                    "SELECT ai_user_id,session_id FROM browser_runs WHERE " + eligible
+                    + " GROUP BY ai_user_id,session_id"
+                    " ORDER BY ai_user_id DESC,session_id DESC LIMIT 1",
+                ), params)).mappings().one_or_none()
+                if last is not None:
+                    scan.upper = (last["ai_user_id"], last["session_id"])
+            params["cycle_time"] = scan.cutoff
+            rows = []
+            if scan.upper is not None:
+                params.update(upper_user=scan.upper[0], upper_session=scan.upper[1])
+                after_clause = ""
+                if scan.after is not None:
+                    params.update(after_user=scan.after[0], after_session=scan.after[1])
+                    after_clause = " AND (ai_user_id,session_id)>(:after_user,:after_session)"
+                rows = list((await session.execute(text(
+                    "SELECT tenant_id,ai_user_id,session_id FROM browser_runs WHERE " + eligible
+                    + " AND (ai_user_id,session_id)<=(:upper_user,:upper_session)" + after_clause
+                    + " GROUP BY tenant_id,ai_user_id,session_id"
+                    " ORDER BY ai_user_id,session_id LIMIT :limit",
+                ), params)).mappings().all())
+                if rows:
+                    scan.after = (rows[-1]["ai_user_id"], rows[-1]["session_id"])
+                if not rows or scan.after == scan.upper:
+                    scan.after = scan.upper = None
+                    scan.cutoff = None
         completed: list[RunSnapshot] = []
         failed_owners = 0
         for row in rows:
