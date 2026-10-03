@@ -3,6 +3,7 @@
 // Private stdio protocol only. Never print a browser endpoint or native error to
 // stderr/logs. Public Playwright BrowserServer.process() owns the original child.
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const {createHash} = require("node:crypto");
@@ -108,8 +109,19 @@ async function command(message, diagnostic) {
     }
     identity = message.identity;
     diagnostic.stage = "browser_launch";
+    // Only this Chromium child receives an owned writable home. The helper's
+    // environment, host home and all browser security settings stay unchanged.
+    const browserHome = fs.mkdtempSync(path.join(os.tmpdir(), "browser-read-home-"));
+    const configHome = path.join(browserHome, "config");
+    const cacheHome = path.join(browserHome, "cache");
+    fs.mkdirSync(configHome, {mode: 0o700});
+    fs.mkdirSync(cacheHome, {mode: 0o700});
+    const browserEnv = Object.fromEntries(["PATH", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH"]
+      .filter(name => typeof process.env[name] === "string")
+      .map(name => [name, process.env[name]]));
     server = await chromium.launchServer({
       executablePath: chromium.executablePath(),
+      env: {...browserEnv, HOME: browserHome, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheHome},
       host: "127.0.0.1", headless: true, chromiumSandbox: true,
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false, timeout: 15000,
     });
