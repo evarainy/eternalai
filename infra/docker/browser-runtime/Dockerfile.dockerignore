@@ -284,4 +284,8 @@
 !scripts/bootstrap_browser_synthetic.py
 !scripts/run_browser_synthetic_api.py
 !scripts/run_browser_synthetic_worker.py
+!scripts/run_browser_synthetic_once.py
+!scripts/run_browser_synthetic_client.py
+!app/infra/browser/synthetic_trial.py
+!app/infra/browser/synthetic_trial_client.py
 !uv.lock

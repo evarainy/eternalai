@@ -13,6 +13,8 @@ COPY scripts/bootstrap_browser_synthetic.py ./scripts/bootstrap_browser_syntheti
 COPY scripts/manage_browser_synthetic_publication.py ./scripts/manage_browser_synthetic_publication.py
 COPY scripts/run_browser_synthetic_api.py ./scripts/run_browser_synthetic_api.py
 COPY scripts/run_browser_synthetic_worker.py ./scripts/run_browser_synthetic_worker.py
+COPY scripts/run_browser_synthetic_once.py ./scripts/run_browser_synthetic_once.py
+COPY scripts/run_browser_synthetic_client.py ./scripts/run_browser_synthetic_client.py
 
 # A future explicitly mounted task volume inherits this private parent ownership.
 # Bootstrap alone creates the task directory; no keys or registrations enter the image.

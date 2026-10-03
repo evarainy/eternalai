@@ -1,0 +1,94 @@
+# Manual v4.2 structured single-run trial. Always select the named services with
+# `docker compose run`; `up` is not a trial entry point.
+name: browser-v42-single-run
+
+x-browser-single-run-image: &browser-single-run-image
+  image: eternalai-browser-v42:local
+  build:
+    context: ../../..
+    dockerfile: infra/docker/browser-runtime/Dockerfile
+  init: true
+  user: pwuser
+  stdin_open: true
+  tty: true
+  read_only: true
+  tmpfs:
+    - /tmp:rw,size=512m,mode=1777
+  restart: "no"
+  networks:
+    - task-postgres
+
+services:
+  browser-synthetic-api:
+    command:
+      - --enable
+      - --input-mode
+      - structured
+      - --operator-vault
+      - /run/browser-synthetic-secrets/P2-BROWSER-RUNTIME-V42-001/operator.bundle.enc
+    volumes:
+      - type: volume
+        source: browser-synthetic-secrets
+        target: /run/browser-synthetic-secrets
+        read_only: true
+
+  # The base Compose supervisor is deliberately unusable in this trial. Only
+  # browser-single-run can execute the one bounded worker pass.
+  browser-worker:
+    entrypoint: ["/bin/false"]
+    command: []
+
+  browser-bootstrap:
+    <<: *browser-single-run-image
+    profiles: [operator-browser-runtime]
+    entrypoint: ["python", "-m", "scripts.bootstrap_browser_synthetic"]
+    command: []
+    volumes:
+      - type: volume
+        source: browser-synthetic-secrets
+        target: /run/browser-synthetic-secrets
+
+  browser-publication:
+    <<: *browser-single-run-image
+    profiles: [operator-browser-runtime]
+    entrypoint: ["python", "-m", "scripts.manage_browser_synthetic_publication"]
+    command: []
+    volumes:
+      - type: volume
+        source: browser-synthetic-secrets
+        target: /run/browser-synthetic-secrets
+        read_only: true
+
+  browser-client:
+    <<: *browser-single-run-image
+    profiles: [operator-browser-runtime]
+    entrypoint: ["python", "-m", "scripts.run_browser_synthetic_client"]
+    command: []
+    volumes:
+      - type: volume
+        source: browser-synthetic-secrets
+        target: /run/browser-synthetic-secrets
+
+  browser-single-run:
+    <<: *browser-single-run-image
+    profiles: [operator-browser-runtime]
+    entrypoint: ["python", "-m", "scripts.run_browser_synthetic_once"]
+    command: []
+    shm_size: 2gb
+    security_opt:
+      - "seccomp:${BROWSER_V42_SECCOMP_PROFILE:?Set BROWSER_V42_SECCOMP_PROFILE to the reviewed local Chromium seccomp JSON path}"
+    networks:
+      - task-postgres
+      - browser-model-egress
+    volumes:
+      - type: volume
+        source: browser-synthetic-secrets
+        target: /run/browser-synthetic-secrets
+
+networks:
+  browser-model-egress:
+    driver: bridge
+
+volumes:
+  browser-synthetic-secrets:
+    name: browser-v42-single-run-secrets

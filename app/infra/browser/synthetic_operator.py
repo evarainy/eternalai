@@ -15,7 +15,7 @@ import hashlib
 import importlib.util
 import sys
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -345,6 +345,7 @@ async def open_synthetic_operator(
     bundle: SyntheticOperatorBundle, *, jev_key: SecretStr, enabled: bool = False,
     require_active_publication: bool = True,
     input_mode: Literal["chat", "structured"] = "chat",
+    attempt_guard: Callable[[], None] | None = None,
 ) -> AsyncIterator[SyntheticOperatorComponents]:
     """Read-only installation/preflight; caller explicitly serves API or starts worker.
 
@@ -392,7 +393,8 @@ async def open_synthetic_operator(
             registered_sources=(source.manifest.site.source,),
         )
         async with open_openrouter_jev(manifest=bundle.jev_manifest,
-                                      deployment=decision_deployment, api_key=jev_key) as decision:
+                                      deployment=decision_deployment, api_key=jev_key,
+                                      attempt_guard=attempt_guard) as decision:
             vertical = build_local_browser_vertical(LocalBrowserInstallationDependencies(
                 session_factory=sessions, capability_registry=registry, session_binder=binder,
                 policy=MinimalPolicyGuard(), source=source, binding=binding, deployment=deployment,

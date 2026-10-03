@@ -5,7 +5,7 @@ from __future__ import annotations
 import getpass
 import sys
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import httpx2
@@ -17,6 +17,27 @@ from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPPro
 
 OPENROUTER_ORIGIN = "https://openrouter.ai"
 JEV_REQUEST_MODEL = "typesafe/jev-1.13"
+
+
+class _SingleAttemptTransport(httpx2.AsyncBaseTransport):
+    """Only the explicit trial worker supplies the task's burn-once reservation."""
+
+    def __init__(self, reserve: Callable[[], None]) -> None:
+        self._reserve = reserve
+        self._transport = httpx2.AsyncHTTPTransport(retries=0, trust_env=False)
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if (request.method != "POST"
+                or str(request.url) != OPENROUTER_ORIGIN + "/api/alpha/decisions"):
+            raise httpx2.RequestError("jev_trial_destination_denied")
+        try:
+            self._reserve()
+        except ValueError:
+            raise httpx2.RequestError("jev_trial_call_budget_exhausted") from None
+        return await self._transport.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._transport.aclose()
 
 
 def prompt_openrouter_key() -> SecretStr:
@@ -44,6 +65,7 @@ def prompt_openrouter_key() -> SecretStr:
 @asynccontextmanager
 async def open_openrouter_jev(
     *, manifest: ModelManifest, deployment: DecisionDeployment, api_key: SecretStr,
+    attempt_guard: Callable[[], None] | None = None,
 ) -> AsyncIterator[DecisionHTTPProvider]:
     """Build a single provider without IO; the caller explicitly dispatches decisions.
 
@@ -70,5 +92,7 @@ async def open_openrouter_jev(
         base_url=OPENROUTER_ORIGIN,
         headers={"Authorization": "Bearer " + key},
         trust_env=False, follow_redirects=False, verify=True,
+        transport=(_SingleAttemptTransport(attempt_guard) if attempt_guard is not None
+                   else httpx2.AsyncHTTPTransport(retries=0, trust_env=False)),
     ) as client:
         yield DecisionHTTPProvider(client, OpenRouterJevCodec(), deployment)

@@ -77,6 +77,12 @@ class BrowserReadWorker:
         run = await self._store.claim_next(owner, worker_id=self._worker_id, ttl_seconds=self._ttl)
         if run is None:
             return None
+        return await self._run_claimed(run)
+
+    async def _run_claimed(self, run: RunSnapshot) -> RunSnapshot:
+        """Internal continuation for a store-claimed Run; retain every existing fence."""
+        if not self._enabled or run.worker_id != self._worker_id:
+            raise BrowserReadExecutionError("denied")
         checkpoint = _Checkpoint(self._store, run, self._ttl)
         try:
             await checkpoint.refresh(allow_cancel=True)
