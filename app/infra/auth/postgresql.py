@@ -692,6 +692,8 @@ class PostgreSQLCredentialStore:
                 target_system=target_system,
                 row=row,
             )
+        except StaleCredentialWrite:
+            raise
         except Exception:
             raise CredentialStoreError("password binding cannot be loaded") from None
 

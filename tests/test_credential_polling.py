@@ -790,6 +790,8 @@ def test_diagnostic_write_failure_preserves_original_poll_classification(
 
 @pytest.mark.parametrize("wrong_tenant", [False, True])
 def test_poll_scope_and_identity_mismatch(dispatch_db, wrong_tenant):
+    from dataclasses import replace
+
     from sqlalchemy import text
 
     from app.infra.auth.crypto import identity_surrogate
@@ -875,18 +877,47 @@ def test_poll_scope_and_identity_mismatch(dispatch_db, wrong_tenant):
         )
         candidates = await store.list_poll_candidates(tenant_id="synthetic-TB")
         assert len(candidates) == 1 and candidates[0].tenant_id == "synthetic-TB"
-        async with store.poll_lock(user, "oa", tenant_id="synthetic-TA") as a_locked:
-            assert a_locked
+        assert candidates[0].write_stamp is None
+
+        async def exercise_tenant_b():
             async with store.poll_lock(user, "oa", tenant_id="synthetic-TB") as b_locked:
                 assert b_locked
-            if wrong_tenant:
-                with pytest.raises(CredentialAcquisitionError) as captured:
-                    await acquirer.acquire(candidates[0])
-                assert captured.value.code == "identity_mismatch"
-                store.store.assert_not_awaited()
-                assert await row("synthetic-TA") == before_a
-                assert await row("synthetic-TB") == before_b
+                if wrong_tenant:
+                    stamp = await store.claim_write(candidates[0].snapshot)
+                    claimed_b = await row("synthetic-TB")
+                    assert claimed_b == {
+                        **before_b,
+                        "refresh_epoch": before_b["refresh_epoch"] + 1,
+                        "refresh_operation_id": stamp.operation_id,
+                        "refresh_deadline": stamp.deadline,
+                    }
+                    with pytest.raises(CredentialAcquisitionError) as captured:
+                        await acquirer.acquire(
+                            candidates[0].model_copy(update={"write_stamp": stamp})
+                        )
+                    assert captured.value.code == "identity_mismatch"
+                    store.store.assert_not_awaited()
+                    assert await row("synthetic-TA") == before_a
+                    assert await row("synthetic-TB") == claimed_b
+
+        async with store.poll_lock(user, "oa", tenant_id="synthetic-TA") as a_locked:
+            assert a_locked
+            # An independent tenant has its own task-bound coordinator.
+            await asyncio.create_task(exercise_tenant_b())
+            store.claim_write = AsyncMock(wraps=store.claim_write)
+            acquirer.acquire = AsyncMock(wraps=acquirer.acquire)
             assert await service.run_due() == 1
+        # Exercise the real legacy polling entry: it claims an unstamped candidate
+        # before the real password loader, verifier and cookie writer receive it.
+        store.claim_write.assert_awaited_once()
+        acquirer.acquire.assert_awaited_once()
+        claimed_snapshot = store.claim_write.await_args.args[0]
+        acquired_candidate = acquirer.acquire.await_args.args[0]
+        assert acquired_candidate.snapshot == claimed_snapshot
+        assert acquired_candidate.write_stamp is not None
+        assert acquired_candidate.write_stamp.snapshot == replace(
+            claimed_snapshot, refresh_epoch=claimed_snapshot.refresh_epoch + 1
+        )
         assert await row("synthetic-TA") == before_a
         after_b = await row("synthetic-TB")
         if wrong_tenant:
@@ -913,11 +944,82 @@ def test_poll_scope_and_identity_mismatch(dispatch_db, wrong_tenant):
         else:
             store.store.assert_awaited_once()
             assert store.store.call_args.kwargs["tenant_id"] == "synthetic-TB"
+            assert (
+                store.store.call_args.kwargs["expected_write"]
+                == acquired_candidate.write_stamp
+            )
             store.mark_terminal_authentication_failure.assert_not_awaited()
             sync.sync_for_background.assert_awaited_once()
             principal = sync.sync_for_background.call_args.args[0]
             assert (principal.org_ctx.tenant_id, principal.ai_user_id) == ("synthetic-TB", user)
             assert after_b["poll_status"] == "active" and after_b["encrypted_payload"] is not None
+
+    run(exercise())
+
+
+@pytest.mark.parametrize("through_acquirer", [False, True])
+@pytest.mark.parametrize("wrong_coordinator", [False, True])
+def test_poll_password_load_preserves_stale_and_local_failures(
+    dispatch_db, through_acquirer, wrong_coordinator
+):
+    from sqlalchemy import text
+
+    from app.infra.auth.postgresql import PostgreSQLCredentialStore
+    from app.ports.auth import CredentialStoreError, StaleCredentialWrite
+    from tests.api.test_work_object_dispatch import run
+    from tests.infra.auth.test_background_credential_acquirer import FakeSession
+
+    async def exercise():
+        store = PostgreSQLCredentialStore(
+            session_factory=dispatch_db.factory, encryption_key=bytes(range(32))
+        )
+        user = CANDIDATE.ai_user_id
+        stamp = await store.claim_write(await store.snapshot(user, "oa", tenant_id="default"))
+        candidate = CANDIDATE.model_copy(
+            update={"snapshot": stamp.snapshot, "write_stamp": stamp}
+        )
+        authentication = Mock(refresh_credential=AsyncMock())
+        acquirer = OAPasswordCredentialAcquirer(
+            session_factory=FakeSession,
+            authentication=authentication,
+            binding_store=store,
+            tenant_id="default",
+        )
+
+        async def rows():
+            async with dispatch_db.factory() as session:
+                return [
+                    dict(row)
+                    for row in (
+                        await session.execute(text("SELECT * FROM oa_session_credentials"))
+                    ).mappings()
+                ]
+
+        before = await rows()
+        lock_user = "usr_v1_other_synthetic" if wrong_coordinator else user
+        expected_error = (
+            StaleCredentialWrite
+            if wrong_coordinator
+            else CredentialAcquisitionError if through_acquirer else CredentialStoreError
+        )
+        async with store.poll_lock(lock_user, "oa", tenant_id="default") as locked:
+            assert locked
+            with pytest.raises(expected_error) as captured:
+                if through_acquirer:
+                    await acquirer.acquire(candidate)
+                else:
+                    await store.load_password_for_poll(
+                        user, "oa", tenant_id="default", expected_write=stamp
+                    )
+        assert type(captured.value) is expected_error
+        if wrong_coordinator:
+            assert captured.value.code == "credential_write_stale"
+        elif through_acquirer:
+            assert captured.value.code == "local_failure"
+        else:
+            assert str(captured.value) == "password binding cannot be loaded"
+        authentication.refresh_credential.assert_not_awaited()
+        assert await rows() == before
 
     run(exercise())
 

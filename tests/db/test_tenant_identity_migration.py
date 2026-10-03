@@ -113,6 +113,13 @@ def snapshot(connection):
 
 
 def seed(connection):
+    # Cloning the current catalog may retain columns newer than the S1 revision.
+    # Supply the required binding identity only when that later column exists.
+    has_binding_id = "binding_id" in {
+        column["name"] for column in inspect(connection).get_columns("oa_session_credentials")
+    }
+    binding_column = ", binding_id" if has_binding_id else ""
+    binding_value = ", :binding_id" if has_binding_id else ""
     connection.execute(text("INSERT INTO sessions (session_id) VALUES ('synthetic-session')"))
     connection.execute(
         text(
@@ -123,10 +130,12 @@ def seed(connection):
     connection.execute(
         text(
             "INSERT INTO oa_session_credentials (ai_user_id, target_system, updated_at, "
-            "cipher_version, nonce, encrypted_payload, expires_at) VALUES "
+            f"cipher_version, nonce, encrypted_payload, expires_at{binding_column}) VALUES "
             "('synthetic-user', 'oa', '2026-09-22T00:00:00Z', 'synthetic-cipher', "
-            "decode('010203', 'hex'), decode('040506', 'hex'), '2026-09-23T00:00:00Z')"
-        )
+            "decode('010203', 'hex'), decode('040506', 'hex'), '2026-09-23T00:00:00Z'"
+            f"{binding_value})"
+        ),
+        {"binding_id": uuid4().hex} if has_binding_id else {},
     )
 
 
