@@ -319,10 +319,9 @@ class FixedSourceReadFactory:
 class FixedSyntheticSourceVerifier:
     """Check code registration without inferring approved provider placement.
 
-    The legacy zero-argument seed lacks independent expected-input authority.
-    The query-detail seed has its own admitted-key contract, but its local source
-    has no approved provider placement. Both remain inactive; matching static
-    bytes supplies neither deployment proof nor operator authorization.
+    Legacy zero-argument execution still lacks expected-input authority. The
+    query-detail route additionally requires the concrete controlled local factory
+    and its installed durable authority. Matching bytes grants no user permission.
     """
 
     def __init__(self, factory: FixedSourceReadFactory) -> None:
@@ -347,9 +346,14 @@ class FixedSyntheticSourceVerifier:
             return False
         if not query:
             raise BrowserPublicationError("browser_fixed_seed_expected_input_contract_unapproved")
-        # Exact code registration does not make localhost reachable by the cloud
-        # provider or approve a new local provider. No implicit placement upgrade.
-        raise BrowserPublicationError("browser_fixed_seed_source_placement_unapproved")
+        # Import only here to keep source contracts independent of construction
+        # order. Arbitrary delegates and cloud factories cannot certify localhost.
+        from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
+
+        delegate = self._factory._delegate
+        if type(delegate) is not LocalBrowserReadExecutionFactory:
+            raise BrowserPublicationError("browser_fixed_seed_source_placement_unapproved")
+        return await delegate.verify_source(manifest) is True
 
 
 def install_fixed_synthetic_seed(

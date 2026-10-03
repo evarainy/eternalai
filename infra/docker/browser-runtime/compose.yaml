@@ -1,0 +1,37 @@
+services:
+  browser-worker:
+    profiles: [operator-browser-worker]
+    build:
+      context: ../../..
+      dockerfile: infra/docker/browser-runtime/Dockerfile
+    init: true
+    user: pwuser
+    stdin_open: true
+    tty: true
+    read_only: true
+    shm_size: 2gb
+    tmpfs:
+      - /tmp:rw,size=512m,mode=1777
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ${BROWSER_OPERATOR_MODULE:?Set a reviewed operator module path}
+        target: /opt/operator/browser_worker_installation.py
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - task-postgres
+      - outbound-bridge
+    command:
+      - --enable
+      - --factory
+      - browser_worker_installation:open_components
+
+networks:
+  task-postgres:
+    external: true
+    name: eternalai_browser_v42_test_default
+  outbound-bridge:
+    name: eternalai_browser_v42_worker_egress
+    driver: bridge
