@@ -9,13 +9,11 @@ const {createHash} = require("node:crypto");
 let server, child, original, exited = false, exitPromise;
 let identity, shuttingDown = false, initialized = false;
 
-function failureReason(error, stage) {
-  // Inspect a bounded private message only; emit a fixed enum, never its text.
-  const message = typeof error?.message === "string" ? error.message.slice(0, 65536) : "";
-  if (/new namespace/i.test(message) && /operation not permitted/i.test(message)) {
+function failureReason(message, stage) {
+  if (/namespace/i.test(message) && /operation not permitted|\bEPERM\b/i.test(message)) {
     return "namespace_permission_denied";
   }
-  if (/no usable sandbox/i.test(message)) return "sandbox_unavailable";
+  if (/no usable sandbox|chromium sandboxing failed!?/i.test(message)) return "sandbox_unavailable";
   if (/\bEROFS\b|read-only file\s*system/i.test(message)
       || (/\bEACCES\b/i.test(message) && /\b(?:mkdir|mkdtemp|write|create|unlink|rename)\b/i.test(message))) {
     return "filesystem_unwritable";
@@ -26,6 +24,32 @@ function failureReason(error, stage) {
     return "browser_dependency_missing";
   }
   return "native_launch_unavailable";
+}
+
+function failureDiagnostic(error, stage) {
+  // Native text remains private and bounded. Only these closed fields leave IPC.
+  const message = typeof error?.message === "string" ? error.message.slice(0, 65536) : "";
+  const allowedCodes = ["EACCES", "EROFS", "ENOENT", "EPERM", "ETIMEDOUT",
+    "EADDRINUSE", "EADDRNOTAVAIL"];
+  const nativeCode = allowedCodes.includes(error?.code) ? error.code : undefined;
+  return {
+    reason: failureReason(message, stage),
+    features: {
+      crashpad_database_missing: /chrome_crashpad_handler/i.test(message) && /--database is required/i.test(message),
+      home_readonly: /read-only file\s*system/i.test(message),
+      namespace_denied: /namespace/i.test(message)
+        && /operation not permitted|\bEPERM\b/i.test(message),
+      sandbox_rewrite: /chromium sandboxing failed!?/i.test(message),
+      timeout: /timeout|timed out|deadline|\bETIMEDOUT\b/i.test(message)
+        || nativeCode === "ETIMEDOUT",
+      spawn_eacces: /\bspawn\b/i.test(message)
+        && (/\bEACCES\b/i.test(message) || nativeCode === "EACCES"),
+      launch_exit: /process did exit|(?:browser|process).{0,80}(?:exited|closed)|exitCode\s*[:=]/i.test(message),
+      endpoint_listen_error: /\bEADDRINUSE\b|\bEADDRNOTAVAIL\b|listen.{0,80}(?:error|failed)|(?:error|failed).{0,80}listen/i.test(message)
+        || nativeCode === "EADDRINUSE" || nativeCode === "EADDRNOTAVAIL",
+    },
+    ...(nativeCode === undefined ? {} : {native_code: nativeCode}),
+  };
 }
 
 async function digestFile(filename) {
@@ -134,7 +158,7 @@ input.on("line", line => {
     } catch (error) {
       const id = Number.isSafeInteger(message?.id) && message.id >= 1 ? message.id : 0;
       process.stdout.write(JSON.stringify({id, ok: false, code: "unavailable",
-        stage: diagnostic.stage, reason: failureReason(error, diagnostic.stage)}) + "\n");
+        stage: diagnostic.stage, ...failureDiagnostic(error, diagnostic.stage)}) + "\n");
     }
   }).catch(() => shutdown());
 });
