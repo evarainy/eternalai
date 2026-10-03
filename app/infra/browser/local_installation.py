@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.chat_inputs import (
     FrozenBrowserChatParser,
+    FrozenSyntheticStructuredParser,
     PostgreSQLBrowserChatBindingResolver,
 )
 from app.infra.browser.composition import (
@@ -47,6 +48,7 @@ from app.infra.persistence.browser.leases import (
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.ports.auth import VerifiedSessionToken
 from app.ports.browser import DecisionProvider
+from app.ports.browser_chat import BrowserChatParserPort
 from app.ports.browser_profile_store import (
     BrowserProfileCaptureFact,
     BrowserProfileCleanupFact,
@@ -232,14 +234,15 @@ class LocalBrowserInstallationDependencies:
     active_request_digest_key_id: str
     input_digest_key: bytes = field(repr=False)
     result_digest_key: bytes = field(repr=False)
-    llm_provider: LLMProviderPort
-    structured_output: StructuredOutputPort
-    intent_model: str
+    llm_provider: LLMProviderPort | None
+    structured_output: StructuredOutputPort | None
+    intent_model: str | None
     trace: TracePort
     sessions: SessionStorePort
     worker_id: str
     enabled: bool = False
     ttl_seconds: int = 60
+    input_mode: Literal["chat", "structured"] = "chat"
 
 
 def build_local_browser_vertical(
@@ -273,6 +276,19 @@ def build_local_browser_vertical(
             or deps.source.rules != expected.rules or deps.source.region != expected.region
             or type(deps.source.projector) is not type(expected.projector)):
         raise ValueError("browser_local_source_invalid")
+    chat_parser: BrowserChatParserPort
+    if deps.input_mode == "structured":
+        chat_parser = FrozenSyntheticStructuredParser(seed=deps.source.manifest)
+    elif deps.input_mode == "chat":
+        if (deps.llm_provider is None or deps.structured_output is None
+                or deps.intent_model is None):
+            raise ValueError("browser_local_chat_provider_required")
+        chat_parser = FrozenBrowserChatParser(
+            deps.llm_provider, deps.structured_output, seed=deps.source.manifest,
+            model=deps.intent_model,
+        )
+    else:
+        raise ValueError("browser_local_input_mode_invalid")
     pool = deps.provider_pools.resolve(deps.deployment.provider_key)
     if (pool.provider_key != deps.deployment.provider_key
             or pool.manifest_digest != deps.deployment.manifest_digest):
@@ -297,10 +313,7 @@ def build_local_browser_vertical(
         profile_capture_proof=unsupported, profile_cleanup_proof=unsupported,
         profile_cleanup_authority=unsupported, cancel_check=lifecycle.check_cancel,
         cleanup_authorize=deps.cleanup_authorize, cleanup_check=lifecycle.check_cleanup,
-        chat_parser=FrozenBrowserChatParser(
-            deps.llm_provider, deps.structured_output, seed=deps.source.manifest,
-            model=deps.intent_model,
-        ),
+        chat_parser=chat_parser,
         chat_bindings=PostgreSQLBrowserChatBindingResolver(
             deps.session_factory, deps.session_binder, seed=deps.source.manifest,
         ),

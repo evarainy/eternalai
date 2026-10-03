@@ -94,6 +94,11 @@ _HTML = (
 _QUERY_HTML = _HTML.replace(
     b'<span id="fixture-key">',
     b'<span id="fixture-object-type">system_message_collection</span><span id="fixture-key">',
+).replace(
+    b'<span id="complete" aria-hidden="true">',
+    b'<div id="fixture-alternative" role="row" aria-label="Other synthetic row" '
+    b'data-testid="fixture_row"><span>Other synthetic row</span></div>'
+    b'<span id="complete" aria-hidden="true">',
 )
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -193,8 +198,10 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> Fix
     fixture_digest = hashlib.sha256(content).hexdigest()
     policy = _signed(
         ObservationPolicy, "browser_observation_policy.v1", policy_id="fixture_projection",
-        allowed_names=("Synthetic messages",), allowed_roles=("row",),
-        maximum_candidates=1,
+        allowed_names=("Synthetic messages", "Other synthetic row") if query else (
+            "Synthetic messages",
+        ),
+        allowed_roles=("row",), maximum_candidates=2 if query else 1,
     )
     step = SkillStep(
         step_id="read_collection", operation="read", effect="read_only",
@@ -228,7 +235,9 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> Fix
                               origin=SYNTHETIC_ORIGIN, fixture_digest=fixture_digest),
         navigation_origins=(SYNTHETIC_ORIGIN,), policy=policy,
         steps=(SiteStepRule(step=step, observation=observation,
-                           target_criteria=("Read the synthetic messages row",), effect=EffectFact(
+                           target_criteria=("Select the row named Synthetic messages",)
+                           if query else ("Read the synthetic messages row",),
+                           effect=EffectFact(
                                operation="read", actual_effect="read_only",
                                proof_ref="static_html_read_only_v1", evidence_digest=fixture_digest,
                            )),),
@@ -260,7 +269,8 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> Fix
     )
     rules = RegisteredDOMRules(
         skill_digest=skill.digest, site_digest=site.digest, verifier_digest=verifier.digest,
-        steps=(DOMStep(step_id=step.step_id, selector="#fixture-row"),),
+        steps=(DOMStep(step_id=step.step_id, selector='[data-testid="fixture_row"]')
+               if query else DOMStep(step_id=step.step_id, selector="#fixture-row"),),
         read=DOMRead(observation=observation, row_selector="#fixture-row",
                      key=DOMValue("#fixture-key"), tenant=DOMValue("#fixture-tenant"),
                      user=DOMValue("#fixture-user"),

@@ -18,6 +18,8 @@ from app.browser_skill.models import (
     BrowserOperationError,
     DispatchPermit,
     ObservationRequest,
+    TargetRef,
+    VisibleCandidate,
 )
 from app.browser_skill.verifier import IndependentVerifier, failure
 from app.infra.browser.playwright_dom_rules import DOMRead, DOMStep, DOMValue, RegisteredDOMRules
@@ -28,6 +30,7 @@ from tests.browser_skill.fakes import FakeWorld
 @dataclass(repr=False)
 class Node:
     selector: str = "#control"
+    also_matches: tuple[str, ...] = ()
     connected: bool = True
     enabled: bool = True
     editable: bool = True
@@ -55,9 +58,12 @@ class Handle:
                 raise ValueError("bounded")
             return value
         if "querySelectorAll(selector).length" in script:
-            return len([n for n in self.node.children if n.selector == arg])
+            return len([
+                n for n in self.node.children
+                if n.selector == arg or arg in n.also_matches
+            ])
         if "el.matches(selector)" in script:
-            return self.node.selector == arg
+            return self.node.selector == arg or arg in self.node.also_matches
         if "tagName === 'SELECT'" in script:
             return self.node.tag == "SELECT"
         if "return {value:" in script:
@@ -82,13 +88,19 @@ class Handle:
 
     async def evaluate_handle(self, script: str, arg: Any = None) -> Handle:
         if "closest(selector)" in script:
-            assert self.node.parent is not None
-            return Handle(self.node.parent, self.world)
+            current: Node | None = self.node
+            while (current is not None and current.selector != arg
+                   and arg not in current.also_matches):
+                current = current.parent
+            return Handle(current or Node(selector="__null__", connected=False), self.world)
         assert script == "el => el"
         return Handle(self.node, self.world)
 
     async def query_selector_all(self, selector: str) -> list[Handle]:
-        return [Handle(n, self.world) for n in self.node.children if n.selector == selector]
+        return [
+            Handle(n, self.world) for n in self.node.children
+            if n.selector == selector or selector in n.also_matches
+        ]
 
     async def dispose(self) -> None:
         self.disposed = True
@@ -188,6 +200,8 @@ class World(FakeWorld):
             },
         )
         self.region = Node(selector="#region", children=[self.row])
+        if operation == "read":
+            self.control.parent = self.row
         if operation == "select_option":
             self.control.children = [
                 Node(
@@ -279,6 +293,98 @@ def test_actual_methods_dispatch_and_independent_dom_read(operation: str) -> Non
         wire = receipt.model_dump_json() + result.model_dump_json()
         leaked = any(isinstance(value, str) and value in wire for value in w._inputs.values())
         assert leaked is False
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mutation", ["decoy", "unknown", "stale", "key", "tenant", "user"])
+def test_read_action_requires_selected_live_confirmed_row(mutation: str) -> None:
+    async def run() -> None:
+        w = World("read")
+        command = await w.command()
+        if mutation == "decoy":
+            ref = TargetRef(target_id="decoy", candidate_epoch=2, scope=w.view.scope)
+            decoy = Node(selector="#control", parent=w.region)
+            w.region.children.append(decoy)
+            w.controls[ref.target_id] = decoy
+            w.view = w.view.model_copy(update={
+                "candidates": (*w.view.candidates, VisibleCandidate(
+                    ref=ref, role="button", name="Other", value_state="not_applicable",
+                    visible=True, enabled=True,
+                )),
+            })
+            command = command.model_copy(update={"target": ref})
+        elif mutation in {"unknown", "stale"}:
+            ref = command.target
+            assert ref is not None
+            command = command.model_copy(update={"target": ref.model_copy(update={
+                "target_id": "unknown" if mutation == "unknown" else ref.target_id,
+                "candidate_epoch": 2 if mutation == "stale" else ref.candidate_epoch,
+            })})
+        elif mutation == "key":
+            w.row.values[".key"] = secrets.token_urlsafe(20)
+        elif mutation == "tenant":
+            w.row.values[".tenant"] = "other"
+        else:
+            w.row.values[".user"] = "other"
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, command, w.context)
+        assert caught.value.failure.code == "stale"
+        assert caught.value.failure.dispatch_state == "not_sent"
+        assert w.dom_sends == [] and w.adapter._private_reads == {}
+
+    asyncio.run(run())
+
+
+def test_read_action_rechecks_selected_row_inside_dispatch_barrier() -> None:
+    async def run() -> None:
+        w = World("read")
+        command = await w.command()
+
+        @asynccontextmanager
+        async def barrier(session, current_command, binding):
+            w.row.values[".key"] = secrets.token_urlsafe(20)
+            yield DispatchPermit(w.context.execution_id, current_command, lambda: None)
+
+        w.context = replace(w.context, dispatch_barrier=barrier)
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, command, w.context)
+        assert caught.value.failure.code == "stale"
+        assert caught.value.failure.dispatch_state == "not_sent"
+        assert w.dom_sends == [] and w.adapter._private_reads == {}
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("mutation", ["owner", "hidden", "disabled", "detached"])
+def test_read_action_rechecks_row_after_current_authority(mutation: str) -> None:
+    async def run() -> None:
+        baseline = World("read")
+        await baseline.adapter.execute(baseline.session, await baseline.command(), baseline.context)
+        last_authority_call = baseline.authority_calls
+        w = World("read")
+
+        def change() -> None:
+            if w.authority_calls == last_authority_call:
+                if mutation == "owner":
+                    w.row.values[".user"] = "other"
+                elif mutation == "hidden":
+                    w.control.visible = False
+                elif mutation == "disabled":
+                    w.control.enabled = False
+                else:
+                    w.control.connected = False
+
+        w.authority_hook = change
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, await w.command(), w.context)
+        assert caught.value.failure.code == "stale"
+        assert caught.value.failure.dispatch_state == "not_sent"
+        assert w.dom_sends == []
 
     asyncio.run(run())
 

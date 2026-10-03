@@ -538,6 +538,84 @@ class PlaywrightWebAdapter:
         await self._authority(session, context)
         return result
 
+    async def _read_target_row(
+        self,
+        session: BrowserSessionRef,
+        command: ActionCommand,
+        context: ExecutionContext,
+        plan: RegisteredSitePlan,
+    ) -> Any:
+        """Bind a read action to its live registered row before acknowledging it.
+
+        IndependentVerifier later reads the region again by confirmed key; this
+        check only establishes that the selected action target is that row.
+        """
+        target = command.target
+        dom = self._rules[plan.skill_digest].read
+        if target is None or target.scope.region_id != dom.observation.region_id:
+            raise failure("stale")
+        sealed = await self._sealed(
+            context, plan.read_rule.key_ref, "business_key", plan.verifier_id
+        )
+        exact = await self._observer.resolve_region(
+            session,
+            ObservationRequest(region_id=target.scope.region_id, expected_scope=target.scope),
+            plan.policy,
+        )
+        self._origins(exact, context)
+        region = await exact.element.evaluate_handle("el => el")
+        try:
+            node = await self._observer.resolve_exact(session, target, plan.policy)
+            self._origins(node, context)
+            row = await node.element.evaluate_handle(
+                "(el, selector) => el.closest(selector)", dom.row_selector
+            )
+            try:
+                async def matches() -> bool:
+                    if not await region.evaluate(
+                        "(region, row) => row && region.contains(row)", row
+                    ):
+                        return False
+                    raw_key = await read_private(row, dom.key, dom.maximum_value_bytes)
+                    matched_key = self._consume(
+                        sealed, context, plan.read_rule.key_ref, "business_key",
+                        plan.verifier_id, lambda approved: raw_key == approved,
+                    )
+                    if not matched_key:
+                        return False
+                    tenant = await read_private(row, dom.tenant, dom.maximum_value_bytes)
+                    user = await read_private(row, dom.user, dom.maximum_value_bytes)
+                    if (tenant != context.expected_binding.owner.tenant_id
+                            or user != context.expected_binding.owner.user_id):
+                        return False
+                    if isinstance(plan.read_rule, RegisteredQueryReadRule):
+                        assert dom.object_type is not None
+                        actual_type = await read_private(
+                            row, dom.object_type, dom.maximum_value_bytes
+                        )
+                        if actual_type != plan.read_rule.object_type:
+                            return False
+                    return True
+
+                if not await matches():
+                    raise failure("stale")
+                await self._authority(session, context, command)
+                if not await matches():
+                    raise failure("stale")
+            finally:
+                await row.dispose()
+        finally:
+            await region.dispose()
+        # The last awaited DOM work before read acknowledgment checks the same
+        # selected node, after both borrowed row/region handles are released.
+        if (
+            not await node.element.evaluate("el => el.isConnected")
+            or not await node.element.is_visible()
+            or not await node.element.is_enabled()
+        ):
+            raise failure("stale")
+        return node
+
     async def _validate(
         self,
         session: BrowserSessionRef,
@@ -692,6 +770,8 @@ class PlaywrightWebAdapter:
                 raise failure("stale")
             if command.step.operation == "fill" and not await node.element.is_editable():
                 raise failure("stale")
+        if command.step.operation == "read":
+            node = await self._read_target_row(session, command, context, plan)
         if option is not None:
             value = await option.evaluate(
                 """(el, parent) => {
@@ -787,9 +867,9 @@ class PlaywrightWebAdapter:
                     permit.begin_send()
                     await node.element.click(timeout=timeout)
                 else:
+                    # _validate just bound this live target to the registered
+                    # read row under the dispatch barrier.
                     permit.begin_send()
-                    if not await node.element.is_visible():
-                        raise failure("stale")
                 check_liveness(context)
                 if self._guards[session.session_ref].failed:
                     raise failure("denied")

@@ -19,13 +19,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.request import ProxyHandler, build_opener
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.browser_skill.models import BrowserOwner, ModelManifest
+from app.browser_skill.models import BrowserOwner
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
 from app.infra.auth.crypto import HMACSessionToken, PrincipalSessionBinder
 from app.infra.auth.session_revocations import PostgreSQLSessionRevocationStore
@@ -44,6 +45,18 @@ from app.infra.browser.local_installation import (
 )
 from app.infra.browser.local_resource_lifecycle import LocalChromiumDeployment, local_subject_digest
 from app.infra.browser.openrouter_jev import open_openrouter_jev, prompt_openrouter_key
+from app.infra.browser.synthetic_configuration import (
+    BINDING_ID,
+    CLEANUP_ACTOR,
+    CLEANUP_ROLE,
+    DATABASE_URL,
+    PROVIDER_ID,
+    PUBLICATION_ACTOR,
+    PUBLICATION_ROLE,
+    SyntheticDeactivationBundle,
+    SyntheticOperatorBundle,
+    synthetic_jev_manifest,
+)
 from app.infra.browser.systemone_http import DecisionDeployment
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
@@ -59,30 +72,24 @@ from app.ports.browser_publication_store import BrowserPublicationError, Publica
 from app.ports.browser_store import BrowserBindingKey
 from app.ports.credential_vault import BrowserBindingFact
 
-DATABASE_URL = "postgresql+psycopg://browser_v42_test@postgres:15432/eternalai_test"
-BINDING_ID = "browser_fixture_binding"
-PROVIDER_ID = "browser_fixture_local"
-PUBLICATION_ACTOR = "browser_fixture_operator"
-CLEANUP_ACTOR = "browser_fixture_cleanup"
-PUBLICATION_ROLE = "browser_fixture_publication"
-CLEANUP_ROLE = "browser_fixture_cleanup"
 _BROWSERS = Path("/ms-playwright")
 _SYNTHETIC_SKILL = "fixed_synthetic_message_detail"
 
 
-class SyntheticDeactivationBundle(BaseModel):
-    """Existing independent operator authority only; no business/provider secrets."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    session_signing_key: SecretStr = Field(repr=False)
-    session_binding_key: SecretStr = Field(repr=False)
-    publication_token: SecretStr = Field(repr=False)
-
-
-def prompt_deactivation_bundle() -> SyntheticDeactivationBundle:
+def prompt_deactivation_bundle(
+    encrypted_path: Path | None = None,
+) -> SyntheticDeactivationBundle:
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise ValueError("browser_operator_private_console_required")
+    if encrypted_path is not None:
+        from app.infra.browser.synthetic_vault import DEACTIVATION_FILE, read_encrypted
+
+        try:
+            return SyntheticDeactivationBundle.model_validate(
+                read_encrypted(encrypted_path, expected_name=DEACTIVATION_FILE)
+            )
+        except Exception:
+            raise ValueError("browser_operator_bundle_invalid") from None
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
         try:
@@ -94,38 +101,19 @@ def prompt_deactivation_bundle() -> SyntheticDeactivationBundle:
             raise ValueError("browser_operator_bundle_invalid") from None
 
 
-class SyntheticOperatorBundle(BaseModel):
-    """Existing key material only, entered at a private interactive console.
-
-    Key values are base64-encoded durable bytes, never generated here. Operator
-    and cleanup tokens must already be issued by the existing session authority,
-    and their exact roles/sessions must already exist in the primary database.
-    The Jev manifest is an independently approved exact served-model registration.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    session_signing_key: SecretStr = Field(repr=False)
-    session_binding_key: SecretStr = Field(repr=False)
-    payload_keys: dict[str, SecretStr] = Field(repr=False)
-    active_payload_key_id: str
-    resource_keys: dict[str, SecretStr] = Field(repr=False)
-    active_resource_key_id: str
-    request_digest_keys: dict[str, SecretStr] = Field(repr=False)
-    active_request_digest_key_id: str
-    input_digest_key: SecretStr = Field(repr=False)
-    result_digest_key: SecretStr = Field(repr=False)
-    proof_context_key: SecretStr = Field(repr=False)
-    publication_token: SecretStr = Field(repr=False)
-    cleanup_token: SecretStr = Field(repr=False)
-    business_token: SecretStr = Field(repr=False)
-    jev_manifest: ModelManifest
-
-
-def prompt_operator_bundle() -> SyntheticOperatorBundle:
+def prompt_operator_bundle(encrypted_path: Path | None = None) -> SyntheticOperatorBundle:
     """Only a user's own TTY; never call from assistant tools or web requests."""
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise ValueError("browser_operator_private_console_required")
+    if encrypted_path is not None:
+        from app.infra.browser.synthetic_vault import OPERATOR_FILE, read_encrypted
+
+        try:
+            return SyntheticOperatorBundle.model_validate(
+                read_encrypted(encrypted_path, expected_name=OPERATOR_FILE)
+            )
+        except Exception:
+            raise ValueError("browser_operator_bundle_invalid") from None
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
         try:
@@ -356,14 +344,18 @@ async def _preflight(
 async def open_synthetic_operator(
     bundle: SyntheticOperatorBundle, *, jev_key: SecretStr, enabled: bool = False,
     require_active_publication: bool = True,
+    input_mode: Literal["chat", "structured"] = "chat",
 ) -> AsyncIterator[SyntheticOperatorComponents]:
     """Read-only installation/preflight; caller explicitly serves API or starts worker.
 
     Registration/provisioning is intentionally not inferred from possession of a
     signing key. Missing existing signed operator/service authority fails closed.
     """
-    if enabled is not True or type(require_active_publication) is not bool:
+    if (enabled is not True or type(require_active_publication) is not bool
+            or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
+    if bundle.jev_manifest != synthetic_jev_manifest():
+        raise ValueError("browser_operator_manifest_invalid")
     tokens = HMACSessionToken(signing_key=_key(bundle.session_signing_key, exact=False),
                               ttl_seconds=3600, tenant_id=SYNTHETIC_TENANT)
     binder = PrincipalSessionBinder(binding_key=_key(bundle.session_binding_key, exact=False))
@@ -422,7 +414,10 @@ async def open_synthetic_operator(
                     base_url="http://34.74.11.38:8011/v1", timeout_seconds=20,
                     max_tokens=2048, temperature=0.6, top_p=0.95, top_k=20,
                     enable_thinking=False, opener=build_opener(ProxyHandler({})),
-                ), structured_output=JSONStructuredOutputProvider(), intent_model="glm-4.7",
+                ) if input_mode == "chat" else None,
+                structured_output=JSONStructuredOutputProvider() if input_mode == "chat" else None,
+                intent_model="glm-4.7" if input_mode == "chat" else None,
+                input_mode=input_mode,
                 trace=PostgreSQLTraceWriter(sessions), sessions=PostgreSQLSessionStore(sessions),
                 worker_id="browser_fixture_worker", enabled=True,
             ))
@@ -441,7 +436,22 @@ async def worker_components() -> AsyncIterator[BrowserVerticalComponents]:
     """Concrete --enable --factory target; only invokes the user's hidden console."""
     bundle = prompt_operator_bundle()
     key = prompt_openrouter_key()
-    async with open_synthetic_operator(bundle, jev_key=key, enabled=True) as components:
+    async with open_synthetic_operator(
+        bundle, jev_key=key, enabled=True, input_mode="structured"
+    ) as components:
+        yield components.vertical
+
+
+@asynccontextmanager
+async def vault_worker_components() -> AsyncIterator[BrowserVerticalComponents]:
+    """Named --factory selection only; explicit task vault and hidden Jev input."""
+    from app.infra.browser.synthetic_vault import OPERATOR_FILE, VAULT_DIRECTORY
+
+    bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
+    key = prompt_openrouter_key()
+    async with open_synthetic_operator(
+        bundle, jev_key=key, enabled=True, input_mode="structured"
+    ) as components:
         yield components.vertical
 
 

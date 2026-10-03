@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from typing import NoReturn
+from pathlib import Path
+from typing import Literal, NoReturn
 
 import uvicorn
 
@@ -19,10 +20,14 @@ class _SilentParser(argparse.ArgumentParser):
         raise ValueError("browser_operator_arguments_invalid")
 
 
-async def _serve() -> None:
-    bundle = prompt_operator_bundle()
+async def _serve(
+    *, input_mode: Literal["chat", "structured"], operator_vault: Path | None,
+) -> None:
+    bundle = prompt_operator_bundle(encrypted_path=operator_vault)
     key = prompt_openrouter_key()
-    async with open_synthetic_operator(bundle, jev_key=key, enabled=True) as components:
+    async with open_synthetic_operator(
+        bundle, jev_key=key, enabled=True, input_mode=input_mode,
+    ) as components:
         application = create_synthetic_api(components)
         # API submission and the separate worker share the durable queue. This
         # process does not start a second worker or provide an authentication bypass.
@@ -36,11 +41,13 @@ async def _serve() -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = _SilentParser(allow_abbrev=False, add_help=False)
     parser.add_argument("--enable", action="store_true")
+    parser.add_argument("--input-mode", choices=("chat", "structured"), default="chat")
+    parser.add_argument("--operator-vault", type=Path)
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError("browser_operator_disabled")
-        asyncio.run(_serve())
+        asyncio.run(_serve(input_mode=args.input_mode, operator_vault=args.operator_vault))
     except BaseException:
         print("browser_synthetic_api_unavailable", file=sys.stderr)
         return 2

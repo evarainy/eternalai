@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from datetime import UTC, datetime
 from typing import Any, Literal, NoReturn, Self
 
@@ -20,6 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.browser_skill.chat import _validate_schema
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
 from app.infra.auth.crypto import PrincipalSessionBinder
+from app.infra.browser.fixed_synthetic_seed import (
+    SYNTHETIC_DETAIL_CAPABILITY_ID,
+    SYNTHETIC_TENANT,
+    SYNTHETIC_USER,
+    build_fixed_synthetic_query_source,
+)
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.browser_chat import BrowserChatError
 from app.ports.capability_registry import CapabilitySpec
@@ -31,6 +38,7 @@ from app.runtime.intent_router import JSON_OBJECT_RESPONSE_FORMAT
 _MAX_MESSAGE_BYTES = 32_768
 _MAX_RESPONSE_BYTES = 65_536
 _MAX_ARGUMENT_BYTES = 16_384
+_SYNTHETIC_BUSINESS_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,95}")
 _SYSTEM = (
     "Extract arguments for the one registered READ_ONLY query supplied as data. "
     "Return exactly one JSON object with status, capability_id, arguments. "
@@ -214,6 +222,65 @@ class FrozenBrowserChatParser:
             return arguments
         except TimeoutError:
             raise BrowserChatError("browser_parser_timeout") from None
+        except SchemaValidationError as error:
+            code = (
+                "browser_input_missing"
+                if error.validator == "required" else "browser_input_invalid"
+            )
+            raise BrowserChatError(code, http_status=422) from None
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_input_invalid", http_status=422) from None
+
+
+class FrozenSyntheticStructuredParser:
+    """Parse one exact fixture query key from an authenticated JSON message.
+
+    This host-selected structured submission exercises the existing Browser Chat
+    admission path. It performs no natural-language understanding or LLM call.
+    """
+
+    def __init__(self, *, seed: BrowserPublicationManifest) -> None:
+        try:
+            expected = build_fixed_synthetic_query_source(seed.site.decision_manifest).manifest
+            if (seed != expected
+                    or seed.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID):
+                raise ValueError("synthetic_manifest_mismatch")
+            self._frozen = _FrozenCapability(seed)
+            self._frozen.check(seed.capability)
+        except Exception:
+            raise ValueError("browser_structured_parser_configuration_invalid") from None
+
+    async def parse(
+        self, principal: Principal, message: str, capability: CapabilitySpec,
+    ) -> dict[str, Any]:
+        captured = _session(principal)
+        current = self._frozen.check(capability)
+        if (principal.org_ctx.tenant_id != SYNTHETIC_TENANT
+                or principal.ai_user_id != SYNTHETIC_USER):
+            raise BrowserChatError("browser_structured_scope_denied", http_status=403)
+        try:
+            if (type(message) is not str or not message.strip()
+                    or len(message.encode("utf-8")) > _MAX_ARGUMENT_BYTES):
+                raise BrowserChatError("browser_input_missing", http_status=422)
+            payload = json.loads(message, object_pairs_hook=_unique_object,
+                                 parse_constant=_invalid_json)
+            if type(payload) is not dict:
+                raise BrowserChatError("browser_input_invalid", http_status=422)
+            if "business_key" not in payload:
+                raise BrowserChatError("browser_input_missing", http_status=422)
+            if len(payload) != 1:
+                raise BrowserChatError("browser_input_invalid", http_status=422)
+            arguments: dict[str, Any] = _bounded_json(payload)
+            if len(canonical_json(arguments).encode("utf-8")) > _MAX_ARGUMENT_BYTES:
+                raise BrowserChatError("browser_input_invalid", http_status=422)
+            _validate_schema(arguments, current.input_schema)
+            key = arguments["business_key"]
+            if type(key) is not str or _SYNTHETIC_BUSINESS_KEY.fullmatch(key) is None:
+                raise BrowserChatError("browser_input_invalid", http_status=422)
+            _session(principal, captured)
+            return {"business_key": key}
         except SchemaValidationError as error:
             code = (
                 "browser_input_missing"
