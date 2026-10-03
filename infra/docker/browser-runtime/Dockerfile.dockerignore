@@ -145,6 +145,8 @@
 !app/infra/browser/profile_codec.py
 !app/infra/browser/read_execution.py
 !app/infra/browser/resource_lifecycle.py
+!app/infra/browser/synthetic_api.py
+!app/infra/browser/synthetic_operator.py
 !app/infra/browser/synthetic_smoke.py
 !app/infra/browser/systemone_http.py
 !app/infra/gateway/capability_gateway.py
@@ -275,5 +277,7 @@
 !app/workflow/engine.py
 !app/workflow/models.py
 !pyproject.toml
+!scripts/manage_browser_synthetic_publication.py
+!scripts/run_browser_synthetic_api.py
 !scripts/run_browser_synthetic_worker.py
 !uv.lock

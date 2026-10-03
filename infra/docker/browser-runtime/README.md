@@ -1,60 +1,55 @@
-# Browser worker container (manual operator start)
+# Browser v42 API and worker (manual, offline)
 
-This image runs the existing durable browser worker supervisor. It does not run
-the Runtime API, create a tenant, migrate a database, seed publications, or
-grant browser permissions. The CLI is disabled by default. The Compose service
-has an opt-in `operator-browser-worker` profile and supplies `--enable` only
-when an operator explicitly starts that service. There is no automatic start,
-paid model call, or permission fallback.
+The API and worker use the same local image and the existing durable browser
+queue. Both services have the opt-in `operator-browser-runtime` profile. The
+ordinary `docker compose up` selects neither service and creates no new
+network. The `browser-synthetic-api` service runs
+`scripts.run_browser_synthetic_api --enable`, listening on `0.0.0.0:8000` only
+inside the task network. Its CSRF origin is
+`http://browser-synthetic-api:8000`. Compose publishes no host
+port. The worker runs the existing `BrowserWorkerSupervisor` through
+`scripts.run_browser_synthetic_worker --enable` and the packaged
+`app.infra.browser.synthetic_operator:worker_components` factory. Neither
+service creates a tenant, migrates a database, grants permissions, or enables
+a paid call by itself. The API Host and operator factory are repository code;
+the caller does not need to author an installation module.
 
-The operator must install a reviewed, code-only module at the host path supplied
-as `BROWSER_OPERATOR_MODULE`. Compose mounts that **existing file** read-only at
-`/opt/operator/browser_worker_installation.py`; a missing file makes startup
-fail. The module must expose a zero-argument `open_components()` async context
-manager that yields `BrowserVerticalComponents`. It should use the existing Host
-dependency injection and call
-`app.infra.browser.local_installation.build_local_browser_vertical` with complete
-`LocalBrowserInstallationDependencies`. That builder returns `None` when disabled and rejects invalid enabled
-configuration; the operator manager must fail startup in either case. The
-operator must provide real approved keys, grants, and runtime configuration and
-close its HTTP decision client and database engine on exit. No placeholder authority or
-key is included in this image or Compose file. Supply runtime secrets through
-the operator's local hidden console or the existing secret authority, never in
-the mounted Python module, image, or Compose configuration.
+Both services attach only to the existing internal task network
+`eternalai_browser_v42_test_default`. Their packaged operator wiring targets
+the same queue at `postgres:15432/eternalai_test` with role
+`browser_v42_test`; `postgres` is the verified network alias. No database
+password is stored here. The existing Host dependency injection and secret
+authority must supply real authorized dependencies and keys. Missing
+installation, grants, or keys fail closed; no `.env` search, generated
+permission, placeholder authority, or automatic fallback is provided. The
+host MCP/test DB port `15432` is not a queue substitute.
 
-The service enables stdin and a TTY solely so the operator can enter an
-OpenRouter key through the existing `prompt_openrouter_key` helper during a
-local, interactive start. The operator must be present at that terminal; an
-assistant tool or unattended background launch cannot supply the key. The
-helper rejects non-interactive input. Missing keys fail closed without printing
-secret text or searching for a `.env` file. This input capability does not
-authorize a paid model call; the operator must separately approve that call.
+The default profile has no outbound network. No ordinary bridge, proxy,
+firewall rule, or new gateway is created by this Compose file. Real OpenRouter
+outbound connectivity needs a separately scoped future override and operator
+authorization; attaching an ordinary bridge would not be an egress allowlist.
+Both services have stdin and a TTY so the operator can use the existing
+`prompt_openrouter_key` helper in a local interactive start. An assistant tool
+or unattended background process must not supply that key. This capability
+does not authorize a paid model call.
 
-The service joins the existing task PostgreSQL network
-`eternalai_browser_v42_test_default`. Inside that network, the verified database
-endpoint is `postgres:15432/eternalai_test`. Before starting the worker, the
-existing API must also target the same explicitly authorized shared queue, or
-the operator must confirm another queue entry point. The service also joins the
-ordinary Compose-managed bridge `eternalai_browser_v42_worker_egress` for
-OpenRouter outbound connectivity. That bridge would be created only when this
-service is started after the operator confirms its scope. It is **not** an
-egress allowlist or firewall. The shared API queue endpoint still needs
-deployment confirmation; the worker must not point at the host MCP/test DB port
-`15432` as a substitute. This Compose file publishes no host port and mounts no
-Docker socket.
+The Playwright base is `mcr.microsoft.com/playwright/python:v1.63.0-noble`.
+Python dependencies are installed from the checked-in `uv.lock` with
+`uv==0.12.13` and `uv sync --frozen --no-dev --no-install-project`. The
+Dockerfile-specific `Dockerfile.dockerignore` excludes the repository build
+context by default and re-includes only exact tracked `app/` files, the named
+local browser modules and `managed_chromium.js`, the packaged synthetic API
+Host and operator modules, both runtime entry scripts, the default-off
+`manage_browser_synthetic_publication.py` command, `pyproject.toml`, and `uv.lock`, plus
+their parent directories. Any context change needs an audit and an exact
+allowlist update. The image copies only `app/`, these three scripts, and
+the dependency files. It does not copy `.env`, Git data, raw capture, tests,
+or the whole repository.
 
-The Playwright image includes browser system dependencies. Its Python package
-dependencies come from the checked-in `uv.lock` with `uv sync --frozen --no-dev
---no-install-project`; the image installs the operator-checked `uv==0.12.13`.
-`Dockerfile.dockerignore` excludes the repository build context by default and
-re-includes only exact tracked `app/` files, the three named local browser
-modules, `managed_chromium.js`, the worker entry script, `pyproject.toml`, and
-`uv.lock`, plus their parent directories. Any build-context change needs an
-audit and an explicit allowlist update. Only `app/`, the worker entry script,
-`pyproject.toml`, and `uv.lock` are copied into the image. The operator module
-is a separate read-only runtime mount. No `.env`, Git data, raw capture, test
-tree, or whole repository is sent as ordinary build context or copied.
-
-No container build, pull, start, live network call, or database operation is
-part of this repository change. A network-none probe would not prove the final
-dual-network execution path, so it cannot be treated as a production run.
+The publication command only calls existing store and authorization methods;
+the publication bootstrap has not been run in this batch. Build and launch
+evidence must bind to this exact Dockerfile, context allowlist, and image
+digest. The earlier worker snapshot built, but its one real Chromium startup
+probe returned generic `unavailable`. That failed probe does not establish a
+runnable worker or validate these API and operator entry points. The complete
+API and worker assembly has not been started.

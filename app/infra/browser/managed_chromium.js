@@ -9,6 +9,25 @@ const {createHash} = require("node:crypto");
 let server, child, original, exited = false, exitPromise;
 let identity, shuttingDown = false, initialized = false;
 
+function failureReason(error, stage) {
+  // Inspect a bounded private message only; emit a fixed enum, never its text.
+  const message = typeof error?.message === "string" ? error.message.slice(0, 65536) : "";
+  if (/new namespace/i.test(message) && /operation not permitted/i.test(message)) {
+    return "namespace_permission_denied";
+  }
+  if (/no usable sandbox/i.test(message)) return "sandbox_unavailable";
+  if (/\bEROFS\b|read-only file\s*system/i.test(message)
+      || (/\bEACCES\b/i.test(message) && /\b(?:mkdir|mkdtemp|write|create|unlink|rename)\b/i.test(message))) {
+    return "filesystem_unwritable";
+  }
+  if (/executable (?:doesn't|does not) exist|error while loading shared libraries|cannot open shared object file|host system is missing dependencies|cannot find module/i.test(message)
+      || (/\bENOENT\b/.test(message) && (stage === "binary_verification"
+        || (stage === "browser_launch" && /\bspawn\b/.test(message))))) {
+    return "browser_dependency_missing";
+  }
+  return "native_launch_unavailable";
+}
+
 async function digestFile(filename) {
   const hash = createHash("sha256");
   for await (const chunk of fs.createReadStream(filename)) hash.update(chunk);
@@ -47,26 +66,30 @@ async function terminate() {
   return {...original, identity, exited: true};
 }
 
-async function command(message) {
+async function command(message, diagnostic) {
   if (message.op === "launch") {
     if (initialized || process.platform !== "linux" || !/^[a-f0-9]{64}$/.test(message.identity)) {
       throw new Error("invalid");
     }
     initialized = true;
+    diagnostic.stage = "package_verification";
     const packageRoot = path.resolve(process.argv[2]);
     const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
     if (metadata.version !== "1.63.0") throw new Error("version");
     const {chromium} = require(packageRoot);
+    diagnostic.stage = "binary_verification";
     if (await digestFile(process.execPath) !== message.node_digest
         || await digestFile(chromium.executablePath()) !== message.chromium_digest) {
       throw new Error("binary");
     }
     identity = message.identity;
+    diagnostic.stage = "browser_launch";
     server = await chromium.launchServer({
       executablePath: chromium.executablePath(),
       host: "127.0.0.1", headless: true, chromiumSandbox: true,
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false, timeout: 15000,
     });
+    diagnostic.stage = "native_identity";
     child = server.process();
     if (!child || !Number.isSafeInteger(child.pid) || child.pid <= 0) throw new Error("child");
     exitPromise = new Promise(resolve => child.once("exit", () => { exited = true; resolve(); }));
@@ -77,10 +100,14 @@ async function command(message) {
   }
   if (!initialized || message.identity !== identity) throw new Error("identity");
   if (message.op === "status") {
+    diagnostic.stage = "native_status";
     if (!sameProcess()) throw new Error("unavailable");
     return {...original, identity, exited: false};
   }
-  if (message.op === "stop") return terminate();
+  if (message.op === "stop") {
+    diagnostic.stage = "native_stop";
+    return terminate();
+  }
   throw new Error("unsupported");
 }
 
@@ -97,14 +124,17 @@ let queue = Promise.resolve();
 input.on("line", line => {
   queue = queue.then(async () => {
     let message;
+    const diagnostic = {stage: "ipc_request"};
     try {
       if (Buffer.byteLength(line) > 4096) throw new Error("bound");
       message = JSON.parse(line);
       if (!Number.isSafeInteger(message.id) || message.id < 1) throw new Error("request");
-      const result = await command(message);
+      const result = await command(message, diagnostic);
       process.stdout.write(JSON.stringify({id: message.id, ok: true, result}) + "\n");
-    } catch {
-      process.stdout.write(JSON.stringify({id: message?.id ?? 0, ok: false, code: "unavailable"}) + "\n");
+    } catch (error) {
+      const id = Number.isSafeInteger(message?.id) && message.id >= 1 ? message.id : 0;
+      process.stdout.write(JSON.stringify({id, ok: false, code: "unavailable",
+        stage: diagnostic.stage, reason: failureReason(error, diagnostic.stage)}) + "\n");
     }
   }).catch(() => shutdown());
 });

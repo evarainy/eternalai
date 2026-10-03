@@ -6,14 +6,15 @@ WORKDIR /opt/eternalai
 RUN python -m pip install --no-cache-dir uv==0.12.13
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
-RUN mkdir -p /opt/operator
 
-# The image contains code only. The reviewed operator installation is mounted at runtime.
+# Both API and worker use the repository's explicit synthetic operator wiring.
 COPY app/ ./app/
+COPY scripts/manage_browser_synthetic_publication.py ./scripts/manage_browser_synthetic_publication.py
+COPY scripts/run_browser_synthetic_api.py ./scripts/run_browser_synthetic_api.py
 COPY scripts/run_browser_synthetic_worker.py ./scripts/run_browser_synthetic_worker.py
 
 ENV PATH="/opt/eternalai/.venv/bin:${PATH}" \
-    PYTHONPATH="/opt/eternalai:/opt/operator" \
+    PYTHONPATH="/opt/eternalai" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
