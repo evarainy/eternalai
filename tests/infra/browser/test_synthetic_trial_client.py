@@ -110,6 +110,24 @@ def test_duplicate_refuses_before_vault_unlock(monkeypatch: pytest.MonkeyPatch) 
         _call("submit", lambda request: pytest.fail("HTTP sent"))
 
 
+def test_failed_run_http_json_preserves_empty_artifacts_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = _receipts(monkeypatch)
+    files["trial.run.json"] = {"task_id": "task-1", "run_id": "run-1"}
+    document = _run(status="failed", cleanup="terminated")
+    document["run"]["artifacts"] = []
+    document["run"]["result"]["verification"] = None
+    document["run"]["result"]["error_code"] = "browser_verification_failed"
+    document["run"]["result"]["dispatch_failure_code"] = "timeout"
+    outcome = _call("inspect", lambda request: httpx2.Response(200, json=document))
+    assert outcome.code == "browser_trial_terminal_unsuccessful"
+    assert outcome.status == "failed" and outcome.exit_code == 2
+    assert outcome.result_code == "browser_verification_failed"
+    assert outcome.dispatch_failure_code == "timeout"
+    assert files == {"trial.run.json": {"task_id": "task-1", "run_id": "run-1"}}
+
+
 def test_marker_io_error_is_not_reported_as_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
     _receipts(monkeypatch)
 

@@ -112,7 +112,9 @@ async def _exchange(
 
 def _checked_run(document: Any, task_id: str, run_id: str) -> BrowserRunResponse:
     try:
-        response = BrowserRunResponse.model_validate(document)
+        # HTTP JSON arrays represent tuple-valued DTO fields such as artifacts.
+        # Keep strict JSON validation rather than treating decoded arrays as Python tuples.
+        response = BrowserRunResponse.model_validate_json(json.dumps(document, allow_nan=False))
         if (response.run.task_id, response.run.run_id) != (task_id, run_id):
             raise ValueError
         return response
