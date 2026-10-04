@@ -431,9 +431,26 @@ def build_browser_vertical(
         capture_proof=deps.profile_capture_proof, cleanup_proof=deps.profile_cleanup_proof,
         cleanup_authority=deps.profile_cleanup_authority,
     )
+    async def record_read_diagnostic(run: RunSnapshot, attributes: dict[str, str | int]) -> None:
+        # Use the already persisted task trace, without decoding protected input
+        # or adding owner/subject values to diagnostic attributes.
+        async with deps.session_factory() as session:
+            trace_id = (await session.execute(text(
+                "SELECT trace_id FROM tasks WHERE task_id=:task AND tenant_id=:tenant"
+                " AND ai_user_id=:user AND session_id=:session"
+            ), {"task": run.task_id, "tenant": run.owner.tenant_id,
+                "user": run.owner.user_id, "session": run.owner.session_id})).scalar_one()
+        if type(trace_id) is not str or not trace_id:
+            raise ValueError("browser_read_diagnostic_trace_unavailable")
+        await deps.trace.record_step(
+            trace_id, run.task_id, run.owner.session_id,
+            tenant_id=run.owner.tenant_id, ai_user_id=run.owner.user_id,
+            event_type="adapter_error", status="failed", attributes=attributes,
+        )
+
     execution = VerifiedBrowserReadExecution(
         deps.execution_factory, deps.lifecycle, publications, cipher,
-        result_digest_key=deps.result_digest_key,
+        result_digest_key=deps.result_digest_key, record_diagnostic=record_read_diagnostic,
     )
     run_authority = PostgreSQLBrowserRunAuthority(
         current_auth=current_auth, verification_check=execution.check_verified_candidate,

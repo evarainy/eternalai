@@ -10,8 +10,9 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Protocol
@@ -121,13 +122,35 @@ class VerifiedBrowserReadExecution:
         self, factory: BrowserReadExecutionFactory, lifecycle: BrowserReadLifecycle,
         publications: BrowserPublicationStorePort, cipher: BrowserPayloadCipher,
         *, result_digest_key: bytes,
+        record_diagnostic: (
+            Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         if type(result_digest_key) is not bytes or len(result_digest_key) != 32:
             raise ValueError("browser_result_digest_key_invalid")
         self._factory, self._lifecycle = factory, lifecycle
         self._publications, self._cipher = publications, cipher
         self._result_key = result_digest_key
+        self._record_diagnostic = record_diagnostic
         self._emissions: dict[str, _VerifiedEmission] = {}
+
+    async def _record_failure_diagnostic(
+        self, run: RunSnapshot, diagnostic: tuple[str, int, str] | None,
+    ) -> None:
+        if self._record_diagnostic is None or diagnostic is None:
+            return
+        stage, elapsed_ms, code = diagnostic
+        try:
+            # Existing Trace routing metadata is separate from these attributes.
+            # No DOM, identity, input or exception text enters the diagnostic.
+            await asyncio.wait_for(self._record_diagnostic(run, {
+                "browser_read_stage": stage,
+                "stage_elapsed_ms": elapsed_ms,
+                "browser_failure_code": code,
+            }), timeout=1.0)
+        except Exception:
+            # Trace failure cannot overwrite the original execution failure.
+            logging.getLogger(__name__).warning("browser_read_diagnostic_trace_unavailable")
 
     async def execute(
         self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint,
@@ -224,6 +247,7 @@ class VerifiedBrowserReadExecution:
             await checkpoint.start_execution()
             attempted = True
             outcome = await executor.run(execution.session, context)
+            await self._record_failure_diagnostic(run, executor._last_failure_diagnostic)
             await checkpoint.refresh(allow_cancel=True)
             effect: RunEffect = "not_sent"
             if any(r.state == "possibly_sent" for r in outcome.receipts) or (

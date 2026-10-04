@@ -2,13 +2,55 @@ import asyncio
 import secrets
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
+from app.browser_skill import executor as executor_module
 from app.browser_skill.executor import BrowserExecutor
 from app.browser_skill.models import ActionCommand, BrowserOperationError, TargetRef
 from app.browser_skill.site_rules import FrozenSiteAdapter
 from tests.browser_skill.fakes import FakeWorld
+
+
+@pytest.mark.parametrize("stage", [
+    "confirmation", "authorization", "target_observation", "target_candidates",
+    "decision_request", "target_revalidation", "dispatch", "verification",
+])
+def test_failure_diagnostic_identifies_the_await_without_changing_outcome(
+    stage: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        world = FakeWorld("read")
+        world.context = replace(world.context, deadline_monotonic=time.monotonic() + 0.05)
+
+        async def blocked(*args: object, **kwargs: object) -> None:
+            await asyncio.Event().wait()
+
+        if stage == "confirmation":
+            monkeypatch.setattr(executor_module, "confirmed_spec", blocked)
+        elif stage == "authorization":
+            monkeypatch.setattr(executor_module, "authorize_current", blocked)
+        elif stage == "decision_request":
+            world.matches = tuple(candidate.ref.target_id for candidate in world.view.candidates)
+            monkeypatch.setattr(world.decision, "decide", blocked)
+        elif stage == "verification":
+            world.verifier = SimpleNamespace(verify=blocked)
+        else:
+            method = {"target_observation": "observe", "target_candidates": "target_candidates",
+                      "target_revalidation": "revalidate", "dispatch": "execute"}[stage]
+            monkeypatch.setattr(world, method, blocked)
+        executor = world.executor()
+        result = await executor.run(world.session, world.context)
+        assert result.sequence == "stopped" and result.verification is None
+        assert result.failure.code == ("effect_unknown" if stage == "dispatch" else "timeout")
+        diagnostic = executor._last_failure_diagnostic
+        assert diagnostic is not None and diagnostic[0] == stage
+        assert type(diagnostic[1]) is int and 0 <= diagnostic[1] <= 5000
+        assert diagnostic[2] == result.failure.code
+        assert len(world.sends) == (1 if stage == "verification" else 0)
+        assert world.reads == 0
+    asyncio.run(scenario())
 
 
 def run(world: FakeWorld):

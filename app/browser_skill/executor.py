@@ -9,7 +9,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Literal, Protocol, get_args
 from uuid import uuid4
 
 from app.browser_skill.models import (
@@ -79,6 +79,13 @@ class ExecutionOutcome(Contract):
     durability: Literal["memory_only"] = "memory_only"
 
 
+ReadAwaitStage = Literal[
+    "bootstrap", "confirmation", "authorization", "target_observation",
+    "target_candidates", "decision_request", "target_revalidation", "dispatch", "verification",
+]
+_DIAGNOSTIC_CODES = frozenset(get_args(BrowserFailure.model_fields["code"].annotation))
+
+
 @dataclass(slots=True)
 class _Progress:
     receipts: list[DispatchReceipt] = field(default_factory=list)
@@ -86,6 +93,12 @@ class _Progress:
     model_calls: int = 0
     dispatch_inflight: bool = False
     unsettled: bool = False
+    stage: ReadAwaitStage = "bootstrap"
+    stage_started: float = field(default_factory=time.monotonic)
+
+    def mark(self, stage: ReadAwaitStage) -> None:
+        self.stage = stage
+        self.stage_started = time.monotonic()
 
 
 class _DecisionStopped(Exception):
@@ -93,7 +106,10 @@ class _DecisionStopped(Exception):
 
 
 class BrowserExecutor:
-    __slots__ = ("_web", "_decision", "_verifier", "_site", "_resolve", "_contexts", "_pending")
+    __slots__ = (
+        "_web", "_decision", "_verifier", "_site", "_resolve", "_contexts", "_pending",
+        "_last_failure_diagnostic",
+    )
 
     def __init__(
         self,
@@ -113,6 +129,19 @@ class BrowserExecutor:
         # Retain ownership of cancellation-resistant adapter tasks until settled.
         # Their execution context is cancelled and no new action is scheduled.
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
+        self._last_failure_diagnostic: tuple[ReadAwaitStage, int, str] | None = None
+
+    def _finish(
+        self, outcome: ExecutionOutcome, progress: _Progress, *,
+        stage: ReadAwaitStage | None = None, started: float | None = None,
+    ) -> ExecutionOutcome:
+        if outcome.failure is not None and outcome.failure.code in _DIAGNOSTIC_CODES:
+            began = progress.stage_started if started is None else started
+            elapsed_ms = max(0, min(300000, int((time.monotonic() - began) * 1000)))
+            self._last_failure_diagnostic = (
+                progress.stage if stage is None else stage, elapsed_ms, outcome.failure.code,
+            )
+        return outcome
 
     def _settled(self, task: asyncio.Task[ExecutionOutcome]) -> None:
         self._pending.discard(task)
@@ -141,6 +170,7 @@ class BrowserExecutor:
         )
 
     async def run(self, session: BrowserSessionRef, context: ExecutionContext) -> ExecutionOutcome:
+        self._last_failure_diagnostic = None
         progress = _Progress()
         job = asyncio.create_task(self._run(session, context, progress))
         cancelled = asyncio.create_task(context.cancellation.wait())
@@ -151,10 +181,11 @@ class BrowserExecutor:
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if job in done:
-                return job.result()
+                return self._finish(job.result(), progress)
             reason: Literal["cancelled", "timeout"] = (
                 "cancelled" if context.cancellation.is_set() else "timeout"
             )
+            stopped_stage, stopped_started = progress.stage, progress.stage_started
             context.cancellation.set()
             job.cancel()
             await asyncio.wait((job,), timeout=0.05)
@@ -168,7 +199,10 @@ class BrowserExecutor:
                 "effect_unknown" if progress.dispatch_inflight else reason,
                 dispatched=progress.dispatch_inflight,
             ).failure
-            return self._outcome(progress, context, problem=problem)
+            return self._finish(
+                self._outcome(progress, context, problem=problem), progress,
+                stage=stopped_stage, started=stopped_started,
+            )
         except asyncio.CancelledError:
             context.cancellation.set()
             job.cancel()
@@ -229,6 +263,7 @@ class BrowserExecutor:
             raise failure("stale")
         check_liveness(context)
         progress.model_calls += 1
+        progress.mark("decision_request")
         decision = await self._decision.decide(request, decision_context)
         check_liveness(context)
         # Re-observe the actual region and re-run the trusted locator/option
@@ -254,8 +289,11 @@ class BrowserExecutor:
         context: ExecutionContext,
         plan: RegisteredSitePlan,
         spec: ReadSpec,
+        progress: _Progress,
     ) -> tuple[ScopedSnapshot, tuple[VisibleCandidate, ...]]:
+        progress.mark("authorization")
         await authorize_current(session, context, spec)
+        progress.mark("target_observation")
         observed = await self._web.observe(session, request, plan.policy)
         snapshot = scope_snapshot(observed, context.expected_binding, plan.policy)
         if snapshot.scope.region_id != request.region_id:
@@ -264,6 +302,7 @@ class BrowserExecutor:
             raise failure("stale")
         if snapshot.coverage.state != "complete":
             raise failure("unsupported")
+        progress.mark("target_candidates")
         candidates = await self._web.target_candidates(session, step, snapshot, context)
         if any(c not in snapshot.candidates for c in candidates):
             raise failure("invalid_response")
@@ -277,6 +316,7 @@ class BrowserExecutor:
         context: ExecutionContext,
         plan: RegisteredSitePlan,
         spec: ReadSpec,
+        progress: _Progress,
         *,
         parent: TargetRef | None = None,
         original_targets: tuple[VisibleCandidate, ...] = (),
@@ -288,6 +328,7 @@ class BrowserExecutor:
             context,
             plan,
             spec,
+            progress,
         )
         if parent is None:
             return targets
@@ -324,16 +365,18 @@ class BrowserExecutor:
             if self._site.observation_policy(context.skill) != plan.policy:
                 raise failure("denied")
             # Establish independently confirmed admission before observing private DOM.
+            progress.mark("confirmation")
             spec = await confirmed_spec(session, context, plan, self._resolve)
             for rule in plan.steps:
                 check_liveness(context)
                 if rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only":
                     raise failure("unsupported")
+                progress.mark("authorization")
                 await authorize_current(session, context, spec)
                 target = option = None
                 if rule.step.operation != "navigate":
                     snapshot, candidates = await self._observe_targets(
-                        session, rule.observation, rule.step, context, plan, spec
+                        session, rule.observation, rule.step, context, plan, spec, progress
                     )
                     target = await self._choose(
                         candidates,
@@ -343,7 +386,7 @@ class BrowserExecutor:
                         plan,
                         progress,
                         lambda: self._refresh_candidates(
-                            session, rule.step, snapshot.scope, context, plan, spec
+                            session, rule.step, snapshot.scope, context, plan, spec, progress
                         ),
                     )
                     if rule.step.operation == "select_option":
@@ -367,6 +410,7 @@ class BrowserExecutor:
                                 context,
                                 plan,
                                 spec,
+                                progress,
                                 parent=target,
                                 original_targets=candidates,
                             ),
@@ -380,17 +424,22 @@ class BrowserExecutor:
                 )
                 if not self._site.permits(context.skill, command):
                     raise failure("denied")
+                progress.mark("authorization")
                 await authorize_current(session, context, command)
+                progress.mark("target_revalidation")
                 await self._web.revalidate(session, command, context)
                 check_liveness(context)
                 progress.dispatch_inflight = True
+                progress.mark("dispatch")
                 receipt = await self._web.execute(session, command, context)
                 receipt.validate_for(command)
                 progress.receipts.append(receipt)
                 progress.dispatch_inflight = False
                 if receipt.state != "acknowledged":
                     return self._outcome(progress, context, problem=receipt.failure)
+            progress.mark("confirmation")
             spec = await confirmed_spec(session, context, plan, self._resolve)
+            progress.mark("verification")
             verification = await self._verifier.verify(session, spec, context)
             check_liveness(context)
             return self._outcome(progress, context, verification=verification)
