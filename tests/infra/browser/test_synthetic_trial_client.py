@@ -48,16 +48,18 @@ def _accepted() -> dict[str, Any]:
 
 @pytest.mark.parametrize("mixed", [{"client_request_id": trial._REQUEST_ID},
                                     {"trial_id": trial.ORIGINAL_TRIAL}])
+@pytest.mark.parametrize("trial_id", [trial.DIAGNOSTIC_TRIAL, trial.VISIBLE_TRIAL])
 def test_second_receipt_rejects_cross_round_binding_before_private_input(
     mixed: dict, monkeypatch: pytest.MonkeyPatch,
+    trial_id: str,
 ) -> None:
-    document = {"task_id": "task-2", "run_id": "run-2", **trial.diagnostic_reference(), **mixed}
+    document = {"task_id": "task-2", "run_id": "run-2", **trial.trial_reference(trial_id), **mixed}
     monkeypatch.setattr(trial, "read_trial_file", lambda *_args, **_kwargs: document)
     token = Mock()
     monkeypatch.setattr(trial, "_token", token)
     with pytest.raises(trial.TrialClientError, match="^browser_trial_receipt_invalid$"):
         asyncio.run(trial.run_trial("inspect", enabled=True, private_stdin=True,
-                                   trial_id=trial.DIAGNOSTIC_TRIAL))
+                                   trial_id=trial_id))
     token.assert_not_called()
 
 

@@ -39,6 +39,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     FixedSyntheticSource,
     build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
+    build_fixed_synthetic_visible_query_source,
 )
 from app.infra.browser.local_installation import (
     LocalBrowserInstallationDependencies,
@@ -60,7 +61,12 @@ from app.infra.browser.synthetic_configuration import (
     read_database_password,
     synthetic_jev_manifest,
 )
-from app.infra.browser.synthetic_vault import DIAGNOSTIC_TRIAL, ORIGINAL_TRIAL, approved_trial_id
+from app.infra.browser.synthetic_vault import (
+    DIAGNOSTIC_TRIAL,
+    ORIGINAL_TRIAL,
+    VISIBLE_TRIAL,
+    approved_trial_id,
+)
 from app.infra.browser.systemone_http import DecisionDeployment
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
 from app.infra.llm.openai_compatible import OpenAICompatibleLLMProvider
@@ -361,7 +367,7 @@ async def open_synthetic_operator(
             or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
     approved_trial_id(trial_id)
-    if trial_id == DIAGNOSTIC_TRIAL and input_mode != "structured":
+    if trial_id != ORIGINAL_TRIAL and input_mode != "structured":
         raise ValueError("browser_operator_disabled")
     if bundle.jev_manifest != synthetic_jev_manifest():
         raise ValueError("browser_operator_manifest_invalid")
@@ -373,7 +379,8 @@ async def open_synthetic_operator(
     business_actor = tokens.inspect(bundle.business_token.get_secret_value())
     if cleanup_actor.principal.ai_user_id != CLEANUP_ACTOR:
         raise ValueError("browser_operator_cleanup_authority_invalid")
-    builder = (build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
+    builder = (build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
+               else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
                else build_fixed_synthetic_query_source)
     source = builder(bundle.jev_manifest)
     deployment = await image_deployment(source)
@@ -541,7 +548,8 @@ async def deactivate_synthetic_publication(
                 or historical.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID
                 or bytes(row["publication_digest"]).hex() != historical.digest):
             raise BrowserPublicationError("browser_publication_storage_invalid")
-        expected = (build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
+        expected = (build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
+                    else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
                     else build_fixed_synthetic_query_source)(synthetic_jev_manifest()).manifest
         if historical != expected:
             raise BrowserPublicationError("browser_publication_reference_invalid")

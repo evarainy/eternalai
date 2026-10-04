@@ -34,6 +34,7 @@ _SECCOMP_SHA256 = "e67623828ce94bb9f4917d029b1c5b83191f18ecd1c3538da63956b773dd3
 _IMAGE = "eternalai-browser-v42:local"
 _ORIGINAL_TRIAL = "single-run"
 _DIAGNOSTIC_TRIAL = "diagnostic-2"
+_VISIBLE_TRIAL = "visible-complete"
 _REFRESH_SCRIPT = Path(
     "C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/"
     "identity-refresh-diagnostic-2-20261004/refresh_existing_tokens.py"
@@ -61,12 +62,13 @@ class _SilentParser(argparse.ArgumentParser):
 
 
 def _recipient(operation: str, trial_id: str) -> tuple[str, str]:
-    if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL} or operation not in _RECIPIENTS
-            or (operation == "refresh" and trial_id != _DIAGNOSTIC_TRIAL)):
+    if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL}
+            or operation not in _RECIPIENTS
+            or (operation == "refresh" and trial_id == _ORIGINAL_TRIAL)):
         raise ValueError("browser_jev_launcher_arguments_invalid")
     service, name = _RECIPIENTS[operation]
     return service, (name if trial_id == _ORIGINAL_TRIAL
-                     else name.replace("-single-", "-diagnostic-2-", 1))
+                     else name.replace("-single-", "-" + trial_id + "-", 1))
 
 
 def _check_refresh_script(expected_sha256: str | None) -> None:
@@ -308,7 +310,7 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
                       service, _REFRESH_TARGET, "--enable", "--private-stdin"]
     else:
         arguments += [service, "--enable", "--private-stdin"]
-    if trial_id == _DIAGNOSTIC_TRIAL:
+    if trial_id != _ORIGINAL_TRIAL:
         arguments += ["--trial-id", trial_id]
     if operation in {"prepare", "activate"}:
         arguments += ["--operation", operation, "--input-mode", "structured"]
@@ -337,7 +339,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-image-id", required=True)
     parser.add_argument("--phrase-from-exact-field", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL), default=_ORIGINAL_TRIAL
+        "--trial-id", choices=(_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL),
+        default=_ORIGINAL_TRIAL,
     )
     parser.add_argument("--refresh-script-sha256")
     try:

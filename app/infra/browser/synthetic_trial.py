@@ -1,4 +1,4 @@
-"""Two explicitly approved receipt namespaces; one attempt per round, no reset."""
+"""Three fixed receipt namespaces; runtime actions require owner approval, no reset."""
 
 from __future__ import annotations
 
@@ -19,8 +19,11 @@ _FILES = frozenset({
 _MAX_BYTES = 4096
 ORIGINAL_TRIAL = vault.ORIGINAL_TRIAL
 DIAGNOSTIC_TRIAL = vault.DIAGNOSTIC_TRIAL
+VISIBLE_TRIAL = vault.VISIBLE_TRIAL
 LEGACY_TASK_ID = "dc4ec941bcd245a5a7d9ccc4815a0f71"
 LEGACY_RUN_ID = "fa1f474fdfce440c9a7338d80fc70670"
+DIAGNOSTIC_TASK_ID = "4a689e26d150452b809ddd152cec0c8c"
+DIAGNOSTIC_RUN_ID = "73ba1ea2a54b4d7c98bc24c1446e3c60"
 
 
 def trial_request_id(trial_id: str = ORIGINAL_TRIAL) -> str:
@@ -28,22 +31,36 @@ def trial_request_id(trial_id: str = ORIGINAL_TRIAL) -> str:
 
 
 def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
+    vault.approved_trial_id(trial_id)
     from app.infra.browser.fixed_synthetic_seed import (
         build_fixed_synthetic_diagnostic_source,
         build_fixed_synthetic_query_source,
+        build_fixed_synthetic_visible_query_source,
     )
     from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
 
-    builder = (build_fixed_synthetic_diagnostic_source
-               if vault.approved_trial_id(trial_id) == DIAGNOSTIC_TRIAL
-               else build_fixed_synthetic_query_source)
+    if trial_id == ORIGINAL_TRIAL:
+        builder = build_fixed_synthetic_query_source
+    elif trial_id == DIAGNOSTIC_TRIAL:
+        builder = build_fixed_synthetic_diagnostic_source
+    elif trial_id == VISIBLE_TRIAL:
+        builder = build_fixed_synthetic_visible_query_source
+    else:
+        raise ValueError("browser_trial_id_invalid")
     return builder(synthetic_jev_manifest()).manifest.digest
 
 
+def trial_reference(trial_id: str = ORIGINAL_TRIAL) -> dict[str, str]:
+    vault.approved_trial_id(trial_id)
+    if trial_id == ORIGINAL_TRIAL:
+        return {}
+    return {"trial_id": trial_id,
+            "client_request_id": trial_request_id(trial_id),
+            "publication_digest": trial_publication_digest(trial_id)}
+
+
 def diagnostic_reference() -> dict[str, str]:
-    return {"trial_id": DIAGNOSTIC_TRIAL,
-            "client_request_id": trial_request_id(DIAGNOSTIC_TRIAL),
-            "publication_digest": trial_publication_digest(DIAGNOSTIC_TRIAL)}
+    return trial_reference(DIAGNOSTIC_TRIAL)
 
 
 def require_legacy_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> None:
@@ -60,8 +77,25 @@ def require_legacy_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> None
         raise ValueError("browser_trial_history_invalid")
 
 
+def require_diagnostic_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> None:
+    """Exact approved failed diagnostic predecessor; no historical receipt substitution."""
+    if (row.get("task_id") != DIAGNOSTIC_TASK_ID or row.get("run_id") != DIAGNOSTIC_RUN_ID
+            or row.get("ai_user_id") != owner.user_id or row.get("session_id") != owner.session_id
+            or row.get("status") != "failed" or row.get("phase") is not None
+            or row.get("cancel_requested") is not False
+            or row.get("cleanup") not in {"released", "terminated"}
+            or row.get("effect") != "not_sent" or row.get("verification") is not None
+            or row.get("error_code") != "browser_verification_failed"
+            or row.get("dispatch_failure_code") != "timeout" or row.get("worker_epoch") != 1
+            or row.get("client_request_id") != trial_request_id(DIAGNOSTIC_TRIAL)
+            or row.get("publication_digest") != bytes.fromhex(
+                trial_publication_digest(DIAGNOSTIC_TRIAL)
+            )):
+        raise ValueError("browser_trial_history_invalid")
+
+
 def approved_trial_budget(value: str) -> Decimal:
-    """Explicit non-secret approval argument, bounded to this trial's USD 0.01."""
+    """Explicit non-secret USD 0.01 approval declaration; not a spending cap."""
     try:
         amount = Decimal(value)
     except (InvalidOperation, TypeError):

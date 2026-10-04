@@ -25,8 +25,9 @@ def _key() -> str:
 
 
 @pytest.mark.parametrize("operation", ["refresh", "submit", "inspect", "deactivate"])
+@pytest.mark.parametrize("trial_id", ["diagnostic-2", "visible-complete"])
 def test_diagnostic_recipients_are_fixed_and_phrase_only(
-    operation: str, monkeypatch: pytest.MonkeyPatch
+    operation: str, monkeypatch: pytest.MonkeyPatch, trial_id: str,
 ) -> None:
     phrase = secrets.token_urlsafe(32)
     captured: dict = {}
@@ -58,7 +59,7 @@ def test_diagnostic_recipients_are_fixed_and_phrase_only(
             approved_deadline_utc=_future(),
             expected_image_id="sha256:" + "a" * 64,
             phrase_from_exact_field=True,
-            trial_id="diagnostic-2",
+            trial_id=trial_id,
             **options,
         )
         == 0
@@ -67,9 +68,9 @@ def test_diagnostic_recipients_are_fixed_and_phrase_only(
     key.assert_not_called()
     arguments = captured["arguments"]
     assert (
-        arguments[arguments.index("--name") + 1] == entry._recipient(operation, "diagnostic-2")[1]
+        arguments[arguments.index("--name") + 1] == entry._recipient(operation, trial_id)[1]
     )
-    assert arguments[arguments.index("--trial-id") + 1] == "diagnostic-2"
+    assert arguments[arguments.index("--trial-id") + 1] == trial_id
     assert json.loads(captured["frame"]) == {
         "version": entry._FRAME_VERSION,
         "vault_passphrase": phrase,
@@ -80,7 +81,9 @@ def test_diagnostic_recipients_are_fixed_and_phrase_only(
         assert arguments[arguments.index("--entrypoint") + 1] == "python"
 
 
-def test_third_trial_is_rejected_before_secret_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_trial_is_rejected_before_secret_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reader = Mock()
     monkeypatch.setattr(entry, "_read_exact_field", reader)
     with pytest.raises(ValueError, match="^browser_jev_launcher_arguments_invalid$"):

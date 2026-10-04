@@ -204,7 +204,7 @@ def build_fixed_synthetic_diagnostic_source(
 def build_fixed_synthetic_visible_query_source(
     decision_manifest: ModelManifest,
 ) -> FixedSyntheticSource:
-    """Future source with visible completion; not admitted for installation or trials."""
+    """Visible completion source; execution still requires publication and trial authority."""
     return _build_fixed_source(decision_manifest, query=True, visible_complete=True)
 
 
@@ -370,10 +370,12 @@ class FixedSyntheticSourceVerifier:
     async def verify(self, manifest: BrowserPublicationManifest) -> bool:
         source = self._factory.source
         query = isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
-        expected = _build_fixed_source(
-            manifest.site.decision_manifest, query=query,
-            diagnostic=manifest.skill.version == DIAGNOSTIC_SKILL_VERSION,
-        )
+        expected = (build_fixed_synthetic_visible_query_source(manifest.site.decision_manifest)
+                    if manifest.skill.version == VISIBLE_QUERY_SKILL_VERSION
+                    else _build_fixed_source(
+                        manifest.site.decision_manifest, query=query,
+                        diagnostic=manifest.skill.version == DIAGNOSTIC_SKILL_VERSION,
+                    ))
         registered = (
             type(source) is FixedSyntheticSource
             and manifest == expected.manifest == source.manifest

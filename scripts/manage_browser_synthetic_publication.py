@@ -26,6 +26,7 @@ from app.infra.browser.synthetic_private_input import (
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
     ORIGINAL_TRIAL,
+    VISIBLE_TRIAL,
     approved_trial_id,
     read_private_deactivation_document,
 )
@@ -88,9 +89,9 @@ async def _operate(
     trial_id: str = ORIGINAL_TRIAL,
 ) -> None:
     approved_trial_id(trial_id)
-    if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+    if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_operator_arguments_invalid")
-    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
+    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
     stage = "bundle"
     try:
         if operation == "deactivate":
@@ -123,7 +124,9 @@ async def _operate(
             vertical, owner = components.vertical, components.publication_owner
             if operation == "prepare":
                 stage = "prepare"
-                if trial_id == DIAGNOSTIC_TRIAL:
+                if trial_id == VISIBLE_TRIAL:
+                    await vertical.publications.prepare_visible_complete(owner, vertical._seed)
+                elif trial_id == DIAGNOSTIC_TRIAL:
                     await vertical.publications.prepare_diagnostic_second(owner, vertical._seed)
                 else:
                     await vertical.prepare_seed(owner)
@@ -170,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deactivation-vault", type=Path)
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL), default=ORIGINAL_TRIAL
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        default=ORIGINAL_TRIAL,
     )
     try:
         args = parser.parse_args(argv)

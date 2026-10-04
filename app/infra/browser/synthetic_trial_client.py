@@ -14,14 +14,20 @@ from app.infra.adapters.oa.contracts import OASystemMessageCollection
 from app.infra.browser.fixed_synthetic_seed import _COLLECTION, SYNTHETIC_KEY, SYNTHETIC_USER
 from app.infra.browser.synthetic_private_input import read_private_passphrase
 from app.infra.browser.synthetic_trial import (
+    DIAGNOSTIC_RUN_ID,
+    DIAGNOSTIC_TASK_ID,
     DIAGNOSTIC_TRIAL,
     LEGACY_RUN_ID,
     LEGACY_TASK_ID,
     ORIGINAL_TRIAL,
+    VISIBLE_TRIAL,
     create_trial_file,
-    diagnostic_reference,
     read_trial_file,
+    trial_reference,
     trial_request_id,
+)
+from app.infra.browser.synthetic_trial import (
+    diagnostic_reference as diagnostic_reference,
 )
 from app.infra.browser.synthetic_vault import (
     BUSINESS_FILE,
@@ -64,7 +70,7 @@ def _receipt(trial_id: str = ORIGINAL_TRIAL) -> tuple[str, str]:
         approved_trial_id(trial_id)
         document = (read_trial_file("trial.run.json") if trial_id == ORIGINAL_TRIAL
                     else read_trial_file("trial.run.json", trial_id=trial_id))
-        binding = diagnostic_reference() if trial_id == DIAGNOSTIC_TRIAL else {}
+        binding = trial_reference(trial_id)
         if (type(document) is not dict or set(document) != {"task_id", "run_id", *binding}
                 or any(document[name] != value for name, value in binding.items())):
             raise ValueError
@@ -74,6 +80,11 @@ def _receipt(trial_id: str = ORIGINAL_TRIAL) -> tuple[str, str]:
                 or _IDENTIFIER.fullmatch(run_id) is None):
             raise ValueError
         if trial_id == DIAGNOSTIC_TRIAL and (task_id == LEGACY_TASK_ID or run_id == LEGACY_RUN_ID):
+            raise ValueError
+        if trial_id == VISIBLE_TRIAL and (
+            task_id in {LEGACY_TASK_ID, DIAGNOSTIC_TASK_ID}
+            or run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID}
+        ):
             raise ValueError
         return task_id, run_id
     except Exception:
@@ -154,13 +165,13 @@ async def run_trial(
         raise TrialClientError("browser_trial_disabled")
     try:
         approved_trial_id(trial_id)
-        if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+        if trial_id != ORIGINAL_TRIAL and not private_stdin:
             raise ValueError
     except ValueError:
         raise TrialClientError("browser_trial_arguments_invalid") from None
-    binding = diagnostic_reference() if trial_id == DIAGNOSTIC_TRIAL else {}
+    binding = trial_reference(trial_id)
     marker = {"submission_attempts": 1, **binding}
-    receipt_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
+    receipt_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
     if operation == "submit":
         try:
             create_trial_file("trial.submit.json", marker, **receipt_options)
@@ -206,6 +217,11 @@ async def run_trial(
                     raise ValueError
                 if trial_id == DIAGNOSTIC_TRIAL and (
                     accepted.task_id == LEGACY_TASK_ID or accepted.run_id == LEGACY_RUN_ID
+                ):
+                    raise ValueError
+                if trial_id == VISIBLE_TRIAL and (
+                    accepted.task_id in {LEGACY_TASK_ID, DIAGNOSTIC_TASK_ID}
+                    or accepted.run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID}
                 ):
                     raise ValueError
             except Exception:

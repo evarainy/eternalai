@@ -173,11 +173,35 @@ class PostgreSQLBrowserPublicationStore:
             raise BrowserPublicationError("browser_publication_source_denied")
         return await self._prepare(owner, manifest, predecessor=predecessor)
 
+    async def prepare_visible_complete(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    ) -> BrowserPublicationRecord:
+        """Append the fixed visible source after both exact inactive trial publications."""
+        from app.infra.browser.fixed_synthetic_seed import (
+            SYNTHETIC_TENANT,
+            build_fixed_synthetic_diagnostic_source,
+            build_fixed_synthetic_query_source,
+            build_fixed_synthetic_visible_query_source,
+        )
+        from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+        decision = synthetic_jev_manifest()
+        successor = build_fixed_synthetic_visible_query_source(decision).manifest
+        if owner.tenant_id != SYNTHETIC_TENANT or _manifest(manifest) != successor:
+            raise BrowserPublicationError("browser_publication_source_denied")
+        return await self._prepare(
+            owner, manifest, predecessor=build_fixed_synthetic_query_source(decision).manifest,
+            diagnostic_predecessor=build_fixed_synthetic_diagnostic_source(decision).manifest,
+        )
+
     async def _prepare(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
         predecessor: BrowserPublicationManifest | None = None,
+        diagnostic_predecessor: BrowserPublicationManifest | None = None,
     ) -> BrowserPublicationRecord:
         owner, manifest = _owner(owner), _manifest(manifest)
+        if diagnostic_predecessor is not None and predecessor is None:
+            raise BrowserPublicationError("browser_publication_source_denied")
         skill_id = manifest.skill.skill_id
         await self._authorize(owner, skill_id, "prepare")
         async with self._transaction() as session:
@@ -192,11 +216,14 @@ class PostgreSQLBrowserPublicationStore:
             # inactive->prepared resurrection through repeated preparation.
             if predecessor is not None:
                 records = [_record(row) for row in previous]
-                prior = [record for record in records if record.manifest == predecessor]
+                history = ((predecessor,) if diagnostic_predecessor is None
+                           else (predecessor, diagnostic_predecessor))
+                prior = [[record for record in records if record.manifest == expected]
+                         for expected in history]
                 new = [record for record in records if record.manifest == manifest]
-                if (len(prior) != 1 or prior[0].state != "inactive"
-                        or prior[0].activation_revision != 2
-                        or len(records) != 1 + len(new) or len(new) > 1):
+                if (any(len(matches) != 1 or matches[0].state != "inactive"
+                        or matches[0].activation_revision != 2 for matches in prior)
+                        or len(records) != len(history) + len(new) or len(new) > 1):
                     raise BrowserPublicationError("browser_publication_already_prepared")
                 if new:
                     if new[0].state == "prepared" and new[0].activation_revision == 0:

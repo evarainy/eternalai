@@ -26,8 +26,10 @@ from app.infra.browser.fixed_synthetic_seed import (
     SYNTHETIC_DETAIL_CAPABILITY_ID,
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
+    VISIBLE_QUERY_SKILL_VERSION,
     build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
+    build_fixed_synthetic_visible_query_source,
 )
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.browser_chat import BrowserChatError
@@ -249,6 +251,8 @@ class FrozenSyntheticStructuredParser:
                 builder = build_fixed_synthetic_query_source
             elif seed.skill.version == DIAGNOSTIC_SKILL_VERSION:
                 builder = build_fixed_synthetic_diagnostic_source
+            elif seed.skill.version == VISIBLE_QUERY_SKILL_VERSION:
+                builder = build_fixed_synthetic_visible_query_source
             else:
                 raise ValueError("synthetic_manifest_mismatch")
             expected = builder(seed.site.decision_manifest).manifest

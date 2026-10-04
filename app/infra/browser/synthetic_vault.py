@@ -23,6 +23,7 @@ from pydantic import SecretStr
 TASK_ID = "P2-BROWSER-RUNTIME-V42-001"
 ORIGINAL_TRIAL = "single-run"
 DIAGNOSTIC_TRIAL = "diagnostic-2"
+VISIBLE_TRIAL = "visible-complete"
 VAULT_DIRECTORY = Path("/run/browser-synthetic-secrets") / TASK_ID
 OPERATOR_FILE: Final[Literal["operator.bundle.enc"]] = "operator.bundle.enc"
 BUSINESS_FILE: Final[Literal["business.token.enc"]] = "business.token.enc"
@@ -61,25 +62,27 @@ def prompt_passphrase(*, confirm: bool = False) -> str:
 
 
 def approved_trial_id(trial_id: str) -> str:
-    if type(trial_id) is not str or trial_id not in {ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL}:
+    if type(trial_id) is not str or trial_id not in {
+        ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL,
+    }:
         raise ValueError("browser_trial_id_invalid")
     return trial_id
 
 
 def trial_directory(trial_id: str = ORIGINAL_TRIAL) -> Path:
-    return (VAULT_DIRECTORY if approved_trial_id(trial_id) == ORIGINAL_TRIAL
-            else VAULT_DIRECTORY / DIAGNOSTIC_TRIAL)
+    trial_id = approved_trial_id(trial_id)
+    return VAULT_DIRECTORY if trial_id == ORIGINAL_TRIAL else VAULT_DIRECTORY / trial_id
 
 
 def _check_trial_directory(trial_id: str = ORIGINAL_TRIAL) -> None:
-    """Only the committed second renewal may supply diagnostic credentials/receipts."""
+    """Each approved child requires its own committed renewal success receipt."""
     _check_directory(create=False)
     if approved_trial_id(trial_id) == ORIGINAL_TRIAL:
         return
     directory = trial_directory(trial_id)
     try:
-        for blocked in (VAULT_DIRECTORY / "diagnostic-2.refresh-failure.json",
-                        VAULT_DIRECTORY / "diagnostic-2.refresh-stage"):
+        for blocked in (VAULT_DIRECTORY / f"{trial_id}.refresh-failure.json",
+                         VAULT_DIRECTORY / f"{trial_id}.refresh-stage"):
             try:
                 blocked.lstat()
             except FileNotFoundError:
@@ -105,7 +108,7 @@ def _check_trial_directory(trial_id: str = ORIGINAL_TRIAL) -> None:
             type(result) is not dict
             or result.get("status") != "success"
             or result.get("task_id") != TASK_ID
-            or result.get("trial_id") != DIAGNOSTIC_TRIAL
+            or result.get("trial_id") != trial_id
             or result.get("ttl_seconds") != 3600
             or result.get("identities_refreshed") != 3
             or result.get("runtime_key_material_changed") is not False
@@ -196,8 +199,8 @@ def assert_vault_uninitialized() -> None:
 def _aad(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> bytes:
     approved_trial_id(trial_id)
     identity = [_VERSION, TASK_ID, "browser_fixture_tenant", name]
-    if trial_id == DIAGNOSTIC_TRIAL:
-        identity.append(DIAGNOSTIC_TRIAL)
+    if trial_id != ORIGINAL_TRIAL:
+        identity.append(trial_id)
     return json.dumps(
         identity, separators=(",", ":")
     ).encode("ascii")

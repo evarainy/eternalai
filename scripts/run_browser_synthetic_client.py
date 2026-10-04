@@ -9,7 +9,7 @@ from dataclasses import asdict
 from typing import NoReturn
 
 from app.infra.browser.synthetic_trial_client import TrialClientError, run_trial
-from app.infra.browser.synthetic_vault import DIAGNOSTIC_TRIAL, ORIGINAL_TRIAL
+from app.infra.browser.synthetic_vault import DIAGNOSTIC_TRIAL, ORIGINAL_TRIAL, VISIBLE_TRIAL
 
 
 class _SilentParser(argparse.ArgumentParser):
@@ -23,7 +23,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL), default=ORIGINAL_TRIAL
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        default=ORIGINAL_TRIAL,
     )
     try:
         args = parser.parse_args(argv)

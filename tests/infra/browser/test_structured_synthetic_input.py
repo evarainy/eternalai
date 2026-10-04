@@ -33,6 +33,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_source,
+    build_fixed_synthetic_visible_query_source,
 )
 from app.infra.browser.local_installation import LocalBrowserInstallationDependencies
 from app.infra.browser.local_resource_lifecycle import (
@@ -95,6 +96,7 @@ def test_exact_json_key_is_only_parsed_argument() -> None:
 
 @pytest.mark.parametrize("builder", [
     build_fixed_synthetic_query_source, build_fixed_synthetic_diagnostic_source,
+    build_fixed_synthetic_visible_query_source,
 ])
 def test_structured_parser_accepts_only_frozen_query_versions(builder) -> None:
     source = builder(_source().manifest.site.decision_manifest)
@@ -202,8 +204,9 @@ def test_structured_parser_cannot_be_installed_for_legacy_or_changed_seed() -> N
             FrozenSyntheticStructuredParser(seed=seed)
 
 
-def _installation(*, input_mode: str, provider: Mock | None):
-    source = _source()
+def _installation(*, input_mode: str, provider: Mock | None,
+                  builder=build_fixed_synthetic_query_source):
+    source = builder(_source().manifest.site.decision_manifest)
     digest = b"d" * 32
     deployment = LocalChromiumDeployment(
         provider_key="synthetic_provider", manifest_digest=digest,
@@ -237,8 +240,13 @@ def _installation(*, input_mode: str, provider: Mock | None):
     )
 
 
+@pytest.mark.parametrize("builder", [
+    build_fixed_synthetic_query_source, build_fixed_synthetic_diagnostic_source,
+    build_fixed_synthetic_visible_query_source,
+])
 def test_installation_selects_structured_without_calling_provider_and_chat_by_default(
     monkeypatch: pytest.MonkeyPatch,
+    builder,
 ) -> None:
     captured: list[object] = []
 
@@ -252,8 +260,8 @@ def test_installation_selects_structured_without_calling_provider_and_chat_by_de
     monkeypatch.setattr(local_installation, "build_browser_vertical", stop_at_composition)
     provider = Mock(complete=AsyncMock())
     for dependency in (
-        _installation(input_mode="structured", provider=provider),
-        _installation(input_mode="structured", provider=None),
+        _installation(input_mode="structured", provider=provider, builder=builder),
+        _installation(input_mode="structured", provider=None, builder=builder),
     ):
         with pytest.raises(StopAtComposition):
             local_installation.build_local_browser_vertical(dependency)

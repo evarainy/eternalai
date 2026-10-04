@@ -21,13 +21,17 @@ from app.infra.browser.synthetic_operator import (
 )
 from app.infra.browser.synthetic_private_input import read_private_operator_input
 from app.infra.browser.synthetic_trial import (
+    DIAGNOSTIC_RUN_ID,
+    DIAGNOSTIC_TASK_ID,
     DIAGNOSTIC_TRIAL,
     LEGACY_RUN_ID,
     LEGACY_TASK_ID,
     ORIGINAL_TRIAL,
+    VISIBLE_TRIAL,
     SingleJevAttempt,
     create_trial_file,
     read_trial_file,
+    require_diagnostic_terminal,
     require_legacy_terminal,
     trial_publication_digest,
     trial_request_id,
@@ -49,22 +53,31 @@ async def execute_once(
     vertical, owner = components.vertical, components.publication_owner
     approved_trial_id(trial_id)
     async with vertical._sessions() as session:
-        if trial_id == DIAGNOSTIC_TRIAL:
+        if trial_id != ORIGINAL_TRIAL:
             rows = (await session.execute(text(
                 "SELECT r.task_id,r.run_id,r.ai_user_id,r.session_id,r.status,r.phase,"
                 "r.cancel_requested,r.worker_deadline,r.worker_epoch,r.cleanup,r.effect,"
                 "r.verification,r.error_code,r.dispatch_failure_code,r.publication_digest,"
                 "t.client_request_id FROM browser_runs r JOIN tasks t ON t.task_id=r.task_id"
-                " AND t.tenant_id=r.tenant_id WHERE r.tenant_id=:tenant LIMIT 3"
-            ), {"tenant": owner.tenant_id})).mappings().all()
+                " AND t.tenant_id=r.tenant_id WHERE r.tenant_id=:tenant LIMIT :maximum"
+            ), {"tenant": owner.tenant_id,
+                "maximum": 4 if trial_id == VISIBLE_TRIAL else 3})).mappings().all()
             history = [row for row in rows if row["task_id"] == LEGACY_TASK_ID
                        and row["run_id"] == LEGACY_RUN_ID]
             current = [row for row in rows if row["task_id"] == expected.task_id
                        and row["run_id"] == expected.run_id]
-            if (len(rows) != 2 or len(history) != 1 or len(current) != 1
+            diagnostic = [row for row in rows if row["task_id"] == DIAGNOSTIC_TASK_ID
+                          and row["run_id"] == DIAGNOSTIC_RUN_ID]
+            if (len(rows) != (3 if trial_id == VISIBLE_TRIAL else 2)
+                    or len(history) != 1 or len(current) != 1
                     or expected.task_id == LEGACY_TASK_ID or expected.run_id == LEGACY_RUN_ID):
                 raise ValueError("browser_trial_history_invalid")
             require_legacy_terminal(history[0], owner)
+            if trial_id == VISIBLE_TRIAL:
+                if (len(diagnostic) != 1 or expected.task_id == DIAGNOSTIC_TASK_ID
+                        or expected.run_id == DIAGNOSTIC_RUN_ID):
+                    raise ValueError("browser_trial_history_invalid")
+                require_diagnostic_terminal(diagnostic[0], owner)
             row = current[0]
             if row["client_request_id"] != trial_request_id(trial_id) or bytes(
                 row["publication_digest"]
@@ -83,7 +96,7 @@ async def execute_once(
             or row["status"] != "running" or row["phase"] != "queued"
             or row["cancel_requested"] or row["worker_deadline"] is not None):
         raise ValueError("browser_trial_single_queued_run_required")
-    if trial_id == DIAGNOSTIC_TRIAL:
+    if trial_id != ORIGINAL_TRIAL:
         create_trial_file("trial.worker.json", {"worker_passes": 1, "trial_id": trial_id},
                           trial_id=trial_id)
     else:
@@ -108,11 +121,11 @@ async def execute_once(
 async def _run(approved_budget_usd: str, *, private_stdin: bool = False,
                trial_id: str = ORIGINAL_TRIAL) -> bool:
     approved_trial_id(trial_id)
-    if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+    if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_trial_arguments_invalid")
-    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
+    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
     budget = SingleJevAttempt(approved_budget_usd, **trial_options)
-    if trial_id == DIAGNOSTIC_TRIAL:
+    if trial_id != ORIGINAL_TRIAL:
         task_id, run_id = _receipt(trial_id)
         reference = {"task_id": task_id, "run_id": run_id}
     else:
@@ -149,7 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--approved-budget-usd", required=True)
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL), default=ORIGINAL_TRIAL
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        default=ORIGINAL_TRIAL,
     )
     try:
         args = parser.parse_args(argv)

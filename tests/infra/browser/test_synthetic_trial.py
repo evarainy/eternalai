@@ -29,8 +29,10 @@ def test_trial_budget_rejects_unapproved_amount(amount: str) -> None:
         trial.SingleJevAttempt(amount)
 
 
+@pytest.mark.parametrize("trial_id", [trial.DIAGNOSTIC_TRIAL, trial.VISIBLE_TRIAL])
 def test_second_round_has_independent_burn_without_resetting_first(
     monkeypatch: pytest.MonkeyPatch,
+    trial_id: str,
 ) -> None:
     records = {(trial.ORIGINAL_TRIAL, "trial.jev-attempt.json"): {"retained": True}}
 
@@ -42,14 +44,13 @@ def test_second_round_has_independent_burn_without_resetting_first(
     monkeypatch.setattr(trial, "create_trial_file", create)
     with pytest.raises(ValueError, match="^browser_trial_already_attempted$"):
         trial.SingleJevAttempt("0.01").reserve()
-    second = trial.SingleJevAttempt("0.01", trial_id=trial.DIAGNOSTIC_TRIAL)
+    second = trial.SingleJevAttempt("0.01", trial_id=trial_id)
     second.reserve()
     with pytest.raises(ValueError, match="^browser_trial_already_attempted$"):
-        trial.SingleJevAttempt("0.01", trial_id=trial.DIAGNOSTIC_TRIAL).reserve()
+        trial.SingleJevAttempt("0.01", trial_id=trial_id).reserve()
     assert records[trial.ORIGINAL_TRIAL, "trial.jev-attempt.json"] == {"retained": True}
     assert (
-        records[trial.DIAGNOSTIC_TRIAL, "trial.jev-attempt.json"]["trial_id"]
-        == trial.DIAGNOSTIC_TRIAL
+        records[trial_id, "trial.jev-attempt.json"]["trial_id"] == trial_id
     )
     assert second.request_count == 1
     with pytest.raises(ValueError, match="^browser_trial_id_invalid$"):
@@ -218,30 +219,41 @@ def _legacy_terminal() -> dict:
 
 
 @pytest.mark.parametrize("changed", [{}, {"status": "running"}, {"cleanup": "quarantined"}])
+@pytest.mark.parametrize("trial_id", [trial.DIAGNOSTIC_TRIAL, trial.VISIBLE_TRIAL])
 def test_second_worker_fences_settled_exact_predecessor(
     changed: dict, monkeypatch: pytest.MonkeyPatch,
+    trial_id: str,
 ) -> None:
     current = {
         **_queued(),
-        "client_request_id": trial.trial_request_id(trial.DIAGNOSTIC_TRIAL),
-        "publication_digest": bytes.fromhex(trial.trial_publication_digest(trial.DIAGNOSTIC_TRIAL)),
+        "client_request_id": trial.trial_request_id(trial_id),
+        "publication_digest": bytes.fromhex(trial.trial_publication_digest(trial_id)),
     }
-    components = _components([{**_legacy_terminal(), **changed}, current])
+    history = [{**_legacy_terminal(), **changed}] if trial_id == trial.DIAGNOSTIC_TRIAL else [
+        _legacy_terminal()
+    ]
+    if trial_id == trial.VISIBLE_TRIAL:
+        history.append({**_legacy_terminal(), "task_id": trial.DIAGNOSTIC_TASK_ID,
+                        "run_id": trial.DIAGNOSTIC_RUN_ID,
+                        "client_request_id": trial.trial_request_id(trial.DIAGNOSTIC_TRIAL),
+                        "publication_digest": bytes.fromhex(
+                            trial.trial_publication_digest(trial.DIAGNOSTIC_TRIAL)), **changed})
+    components = _components([*history, current])
     marker = Mock()
     monkeypatch.setattr(once, "create_trial_file", marker)
     expected = BrowserAcceptedView(task_id="trial_task", run_id="trial_run", state_revision=0)
     if changed:
         with pytest.raises(ValueError, match="^browser_trial_history_invalid$"):
-            asyncio.run(once.execute_once(components, expected, trial_id=trial.DIAGNOSTIC_TRIAL))
+            asyncio.run(once.execute_once(components, expected, trial_id=trial_id))
         marker.assert_not_called()
         assert components.vertical.runs._claim_candidate.await_args_list == []
     else:
         assert (
-            asyncio.run(once.execute_once(components, expected, trial_id=trial.DIAGNOSTIC_TRIAL))
+            asyncio.run(once.execute_once(components, expected, trial_id=trial_id))
             is True
         )
         marker.assert_called_once_with("trial.worker.json", {"worker_passes": 1,
-            "trial_id": trial.DIAGNOSTIC_TRIAL}, trial_id=trial.DIAGNOSTIC_TRIAL)
+            "trial_id": trial_id}, trial_id=trial_id)
         assert components.vertical.runs._claim_candidate.await_args_list == [call(
             components.publication_owner, "trial_task", "trial_run", "browser_fixture_worker",
             timedelta(seconds=60),
