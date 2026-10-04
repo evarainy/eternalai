@@ -23,7 +23,7 @@ from app.infra.browser.synthetic_private_input import (
     read_private_operator_input,
     read_private_passphrase,
 )
-from app.infra.browser.synthetic_trial import approved_attempt_id
+from app.infra.browser.synthetic_trial import approved_attempt_id, material_attempt_id
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
     OBSERVE_TRIAL,
@@ -89,14 +89,19 @@ async def _operate(
     private_stdin: bool = False,
     trial_id: str = ORIGINAL_TRIAL,
     attempt_id: str | None = None,
+    identity_attempt_id: str | None = None,
 ) -> None:
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    selected = material_attempt_id(trial_id=trial_id, attempt_id=attempt_id,
+                                   identity_attempt_id=identity_attempt_id)
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_operator_arguments_invalid")
-    private_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    private_options = dict(trial_options)
     if attempt_id is not None:
-        private_options["attempt_id"] = attempt_id
-    trial_options = dict(private_options)
+        trial_options["attempt_id"] = attempt_id
+    if selected is not None:
+        private_options["attempt_id"] = selected
     stage = "bundle"
     try:
         if operation == "deactivate":
@@ -116,7 +121,7 @@ async def _operate(
                 raise ValueError("browser_operator_arguments_invalid")
             bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
                            else read_private_operator_input(
-                               trial_id=trial_id, attempt_id=attempt_id,
+                               trial_id=trial_id, attempt_id=selected,
                            ))
         else:
             bundle = prompt_operator_bundle(operator_vault)
@@ -188,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         default=ORIGINAL_TRIAL,
     )
     parser.add_argument("--attempt-id")
+    parser.add_argument("--identity-attempt-id")
     try:
         args = parser.parse_args(argv)
         if not args.enable or args.operation is None:
@@ -197,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             operator_vault=args.operator_vault, deactivation_vault=args.deactivation_vault,
             private_stdin=args.private_stdin,
             trial_id=args.trial_id, attempt_id=args.attempt_id,
+            identity_attempt_id=args.identity_attempt_id,
         ))
     except _PublicationDiagnostic as error:
         print(error.code, file=sys.stderr)

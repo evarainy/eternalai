@@ -34,6 +34,7 @@ from app.infra.browser.synthetic_trial import (
     SingleJevAttempt,
     approved_attempt_id,
     create_trial_file,
+    material_attempt_id,
     read_trial_file,
     require_diagnostic_terminal,
     require_legacy_terminal,
@@ -54,10 +55,14 @@ class _SilentParser(argparse.ArgumentParser):
 async def execute_once(
     components: SyntheticOperatorComponents, expected: BrowserAcceptedView,
     *, trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None,
+    identity_attempt_id: str | None = None, full_run: bool = False,
 ) -> bool:
     """Preflight is supplementary; the existing worker retains all current guards."""
     vertical, owner = components.vertical, components.publication_owner
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    binding = trial_reference(
+        trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id, full_run=full_run,
+    )
     async with vertical._sessions() as session:
         if attempt_id is not None:
             rows = (await session.execute(text(
@@ -133,9 +138,11 @@ async def execute_once(
         worker_receipt: dict[str, Any] = {"worker_passes": 1, "trial_id": trial_id}
         receipt_options: dict[str, Any] = {"trial_id": trial_id}
         if attempt_id is not None:
-            worker_receipt.update(trial_reference(trial_id, attempt_id=attempt_id))
+            worker_receipt.update(binding)
             worker_receipt.update(task_id=expected.task_id, run_id=expected.run_id)
             receipt_options["attempt_id"] = attempt_id
+        if identity_attempt_id is not None:
+            receipt_options["identity_attempt_id"] = identity_attempt_id
         create_trial_file("trial.worker.json", worker_receipt, **receipt_options)
     else:
         create_trial_file("trial.worker.json", {"worker_passes": 1})
@@ -151,7 +158,7 @@ async def execute_once(
         raise ValueError("browser_trial_worker_failed")
     # _run_claimed's finally settles cleanup; re-read instead of reporting its old snapshot.
     result = await vertical.runs.get(owner, expected.task_id, expected.run_id)
-    if trial_id == OBSERVE_TRIAL:
+    if trial_id == OBSERVE_TRIAL and not full_run:
         elapsed_ms = vertical.execution._consume_observe_only_receipt(result)
         observed = (elapsed_ms is not None and result.status == "failed"
                     and result.phase is None and result.effect == "not_sent"
@@ -159,8 +166,7 @@ async def execute_once(
                     and result.error_code == "browser_verification_failed"
                     and result.dispatch_failure_code == "cancelled"
                     and result.cleanup in {"released", "terminated"})
-        observation_binding = (trial_reference(trial_id, attempt_id=attempt_id)
-                               if attempt_id is not None else {})
+        observation_binding = binding if attempt_id is not None else {}
         create_trial_file("trial.observation.json", {
             **observation_binding,
             "trial_id": trial_id, "task_id": result.task_id, "run_id": result.run_id,
@@ -177,23 +183,34 @@ async def execute_once(
 
 async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
                trial_id: str = ORIGINAL_TRIAL, observe_only: bool = False,
-               attempt_id: str | None = None) -> bool:
+               attempt_id: str | None = None, identity_attempt_id: str | None = None,
+               full_run: bool = False) -> bool:
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    selected = material_attempt_id(trial_id=trial_id, attempt_id=attempt_id,
+                                   identity_attempt_id=identity_attempt_id)
+    trial_reference(trial_id, attempt_id=attempt_id,
+                    identity_attempt_id=identity_attempt_id, full_run=full_run)
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_trial_arguments_invalid")
     trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
     if attempt_id is not None:
         trial_options["attempt_id"] = attempt_id
-    if observe_only != (trial_id == OBSERVE_TRIAL):
+    if observe_only != (trial_id == OBSERVE_TRIAL and not full_run):
         raise ValueError("browser_trial_arguments_invalid")
     if observe_only and approved_budget_usd is not None:
         raise ValueError("browser_trial_arguments_invalid")
-    budget = None if observe_only else SingleJevAttempt(approved_budget_usd, **trial_options)
+    budget = None if observe_only else SingleJevAttempt(
+        approved_budget_usd, **trial_options,
+        identity_attempt_id=identity_attempt_id, full_run=full_run,
+    )
 
     def reject_http() -> None:
         raise ValueError("browser_observe_only_http_forbidden")
     if trial_id != ORIGINAL_TRIAL:
-        task_id, run_id = _receipt(trial_id, attempt_id=attempt_id)
+        task_id, run_id = _receipt(
+            trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id,
+            full_run=full_run,
+        )
         reference = {"task_id": task_id, "run_id": run_id}
     else:
         reference = read_trial_file("trial.run.json")
@@ -206,7 +223,7 @@ async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
     if private_stdin:
         bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
                        else read_private_operator_input(
-                           trial_id=trial_id, attempt_id=attempt_id,
+                           trial_id=trial_id, attempt_id=selected,
                        ))
     else:
         bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
@@ -215,9 +232,12 @@ async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, input_mode="structured",
             attempt_guard=reject_http if observe_only else budget.reserve,
-            **trial_options,
+            full_run=full_run, **trial_options,
         ) as components:
-            success = await execute_once(components, expected, **trial_options)
+            success = await execute_once(
+                components, expected, **trial_options,
+                identity_attempt_id=identity_attempt_id, full_run=full_run,
+            )
         return success if observe_only else success and budget.request_count == 1
     finally:
         print(json.dumps({"jev_request_count": 0 if observe_only else budget.request_count,
@@ -232,19 +252,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--approved-budget-usd")
     parser.add_argument("--observe-only", action="store_true")
+    parser.add_argument("--full-run", action="store_true")
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
         "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
     parser.add_argument("--attempt-id")
+    parser.add_argument("--identity-attempt-id")
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError
         success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin,
                                    trial_id=args.trial_id, observe_only=args.observe_only,
-                                   attempt_id=args.attempt_id))
+                                   attempt_id=args.attempt_id,
+                                   identity_attempt_id=args.identity_attempt_id,
+                                   full_run=args.full_run))
     except BaseException:
         print("browser_trial_worker_unavailable", file=sys.stderr)
         return 2

@@ -277,9 +277,18 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
 
 def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str,
            phrase_from_exact_field: bool = False, trial_id: str = _ORIGINAL_TRIAL,
-           refresh_script_sha256: str | None = None, attempt_id: str | None = None) -> int:
+           refresh_script_sha256: str | None = None, attempt_id: str | None = None,
+           identity_attempt_id: str | None = None, full_run: bool = False) -> int:
     """All preflights precede secret input; dispatch exactly once to a fixed service."""
     _require_future_deadline(approved_deadline_utc)
+    if (type(full_run) is not bool
+            or (identity_attempt_id is not None and (
+                trial_id != _OBSERVE_TRIAL or attempt_id is None or operation == "refresh"
+                or type(identity_attempt_id) is not str
+                or re.fullmatch(r"[0-9a-f]{32}", identity_attempt_id) is None))
+            or (full_run and (trial_id != _OBSERVE_TRIAL or attempt_id is None
+                              or identity_attempt_id is None or operation == "refresh"))):
+        raise ValueError("browser_jev_launcher_arguments_invalid")
     service, name = (_recipient(operation, trial_id, attempt_id) if attempt_id is not None
                      else _recipient(operation, trial_id))
     if ((operation == "refresh" and refresh_script_sha256 is None)
@@ -301,8 +310,8 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     _require_future_deadline(approved_deadline_utc)
     if operation in {"submit", "inspect", "deactivate", "refresh"}:
         key = None
-    elif trial_id == _OBSERVE_TRIAL:
-        # Accepted by the existing closed input frame; installation forbids HTTP.
+    elif trial_id == _OBSERVE_TRIAL and not (full_run and operation == "once"):
+        # Only the explicit full worker receives a real key; other recipients forbid HTTP.
         key = "observe-only-http-forbidden"
     else:
         key = read_exact_jev_key()
@@ -328,12 +337,16 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
         arguments += ["--trial-id", trial_id]
     if attempt_id is not None:
         arguments += ["--attempt-id", attempt_id]
+    if identity_attempt_id is not None:
+        arguments += ["--identity-attempt-id", identity_attempt_id]
+    if full_run and operation in {"once", "submit", "inspect"}:
+        arguments.append("--full-run")
     if operation in {"prepare", "activate"}:
         arguments += ["--operation", operation, "--input-mode", "structured"]
     elif operation == "api":
         arguments += ["--input-mode", "structured"]
     elif operation == "once":
-        arguments += (["--observe-only"] if trial_id == _OBSERVE_TRIAL
+        arguments += (["--observe-only"] if trial_id == _OBSERVE_TRIAL and not full_run
                       else ["--approved-budget-usd", "0.01"])
     elif operation != "refresh":
         arguments += ["--operation", operation]
@@ -361,13 +374,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--refresh-script-sha256")
     parser.add_argument("--attempt-id")
+    parser.add_argument("--identity-attempt-id")
+    parser.add_argument("--full-run", action="store_true")
     try:
         args = parser.parse_args(argv)
         return launch(args.operation, approved_deadline_utc=args.approved_deadline_utc,
                       expected_image_id=args.expected_image_id,
                       phrase_from_exact_field=args.phrase_from_exact_field, trial_id=args.trial_id,
                       refresh_script_sha256=args.refresh_script_sha256,
-                      attempt_id=args.attempt_id)
+                      attempt_id=args.attempt_id,
+                      identity_attempt_id=args.identity_attempt_id, full_run=args.full_run)
     except (Exception, KeyboardInterrupt) as error:
         codes = {
             "browser_jev_launcher_arguments_invalid", "browser_jev_launcher_deadline_invalid",

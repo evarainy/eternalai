@@ -360,6 +360,7 @@ async def open_synthetic_operator(
     attempt_guard: Callable[[], None] | None = None,
     trial_id: str = ORIGINAL_TRIAL,
     attempt_id: str | None = None,
+    full_run: bool = False,
 ) -> AsyncIterator[SyntheticOperatorComponents]:
     """Read-only installation/preflight; caller explicitly serves API or starts worker.
 
@@ -370,7 +371,12 @@ async def open_synthetic_operator(
             or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
-    if trial_id == OBSERVE_TRIAL:
+    if (type(full_run) is not bool or (full_run and (
+        trial_id != OBSERVE_TRIAL or attempt_id is None or input_mode != "structured"
+        or not callable(attempt_guard)
+    ))):
+        raise ValueError("browser_operator_disabled")
+    if trial_id == OBSERVE_TRIAL and not full_run:
         # Fixed diagnostic installation always rejects before HTTP transport IO.
         def reject_observe_only_http() -> None:
             raise ValueError("browser_observe_only_http_forbidden")
@@ -448,13 +454,14 @@ async def open_synthetic_operator(
                 structured_output=JSONStructuredOutputProvider() if input_mode == "chat" else None,
                 intent_model="glm-4.7" if input_mode == "chat" else None,
                 input_mode=input_mode,
-                execution_timeout_seconds=120 if trial_id == OBSERVE_TRIAL else None,
+                execution_timeout_seconds=(300 if full_run else 120)
+                if trial_id == OBSERVE_TRIAL else None,
                 trace=PostgreSQLTraceWriter(sessions), sessions=PostgreSQLSessionStore(sessions),
                 worker_id="browser_fixture_worker", enabled=True,
             ))
             if vertical is None:
                 raise ValueError("browser_operator_installation_unavailable")
-            if trial_id == OBSERVE_TRIAL:
+            if trial_id == OBSERVE_TRIAL and not full_run:
                 vertical.execution._install_fixed_observe_only(source.manifest)
             yield SyntheticOperatorComponents(
                 vertical, tokens, binder, PostgreSQLSessionRevocationStore(sessions),

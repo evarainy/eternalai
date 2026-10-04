@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -32,6 +33,17 @@ VISIBLE_RUN_ID = "02e340c0346942729ffddd555f436262"
 
 def approved_attempt_id(attempt_id: str | None, *, trial_id: str = ORIGINAL_TRIAL) -> str | None:
     return vault.approved_attempt_id(attempt_id, trial_id=trial_id)
+
+
+def material_attempt_id(*, trial_id: str = ORIGINAL_TRIAL,
+                        attempt_id: str | None = None,
+                        identity_attempt_id: str | None = None) -> str | None:
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    if identity_attempt_id is None:
+        return attempt_id
+    if attempt_id is None:
+        raise ValueError("browser_observe_attempt_invalid")
+    return approved_attempt_id(identity_attempt_id, trial_id=trial_id)
 
 
 def trial_request_id(trial_id: str = ORIGINAL_TRIAL, *, attempt_id: str | None = None) -> str:
@@ -67,8 +79,16 @@ def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL, *,
 
 
 def trial_reference(trial_id: str = ORIGINAL_TRIAL, *,
-                    attempt_id: str | None = None) -> dict[str, str]:
+                    attempt_id: str | None = None,
+                    identity_attempt_id: str | None = None,
+                    full_run: bool = False) -> dict[str, str]:
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    material_attempt_id(trial_id=trial_id, attempt_id=attempt_id,
+                        identity_attempt_id=identity_attempt_id)
+    if (type(full_run) is not bool or (full_run and (
+        trial_id != OBSERVE_TRIAL or attempt_id is None or identity_attempt_id is None
+    ))):
+        raise ValueError("browser_trial_arguments_invalid")
     if trial_id == ORIGINAL_TRIAL:
         return {}
     reference = {"trial_id": trial_id,
@@ -76,6 +96,10 @@ def trial_reference(trial_id: str = ORIGINAL_TRIAL, *,
                  "publication_digest": trial_publication_digest(trial_id, attempt_id=attempt_id)}
     if attempt_id is not None:
         reference["attempt_id"] = attempt_id
+    if identity_attempt_id is not None:
+        reference["identity_attempt_id"] = identity_attempt_id
+    if full_run:
+        reference["execution_mode"] = "full"
     return reference
 
 
@@ -143,11 +167,13 @@ def approved_trial_budget(value: str) -> Decimal:
 
 
 def _path(name: str, *, trial_id: str = ORIGINAL_TRIAL,
-          attempt_id: str | None = None) -> Path:
+          attempt_id: str | None = None, identity_attempt_id: str | None = None) -> Path:
     if name not in _FILES:
         raise ValueError("browser_trial_receipt_invalid")
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
-    vault._check_trial_directory(trial_id, attempt_id=attempt_id)
+    selected = material_attempt_id(trial_id=trial_id, attempt_id=attempt_id,
+                                   identity_attempt_id=identity_attempt_id)
+    vault._check_trial_directory(trial_id, attempt_id=selected)
     filename = name if attempt_id is None else attempt_id + "." + name
     return vault.trial_directory(trial_id) / filename
 
@@ -170,9 +196,11 @@ def _open_flags(base: int) -> int:
 
 
 def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL,
-                    attempt_id: str | None = None) -> dict[str, Any]:
+                    attempt_id: str | None = None,
+                    identity_attempt_id: str | None = None) -> dict[str, Any]:
     """Read non-secret metadata only; exact task path/owner/mode/link required."""
-    path = _path(name, trial_id=trial_id, attempt_id=attempt_id)
+    path = _path(name, trial_id=trial_id, attempt_id=attempt_id,
+                 identity_attempt_id=identity_attempt_id)
     try:
         vault._checked_file(path)
         fd = os.open(path, _open_flags(os.O_RDONLY))
@@ -194,12 +222,14 @@ def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL,
 
 
 def create_trial_file(name: str, document: dict[str, Any], *,
-                      trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None) -> None:
+                      trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None,
+                      identity_attempt_id: str | None = None) -> None:
     """Reserve before IO; an uncertain/failed attempt is never automatically reset."""
     body = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(body) > _MAX_BYTES:
         raise ValueError("browser_trial_receipt_invalid")
-    path = _path(name, trial_id=trial_id, attempt_id=attempt_id)
+    path = _path(name, trial_id=trial_id, attempt_id=attempt_id,
+                 identity_attempt_id=identity_attempt_id)
     try:
         fd = os.open(path, _open_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL), 0o600)
         with os.fdopen(fd, "wb") as stream:
@@ -215,9 +245,18 @@ def create_trial_file(name: str, document: dict[str, Any], *,
 class SingleJevAttempt:
     """Burn the task's only transport attempt before dispatch, including failures."""
 
-    def __init__(self, approved_budget_usd: str, *, trial_id: str = ORIGINAL_TRIAL) -> None:
+    def __init__(self, approved_budget_usd: str, *, trial_id: str = ORIGINAL_TRIAL,
+                 attempt_id: str | None = None, identity_attempt_id: str | None = None,
+                 full_run: bool = False) -> None:
         self.trial_id = vault.approved_trial_id(trial_id)
-        if self.trial_id == OBSERVE_TRIAL:
+        self.attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+        self.identity_attempt_id = identity_attempt_id
+        self.full_run = full_run
+        self.reference = trial_reference(
+            trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id,
+            full_run=full_run,
+        )
+        if self.trial_id == OBSERVE_TRIAL and not full_run:
             raise ValueError("browser_trial_budget_invalid")
         self.budget = approved_trial_budget(approved_budget_usd)
         self.request_count = 0
@@ -232,6 +271,19 @@ class SingleJevAttempt:
         }
         if self.trial_id == ORIGINAL_TRIAL:
             create_trial_file("trial.jev-attempt.json", document)
+        elif self.full_run:
+            options = {"trial_id": self.trial_id, "attempt_id": self.attempt_id,
+                       "identity_attempt_id": self.identity_attempt_id}
+            run = read_trial_file("trial.run.json", **options)
+            if (set(run) != {"task_id", "run_id", *self.reference}
+                    or any(run[name] != value for name, value in self.reference.items())
+                    or any(type(run[name]) is not str
+                           or re.fullmatch(r"[A-Za-z0-9_-]{1,96}", run[name]) is None
+                           for name in ("task_id", "run_id"))):
+                raise ValueError("browser_trial_receipt_invalid")
+            document.update(self.reference)
+            document.update(task_id=run["task_id"], run_id=run["run_id"])
+            create_trial_file("trial.jev-attempt.json", document, **options)
         else:
             document["trial_id"] = self.trial_id
             create_trial_file("trial.jev-attempt.json", document, trial_id=self.trial_id)

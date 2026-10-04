@@ -26,6 +26,7 @@ from app.infra.browser.synthetic_trial import (
     VISIBLE_TRIAL,
     approved_attempt_id,
     create_trial_file,
+    material_attempt_id,
     read_trial_file,
     trial_reference,
     trial_request_id,
@@ -68,15 +69,20 @@ class TrialOutcome:
     exit_code: int = 2
 
 
-def _receipt(trial_id: str = ORIGINAL_TRIAL, *,
-             attempt_id: str | None = None) -> tuple[str, str]:
+def _receipt(trial_id: str = ORIGINAL_TRIAL, *, attempt_id: str | None = None,
+             identity_attempt_id: str | None = None, full_run: bool = False) -> tuple[str, str]:
     try:
         attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
         options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
         if attempt_id is not None:
             options["attempt_id"] = attempt_id
+        if identity_attempt_id is not None:
+            options["identity_attempt_id"] = identity_attempt_id
+        binding = trial_reference(
+            trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id,
+            full_run=full_run,
+        )
         document = read_trial_file("trial.run.json", **options)
-        binding = trial_reference(trial_id, attempt_id=attempt_id)
         if (type(document) is not dict or set(document) != {"task_id", "run_id", *binding}
                 or any(document[name] != value for name, value in binding.items())):
             raise ValueError
@@ -174,21 +180,30 @@ async def run_trial(
     private_stdin: bool = False,
     trial_id: str = ORIGINAL_TRIAL,
     attempt_id: str | None = None,
+    identity_attempt_id: str | None = None,
+    full_run: bool = False,
 ) -> TrialOutcome:
     """Perform exactly one fixed HTTP operation; injected client is for local tests."""
     if enabled is not True or operation not in {"submit", "inspect", "cancel"}:
         raise TrialClientError("browser_trial_disabled")
     try:
         attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+        selected = material_attempt_id(trial_id=trial_id, attempt_id=attempt_id,
+                                       identity_attempt_id=identity_attempt_id)
+        binding = trial_reference(
+            trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id,
+            full_run=full_run,
+        )
         if trial_id != ORIGINAL_TRIAL and not private_stdin:
             raise ValueError
     except ValueError:
         raise TrialClientError("browser_trial_arguments_invalid") from None
-    binding = trial_reference(trial_id, attempt_id=attempt_id)
     marker = {"submission_attempts": 1, **binding}
     receipt_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
     if attempt_id is not None:
         receipt_options["attempt_id"] = attempt_id
+    if identity_attempt_id is not None:
+        receipt_options["identity_attempt_id"] = identity_attempt_id
     if operation == "submit":
         try:
             create_trial_file("trial.submit.json", marker, **receipt_options)
@@ -206,8 +221,11 @@ async def run_trial(
         except Exception:
             raise TrialClientError("browser_trial_marker_unavailable") from None
     else:
-        task_id, run_id = _receipt(trial_id, attempt_id=attempt_id)
-    token = (_token(private_stdin=True, trial_id=trial_id, attempt_id=attempt_id)
+        task_id, run_id = _receipt(
+            trial_id, attempt_id=attempt_id, identity_attempt_id=identity_attempt_id,
+            full_run=full_run,
+        )
+    token = (_token(private_stdin=True, trial_id=trial_id, attempt_id=selected)
              if private_stdin else _token())
     owned = client is None
     if owned:
@@ -284,7 +302,7 @@ async def run_trial(
             return outcome("browser_trial_nonterminal")
         # Observation success requires its own diagnostic receipt. This HTTP
         # inspection never turns an observe-only terminal Run into business success.
-        if (trial_id == OBSERVE_TRIAL or run.status != "completed"
+        if ((trial_id == OBSERVE_TRIAL and not full_run) or run.status != "completed"
                 or result is None or result.verification != "verified"):
             return outcome("browser_trial_terminal_unsuccessful")
         if result.cleanup not in {"released", "terminated"}:
