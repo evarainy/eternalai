@@ -128,9 +128,9 @@ Do not replace it with `unconfined`, a different file, or a permissive fallback.
 
 **Current task:** initialization completed on 2026-10-04; do not repeat
 `--init` against its existing database and vault. The original conservative
-cutoff `2026-10-04T04:48:46Z` has passed. A separately approved identity refresh
-is pending execution; these key-connection instructions do not perform it or
-extend the cutoff. Keep the existing ciphertext and task state for recovery.
+cutoff `2026-10-04T04:48:46Z` has passed. The separately approved refresh completed;
+the current cutoff is `2026-10-04T06:56:46Z`. These input instructions do not
+extend it. Keep the existing ciphertext and task state for recovery.
 The bootstrap commands below describe fresh-task preparation only.
 
 For fresh-task preparation in the first terminal, parse the merged Compose model, build the shared local
@@ -150,7 +150,11 @@ Invoke-BrowserV42 run browser-bootstrap --enable --init
 ```
 
 For prepare, activate, API and once-worker, use the explicit owner launcher from
-`E:/code/eternalai/.worktrees/browser-runtime-v42`. After the candidate image is
+`E:/code/eternalai/.worktrees/browser-runtime-v42`. The explicitly authorized
+`--phrase-from-exact-field` option projects only `jev-passport` from the fixed
+project `.env`, and sends it over the existing anonymous stdin frame. The
+`inspect` and `deactivate` operations send a phrase-only frame, without reading
+or supplying `jev-key`; their ciphertext paths remain code-owned. After the candidate image is
 reviewed and built, set its approved immutable ID and the owner's approved UTC
 cutoff in each private terminal. Replace these two public placeholders; do not
 put secrets in them. The cutoff must be in `YYYY-MM-DDTHH:MM:SSZ` form and still

@@ -219,13 +219,25 @@ def read_encrypted(path: Path, *, expected_name: Literal[
 
 def read_private_operator_document(passphrase: SecretStr) -> dict[str, Any]:
     """Only the explicit private-stdin operator path; no caller-selected file."""
-    contents = _read_checked_ciphertext(
-        VAULT_DIRECTORY / OPERATOR_FILE, expected_name=OPERATOR_FILE,
-    )
+    return _read_private_document(OPERATOR_FILE, passphrase)
+
+
+def read_private_business_document(passphrase: SecretStr) -> dict[str, Any]:
+    return _read_private_document(BUSINESS_FILE, passphrase)
+
+
+def read_private_deactivation_document(passphrase: SecretStr) -> dict[str, Any]:
+    return _read_private_document(DEACTIVATION_FILE, passphrase)
+
+
+def _read_private_document(name: Literal[
+    "operator.bundle.enc", "business.token.enc", "deactivation.bundle.enc"
+], passphrase: SecretStr) -> dict[str, Any]:
+    contents = _read_checked_ciphertext(VAULT_DIRECTORY / name, expected_name=name)
     try:
         if not isinstance(passphrase, SecretStr):
             raise ValueError
-        return decrypt_document(OPERATOR_FILE, contents, passphrase.get_secret_value())
+        return decrypt_document(name, contents, passphrase.get_secret_value())
     except (OSError, ValueError):
         raise ValueError("browser_vault_unlock_failed") from None
 

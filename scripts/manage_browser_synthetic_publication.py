@@ -12,13 +12,18 @@ from typing import NoReturn
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.infra.browser.openrouter_jev import prompt_openrouter_key
+from app.infra.browser.synthetic_configuration import SyntheticDeactivationBundle
 from app.infra.browser.synthetic_operator import (
     deactivate_synthetic_publication,
     open_synthetic_operator,
     prompt_deactivation_bundle,
     prompt_operator_bundle,
 )
-from app.infra.browser.synthetic_private_input import read_private_operator_input
+from app.infra.browser.synthetic_private_input import (
+    read_private_operator_input,
+    read_private_passphrase,
+)
+from app.infra.browser.synthetic_vault import read_private_deactivation_document
 from app.ports.auth import AuthenticationError
 from app.ports.browser_publication_store import BrowserPublicationError
 
@@ -79,9 +84,11 @@ async def _operate(
     stage = "bundle"
     try:
         if operation == "deactivate":
-            if operator_vault is not None or private_stdin:
+            if operator_vault is not None or (private_stdin and deactivation_vault is not None):
                 raise ValueError("browser_operator_arguments_invalid")
-            deactivation_bundle = prompt_deactivation_bundle(deactivation_vault)
+            deactivation_bundle = (SyntheticDeactivationBundle.model_validate(
+                read_private_deactivation_document(read_private_passphrase())
+            ) if private_stdin else prompt_deactivation_bundle(deactivation_vault))
             stage = "deactivate"
             await deactivate_synthetic_publication(deactivation_bundle, enabled=True)
             return

@@ -1,7 +1,7 @@
 """Owner-terminal launcher for one fixed synthetic Jev input recipient.
 
 Standard library only; importing this module does no IO. The exact authorized
-host field is projected in memory and sent once through an anonymous stdin pipe.
+host fields are projected in memory and sent once through an anonymous stdin pipe.
 """
 
 from __future__ import annotations
@@ -35,12 +35,14 @@ _IMAGE = "eternalai-browser-v42:local"
 _FRAME_VERSION = "browser.synthetic.private-input.v1"
 _MAX_FRAME = 65536
 _MAX_SOURCE = 1048576
-_MAX_LINE = 16384
+_MAX_LINE = 32768
 _RECIPIENTS = {
     "prepare": ("browser-publication", "browser-v42-single-prepare"),
     "activate": ("browser-publication", "browser-v42-single-activate"),
     "api": ("browser-synthetic-api", "browser-v42-single-api"),
     "once": ("browser-single-run", "browser-v42-single-once"),
+    "inspect": ("browser-client", "browser-v42-single-client-inspect-auto"),
+    "deactivate": ("browser-publication", "browser-v42-single-deactivate-auto"),
 }
 
 
@@ -66,8 +68,10 @@ def _regular_file(metadata: os.stat_result, *, maximum: int) -> bool:
             and metadata.st_size <= maximum)
 
 
-def _project_field(stream: BinaryIO) -> str:
+def _project_field(stream: BinaryIO, field: bytes = b"jev-key") -> str:
     """Discard every nonselected value as bytes, without decoding or interpolation."""
+    if field not in {b"jev-key", b"jev-passport"}:
+        raise ValueError
     prefix = bytearray()
     selected = bytearray()
     value: bytes | None = None
@@ -110,7 +114,7 @@ def _project_field(stream: BinaryIO) -> str:
         elif not is_value:
             if byte == b"=":
                 is_value = True
-                is_selected = bytes(prefix).strip(b" \t") == b"jev-key"
+                is_selected = bytes(prefix).strip(b" \t") == field
                 prefix.clear()
             elif len(prefix) < 256:
                 prefix.extend(byte)
@@ -120,7 +124,7 @@ def _project_field(stream: BinaryIO) -> str:
                 prefix.clear()
         elif is_selected:
             selected.extend(byte)
-            if len(selected) > 4100:
+            if len(selected) > (4100 if field == b"jev-key" else 16400):
                 raise ValueError
     if value is None or not value:
         raise ValueError
@@ -128,12 +132,21 @@ def _project_field(stream: BinaryIO) -> str:
         if len(value) < 2 or value[-1:] != value[:1]:
             raise ValueError
         value = value[1:-1]
-    if not 1 <= len(value) <= 4096 or any(byte < 33 or byte > 126 for byte in value):
+    if field == b"jev-key":
+        if not 1 <= len(value) <= 4096 or any(byte < 33 or byte > 126 for byte in value):
+            raise ValueError
+        return value.decode("ascii")
+    phrase = value.decode("utf-8")
+    if not 12 <= len(phrase) <= 4096:
         raise ValueError
-    return value.decode("ascii")
+    return phrase
 
 
 def read_exact_jev_key() -> str:
+    return _read_exact_field(b"jev-key")
+
+
+def _read_exact_field(field: bytes) -> str:
     """Open only the fixed approved source; reject links and malformed selection."""
     try:
         before = _SOURCE.lstat()
@@ -146,7 +159,7 @@ def read_exact_jev_key() -> str:
             if (not _regular_file(opened, maximum=_MAX_SOURCE)
                     or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)):
                 raise ValueError
-            return _project_field(stream)
+            return _project_field(stream, field)
     except (Exception, KeyboardInterrupt):
         raise ValueError("browser_jev_exact_field_invalid") from None
 
@@ -224,12 +237,13 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
         raise ValueError("browser_jev_launcher_preflight_failed")
 
 
-def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str) -> int:
+def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str,
+           phrase_from_exact_field: bool = False) -> int:
     """All preflights precede secret input; dispatch exactly once to a fixed service."""
     _require_future_deadline(approved_deadline_utc)
     if operation not in _RECIPIENTS:
         raise ValueError("browser_jev_launcher_arguments_invalid")
-    if not sys.stdin.isatty() or not sys.stderr.isatty():
+    if not phrase_from_exact_field and (not sys.stdin.isatty() or not sys.stderr.isatty()):
         raise ValueError("browser_jev_owner_terminal_required")
     environment = _docker_environment()
     # Public immutable image identity pins Compose's actual recipient. The
@@ -237,10 +251,12 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     environment["BROWSER_V42_SINGLE_RUN_IMAGE"] = expected_image_id
     _preflight(operation, expected_image_id, environment)
     _require_future_deadline(approved_deadline_utc)
-    key = read_exact_jev_key()
-    phrase = _prompt_phrase()
-    frame = json.dumps({"version": _FRAME_VERSION, "vault_passphrase": phrase,
-                        "jev_key": key}, separators=(",", ":")).encode("ascii")
+    key = read_exact_jev_key() if operation not in {"inspect", "deactivate"} else None
+    phrase = (_read_exact_field(b"jev-passport") if phrase_from_exact_field else _prompt_phrase())
+    document = {"version": _FRAME_VERSION, "vault_passphrase": phrase}
+    if key is not None:
+        document["jev_key"] = key
+    frame = json.dumps(document, separators=(",", ":")).encode("ascii")
     if len(frame) > _MAX_FRAME:
         raise ValueError("browser_jev_launcher_input_invalid")
     service, name = _RECIPIENTS[operation]
@@ -252,8 +268,10 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
         arguments += ["--operation", operation, "--input-mode", "structured"]
     elif operation == "api":
         arguments += ["--input-mode", "structured"]
-    else:
+    elif operation == "once":
         arguments += ["--approved-budget-usd", "0.01"]
+    else:
+        arguments += ["--operation", operation]
     # Recheck after hidden input, before starting any container. stdout/stderr
     # remain the owner's private terminal; communicate closes stdin with EOF.
     _require_future_deadline(approved_deadline_utc)
@@ -269,10 +287,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operation", choices=tuple(_RECIPIENTS), required=True)
     parser.add_argument("--approved-deadline-utc", required=True)
     parser.add_argument("--expected-image-id", required=True)
+    parser.add_argument("--phrase-from-exact-field", action="store_true")
     try:
         args = parser.parse_args(argv)
         return launch(args.operation, approved_deadline_utc=args.approved_deadline_utc,
-                      expected_image_id=args.expected_image_id)
+                      expected_image_id=args.expected_image_id,
+                      phrase_from_exact_field=args.phrase_from_exact_field)
     except (Exception, KeyboardInterrupt) as error:
         codes = {
             "browser_jev_launcher_arguments_invalid", "browser_jev_launcher_deadline_invalid",

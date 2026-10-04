@@ -1,7 +1,8 @@
 """One bounded operator frame from the explicitly selected anonymous stdin pipe.
 
 This does not discover credentials or accept paths. Only the existing fixed
-operator ciphertext is unlocked; business and deactivation input are excluded.
+operator ciphertext is unlocked by the operator reader. Phrase-only frames serve
+the fixed business and deactivation recipients without any provider key.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ def _closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def read_private_operator_input() -> tuple[SyntheticOperatorBundle, SecretStr]:
+def _read_frame(*, require_jev_key: bool) -> dict[str, Any]:
     """Require non-TTY stdin, EOF and one closed, versioned JSON object."""
     try:
         if sys.stdin.isatty():
@@ -38,25 +39,36 @@ def read_private_operator_input() -> tuple[SyntheticOperatorBundle, SecretStr]:
         if not isinstance(payload, bytes) or not payload or len(payload) > MAX_FRAME_BYTES:
             raise ValueError
         frame = json.loads(payload.decode("ascii"), object_pairs_hook=_closed_object)
-        if (type(frame) is not dict or set(frame) != _FIELDS
+        fields = _FIELDS if require_jev_key else _FIELDS - {"jev_key"}
+        if (type(frame) is not dict or set(frame) != fields
                 or frame["version"] != FRAME_VERSION
                 or type(frame["vault_passphrase"]) is not str
                 or not 12 <= len(frame["vault_passphrase"]) <= 4096):
             raise ValueError
         # Match the existing vault passphrase contract, including Unicode/spaces.
         frame["vault_passphrase"].encode("utf-8")
-        value = frame["jev_key"]
-        if type(value) is not str or not 1 <= len(value) <= 4096 or any(
+        value = frame.get("jev_key")
+        if require_jev_key and (type(value) is not str or not 1 <= len(value) <= 4096 or any(
             ord(char) < 33 or ord(char) > 126 for char in value
-        ):
+        )):
             raise ValueError("jev_key_input_invalid")
-        key = SecretStr(value)
-        phrase = SecretStr(frame["vault_passphrase"])
     except (Exception, KeyboardInterrupt) as error:
         code = ("jev_key_input_invalid" if type(error) is ValueError
                 and error.args == ("jev_key_input_invalid",)
                 else "browser_private_input_invalid")
         raise ValueError(code) from None
+    return frame
+
+
+def read_private_passphrase() -> SecretStr:
+    """Phrase-only closed frame: business/cleanup recipients never receive Jev key."""
+    return SecretStr(_read_frame(require_jev_key=False)["vault_passphrase"])
+
+
+def read_private_operator_input() -> tuple[SyntheticOperatorBundle, SecretStr]:
+    frame = _read_frame(require_jev_key=True)
+    key = SecretStr(frame["jev_key"])
+    phrase = SecretStr(frame["vault_passphrase"])
     try:
         bundle = SyntheticOperatorBundle.model_validate(read_private_operator_document(phrase))
     except (Exception, KeyboardInterrupt):

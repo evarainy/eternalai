@@ -12,8 +12,14 @@ import httpx2
 from app.browser_skill.run_contracts import BrowserAcceptedView
 from app.infra.adapters.oa.contracts import OASystemMessageCollection
 from app.infra.browser.fixed_synthetic_seed import _COLLECTION, SYNTHETIC_KEY, SYNTHETIC_USER
+from app.infra.browser.synthetic_private_input import read_private_passphrase
 from app.infra.browser.synthetic_trial import create_trial_file, read_trial_file
-from app.infra.browser.synthetic_vault import BUSINESS_FILE, VAULT_DIRECTORY, read_encrypted
+from app.infra.browser.synthetic_vault import (
+    BUSINESS_FILE,
+    VAULT_DIRECTORY,
+    read_encrypted,
+    read_private_business_document,
+)
 from app.ports.browser_chat import BrowserRunResponse
 from app.ports.response_envelope import ResponseEnvelope
 
@@ -58,9 +64,12 @@ def _receipt() -> tuple[str, str]:
         raise TrialClientError("browser_trial_receipt_invalid") from None
 
 
-def _token() -> str:
+def _token(*, private_stdin: bool = False) -> str:
     try:
-        document = read_encrypted(VAULT_DIRECTORY / BUSINESS_FILE, expected_name=BUSINESS_FILE)
+        document = (
+            read_private_business_document(read_private_passphrase()) if private_stdin
+            else read_encrypted(VAULT_DIRECTORY / BUSINESS_FILE, expected_name=BUSINESS_FILE)
+        )
         if type(document) is not dict or set(document) != {"business_token"}:
             raise ValueError
         token = document["business_token"]
@@ -114,6 +123,7 @@ def _checked_run(document: Any, task_id: str, run_id: str) -> BrowserRunResponse
 async def run_trial(
     operation: Literal["submit", "inspect", "cancel"], *, enabled: bool = False,
     client: httpx2.AsyncClient | None = None,
+    private_stdin: bool = False,
 ) -> TrialOutcome:
     """Perform exactly one fixed HTTP operation; injected client is for local tests."""
     if enabled is not True or operation not in {"submit", "inspect", "cancel"}:
@@ -136,7 +146,7 @@ async def run_trial(
             raise TrialClientError("browser_trial_marker_unavailable") from None
     else:
         task_id, run_id = _receipt()
-    token = _token()
+    token = _token(private_stdin=private_stdin) if private_stdin else _token()
     owned = client is None
     if owned:
         client = httpx2.AsyncClient(

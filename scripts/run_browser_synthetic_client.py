@@ -20,9 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = _SilentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--operation", choices=("submit", "inspect", "cancel"), required=True)
     parser.add_argument("--enable", action="store_true")
+    parser.add_argument("--private-stdin", action="store_true")
     try:
         args = parser.parse_args(argv)
-        outcome = asyncio.run(run_trial(args.operation, enabled=args.enable))
+        outcome = asyncio.run(run_trial(args.operation, enabled=args.enable,
+                                        private_stdin=args.private_stdin))
     except TrialClientError as error:
         print(json.dumps({"code": error.code}, sort_keys=True))
         return 2

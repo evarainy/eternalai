@@ -269,16 +269,54 @@ def test_publication_private_key_failure_preserves_key_diagnostic(
     assert capsys.readouterr() == ("", "browser_synthetic_publication_key_input_invalid\n")
 
 
-def test_publication_private_stdin_rejects_deactivation_before_input(
+def test_publication_private_stdin_rejects_custom_deactivation_path_before_input(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reader, deactivate = Mock(), Mock()
     monkeypatch.setattr(publication, "read_private_operator_input", reader)
     monkeypatch.setattr(publication, "prompt_deactivation_bundle", deactivate)
     with pytest.raises(ValueError, match="^browser_operator_arguments_invalid$"):
-        asyncio.run(publication._operate("deactivate", private_stdin=True))
+        asyncio.run(publication._operate("deactivate", private_stdin=True,
+                                         deactivation_vault=Path("unexpected")))
     reader.assert_not_called()
     deactivate.assert_not_called()
+
+
+def test_phrase_only_frame_rejects_provider_key_and_never_unlocks_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phrase = secrets.token_urlsafe(32)
+    _stdin(monkeypatch, json.dumps({"version": private.FRAME_VERSION,
+                                   "vault_passphrase": phrase}).encode())
+    unlock = Mock(side_effect=AssertionError("operator unlock forbidden"))
+    monkeypatch.setattr(private, "read_private_operator_document", unlock)
+    assert private.read_private_passphrase().get_secret_value() == phrase
+    _stdin(monkeypatch, _frame(vault_passphrase=phrase))
+    with pytest.raises(ValueError, match="^browser_private_input_invalid$"):
+        private.read_private_passphrase()
+    unlock.assert_not_called()
+
+
+def test_deactivation_private_frame_uses_only_original_cleanup_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phrase = SecretStr(secrets.token_urlsafe(32))
+    document = {field: secrets.token_urlsafe(32) for field in (
+        "session_signing_key", "session_binding_key", "publication_token")}
+    reader = Mock(return_value=document)
+    deactivate = AsyncMock()
+    operator = Mock(side_effect=AssertionError("operator input forbidden"))
+    monkeypatch.setattr(publication, "read_private_passphrase", Mock(return_value=phrase))
+    monkeypatch.setattr(publication, "read_private_deactivation_document", reader)
+    monkeypatch.setattr(publication, "read_private_operator_input", operator)
+    monkeypatch.setattr(publication, "deactivate_synthetic_publication", deactivate)
+    asyncio.run(publication._operate("deactivate", private_stdin=True))
+    reader.assert_called_once_with(phrase)
+    assert deactivate.await_count == 1
+    assert (deactivate.call_args.args[0].publication_token.get_secret_value()
+            == document["publication_token"])
+    assert deactivate.call_args.kwargs == {"enabled": True}
+    operator.assert_not_called()
 
 
 @pytest.mark.parametrize("private_stdin", [False, True])

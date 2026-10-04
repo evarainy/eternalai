@@ -232,7 +232,7 @@ def test_hidden_phrase_warning_never_falls_back_to_echo(monkeypatch: pytest.Monk
         entry._prompt_phrase()
 
 
-@pytest.mark.parametrize("operation", ["deactivate", "client", "supervisor", "worker"])
+@pytest.mark.parametrize("operation", ["client", "supervisor", "worker"])
 def test_no_other_recipient_can_consume_secret_input(
     operation: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -242,6 +242,52 @@ def test_no_other_recipient_can_consume_secret_input(
         entry.launch(operation, approved_deadline_utc=_future(),
                      expected_image_id="sha256:" + "a" * 64)
     source.assert_not_called()
+
+
+def test_exact_passport_preserves_unicode_spaces_and_rejects_duplicates() -> None:
+    phrase = "  synthetic vault phrase \u4e00 "
+    payload = b"other=\xff\xfe\nJEV-PASSPORT=decoy\njev-passport='" + phrase.encode() + b"'\r\n"
+    assert entry._project_field(io.BytesIO(payload), b"jev-passport") == phrase
+    with pytest.raises(ValueError):
+        entry._project_field(io.BytesIO(payload + b"jev-passport=duplicate\n"), b"jev-passport")
+
+
+@pytest.mark.parametrize("operation", ["inspect", "deactivate"])
+def test_automatic_cleanup_sends_phrase_only_without_prompt_or_key(
+    operation: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phrase = secrets.token_urlsafe(32)
+    reads: list[bytes] = []
+    frames: list[bytes] = []
+    arguments: list[list[str]] = []
+    monkeypatch.setattr(entry.sys, "stdin", SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setattr(entry.sys, "stderr", SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setattr(entry, "_preflight", lambda *_: None)
+    monkeypatch.setattr(entry, "_check_image", lambda *_: None)
+    monkeypatch.setattr(entry, "_read_exact_field", lambda field: (reads.append(field) or phrase))
+    monkeypatch.setattr(entry, "read_exact_jev_key", Mock(side_effect=AssertionError("key read")))
+    monkeypatch.setattr(entry, "_prompt_phrase", Mock(side_effect=AssertionError("prompt")))
+
+    class Process:
+        returncode = 0
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            arguments.append(args)
+            assert kwargs["stdin"] is subprocess.PIPE
+            assert phrase not in repr(args) and phrase not in repr(kwargs)
+        def __enter__(self):
+            return self
+        def __exit__(self, *_: object) -> None:
+            pass
+        def communicate(self, *, input: bytes) -> None:
+            frames.append(input)
+
+    monkeypatch.setattr(entry.subprocess, "Popen", Process)
+    assert entry.launch(operation, approved_deadline_utc=_future(),
+                        expected_image_id="sha256:"+"a"*64, phrase_from_exact_field=True) == 0
+    assert reads == [b"jev-passport"]
+    assert len(arguments) == len(frames) == 1
+    assert arguments[0][-2:] == ["--operation", operation]
+    assert json.loads(frames[0]) == {"version": entry._FRAME_VERSION, "vault_passphrase": phrase}
 
 
 def test_preflight_uses_only_filtered_metadata_and_quiet_compose(
