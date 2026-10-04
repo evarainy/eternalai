@@ -168,7 +168,9 @@ def _prompt_phrase() -> str:
 
 def _docker_environment() -> dict[str, str]:
     # Keep only nonsecret Windows CLI support paths; no source fields or phrase.
-    names = ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+    # Docker CLI discovers its Windows Compose plugin under these system paths.
+    names = ("PATH", "SystemRoot", "WINDIR", "ProgramFiles", "ProgramData",
+             "COMSPEC", "TEMP", "TMP",
              "USERPROFILE", "APPDATA", "LOCALAPPDATA")
     result = {name: os.environ[name] for name in names if name in os.environ}
     result["BROWSER_V42_SECCOMP_PROFILE"] = str(_SECCOMP)
