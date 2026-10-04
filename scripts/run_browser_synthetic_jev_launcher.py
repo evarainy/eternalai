@@ -230,6 +230,9 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     if not sys.stdin.isatty() or not sys.stderr.isatty():
         raise ValueError("browser_jev_owner_terminal_required")
     environment = _docker_environment()
+    # Public immutable image identity pins Compose's actual recipient. The
+    # preflight validates its exact SHA-256 syntax before any Docker command.
+    environment["BROWSER_V42_SINGLE_RUN_IMAGE"] = expected_image_id
     _preflight(operation, expected_image_id, environment)
     _require_future_deadline(approved_deadline_utc)
     key = read_exact_jev_key()

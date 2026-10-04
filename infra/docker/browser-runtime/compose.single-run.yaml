@@ -11,7 +11,7 @@ x-task-database-password: &task-database-password
     create_host_path: false
 
 x-browser-single-run-image: &browser-single-run-image
-  image: eternalai-browser-v42:local
+  image: ${BROWSER_V42_SINGLE_RUN_IMAGE:-eternalai-browser-v42:local}
   build:
     context: ../../..
     dockerfile: infra/docker/browser-runtime/Dockerfile
@@ -28,6 +28,7 @@ x-browser-single-run-image: &browser-single-run-image
 
 services:
   browser-synthetic-api:
+    image: ${BROWSER_V42_SINGLE_RUN_IMAGE:-eternalai-browser-v42:local}
     command:
       - --enable
       - --input-mode

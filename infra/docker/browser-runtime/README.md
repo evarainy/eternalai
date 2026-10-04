@@ -179,6 +179,9 @@ with a fixed error. It requires the owner's terminal for hidden entry of the
 It checks the worktree, deadline, fixed empty env file, reviewed seccomp profile,
 local image ID/user, absent target container and quiet Compose configuration
 before reading inputs; image and deadline are rechecked after hidden input.
+The public image ID is also passed through `BROWSER_V42_SINGLE_RUN_IMAGE` to pin
+the existing Compose services to that immutable image when dispatching; a later
+local tag change cannot select a different recipient image.
 
 One bounded, versioned JSON frame carries the passphrase and Jev key only on
 the child process's anonymous stdin. The explicit `--private-stdin` branch

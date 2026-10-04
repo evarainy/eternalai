@@ -172,10 +172,20 @@ def test_one_fixed_recipient_receives_secrets_only_on_anonymous_stdin(
     assert kwargs["stdin"] is subprocess.PIPE
     assert kwargs["stdout"] is None and kwargs["stderr"] is None
     assert "JEV_KEY" not in kwargs["env"] and "UNRELATED_SECRET" not in kwargs["env"]
+    assert kwargs["env"]["BROWSER_V42_SINGLE_RUN_IMAGE"] == "sha256:" + "a" * 64
     assert json.loads(frames[0]) == {
         "version": entry._FRAME_VERSION, "vault_passphrase": phrase, "jev_key": key,
     }
     assert capsys.readouterr().out == ""
+
+
+def test_existing_compose_pins_shared_anchor_and_api_to_same_public_image_id() -> None:
+    worktree = Path(entry.__file__).resolve().parent.parent
+    model = (worktree / "infra/docker/browser-runtime/compose.single-run.yaml").read_text()
+    image = "image: ${BROWSER_V42_SINGLE_RUN_IMAGE:-eternalai-browser-v42:local}"
+    assert "x-browser-single-run-image: &browser-single-run-image\n  " + image in model
+    assert "services:\n  browser-synthetic-api:\n    " + image in model
+    assert model.count(image) == 2
 
 
 def test_deadline_rechecked_after_prompt_prevents_launch(monkeypatch: pytest.MonkeyPatch) -> None:
