@@ -283,7 +283,7 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     _require_future_deadline(approved_deadline_utc)
     if (type(full_run) is not bool
             or (identity_attempt_id is not None and (
-                trial_id != _OBSERVE_TRIAL or attempt_id is None or operation == "refresh"
+                trial_id != _OBSERVE_TRIAL or attempt_id is None
                 or type(identity_attempt_id) is not str
                 or re.fullmatch(r"[0-9a-f]{32}", identity_attempt_id) is None))
             or (full_run and (trial_id != _OBSERVE_TRIAL or attempt_id is None
