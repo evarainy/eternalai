@@ -149,6 +149,7 @@
 !app/infra/browser/synthetic_bootstrap.py
 !app/infra/browser/synthetic_configuration.py
 !app/infra/browser/synthetic_operator.py
+!app/infra/browser/synthetic_private_input.py
 !app/infra/browser/synthetic_smoke.py
 !app/infra/browser/synthetic_vault.py
 !app/infra/browser/systemone_http.py

@@ -13,6 +13,7 @@ import uvicorn
 from app.infra.browser.openrouter_jev import prompt_openrouter_key
 from app.infra.browser.synthetic_api import create_synthetic_api
 from app.infra.browser.synthetic_operator import open_synthetic_operator, prompt_operator_bundle
+from app.infra.browser.synthetic_private_input import read_private_operator_input
 
 
 class _SilentParser(argparse.ArgumentParser):
@@ -22,9 +23,15 @@ class _SilentParser(argparse.ArgumentParser):
 
 async def _serve(
     *, input_mode: Literal["chat", "structured"], operator_vault: Path | None,
+    private_stdin: bool = False,
 ) -> None:
-    bundle = prompt_operator_bundle(encrypted_path=operator_vault)
-    key = prompt_openrouter_key()
+    if private_stdin:
+        if operator_vault is not None:
+            raise ValueError("browser_operator_arguments_invalid")
+        bundle, key = read_private_operator_input()
+    else:
+        bundle = prompt_operator_bundle(encrypted_path=operator_vault)
+        key = prompt_openrouter_key()
     async with open_synthetic_operator(
         bundle, jev_key=key, enabled=True, input_mode=input_mode,
     ) as components:
@@ -43,11 +50,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--input-mode", choices=("chat", "structured"), default="chat")
     parser.add_argument("--operator-vault", type=Path)
+    parser.add_argument("--private-stdin", action="store_true")
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError("browser_operator_disabled")
-        asyncio.run(_serve(input_mode=args.input_mode, operator_vault=args.operator_vault))
+        asyncio.run(_serve(input_mode=args.input_mode, operator_vault=args.operator_vault,
+                           private_stdin=args.private_stdin))
     except BaseException:
         print("browser_synthetic_api_unavailable", file=sys.stderr)
         return 2

@@ -9,8 +9,9 @@ executes one worker pass, and exits. The `browser-client` submits and later
 inspects that Run through the authenticated internal API.
 
 This is a prepared operator runbook, not evidence of a live trial. The local
-image and task PG listener have been prepared; real password authentication,
-task initialization, and paid model dispatch remain unverified. Use the
+image and task PG listener have been prepared. The authenticated file preflight
+and owner task initialization previously completed; paid model dispatch remains
+unverified. Use the
 commands within the owner's existing authorization, and confirm the required
 platform credit cap before paid dispatch. The CLI allows
 at most one Jev transport attempt for this trial. It cannot guarantee a dollar
@@ -71,7 +72,9 @@ Missing or invalid files and mounts fail with a fixed suppressed error code,
 without TTY, environment, argv, or other-file fallback. The password goes only
 into the database driver's in-memory `connect_args["password"]`. The fixed
 database remains `eternalai_test` at `postgres:15432`, role `browser_v42_test`.
-Vault passphrase and OpenRouter key prompts remain separate.
+Default container invocation retains its separate hidden vault passphrase and
+OpenRouter key prompts. The explicit owner launcher below supplies the same
+inputs through an anonymous stdin pipe.
 
 Use this single read-only preflight to establish authenticated access through
 the approved file binding after building the updated image. It uses the
@@ -111,7 +114,8 @@ if ($seccompSha256 -cne 'e67623828ce94bb9f4917d029b1c5b83191f18ecd1c3538da63956b
     throw 'Reviewed Chromium seccomp profile hash mismatch; stop.'
 }
 function Invoke-BrowserV42 {
-    & docker compose --project-name browser-v42-single-run `
+    & docker compose --env-file C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/publication-fixed-classification-20261004/empty.env `
+        --project-name browser-v42-single-run `
         --file infra/docker/browser-runtime/compose.yaml `
         --file infra/docker/browser-runtime/compose.single-run.yaml `
         --profile operator-browser-runtime @args
@@ -121,7 +125,15 @@ function Invoke-BrowserV42 {
 
 The seccomp file above must be the locally reviewed Docker `daa0cb7` profile.
 Do not replace it with `unconfined`, a different file, or a permissive fallback.
-In the first terminal, parse the merged Compose model, build the shared local
+
+**Current task:** initialization completed on 2026-10-04; do not repeat
+`--init` against its existing database and vault. The original conservative
+cutoff `2026-10-04T04:48:46Z` has passed. A separately approved identity refresh
+is pending execution; these key-connection instructions do not perform it or
+extend the cutoff. Keep the existing ciphertext and task state for recovery.
+The bootstrap commands below describe fresh-task preparation only.
+
+For fresh-task preparation in the first terminal, parse the merged Compose model, build the shared local
 image, perform the read-only bootstrap preflight with the approved DB-file
 mount, and then explicitly initialize the task. The `--init` command uses that
 same fixed mount, changes the fixed test database, and creates the encrypted
@@ -137,34 +149,74 @@ Invoke-BrowserV42 run browser-bootstrap
 Invoke-BrowserV42 run browser-bootstrap --enable --init
 ```
 
-Prepare and activate the fixed synthetic publication. These commands prompt
-for the vault passphrase and a restricted OpenRouter Jev key in the owner's
-terminal; DB authentication uses the approved read-only file mount. They
+For prepare, activate, API and once-worker, use the explicit owner launcher from
+`E:/code/eternalai/.worktrees/browser-runtime-v42`. After the candidate image is
+reviewed and built, set its approved immutable ID and the owner's approved UTC
+cutoff in each private terminal. Replace these two public placeholders; do not
+put secrets in them. The cutoff must be in `YYYY-MM-DDTHH:MM:SSZ` form and still
+in the future. It does not renew or extend any authority token: container-side
+authorization continues to verify the existing tokens and their expiry.
+
+```powershell
+$browserImageId = 'sha256:<approved-64-lowercase-hex-image-id>'
+$browserDeadlineUtc = '<owner-approved-future-UTC-cutoff>'
+function Invoke-BrowserJev {
+    param([string]$Operation)
+    & E:/code/eternalai/.venv/Scripts/python.exe -m scripts.run_browser_synthetic_jev_launcher `
+        --operation $Operation --expected-image-id $browserImageId `
+        --approved-deadline-utc $browserDeadlineUtc
+    if ($LASTEXITCODE -ne 0) { throw 'Browser Jev launcher failed; stop and retain state.' }
+}
+```
+
+The launcher streams only the exact case-sensitive `jev-key` field from the
+fixed `E:/code/eternalai/.env`; it does not load the file as environment variables,
+decode other values, interpolate substitutions, copy or mount it. UTF-8 BOM,
+CRLF, surrounding assignment spaces, and matching literal quotes are supported.
+Missing, empty, duplicate, multiline, control/non-ASCII or oversized keys fail
+with a fixed error. It requires the owner's terminal for hidden entry of the
+**same existing vault passphrase**, with no echoing or environment fallback.
+It checks the worktree, deadline, fixed empty env file, reviewed seccomp profile,
+local image ID/user, absent target container and quiet Compose configuration
+before reading inputs; image and deadline are rechecked after hidden input.
+
+One bounded, versioned JSON frame carries the passphrase and Jev key only on
+the child process's anonymous stdin. The explicit `--private-stdin` branch
+unlocks only the fixed operator bundle and retains the existing vault
+owner/mode/link checks. No key/passphrase is placed in argv, environment, a file,
+or captured output. Child stdout/stderr remain in the owner's private terminal.
+This path uses the two existing Compose files, `--no-deps --pull never -T`, fixed
+retained names, and no automatic retry/removal. Deactivation, client and the
+disabled supervisor are excluded from this secret-input path.
+
+Prepare and activate the fixed synthetic publication. The launcher prompts
+for the vault passphrase and reads the approved exact key field; DB
+authentication uses the approved read-only file mount. These commands
 construct the provider client but send no model HTTP request.
 They do write the publication state. The key and passphrase never belong in
 arguments, environment variables, logs, or assistant tools.
 
 ```powershell
-Invoke-BrowserV42 run browser-publication --enable --operation prepare --input-mode structured --operator-vault /run/browser-synthetic-secrets/P2-BROWSER-RUNTIME-V42-001/operator.bundle.enc
-Invoke-BrowserV42 run browser-publication --enable --operation activate --input-mode structured --operator-vault /run/browser-synthetic-secrets/P2-BROWSER-RUNTIME-V42-001/operator.bundle.enc
+Invoke-BrowserJev prepare
+Invoke-BrowserJev activate
 ```
 
 Still in the first terminal, start the API in the foreground. Its encrypted
-operator bundle and restricted key use hidden prompts; DB authentication uses
+operator bundle uses the same hidden passphrase and exact key field; DB authentication uses
 the approved read-only file mount. Keep
 this terminal open while running the client; the `--use-aliases` option gives
 the one-off API container the service DNS name required by the client and CSRF
 origin. There is no host port and no background supervisor.
 
 ```powershell
-Invoke-BrowserV42 run --use-aliases --name browser-v42-single-api browser-synthetic-api
+Invoke-BrowserJev api
 ```
 
 Open a second private PowerShell terminal in the same checkout and repeat the
-setup block above. After the API is running, submit exactly one Run, execute
+setup blocks above. After the API is running, submit exactly one Run, execute
 the one-off worker once, and inspect the Run once. Each relevant command
-prompts for its own hidden vault passphrase; the worker also prompts for the
-restricted Jev key and uses the approved DB-file mount. **Only the worker may
+prompts for its own hidden vault passphrase; the worker's launcher reads the
+exact Jev key field and uses the approved DB-file mount. **Only the worker may
 make a paid Jev request.** The
 `trial.jev-attempt.json` receipt is burned before that request, so an uncertain
 result must not be retried. The durable database queue, vault, and trial
@@ -172,7 +224,7 @@ receipts remain in place.
 
 ```powershell
 Invoke-BrowserV42 run browser-client --enable --operation submit
-Invoke-BrowserV42 run browser-single-run --enable --approved-budget-usd 0.01
+Invoke-BrowserJev once
 Invoke-BrowserV42 run browser-client --enable --operation inspect
 ```
 

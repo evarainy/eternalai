@@ -18,12 +18,14 @@ from app.infra.browser.synthetic_operator import (
     prompt_deactivation_bundle,
     prompt_operator_bundle,
 )
+from app.infra.browser.synthetic_private_input import read_private_operator_input
 from app.ports.auth import AuthenticationError
 from app.ports.browser_publication_store import BrowserPublicationError
 
 _INPUT_CODES = {
     "bundle": frozenset({
         "browser_operator_bundle_invalid", "browser_operator_private_console_required",
+        "browser_private_input_invalid",
     }),
     "key": frozenset({"jev_key_input_invalid", "jev_secure_console_required"}),
 }
@@ -72,11 +74,12 @@ class _SilentParser(argparse.ArgumentParser):
 async def _operate(
     operation: str, *, input_mode: str = "chat", operator_vault: Path | None = None,
     deactivation_vault: Path | None = None,
+    private_stdin: bool = False,
 ) -> None:
     stage = "bundle"
     try:
         if operation == "deactivate":
-            if operator_vault is not None:
+            if operator_vault is not None or private_stdin:
                 raise ValueError("browser_operator_arguments_invalid")
             deactivation_bundle = prompt_deactivation_bundle(deactivation_vault)
             stage = "deactivate"
@@ -84,9 +87,14 @@ async def _operate(
             return
         if deactivation_vault is not None:
             raise ValueError("browser_operator_arguments_invalid")
-        bundle = prompt_operator_bundle(operator_vault)
-        stage = "key"
-        key = prompt_openrouter_key()
+        if private_stdin:
+            if operator_vault is not None or operation not in {"prepare", "activate"}:
+                raise ValueError("browser_operator_arguments_invalid")
+            bundle, key = read_private_operator_input()
+        else:
+            bundle = prompt_operator_bundle(operator_vault)
+            stage = "key"
+            key = prompt_openrouter_key()
         stage = "operator"
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, require_active_publication=False,
@@ -114,6 +122,8 @@ async def _operate(
     except ValueError as error:
         if type(error) is not ValueError:
             raise
+        if private_stdin and stage == "bundle" and _has_known_code(error, _INPUT_CODES["key"]):
+            raise _PublicationDiagnostic(_INPUT_DIAGNOSTICS["key"]) from None
         if _has_known_code(error, _INPUT_CODES.get(stage, frozenset())):
             raise _PublicationDiagnostic(_INPUT_DIAGNOSTICS[stage]) from None
         if stage in {"operator", "prepare", "activate", "deactivate"}:
@@ -135,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-mode", choices=("chat", "structured"), default="chat")
     parser.add_argument("--operator-vault", type=Path)
     parser.add_argument("--deactivation-vault", type=Path)
+    parser.add_argument("--private-stdin", action="store_true")
     try:
         args = parser.parse_args(argv)
         if not args.enable or args.operation is None:
@@ -142,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_operate(
             args.operation, input_mode=args.input_mode,
             operator_vault=args.operator_vault, deactivation_vault=args.deactivation_vault,
+            private_stdin=args.private_stdin,
         ))
     except _PublicationDiagnostic as error:
         print(error.code, file=sys.stderr)

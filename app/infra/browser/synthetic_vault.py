@@ -18,6 +18,7 @@ from typing import Any, Final, Literal
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+from pydantic import SecretStr
 
 TASK_ID = "P2-BROWSER-RUNTIME-V42-001"
 VAULT_DIRECTORY = Path("/run/browser-synthetic-secrets") / TASK_ID
@@ -181,11 +182,10 @@ def _checked_file(path: Path) -> None:
         raise ValueError("browser_vault_file_invalid")
 
 
-def read_encrypted(path: Path, *, expected_name: Literal[
+def _read_checked_ciphertext(path: Path, *, expected_name: Literal[
     "operator.bundle.enc", "business.token.enc", "deactivation.bundle.enc"
-]) -> dict[str, Any]:
-    """Explicit path only. Opening a symlink or an unexpected filename fails."""
-    _private_console()
+]) -> bytes:
+    """Shared file checks; the input transport cannot relax vault metadata."""
     if path != _file_path(expected_name):
         raise ValueError("browser_vault_path_invalid")
     _check_directory(create=False)
@@ -200,7 +200,32 @@ def read_encrypted(path: Path, *, expected_name: Literal[
                     or stat.S_IMODE(opened.st_mode) != 0o600 or opened.st_size > _MAX_CIPHERTEXT):
                 raise ValueError
             contents = stream.read(_MAX_CIPHERTEXT + 1)
+        return contents
+    except (OSError, ValueError):
+        raise ValueError("browser_vault_unlock_failed") from None
+
+
+def read_encrypted(path: Path, *, expected_name: Literal[
+    "operator.bundle.enc", "business.token.enc", "deactivation.bundle.enc"
+]) -> dict[str, Any]:
+    """Explicit path only. Opening a symlink or an unexpected filename fails."""
+    _private_console()
+    contents = _read_checked_ciphertext(path, expected_name=expected_name)
+    try:
         return decrypt_document(expected_name, contents, prompt_passphrase())
+    except (OSError, ValueError):
+        raise ValueError("browser_vault_unlock_failed") from None
+
+
+def read_private_operator_document(passphrase: SecretStr) -> dict[str, Any]:
+    """Only the explicit private-stdin operator path; no caller-selected file."""
+    contents = _read_checked_ciphertext(
+        VAULT_DIRECTORY / OPERATOR_FILE, expected_name=OPERATOR_FILE,
+    )
+    try:
+        if not isinstance(passphrase, SecretStr):
+            raise ValueError
+        return decrypt_document(OPERATOR_FILE, contents, passphrase.get_secret_value())
     except (OSError, ValueError):
         raise ValueError("browser_vault_unlock_failed") from None
 

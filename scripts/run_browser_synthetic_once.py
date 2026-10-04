@@ -19,6 +19,7 @@ from app.infra.browser.synthetic_operator import (
     open_synthetic_operator,
     prompt_operator_bundle,
 )
+from app.infra.browser.synthetic_private_input import read_private_operator_input
 from app.infra.browser.synthetic_trial import (
     SingleJevAttempt,
     create_trial_file,
@@ -66,7 +67,7 @@ async def execute_once(
             and result.cleanup in {"released", "terminated"})
 
 
-async def _run(approved_budget_usd: str) -> bool:
+async def _run(approved_budget_usd: str, *, private_stdin: bool = False) -> bool:
     budget = SingleJevAttempt(approved_budget_usd)
     reference = read_trial_file("trial.run.json")
     if (set(reference) != {"task_id", "run_id"} or any(
@@ -75,8 +76,11 @@ async def _run(approved_budget_usd: str) -> bool:
     )):
         raise ValueError("browser_trial_receipt_invalid")
     expected = BrowserAcceptedView.model_validate({**reference, "state_revision": 0})
-    bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
-    key = prompt_openrouter_key()
+    if private_stdin:
+        bundle, key = read_private_operator_input()
+    else:
+        bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
+        key = prompt_openrouter_key()
     try:
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, input_mode="structured",
@@ -94,11 +98,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = _SilentParser(allow_abbrev=False, add_help=False)
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--approved-budget-usd", required=True)
+    parser.add_argument("--private-stdin", action="store_true")
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError
-        success = asyncio.run(_run(args.approved_budget_usd))
+        success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin))
     except BaseException:
         print("browser_trial_worker_unavailable", file=sys.stderr)
         return 2
