@@ -70,6 +70,7 @@ SYNTHETIC_USER = "browser_fixture_user"
 SYNTHETIC_KEY = "fixture_system_messages"
 SYNTHETIC_DETAIL_CAPABILITY_ID = "browser.synthetic.system_message_detail"
 DIAGNOSTIC_SKILL_VERSION = "v2_diagnostic_2"
+VISIBLE_QUERY_SKILL_VERSION = "v3_visible_complete"
 
 _COLLECTION = canonical_json({
     "messages": [{
@@ -200,12 +201,27 @@ def build_fixed_synthetic_diagnostic_source(
     return _build_fixed_source(decision_manifest, query=True, diagnostic=True)
 
 
+def build_fixed_synthetic_visible_query_source(
+    decision_manifest: ModelManifest,
+) -> FixedSyntheticSource:
+    """Future source with visible completion; not admitted for installation or trials."""
+    return _build_fixed_source(decision_manifest, query=True, visible_complete=True)
+
+
 def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
-                        diagnostic: bool = False) -> FixedSyntheticSource:
-    if type(diagnostic) is not bool or (diagnostic and not query):
+                        diagnostic: bool = False,
+                        visible_complete: bool = False) -> FixedSyntheticSource:
+    if (type(diagnostic) is not bool or type(visible_complete) is not bool
+            or ((diagnostic or visible_complete) and not query)
+            or (diagnostic and visible_complete)):
         raise ValueError("browser_local_source_invalid")
     capability = synthetic_detail_capability_snapshot() if query else expected_oa_capabilities()[1]
     content = _QUERY_HTML if query else _HTML
+    if visible_complete:
+        hidden_marker = b'<span id="complete" aria-hidden="true">'
+        if content.count(hidden_marker) != 1:
+            raise ValueError("browser_local_source_invalid")
+        content = content.replace(hidden_marker, b'<span id="complete">', 1)
     fixture_digest = hashlib.sha256(content).hexdigest()
     policy = _signed(
         ObservationPolicy, "browser_observation_policy.v1", policy_id="fixture_projection",
@@ -257,7 +273,8 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
     skill = _signed(
         BrowserSkill, "browser_skill.v1",
         skill_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
-        version=DIAGNOSTIC_SKILL_VERSION if diagnostic else "v1",
+        version=(VISIBLE_QUERY_SKILL_VERSION if visible_complete
+                 else DIAGNOSTIC_SKILL_VERSION if diagnostic else "v1"),
         site_id=site.site_id, site_digest=site.digest,
         verifier_id=verifier.verifier_id, verifier_digest=verifier.digest,
         parameters=("business_key",) if query else ("fixture_business_key", "fixture_collection"),
