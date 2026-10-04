@@ -29,11 +29,13 @@ from app.infra.browser.composition import (
 )
 from app.infra.browser.fixed_synthetic_seed import (
     DIAGNOSTIC_SKILL_VERSION,
+    OBSERVE_SKILL_VERSION,
     VISIBLE_QUERY_SKILL_VERSION,
     FixedSourceReadFactory,
     FixedSyntheticSource,
     FixedSyntheticSourceVerifier,
     build_fixed_synthetic_diagnostic_source,
+    build_fixed_synthetic_observe_only_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_visible_query_source,
 )
@@ -275,7 +277,9 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_recovery", None))
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
-    builder = (build_fixed_synthetic_visible_query_source
+    builder = (build_fixed_synthetic_observe_only_source
+               if deps.source.manifest.skill.version == OBSERVE_SKILL_VERSION
+               else build_fixed_synthetic_visible_query_source
                if deps.source.manifest.skill.version == VISIBLE_QUERY_SKILL_VERSION
                else build_fixed_synthetic_diagnostic_source
                if deps.source.manifest.skill.version == DIAGNOSTIC_SKILL_VERSION

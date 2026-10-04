@@ -26,13 +26,17 @@ from app.infra.browser.synthetic_trial import (
     DIAGNOSTIC_TRIAL,
     LEGACY_RUN_ID,
     LEGACY_TASK_ID,
+    OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
+    VISIBLE_RUN_ID,
+    VISIBLE_TASK_ID,
     VISIBLE_TRIAL,
     SingleJevAttempt,
     create_trial_file,
     read_trial_file,
     require_diagnostic_terminal,
     require_legacy_terminal,
+    require_visible_terminal,
     trial_publication_digest,
     trial_request_id,
 )
@@ -61,23 +65,32 @@ async def execute_once(
                 "t.client_request_id FROM browser_runs r JOIN tasks t ON t.task_id=r.task_id"
                 " AND t.tenant_id=r.tenant_id WHERE r.tenant_id=:tenant LIMIT :maximum"
             ), {"tenant": owner.tenant_id,
-                "maximum": 4 if trial_id == VISIBLE_TRIAL else 3})).mappings().all()
+                "maximum": (5 if trial_id == OBSERVE_TRIAL
+                            else 4 if trial_id == VISIBLE_TRIAL else 3)})).mappings().all()
             history = [row for row in rows if row["task_id"] == LEGACY_TASK_ID
                        and row["run_id"] == LEGACY_RUN_ID]
             current = [row for row in rows if row["task_id"] == expected.task_id
                        and row["run_id"] == expected.run_id]
             diagnostic = [row for row in rows if row["task_id"] == DIAGNOSTIC_TASK_ID
                           and row["run_id"] == DIAGNOSTIC_RUN_ID]
-            if (len(rows) != (3 if trial_id == VISIBLE_TRIAL else 2)
+            if (len(rows) != (4 if trial_id == OBSERVE_TRIAL
+                                     else 3 if trial_id == VISIBLE_TRIAL else 2)
                     or len(history) != 1 or len(current) != 1
                     or expected.task_id == LEGACY_TASK_ID or expected.run_id == LEGACY_RUN_ID):
                 raise ValueError("browser_trial_history_invalid")
             require_legacy_terminal(history[0], owner)
-            if trial_id == VISIBLE_TRIAL:
+            if trial_id in {VISIBLE_TRIAL, OBSERVE_TRIAL}:
                 if (len(diagnostic) != 1 or expected.task_id == DIAGNOSTIC_TASK_ID
                         or expected.run_id == DIAGNOSTIC_RUN_ID):
                     raise ValueError("browser_trial_history_invalid")
                 require_diagnostic_terminal(diagnostic[0], owner)
+            if trial_id == OBSERVE_TRIAL:
+                visible = [item for item in rows if item["task_id"] == VISIBLE_TASK_ID
+                           and item["run_id"] == VISIBLE_RUN_ID]
+                if (len(visible) != 1 or expected.task_id == VISIBLE_TASK_ID
+                        or expected.run_id == VISIBLE_RUN_ID):
+                    raise ValueError("browser_trial_history_invalid")
+                require_visible_terminal(visible[0], owner)
             row = current[0]
             if row["client_request_id"] != trial_request_id(trial_id) or bytes(
                 row["publication_digest"]
@@ -113,18 +126,41 @@ async def execute_once(
         raise ValueError("browser_trial_worker_failed")
     # _run_claimed's finally settles cleanup; re-read instead of reporting its old snapshot.
     result = await vertical.runs.get(owner, expected.task_id, expected.run_id)
+    if trial_id == OBSERVE_TRIAL:
+        elapsed_ms = vertical.execution._consume_observe_only_receipt(result)
+        observed = (elapsed_ms is not None and result.status == "failed"
+                    and result.phase is None and result.effect == "not_sent"
+                    and result.verification is None
+                    and result.error_code == "browser_verification_failed"
+                    and result.dispatch_failure_code == "cancelled"
+                    and result.cleanup in {"released", "terminated"})
+        create_trial_file("trial.observation.json", {
+            "trial_id": trial_id, "task_id": result.task_id, "run_id": result.run_id,
+            "observation_completed": observed, "observe_elapsed_ms": elapsed_ms,
+            "business_completed": False, "verification": result.verification,
+            "run_status": result.status, "effect": result.effect,
+            "cleanup": result.cleanup, "jev_request_count": 0,
+        }, trial_id=trial_id)
+        return observed
     return (result.status == "completed" and result.effect == "acknowledged"
             and result.verification == "verified" and result.error_code is None
             and result.cleanup in {"released", "terminated"})
 
 
-async def _run(approved_budget_usd: str, *, private_stdin: bool = False,
-               trial_id: str = ORIGINAL_TRIAL) -> bool:
+async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
+               trial_id: str = ORIGINAL_TRIAL, observe_only: bool = False) -> bool:
     approved_trial_id(trial_id)
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_trial_arguments_invalid")
     trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
-    budget = SingleJevAttempt(approved_budget_usd, **trial_options)
+    if observe_only != (trial_id == OBSERVE_TRIAL):
+        raise ValueError("browser_trial_arguments_invalid")
+    if observe_only and approved_budget_usd is not None:
+        raise ValueError("browser_trial_arguments_invalid")
+    budget = None if observe_only else SingleJevAttempt(approved_budget_usd, **trial_options)
+
+    def reject_http() -> None:
+        raise ValueError("browser_observe_only_http_forbidden")
     if trial_id != ORIGINAL_TRIAL:
         task_id, run_id = _receipt(trial_id)
         reference = {"task_id": task_id, "run_id": run_id}
@@ -145,24 +181,27 @@ async def _run(approved_budget_usd: str, *, private_stdin: bool = False,
     try:
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, input_mode="structured",
-            attempt_guard=budget.reserve,
+            attempt_guard=reject_http if observe_only else budget.reserve,
             **trial_options,
         ) as components:
             success = await execute_once(components, expected, **trial_options)
-        return success and budget.request_count == 1
+        return success if observe_only else success and budget.request_count == 1
     finally:
-        print(json.dumps({"jev_request_count": budget.request_count,
-                          "max_jev_requests": 1, "actual_cost_usd": None,
-                          "cost_status": "unknown"}, sort_keys=True))
+        print(json.dumps({"jev_request_count": 0 if observe_only else budget.request_count,
+                          "max_jev_requests": 0 if observe_only else 1,
+                          "actual_cost_usd": 0 if observe_only else None,
+                          "cost_status": "http_forbidden" if observe_only else "unknown"},
+                         sort_keys=True))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _SilentParser(allow_abbrev=False, add_help=False)
     parser.add_argument("--enable", action="store_true")
-    parser.add_argument("--approved-budget-usd", required=True)
+    parser.add_argument("--approved-budget-usd")
+    parser.add_argument("--observe-only", action="store_true")
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
     try:
@@ -170,11 +209,12 @@ def main(argv: list[str] | None = None) -> int:
         if not args.enable:
             raise ValueError
         success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin,
-                                   trial_id=args.trial_id))
+                                   trial_id=args.trial_id, observe_only=args.observe_only))
     except BaseException:
         print("browser_trial_worker_unavailable", file=sys.stderr)
         return 2
-    print("browser_trial_verified" if success else "browser_trial_failed")
+    print(("browser_trial_observation_completed" if args.observe_only
+           else "browser_trial_verified") if success else "browser_trial_failed")
     return 0 if success else 2
 
 

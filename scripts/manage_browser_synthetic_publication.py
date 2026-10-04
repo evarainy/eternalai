@@ -25,6 +25,7 @@ from app.infra.browser.synthetic_private_input import (
 )
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
+    OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
     VISIBLE_TRIAL,
     approved_trial_id,
@@ -124,7 +125,9 @@ async def _operate(
             vertical, owner = components.vertical, components.publication_owner
             if operation == "prepare":
                 stage = "prepare"
-                if trial_id == VISIBLE_TRIAL:
+                if trial_id == OBSERVE_TRIAL:
+                    await vertical.publications.prepare_observe_only(owner, vertical._seed)
+                elif trial_id == VISIBLE_TRIAL:
                     await vertical.publications.prepare_visible_complete(owner, vertical._seed)
                 elif trial_id == DIAGNOSTIC_TRIAL:
                     await vertical.publications.prepare_diagnostic_second(owner, vertical._seed)
@@ -173,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deactivation-vault", type=Path)
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
     try:

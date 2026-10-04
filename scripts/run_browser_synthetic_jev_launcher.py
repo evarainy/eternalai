@@ -35,6 +35,7 @@ _IMAGE = "eternalai-browser-v42:local"
 _ORIGINAL_TRIAL = "single-run"
 _DIAGNOSTIC_TRIAL = "diagnostic-2"
 _VISIBLE_TRIAL = "visible-complete"
+_OBSERVE_TRIAL = "observe-only"
 _REFRESH_SCRIPT = Path(
     "C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/"
     "identity-refresh-diagnostic-2-20261004/refresh_existing_tokens.py"
@@ -62,7 +63,7 @@ class _SilentParser(argparse.ArgumentParser):
 
 
 def _recipient(operation: str, trial_id: str) -> tuple[str, str]:
-    if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL}
+    if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL, _OBSERVE_TRIAL}
             or operation not in _RECIPIENTS
             or (operation == "refresh" and trial_id == _ORIGINAL_TRIAL)):
         raise ValueError("browser_jev_launcher_arguments_invalid")
@@ -317,7 +318,8 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     elif operation == "api":
         arguments += ["--input-mode", "structured"]
     elif operation == "once":
-        arguments += ["--approved-budget-usd", "0.01"]
+        arguments += (["--observe-only"] if trial_id == _OBSERVE_TRIAL
+                      else ["--approved-budget-usd", "0.01"])
     elif operation != "refresh":
         arguments += ["--operation", operation]
     # Recheck after hidden input, before starting any container. stdout/stderr
@@ -339,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-image-id", required=True)
     parser.add_argument("--phrase-from-exact-field", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL),
+        "--trial-id", choices=(_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL, _OBSERVE_TRIAL),
         default=_ORIGINAL_TRIAL,
     )
     parser.add_argument("--refresh-script-sha256")

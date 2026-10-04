@@ -24,6 +24,7 @@ TASK_ID = "P2-BROWSER-RUNTIME-V42-001"
 ORIGINAL_TRIAL = "single-run"
 DIAGNOSTIC_TRIAL = "diagnostic-2"
 VISIBLE_TRIAL = "visible-complete"
+OBSERVE_TRIAL = "observe-only"
 VAULT_DIRECTORY = Path("/run/browser-synthetic-secrets") / TASK_ID
 OPERATOR_FILE: Final[Literal["operator.bundle.enc"]] = "operator.bundle.enc"
 BUSINESS_FILE: Final[Literal["business.token.enc"]] = "business.token.enc"
@@ -63,7 +64,7 @@ def prompt_passphrase(*, confirm: bool = False) -> str:
 
 def approved_trial_id(trial_id: str) -> str:
     if type(trial_id) is not str or trial_id not in {
-        ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL,
+        ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL,
     }:
         raise ValueError("browser_trial_id_invalid")
     return trial_id

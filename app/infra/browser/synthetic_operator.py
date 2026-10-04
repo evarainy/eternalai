@@ -38,6 +38,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     SYNTHETIC_USER,
     FixedSyntheticSource,
     build_fixed_synthetic_diagnostic_source,
+    build_fixed_synthetic_observe_only_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_visible_query_source,
 )
@@ -63,6 +64,7 @@ from app.infra.browser.synthetic_configuration import (
 )
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
+    OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
     VISIBLE_TRIAL,
     approved_trial_id,
@@ -367,6 +369,11 @@ async def open_synthetic_operator(
             or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
     approved_trial_id(trial_id)
+    if trial_id == OBSERVE_TRIAL:
+        # Fixed diagnostic installation always rejects before HTTP transport IO.
+        def reject_observe_only_http() -> None:
+            raise ValueError("browser_observe_only_http_forbidden")
+        attempt_guard = reject_observe_only_http
     if trial_id != ORIGINAL_TRIAL and input_mode != "structured":
         raise ValueError("browser_operator_disabled")
     if bundle.jev_manifest != synthetic_jev_manifest():
@@ -379,7 +386,8 @@ async def open_synthetic_operator(
     business_actor = tokens.inspect(bundle.business_token.get_secret_value())
     if cleanup_actor.principal.ai_user_id != CLEANUP_ACTOR:
         raise ValueError("browser_operator_cleanup_authority_invalid")
-    builder = (build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
+    builder = (build_fixed_synthetic_observe_only_source if trial_id == OBSERVE_TRIAL
+               else build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
                else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
                else build_fixed_synthetic_query_source)
     source = builder(bundle.jev_manifest)
@@ -443,6 +451,8 @@ async def open_synthetic_operator(
             ))
             if vertical is None:
                 raise ValueError("browser_operator_installation_unavailable")
+            if trial_id == OBSERVE_TRIAL:
+                vertical.execution._install_fixed_observe_only(source.manifest)
             yield SyntheticOperatorComponents(
                 vertical, tokens, binder, PostgreSQLSessionRevocationStore(sessions),
                 grants.owner,
@@ -548,7 +558,8 @@ async def deactivate_synthetic_publication(
                 or historical.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID
                 or bytes(row["publication_digest"]).hex() != historical.digest):
             raise BrowserPublicationError("browser_publication_storage_invalid")
-        expected = (build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
+        expected = (build_fixed_synthetic_observe_only_source if trial_id == OBSERVE_TRIAL
+               else build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
                     else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
                     else build_fixed_synthetic_query_source)(synthetic_jev_manifest()).manifest
         if historical != expected:

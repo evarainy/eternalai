@@ -23,11 +23,13 @@ from app.browser_skill.publication_contracts import BrowserPublicationManifest, 
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.fixed_synthetic_seed import (
     DIAGNOSTIC_SKILL_VERSION,
+    OBSERVE_SKILL_VERSION,
     SYNTHETIC_DETAIL_CAPABILITY_ID,
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
     VISIBLE_QUERY_SKILL_VERSION,
     build_fixed_synthetic_diagnostic_source,
+    build_fixed_synthetic_observe_only_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_visible_query_source,
 )
@@ -251,6 +253,8 @@ class FrozenSyntheticStructuredParser:
                 builder = build_fixed_synthetic_query_source
             elif seed.skill.version == DIAGNOSTIC_SKILL_VERSION:
                 builder = build_fixed_synthetic_diagnostic_source
+            elif seed.skill.version == OBSERVE_SKILL_VERSION:
+                builder = build_fixed_synthetic_observe_only_source
             elif seed.skill.version == VISIBLE_QUERY_SKILL_VERSION:
                 builder = build_fixed_synthetic_visible_query_source
             else:

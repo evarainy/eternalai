@@ -194,13 +194,39 @@ class PostgreSQLBrowserPublicationStore:
             diagnostic_predecessor=build_fixed_synthetic_diagnostic_source(decision).manifest,
         )
 
+    async def prepare_observe_only(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    ) -> BrowserPublicationRecord:
+        """Append this fixed fourth publication; preserve three inactive histories."""
+        from app.infra.browser.fixed_synthetic_seed import (
+            SYNTHETIC_TENANT,
+            build_fixed_synthetic_diagnostic_source,
+            build_fixed_synthetic_observe_only_source,
+            build_fixed_synthetic_query_source,
+            build_fixed_synthetic_visible_query_source,
+        )
+        from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+        decision = synthetic_jev_manifest()
+        successor = build_fixed_synthetic_observe_only_source(decision).manifest
+        if owner.tenant_id != SYNTHETIC_TENANT or _manifest(manifest) != successor:
+            raise BrowserPublicationError("browser_publication_source_denied")
+        return await self._prepare(
+            owner, manifest, predecessor=build_fixed_synthetic_query_source(decision).manifest,
+            diagnostic_predecessor=build_fixed_synthetic_diagnostic_source(decision).manifest,
+            visible_predecessor=build_fixed_synthetic_visible_query_source(decision).manifest,
+        )
+
     async def _prepare(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
         predecessor: BrowserPublicationManifest | None = None,
         diagnostic_predecessor: BrowserPublicationManifest | None = None,
+        visible_predecessor: BrowserPublicationManifest | None = None,
     ) -> BrowserPublicationRecord:
         owner, manifest = _owner(owner), _manifest(manifest)
         if diagnostic_predecessor is not None and predecessor is None:
+            raise BrowserPublicationError("browser_publication_source_denied")
+        if visible_predecessor is not None and diagnostic_predecessor is None:
             raise BrowserPublicationError("browser_publication_source_denied")
         skill_id = manifest.skill.skill_id
         await self._authorize(owner, skill_id, "prepare")
@@ -218,6 +244,8 @@ class PostgreSQLBrowserPublicationStore:
                 records = [_record(row) for row in previous]
                 history = ((predecessor,) if diagnostic_predecessor is None
                            else (predecessor, diagnostic_predecessor))
+                if visible_predecessor is not None:
+                    history = (predecessor, diagnostic_predecessor, visible_predecessor)
                 prior = [[record for record in records if record.manifest == expected]
                          for expected in history]
                 new = [record for record in records if record.manifest == manifest]

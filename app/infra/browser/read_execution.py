@@ -133,6 +133,30 @@ class VerifiedBrowserReadExecution:
         self._result_key = result_digest_key
         self._record_diagnostic = record_diagnostic
         self._emissions: dict[str, _VerifiedEmission] = {}
+        self._observe_only_manifest: BrowserPublicationManifest | None = None
+        self._observe_only_receipt: tuple[RunSnapshot, int] | None = None
+
+    def _install_fixed_observe_only(self, manifest: BrowserPublicationManifest) -> None:
+        """Trusted one-off installation; a version label alone cannot enable stopping."""
+        from app.infra.browser.fixed_synthetic_seed import build_fixed_synthetic_observe_only_source
+        from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+        expected = build_fixed_synthetic_observe_only_source(synthetic_jev_manifest()).manifest
+        if manifest != expected or self._observe_only_manifest is not None:
+            raise ValueError("browser_observe_only_configuration_invalid")
+        self._observe_only_manifest = expected
+
+    def _consume_observe_only_receipt(self, run: RunSnapshot) -> int | None:
+        receipt = self._observe_only_receipt
+        if receipt is None:
+            return None
+        observed, elapsed_ms = receipt
+        if (run.owner != observed.owner or run.task_id != observed.task_id
+                or run.run_id != observed.run_id or run.lease_epoch != observed.lease_epoch
+                or run.admission.publication_digest != observed.admission.publication_digest):
+            raise ValueError("browser_observe_only_receipt_invalid")
+        self._observe_only_receipt = None
+        return elapsed_ms
 
     async def _record_failure_diagnostic(
         self, run: RunSnapshot, diagnostic: tuple[str, int, str] | None,
@@ -186,6 +210,9 @@ class VerifiedBrowserReadExecution:
             if publication is None:
                 raise BrowserReadExecutionError("denied")
             manifest = publication.manifest
+            observe_only = self._observe_only_manifest is not None and (
+                manifest == self._observe_only_manifest
+            )
             private_input = self._cipher.decrypt_input(run.admission)
             query_business_key: str | None = None
             if isinstance(manifest.site.read_rule, RegisteredQueryReadRule):
@@ -238,6 +265,7 @@ class VerifiedBrowserReadExecution:
                     RegisteredExecution(
                         execution.session, context, execution.confirmed_key,
                         project_output=execution.project_output,
+                        stop_after_observe=observe_only,
                     ),
                 ),
             )
@@ -256,6 +284,13 @@ class VerifiedBrowserReadExecution:
                 web=web, session_ref=execution.session.session_ref,
             )
             await checkpoint.refresh(allow_cancel=True)
+            observed_ms = web._observe_only_completed.get(execution.session.session_ref)
+            if (observe_only and observed_ms is not None and outcome.verification is None
+                    and not outcome.receipts and outcome.failure is not None
+                    and outcome.failure.code == "cancelled"
+                    and outcome.failure.dispatch_state == "not_sent"
+                    and context.cancellation.is_set()):
+                self._observe_only_receipt = (run, observed_ms)
             effect: RunEffect = "not_sent"
             if any(r.state == "possibly_sent" for r in outcome.receipts) or (
                 outcome.failure is not None and outcome.failure.dispatch_state == "possibly_sent"

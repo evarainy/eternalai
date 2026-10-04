@@ -19,7 +19,10 @@ from app.infra.browser.synthetic_trial import (
     DIAGNOSTIC_TRIAL,
     LEGACY_RUN_ID,
     LEGACY_TASK_ID,
+    OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
+    VISIBLE_RUN_ID,
+    VISIBLE_TASK_ID,
     VISIBLE_TRIAL,
     create_trial_file,
     read_trial_file,
@@ -84,6 +87,11 @@ def _receipt(trial_id: str = ORIGINAL_TRIAL) -> tuple[str, str]:
         if trial_id == VISIBLE_TRIAL and (
             task_id in {LEGACY_TASK_ID, DIAGNOSTIC_TASK_ID}
             or run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID}
+        ):
+            raise ValueError
+        if trial_id == OBSERVE_TRIAL and (
+            task_id in {LEGACY_TASK_ID, DIAGNOSTIC_TASK_ID, VISIBLE_TASK_ID}
+            or run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID, VISIBLE_RUN_ID}
         ):
             raise ValueError
         return task_id, run_id
@@ -224,6 +232,11 @@ async def run_trial(
                     or accepted.run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID}
                 ):
                     raise ValueError
+                if trial_id == OBSERVE_TRIAL and (
+                    accepted.task_id in {LEGACY_TASK_ID, DIAGNOSTIC_TASK_ID, VISIBLE_TASK_ID}
+                    or accepted.run_id in {LEGACY_RUN_ID, DIAGNOSTIC_RUN_ID, VISIBLE_RUN_ID}
+                ):
+                    raise ValueError
             except Exception:
                 raise TrialClientError("browser_trial_response_invalid") from None
             try:
@@ -258,7 +271,10 @@ async def run_trial(
             return outcome("browser_trial_cancel_requested", exit_code=0)
         if run.status not in {"completed", "failed", "cancelled"}:
             return outcome("browser_trial_nonterminal")
-        if run.status != "completed" or result is None or result.verification != "verified":
+        # Observation success requires its own diagnostic receipt. This HTTP
+        # inspection never turns an observe-only terminal Run into business success.
+        if (trial_id == OBSERVE_TRIAL or run.status != "completed"
+                or result is None or result.verification != "verified"):
             return outcome("browser_trial_terminal_unsuccessful")
         if result.cleanup not in {"released", "terminated"}:
             return outcome("browser_trial_cleanup_incomplete")

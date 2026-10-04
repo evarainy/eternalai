@@ -16,6 +16,7 @@ from app.infra.browser.synthetic_operator import open_synthetic_operator, prompt
 from app.infra.browser.synthetic_private_input import read_private_operator_input
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
+    OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
     VISIBLE_TRIAL,
     approved_trial_id,
@@ -65,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-vault", type=Path)
     parser.add_argument("--private-stdin", action="store_true")
     parser.add_argument(
-        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL),
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
     try:

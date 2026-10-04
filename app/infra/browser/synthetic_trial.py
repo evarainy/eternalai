@@ -1,4 +1,4 @@
-"""Three fixed receipt namespaces; runtime actions require owner approval, no reset."""
+"""Four fixed receipt namespaces; runtime actions require owner approval, no reset."""
 
 from __future__ import annotations
 
@@ -15,15 +15,19 @@ from app.infra.browser import synthetic_vault as vault
 
 _FILES = frozenset({
     "trial.submit.json", "trial.run.json", "trial.jev-attempt.json", "trial.worker.json",
+    "trial.observation.json",
 })
 _MAX_BYTES = 4096
 ORIGINAL_TRIAL = vault.ORIGINAL_TRIAL
 DIAGNOSTIC_TRIAL = vault.DIAGNOSTIC_TRIAL
 VISIBLE_TRIAL = vault.VISIBLE_TRIAL
+OBSERVE_TRIAL = vault.OBSERVE_TRIAL
 LEGACY_TASK_ID = "dc4ec941bcd245a5a7d9ccc4815a0f71"
 LEGACY_RUN_ID = "fa1f474fdfce440c9a7338d80fc70670"
 DIAGNOSTIC_TASK_ID = "4a689e26d150452b809ddd152cec0c8c"
 DIAGNOSTIC_RUN_ID = "73ba1ea2a54b4d7c98bc24c1446e3c60"
+VISIBLE_TASK_ID = "abc29b53e91749a5889da04b51979761"
+VISIBLE_RUN_ID = "02e340c0346942729ffddd555f436262"
 
 
 def trial_request_id(trial_id: str = ORIGINAL_TRIAL) -> str:
@@ -34,6 +38,7 @@ def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
     vault.approved_trial_id(trial_id)
     from app.infra.browser.fixed_synthetic_seed import (
         build_fixed_synthetic_diagnostic_source,
+        build_fixed_synthetic_observe_only_source,
         build_fixed_synthetic_query_source,
         build_fixed_synthetic_visible_query_source,
     )
@@ -45,6 +50,8 @@ def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
         builder = build_fixed_synthetic_diagnostic_source
     elif trial_id == VISIBLE_TRIAL:
         builder = build_fixed_synthetic_visible_query_source
+    elif trial_id == OBSERVE_TRIAL:
+        builder = build_fixed_synthetic_observe_only_source
     else:
         raise ValueError("browser_trial_id_invalid")
     return builder(synthetic_jev_manifest()).manifest.digest
@@ -90,6 +97,23 @@ def require_diagnostic_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> 
             or row.get("client_request_id") != trial_request_id(DIAGNOSTIC_TRIAL)
             or row.get("publication_digest") != bytes.fromhex(
                 trial_publication_digest(DIAGNOSTIC_TRIAL)
+            )):
+        raise ValueError("browser_trial_history_invalid")
+
+
+def require_visible_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> None:
+    """Exact failed visible predecessor; owner and immutable v3 binding remain required."""
+    if (row.get("task_id") != VISIBLE_TASK_ID or row.get("run_id") != VISIBLE_RUN_ID
+            or row.get("ai_user_id") != owner.user_id or row.get("session_id") != owner.session_id
+            or row.get("status") != "failed" or row.get("phase") is not None
+            or row.get("cancel_requested") is not False
+            or row.get("cleanup") not in {"released", "terminated"}
+            or row.get("effect") != "not_sent" or row.get("verification") is not None
+            or row.get("error_code") != "browser_verification_failed"
+            or row.get("dispatch_failure_code") != "timeout" or row.get("worker_epoch") != 1
+            or row.get("client_request_id") != trial_request_id(VISIBLE_TRIAL)
+            or row.get("publication_digest") != bytes.fromhex(
+                trial_publication_digest(VISIBLE_TRIAL)
             )):
         raise ValueError("browser_trial_history_invalid")
 
@@ -176,6 +200,8 @@ class SingleJevAttempt:
 
     def __init__(self, approved_budget_usd: str, *, trial_id: str = ORIGINAL_TRIAL) -> None:
         self.trial_id = vault.approved_trial_id(trial_id)
+        if self.trial_id == OBSERVE_TRIAL:
+            raise ValueError("browser_trial_budget_invalid")
         self.budget = approved_trial_budget(approved_budget_usd)
         self.request_count = 0
 

@@ -78,6 +78,7 @@ class RegisteredExecution:
     context: ExecutionContext
     confirmed_key: ConfirmedBusinessKey
     project_output: Callable[[Mapping[str, str]], Mapping[str, object]] | None = None
+    stop_after_observe: bool = False
 
 
 @dataclass(slots=True, repr=False)
@@ -157,6 +158,7 @@ class PlaywrightWebAdapter:
         self._guards: dict[str, _OriginGuard] = {}
         self._guard_lock = asyncio.Lock()
         self._observe_wait: dict[str, tuple[str, float]] = {}
+        self._observe_only_completed: dict[str, int] = {}
         self._salt = secrets.token_bytes(32)
         # One bounded private result per registered execution. Never included in
         # ReadEvidence, projections, model input, diagnostics, or adapter repr.
@@ -348,7 +350,9 @@ class PlaywrightWebAdapter:
         request: ObservationRequest,
         policy: ObservationPolicy,
     ) -> VisibleProjection:
-        context = self._registration(session).context
+        admitted = self._registration(session)
+        context = admitted.context
+        started = time.monotonic()
         self._observe_wait[session.session_ref] = ("authority_before", time.monotonic())
         plan, _ = await self._authority(session, context)
         allowed = {rule.observation.region_id for rule in plan.steps}
@@ -360,6 +364,11 @@ class PlaywrightWebAdapter:
         self._origins(exact, context)
         self._observe_wait[session.session_ref] = ("authority_after", time.monotonic())
         await self._authority(session, context)
+        if admitted.stop_after_observe:
+            self._observe_only_completed[session.session_ref] = min(
+                300_000, max(0, int((time.monotonic() - started) * 1000)),
+            )
+            context.cancellation.set()
         return exact.projection
 
     @_neutral

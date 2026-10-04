@@ -71,6 +71,7 @@ SYNTHETIC_KEY = "fixture_system_messages"
 SYNTHETIC_DETAIL_CAPABILITY_ID = "browser.synthetic.system_message_detail"
 DIAGNOSTIC_SKILL_VERSION = "v2_diagnostic_2"
 VISIBLE_QUERY_SKILL_VERSION = "v3_visible_complete"
+OBSERVE_SKILL_VERSION = "v4_observe_only"
 
 _COLLECTION = canonical_json({
     "messages": [{
@@ -208,10 +209,22 @@ def build_fixed_synthetic_visible_query_source(
     return _build_fixed_source(decision_manifest, query=True, visible_complete=True)
 
 
+def build_fixed_synthetic_observe_only_source(
+    decision_manifest: ModelManifest,
+) -> FixedSyntheticSource:
+    """One fixed observation diagnostic; preserve the visible predecessor's HTML."""
+    return _build_fixed_source(
+        decision_manifest, query=True, visible_complete=True, observe_only=True,
+    )
+
+
 def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
                         diagnostic: bool = False,
-                        visible_complete: bool = False) -> FixedSyntheticSource:
+                        visible_complete: bool = False,
+                        observe_only: bool = False) -> FixedSyntheticSource:
     if (type(diagnostic) is not bool or type(visible_complete) is not bool
+            or type(observe_only) is not bool
+            or (observe_only and (not visible_complete or diagnostic))
             or ((diagnostic or visible_complete) and not query)
             or (diagnostic and visible_complete)):
         raise ValueError("browser_local_source_invalid")
@@ -273,7 +286,8 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
     skill = _signed(
         BrowserSkill, "browser_skill.v1",
         skill_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
-        version=(VISIBLE_QUERY_SKILL_VERSION if visible_complete
+        version=(OBSERVE_SKILL_VERSION if observe_only
+                 else VISIBLE_QUERY_SKILL_VERSION if visible_complete
                  else DIAGNOSTIC_SKILL_VERSION if diagnostic else "v1"),
         site_id=site.site_id, site_digest=site.digest,
         verifier_id=verifier.verifier_id, verifier_digest=verifier.digest,
@@ -370,7 +384,9 @@ class FixedSyntheticSourceVerifier:
     async def verify(self, manifest: BrowserPublicationManifest) -> bool:
         source = self._factory.source
         query = isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
-        expected = (build_fixed_synthetic_visible_query_source(manifest.site.decision_manifest)
+        expected = (build_fixed_synthetic_observe_only_source(manifest.site.decision_manifest)
+                    if manifest.skill.version == OBSERVE_SKILL_VERSION
+                    else build_fixed_synthetic_visible_query_source(manifest.site.decision_manifest)
                     if manifest.skill.version == VISIBLE_QUERY_SKILL_VERSION
                     else _build_fixed_source(
                         manifest.site.decision_manifest, query=query,
