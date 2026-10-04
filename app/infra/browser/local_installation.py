@@ -38,6 +38,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     build_fixed_synthetic_observe_only_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_visible_query_source,
+    observe_attempt_id_from_version,
 )
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
 from app.infra.browser.local_resource_lifecycle import (
@@ -279,13 +280,18 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
     builder = (build_fixed_synthetic_observe_only_source
-               if deps.source.manifest.skill.version == OBSERVE_SKILL_VERSION
+               if (deps.source.manifest.skill.version == OBSERVE_SKILL_VERSION
+                   or deps.source.manifest.skill.version.startswith(OBSERVE_SKILL_VERSION + "_"))
                else build_fixed_synthetic_visible_query_source
                if deps.source.manifest.skill.version == VISIBLE_QUERY_SKILL_VERSION
                else build_fixed_synthetic_diagnostic_source
                if deps.source.manifest.skill.version == DIAGNOSTIC_SKILL_VERSION
                else build_fixed_synthetic_query_source)
-    expected = builder(deps.source.manifest.site.decision_manifest)
+    expected = (build_fixed_synthetic_observe_only_source(
+                    deps.source.manifest.site.decision_manifest,
+                    attempt_id=observe_attempt_id_from_version(deps.source.manifest.skill.version),
+                ) if builder is build_fixed_synthetic_observe_only_source
+                else builder(deps.source.manifest.site.decision_manifest))
     if (deps.source.manifest != expected.manifest or deps.source.html != expected.html
             or deps.source.rules != expected.rules or deps.source.region != expected.region
             or type(deps.source.projector) is not type(expected.projector)):

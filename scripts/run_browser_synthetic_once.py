@@ -32,16 +32,18 @@ from app.infra.browser.synthetic_trial import (
     VISIBLE_TASK_ID,
     VISIBLE_TRIAL,
     SingleJevAttempt,
+    approved_attempt_id,
     create_trial_file,
     read_trial_file,
     require_diagnostic_terminal,
     require_legacy_terminal,
     require_visible_terminal,
     trial_publication_digest,
+    trial_reference,
     trial_request_id,
 )
 from app.infra.browser.synthetic_trial_client import _receipt
-from app.infra.browser.synthetic_vault import OPERATOR_FILE, VAULT_DIRECTORY, approved_trial_id
+from app.infra.browser.synthetic_vault import OPERATOR_FILE, VAULT_DIRECTORY
 
 
 class _SilentParser(argparse.ArgumentParser):
@@ -51,13 +53,31 @@ class _SilentParser(argparse.ArgumentParser):
 
 async def execute_once(
     components: SyntheticOperatorComponents, expected: BrowserAcceptedView,
-    *, trial_id: str = ORIGINAL_TRIAL,
+    *, trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None,
 ) -> bool:
     """Preflight is supplementary; the existing worker retains all current guards."""
     vertical, owner = components.vertical, components.publication_owner
-    approved_trial_id(trial_id)
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     async with vertical._sessions() as session:
-        if trial_id != ORIGINAL_TRIAL:
+        if attempt_id is not None:
+            rows = (await session.execute(text(
+                "SELECT r.task_id,r.run_id,r.ai_user_id,r.session_id,r.status,r.phase,"
+                "r.cancel_requested,r.worker_deadline,r.worker_epoch,r.effect,r.verification,"
+                "r.publication_digest,t.client_request_id FROM browser_runs r"
+                " JOIN tasks t ON t.task_id=r.task_id AND t.tenant_id=r.tenant_id"
+                " WHERE r.tenant_id=:tenant AND r.task_id=:task AND r.run_id=:run LIMIT 2"
+            ), {"tenant": owner.tenant_id, "task": expected.task_id,
+                "run": expected.run_id})).mappings().all()
+            if len(rows) != 1:
+                raise ValueError("browser_trial_receipt_invalid")
+            row = rows[0]
+            if (row["client_request_id"] != trial_request_id(trial_id, attempt_id=attempt_id)
+                    or bytes(row["publication_digest"]) != bytes.fromhex(
+                        trial_publication_digest(trial_id, attempt_id=attempt_id))
+                    or row["effect"] != "not_sent" or row["verification"] is not None
+                    or row["worker_epoch"] != 0):
+                raise ValueError("browser_trial_receipt_invalid")
+        elif trial_id != ORIGINAL_TRIAL:
             rows = (await session.execute(text(
                 "SELECT r.task_id,r.run_id,r.ai_user_id,r.session_id,r.status,r.phase,"
                 "r.cancel_requested,r.worker_deadline,r.worker_epoch,r.cleanup,r.effect,"
@@ -110,8 +130,13 @@ async def execute_once(
             or row["cancel_requested"] or row["worker_deadline"] is not None):
         raise ValueError("browser_trial_single_queued_run_required")
     if trial_id != ORIGINAL_TRIAL:
-        create_trial_file("trial.worker.json", {"worker_passes": 1, "trial_id": trial_id},
-                          trial_id=trial_id)
+        worker_receipt: dict[str, Any] = {"worker_passes": 1, "trial_id": trial_id}
+        receipt_options: dict[str, Any] = {"trial_id": trial_id}
+        if attempt_id is not None:
+            worker_receipt.update(trial_reference(trial_id, attempt_id=attempt_id))
+            worker_receipt.update(task_id=expected.task_id, run_id=expected.run_id)
+            receipt_options["attempt_id"] = attempt_id
+        create_trial_file("trial.worker.json", worker_receipt, **receipt_options)
     else:
         create_trial_file("trial.worker.json", {"worker_passes": 1})
     # Exact existing claim/CAS transaction: never fall back to another owner's Run.
@@ -134,13 +159,16 @@ async def execute_once(
                     and result.error_code == "browser_verification_failed"
                     and result.dispatch_failure_code == "cancelled"
                     and result.cleanup in {"released", "terminated"})
+        observation_binding = (trial_reference(trial_id, attempt_id=attempt_id)
+                               if attempt_id is not None else {})
         create_trial_file("trial.observation.json", {
+            **observation_binding,
             "trial_id": trial_id, "task_id": result.task_id, "run_id": result.run_id,
             "observation_completed": observed, "observe_elapsed_ms": elapsed_ms,
             "business_completed": False, "verification": result.verification,
             "run_status": result.status, "effect": result.effect,
             "cleanup": result.cleanup, "jev_request_count": 0,
-        }, trial_id=trial_id)
+        }, **receipt_options)
         return observed
     return (result.status == "completed" and result.effect == "acknowledged"
             and result.verification == "verified" and result.error_code is None
@@ -148,11 +176,14 @@ async def execute_once(
 
 
 async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
-               trial_id: str = ORIGINAL_TRIAL, observe_only: bool = False) -> bool:
-    approved_trial_id(trial_id)
+               trial_id: str = ORIGINAL_TRIAL, observe_only: bool = False,
+               attempt_id: str | None = None) -> bool:
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_trial_arguments_invalid")
     trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    if attempt_id is not None:
+        trial_options["attempt_id"] = attempt_id
     if observe_only != (trial_id == OBSERVE_TRIAL):
         raise ValueError("browser_trial_arguments_invalid")
     if observe_only and approved_budget_usd is not None:
@@ -162,7 +193,7 @@ async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
     def reject_http() -> None:
         raise ValueError("browser_observe_only_http_forbidden")
     if trial_id != ORIGINAL_TRIAL:
-        task_id, run_id = _receipt(trial_id)
+        task_id, run_id = _receipt(trial_id, attempt_id=attempt_id)
         reference = {"task_id": task_id, "run_id": run_id}
     else:
         reference = read_trial_file("trial.run.json")
@@ -204,12 +235,14 @@ def main(argv: list[str] | None = None) -> int:
         "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
+    parser.add_argument("--attempt-id")
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError
         success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin,
-                                   trial_id=args.trial_id, observe_only=args.observe_only))
+                                   trial_id=args.trial_id, observe_only=args.observe_only,
+                                   attempt_id=args.attempt_id))
     except BaseException:
         print("browser_trial_worker_unavailable", file=sys.stderr)
         return 2

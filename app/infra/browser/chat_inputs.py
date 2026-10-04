@@ -23,7 +23,6 @@ from app.browser_skill.publication_contracts import BrowserPublicationManifest, 
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.fixed_synthetic_seed import (
     DIAGNOSTIC_SKILL_VERSION,
-    OBSERVE_SKILL_VERSION,
     SYNTHETIC_DETAIL_CAPABILITY_ID,
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
@@ -32,6 +31,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     build_fixed_synthetic_observe_only_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_visible_query_source,
+    observe_attempt_id_from_version,
 )
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
 from app.ports.browser_chat import BrowserChatError
@@ -250,16 +250,16 @@ class FrozenSyntheticStructuredParser:
     def __init__(self, *, seed: BrowserPublicationManifest) -> None:
         try:
             if seed.skill.version == "v1":
-                builder = build_fixed_synthetic_query_source
+                expected = build_fixed_synthetic_query_source(seed.site.decision_manifest).manifest
             elif seed.skill.version == DIAGNOSTIC_SKILL_VERSION:
-                builder = build_fixed_synthetic_diagnostic_source
-            elif seed.skill.version == OBSERVE_SKILL_VERSION:
-                builder = build_fixed_synthetic_observe_only_source
+                expected = build_fixed_synthetic_diagnostic_source(seed.site.decision_manifest).manifest
             elif seed.skill.version == VISIBLE_QUERY_SKILL_VERSION:
-                builder = build_fixed_synthetic_visible_query_source
+                expected = build_fixed_synthetic_visible_query_source(seed.site.decision_manifest).manifest
             else:
-                raise ValueError("synthetic_manifest_mismatch")
-            expected = builder(seed.site.decision_manifest).manifest
+                expected = build_fixed_synthetic_observe_only_source(
+                    seed.site.decision_manifest,
+                    attempt_id=observe_attempt_id_from_version(seed.skill.version),
+                ).manifest
             if (seed != expected
                     or seed.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID):
                 raise ValueError("synthetic_manifest_mismatch")

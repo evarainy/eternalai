@@ -1,4 +1,4 @@
-"""Four fixed receipt namespaces; runtime actions require owner approval, no reset."""
+"""Fixed fixtures and independent observe receipts; owner approval, no reset."""
 
 from __future__ import annotations
 
@@ -30,12 +30,25 @@ VISIBLE_TASK_ID = "abc29b53e91749a5889da04b51979761"
 VISIBLE_RUN_ID = "02e340c0346942729ffddd555f436262"
 
 
-def trial_request_id(trial_id: str = ORIGINAL_TRIAL) -> str:
-    return vault.TASK_ID + "-" + vault.approved_trial_id(trial_id)
-
-
-def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
+def approved_attempt_id(attempt_id: str | None, *, trial_id: str = ORIGINAL_TRIAL) -> str | None:
     vault.approved_trial_id(trial_id)
+    if attempt_id is None:
+        return None
+    if trial_id != OBSERVE_TRIAL:
+        raise ValueError("browser_observe_attempt_invalid")
+    from app.infra.browser.fixed_synthetic_seed import approved_observe_attempt_id
+
+    return approved_observe_attempt_id(attempt_id)
+
+
+def trial_request_id(trial_id: str = ORIGINAL_TRIAL, *, attempt_id: str | None = None) -> str:
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+    return vault.TASK_ID + "-" + trial_id + ("-" + attempt_id if attempt_id is not None else "")
+
+
+def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL, *,
+                             attempt_id: str | None = None) -> str:
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     from app.infra.browser.fixed_synthetic_seed import (
         build_fixed_synthetic_diagnostic_source,
         build_fixed_synthetic_observe_only_source,
@@ -54,16 +67,23 @@ def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
         builder = build_fixed_synthetic_observe_only_source
     else:
         raise ValueError("browser_trial_id_invalid")
-    return builder(synthetic_jev_manifest()).manifest.digest
+    source = (build_fixed_synthetic_observe_only_source(
+        synthetic_jev_manifest(), attempt_id=attempt_id,
+    ) if trial_id == OBSERVE_TRIAL else builder(synthetic_jev_manifest()))
+    return source.manifest.digest
 
 
-def trial_reference(trial_id: str = ORIGINAL_TRIAL) -> dict[str, str]:
-    vault.approved_trial_id(trial_id)
+def trial_reference(trial_id: str = ORIGINAL_TRIAL, *,
+                    attempt_id: str | None = None) -> dict[str, str]:
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     if trial_id == ORIGINAL_TRIAL:
         return {}
-    return {"trial_id": trial_id,
-            "client_request_id": trial_request_id(trial_id),
-            "publication_digest": trial_publication_digest(trial_id)}
+    reference = {"trial_id": trial_id,
+                 "client_request_id": trial_request_id(trial_id, attempt_id=attempt_id),
+                 "publication_digest": trial_publication_digest(trial_id, attempt_id=attempt_id)}
+    if attempt_id is not None:
+        reference["attempt_id"] = attempt_id
+    return reference
 
 
 def diagnostic_reference() -> dict[str, str]:
@@ -129,11 +149,14 @@ def approved_trial_budget(value: str) -> Decimal:
     return amount
 
 
-def _path(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> Path:
+def _path(name: str, *, trial_id: str = ORIGINAL_TRIAL,
+          attempt_id: str | None = None) -> Path:
     if name not in _FILES:
         raise ValueError("browser_trial_receipt_invalid")
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     vault._check_trial_directory(trial_id)
-    return vault.trial_directory(trial_id) / name
+    filename = name if attempt_id is None else attempt_id + "." + name
+    return vault.trial_directory(trial_id) / filename
 
 
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -153,9 +176,10 @@ def _open_flags(base: int) -> int:
     return base | nofollow | cloexec
 
 
-def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
+def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL,
+                    attempt_id: str | None = None) -> dict[str, Any]:
     """Read non-secret metadata only; exact task path/owner/mode/link required."""
-    path = _path(name, trial_id=trial_id)
+    path = _path(name, trial_id=trial_id, attempt_id=attempt_id)
     try:
         vault._checked_file(path)
         fd = os.open(path, _open_flags(os.O_RDONLY))
@@ -177,12 +201,12 @@ def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> dict[str, A
 
 
 def create_trial_file(name: str, document: dict[str, Any], *,
-                      trial_id: str = ORIGINAL_TRIAL) -> None:
+                      trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None) -> None:
     """Reserve before IO; an uncertain/failed attempt is never automatically reset."""
     body = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(body) > _MAX_BYTES:
         raise ValueError("browser_trial_receipt_invalid")
-    path = _path(name, trial_id=trial_id)
+    path = _path(name, trial_id=trial_id, attempt_id=attempt_id)
     try:
         fd = os.open(path, _open_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL), 0o600)
         with os.fdopen(fd, "wb") as stream:

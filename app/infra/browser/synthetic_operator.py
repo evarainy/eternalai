@@ -62,12 +62,12 @@ from app.infra.browser.synthetic_configuration import (
     read_database_password,
     synthetic_jev_manifest,
 )
+from app.infra.browser.synthetic_trial import approved_attempt_id
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
     OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
     VISIBLE_TRIAL,
-    approved_trial_id,
 )
 from app.infra.browser.systemone_http import DecisionDeployment
 from app.infra.llm.json_structured_output import JSONStructuredOutputProvider
@@ -359,6 +359,7 @@ async def open_synthetic_operator(
     input_mode: Literal["chat", "structured"] = "chat",
     attempt_guard: Callable[[], None] | None = None,
     trial_id: str = ORIGINAL_TRIAL,
+    attempt_id: str | None = None,
 ) -> AsyncIterator[SyntheticOperatorComponents]:
     """Read-only installation/preflight; caller explicitly serves API or starts worker.
 
@@ -368,7 +369,7 @@ async def open_synthetic_operator(
     if (enabled is not True or type(require_active_publication) is not bool
             or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
-    approved_trial_id(trial_id)
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     if trial_id == OBSERVE_TRIAL:
         # Fixed diagnostic installation always rejects before HTTP transport IO.
         def reject_observe_only_http() -> None:
@@ -390,7 +391,8 @@ async def open_synthetic_operator(
                else build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
                else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
                else build_fixed_synthetic_query_source)
-    source = builder(bundle.jev_manifest)
+    source = (build_fixed_synthetic_observe_only_source(bundle.jev_manifest, attempt_id=attempt_id)
+              if trial_id == OBSERVE_TRIAL else builder(bundle.jev_manifest))
     deployment = await image_deployment(source)
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
@@ -519,7 +521,7 @@ class _DeactivationAuthority:
 
 async def deactivate_synthetic_publication(
     bundle: SyntheticDeactivationBundle, *, enabled: bool = False,
-    trial_id: str = ORIGINAL_TRIAL,
+    trial_id: str = ORIGINAL_TRIAL, attempt_id: str | None = None,
 ) -> None:
     """Disable frozen history using only independent live operator authorization.
 
@@ -531,7 +533,7 @@ async def deactivate_synthetic_publication(
     """
     if enabled is not True:
         raise ValueError("browser_operator_disabled")
-    approved_trial_id(trial_id)
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     tokens = HMACSessionToken(signing_key=_key(bundle.session_signing_key, exact=False),
                               ttl_seconds=3600, tenant_id=SYNTHETIC_TENANT)
     binder = PrincipalSessionBinder(binding_key=_key(bundle.session_binding_key, exact=False))
@@ -559,10 +561,13 @@ async def deactivate_synthetic_publication(
                 or historical.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID
                 or bytes(row["publication_digest"]).hex() != historical.digest):
             raise BrowserPublicationError("browser_publication_storage_invalid")
-        expected = (build_fixed_synthetic_observe_only_source if trial_id == OBSERVE_TRIAL
-               else build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
-                    else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
-                    else build_fixed_synthetic_query_source)(synthetic_jev_manifest()).manifest
+        expected = (build_fixed_synthetic_observe_only_source(
+            synthetic_jev_manifest(), attempt_id=attempt_id,
+        ) if trial_id == OBSERVE_TRIAL else (
+            build_fixed_synthetic_visible_query_source if trial_id == VISIBLE_TRIAL
+            else build_fixed_synthetic_diagnostic_source if trial_id == DIAGNOSTIC_TRIAL
+            else build_fixed_synthetic_query_source
+        )(synthetic_jev_manifest())).manifest
         if historical != expected:
             raise BrowserPublicationError("browser_publication_reference_invalid")
         store = PostgreSQLBrowserPublicationStore(

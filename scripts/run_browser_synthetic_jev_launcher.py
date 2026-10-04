@@ -62,14 +62,20 @@ class _SilentParser(argparse.ArgumentParser):
         raise ValueError("browser_jev_launcher_arguments_invalid")
 
 
-def _recipient(operation: str, trial_id: str) -> tuple[str, str]:
+def _recipient(operation: str, trial_id: str,
+               attempt_id: str | None = None) -> tuple[str, str]:
     if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL, _VISIBLE_TRIAL, _OBSERVE_TRIAL}
             or operation not in _RECIPIENTS
-            or (operation == "refresh" and trial_id == _ORIGINAL_TRIAL)):
+            or (operation == "refresh" and trial_id == _ORIGINAL_TRIAL)
+            or (attempt_id is not None and (
+                trial_id != _OBSERVE_TRIAL or operation == "refresh"
+                or type(attempt_id) is not str
+                or re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None))):
         raise ValueError("browser_jev_launcher_arguments_invalid")
     service, name = _RECIPIENTS[operation]
-    return service, (name if trial_id == _ORIGINAL_TRIAL
-                     else name.replace("-single-", "-" + trial_id + "-", 1))
+    name = (name if trial_id == _ORIGINAL_TRIAL
+            else name.replace("-single-", "-" + trial_id + "-", 1))
+    return service, name + ("-" + attempt_id if attempt_id is not None else "")
 
 
 def _check_refresh_script(expected_sha256: str | None) -> None:
@@ -244,7 +250,8 @@ def _check_image(expected_image_id: str, environment: dict[str, str]) -> None:
 
 
 def _preflight(operation: str, expected_image_id: str, environment: dict[str, str],
-               trial_id: str = _ORIGINAL_TRIAL, refresh_script_sha256: str | None = None) -> None:
+               trial_id: str = _ORIGINAL_TRIAL, refresh_script_sha256: str | None = None,
+               attempt_id: str | None = None) -> None:
     if (Path.cwd().resolve() != _WORKTREE.resolve(strict=True)
             or Path(__file__).resolve().parent.parent != _WORKTREE.resolve(strict=True)
             or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id) is None):
@@ -254,7 +261,8 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
             or hashlib.sha256(_SECCOMP.read_bytes()).hexdigest() != _SECCOMP_SHA256):
         raise ValueError("browser_jev_launcher_preflight_failed")
     _check_image(expected_image_id, environment)
-    _, name = _recipient(operation, trial_id)
+    _, name = (_recipient(operation, trial_id, attempt_id) if attempt_id is not None
+               else _recipient(operation, trial_id))
     if operation == "refresh":
         _check_refresh_script(refresh_script_sha256)
     present = _metadata(["docker", "container", "ls", "--all", "--filter",
@@ -270,10 +278,11 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
 
 def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str,
            phrase_from_exact_field: bool = False, trial_id: str = _ORIGINAL_TRIAL,
-           refresh_script_sha256: str | None = None) -> int:
+           refresh_script_sha256: str | None = None, attempt_id: str | None = None) -> int:
     """All preflights precede secret input; dispatch exactly once to a fixed service."""
     _require_future_deadline(approved_deadline_utc)
-    service, name = _recipient(operation, trial_id)
+    service, name = (_recipient(operation, trial_id, attempt_id) if attempt_id is not None
+                     else _recipient(operation, trial_id))
     if ((operation == "refresh" and refresh_script_sha256 is None)
             or (operation != "refresh" and refresh_script_sha256 is not None)):
         raise ValueError("browser_jev_launcher_arguments_invalid")
@@ -283,16 +292,21 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     # Public immutable image identity pins Compose's actual recipient. The
     # preflight validates its exact SHA-256 syntax before any Docker command.
     environment["BROWSER_V42_SINGLE_RUN_IMAGE"] = expected_image_id
-    if trial_id == _ORIGINAL_TRIAL:
+    if attempt_id is not None:
+        _preflight(operation, expected_image_id, environment, trial_id,
+                   refresh_script_sha256, attempt_id=attempt_id)
+    elif trial_id == _ORIGINAL_TRIAL:
         _preflight(operation, expected_image_id, environment)
     else:
         _preflight(operation, expected_image_id, environment, trial_id, refresh_script_sha256)
     _require_future_deadline(approved_deadline_utc)
-    key = (
-        read_exact_jev_key()
-        if operation not in {"submit", "inspect", "deactivate", "refresh"}
-        else None
-    )
+    if operation in {"submit", "inspect", "deactivate", "refresh"}:
+        key = None
+    elif trial_id == _OBSERVE_TRIAL:
+        # Accepted by the existing closed input frame; installation forbids HTTP.
+        key = "observe-only-http-forbidden"
+    else:
+        key = read_exact_jev_key()
     phrase = (_read_exact_field(b"jev-passport") if phrase_from_exact_field else _prompt_phrase())
     document = {"version": _FRAME_VERSION, "vault_passphrase": phrase}
     if key is not None:
@@ -313,6 +327,8 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
         arguments += [service, "--enable", "--private-stdin"]
     if trial_id != _ORIGINAL_TRIAL:
         arguments += ["--trial-id", trial_id]
+    if attempt_id is not None:
+        arguments += ["--attempt-id", attempt_id]
     if operation in {"prepare", "activate"}:
         arguments += ["--operation", operation, "--input-mode", "structured"]
     elif operation == "api":
@@ -345,12 +361,14 @@ def main(argv: list[str] | None = None) -> int:
         default=_ORIGINAL_TRIAL,
     )
     parser.add_argument("--refresh-script-sha256")
+    parser.add_argument("--attempt-id")
     try:
         args = parser.parse_args(argv)
         return launch(args.operation, approved_deadline_utc=args.approved_deadline_utc,
                       expected_image_id=args.expected_image_id,
                       phrase_from_exact_field=args.phrase_from_exact_field, trial_id=args.trial_id,
-                      refresh_script_sha256=args.refresh_script_sha256)
+                      refresh_script_sha256=args.refresh_script_sha256,
+                      attempt_id=args.attempt_id)
     except (Exception, KeyboardInterrupt) as error:
         codes = {
             "browser_jev_launcher_arguments_invalid", "browser_jev_launcher_deadline_invalid",

@@ -196,8 +196,9 @@ class PostgreSQLBrowserPublicationStore:
 
     async def prepare_observe_only(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        *, attempt_id: str | None = None,
     ) -> BrowserPublicationRecord:
-        """Append this fixed fourth publication; preserve three inactive histories."""
+        """Append a fully verified fixed observation instance without changing history."""
         from app.infra.browser.fixed_synthetic_seed import (
             SYNTHETIC_TENANT,
             build_fixed_synthetic_diagnostic_source,
@@ -208,9 +209,11 @@ class PostgreSQLBrowserPublicationStore:
         from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
 
         decision = synthetic_jev_manifest()
-        successor = build_fixed_synthetic_observe_only_source(decision).manifest
+        successor = build_fixed_synthetic_observe_only_source(decision, attempt_id=attempt_id).manifest
         if owner.tenant_id != SYNTHETIC_TENANT or _manifest(manifest) != successor:
             raise BrowserPublicationError("browser_publication_source_denied")
+        if attempt_id is not None:
+            return await self._prepare(owner, manifest, observe_attempt_id=attempt_id)
         return await self._prepare(
             owner, manifest, predecessor=build_fixed_synthetic_query_source(decision).manifest,
             diagnostic_predecessor=build_fixed_synthetic_diagnostic_source(decision).manifest,
@@ -222,8 +225,24 @@ class PostgreSQLBrowserPublicationStore:
         predecessor: BrowserPublicationManifest | None = None,
         diagnostic_predecessor: BrowserPublicationManifest | None = None,
         visible_predecessor: BrowserPublicationManifest | None = None,
+        observe_attempt_id: str | None = None,
     ) -> BrowserPublicationRecord:
         owner, manifest = _owner(owner), _manifest(manifest)
+        if observe_attempt_id is not None:
+            from app.infra.browser.fixed_synthetic_seed import (
+                SYNTHETIC_TENANT,
+                build_fixed_synthetic_observe_only_source,
+            )
+            from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+            expected = build_fixed_synthetic_observe_only_source(
+                synthetic_jev_manifest(), attempt_id=observe_attempt_id,
+            ).manifest
+            if (owner.tenant_id != SYNTHETIC_TENANT or manifest != expected
+                    or any(item is not None for item in (
+                        predecessor, diagnostic_predecessor, visible_predecessor,
+                    ))):
+                raise BrowserPublicationError("browser_publication_source_denied")
         if diagnostic_predecessor is not None and predecessor is None:
             raise BrowserPublicationError("browser_publication_source_denied")
         if visible_predecessor is not None and diagnostic_predecessor is None:
@@ -238,9 +257,19 @@ class PostgreSQLBrowserPublicationStore:
             previous = (await session.execute(text(
                 "SELECT * FROM browser_publications WHERE " + _OWNER_SKILL + " FOR UPDATE"
             ), params)).mappings().all()
-            # One controlled seed only. No implicit new-version platform and no
-            # inactive->prepared resurrection through repeated preparation.
-            if predecessor is not None:
+            # Independent observe instances append only; existing records stay unchanged.
+            # No inactive record may return to prepared.
+            if observe_attempt_id is not None:
+                records = [_record(row) for row in previous]
+                new = [record for record in records if record.manifest == manifest]
+                if (len(new) > 1 or any(record.state != "inactive"
+                                       for record in records if record.manifest != manifest)):
+                    raise BrowserPublicationError("browser_publication_already_prepared")
+                if new:
+                    if new[0].state == "prepared" and new[0].activation_revision == 0:
+                        return new[0]
+                    raise BrowserPublicationError("browser_publication_already_prepared")
+            elif predecessor is not None:
                 records = [_record(row) for row in previous]
                 history = ((predecessor,) if diagnostic_predecessor is None
                            else (predecessor, diagnostic_predecessor))

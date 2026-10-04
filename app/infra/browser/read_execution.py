@@ -138,10 +138,16 @@ class VerifiedBrowserReadExecution:
 
     def _install_fixed_observe_only(self, manifest: BrowserPublicationManifest) -> None:
         """Trusted one-off installation; a version label alone cannot enable stopping."""
-        from app.infra.browser.fixed_synthetic_seed import build_fixed_synthetic_observe_only_source
+        from app.infra.browser.fixed_synthetic_seed import (
+            build_fixed_synthetic_observe_only_source,
+            observe_attempt_id_from_version,
+        )
         from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
 
-        expected = build_fixed_synthetic_observe_only_source(synthetic_jev_manifest()).manifest
+        expected = build_fixed_synthetic_observe_only_source(
+            synthetic_jev_manifest(),
+            attempt_id=observe_attempt_id_from_version(manifest.skill.version),
+        ).manifest
         if manifest != expected or self._observe_only_manifest is not None:
             raise ValueError("browser_observe_only_configuration_invalid")
         self._observe_only_manifest = expected

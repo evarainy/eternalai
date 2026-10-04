@@ -23,12 +23,12 @@ from app.infra.browser.synthetic_private_input import (
     read_private_operator_input,
     read_private_passphrase,
 )
+from app.infra.browser.synthetic_trial import approved_attempt_id
 from app.infra.browser.synthetic_vault import (
     DIAGNOSTIC_TRIAL,
     OBSERVE_TRIAL,
     ORIGINAL_TRIAL,
     VISIBLE_TRIAL,
-    approved_trial_id,
     read_private_deactivation_document,
 )
 from app.ports.auth import AuthenticationError
@@ -88,18 +88,22 @@ async def _operate(
     deactivation_vault: Path | None = None,
     private_stdin: bool = False,
     trial_id: str = ORIGINAL_TRIAL,
+    attempt_id: str | None = None,
 ) -> None:
-    approved_trial_id(trial_id)
+    attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_operator_arguments_invalid")
-    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    private_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    trial_options = dict(private_options)
+    if attempt_id is not None:
+        trial_options["attempt_id"] = attempt_id
     stage = "bundle"
     try:
         if operation == "deactivate":
             if operator_vault is not None or (private_stdin and deactivation_vault is not None):
                 raise ValueError("browser_operator_arguments_invalid")
             deactivation_bundle = (SyntheticDeactivationBundle.model_validate(
-                read_private_deactivation_document(read_private_passphrase(), **trial_options)
+                read_private_deactivation_document(read_private_passphrase(), **private_options)
             ) if private_stdin else prompt_deactivation_bundle(deactivation_vault))
             stage = "deactivate"
             await deactivate_synthetic_publication(deactivation_bundle, enabled=True,
@@ -126,7 +130,9 @@ async def _operate(
             if operation == "prepare":
                 stage = "prepare"
                 if trial_id == OBSERVE_TRIAL:
-                    await vertical.publications.prepare_observe_only(owner, vertical._seed)
+                    await vertical.publications.prepare_observe_only(
+                        owner, vertical._seed, attempt_id=attempt_id,
+                    )
                 elif trial_id == VISIBLE_TRIAL:
                     await vertical.publications.prepare_visible_complete(owner, vertical._seed)
                 elif trial_id == DIAGNOSTIC_TRIAL:
@@ -179,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
+    parser.add_argument("--attempt-id")
     try:
         args = parser.parse_args(argv)
         if not args.enable or args.operation is None:
@@ -187,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             args.operation, input_mode=args.input_mode,
             operator_vault=args.operator_vault, deactivation_vault=args.deactivation_vault,
             private_stdin=args.private_stdin,
-            trial_id=args.trial_id,
+            trial_id=args.trial_id, attempt_id=args.attempt_id,
         ))
     except _PublicationDiagnostic as error:
         print(error.code, file=sys.stderr)

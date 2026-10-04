@@ -24,6 +24,7 @@ from app.infra.browser.synthetic_trial import (
     VISIBLE_RUN_ID,
     VISIBLE_TASK_ID,
     VISIBLE_TRIAL,
+    approved_attempt_id,
     create_trial_file,
     read_trial_file,
     trial_reference,
@@ -35,7 +36,6 @@ from app.infra.browser.synthetic_trial import (
 from app.infra.browser.synthetic_vault import (
     BUSINESS_FILE,
     VAULT_DIRECTORY,
-    approved_trial_id,
     read_encrypted,
     read_private_business_document,
 )
@@ -68,12 +68,15 @@ class TrialOutcome:
     exit_code: int = 2
 
 
-def _receipt(trial_id: str = ORIGINAL_TRIAL) -> tuple[str, str]:
+def _receipt(trial_id: str = ORIGINAL_TRIAL, *,
+             attempt_id: str | None = None) -> tuple[str, str]:
     try:
-        approved_trial_id(trial_id)
-        document = (read_trial_file("trial.run.json") if trial_id == ORIGINAL_TRIAL
-                    else read_trial_file("trial.run.json", trial_id=trial_id))
-        binding = trial_reference(trial_id)
+        attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
+        options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+        if attempt_id is not None:
+            options["attempt_id"] = attempt_id
+        document = read_trial_file("trial.run.json", **options)
+        binding = trial_reference(trial_id, attempt_id=attempt_id)
         if (type(document) is not dict or set(document) != {"task_id", "run_id", *binding}
                 or any(document[name] != value for name, value in binding.items())):
             raise ValueError
@@ -167,19 +170,22 @@ async def run_trial(
     client: httpx2.AsyncClient | None = None,
     private_stdin: bool = False,
     trial_id: str = ORIGINAL_TRIAL,
+    attempt_id: str | None = None,
 ) -> TrialOutcome:
     """Perform exactly one fixed HTTP operation; injected client is for local tests."""
     if enabled is not True or operation not in {"submit", "inspect", "cancel"}:
         raise TrialClientError("browser_trial_disabled")
     try:
-        approved_trial_id(trial_id)
+        attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
         if trial_id != ORIGINAL_TRIAL and not private_stdin:
             raise ValueError
     except ValueError:
         raise TrialClientError("browser_trial_arguments_invalid") from None
-    binding = trial_reference(trial_id)
+    binding = trial_reference(trial_id, attempt_id=attempt_id)
     marker = {"submission_attempts": 1, **binding}
     receipt_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
+    if attempt_id is not None:
+        receipt_options["attempt_id"] = attempt_id
     if operation == "submit":
         try:
             create_trial_file("trial.submit.json", marker, **receipt_options)
@@ -197,7 +203,7 @@ async def run_trial(
         except Exception:
             raise TrialClientError("browser_trial_marker_unavailable") from None
     else:
-        task_id, run_id = _receipt(trial_id)
+        task_id, run_id = _receipt(trial_id, attempt_id=attempt_id)
     token = (_token(private_stdin=True, trial_id=trial_id) if private_stdin else _token())
     owned = client is None
     if owned:
@@ -215,7 +221,8 @@ async def run_trial(
                          ),
                          "client_capabilities": {"browser_async_v1": True,
                                                  "browser_skill_id": _SKILL_ID},
-                         "client_request_id": trial_request_id(trial_id)}, expected_status=200)
+                         "client_request_id": trial_request_id(trial_id, attempt_id=attempt_id)},
+                expected_status=200)
             try:
                 envelope = ResponseEnvelope.model_validate(document)
                 accepted = BrowserAcceptedView.model_validate(envelope.data)

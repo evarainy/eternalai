@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -72,6 +73,24 @@ SYNTHETIC_DETAIL_CAPABILITY_ID = "browser.synthetic.system_message_detail"
 DIAGNOSTIC_SKILL_VERSION = "v2_diagnostic_2"
 VISIBLE_QUERY_SKILL_VERSION = "v3_visible_complete"
 OBSERVE_SKILL_VERSION = "v4_observe_only"
+
+
+def approved_observe_attempt_id(attempt_id: str | None) -> str | None:
+    if attempt_id is not None and (
+        type(attempt_id) is not str or re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None
+    ):
+        raise ValueError("browser_observe_attempt_invalid")
+    return attempt_id
+
+
+def observe_attempt_id_from_version(version: str) -> str | None:
+    if version == OBSERVE_SKILL_VERSION:
+        return None
+    match = re.fullmatch(re.escape(OBSERVE_SKILL_VERSION) + r"_([0-9a-f]{32})", version)
+    if match is None:
+        raise ValueError("browser_observe_attempt_invalid")
+    return match.group(1)
+
 
 _COLLECTION = canonical_json({
     "messages": [{
@@ -210,23 +229,27 @@ def build_fixed_synthetic_visible_query_source(
 
 
 def build_fixed_synthetic_observe_only_source(
-    decision_manifest: ModelManifest,
+    decision_manifest: ModelManifest, *, attempt_id: str | None = None,
 ) -> FixedSyntheticSource:
-    """One fixed observation diagnostic; preserve the visible predecessor's HTML."""
+    """One fixed fixture, with an optional independent publication instance."""
     return _build_fixed_source(
         decision_manifest, query=True, visible_complete=True, observe_only=True,
+        attempt_id=attempt_id,
     )
 
 
 def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
                         diagnostic: bool = False,
                         visible_complete: bool = False,
-                        observe_only: bool = False) -> FixedSyntheticSource:
+                        observe_only: bool = False,
+                        attempt_id: str | None = None) -> FixedSyntheticSource:
+    attempt_id = approved_observe_attempt_id(attempt_id)
     if (type(diagnostic) is not bool or type(visible_complete) is not bool
             or type(observe_only) is not bool
             or (observe_only and (not visible_complete or diagnostic))
             or ((diagnostic or visible_complete) and not query)
-            or (diagnostic and visible_complete)):
+            or (diagnostic and visible_complete)
+            or (attempt_id is not None and not observe_only)):
         raise ValueError("browser_local_source_invalid")
     capability = synthetic_detail_capability_snapshot() if query else expected_oa_capabilities()[1]
     content = _QUERY_HTML if query else _HTML
@@ -286,7 +309,8 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
     skill = _signed(
         BrowserSkill, "browser_skill.v1",
         skill_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
-        version=(OBSERVE_SKILL_VERSION if observe_only
+        version=((OBSERVE_SKILL_VERSION + ("_" + attempt_id if attempt_id is not None else ""))
+                 if observe_only
                  else VISIBLE_QUERY_SKILL_VERSION if visible_complete
                  else DIAGNOSTIC_SKILL_VERSION if diagnostic else "v1"),
         site_id=site.site_id, site_digest=site.digest,
@@ -384,8 +408,12 @@ class FixedSyntheticSourceVerifier:
     async def verify(self, manifest: BrowserPublicationManifest) -> bool:
         source = self._factory.source
         query = isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
-        expected = (build_fixed_synthetic_observe_only_source(manifest.site.decision_manifest)
-                    if manifest.skill.version == OBSERVE_SKILL_VERSION
+        expected = (build_fixed_synthetic_observe_only_source(
+                        manifest.site.decision_manifest,
+                        attempt_id=observe_attempt_id_from_version(manifest.skill.version),
+                    )
+                    if (manifest.skill.version == OBSERVE_SKILL_VERSION
+                        or manifest.skill.version.startswith(OBSERVE_SKILL_VERSION + "_"))
                     else build_fixed_synthetic_visible_query_source(manifest.site.decision_manifest)
                     if manifest.skill.version == VISIBLE_QUERY_SKILL_VERSION
                     else _build_fixed_source(

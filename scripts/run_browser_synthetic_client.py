@@ -31,10 +31,12 @@ def main(argv: list[str] | None = None) -> int:
         "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL, VISIBLE_TRIAL, OBSERVE_TRIAL),
         default=ORIGINAL_TRIAL,
     )
+    parser.add_argument("--attempt-id")
     try:
         args = parser.parse_args(argv)
         outcome = asyncio.run(run_trial(args.operation, enabled=args.enable,
-                                        private_stdin=args.private_stdin, trial_id=args.trial_id))
+                                        private_stdin=args.private_stdin, trial_id=args.trial_id,
+                                        attempt_id=args.attempt_id))
     except TrialClientError as error:
         print(json.dumps({"code": error.code}, sort_keys=True))
         return 2
