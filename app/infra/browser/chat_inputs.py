@@ -22,9 +22,11 @@ from app.browser_skill.chat import _validate_schema
 from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.fixed_synthetic_seed import (
+    DIAGNOSTIC_SKILL_VERSION,
     SYNTHETIC_DETAIL_CAPABILITY_ID,
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
+    build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
 )
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
@@ -243,7 +245,13 @@ class FrozenSyntheticStructuredParser:
 
     def __init__(self, *, seed: BrowserPublicationManifest) -> None:
         try:
-            expected = build_fixed_synthetic_query_source(seed.site.decision_manifest).manifest
+            if seed.skill.version == "v1":
+                builder = build_fixed_synthetic_query_source
+            elif seed.skill.version == DIAGNOSTIC_SKILL_VERSION:
+                builder = build_fixed_synthetic_diagnostic_source
+            else:
+                raise ValueError("synthetic_manifest_mismatch")
+            expected = builder(seed.site.decision_manifest).manifest
             if (seed != expected
                     or seed.capability.capability_id != SYNTHETIC_DETAIL_CAPABILITY_ID):
                 raise ValueError("synthetic_manifest_mismatch")

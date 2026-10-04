@@ -16,6 +16,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from app.browser_skill.models import ModelManifest
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    canonical_json,
+    publication_digest,
+)
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser import local_installation
 from app.infra.browser.chat_inputs import (
@@ -25,6 +30,7 @@ from app.infra.browser.chat_inputs import (
 from app.infra.browser.fixed_synthetic_seed import (
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
+    build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_source,
 )
@@ -85,6 +91,29 @@ def test_exact_json_key_is_only_parsed_argument() -> None:
     }
     assert _parse(parser, json.dumps({"business_key": "x" * 96}),
                   capability=source.manifest.capability) == {"business_key": "x" * 96}
+
+
+@pytest.mark.parametrize("builder", [
+    build_fixed_synthetic_query_source, build_fixed_synthetic_diagnostic_source,
+])
+def test_structured_parser_accepts_only_frozen_query_versions(builder) -> None:
+    source = builder(_source().manifest.site.decision_manifest)
+    parser = FrozenSyntheticStructuredParser(seed=source.manifest)
+    assert _parse(parser, '{"business_key":"different_business_key"}',
+                  capability=source.manifest.capability) == {
+        "business_key": "different_business_key",
+    }
+
+
+@pytest.mark.parametrize("version", ["v2", "v3_diagnostic_3"])
+def test_structured_parser_rejects_unapproved_query_versions(version: str) -> None:
+    payload = _source().manifest.model_dump(mode="json")
+    payload["skill"]["version"] = version
+    payload["skill"]["digest"] = publication_digest("browser_skill.v1", payload["skill"])
+    payload["digest"] = publication_digest("browser_publication.durable.v1", payload)
+    seed = BrowserPublicationManifest.model_validate_json(canonical_json(payload))
+    with pytest.raises(ValueError, match="browser_structured_parser_configuration_invalid"):
+        FrozenSyntheticStructuredParser(seed=seed)
 
 
 @pytest.mark.parametrize("message,code", [
