@@ -28,9 +28,11 @@ from app.infra.browser.composition import (
     build_browser_vertical,
 )
 from app.infra.browser.fixed_synthetic_seed import (
+    DIAGNOSTIC_SKILL_VERSION,
     FixedSourceReadFactory,
     FixedSyntheticSource,
     FixedSyntheticSourceVerifier,
+    build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
 )
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
@@ -271,7 +273,10 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_recovery", None))
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
-    expected = build_fixed_synthetic_query_source(deps.source.manifest.site.decision_manifest)
+    builder = (build_fixed_synthetic_diagnostic_source
+               if deps.source.manifest.skill.version == DIAGNOSTIC_SKILL_VERSION
+               else build_fixed_synthetic_query_source)
+    expected = builder(deps.source.manifest.site.decision_manifest)
     if (deps.source.manifest != expected.manifest or deps.source.html != expected.html
             or deps.source.rules != expected.rules or deps.source.region != expected.region
             or type(deps.source.projector) is not type(expected.projector)):

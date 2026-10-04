@@ -7,7 +7,7 @@ import asyncio
 import re
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -23,7 +23,12 @@ from app.infra.browser.synthetic_private_input import (
     read_private_operator_input,
     read_private_passphrase,
 )
-from app.infra.browser.synthetic_vault import read_private_deactivation_document
+from app.infra.browser.synthetic_vault import (
+    DIAGNOSTIC_TRIAL,
+    ORIGINAL_TRIAL,
+    approved_trial_id,
+    read_private_deactivation_document,
+)
 from app.ports.auth import AuthenticationError
 from app.ports.browser_publication_store import BrowserPublicationError
 
@@ -80,24 +85,31 @@ async def _operate(
     operation: str, *, input_mode: str = "chat", operator_vault: Path | None = None,
     deactivation_vault: Path | None = None,
     private_stdin: bool = False,
+    trial_id: str = ORIGINAL_TRIAL,
 ) -> None:
+    approved_trial_id(trial_id)
+    if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+        raise ValueError("browser_operator_arguments_invalid")
+    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
     stage = "bundle"
     try:
         if operation == "deactivate":
             if operator_vault is not None or (private_stdin and deactivation_vault is not None):
                 raise ValueError("browser_operator_arguments_invalid")
             deactivation_bundle = (SyntheticDeactivationBundle.model_validate(
-                read_private_deactivation_document(read_private_passphrase())
+                read_private_deactivation_document(read_private_passphrase(), **trial_options)
             ) if private_stdin else prompt_deactivation_bundle(deactivation_vault))
             stage = "deactivate"
-            await deactivate_synthetic_publication(deactivation_bundle, enabled=True)
+            await deactivate_synthetic_publication(deactivation_bundle, enabled=True,
+                                                    **trial_options)
             return
         if deactivation_vault is not None:
             raise ValueError("browser_operator_arguments_invalid")
         if private_stdin:
             if operator_vault is not None or operation not in {"prepare", "activate"}:
                 raise ValueError("browser_operator_arguments_invalid")
-            bundle, key = read_private_operator_input()
+            bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
+                           else read_private_operator_input(trial_id=trial_id))
         else:
             bundle = prompt_operator_bundle(operator_vault)
             stage = "key"
@@ -106,11 +118,15 @@ async def _operate(
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, require_active_publication=False,
             input_mode=input_mode,
+            **trial_options,
         ) as components:
             vertical, owner = components.vertical, components.publication_owner
             if operation == "prepare":
                 stage = "prepare"
-                await vertical.prepare_seed(owner)
+                if trial_id == DIAGNOSTIC_TRIAL:
+                    await vertical.publications.prepare_diagnostic_second(owner, vertical._seed)
+                else:
+                    await vertical.prepare_seed(owner)
             elif operation == "activate":
                 stage = "activate"
                 await vertical.activate_seed(owner)
@@ -153,6 +169,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator-vault", type=Path)
     parser.add_argument("--deactivation-vault", type=Path)
     parser.add_argument("--private-stdin", action="store_true")
+    parser.add_argument(
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL), default=ORIGINAL_TRIAL
+    )
     try:
         args = parser.parse_args(argv)
         if not args.enable or args.operation is None:
@@ -161,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
             args.operation, input_mode=args.input_mode,
             operator_vault=args.operator_vault, deactivation_vault=args.deactivation_vault,
             private_stdin=args.private_stdin,
+            trial_id=args.trial_id,
         ))
     except _PublicationDiagnostic as error:
         print(error.code, file=sys.stderr)

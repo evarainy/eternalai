@@ -128,8 +128,8 @@ Do not replace it with `unconfined`, a different file, or a permissive fallback.
 
 **Current task:** initialization completed on 2026-10-04; do not repeat
 `--init` against its existing database and vault. The original conservative
-cutoff `2026-10-04T04:48:46Z` has passed. The separately approved refresh completed;
-the current cutoff is `2026-10-04T06:56:46Z`. These input instructions do not
+cutoff `2026-10-04T04:48:46Z` has passed. The first approved refresh completed;
+its cutoff `2026-10-04T06:56:46Z` has also passed. These input instructions do not
 extend it. Keep the existing ciphertext and task state for recovery.
 The bootstrap commands below describe fresh-task preparation only.
 
@@ -263,3 +263,21 @@ Do not run `docker compose down -v`, delete the named volume, remove retained
 containers, or modify the fixed database to make a failed attempt green. This
 structured path exercises the authenticated browser API and one Jev decision;
 it does not exercise chat intent parsing or the default vLLM endpoint.
+
+The explicitly approved second diagnosis uses only `--trial-id diagnostic-2`.
+The original Run remains failed and its `v1` publication remains inactive at
+revision 2. Preparation appends `v2_diagnostic_2`; it preserves the original
+publication, ciphertexts, receipts and backup. After approved validation/build,
+use the launcher with the reviewed image ID, approved future cutoff and
+`--phrase-from-exact-field` for every second-round operation. Run `refresh` once
+with the reviewed public `--refresh-script-sha256`, then `prepare`, `activate`,
+foreground `api`, `submit`, `once`, `inspect`, and `deactivate`. Refresh mounts
+only `C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/identity-refresh-diagnostic-2-20261004/refresh_existing_tokens.py`.
+It issues the same three identities for 3600 seconds into a private stage, then
+publishes the fixed vault child `diagnostic-2` once with `renameNOREPLACE`.
+A failure marker takes precedence over a visible success receipt. Refresh,
+submit, inspect and deactivate receive phrase-only frames. The worker has one
+Jev attempt at USD 0.01; the platform cap remains USD 0.15. On failure retain
+all state and stop; no retry, reset, bootstrap or third round. Stop the exact
+API container `browser-v42-diagnostic-2-api` after deactivation or its failure.
+These instructions do not imply that any second-round operation has run.

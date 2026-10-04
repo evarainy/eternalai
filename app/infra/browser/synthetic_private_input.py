@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import SecretStr
 
 from app.infra.browser.synthetic_configuration import SyntheticOperatorBundle
-from app.infra.browser.synthetic_vault import read_private_operator_document
+from app.infra.browser.synthetic_vault import ORIGINAL_TRIAL, read_private_operator_document
 
 FRAME_VERSION = "browser.synthetic.private-input.v1"
 MAX_FRAME_BYTES = 65536
@@ -65,12 +65,16 @@ def read_private_passphrase() -> SecretStr:
     return SecretStr(_read_frame(require_jev_key=False)["vault_passphrase"])
 
 
-def read_private_operator_input() -> tuple[SyntheticOperatorBundle, SecretStr]:
+def read_private_operator_input(
+    *, trial_id: str = ORIGINAL_TRIAL
+) -> tuple[SyntheticOperatorBundle, SecretStr]:
     frame = _read_frame(require_jev_key=True)
     key = SecretStr(frame["jev_key"])
     phrase = SecretStr(frame["vault_passphrase"])
     try:
-        bundle = SyntheticOperatorBundle.model_validate(read_private_operator_document(phrase))
+        document = (read_private_operator_document(phrase) if trial_id == ORIGINAL_TRIAL
+                    else read_private_operator_document(phrase, trial_id=trial_id))
+        bundle = SyntheticOperatorBundle.model_validate(document)
     except (Exception, KeyboardInterrupt):
         raise ValueError("browser_operator_bundle_invalid") from None
     return bundle, key

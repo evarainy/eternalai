@@ -30,11 +30,13 @@ from app.browser_skill.verifier import IndependentVerifier, failure
 from app.infra.adapters.oa.capabilities import expected_oa_capabilities
 from app.infra.browser.composition import BrowserVerticalDependencies
 from app.infra.browser.fixed_synthetic_seed import (
+    DIAGNOSTIC_SKILL_VERSION,
     SYNTHETIC_DETAIL_CAPABILITY_ID,
     SYNTHETIC_ORIGIN,
     SYNTHETIC_TENANT,
     SYNTHETIC_USER,
     SyntheticDetailArguments,
+    build_fixed_synthetic_diagnostic_source,
     build_fixed_synthetic_query_source,
     build_fixed_synthetic_source,
     install_fixed_synthetic_seed,
@@ -51,6 +53,20 @@ def _model() -> ModelManifest:
         request_model="fixture_model_v1", deployment_model="deploymentfixturev1",
         manifest_digest=hashlib.sha256(b"synthetic-query-loader-only-v1").hexdigest(),
     )
+
+
+def test_second_frozen_publication_preserves_source_and_capability() -> None:
+    first = build_fixed_synthetic_query_source(_model())
+    second = build_fixed_synthetic_diagnostic_source(_model())
+    assert first.manifest.skill.version == "v1"
+    assert second.manifest.skill.version == DIAGNOSTIC_SKILL_VERSION
+    assert second.html == first.html
+    assert second.manifest.capability == first.manifest.capability
+    assert second.manifest.site == first.manifest.site
+    assert second.manifest.verifier == first.manifest.verifier
+    assert second.manifest.skill.digest != first.manifest.skill.digest
+    assert second.manifest.digest != first.manifest.digest
+    second.manifest.site_plan().validate_skill(second.manifest.skill)
 
 
 def _fixture_text(markup: str, element_id: str) -> str:

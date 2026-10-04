@@ -7,7 +7,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import httpx2
 import pytest
@@ -27,6 +27,33 @@ from scripts import run_browser_synthetic_once as once
 def test_trial_budget_rejects_unapproved_amount(amount: str) -> None:
     with pytest.raises(ValueError, match="^browser_trial_budget_invalid$"):
         trial.SingleJevAttempt(amount)
+
+
+def test_second_round_has_independent_burn_without_resetting_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = {(trial.ORIGINAL_TRIAL, "trial.jev-attempt.json"): {"retained": True}}
+
+    def create(name, document, *, trial_id=trial.ORIGINAL_TRIAL):
+        if (trial_id, name) in records:
+            raise ValueError("browser_trial_already_attempted")
+        records[trial_id, name] = document.copy()
+
+    monkeypatch.setattr(trial, "create_trial_file", create)
+    with pytest.raises(ValueError, match="^browser_trial_already_attempted$"):
+        trial.SingleJevAttempt("0.01").reserve()
+    second = trial.SingleJevAttempt("0.01", trial_id=trial.DIAGNOSTIC_TRIAL)
+    second.reserve()
+    with pytest.raises(ValueError, match="^browser_trial_already_attempted$"):
+        trial.SingleJevAttempt("0.01", trial_id=trial.DIAGNOSTIC_TRIAL).reserve()
+    assert records[trial.ORIGINAL_TRIAL, "trial.jev-attempt.json"] == {"retained": True}
+    assert (
+        records[trial.DIAGNOSTIC_TRIAL, "trial.jev-attempt.json"]["trial_id"]
+        == trial.DIAGNOSTIC_TRIAL
+    )
+    assert second.request_count == 1
+    with pytest.raises(ValueError, match="^browser_trial_id_invalid$"):
+        trial.SingleJevAttempt("0.01", trial_id="diagnostic-3")
 
 
 def test_trial_reservation_burns_budget_even_across_restart(
@@ -178,6 +205,47 @@ def _queued() -> dict:
     return {"task_id": "trial_task", "run_id": "trial_run", "status": "running",
             "phase": "queued", "cancel_requested": False, "worker_deadline": None,
             "ai_user_id": "browser_fixture_user", "session_id": "bound_synthetic_session"}
+
+
+def _legacy_terminal() -> dict:
+    return {**_queued(), "task_id": trial.LEGACY_TASK_ID, "run_id": trial.LEGACY_RUN_ID,
+            "status": "failed", "phase": None, "cleanup": "terminated", "effect": "not_sent",
+            "verification": None, "error_code": "browser_verification_failed",
+            "dispatch_failure_code": "timeout", "worker_epoch": 1,
+            "worker_deadline": "historical-deadline",
+            "client_request_id": trial.trial_request_id(),
+            "publication_digest": bytes.fromhex(trial.trial_publication_digest())}
+
+
+@pytest.mark.parametrize("changed", [{}, {"status": "running"}, {"cleanup": "quarantined"}])
+def test_second_worker_fences_settled_exact_predecessor(
+    changed: dict, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = {
+        **_queued(),
+        "client_request_id": trial.trial_request_id(trial.DIAGNOSTIC_TRIAL),
+        "publication_digest": bytes.fromhex(trial.trial_publication_digest(trial.DIAGNOSTIC_TRIAL)),
+    }
+    components = _components([{**_legacy_terminal(), **changed}, current])
+    marker = Mock()
+    monkeypatch.setattr(once, "create_trial_file", marker)
+    expected = BrowserAcceptedView(task_id="trial_task", run_id="trial_run", state_revision=0)
+    if changed:
+        with pytest.raises(ValueError, match="^browser_trial_history_invalid$"):
+            asyncio.run(once.execute_once(components, expected, trial_id=trial.DIAGNOSTIC_TRIAL))
+        marker.assert_not_called()
+        assert components.vertical.runs._claim_candidate.await_args_list == []
+    else:
+        assert (
+            asyncio.run(once.execute_once(components, expected, trial_id=trial.DIAGNOSTIC_TRIAL))
+            is True
+        )
+        marker.assert_called_once_with("trial.worker.json", {"worker_passes": 1,
+            "trial_id": trial.DIAGNOSTIC_TRIAL}, trial_id=trial.DIAGNOSTIC_TRIAL)
+        assert components.vertical.runs._claim_candidate.await_args_list == [call(
+            components.publication_owner, "trial_task", "trial_run", "browser_fixture_worker",
+            timedelta(seconds=60),
+        )]
 
 
 def test_worker_executes_once_and_checks_fresh_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:

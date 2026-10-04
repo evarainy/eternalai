@@ -21,6 +21,8 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import SecretStr
 
 TASK_ID = "P2-BROWSER-RUNTIME-V42-001"
+ORIGINAL_TRIAL = "single-run"
+DIAGNOSTIC_TRIAL = "diagnostic-2"
 VAULT_DIRECTORY = Path("/run/browser-synthetic-secrets") / TASK_ID
 OPERATOR_FILE: Final[Literal["operator.bundle.enc"]] = "operator.bundle.enc"
 BUSINESS_FILE: Final[Literal["business.token.enc"]] = "business.token.enc"
@@ -58,10 +60,67 @@ def prompt_passphrase(*, confirm: bool = False) -> str:
             raise ValueError("browser_vault_passphrase_invalid") from None
 
 
-def _file_path(name: str) -> Path:
+def approved_trial_id(trial_id: str) -> str:
+    if type(trial_id) is not str or trial_id not in {ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL}:
+        raise ValueError("browser_trial_id_invalid")
+    return trial_id
+
+
+def trial_directory(trial_id: str = ORIGINAL_TRIAL) -> Path:
+    return (VAULT_DIRECTORY if approved_trial_id(trial_id) == ORIGINAL_TRIAL
+            else VAULT_DIRECTORY / DIAGNOSTIC_TRIAL)
+
+
+def _check_trial_directory(trial_id: str = ORIGINAL_TRIAL) -> None:
+    """Only the committed second renewal may supply diagnostic credentials/receipts."""
+    _check_directory(create=False)
+    if approved_trial_id(trial_id) == ORIGINAL_TRIAL:
+        return
+    directory = trial_directory(trial_id)
+    try:
+        for blocked in (VAULT_DIRECTORY / "diagnostic-2.refresh-failure.json",
+                        VAULT_DIRECTORY / "diagnostic-2.refresh-stage"):
+            try:
+                blocked.lstat()
+            except FileNotFoundError:
+                continue
+            raise ValueError
+        metadata = directory.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != _current_uid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700):
+            raise ValueError
+        # The fixed success receipt is published with the three ciphertexts.
+        receipt = directory / "refresh-result.json"
+        _checked_file(receipt)
+        with os.fdopen(
+            os.open(receipt, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC), "rb"
+        ) as stream:
+            opened = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_uid != _current_uid()
+                    or opened.st_nlink != 1 or stat.S_IMODE(opened.st_mode) != 0o600
+                    or opened.st_size > 4096):
+                raise ValueError
+            result = json.loads(stream.read(4097))
+        if (
+            type(result) is not dict
+            or result.get("status") != "success"
+            or result.get("task_id") != TASK_ID
+            or result.get("trial_id") != DIAGNOSTIC_TRIAL
+            or result.get("ttl_seconds") != 3600
+            or result.get("identities_refreshed") != 3
+            or result.get("runtime_key_material_changed") is not False
+            or result.get("db_write_count") != 0
+            or result.get("burn_once_records_reset") is not False
+        ):
+            raise ValueError
+    except (OSError, ValueError, TypeError):
+        raise ValueError("browser_vault_directory_invalid") from None
+
+
+def _file_path(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> Path:
     if name not in _FILES:
         raise ValueError("browser_vault_path_invalid")
-    return VAULT_DIRECTORY / name
+    return trial_directory(trial_id) / name
 
 
 def _sync_directory(path: Path) -> None:
@@ -134,9 +193,13 @@ def assert_vault_uninitialized() -> None:
         raise ValueError("browser_vault_directory_invalid") from None
 
 
-def _aad(name: str) -> bytes:
+def _aad(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> bytes:
+    approved_trial_id(trial_id)
+    identity = [_VERSION, TASK_ID, "browser_fixture_tenant", name]
+    if trial_id == DIAGNOSTIC_TRIAL:
+        identity.append(DIAGNOSTIC_TRIAL)
     return json.dumps(
-        [_VERSION, TASK_ID, "browser_fixture_tenant", name], separators=(",", ":")
+        identity, separators=(",", ":")
     ).encode("ascii")
 
 
@@ -146,25 +209,29 @@ def _derive(passphrase: str, salt: bytes) -> bytes:
     return Scrypt(salt=salt, length=32, n=2**15, r=8, p=1).derive(passphrase.encode("utf-8"))
 
 
-def encrypt_document(name: str, document: dict[str, Any], passphrase: str) -> bytes:
+def encrypt_document(name: str, document: dict[str, Any], passphrase: str, *,
+                     trial_id: str = ORIGINAL_TRIAL) -> bytes:
     """Pure codec; runtime persistence additionally enforces the private path."""
-    _file_path(name)
+    _file_path(name, trial_id=trial_id)
     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if len(payload) > _MAX_PLAINTEXT:
         raise ValueError("browser_vault_document_invalid")
     salt, nonce = os.urandom(16), os.urandom(12)
-    ciphertext = AESGCM(_derive(passphrase, salt)).encrypt(nonce, payload, _aad(name))
+    ciphertext = AESGCM(_derive(passphrase, salt)).encrypt(
+        nonce, payload, _aad(name, trial_id=trial_id)
+    )
     return b"BSV1" + salt + nonce + ciphertext
 
 
-def decrypt_document(name: str, ciphertext: bytes, passphrase: str) -> dict[str, Any]:
-    _file_path(name)
+def decrypt_document(name: str, ciphertext: bytes, passphrase: str, *,
+                     trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
+    _file_path(name, trial_id=trial_id)
     try:
         if (not isinstance(ciphertext, bytes) or not 48 <= len(ciphertext) <= _MAX_CIPHERTEXT
                 or ciphertext[:4] != b"BSV1"):
             raise ValueError
         payload = AESGCM(_derive(passphrase, ciphertext[4:20])).decrypt(
-            ciphertext[20:32], ciphertext[32:], _aad(name)
+            ciphertext[20:32], ciphertext[32:], _aad(name, trial_id=trial_id)
         )
         result = json.loads(payload)
         if type(result) is not dict:
@@ -184,11 +251,11 @@ def _checked_file(path: Path) -> None:
 
 def _read_checked_ciphertext(path: Path, *, expected_name: Literal[
     "operator.bundle.enc", "business.token.enc", "deactivation.bundle.enc"
-]) -> bytes:
+], trial_id: str = ORIGINAL_TRIAL) -> bytes:
     """Shared file checks; the input transport cannot relax vault metadata."""
-    if path != _file_path(expected_name):
+    if path != _file_path(expected_name, trial_id=trial_id):
         raise ValueError("browser_vault_path_invalid")
-    _check_directory(create=False)
+    _check_trial_directory(trial_id)
     try:
         _checked_file(path)
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
@@ -217,27 +284,31 @@ def read_encrypted(path: Path, *, expected_name: Literal[
         raise ValueError("browser_vault_unlock_failed") from None
 
 
-def read_private_operator_document(passphrase: SecretStr) -> dict[str, Any]:
+def read_private_operator_document(passphrase: SecretStr, *,
+                                   trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
     """Only the explicit private-stdin operator path; no caller-selected file."""
-    return _read_private_document(OPERATOR_FILE, passphrase)
+    return _read_private_document(OPERATOR_FILE, passphrase, trial_id=trial_id)
 
 
-def read_private_business_document(passphrase: SecretStr) -> dict[str, Any]:
-    return _read_private_document(BUSINESS_FILE, passphrase)
+def read_private_business_document(passphrase: SecretStr, *,
+                                   trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
+    return _read_private_document(BUSINESS_FILE, passphrase, trial_id=trial_id)
 
 
-def read_private_deactivation_document(passphrase: SecretStr) -> dict[str, Any]:
-    return _read_private_document(DEACTIVATION_FILE, passphrase)
+def read_private_deactivation_document(passphrase: SecretStr, *,
+                                       trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
+    return _read_private_document(DEACTIVATION_FILE, passphrase, trial_id=trial_id)
 
 
 def _read_private_document(name: Literal[
     "operator.bundle.enc", "business.token.enc", "deactivation.bundle.enc"
-], passphrase: SecretStr) -> dict[str, Any]:
-    contents = _read_checked_ciphertext(VAULT_DIRECTORY / name, expected_name=name)
+], passphrase: SecretStr, *, trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
+    contents = _read_checked_ciphertext(_file_path(name, trial_id=trial_id),
+                                       expected_name=name, trial_id=trial_id)
     try:
         if not isinstance(passphrase, SecretStr):
             raise ValueError
-        return decrypt_document(name, contents, passphrase.get_secret_value())
+        return decrypt_document(name, contents, passphrase.get_secret_value(), trial_id=trial_id)
     except (OSError, ValueError):
         raise ValueError("browser_vault_unlock_failed") from None
 

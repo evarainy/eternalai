@@ -32,6 +32,13 @@ _SECCOMP = Path(
 )
 _SECCOMP_SHA256 = "e67623828ce94bb9f4917d029b1c5b83191f18ecd1c3538da63956b773dd33c5"
 _IMAGE = "eternalai-browser-v42:local"
+_ORIGINAL_TRIAL = "single-run"
+_DIAGNOSTIC_TRIAL = "diagnostic-2"
+_REFRESH_SCRIPT = Path(
+    "C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/"
+    "identity-refresh-diagnostic-2-20261004/refresh_existing_tokens.py"
+)
+_REFRESH_TARGET = "/opt/browser-diagnostic-refresh.py"
 _FRAME_VERSION = "browser.synthetic.private-input.v1"
 _MAX_FRAME = 65536
 _MAX_SOURCE = 1048576
@@ -42,13 +49,31 @@ _RECIPIENTS = {
     "api": ("browser-synthetic-api", "browser-v42-single-api"),
     "once": ("browser-single-run", "browser-v42-single-once"),
     "inspect": ("browser-client", "browser-v42-single-client-inspect-auto"),
+    "submit": ("browser-client", "browser-v42-single-client-submit-auto"),
     "deactivate": ("browser-publication", "browser-v42-single-deactivate-auto"),
+    "refresh": ("browser-publication", "browser-v42-single-refresh"),
 }
 
 
 class _SilentParser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
         raise ValueError("browser_jev_launcher_arguments_invalid")
+
+
+def _recipient(operation: str, trial_id: str) -> tuple[str, str]:
+    if (trial_id not in {_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL} or operation not in _RECIPIENTS
+            or (operation == "refresh" and trial_id != _DIAGNOSTIC_TRIAL)):
+        raise ValueError("browser_jev_launcher_arguments_invalid")
+    service, name = _RECIPIENTS[operation]
+    return service, (name if trial_id == _ORIGINAL_TRIAL
+                     else name.replace("-single-", "-diagnostic-2-", 1))
+
+
+def _check_refresh_script(expected_sha256: str | None) -> None:
+    if (type(expected_sha256) is not str or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+            or not _regular_file(_REFRESH_SCRIPT.lstat(), maximum=65536)
+            or hashlib.sha256(_REFRESH_SCRIPT.read_bytes()).hexdigest() != expected_sha256):
+        raise ValueError("browser_jev_launcher_preflight_failed")
 
 
 def _require_future_deadline(value: str) -> None:
@@ -215,7 +240,8 @@ def _check_image(expected_image_id: str, environment: dict[str, str]) -> None:
         raise ValueError("browser_jev_launcher_preflight_failed")
 
 
-def _preflight(operation: str, expected_image_id: str, environment: dict[str, str]) -> None:
+def _preflight(operation: str, expected_image_id: str, environment: dict[str, str],
+               trial_id: str = _ORIGINAL_TRIAL, refresh_script_sha256: str | None = None) -> None:
     if (Path.cwd().resolve() != _WORKTREE.resolve(strict=True)
             or Path(__file__).resolve().parent.parent != _WORKTREE.resolve(strict=True)
             or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id) is None):
@@ -225,7 +251,9 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
             or hashlib.sha256(_SECCOMP.read_bytes()).hexdigest() != _SECCOMP_SHA256):
         raise ValueError("browser_jev_launcher_preflight_failed")
     _check_image(expected_image_id, environment)
-    _, name = _RECIPIENTS[operation]
+    _, name = _recipient(operation, trial_id)
+    if operation == "refresh":
+        _check_refresh_script(refresh_script_sha256)
     present = _metadata(["docker", "container", "ls", "--all", "--filter",
                          "name=^/" + name + "$", "--format", "{{.Names}}"], environment)
     if present:
@@ -238,10 +266,13 @@ def _preflight(operation: str, expected_image_id: str, environment: dict[str, st
 
 
 def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str,
-           phrase_from_exact_field: bool = False) -> int:
+           phrase_from_exact_field: bool = False, trial_id: str = _ORIGINAL_TRIAL,
+           refresh_script_sha256: str | None = None) -> int:
     """All preflights precede secret input; dispatch exactly once to a fixed service."""
     _require_future_deadline(approved_deadline_utc)
-    if operation not in _RECIPIENTS:
+    service, name = _recipient(operation, trial_id)
+    if ((operation == "refresh" and refresh_script_sha256 is None)
+            or (operation != "refresh" and refresh_script_sha256 is not None)):
         raise ValueError("browser_jev_launcher_arguments_invalid")
     if not phrase_from_exact_field and (not sys.stdin.isatty() or not sys.stderr.isatty()):
         raise ValueError("browser_jev_owner_terminal_required")
@@ -249,9 +280,16 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     # Public immutable image identity pins Compose's actual recipient. The
     # preflight validates its exact SHA-256 syntax before any Docker command.
     environment["BROWSER_V42_SINGLE_RUN_IMAGE"] = expected_image_id
-    _preflight(operation, expected_image_id, environment)
+    if trial_id == _ORIGINAL_TRIAL:
+        _preflight(operation, expected_image_id, environment)
+    else:
+        _preflight(operation, expected_image_id, environment, trial_id, refresh_script_sha256)
     _require_future_deadline(approved_deadline_utc)
-    key = read_exact_jev_key() if operation not in {"inspect", "deactivate"} else None
+    key = (
+        read_exact_jev_key()
+        if operation not in {"submit", "inspect", "deactivate", "refresh"}
+        else None
+    )
     phrase = (_read_exact_field(b"jev-passport") if phrase_from_exact_field else _prompt_phrase())
     document = {"version": _FRAME_VERSION, "vault_passphrase": phrase}
     if key is not None:
@@ -259,23 +297,34 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     frame = json.dumps(document, separators=(",", ":")).encode("ascii")
     if len(frame) > _MAX_FRAME:
         raise ValueError("browser_jev_launcher_input_invalid")
-    service, name = _RECIPIENTS[operation]
     arguments = _compose() + ["run", "--no-deps", "--pull", "never", "-T", "--name", name]
     if operation == "api":
         arguments.append("--use-aliases")
-    arguments += [service, "--enable", "--private-stdin"]
+    if operation == "refresh":
+        # Reuse the existing internal-network publication service. Only this
+        # exact reviewed one-off script is mounted; no arbitrary code loader.
+        arguments += ["--entrypoint", "python", "--volume",
+                      str(_REFRESH_SCRIPT) + ":" + _REFRESH_TARGET + ":ro", "--volume",
+                      "browser-v42-single-run-secrets:/run/browser-synthetic-secrets:rw",
+                      service, _REFRESH_TARGET, "--enable", "--private-stdin"]
+    else:
+        arguments += [service, "--enable", "--private-stdin"]
+    if trial_id == _DIAGNOSTIC_TRIAL:
+        arguments += ["--trial-id", trial_id]
     if operation in {"prepare", "activate"}:
         arguments += ["--operation", operation, "--input-mode", "structured"]
     elif operation == "api":
         arguments += ["--input-mode", "structured"]
     elif operation == "once":
         arguments += ["--approved-budget-usd", "0.01"]
-    else:
+    elif operation != "refresh":
         arguments += ["--operation", operation]
     # Recheck after hidden input, before starting any container. stdout/stderr
     # remain the owner's private terminal; communicate closes stdin with EOF.
     _require_future_deadline(approved_deadline_utc)
     _check_image(expected_image_id, environment)
+    if operation == "refresh":
+        _check_refresh_script(refresh_script_sha256)
     with subprocess.Popen(arguments, cwd=_WORKTREE, env=environment,
                           stdin=subprocess.PIPE, stdout=None, stderr=None) as process:
         process.communicate(input=frame)
@@ -288,11 +337,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--approved-deadline-utc", required=True)
     parser.add_argument("--expected-image-id", required=True)
     parser.add_argument("--phrase-from-exact-field", action="store_true")
+    parser.add_argument(
+        "--trial-id", choices=(_ORIGINAL_TRIAL, _DIAGNOSTIC_TRIAL), default=_ORIGINAL_TRIAL
+    )
+    parser.add_argument("--refresh-script-sha256")
     try:
         args = parser.parse_args(argv)
         return launch(args.operation, approved_deadline_utc=args.approved_deadline_utc,
                       expected_image_id=args.expected_image_id,
-                      phrase_from_exact_field=args.phrase_from_exact_field)
+                      phrase_from_exact_field=args.phrase_from_exact_field, trial_id=args.trial_id,
+                      refresh_script_sha256=args.refresh_script_sha256)
     except (Exception, KeyboardInterrupt) as error:
         codes = {
             "browser_jev_launcher_arguments_invalid", "browser_jev_launcher_deadline_invalid",

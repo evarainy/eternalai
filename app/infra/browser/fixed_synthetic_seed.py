@@ -69,6 +69,7 @@ SYNTHETIC_TENANT = "browser_fixture_tenant"
 SYNTHETIC_USER = "browser_fixture_user"
 SYNTHETIC_KEY = "fixture_system_messages"
 SYNTHETIC_DETAIL_CAPABILITY_ID = "browser.synthetic.system_message_detail"
+DIAGNOSTIC_SKILL_VERSION = "v2_diagnostic_2"
 
 _COLLECTION = canonical_json({
     "messages": [{
@@ -192,7 +193,17 @@ def build_fixed_synthetic_query_source(decision_manifest: ModelManifest) -> Fixe
     return _build_fixed_source(decision_manifest, query=True)
 
 
-def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> FixedSyntheticSource:
+def build_fixed_synthetic_diagnostic_source(
+    decision_manifest: ModelManifest,
+) -> FixedSyntheticSource:
+    """The one approved second publication; identical source, Capability and permissions."""
+    return _build_fixed_source(decision_manifest, query=True, diagnostic=True)
+
+
+def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool,
+                        diagnostic: bool = False) -> FixedSyntheticSource:
+    if type(diagnostic) is not bool or (diagnostic and not query):
+        raise ValueError("browser_local_source_invalid")
     capability = synthetic_detail_capability_snapshot() if query else expected_oa_capabilities()[1]
     content = _QUERY_HTML if query else _HTML
     fixture_digest = hashlib.sha256(content).hexdigest()
@@ -246,7 +257,7 @@ def _build_fixed_source(decision_manifest: ModelManifest, *, query: bool) -> Fix
     skill = _signed(
         BrowserSkill, "browser_skill.v1",
         skill_id="fixed_synthetic_message_detail" if query else "fixed_synthetic_messages",
-        version="v1",
+        version=DIAGNOSTIC_SKILL_VERSION if diagnostic else "v1",
         site_id=site.site_id, site_digest=site.digest,
         verifier_id=verifier.verifier_id, verifier_digest=verifier.digest,
         parameters=("business_key",) if query else ("fixture_business_key", "fixture_collection"),
@@ -342,7 +353,10 @@ class FixedSyntheticSourceVerifier:
     async def verify(self, manifest: BrowserPublicationManifest) -> bool:
         source = self._factory.source
         query = isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
-        expected = _build_fixed_source(manifest.site.decision_manifest, query=query)
+        expected = _build_fixed_source(
+            manifest.site.decision_manifest, query=query,
+            diagnostic=manifest.skill.version == DIAGNOSTIC_SKILL_VERSION,
+        )
         registered = (
             type(source) is FixedSyntheticSource
             and manifest == expected.manifest == source.manifest

@@ -13,10 +13,20 @@ from app.browser_skill.run_contracts import BrowserAcceptedView
 from app.infra.adapters.oa.contracts import OASystemMessageCollection
 from app.infra.browser.fixed_synthetic_seed import _COLLECTION, SYNTHETIC_KEY, SYNTHETIC_USER
 from app.infra.browser.synthetic_private_input import read_private_passphrase
-from app.infra.browser.synthetic_trial import create_trial_file, read_trial_file
+from app.infra.browser.synthetic_trial import (
+    DIAGNOSTIC_TRIAL,
+    LEGACY_RUN_ID,
+    LEGACY_TASK_ID,
+    ORIGINAL_TRIAL,
+    create_trial_file,
+    diagnostic_reference,
+    read_trial_file,
+    trial_request_id,
+)
 from app.infra.browser.synthetic_vault import (
     BUSINESS_FILE,
     VAULT_DIRECTORY,
+    approved_trial_id,
     read_encrypted,
     read_private_business_document,
 )
@@ -49,25 +59,36 @@ class TrialOutcome:
     exit_code: int = 2
 
 
-def _receipt() -> tuple[str, str]:
+def _receipt(trial_id: str = ORIGINAL_TRIAL) -> tuple[str, str]:
     try:
-        document = read_trial_file("trial.run.json")
-        if type(document) is not dict or set(document) != {"task_id", "run_id"}:
+        approved_trial_id(trial_id)
+        document = (read_trial_file("trial.run.json") if trial_id == ORIGINAL_TRIAL
+                    else read_trial_file("trial.run.json", trial_id=trial_id))
+        binding = diagnostic_reference() if trial_id == DIAGNOSTIC_TRIAL else {}
+        if (type(document) is not dict or set(document) != {"task_id", "run_id", *binding}
+                or any(document[name] != value for name, value in binding.items())):
             raise ValueError
         task_id, run_id = document["task_id"], document["run_id"]
         if (type(task_id) is not str or type(run_id) is not str
                 or _IDENTIFIER.fullmatch(task_id) is None
                 or _IDENTIFIER.fullmatch(run_id) is None):
             raise ValueError
+        if trial_id == DIAGNOSTIC_TRIAL and (task_id == LEGACY_TASK_ID or run_id == LEGACY_RUN_ID):
+            raise ValueError
         return task_id, run_id
     except Exception:
         raise TrialClientError("browser_trial_receipt_invalid") from None
 
 
-def _token(*, private_stdin: bool = False) -> str:
+def _token(*, private_stdin: bool = False, trial_id: str = ORIGINAL_TRIAL) -> str:
     try:
         document = (
-            read_private_business_document(read_private_passphrase()) if private_stdin
+            (
+                read_private_business_document(read_private_passphrase())
+                if trial_id == ORIGINAL_TRIAL
+                else read_private_business_document(read_private_passphrase(), trial_id=trial_id)
+            )
+            if private_stdin
             else read_encrypted(VAULT_DIRECTORY / BUSINESS_FILE, expected_name=BUSINESS_FILE)
         )
         if type(document) is not dict or set(document) != {"business_token"}:
@@ -126,18 +147,28 @@ async def run_trial(
     operation: Literal["submit", "inspect", "cancel"], *, enabled: bool = False,
     client: httpx2.AsyncClient | None = None,
     private_stdin: bool = False,
+    trial_id: str = ORIGINAL_TRIAL,
 ) -> TrialOutcome:
     """Perform exactly one fixed HTTP operation; injected client is for local tests."""
     if enabled is not True or operation not in {"submit", "inspect", "cancel"}:
         raise TrialClientError("browser_trial_disabled")
+    try:
+        approved_trial_id(trial_id)
+        if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+            raise ValueError
+    except ValueError:
+        raise TrialClientError("browser_trial_arguments_invalid") from None
+    binding = diagnostic_reference() if trial_id == DIAGNOSTIC_TRIAL else {}
+    marker = {"submission_attempts": 1, **binding}
+    receipt_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
     if operation == "submit":
         try:
-            create_trial_file("trial.submit.json", {"submission_attempts": 1})
+            create_trial_file("trial.submit.json", marker, **receipt_options)
         except ValueError:
             # The receipt helper maps all OS create errors to one fixed code.
             # Confirm an existing marker before calling this a duplicate.
             try:
-                if read_trial_file("trial.submit.json") == {"submission_attempts": 1}:
+                if read_trial_file("trial.submit.json", **receipt_options) == marker:
                     raise TrialClientError("browser_trial_already_submitted")
             except TrialClientError:
                 raise
@@ -147,8 +178,8 @@ async def run_trial(
         except Exception:
             raise TrialClientError("browser_trial_marker_unavailable") from None
     else:
-        task_id, run_id = _receipt()
-    token = _token(private_stdin=private_stdin) if private_stdin else _token()
+        task_id, run_id = _receipt(trial_id)
+    token = (_token(private_stdin=True, trial_id=trial_id) if private_stdin else _token())
     owned = client is None
     if owned:
         client = httpx2.AsyncClient(
@@ -165,7 +196,7 @@ async def run_trial(
                          ),
                          "client_capabilities": {"browser_async_v1": True,
                                                  "browser_skill_id": _SKILL_ID},
-                         "client_request_id": _REQUEST_ID}, expected_status=200)
+                         "client_request_id": trial_request_id(trial_id)}, expected_status=200)
             try:
                 envelope = ResponseEnvelope.model_validate(document)
                 accepted = BrowserAcceptedView.model_validate(envelope.data)
@@ -173,11 +204,16 @@ async def run_trial(
                         or _IDENTIFIER.fullmatch(accepted.task_id) is None
                         or _IDENTIFIER.fullmatch(accepted.run_id) is None):
                     raise ValueError
+                if trial_id == DIAGNOSTIC_TRIAL and (
+                    accepted.task_id == LEGACY_TASK_ID or accepted.run_id == LEGACY_RUN_ID
+                ):
+                    raise ValueError
             except Exception:
                 raise TrialClientError("browser_trial_response_invalid") from None
             try:
                 create_trial_file("trial.run.json", {"task_id": accepted.task_id,
-                                                    "run_id": accepted.run_id})
+                                                    "run_id": accepted.run_id, **binding},
+                                  **receipt_options)
             except Exception:
                 raise TrialClientError("browser_trial_receipt_unavailable") from None
             return TrialOutcome("browser_trial_accepted", accepted.task_id, accepted.run_id,

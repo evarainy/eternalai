@@ -1,20 +1,63 @@
-"""Four private, immutable receipts for this one synthetic trial; no reset path."""
+"""Two explicitly approved receipt namespaces; one attempt per round, no reset."""
 
 from __future__ import annotations
 
 import json
 import os
 import stat
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+from app.browser_skill.models import BrowserOwner
 from app.infra.browser import synthetic_vault as vault
 
 _FILES = frozenset({
     "trial.submit.json", "trial.run.json", "trial.jev-attempt.json", "trial.worker.json",
 })
 _MAX_BYTES = 4096
+ORIGINAL_TRIAL = vault.ORIGINAL_TRIAL
+DIAGNOSTIC_TRIAL = vault.DIAGNOSTIC_TRIAL
+LEGACY_TASK_ID = "dc4ec941bcd245a5a7d9ccc4815a0f71"
+LEGACY_RUN_ID = "fa1f474fdfce440c9a7338d80fc70670"
+
+
+def trial_request_id(trial_id: str = ORIGINAL_TRIAL) -> str:
+    return vault.TASK_ID + "-" + vault.approved_trial_id(trial_id)
+
+
+def trial_publication_digest(trial_id: str = ORIGINAL_TRIAL) -> str:
+    from app.infra.browser.fixed_synthetic_seed import (
+        build_fixed_synthetic_diagnostic_source,
+        build_fixed_synthetic_query_source,
+    )
+    from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+    builder = (build_fixed_synthetic_diagnostic_source
+               if vault.approved_trial_id(trial_id) == DIAGNOSTIC_TRIAL
+               else build_fixed_synthetic_query_source)
+    return builder(synthetic_jev_manifest()).manifest.digest
+
+
+def diagnostic_reference() -> dict[str, str]:
+    return {"trial_id": DIAGNOSTIC_TRIAL,
+            "client_request_id": trial_request_id(DIAGNOSTIC_TRIAL),
+            "publication_digest": trial_publication_digest(DIAGNOSTIC_TRIAL)}
+
+
+def require_legacy_terminal(row: Mapping[str, Any], owner: BrowserOwner) -> None:
+    """Exact approved failed predecessor only; terminal worker deadlines are historical."""
+    if (row.get("task_id") != LEGACY_TASK_ID or row.get("run_id") != LEGACY_RUN_ID
+            or row.get("ai_user_id") != owner.user_id or row.get("session_id") != owner.session_id
+            or row.get("status") != "failed" or row.get("phase") is not None
+            or row.get("cleanup") not in {"released", "terminated"}
+            or row.get("effect") != "not_sent" or row.get("verification") is not None
+            or row.get("error_code") != "browser_verification_failed"
+            or row.get("dispatch_failure_code") != "timeout" or row.get("worker_epoch") != 1
+            or row.get("client_request_id") != trial_request_id()
+            or row.get("publication_digest") != bytes.fromhex(trial_publication_digest())):
+        raise ValueError("browser_trial_history_invalid")
 
 
 def approved_trial_budget(value: str) -> Decimal:
@@ -28,11 +71,11 @@ def approved_trial_budget(value: str) -> Decimal:
     return amount
 
 
-def _path(name: str) -> Path:
+def _path(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> Path:
     if name not in _FILES:
         raise ValueError("browser_trial_receipt_invalid")
-    vault._check_directory(create=False)
-    return vault.VAULT_DIRECTORY / name
+    vault._check_trial_directory(trial_id)
+    return vault.trial_directory(trial_id) / name
 
 
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -52,9 +95,9 @@ def _open_flags(base: int) -> int:
     return base | nofollow | cloexec
 
 
-def read_trial_file(name: str) -> dict[str, Any]:
+def read_trial_file(name: str, *, trial_id: str = ORIGINAL_TRIAL) -> dict[str, Any]:
     """Read non-secret metadata only; exact task path/owner/mode/link required."""
-    path = _path(name)
+    path = _path(name, trial_id=trial_id)
     try:
         vault._checked_file(path)
         fd = os.open(path, _open_flags(os.O_RDONLY))
@@ -75,12 +118,13 @@ def read_trial_file(name: str) -> dict[str, Any]:
         raise ValueError("browser_trial_receipt_unavailable") from None
 
 
-def create_trial_file(name: str, document: dict[str, Any]) -> None:
+def create_trial_file(name: str, document: dict[str, Any], *,
+                      trial_id: str = ORIGINAL_TRIAL) -> None:
     """Reserve before IO; an uncertain/failed attempt is never automatically reset."""
     body = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     if len(body) > _MAX_BYTES:
         raise ValueError("browser_trial_receipt_invalid")
-    path = _path(name)
+    path = _path(name, trial_id=trial_id)
     try:
         fd = os.open(path, _open_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL), 0o600)
         with os.fdopen(fd, "wb") as stream:
@@ -88,7 +132,7 @@ def create_trial_file(name: str, document: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         vault._checked_file(path)
-        vault._sync_directory(vault.VAULT_DIRECTORY)
+        vault._sync_directory(path.parent)
     except OSError:
         raise ValueError("browser_trial_already_attempted") from None
 
@@ -96,16 +140,22 @@ def create_trial_file(name: str, document: dict[str, Any]) -> None:
 class SingleJevAttempt:
     """Burn the task's only transport attempt before dispatch, including failures."""
 
-    def __init__(self, approved_budget_usd: str) -> None:
+    def __init__(self, approved_budget_usd: str, *, trial_id: str = ORIGINAL_TRIAL) -> None:
+        self.trial_id = vault.approved_trial_id(trial_id)
         self.budget = approved_trial_budget(approved_budget_usd)
         self.request_count = 0
 
     def reserve(self) -> None:
         if self.request_count:
             raise ValueError("browser_trial_already_attempted")
-        create_trial_file("trial.jev-attempt.json", {
+        document: dict[str, Any] = {
             "jev_request_count": 1, "max_jev_requests": 1,
             "approved_budget_usd": str(self.budget), "actual_cost_usd": None,
             "cost_status": "unknown", "reservation": "before_transport_dispatch",
-        })
+        }
+        if self.trial_id == ORIGINAL_TRIAL:
+            create_trial_file("trial.jev-attempt.json", document)
+        else:
+            document["trial_id"] = self.trial_id
+            create_trial_file("trial.jev-attempt.json", document, trial_id=self.trial_id)
         self.request_count = 1

@@ -24,6 +24,76 @@ def _key() -> str:
     return secrets.token_urlsafe(32)
 
 
+@pytest.mark.parametrize("operation", ["refresh", "submit", "inspect", "deactivate"])
+def test_diagnostic_recipients_are_fixed_and_phrase_only(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    phrase = secrets.token_urlsafe(32)
+    captured: dict = {}
+    monkeypatch.setattr(entry, "_preflight", Mock())
+    monkeypatch.setattr(entry, "_check_image", Mock())
+    monkeypatch.setattr(entry, "_check_refresh_script", Mock())
+    reader = Mock(return_value=phrase)
+    key = Mock(side_effect=AssertionError("provider key read"))
+    monkeypatch.setattr(entry, "_read_exact_field", reader)
+    monkeypatch.setattr(entry, "read_exact_jev_key", key)
+
+    class Process:
+        returncode = 0
+        def __init__(self, arguments, **kwargs):
+            captured["arguments"] = arguments
+            captured["kwargs"] = kwargs
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            pass
+        def communicate(self, *, input):
+            captured["frame"] = input
+
+    monkeypatch.setattr(entry.subprocess, "Popen", Process)
+    options = {"refresh_script_sha256": "c" * 64} if operation == "refresh" else {}
+    assert (
+        entry.launch(
+            operation,
+            approved_deadline_utc=_future(),
+            expected_image_id="sha256:" + "a" * 64,
+            phrase_from_exact_field=True,
+            trial_id="diagnostic-2",
+            **options,
+        )
+        == 0
+    )
+    reader.assert_called_once_with(b"jev-passport")
+    key.assert_not_called()
+    arguments = captured["arguments"]
+    assert (
+        arguments[arguments.index("--name") + 1] == entry._recipient(operation, "diagnostic-2")[1]
+    )
+    assert arguments[arguments.index("--trial-id") + 1] == "diagnostic-2"
+    assert json.loads(captured["frame"]) == {
+        "version": entry._FRAME_VERSION,
+        "vault_passphrase": phrase,
+    }
+    assert phrase not in repr(arguments) and phrase not in repr(captured["kwargs"])
+    if operation == "refresh":
+        assert str(entry._REFRESH_SCRIPT) + ":" + entry._REFRESH_TARGET + ":ro" in arguments
+        assert arguments[arguments.index("--entrypoint") + 1] == "python"
+
+
+def test_third_trial_is_rejected_before_secret_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = Mock()
+    monkeypatch.setattr(entry, "_read_exact_field", reader)
+    with pytest.raises(ValueError, match="^browser_jev_launcher_arguments_invalid$"):
+        entry.launch(
+            "submit",
+            approved_deadline_utc=_future(),
+            expected_image_id="sha256:" + "a" * 64,
+            phrase_from_exact_field=True,
+            trial_id="diagnostic-3",
+        )
+    reader.assert_not_called()
+
+
 @pytest.mark.parametrize("quote", [b"", b"'", b'"'])
 @pytest.mark.parametrize("bom", [b"", b"\xef\xbb\xbf"])
 def test_projects_exact_field_without_interpreting_decoys(

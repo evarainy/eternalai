@@ -153,6 +153,30 @@ class PostgreSQLBrowserPublicationStore:
 
     async def prepare(self, owner: BrowserOwner,
                       manifest: BrowserPublicationManifest) -> BrowserPublicationRecord:
+        return await self._prepare(owner, manifest)
+
+    async def prepare_diagnostic_second(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    ) -> BrowserPublicationRecord:
+        """Append only this task's frozen second version; never resurrect its predecessor."""
+        from app.infra.browser.fixed_synthetic_seed import (
+            SYNTHETIC_TENANT,
+            build_fixed_synthetic_diagnostic_source,
+            build_fixed_synthetic_query_source,
+        )
+        from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
+
+        decision = synthetic_jev_manifest()
+        successor = build_fixed_synthetic_diagnostic_source(decision).manifest
+        predecessor = build_fixed_synthetic_query_source(decision).manifest
+        if owner.tenant_id != SYNTHETIC_TENANT or _manifest(manifest) != successor:
+            raise BrowserPublicationError("browser_publication_source_denied")
+        return await self._prepare(owner, manifest, predecessor=predecessor)
+
+    async def _prepare(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
+        predecessor: BrowserPublicationManifest | None = None,
+    ) -> BrowserPublicationRecord:
         owner, manifest = _owner(owner), _manifest(manifest)
         skill_id = manifest.skill.skill_id
         await self._authorize(owner, skill_id, "prepare")
@@ -166,7 +190,19 @@ class PostgreSQLBrowserPublicationStore:
             ), params)).mappings().all()
             # One controlled seed only. No implicit new-version platform and no
             # inactive->prepared resurrection through repeated preparation.
-            if previous:
+            if predecessor is not None:
+                records = [_record(row) for row in previous]
+                prior = [record for record in records if record.manifest == predecessor]
+                new = [record for record in records if record.manifest == manifest]
+                if (len(prior) != 1 or prior[0].state != "inactive"
+                        or prior[0].activation_revision != 2
+                        or len(records) != 1 + len(new) or len(new) > 1):
+                    raise BrowserPublicationError("browser_publication_already_prepared")
+                if new:
+                    if new[0].state == "prepared" and new[0].activation_revision == 0:
+                        return new[0]
+                    raise BrowserPublicationError("browser_publication_already_prepared")
+            elif previous:
                 existing = _record(previous[0])
                 if (len(previous) == 1 and existing.manifest == manifest
                         and existing.state == "prepared"):

@@ -8,7 +8,7 @@ import json
 import re
 import sys
 from datetime import timedelta
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from sqlalchemy import text
 
@@ -21,11 +21,19 @@ from app.infra.browser.synthetic_operator import (
 )
 from app.infra.browser.synthetic_private_input import read_private_operator_input
 from app.infra.browser.synthetic_trial import (
+    DIAGNOSTIC_TRIAL,
+    LEGACY_RUN_ID,
+    LEGACY_TASK_ID,
+    ORIGINAL_TRIAL,
     SingleJevAttempt,
     create_trial_file,
     read_trial_file,
+    require_legacy_terminal,
+    trial_publication_digest,
+    trial_request_id,
 )
-from app.infra.browser.synthetic_vault import OPERATOR_FILE, VAULT_DIRECTORY
+from app.infra.browser.synthetic_trial_client import _receipt
+from app.infra.browser.synthetic_vault import OPERATOR_FILE, VAULT_DIRECTORY, approved_trial_id
 
 
 class _SilentParser(argparse.ArgumentParser):
@@ -35,21 +43,51 @@ class _SilentParser(argparse.ArgumentParser):
 
 async def execute_once(
     components: SyntheticOperatorComponents, expected: BrowserAcceptedView,
+    *, trial_id: str = ORIGINAL_TRIAL,
 ) -> bool:
     """Preflight is supplementary; the existing worker retains all current guards."""
     vertical, owner = components.vertical, components.publication_owner
+    approved_trial_id(trial_id)
     async with vertical._sessions() as session:
-        rows = (await session.execute(text(
-            "SELECT task_id,run_id,ai_user_id,session_id,status,phase,cancel_requested,"
-            "worker_deadline FROM browser_runs WHERE tenant_id=:tenant LIMIT 2"
-        ), {"tenant": owner.tenant_id})).mappings().all()
-    if (len(rows) != 1 or rows[0]["task_id"] != expected.task_id
-            or rows[0]["run_id"] != expected.run_id or rows[0]["ai_user_id"] != owner.user_id
-            or rows[0]["session_id"] != owner.session_id or rows[0]["status"] != "running"
-            or rows[0]["phase"] != "queued" or rows[0]["cancel_requested"]
-            or rows[0]["worker_deadline"] is not None):
+        if trial_id == DIAGNOSTIC_TRIAL:
+            rows = (await session.execute(text(
+                "SELECT r.task_id,r.run_id,r.ai_user_id,r.session_id,r.status,r.phase,"
+                "r.cancel_requested,r.worker_deadline,r.worker_epoch,r.cleanup,r.effect,"
+                "r.verification,r.error_code,r.dispatch_failure_code,r.publication_digest,"
+                "t.client_request_id FROM browser_runs r JOIN tasks t ON t.task_id=r.task_id"
+                " AND t.tenant_id=r.tenant_id WHERE r.tenant_id=:tenant LIMIT 3"
+            ), {"tenant": owner.tenant_id})).mappings().all()
+            history = [row for row in rows if row["task_id"] == LEGACY_TASK_ID
+                       and row["run_id"] == LEGACY_RUN_ID]
+            current = [row for row in rows if row["task_id"] == expected.task_id
+                       and row["run_id"] == expected.run_id]
+            if (len(rows) != 2 or len(history) != 1 or len(current) != 1
+                    or expected.task_id == LEGACY_TASK_ID or expected.run_id == LEGACY_RUN_ID):
+                raise ValueError("browser_trial_history_invalid")
+            require_legacy_terminal(history[0], owner)
+            row = current[0]
+            if row["client_request_id"] != trial_request_id(trial_id) or bytes(
+                row["publication_digest"]
+            ) != bytes.fromhex(trial_publication_digest(trial_id)):
+                raise ValueError("browser_trial_receipt_invalid")
+        else:
+            rows = (await session.execute(text(
+                "SELECT task_id,run_id,ai_user_id,session_id,status,phase,cancel_requested,"
+                "worker_deadline FROM browser_runs WHERE tenant_id=:tenant LIMIT 2"
+            ), {"tenant": owner.tenant_id})).mappings().all()
+            if len(rows) != 1:
+                raise ValueError("browser_trial_single_queued_run_required")
+            row = rows[0]
+    if (row["task_id"] != expected.task_id or row["run_id"] != expected.run_id
+            or row["ai_user_id"] != owner.user_id or row["session_id"] != owner.session_id
+            or row["status"] != "running" or row["phase"] != "queued"
+            or row["cancel_requested"] or row["worker_deadline"] is not None):
         raise ValueError("browser_trial_single_queued_run_required")
-    create_trial_file("trial.worker.json", {"worker_passes": 1})
+    if trial_id == DIAGNOSTIC_TRIAL:
+        create_trial_file("trial.worker.json", {"worker_passes": 1, "trial_id": trial_id},
+                          trial_id=trial_id)
+    else:
+        create_trial_file("trial.worker.json", {"worker_passes": 1})
     # Exact existing claim/CAS transaction: never fall back to another owner's Run.
     claimed = await vertical.runs._claim_candidate(
         owner, expected.task_id, expected.run_id, "browser_fixture_worker", timedelta(seconds=60),
@@ -67,9 +105,18 @@ async def execute_once(
             and result.cleanup in {"released", "terminated"})
 
 
-async def _run(approved_budget_usd: str, *, private_stdin: bool = False) -> bool:
-    budget = SingleJevAttempt(approved_budget_usd)
-    reference = read_trial_file("trial.run.json")
+async def _run(approved_budget_usd: str, *, private_stdin: bool = False,
+               trial_id: str = ORIGINAL_TRIAL) -> bool:
+    approved_trial_id(trial_id)
+    if trial_id == DIAGNOSTIC_TRIAL and not private_stdin:
+        raise ValueError("browser_trial_arguments_invalid")
+    trial_options: dict[str, Any] = {"trial_id": trial_id} if trial_id == DIAGNOSTIC_TRIAL else {}
+    budget = SingleJevAttempt(approved_budget_usd, **trial_options)
+    if trial_id == DIAGNOSTIC_TRIAL:
+        task_id, run_id = _receipt(trial_id)
+        reference = {"task_id": task_id, "run_id": run_id}
+    else:
+        reference = read_trial_file("trial.run.json")
     if (set(reference) != {"task_id", "run_id"} or any(
         not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value) is None
         for value in reference.values()
@@ -77,7 +124,8 @@ async def _run(approved_budget_usd: str, *, private_stdin: bool = False) -> bool
         raise ValueError("browser_trial_receipt_invalid")
     expected = BrowserAcceptedView.model_validate({**reference, "state_revision": 0})
     if private_stdin:
-        bundle, key = read_private_operator_input()
+        bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
+                       else read_private_operator_input(trial_id=trial_id))
     else:
         bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
         key = prompt_openrouter_key()
@@ -85,8 +133,9 @@ async def _run(approved_budget_usd: str, *, private_stdin: bool = False) -> bool
         async with open_synthetic_operator(
             bundle, jev_key=key, enabled=True, input_mode="structured",
             attempt_guard=budget.reserve,
+            **trial_options,
         ) as components:
-            success = await execute_once(components, expected)
+            success = await execute_once(components, expected, **trial_options)
         return success and budget.request_count == 1
     finally:
         print(json.dumps({"jev_request_count": budget.request_count,
@@ -99,11 +148,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--approved-budget-usd", required=True)
     parser.add_argument("--private-stdin", action="store_true")
+    parser.add_argument(
+        "--trial-id", choices=(ORIGINAL_TRIAL, DIAGNOSTIC_TRIAL), default=ORIGINAL_TRIAL
+    )
     try:
         args = parser.parse_args(argv)
         if not args.enable:
             raise ValueError
-        success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin))
+        success = asyncio.run(_run(args.approved_budget_usd, private_stdin=args.private_stdin,
+                                   trial_id=args.trial_id))
     except BaseException:
         print("browser_trial_worker_unavailable", file=sys.stderr)
         return 2
