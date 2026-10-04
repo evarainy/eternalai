@@ -51,7 +51,7 @@ _RECIPIENTS = {
     "inspect": ("browser-client", "browser-v42-single-client-inspect-auto"),
     "submit": ("browser-client", "browser-v42-single-client-submit-auto"),
     "deactivate": ("browser-publication", "browser-v42-single-deactivate-auto"),
-    "refresh": ("browser-publication", "browser-v42-single-refresh"),
+    "refresh": ("browser-bootstrap", "browser-v42-single-refresh"),
 }
 
 
@@ -301,11 +301,10 @@ def launch(operation: str, *, approved_deadline_utc: str, expected_image_id: str
     if operation == "api":
         arguments.append("--use-aliases")
     if operation == "refresh":
-        # Reuse the existing internal-network publication service. Only this
+        # Reuse the existing internal-network service with its private RW volume. Only this
         # exact reviewed one-off script is mounted; no arbitrary code loader.
         arguments += ["--entrypoint", "python", "--volume",
-                      str(_REFRESH_SCRIPT) + ":" + _REFRESH_TARGET + ":ro", "--volume",
-                      "browser-v42-single-run-secrets:/run/browser-synthetic-secrets:rw",
+                      str(_REFRESH_SCRIPT) + ":" + _REFRESH_TARGET + ":ro",
                       service, _REFRESH_TARGET, "--enable", "--private-stdin"]
     else:
         arguments += [service, "--enable", "--private-stdin"]
