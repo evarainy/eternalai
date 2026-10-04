@@ -12,6 +12,8 @@ import hashlib
 import json
 import secrets
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -745,6 +747,101 @@ class PlaywrightObserver:
                 raise
             except Exception:
                 raise _failure("stale") from None
+
+    @asynccontextmanager
+    async def _candidate_batch(
+        self,
+        session: BrowserSessionRef,
+        projection: VisibleProjection,
+        policy: ObservationPolicy,
+    ) -> AsyncIterator[tuple[ExactRegion, tuple[tuple[VisibleCandidate, ExactNode], ...]]]:
+        """Borrow nodes for one locked enumeration; validate DOM before and after."""
+        site = self._regions.get(projection.scope.region_id)
+        if site is None or (site.policy_id, site.policy_digest) != (
+            policy.policy_id, policy.digest,
+        ):
+            raise _failure("denied")
+        scope_snapshot(projection, session.binding, policy)
+        key = (session.session_ref, projection.scope.region_id)
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            live = await self._live(session)
+            page = await self._page(session, live)
+            state = self._observed.get(key)
+            if (
+                state is None or state.scope != projection.scope
+                or page.page_id != projection.scope.page_id
+                or page.epoch != projection.scope.page_epoch
+                or page.binding != session.binding
+            ):
+                raise _failure("stale")
+            frame = await self._target_frame(page.page, site)
+            signature = self._signature(page.page.main_frame)
+            if self._path(page, frame) != projection.scope.frame_path:
+                raise _failure("stale")
+            regions = await frame.query_selector_all(site.region_selector)
+            try:
+                if len(regions) != 1 or not await _same_node(state.element, regions[0]):
+                    raise _failure("stale")
+            finally:
+                for region in regions:
+                    await _dispose(region)
+
+            metadata, handles = await self._snapshot(state.element, policy, site)
+            nodes: list[tuple[VisibleCandidate, ExactNode]] = []
+            try:
+                safe = tuple(self._safe_candidate(raw, policy) for raw in metadata["candidates"])
+                if (
+                    Coverage.model_validate(metadata["coverage"]) != projection.coverage
+                    or len(safe) != len(projection.candidates)
+                    or len(handles) != len(projection.candidates)
+                    or len(state.candidates) != len(projection.candidates)
+                ):
+                    raise _failure("stale")
+                for candidate, identity, raw, handle in zip(
+                    projection.candidates, state.candidates, safe, handles, strict=True,
+                ):
+                    if (
+                        identity.target_id != candidate.ref.target_id
+                        or identity.epoch != candidate.ref.candidate_epoch
+                        or candidate.ref.scope != projection.scope
+                        or VisibleCandidate(ref=candidate.ref, **raw) != candidate
+                        or not await _same_node(identity.element, handle)
+                    ):
+                        raise _failure("stale")
+                    if candidate.visible and candidate.enabled:
+                        if (
+                            not await identity.element.evaluate("el => el.isConnected")
+                            or not await identity.element.is_visible()
+                            or not await identity.element.is_enabled()
+                        ):
+                            raise _failure("stale")
+                        nodes.append((
+                            candidate,
+                            ExactNode(page.page, frame, identity.element, candidate.ref),
+                        ))
+            finally:
+                for handle in handles:
+                    await _dispose(handle)
+            if (
+                page.epoch != projection.scope.page_epoch
+                or self._signature(page.page.main_frame) != signature
+                or self._path(page, frame) != projection.scope.frame_path
+                or page.page.is_closed()
+            ):
+                raise _failure("stale")
+            yield ExactRegion(page.page, frame, state.element, projection), tuple(nodes)
+
+        # No borrowed handle escapes the batch. Re-observation checks the whole
+        # candidate set, region identity and current authority after selector/key IO.
+        refreshed = await self.observe(
+            session,
+            ObservationRequest(
+                region_id=projection.scope.region_id, expected_scope=projection.scope,
+            ),
+            policy,
+        )
+        if refreshed != projection:
+            raise _failure("stale")
 
     async def resolve_exact(
         self,

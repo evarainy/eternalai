@@ -383,19 +383,6 @@ class PlaywrightWebAdapter:
         rule = next((r for r in plan.steps if r.step == step), None)
         if rule is None or projection.scope.region_id != rule.observation.region_id:
             raise failure("denied")
-        fresh = await self.observe(
-            session,
-            ObservationRequest(
-                region_id=projection.scope.region_id,
-                expected_scope=projection.scope,
-            ),
-            plan.policy,
-        )
-        if any(
-            getattr(fresh, name) != getattr(projection, name)
-            for name in VisibleProjection.model_fields
-        ):
-            raise failure("stale")
         dom = next(r for r in self._rules[plan.skill_digest].steps if r.step_id == step.step_id)
         key = None
         if step.locator.kind == "business_key":
@@ -403,49 +390,42 @@ class PlaywrightWebAdapter:
                 raise failure("unsupported")
             key = await self._sealed(context, plan.read_rule.key_ref, "business_key", step.step_id)
         matches = []
-        for candidate in projection.candidates:
-            if not candidate.visible or not candidate.enabled:
-                continue
-            node = await self._observer.resolve_exact(session, candidate.ref, plan.policy)
-            self._origins(node, context)
-            if not await node.element.evaluate(
-                "(el, selector) => el.matches(selector)", dom.selector
-            ):
-                continue
-            if key is not None and dom.key is not None:
-                row = await node.element.evaluate_handle(
-                    "(el, selector) => el.closest(selector)",
-                    dom.row_selector,
-                )
-                try:
-                    region = await self._observer.resolve_region(
-                        session,
-                        ObservationRequest(
-                            region_id=candidate.ref.scope.region_id,
-                            expected_scope=candidate.ref.scope,
-                        ),
-                        plan.policy,
-                    )
-                    if not await region.element.evaluate(
-                        "(region, row) => row && region.contains(row)",
-                        row,
-                    ):
-                        raise failure("denied")
-                    raw = await read_private(row, dom.key, 4096)
-                    matched = self._consume(
-                        key,
-                        context,
-                        plan.read_rule.key_ref,
-                        "business_key",
-                        step.step_id,
-                        lambda expected: raw == expected,
-                    )
-                finally:
-                    await row.dispose()
-                if not matched:
+        async with self._observer._candidate_batch(session, projection, plan.policy) as (
+            region, nodes,
+        ):
+            self._origins(region, context)
+            for candidate, node in nodes:
+                self._origins(node, context)
+                if not await node.element.evaluate(
+                    "(el, selector) => el.matches(selector)", dom.selector
+                ):
                     continue
-            matches.append(candidate)
-        await self._authority(session, context)
+                if key is not None and dom.key is not None:
+                    row = await node.element.evaluate_handle(
+                        "(el, selector) => el.closest(selector)",
+                        dom.row_selector,
+                    )
+                    try:
+                        if not await region.element.evaluate(
+                            "(region, row) => row && region.contains(row)",
+                            row,
+                        ):
+                            raise failure("denied")
+                        raw = await read_private(row, dom.key, 4096)
+                        matched = self._consume(
+                            key,
+                            context,
+                            plan.read_rule.key_ref,
+                            "business_key",
+                            step.step_id,
+                            lambda expected: raw == expected,
+                        )
+                    finally:
+                        await row.dispose()
+                    if not matched:
+                        continue
+                matches.append(candidate)
+            await self._authority(session, context)
         return tuple(matches)
 
     async def _options_current(

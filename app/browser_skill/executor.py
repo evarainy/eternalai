@@ -51,7 +51,7 @@ class DecisionContextFactory(Protocol):
 
     current_targets must not close over request.candidates as immutable truth.
     This synchronous cache check cannot prove asynchronous DOM freshness. The
-    executor re-observes all admitted candidates after every Decision call.
+    executor re-observes all admitted candidates after a selected Decision.
     The factory and provider both enforce the registered deployment/source gate.
     """
 
@@ -265,20 +265,29 @@ class BrowserExecutor:
         progress.model_calls += 1
         progress.mark("decision_request")
         decision = await self._decision.decide(request, decision_context)
+        decision.validate_for(request, scope)
+        if decision.selected is None:
+            progress.decisions.append(decision)
+            if decision.error is not None:
+                code = {
+                    "input_unsupported": "unsupported",
+                    "model_mismatch": "invalid_response",
+                }.get(decision.error, decision.error)
+                raise BrowserOperationError(BrowserFailure.model_validate({
+                    "code": code, "phase": "observe", "dispatch_state": "not_sent",
+                    "cleanup_required": False,
+                }))
+            raise _DecisionStopped
         check_liveness(context)
-        # Re-observe the actual region and re-run the trusted locator/option
-        # enumeration, even if the selected node and cached epoch are unchanged.
-        # Any new, removed, or changed alternative invalidates this decision.
+        # A selected target requires a new observation of all alternatives.
+        # Failure/abstention retains its original result without private DOM IO.
         refreshed = await refresh()
         if refreshed != candidates:
             raise failure("stale")
         if decision_context.current_targets() != expected:
             raise failure("stale")
-        decision.validate_for(request, scope)
         progress.decisions.append(decision)
         check_liveness(context)
-        if decision.selected is None:
-            raise _DecisionStopped
         return decision.selected
 
     async def _observe_targets(
