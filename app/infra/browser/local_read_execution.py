@@ -432,7 +432,9 @@ class LocalBrowserReadExecutionFactory:
         scope = state.session.binding
 
         async def current_binding(session: BrowserSessionRef) -> ScopeBinding:
-            await self.resolve_live(session)
+            if self._state(session) is not state:
+                raise failure("denied")
+            await self._fence(state, renew=True)
             return scope
 
         async def authorize(

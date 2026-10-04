@@ -371,10 +371,11 @@ class BrowserExecutor:
                 check_liveness(context)
                 if rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only":
                     raise failure("unsupported")
-                progress.mark("authorization")
-                await authorize_current(session, context, spec)
                 target = option = None
-                if rule.step.operation != "navigate":
+                if rule.step.operation == "navigate":
+                    progress.mark("authorization")
+                    await authorize_current(session, context, spec)
+                else:
                     snapshot, candidates = await self._observe_targets(
                         session, rule.observation, rule.step, context, plan, spec, progress
                     )

@@ -8,8 +8,9 @@ import pytest
 
 from app.browser_skill import executor as executor_module
 from app.browser_skill.executor import BrowserExecutor
-from app.browser_skill.models import ActionCommand, BrowserOperationError, TargetRef
+from app.browser_skill.models import ActionCommand, BrowserOperationError, ReadSpec, TargetRef
 from app.browser_skill.site_rules import FrozenSiteAdapter
+from app.browser_skill.verifier import failure
 from tests.browser_skill.fakes import FakeWorld
 
 
@@ -55,6 +56,38 @@ def test_failure_diagnostic_identifies_the_await_without_changing_outcome(
 
 def run(world: FakeWorld):
     return asyncio.run(world.executor().run(world.session, world.context))
+
+
+@pytest.mark.parametrize("operation", ["navigate", "read"])
+def test_step_entry_authorizes_once_before_observation_or_navigation(operation: str) -> None:
+    world = FakeWorld(operation)
+    authorized: list[str] = []
+    original_authorize = world.authorize
+    original_observe = world.observe
+
+    async def record_authorization(session, skill, subject, binding):
+        await original_authorize(session, skill, subject, binding)
+        authorized.append("read" if isinstance(subject, ReadSpec) else "command")
+
+    async def stop_at_observation(session, request, policy):
+        await original_observe(session, request, policy)
+        assert authorized == ["read", "read"]
+        raise failure("denied")
+
+    async def stop_at_navigation(session, command, context):
+        assert operation == "navigate" and command.step.operation == "navigate"
+        assert session == world.session and context is world.context
+        assert authorized == ["read", "read", "command"]
+        raise failure("denied")
+
+    world.context = replace(world.context, authorize=record_authorization)
+    world.observe = stop_at_observation
+    world.revalidate = stop_at_navigation
+    result = run(world)
+    assert result.failure.code == "denied" and result.verification is None
+    assert authorized == (["read", "read", "command"] if operation == "navigate"
+                          else ["read", "read"])
+    assert world.sends == [] and world.reads == 0
 
 
 @pytest.mark.parametrize("operation", ["click", "fill", "read", "navigate", "select_option"])
