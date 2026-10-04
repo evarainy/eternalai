@@ -109,6 +109,7 @@ class BrowserExecutor:
     __slots__ = (
         "_web", "_decision", "_verifier", "_site", "_resolve", "_contexts", "_pending",
         "_last_failure_diagnostic",
+        "_last_decision_diagnostic",
     )
 
     def __init__(
@@ -130,6 +131,7 @@ class BrowserExecutor:
         # Their execution context is cancelled and no new action is scheduled.
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
         self._last_failure_diagnostic: tuple[ReadAwaitStage, int, str] | None = None
+        self._last_decision_diagnostic: dict[str, str] | None = None
 
     def _finish(
         self, outcome: ExecutionOutcome, progress: _Progress, *,
@@ -171,6 +173,7 @@ class BrowserExecutor:
 
     async def run(self, session: BrowserSessionRef, context: ExecutionContext) -> ExecutionOutcome:
         self._last_failure_diagnostic = None
+        self._last_decision_diagnostic = None
         progress = _Progress()
         job = asyncio.create_task(self._run(session, context, progress))
         cancelled = asyncio.create_task(context.cancellation.wait())
@@ -266,6 +269,13 @@ class BrowserExecutor:
         progress.mark("decision_request")
         decision = await self._decision.decide(request, decision_context)
         decision.validate_for(request, scope)
+        # Fixed response classifications are diagnostics only. A selected result
+        # still enters progress.decisions only after every fresh-target check.
+        self._last_decision_diagnostic = {}
+        for name in ("status", "error", "reason"):
+            value = getattr(decision, name)
+            if value is not None:
+                self._last_decision_diagnostic[name] = value
         if decision.selected is None:
             progress.decisions.append(decision)
             if decision.error is not None:

@@ -171,6 +171,7 @@ class VerifiedBrowserReadExecution:
         self, run: RunSnapshot, diagnostic: tuple[str, int, str] | None,
         *, web: PlaywrightWebAdapter | None = None, session_ref: str | None = None,
         decision: DecisionResult | None = None,
+        decision_diagnostic: Mapping[str, str] | None = None,
     ) -> None:
         if self._record_diagnostic is None or (
             diagnostic is None and (decision is None or decision.selected is not None)
@@ -187,9 +188,11 @@ class VerifiedBrowserReadExecution:
                     "stage_elapsed_ms": elapsed_ms,
                     "browser_failure_code": code,
                 })
-                if stage == "target_observation" and web is not None and session_ref is not None:
+                if stage in {"target_observation", "target_candidates"} and (
+                    web is not None and session_ref is not None
+                ):
                     attributes.update(web._observation_diagnostic(session_ref))
-            if decision is not None:
+            if decision is not None or decision_diagnostic is not None:
                 # Project only exact existing Literal values, including when a
                 # nonselection has no BrowserFailure/stage timing to record.
                 reason_values = tuple(
@@ -204,7 +207,10 @@ class VerifiedBrowserReadExecution:
                     "reason": reason_values,
                 }
                 for name, values in allowed.items():
-                    value = getattr(decision, name)
+                    value = (
+                        decision_diagnostic.get(name) if decision_diagnostic is not None
+                        else getattr(decision, name)
+                    )
                     if type(value) is str and value in values:
                         attributes["decision_" + name] = value
             if attributes:
@@ -316,6 +322,7 @@ class VerifiedBrowserReadExecution:
                 run, executor._last_failure_diagnostic,
                 web=web, session_ref=execution.session.session_ref,
                 decision=outcome.decisions[-1] if outcome.decisions else None,
+                decision_diagnostic=executor._last_decision_diagnostic,
             )
             await checkpoint.refresh(allow_cancel=True)
             observed_ms = web._observe_only_completed.get(execution.session.session_ref)

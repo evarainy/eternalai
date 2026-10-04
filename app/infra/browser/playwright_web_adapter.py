@@ -111,8 +111,12 @@ def _neutral(method: Callable[_P, Awaitable[_R]]) -> Callable[_P, Coroutine[Any,
         try:
             self = cast(PlaywrightWebAdapter, args[0])
             session = cast(BrowserSessionRef, args[1] if len(args) > 1 else kwargs.get("session"))
-            if method.__name__ == "observe":
+            if method.__name__ in {"observe", "target_candidates"}:
                 self._observe_wait.pop(session.session_ref, None)
+                if method.__name__ == "target_candidates" and isinstance(
+                    self._observer, PlaywrightObserver,
+                ):
+                    self._observer._observe_wait.pop(session.session_ref, None)
             admitted = self._registration(session)
             check_liveness(admitted.context)
             async with asyncio.timeout_at(admitted.context.deadline_monotonic):
@@ -327,16 +331,35 @@ class PlaywrightWebAdapter:
         if wait is None:
             return {}
         stage, started = wait
-        if stage not in {"authority_before", "region_resolution", "authority_after"}:
+        if stage not in {
+            "authority_before", "region_resolution", "authority_after",
+            "candidate_authority_before", "candidate_key_resolution", "candidate_batch",
+            "candidate_selector", "candidate_key_read", "candidate_authority_after",
+            "candidate_batch_after",
+        }:
             return {}
         now = time.monotonic()
         result: dict[str, str | int] = {
             "observe_wait_stage": stage,
             "observe_wait_elapsed_ms": max(0, min(300000, int((now - started) * 1000))),
         }
-        if stage == "region_resolution" and isinstance(self._observer, PlaywrightObserver):
+        if stage in {"region_resolution", "candidate_batch", "candidate_batch_after"} and isinstance(
+            self._observer, PlaywrightObserver,
+        ):
             inner = self._observer._observe_wait.get(session_ref)
-            if inner is not None and inner[0] in {"region_lock", "live_authority", "dom_transport"}:
+            if inner is not None and inner[0] in {
+                "region_lock", "live_authority", "dom_transport",
+                "candidate_contract", "candidate_region_lock", "candidate_live_authority",
+                "candidate_page", "candidate_frame", "candidate_region_lookup",
+                "candidate_region_identity", "candidate_region_disposal", "candidate_snapshot",
+                "candidate_metadata", "candidate_identity", "candidate_availability",
+                "candidate_handle_disposal", "candidate_topology", "candidate_selection",
+                "candidate_reobserve", "candidate_reobserve_stale",
+                "candidate_scope_mismatch", "candidate_frame_mismatch",
+                "candidate_region_mismatch", "candidate_metadata_mismatch",
+                "candidate_identity_mismatch", "candidate_availability_mismatch",
+                "candidate_topology_mismatch", "candidate_projection_mismatch",
+            }:
                 result["observe_inner_wait_stage"] = inner[0]
                 result["observe_inner_wait_elapsed_ms"] = max(
                     0, min(300000, int((now - inner[1]) * 1000)),
@@ -379,6 +402,7 @@ class PlaywrightWebAdapter:
         projection: VisibleProjection,
         context: ExecutionContext,
     ) -> tuple[VisibleCandidate, ...]:
+        self._observe_wait[session.session_ref] = ("candidate_authority_before", time.monotonic())
         plan, _ = await self._authority(session, context)
         rule = next((r for r in plan.steps if r.step == step), None)
         if rule is None or projection.scope.region_id != rule.observation.region_id:
@@ -388,19 +412,23 @@ class PlaywrightWebAdapter:
         if step.locator.kind == "business_key":
             if dom.key is None:
                 raise failure("unsupported")
+            self._observe_wait[session.session_ref] = ("candidate_key_resolution", time.monotonic())
             key = await self._sealed(context, plan.read_rule.key_ref, "business_key", step.step_id)
         matches = []
+        self._observe_wait[session.session_ref] = ("candidate_batch", time.monotonic())
         async with self._observer._candidate_batch(session, projection, plan.policy) as (
             region, nodes,
         ):
             self._origins(region, context)
             for candidate, node in nodes:
                 self._origins(node, context)
+                self._observe_wait[session.session_ref] = ("candidate_selector", time.monotonic())
                 if not await node.element.evaluate(
                     "(el, selector) => el.matches(selector)", dom.selector
                 ):
                     continue
                 if key is not None and dom.key is not None:
+                    self._observe_wait[session.session_ref] = ("candidate_key_read", time.monotonic())
                     row = await node.element.evaluate_handle(
                         "(el, selector) => el.closest(selector)",
                         dom.row_selector,
@@ -425,7 +453,9 @@ class PlaywrightWebAdapter:
                     if not matched:
                         continue
                 matches.append(candidate)
+            self._observe_wait[session.session_ref] = ("candidate_authority_after", time.monotonic())
             await self._authority(session, context)
+            self._observe_wait[session.session_ref] = ("candidate_batch_after", time.monotonic())
         return tuple(matches)
 
     async def _options_current(
