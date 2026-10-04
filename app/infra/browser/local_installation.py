@@ -249,6 +249,7 @@ class LocalBrowserInstallationDependencies:
     enabled: bool = False
     ttl_seconds: int = 60
     input_mode: Literal["chat", "structured"] = "chat"
+    execution_timeout_seconds: int | None = None
 
 
 def build_local_browser_vertical(
@@ -309,6 +310,7 @@ def build_local_browser_vertical(
     resources = LocalBrowserResources(deps.deployment, deps.proof_context, deps.cleanup_authority)
     factory = LocalBrowserReadExecutionFactory(
         deps.source, resources, deps.binding, deps.decision, ttl_seconds=deps.ttl_seconds,
+        execution_timeout_seconds=deps.execution_timeout_seconds,
     )
     lifecycle = LocalBrowserReadLifecycle(factory, deps.cleanup_authority)
     wrapped = FixedSourceReadFactory(factory, deps.source)

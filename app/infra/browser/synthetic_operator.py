@@ -446,6 +446,7 @@ async def open_synthetic_operator(
                 structured_output=JSONStructuredOutputProvider() if input_mode == "chat" else None,
                 intent_model="glm-4.7" if input_mode == "chat" else None,
                 input_mode=input_mode,
+                execution_timeout_seconds=120 if trial_id == OBSERVE_TRIAL else None,
                 trace=PostgreSQLTraceWriter(sessions), sessions=PostgreSQLSessionStore(sessions),
                 worker_id="browser_fixture_worker", enabled=True,
             ))

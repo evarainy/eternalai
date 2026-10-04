@@ -109,6 +109,7 @@ class LocalBrowserReadExecutionFactory:
         decision: DecisionProvider,
         *,
         ttl_seconds: int = 60,
+        execution_timeout_seconds: int | None = None,
     ) -> None:
         from app.infra.browser.fixed_synthetic_seed import (
             SYNTHETIC_TENANT,
@@ -116,6 +117,8 @@ class LocalBrowserReadExecutionFactory:
             FixedSyntheticSource,
         )
 
+        if execution_timeout_seconds is None:
+            execution_timeout_seconds = ttl_seconds
         if (
             type(source) is not FixedSyntheticSource
             or type(resources) is not LocalBrowserResources
@@ -127,11 +130,14 @@ class LocalBrowserReadExecutionFactory:
             or not callable(getattr(decision, "decide", None))
             or type(ttl_seconds) is not int
             or not 30 <= ttl_seconds <= 300
+            or type(execution_timeout_seconds) is not int
+            or not 30 <= execution_timeout_seconds <= 300
         ):
             raise ValueError("browser_local_installation_invalid")
         self.source, self.resources = source, resources
         self.binding, self.decision = binding, decision
         self.ttl_seconds = ttl_seconds
+        self.execution_timeout_seconds = execution_timeout_seconds
         self._authority: (
             tuple[
                 BrowserLeaseStorePort,
@@ -507,7 +513,7 @@ class LocalBrowserReadExecutionFactory:
             manifest.skill,
             scope,
             manifest.site.source,
-            time.monotonic() + self.ttl_seconds,
+            time.monotonic() + self.execution_timeout_seconds,
             state.cancellation,
             manifest.site.navigation_origins,
             current_binding,
