@@ -10,13 +10,16 @@ import stat
 import sys
 import traceback
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from pydantic import SecretStr
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.infra.browser import synthetic_bootstrap as bootstrap
 from app.infra.browser import synthetic_configuration as configuration
+from app.ports.auth import SessionTokenError
+from app.ports.browser_publication_store import BrowserPublicationError
 
 
 @pytest.fixture
@@ -245,3 +248,136 @@ def test_bootstrap_cli_redacts_file_and_engine_errors(
     assert captured.out == ""
     assert captured.err == "browser_bootstrap_unavailable\n"
     assert value not in captured.err
+
+
+@pytest.fixture
+def publication_cli(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """Mock the actual publication assembly/await seams; no external IO is reachable."""
+    if (sys.platform == "win32" and "httpx2" not in sys.modules
+            and importlib.util.find_spec("httpx2") is None):
+        import httpx
+
+        monkeypatch.setitem(sys.modules, "httpx2", httpx)
+    from scripts import manage_browser_synthetic_publication as cli
+
+    vertical = SimpleNamespace(prepare_seed=AsyncMock(), activate_seed=AsyncMock())
+    components = SimpleNamespace(vertical=vertical, publication_owner=object())
+    context = MagicMock()
+    context.__aenter__ = AsyncMock(return_value=components)
+    context.__aexit__ = AsyncMock(return_value=False)
+    opening = Mock(return_value=context)
+    bundle = Mock(return_value=object())
+    key = Mock(return_value=SecretStr(secrets.token_urlsafe(24)))
+    monkeypatch.setattr(cli, "prompt_operator_bundle", bundle)
+    monkeypatch.setattr(cli, "prompt_openrouter_key", key)
+    monkeypatch.setattr(cli, "open_synthetic_operator", opening)
+    return SimpleNamespace(
+        cli=cli, vertical=vertical, components=components, context=context,
+        opening=opening, bundle=bundle, key=key,
+    )
+
+
+def test_publication_empty_key_is_input_failure_before_assembly(
+    publication_cli: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from app.infra.browser import openrouter_jev as jev
+
+    monkeypatch.setattr(jev, "sys", SimpleNamespace(
+        stdin=SimpleNamespace(isatty=lambda: True),
+        stderr=SimpleNamespace(isatty=lambda: True),
+    ))
+    hidden_prompt = Mock(return_value="")
+    monkeypatch.setattr(jev.getpass, "getpass", hidden_prompt)
+    monkeypatch.setattr(publication_cli.cli, "prompt_openrouter_key", jev.prompt_openrouter_key)
+    assert publication_cli.cli.main(["--enable", "--operation", "prepare"]) == 2
+    publication_cli.bundle.assert_called_once_with(None)
+    hidden_prompt.assert_called_once()
+    publication_cli.opening.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_key_input_invalid\n"
+
+
+def test_publication_later_configuration_failure_is_distinct(
+    publication_cli: SimpleNamespace, capsys: pytest.CaptureFixture[str],
+) -> None:
+    publication_cli.context.__aenter__.side_effect = ValueError(
+        "browser_operator_installation_unavailable",
+    )
+    assert publication_cli.cli.main(["--enable", "--operation", "prepare"]) == 2
+    publication_cli.key.assert_called_once_with()
+    publication_cli.context.__aenter__.assert_awaited_once()
+    publication_cli.vertical.prepare_seed.assert_not_awaited()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_configuration_invalid\n"
+
+
+def test_publication_prepare_database_error_emits_only_fixed_code(
+    publication_cli: SimpleNamespace, capsys: pytest.CaptureFixture[str],
+) -> None:
+    publication_cli.vertical.prepare_seed.side_effect = SQLAlchemyError(secrets.token_urlsafe(24))
+    assert publication_cli.cli.main(["--enable", "--operation", "prepare"]) == 2
+    publication_cli.vertical.prepare_seed.assert_awaited_once_with(
+        publication_cli.components.publication_owner,
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_database_unavailable\n"
+
+
+@pytest.mark.parametrize("failure", ["token", "publication"])
+def test_publication_authorization_failure_is_fixed(
+    failure: str, publication_cli: SimpleNamespace, capsys: pytest.CaptureFixture[str],
+) -> None:
+    if failure == "token":
+        publication_cli.context.__aenter__.side_effect = SessionTokenError(
+            secrets.token_urlsafe(24),
+        )
+    else:
+        publication_cli.vertical.activate_seed.side_effect = BrowserPublicationError(
+            "browser_operator_business_denied",
+        )
+    assert publication_cli.cli.main(["--enable", "--operation", "activate"]) == 2
+    publication_cli.context.__aenter__.assert_awaited_once()
+    if failure == "publication":
+        publication_cli.vertical.activate_seed.assert_awaited_once_with(
+            publication_cli.components.publication_owner,
+        )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_authorization_denied\n"
+
+
+@pytest.mark.parametrize("failure", [ValueError, RuntimeError])
+def test_publication_unknown_error_remains_generic(
+    failure: type[Exception], publication_cli: SimpleNamespace,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    publication_cli.context.__aenter__.side_effect = failure(secrets.token_urlsafe(24))
+    assert publication_cli.cli.main(["--enable", "--operation", "prepare"]) == 2
+    publication_cli.context.__aenter__.assert_awaited_once()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_unavailable\n"
+
+
+def test_publication_success_preserves_marker_and_operation_arguments(
+    publication_cli: SimpleNamespace, capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert publication_cli.cli.main([
+        "--enable", "--operation", "prepare", "--input-mode", "structured",
+    ]) == 0
+    publication_cli.opening.assert_called_once_with(
+        publication_cli.bundle.return_value, jev_key=publication_cli.key.return_value,
+        enabled=True, require_active_publication=False, input_mode="structured",
+    )
+    publication_cli.vertical.prepare_seed.assert_awaited_once_with(
+        publication_cli.components.publication_owner,
+    )
+    publication_cli.vertical.activate_seed.assert_not_awaited()
+    publication_cli.context.__aexit__.assert_awaited_once_with(None, None, None)
+    captured = capsys.readouterr()
+    assert captured.out == "browser_synthetic_publication_updated\n"
+    assert captured.err == ""
