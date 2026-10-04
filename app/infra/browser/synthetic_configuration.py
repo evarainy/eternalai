@@ -6,7 +6,10 @@ operator or importing its optional HTTP client dependencies.
 
 from __future__ import annotations
 
+import getpass
 import hashlib
+import sys
+import warnings
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -22,6 +25,21 @@ PUBLICATION_ROLE = "browser_fixture_publication"
 CLEANUP_ROLE = "browser_fixture_cleanup"
 JEV_REQUEST_MODEL = "typesafe/jev-1.13"
 JEV_DEPLOYMENT_MODEL = "typesafe/jev-1.13-20260917"
+
+
+def prompt_database_password() -> SecretStr:
+    """User-owned TTY input only; never discover, persist, or put it in a URL."""
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise ValueError("browser_database_private_console_required")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        try:
+            value = getpass.getpass("PostgreSQL browser_v42_test password (hidden): ")
+        except (Exception, KeyboardInterrupt):
+            raise ValueError("browser_database_private_console_required") from None
+    if not value or len(value) > 4096 or "\x00" in value:
+        raise ValueError("browser_database_password_invalid")
+    return SecretStr(value)
 
 
 def synthetic_jev_manifest() -> ModelManifest:

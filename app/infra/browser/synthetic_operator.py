@@ -55,6 +55,7 @@ from app.infra.browser.synthetic_configuration import (
     PUBLICATION_ROLE,
     SyntheticDeactivationBundle,
     SyntheticOperatorBundle,
+    prompt_database_password,
     synthetic_jev_manifest,
 )
 from app.infra.browser.systemone_http import DecisionDeployment
@@ -370,6 +371,7 @@ async def open_synthetic_operator(
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_operator",
+                      "password": prompt_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -508,6 +510,7 @@ async def deactivate_synthetic_publication(
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_operator",
+                      "password": prompt_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     try:

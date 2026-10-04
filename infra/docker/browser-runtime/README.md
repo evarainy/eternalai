@@ -8,10 +8,11 @@ The override disables the base `browser-worker` supervisor entry point. The
 executes one worker pass, and exits. The `browser-client` submits and later
 inspects that Run through the authenticated internal API.
 
-This is a prepared operator runbook, not evidence of a live trial. No Docker
-build, container startup, database write, paid request, or network call was
-performed while preparing it. The owner must separately authorize those actions
-and the `0.01` USD trial budget before using the commands below. The CLI allows
+This is a prepared operator runbook, not evidence of a live trial. The local
+image and task PG listener have been prepared; real password authentication,
+task initialization, and paid model dispatch remain unverified. Use the
+commands within the owner's existing authorization, and confirm the required
+platform credit cap before paid dispatch. The CLI allows
 at most one Jev transport attempt for this trial. It cannot guarantee a dollar
 billing ceiling; actual cost is reported as unknown.
 
@@ -42,6 +43,46 @@ network. Only `browser-single-run` also joins the ordinary outbound bridge
 allowlist. No service publishes a host port. The API's internal name and CSRF
 origin are `browser-synthetic-api:8000` and
 `http://browser-synthetic-api:8000`.
+
+On 2026-10-04, the existing task PG was rebuilt with its original data volume
+and authentication mounts. It now listens only on `127.0.0.1,172.30.0.2`, port
+`15432`; the internal address is pinned and there are no published host ports.
+The active service-only PG configuration is
+`C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/pg-listener-rebuild-20261004/target-postgres.compose.json`.
+Future authorized PG management must use that file, project
+`eternalai_browser_v42_test`, the original project directory
+`C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/docker-test`,
+and the repair directory's `empty.env` so relative mounts resolve correctly.
+The old `docker-test/compose.yml` still declares loopback-only listening;
+recreating PG from it would restore the old connection blocker. The repair
+directory also retains the original configuration and before/after evidence.
+This PG management file is separate from the two trial Compose files below.
+
+**DB passwords use a separate hidden prompt.** Each bootstrap, publication,
+API, worker, and deactivation process asks for the existing `browser_v42_test`
+password in the owner's own TTY. Missing TTY or a getpass echo fallback fails
+closed. The password goes only into the database driver's in-memory
+`connect_args`; it is not put in the DSN, argv, environment, vault, or logs, and
+is not reused across processes. The fixed database remains `eternalai_test`
+at `postgres:15432`. This password is separate from the vault passphrase and
+OpenRouter key. It is never discovered from existing credential files.
+
+Network reachability was verified up to SCRAM rejection, but no real password
+has been supplied by the assistant. After building the updated image, the
+owner can use this single read-only input entry point in their private terminal.
+It prompts only for the DB password and checks DB identity, schema, task state,
+and the still-uninitialized vault; it does not initialize or call a model.
+
+```powershell
+docker run -it --name browser-v42-db-input-preflight --network eternalai_browser_v42_test_default --user pwuser --read-only --tmpfs /tmp:rw,size=512m,mode=1777 --mount type=volume,source=browser-v42-single-run-secrets,target=/run/browser-synthetic-secrets,readonly --entrypoint python eternalai-browser-v42:local -m scripts.bootstrap_browser_synthetic
+```
+
+Only exit `0` with `browser_bootstrap_preflight_ready` establishes this
+preflight's success. A wrong password or any other failure exits nonzero with a
+fixed error code; retain the container and stop. The previously created
+`browser-v42-single-init` container still has its old immutable image, so do not
+start it to obtain the new DB prompt. Use the updated trial services below only
+after the owner-run read-only preflight passes.
 
 The worker alone uses the reviewed Docker seccomp profile from
 `BROWSER_V42_SECCOMP_PROFILE`; the other services use Docker's default profile.
@@ -75,9 +116,10 @@ function Invoke-BrowserV42 {
 The seccomp file above must be the locally reviewed Docker `daa0cb7` profile.
 Do not replace it with `unconfined`, a different file, or a permissive fallback.
 In the first terminal, parse the merged Compose model, build the shared local
-image, perform the read-only bootstrap preflight, and then explicitly initialize
-the task. The `--init` command changes the fixed test database and creates the
-encrypted vault after hidden passphrase entry. Stop at any nonzero result.
+image, perform the read-only bootstrap preflight with hidden DB password input,
+and then explicitly initialize the task. The `--init` command first requests the
+existing DB password, then changes the fixed test database and creates the
+encrypted vault after hidden vault passphrase entry. Stop at any nonzero result.
 The issued authority tokens expire after one hour; finish publication, the Run,
 and deactivation within that window. Expiration fails closed; these commands do
 not refresh tokens or overwrite an existing vault.
@@ -90,8 +132,8 @@ Invoke-BrowserV42 run browser-bootstrap --enable --init
 ```
 
 Prepare and activate the fixed synthetic publication. These commands prompt
-for the vault passphrase and a restricted OpenRouter Jev key in the owner's
-terminal. They construct the provider client but send no model HTTP request.
+for the vault passphrase, a restricted OpenRouter Jev key, and the DB password
+in the owner's terminal. They construct the provider client but send no model HTTP request.
 They do write the publication state. The key and passphrase never belong in
 arguments, environment variables, logs, or assistant tools.
 
@@ -101,7 +143,7 @@ Invoke-BrowserV42 run browser-publication --enable --operation activate --input-
 ```
 
 Still in the first terminal, start the API in the foreground. Its encrypted
-operator bundle and restricted key are entered through hidden prompts. Keep
+operator bundle, restricted key, and DB password use hidden prompts. Keep
 this terminal open while running the client; the `--use-aliases` option gives
 the one-off API container the service DNS name required by the client and CSRF
 origin. There is no host port and no background supervisor.
@@ -114,7 +156,7 @@ Open a second private PowerShell terminal in the same checkout and repeat the
 setup block above. After the API is running, submit exactly one Run, execute
 the one-off worker once, and inspect the Run once. Each relevant command
 prompts for its own hidden vault passphrase; the worker also prompts for the
-restricted Jev key. **Only the worker may make a paid Jev request.** The
+restricted Jev key and DB password. **Only the worker may make a paid Jev request.** The
 `trial.jev-attempt.json` receipt is burned before that request, so an uncertain
 result must not be retried. The durable database queue, vault, and trial
 receipts remain in place.
@@ -134,7 +176,7 @@ review. A verified result requires the worker's successful exit and the
 client's terminal Run view; container startup alone proves neither.
 
 Finally, in the second terminal, deactivate the publication with the separate
-deactivation bundle. This prompts only for the vault passphrase and does not
+deactivation bundle. This prompts for the vault passphrase and DB password and does not
 require the signer or provider key. Then stop the exact foreground API
 container from the second terminal. If deactivation fails, stop the API and
 retain state for explicit recovery; do not report successful deactivation.

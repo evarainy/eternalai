@@ -33,6 +33,7 @@ from app.infra.browser.synthetic_configuration import (
     PUBLICATION_ACTOR,
     PUBLICATION_ROLE,
     SyntheticOperatorBundle,
+    prompt_database_password,
     synthetic_jev_manifest,
 )
 from app.infra.browser.synthetic_vault import (
@@ -118,6 +119,7 @@ async def preflight_synthetic_bootstrap() -> BootstrapPreflight:
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_bootstrap",
+                      "password": prompt_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     try:
@@ -241,6 +243,7 @@ async def initialize_synthetic_bootstrap(manifest: ModelManifest, *, enabled: bo
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_bootstrap",
+                      "password": prompt_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     try:
