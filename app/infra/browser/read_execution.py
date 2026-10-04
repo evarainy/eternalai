@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Protocol, get_args
 
 from jsonschema import Draft202012Validator
 from referencing import Registry
@@ -27,6 +27,9 @@ from app.browser_skill.models import (
     BrowserSessionRef,
     BrowserSkill,
     ConfirmedBusinessKey,
+    DecisionError,
+    DecisionResult,
+    DecisionStatus,
     DispatchPermit,
     ExecutionContext,
     ParameterPurpose,
@@ -167,21 +170,45 @@ class VerifiedBrowserReadExecution:
     async def _record_failure_diagnostic(
         self, run: RunSnapshot, diagnostic: tuple[str, int, str] | None,
         *, web: PlaywrightWebAdapter | None = None, session_ref: str | None = None,
+        decision: DecisionResult | None = None,
     ) -> None:
-        if self._record_diagnostic is None or diagnostic is None:
+        if self._record_diagnostic is None or (
+            diagnostic is None and (decision is None or decision.selected is not None)
+        ):
             return
-        stage, elapsed_ms, code = diagnostic
         try:
             # Existing Trace routing metadata is separate from these attributes.
             # No DOM, identity, input or exception text enters the diagnostic.
-            attributes: dict[str, str | int] = {
-                "browser_read_stage": stage,
-                "stage_elapsed_ms": elapsed_ms,
-                "browser_failure_code": code,
-            }
-            if stage == "target_observation" and web is not None and session_ref is not None:
-                attributes.update(web._observation_diagnostic(session_ref))
-            await asyncio.wait_for(self._record_diagnostic(run, attributes), timeout=1.0)
+            attributes: dict[str, str | int] = {}
+            if diagnostic is not None:
+                stage, elapsed_ms, code = diagnostic
+                attributes.update({
+                    "browser_read_stage": stage,
+                    "stage_elapsed_ms": elapsed_ms,
+                    "browser_failure_code": code,
+                })
+                if stage == "target_observation" and web is not None and session_ref is not None:
+                    attributes.update(web._observation_diagnostic(session_ref))
+            if decision is not None:
+                # Project only exact existing Literal values, including when a
+                # nonselection has no BrowserFailure/stage timing to record.
+                reason_values = tuple(
+                    value
+                    for branch in get_args(DecisionResult.model_fields["reason"].annotation)
+                    for value in get_args(branch)
+                    if type(value) is str
+                )
+                allowed = {
+                    "status": get_args(DecisionStatus),
+                    "error": get_args(DecisionError),
+                    "reason": reason_values,
+                }
+                for name, values in allowed.items():
+                    value = getattr(decision, name)
+                    if type(value) is str and value in values:
+                        attributes["decision_" + name] = value
+            if attributes:
+                await asyncio.wait_for(self._record_diagnostic(run, attributes), timeout=1.0)
         except Exception:
             # Trace failure cannot overwrite the original execution failure.
             logging.getLogger(__name__).warning("browser_read_diagnostic_trace_unavailable")
@@ -288,6 +315,7 @@ class VerifiedBrowserReadExecution:
             await self._record_failure_diagnostic(
                 run, executor._last_failure_diagnostic,
                 web=web, session_ref=execution.session.session_ref,
+                decision=outcome.decisions[-1] if outcome.decisions else None,
             )
             await checkpoint.refresh(allow_cancel=True)
             observed_ms = web._observe_only_completed.get(execution.session.session_ref)
