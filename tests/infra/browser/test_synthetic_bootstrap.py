@@ -255,7 +255,7 @@ def test_ciphertext_and_directory_sync_precede_database_commit(
         events.append("register_pending")
 
     monkeypatch.setattr(bootstrap, "create_async_engine", lambda *args, **kwargs: _Engine())
-    monkeypatch.setattr(bootstrap, "prompt_database_password",
+    monkeypatch.setattr(bootstrap, "read_database_password",
                         lambda: SecretStr(secrets.token_urlsafe(24)))
     monkeypatch.setattr(bootstrap, "_private_console", lambda: None)
     monkeypatch.setattr(bootstrap, "_identity", approved_identity)
@@ -338,7 +338,7 @@ def test_identity_mismatch_stops_before_key_generation_and_registration(
     generator = Mock(side_effect=AssertionError("generation reached"))
     writer = Mock(side_effect=AssertionError("vault write reached"))
     monkeypatch.setattr(bootstrap, "create_async_engine", lambda *args, **kwargs: _Engine())
-    monkeypatch.setattr(bootstrap, "prompt_database_password",
+    monkeypatch.setattr(bootstrap, "read_database_password",
                         lambda: SecretStr(secrets.token_urlsafe(24)))
     monkeypatch.setattr(bootstrap, "_private_console", lambda: None)
     monkeypatch.setattr(bootstrap, "_material", generator)
@@ -431,7 +431,7 @@ def test_dry_run_only_reads_identity_and_conflict_state(monkeypatch: pytest.Monk
 
     generator = Mock(side_effect=AssertionError("generation reached"))
     monkeypatch.setattr(bootstrap, "create_async_engine", lambda *args, **kwargs: _Engine())
-    monkeypatch.setattr(bootstrap, "prompt_database_password",
+    monkeypatch.setattr(bootstrap, "read_database_password",
                         lambda: SecretStr(secrets.token_urlsafe(24)))
     monkeypatch.setattr(bootstrap, "assert_vault_uninitialized", lambda: None)
     monkeypatch.setattr(bootstrap, "_material", generator)

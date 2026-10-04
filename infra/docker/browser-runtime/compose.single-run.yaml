@@ -2,6 +2,14 @@
 # `docker compose run`; `up` is not a trial entry point.
 name: browser-v42-single-run
 
+x-task-database-password: &task-database-password
+  type: bind
+  source: C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/docker-test/private/db-password
+  target: /run/secrets/task-db-password
+  read_only: true
+  bind:
+    create_host_path: false
+
 x-browser-single-run-image: &browser-single-run-image
   image: eternalai-browser-v42:local
   build:
@@ -27,6 +35,7 @@ services:
       - --operator-vault
       - /run/browser-synthetic-secrets/P2-BROWSER-RUNTIME-V42-001/operator.bundle.enc
     volumes:
+      - *task-database-password
       - type: volume
         source: browser-synthetic-secrets
         target: /run/browser-synthetic-secrets
@@ -44,6 +53,7 @@ services:
     entrypoint: ["python", "-m", "scripts.bootstrap_browser_synthetic"]
     command: []
     volumes:
+      - *task-database-password
       - type: volume
         source: browser-synthetic-secrets
         target: /run/browser-synthetic-secrets
@@ -54,6 +64,7 @@ services:
     entrypoint: ["python", "-m", "scripts.manage_browser_synthetic_publication"]
     command: []
     volumes:
+      - *task-database-password
       - type: volume
         source: browser-synthetic-secrets
         target: /run/browser-synthetic-secrets
@@ -81,6 +92,7 @@ services:
       - task-postgres
       - browser-model-egress
     volumes:
+      - *task-database-password
       - type: volume
         source: browser-synthetic-secrets
         target: /run/browser-synthetic-secrets

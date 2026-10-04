@@ -2,7 +2,8 @@
 
 Explicit console invocation supplies existing secrets and already issued tokens.
 Importing this module performs no IO. Nothing issues tokens, grants roles, writes
-registration data, publishes a seed or discovers credentials from files or env.
+registration data, publishes a seed or discovers credentials from env.
+The database password comes only from the approved, fixed read-only task mount.
 The API and worker use the same fixed PostgreSQL queue and persisted key material.
 """
 
@@ -55,7 +56,7 @@ from app.infra.browser.synthetic_configuration import (
     PUBLICATION_ROLE,
     SyntheticDeactivationBundle,
     SyntheticOperatorBundle,
-    prompt_database_password,
+    read_database_password,
     synthetic_jev_manifest,
 )
 from app.infra.browser.systemone_http import DecisionDeployment
@@ -371,7 +372,7 @@ async def open_synthetic_operator(
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_operator",
-                      "password": prompt_database_password().get_secret_value(),
+                      "password": read_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -510,7 +511,7 @@ async def deactivate_synthetic_publication(
     engine = create_async_engine(
         DATABASE_URL, echo=False, hide_parameters=True,
         connect_args={"connect_timeout": 5, "application_name": "browser_synthetic_operator",
-                      "password": prompt_database_password().get_secret_value(),
+                      "password": read_database_password().get_secret_value(),
                       "options": "-c statement_timeout=5000 -c lock_timeout=1000"},
     )
     try:

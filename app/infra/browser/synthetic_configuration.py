@@ -6,10 +6,10 @@ operator or importing its optional HTTP client dependencies.
 
 from __future__ import annotations
 
-import getpass
 import hashlib
+import os
+import stat
 import sys
-import warnings
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -25,21 +25,33 @@ PUBLICATION_ROLE = "browser_fixture_publication"
 CLEANUP_ROLE = "browser_fixture_cleanup"
 JEV_REQUEST_MODEL = "typesafe/jev-1.13"
 JEV_DEPLOYMENT_MODEL = "typesafe/jev-1.13-20260917"
+_DATABASE_PASSWORD_FILE = "/run/secrets/task-db-password"
+_DATABASE_PASSWORD_ALPHABET = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
 
 
-def prompt_database_password() -> SecretStr:
-    """User-owned TTY input only; never discover, persist, or put it in a URL."""
-    if not sys.stdin.isatty() or not sys.stderr.isatty():
-        raise ValueError("browser_database_private_console_required")
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", getpass.GetPassWarning)
+def read_database_password() -> SecretStr:
+    """Read only the approved task bind mount; no path or credential fallback."""
+    try:
+        if sys.platform != "linux":
+            raise ValueError
+        descriptor = os.open(
+            _DATABASE_PASSWORD_FILE,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+        )
         try:
-            value = getpass.getpass("PostgreSQL browser_v42_test password (hidden): ")
-        except (Exception, KeyboardInterrupt):
-            raise ValueError("browser_database_private_console_required") from None
-    if not value or len(value) > 4096 or "\x00" in value:
-        raise ValueError("browser_database_password_invalid")
-    return SecretStr(value)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 64:
+                raise ValueError
+            if not os.fstatvfs(descriptor).f_flag & os.ST_RDONLY:
+                raise ValueError
+            value = os.read(descriptor, 65)
+            if len(value) != 64 or any(byte not in _DATABASE_PASSWORD_ALPHABET for byte in value):
+                raise ValueError
+            return SecretStr(value.decode("ascii"))
+        finally:
+            os.close(descriptor)
+    except (Exception, KeyboardInterrupt):
+        raise ValueError("browser_database_password_file_invalid") from None
 
 
 def synthetic_jev_manifest() -> ModelManifest:

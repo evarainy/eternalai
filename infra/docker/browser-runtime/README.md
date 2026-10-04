@@ -58,31 +58,37 @@ recreating PG from it would restore the old connection blocker. The repair
 directory also retains the original configuration and before/after evidence.
 This PG management file is separate from the two trial Compose files below.
 
-**DB passwords use a separate hidden prompt.** Each bootstrap, publication,
-API, worker, and deactivation process asks for the existing `browser_v42_test`
-password in the owner's own TTY. Missing TTY or a getpass echo fallback fails
-closed. The password goes only into the database driver's in-memory
-`connect_args`; it is not put in the DSN, argv, environment, vault, or logs, and
-is not reused across processes. The fixed database remains `eternalai_test`
-at `postgres:15432`. This password is separate from the vault passphrase and
-OpenRouter key. It is never discovered from existing credential files.
+**DB password input has been removed.** The owner approved read-only binding of
+the existing task-initializer-generated file
+`C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/docker-test/private/db-password`
+to the code-owned `/run/secrets/task-db-password` path. Only bootstrap,
+publication (including deactivation), API, and the once-worker receive this
+mount. The Compose bind is read-only with `create_host_path: false`; the client
+and disabled supervisor receive no DB credential mount. The fixed-file reader
+requires Linux, a regular 64-byte ASCII URLsafe file, and a read-only mount. It
+accepts this approved Windows bind's existing `0777`, root-owned metadata.
+Missing or invalid files and mounts fail with a fixed suppressed error code,
+without TTY, environment, argv, or other-file fallback. The password goes only
+into the database driver's in-memory `connect_args["password"]`. The fixed
+database remains `eternalai_test` at `postgres:15432`, role `browser_v42_test`.
+Vault passphrase and OpenRouter key prompts remain separate.
 
-Network reachability was verified up to SCRAM rejection, but no real password
-has been supplied by the assistant. After building the updated image, the
-owner can use this single read-only input entry point in their private terminal.
-It prompts only for the DB password and checks DB identity, schema, task state,
-and the still-uninitialized vault; it does not initialize or call a model.
+Use this single read-only preflight to establish authenticated access through
+the approved file binding after building the updated image. It uses the
+explicit approved DB-file mount. It takes no password input and checks DB
+identity, schema, task state, and the still-uninitialized vault; it does not
+initialize or call a model.
 
 ```powershell
-docker run -it --name browser-v42-db-input-preflight --network eternalai_browser_v42_test_default --user pwuser --read-only --tmpfs /tmp:rw,size=512m,mode=1777 --mount type=volume,source=browser-v42-single-run-secrets,target=/run/browser-synthetic-secrets,readonly --entrypoint python eternalai-browser-v42:local -m scripts.bootstrap_browser_synthetic
+docker run --name browser-v42-db-file-preflight --network eternalai_browser_v42_test_default --user pwuser --read-only --tmpfs /tmp:rw,size=512m,mode=1777 --mount type=bind,source=C:/Users/Administrator/AppData/Local/Temp/browser-v42-20261002/docker-test/private/db-password,target=/run/secrets/task-db-password,readonly --mount type=volume,source=browser-v42-single-run-secrets,target=/run/browser-synthetic-secrets,readonly --entrypoint python eternalai-browser-v42:local -m scripts.bootstrap_browser_synthetic
 ```
 
 Only exit `0` with `browser_bootstrap_preflight_ready` establishes this
 preflight's success. A wrong password or any other failure exits nonzero with a
-fixed error code; retain the container and stop. The previously created
-`browser-v42-single-init` container still has its old immutable image, so do not
-start it to obtain the new DB prompt. Use the updated trial services below only
-after the owner-run read-only preflight passes.
+fixed error code; retain the container and stop. The retained
+`browser-v42-db-input-preflight` and `browser-v42-single-init` containers have
+older immutable images; do not restart them for this file-binding path. Use
+the updated trial services below only after the read-only preflight passes.
 
 The worker alone uses the reviewed Docker seccomp profile from
 `BROWSER_V42_SECCOMP_PROFILE`; the other services use Docker's default profile.
@@ -116,10 +122,10 @@ function Invoke-BrowserV42 {
 The seccomp file above must be the locally reviewed Docker `daa0cb7` profile.
 Do not replace it with `unconfined`, a different file, or a permissive fallback.
 In the first terminal, parse the merged Compose model, build the shared local
-image, perform the read-only bootstrap preflight with hidden DB password input,
-and then explicitly initialize the task. The `--init` command first requests the
-existing DB password, then changes the fixed test database and creates the
-encrypted vault after hidden vault passphrase entry. Stop at any nonzero result.
+image, perform the read-only bootstrap preflight with the approved DB-file
+mount, and then explicitly initialize the task. The `--init` command uses that
+same fixed mount, changes the fixed test database, and creates the encrypted
+vault after hidden vault passphrase entry. Stop at any nonzero result.
 The issued authority tokens expire after one hour; finish publication, the Run,
 and deactivation within that window. Expiration fails closed; these commands do
 not refresh tokens or overwrite an existing vault.
@@ -132,8 +138,9 @@ Invoke-BrowserV42 run browser-bootstrap --enable --init
 ```
 
 Prepare and activate the fixed synthetic publication. These commands prompt
-for the vault passphrase, a restricted OpenRouter Jev key, and the DB password
-in the owner's terminal. They construct the provider client but send no model HTTP request.
+for the vault passphrase and a restricted OpenRouter Jev key in the owner's
+terminal; DB authentication uses the approved read-only file mount. They
+construct the provider client but send no model HTTP request.
 They do write the publication state. The key and passphrase never belong in
 arguments, environment variables, logs, or assistant tools.
 
@@ -143,7 +150,8 @@ Invoke-BrowserV42 run browser-publication --enable --operation activate --input-
 ```
 
 Still in the first terminal, start the API in the foreground. Its encrypted
-operator bundle, restricted key, and DB password use hidden prompts. Keep
+operator bundle and restricted key use hidden prompts; DB authentication uses
+the approved read-only file mount. Keep
 this terminal open while running the client; the `--use-aliases` option gives
 the one-off API container the service DNS name required by the client and CSRF
 origin. There is no host port and no background supervisor.
@@ -156,7 +164,8 @@ Open a second private PowerShell terminal in the same checkout and repeat the
 setup block above. After the API is running, submit exactly one Run, execute
 the one-off worker once, and inspect the Run once. Each relevant command
 prompts for its own hidden vault passphrase; the worker also prompts for the
-restricted Jev key and DB password. **Only the worker may make a paid Jev request.** The
+restricted Jev key and uses the approved DB-file mount. **Only the worker may
+make a paid Jev request.** The
 `trial.jev-attempt.json` receipt is burned before that request, so an uncertain
 result must not be retried. The durable database queue, vault, and trial
 receipts remain in place.
@@ -176,8 +185,8 @@ review. A verified result requires the worker's successful exit and the
 client's terminal Run view; container startup alone proves neither.
 
 Finally, in the second terminal, deactivate the publication with the separate
-deactivation bundle. This prompts for the vault passphrase and DB password and does not
-require the signer or provider key. Then stop the exact foreground API
+deactivation bundle. This prompts for the vault passphrase and uses the approved
+DB-file mount; it does not require the signer or provider key. Then stop the exact foreground API
 container from the second terminal. If deactivation fails, stop the API and
 retain state for explicit recovery; do not report successful deactivation.
 
