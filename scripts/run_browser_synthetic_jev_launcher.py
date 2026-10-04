@@ -68,8 +68,7 @@ def _recipient(operation: str, trial_id: str,
             or operation not in _RECIPIENTS
             or (operation == "refresh" and trial_id == _ORIGINAL_TRIAL)
             or (attempt_id is not None and (
-                trial_id != _OBSERVE_TRIAL or operation == "refresh"
-                or type(attempt_id) is not str
+                trial_id != _OBSERVE_TRIAL or type(attempt_id) is not str
                 or re.fullmatch(r"[0-9a-f]{32}", attempt_id) is None))):
         raise ValueError("browser_jev_launcher_arguments_invalid")
     service, name = _RECIPIENTS[operation]

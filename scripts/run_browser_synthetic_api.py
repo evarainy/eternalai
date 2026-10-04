@@ -41,7 +41,9 @@ async def _serve(
         if operator_vault is not None:
             raise ValueError("browser_operator_arguments_invalid")
         bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
-                       else read_private_operator_input(trial_id=trial_id))
+                       else read_private_operator_input(
+                           trial_id=trial_id, attempt_id=attempt_id,
+                       ))
     else:
         bundle = prompt_operator_bundle(encrypted_path=operator_vault)
         key = prompt_openrouter_key()

@@ -205,7 +205,9 @@ async def _run(approved_budget_usd: str | None, *, private_stdin: bool = False,
     expected = BrowserAcceptedView.model_validate({**reference, "state_revision": 0})
     if private_stdin:
         bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
-                       else read_private_operator_input(trial_id=trial_id))
+                       else read_private_operator_input(
+                           trial_id=trial_id, attempt_id=attempt_id,
+                       ))
     else:
         bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
         key = prompt_openrouter_key()

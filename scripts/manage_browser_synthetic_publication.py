@@ -94,9 +94,9 @@ async def _operate(
     if trial_id != ORIGINAL_TRIAL and not private_stdin:
         raise ValueError("browser_operator_arguments_invalid")
     private_options: dict[str, Any] = {"trial_id": trial_id} if trial_id != ORIGINAL_TRIAL else {}
-    trial_options = dict(private_options)
     if attempt_id is not None:
-        trial_options["attempt_id"] = attempt_id
+        private_options["attempt_id"] = attempt_id
+    trial_options = dict(private_options)
     stage = "bundle"
     try:
         if operation == "deactivate":
@@ -115,7 +115,9 @@ async def _operate(
             if operator_vault is not None or operation not in {"prepare", "activate"}:
                 raise ValueError("browser_operator_arguments_invalid")
             bundle, key = (read_private_operator_input() if trial_id == ORIGINAL_TRIAL
-                           else read_private_operator_input(trial_id=trial_id))
+                           else read_private_operator_input(
+                               trial_id=trial_id, attempt_id=attempt_id,
+                           ))
         else:
             bundle = prompt_operator_bundle(operator_vault)
             stage = "key"

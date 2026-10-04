@@ -31,14 +31,7 @@ VISIBLE_RUN_ID = "02e340c0346942729ffddd555f436262"
 
 
 def approved_attempt_id(attempt_id: str | None, *, trial_id: str = ORIGINAL_TRIAL) -> str | None:
-    vault.approved_trial_id(trial_id)
-    if attempt_id is None:
-        return None
-    if trial_id != OBSERVE_TRIAL:
-        raise ValueError("browser_observe_attempt_invalid")
-    from app.infra.browser.fixed_synthetic_seed import approved_observe_attempt_id
-
-    return approved_observe_attempt_id(attempt_id)
+    return vault.approved_attempt_id(attempt_id, trial_id=trial_id)
 
 
 def trial_request_id(trial_id: str = ORIGINAL_TRIAL, *, attempt_id: str | None = None) -> str:
@@ -154,7 +147,7 @@ def _path(name: str, *, trial_id: str = ORIGINAL_TRIAL,
     if name not in _FILES:
         raise ValueError("browser_trial_receipt_invalid")
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
-    vault._check_trial_directory(trial_id)
+    vault._check_trial_directory(trial_id, attempt_id=attempt_id)
     filename = name if attempt_id is None else attempt_id + "." + name
     return vault.trial_directory(trial_id) / filename
 

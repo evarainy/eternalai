@@ -102,13 +102,16 @@ def _receipt(trial_id: str = ORIGINAL_TRIAL, *,
         raise TrialClientError("browser_trial_receipt_invalid") from None
 
 
-def _token(*, private_stdin: bool = False, trial_id: str = ORIGINAL_TRIAL) -> str:
+def _token(*, private_stdin: bool = False, trial_id: str = ORIGINAL_TRIAL,
+           attempt_id: str | None = None) -> str:
     try:
         document = (
             (
                 read_private_business_document(read_private_passphrase())
                 if trial_id == ORIGINAL_TRIAL
-                else read_private_business_document(read_private_passphrase(), trial_id=trial_id)
+                else read_private_business_document(
+                    read_private_passphrase(), trial_id=trial_id, attempt_id=attempt_id,
+                )
             )
             if private_stdin
             else read_encrypted(VAULT_DIRECTORY / BUSINESS_FILE, expected_name=BUSINESS_FILE)
@@ -204,7 +207,8 @@ async def run_trial(
             raise TrialClientError("browser_trial_marker_unavailable") from None
     else:
         task_id, run_id = _receipt(trial_id, attempt_id=attempt_id)
-    token = (_token(private_stdin=True, trial_id=trial_id) if private_stdin else _token())
+    token = (_token(private_stdin=True, trial_id=trial_id, attempt_id=attempt_id)
+             if private_stdin else _token())
     owned = client is None
     if owned:
         client = httpx2.AsyncClient(
