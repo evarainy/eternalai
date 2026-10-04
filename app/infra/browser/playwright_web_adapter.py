@@ -110,6 +110,8 @@ def _neutral(method: Callable[_P, Awaitable[_R]]) -> Callable[_P, Coroutine[Any,
         try:
             self = cast(PlaywrightWebAdapter, args[0])
             session = cast(BrowserSessionRef, args[1] if len(args) > 1 else kwargs.get("session"))
+            if method.__name__ == "observe":
+                self._observe_wait.pop(session.session_ref, None)
             admitted = self._registration(session)
             check_liveness(admitted.context)
             async with asyncio.timeout_at(admitted.context.deadline_monotonic):
@@ -154,6 +156,7 @@ class PlaywrightWebAdapter:
         self._options: dict[tuple[str, str], _OptionSet] = {}
         self._guards: dict[str, _OriginGuard] = {}
         self._guard_lock = asyncio.Lock()
+        self._observe_wait: dict[str, tuple[str, float]] = {}
         self._salt = secrets.token_bytes(32)
         # One bounded private result per registered execution. Never included in
         # ReadEvidence, projections, model input, diagnostics, or adapter repr.
@@ -316,6 +319,28 @@ class PlaywrightWebAdapter:
             step_id=step_id,
         )
 
+    def _observation_diagnostic(self, session_ref: str) -> dict[str, str | int]:
+        """Only fixed wait names and bounded monotonic durations leave this adapter."""
+        wait = self._observe_wait.get(session_ref)
+        if wait is None:
+            return {}
+        stage, started = wait
+        if stage not in {"authority_before", "region_resolution", "authority_after"}:
+            return {}
+        now = time.monotonic()
+        result: dict[str, str | int] = {
+            "observe_wait_stage": stage,
+            "observe_wait_elapsed_ms": max(0, min(300000, int((now - started) * 1000))),
+        }
+        if stage == "region_resolution" and isinstance(self._observer, PlaywrightObserver):
+            inner = self._observer._observe_wait.get(session_ref)
+            if inner is not None and inner[0] in {"region_lock", "live_authority", "dom_transport"}:
+                result["observe_inner_wait_stage"] = inner[0]
+                result["observe_inner_wait_elapsed_ms"] = max(
+                    0, min(300000, int((now - inner[1]) * 1000)),
+                )
+        return result
+
     @_neutral
     async def observe(
         self,
@@ -324,13 +349,16 @@ class PlaywrightWebAdapter:
         policy: ObservationPolicy,
     ) -> VisibleProjection:
         context = self._registration(session).context
+        self._observe_wait[session.session_ref] = ("authority_before", time.monotonic())
         plan, _ = await self._authority(session, context)
         allowed = {rule.observation.region_id for rule in plan.steps}
         allowed.add(self._rules[plan.skill_digest].read.observation.region_id)
         if policy != plan.policy or request.region_id not in allowed:
             raise failure("denied")
+        self._observe_wait[session.session_ref] = ("region_resolution", time.monotonic())
         exact = await self._observer.resolve_region(session, request, policy)
         self._origins(exact, context)
+        self._observe_wait[session.session_ref] = ("authority_after", time.monotonic())
         await self._authority(session, context)
         return exact.projection
 

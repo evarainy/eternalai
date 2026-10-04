@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import secrets
+import time
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -183,6 +184,7 @@ class PlaywrightObserver:
         self._pages: dict[str, _PageIdentity] = {}
         self._observed: dict[tuple[str, str], _RegionIdentity] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._observe_wait: dict[str, tuple[str, float]] = {}
 
     async def _live(self, session: BrowserSessionRef) -> Any:
         try:
@@ -521,6 +523,7 @@ class PlaywrightObserver:
         request: ObservationRequest,
         policy: ObservationPolicy,
     ) -> VisibleProjection:
+        self._observe_wait.pop(session.session_ref, None)
         site = self._regions.get(request.region_id)
         if site is None or (site.policy_id, site.policy_digest) != (
             policy.policy_id,
@@ -528,9 +531,12 @@ class PlaywrightObserver:
         ):
             raise _failure("denied")
         key = (session.session_ref, request.region_id)
+        self._observe_wait[session.session_ref] = ("region_lock", time.monotonic())
         async with self._locks.setdefault(key, asyncio.Lock()):
+            self._observe_wait[session.session_ref] = ("live_authority", time.monotonic())
             live = await self._live(session)
             page = await self._page(session, live)
+            self._observe_wait[session.session_ref] = ("dom_transport", time.monotonic())
             actual_frame = await self._target_frame(page.page, site)
             frame_path = self._path(page, actual_frame)
             start_page_epoch = page.epoch
@@ -625,9 +631,11 @@ class PlaywrightObserver:
                     )
                 ):
                     raise _failure("stale")
+                self._observe_wait[session.session_ref] = ("live_authority", time.monotonic())
                 current_live = await self._live(session)
                 if current_live.context is not live.context or page.page.is_closed():
                     raise _failure("stale")
+                self._observe_wait[session.session_ref] = ("dom_transport", time.monotonic())
                 candidates = tuple(
                     VisibleCandidate(
                         ref=TargetRef(
@@ -680,10 +688,12 @@ class PlaywrightObserver:
         may dispose it, so a reader must clone and own its temporary handle.
         This lookup is not an action authorization or a dispatch barrier.
         """
+        self._observe_wait.pop(session.session_ref, None)
         projection = await self.observe(session, request, policy)
         if projection.coverage.state == "unsupported":
             raise _failure("unsupported")
         key = (session.session_ref, request.region_id)
+        self._observe_wait[session.session_ref] = ("region_lock", time.monotonic())
         async with self._locks[key]:
             state = self._observed.get(key)
             page = self._pages.get(session.session_ref)
@@ -695,6 +705,7 @@ class PlaywrightObserver:
                 or page.binding != session.binding
             ):
                 raise _failure("stale")
+            self._observe_wait[session.session_ref] = ("live_authority", time.monotonic())
             live = await self._live(session)
             if (
                 page.context is not live.context
@@ -703,6 +714,7 @@ class PlaywrightObserver:
             ):
                 raise _failure("stale")
             try:
+                self._observe_wait[session.session_ref] = ("dom_transport", time.monotonic())
                 frame = await self._target_frame(page.page, self._regions[request.region_id])
                 if self._path(page, frame) != projection.scope.frame_path:
                     raise _failure("stale")
@@ -716,6 +728,7 @@ class PlaywrightObserver:
                         or not await state.element.evaluate("el => el.isConnected")
                     ):
                         raise _failure("stale")
+                    self._observe_wait[session.session_ref] = ("live_authority", time.monotonic())
                     current = await self._live(session)
                     if (
                         current.context is not live.context
@@ -723,6 +736,7 @@ class PlaywrightObserver:
                         or page.page.is_closed()
                     ):
                         raise _failure("stale")
+                    self._observe_wait[session.session_ref] = ("dom_transport", time.monotonic())
                     return ExactRegion(page.page, frame, state.element, projection)
                 finally:
                     for match in matches:

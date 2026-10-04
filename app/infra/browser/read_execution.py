@@ -136,6 +136,7 @@ class VerifiedBrowserReadExecution:
 
     async def _record_failure_diagnostic(
         self, run: RunSnapshot, diagnostic: tuple[str, int, str] | None,
+        *, web: PlaywrightWebAdapter | None = None, session_ref: str | None = None,
     ) -> None:
         if self._record_diagnostic is None or diagnostic is None:
             return
@@ -143,11 +144,14 @@ class VerifiedBrowserReadExecution:
         try:
             # Existing Trace routing metadata is separate from these attributes.
             # No DOM, identity, input or exception text enters the diagnostic.
-            await asyncio.wait_for(self._record_diagnostic(run, {
+            attributes: dict[str, str | int] = {
                 "browser_read_stage": stage,
                 "stage_elapsed_ms": elapsed_ms,
                 "browser_failure_code": code,
-            }), timeout=1.0)
+            }
+            if stage == "target_observation" and web is not None and session_ref is not None:
+                attributes.update(web._observation_diagnostic(session_ref))
+            await asyncio.wait_for(self._record_diagnostic(run, attributes), timeout=1.0)
         except Exception:
             # Trace failure cannot overwrite the original execution failure.
             logging.getLogger(__name__).warning("browser_read_diagnostic_trace_unavailable")
@@ -247,7 +251,10 @@ class VerifiedBrowserReadExecution:
             await checkpoint.start_execution()
             attempted = True
             outcome = await executor.run(execution.session, context)
-            await self._record_failure_diagnostic(run, executor._last_failure_diagnostic)
+            await self._record_failure_diagnostic(
+                run, executor._last_failure_diagnostic,
+                web=web, session_ref=execution.session.session_ref,
+            )
             await checkpoint.refresh(allow_cancel=True)
             effect: RunEffect = "not_sent"
             if any(r.state == "possibly_sent" for r in outcome.receipts) or (
