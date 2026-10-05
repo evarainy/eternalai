@@ -25,16 +25,21 @@ class _Checkpoint:
 
     async def refresh(self, *, allow_cancel: bool = False) -> RunSnapshot:
         old = self.run
-        current = await self.store.get(old.owner, old.task_id, old.run_id)
+        try:
+            current = await self.store.refresh_worker(old, ttl_seconds=self.ttl)
+        except BrowserRunStoreError as error:
+            if error.code == "browser_run_checkpoint_stale":
+                raise BrowserReadExecutionError("stale") from None
+            raise
         if (
             current.worker_id != old.worker_id or current.worker_epoch != old.worker_epoch
             or current.admission != old.admission
             or current.status not in {"running", "waiting_user"}
         ):
             raise BrowserReadExecutionError("stale")
-        # get alone is not a worker fence. renew atomically verifies the freshly
-        # read revision/deadline/epoch plus current authority under the Run lock.
-        self.run = await self.store.renew(current, ttl_seconds=self.ttl)
+        # The store has read, fenced and renewed this exact worker in one closed
+        # transaction. Keep the application identity and cancellation boundary.
+        self.run = current
         if self.run.cancel_requested and not allow_cancel:
             raise BrowserReadExecutionError("cancelled")
         return self.run

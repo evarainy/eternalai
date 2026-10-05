@@ -311,6 +311,21 @@ class BrowserRunStorePort(Protocol):
 
     async def renew(self, claim: RunSnapshot, *, ttl_seconds: int = 60) -> RunSnapshot: ...
 
+    async def refresh_worker(
+        self, previous: RunSnapshot, *, ttl_seconds: int = 60,
+    ) -> RunSnapshot:
+        """Read and renew this worker's current Run in one short transaction.
+
+        A newer revision/cancel flag is accepted only for the same owner, Run,
+        worker ID/epoch and immutable admission. Identity or initial active-state
+        changes raise browser_run_checkpoint_stale; authorization, expired worker
+        and locked CAS failures retain their existing error classifications.
+        Lock order, fresh locked authorization and revision CAS are mandatory.
+        The UPDATE must reject worker/auth expiry using database current time.
+        No provider/model IO or cross-call authorization cache is permitted.
+        """
+        ...
+
     async def advance(
         self,
         claim: RunSnapshot,

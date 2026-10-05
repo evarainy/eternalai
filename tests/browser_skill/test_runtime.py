@@ -12,6 +12,7 @@ from app.browser_skill.runtime import BrowserReadWorker
 from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import BrowserReadExecutionPort, BrowserWorkerCheckpoint
 from app.ports.browser_run_store import (
+    BrowserRunStoreError,
     BrowserRunStorePort,
     DispatchFailureCode,
     ProtectedRunEnvelope,
@@ -66,6 +67,20 @@ class RecordingStore:
     async def get(self, owner: BrowserOwner, task_id: str, run_id: str) -> RunSnapshot:
         assert (owner, task_id, run_id) == (self.run.owner, self.run.task_id, self.run.run_id)
         return self.run
+
+    async def refresh_worker(
+        self, previous: RunSnapshot, *, ttl_seconds: int,
+    ) -> RunSnapshot:
+        # Interface adaptation only; this fake provides no DB fencing evidence.
+        current = await self.get(previous.owner, previous.task_id, previous.run_id)
+        if (
+            current.worker_id != previous.worker_id
+            or current.worker_epoch != previous.worker_epoch
+            or current.admission != previous.admission
+            or current.status not in {"running", "waiting_user"}
+        ):
+            raise BrowserRunStoreError("browser_run_checkpoint_stale")
+        return await self.renew(current, ttl_seconds=ttl_seconds)
 
     async def renew(self, claim: RunSnapshot, *, ttl_seconds: int) -> RunSnapshot:
         assert claim == self.run and ttl_seconds > 0

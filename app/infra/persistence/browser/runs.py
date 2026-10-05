@@ -50,6 +50,7 @@ from app.ports.browser_run_store import (
     checked_run_digest,
     checked_run_id,
 )
+from app.ports.credential_vault import BrowserAuthorizationError
 from app.ports.task_store import TaskEventRecord
 
 _OWNER = "tenant_id=:tenant_id AND ai_user_id=:ai_user_id AND session_id=:session_id"
@@ -783,6 +784,59 @@ class PostgreSQLBrowserRunStore:
         if row is None:
             raise BrowserRunStoreError("browser_run_stale")
         return _snapshot(row)
+
+    async def refresh_worker(
+        self, previous: RunSnapshot, *, ttl_seconds: int = 60,
+    ) -> RunSnapshot:
+        """Keep read/renew in one transaction; no authority is reused across calls."""
+        _ttl(ttl_seconds)
+        async with self._transaction() as session:
+            candidate = await self._read_run(
+                session, previous.owner, previous.task_id, previous.run_id,
+            )
+            if (
+                candidate.worker_id != previous.worker_id
+                or candidate.worker_epoch != previous.worker_epoch
+                or candidate.admission != previous.admission
+                or candidate.status not in _ACTIVE
+            ):
+                raise BrowserRunStoreError("browser_run_checkpoint_stale")
+            # Retain the existing repeated SELECT, lock order, lock-after-read CAS
+            # and fresh authority checks. previous is never the UPDATE candidate.
+            current = await self._locked(session, candidate, "renew")
+            if current.state_revision >= MAX_RUN_REVISION:
+                raise BrowserRunStoreError("browser_run_revision_exhausted")
+            row = (
+                await session.execute(
+                    text(
+                        "UPDATE browser_runs SET worker_deadline="
+                        "clock_timestamp() + :ttl_seconds * INTERVAL '1 second',"
+                        "state_revision=state_revision+1,updated_at=clock_timestamp()"
+                        f" WHERE {_RUN} AND state_revision=:expected_revision"
+                        " AND worker_id=:expected_worker_id AND worker_epoch=:expected_worker_epoch"
+                        " AND worker_deadline=:expected_worker_deadline"
+                        " AND status IN ('running','waiting_user')"
+                        " AND worker_deadline > clock_timestamp()"
+                        " AND auth_expires_at > clock_timestamp() RETURNING *"
+                    ),
+                    {**_identity(current.owner, current.task_id, current.run_id),
+                     "ttl_seconds": ttl_seconds, "expected_revision": current.state_revision,
+                     "expected_worker_id": current.worker_id,
+                     "expected_worker_epoch": current.worker_epoch,
+                     "expected_worker_deadline": current.worker_deadline},
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                # The row remains locked; classify expiry without hiding a CAS
+                # failure or returning an unrenewed snapshot as success.
+                now = await self._now(session)
+                if current.worker_deadline is None or current.worker_deadline <= now:
+                    raise BrowserRunStoreError("browser_run_worker_stale")
+                if current.admission.auth_expires_at <= now:
+                    raise BrowserAuthorizationError("browser_auth_expired")
+                raise BrowserRunStoreError("browser_run_stale")
+            result = _snapshot(row)
+        return result
 
     async def renew(self, claim: RunSnapshot, *, ttl_seconds: int = 60) -> RunSnapshot:
         ttl = _ttl(ttl_seconds)
