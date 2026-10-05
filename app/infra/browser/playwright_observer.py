@@ -777,7 +777,7 @@ class PlaywrightObserver:
             policy.policy_id, policy.digest,
         ):
             raise _failure("denied")
-        scope_snapshot(projection, session.binding, policy)
+        expected = scope_snapshot(projection, session.binding, policy)
         key = (session.session_ref, projection.scope.region_id)
         mark("candidate_region_lock")
         async with self._locks.setdefault(key, asyncio.Lock()):
@@ -880,7 +880,7 @@ class PlaywrightObserver:
                 )
             raise
         self._observe_wait[session.session_ref] = ("candidate_reobserve", reobserve_started)
-        if refreshed != projection:
+        if scope_snapshot(refreshed, session.binding, policy) != expected:
             raise mismatch("candidate_projection_mismatch")
 
     async def resolve_exact(
