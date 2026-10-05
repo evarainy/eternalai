@@ -187,6 +187,7 @@ class PlaywrightObserver:
         self._observed: dict[tuple[str, str], _RegionIdentity] = {}
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._observe_wait: dict[str, tuple[str, float]] = {}
+        self._observe_calls: dict[str, int] = {}
 
     async def _live(self, session: BrowserSessionRef) -> Any:
         try:
@@ -525,6 +526,9 @@ class PlaywrightObserver:
         request: ObservationRequest,
         policy: ObservationPolicy,
     ) -> VisibleProjection:
+        self._observe_calls[session.session_ref] = min(
+            10000, self._observe_calls.get(session.session_ref, 0) + 1,
+        )
         self._observe_wait.pop(session.session_ref, None)
         site = self._regions.get(request.region_id)
         if site is None or (site.policy_id, site.policy_digest) != (

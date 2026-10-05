@@ -20,7 +20,7 @@ from typing import Protocol, get_args
 from jsonschema import Draft202012Validator
 from referencing import Registry
 
-from app.browser_skill.executor import BrowserExecutor, DecisionContextFactory
+from app.browser_skill.executor import BrowserExecutor, ReadAwaitStage, DecisionContextFactory
 from app.browser_skill.models import (
     ActionCommand,
     BrowserOperationError,
@@ -172,6 +172,7 @@ class VerifiedBrowserReadExecution:
         *, web: PlaywrightWebAdapter | None = None, session_ref: str | None = None,
         decision: DecisionResult | None = None,
         decision_diagnostic: Mapping[str, str] | None = None,
+        stage_diagnostic: Mapping[str, int] | None = None,
     ) -> None:
         if self._record_diagnostic is None or (
             diagnostic is None and (decision is None or decision.selected is not None)
@@ -181,6 +182,14 @@ class VerifiedBrowserReadExecution:
             # Existing Trace routing metadata is separate from these attributes.
             # No DOM, identity, input or exception text enters the diagnostic.
             attributes: dict[str, str | int] = {}
+            if stage_diagnostic is not None:
+                for stage in get_args(ReadAwaitStage):
+                    name = "read_total_" + stage + "_ms"
+                    value = stage_diagnostic.get(name)
+                    if type(value) is int and 0 <= value <= 300000:
+                        attributes[name] = value
+            if web is not None and session_ref is not None:
+                attributes.update(web._execution_diagnostic(session_ref))
             if diagnostic is not None:
                 stage, elapsed_ms, code = diagnostic
                 attributes.update({
@@ -323,6 +332,7 @@ class VerifiedBrowserReadExecution:
                 web=web, session_ref=execution.session.session_ref,
                 decision=outcome.decisions[-1] if outcome.decisions else None,
                 decision_diagnostic=executor._last_decision_diagnostic,
+                stage_diagnostic=executor._last_stage_diagnostic,
             )
             await checkpoint.refresh(allow_cancel=True)
             observed_ms = web._observe_only_completed.get(execution.session.session_ref)

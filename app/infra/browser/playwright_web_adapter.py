@@ -12,9 +12,11 @@ import json
 import secrets
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
-from typing import Any, Awaitable, Callable, Coroutine, ParamSpec, Protocol, TypeVar, cast
+from typing import (
+    Any, Awaitable, Callable, Coroutine, Literal, ParamSpec, Protocol, TypeVar, cast, get_args,
+)
 
 from jsonschema import Draft202012Validator
 from referencing import Registry
@@ -51,6 +53,7 @@ from app.browser_skill.site_rules import (
 from app.browser_skill.verifier import authorize_current, check_liveness, failure
 from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import (
+    DOMValue,
     RegisteredDOMRules,
     bounded_children,
     read_private,
@@ -99,6 +102,44 @@ class _OriginGuard:
     context: Any
     execution: ExecutionContext
     failed: bool = False
+
+
+_ValidationStage = Literal[
+    "authority", "region_resolution", "candidate_enumeration", "target_resolution",
+    "parameter_resolution", "target_identity", "row_identity", "option_identity",
+]
+
+
+@dataclass(slots=True, repr=False)
+class _ValidationProgress:
+    stage: _ValidationStage | None = None
+    started: float = field(default_factory=time.monotonic)
+    elapsed: dict[_ValidationStage, float] = field(default_factory=dict)
+    calls: int = 0
+    scope: Literal["pre_dispatch", "dispatch_barrier"] = "pre_dispatch"
+
+    def mark(self, stage: _ValidationStage | None) -> None:
+        now = time.monotonic()
+        if self.stage is not None:
+            self.elapsed[self.stage] = self.elapsed.get(self.stage, 0.0) + now - self.started
+        self.stage, self.started = stage, now
+
+    def diagnostic(self) -> dict[str, str | int]:
+        now = time.monotonic()
+        elapsed = dict(self.elapsed)
+        result: dict[str, str | int] = {
+            "validation_scope": self.scope, "validation_calls": self.calls,
+        }
+        if self.stage is not None:
+            current = max(0.0, now - self.started)
+            elapsed[self.stage] = elapsed.get(self.stage, 0.0) + current
+            result["validation_wait_stage"] = self.stage
+            result["validation_wait_elapsed_ms"] = min(300000, int(current * 1000))
+        for stage in get_args(_ValidationStage):
+            result["validation_total_" + stage + "_ms"] = max(
+                0, min(300000, int(elapsed.get(stage, 0.0) * 1000)),
+            )
+        return result
 
 
 _P = ParamSpec("_P")
@@ -163,6 +204,8 @@ class PlaywrightWebAdapter:
         self._guard_lock = asyncio.Lock()
         self._observe_wait: dict[str, tuple[str, float]] = {}
         self._observe_only_completed: dict[str, int] = {}
+        self._authority_calls: dict[str, int] = {}
+        self._validation_progress: dict[str, _ValidationProgress] = {}
         self._salt = secrets.token_bytes(32)
         # One bounded private result per registered execution. Never included in
         # ReadEvidence, projections, model input, diagnostics, or adapter repr.
@@ -210,6 +253,9 @@ class PlaywrightWebAdapter:
         subject: ActionCommand | ReadSpec | None = None,
     ) -> tuple[RegisteredSitePlan, Any]:
         registration = self._registration(session, context)
+        self._authority_calls[session.session_ref] = min(
+            10000, self._authority_calls.get(session.session_ref, 0) + 1,
+        )
         check_liveness(context)
         plan = self._site.bootstrap(context.skill)
         plan.validate_context(context)
@@ -324,6 +370,22 @@ class PlaywrightWebAdapter:
             skill_digest=context.skill.digest,
             step_id=step_id,
         )
+
+    def _validation_mark(
+        self, session: BrowserSessionRef, stage: _ValidationStage | None,
+    ) -> None:
+        self._validation_progress.setdefault(session.session_ref, _ValidationProgress()).mark(stage)
+
+    def _execution_diagnostic(self, session_ref: str) -> dict[str, str | int]:
+        result: dict[str, str | int] = {
+            "adapter_authority_calls": self._authority_calls.get(session_ref, 0),
+        }
+        if isinstance(self._observer, PlaywrightObserver):
+            result["observer_observe_calls"] = self._observer._observe_calls.get(session_ref, 0)
+        progress = self._validation_progress.get(session_ref)
+        if progress is not None:
+            result.update(progress.diagnostic())
+        return result
 
     def _observation_diagnostic(self, session_ref: str) -> dict[str, str | int]:
         """Only fixed wait names and bounded monotonic durations leave this adapter."""
@@ -601,9 +663,11 @@ class PlaywrightWebAdapter:
         dom = self._rules[plan.skill_digest].read
         if target is None or target.scope.region_id != dom.observation.region_id:
             raise failure("stale")
+        self._validation_mark(session, "parameter_resolution")
         sealed = await self._sealed(
             context, plan.read_rule.key_ref, "business_key", plan.verifier_id
         )
+        self._validation_mark(session, "region_resolution")
         exact = await self._observer.resolve_region(
             session,
             ObservationRequest(region_id=target.scope.region_id, expected_scope=target.scope),
@@ -612,6 +676,7 @@ class PlaywrightWebAdapter:
         self._origins(exact, context)
         region = await exact.element.evaluate_handle("el => el")
         try:
+            self._validation_mark(session, "target_resolution")
             node = await self._observer.resolve_exact(session, target, plan.policy)
             self._origins(node, context)
             row = await node.element.evaluate_handle(
@@ -619,34 +684,60 @@ class PlaywrightWebAdapter:
             )
             try:
                 async def matches() -> bool:
-                    if not await region.evaluate(
-                        "(region, row) => row && region.contains(row)", row
-                    ):
-                        return False
-                    raw_key = await read_private(row, dom.key, dom.maximum_value_bytes)
-                    matched_key = self._consume(
-                        sealed, context, plan.read_rule.key_ref, "business_key",
-                        plan.verifier_id, lambda approved: raw_key == approved,
+                    values: tuple[DOMValue, ...] = (dom.key, dom.tenant, dom.user)
+                    expected: tuple[str, ...] = (
+                        context.expected_binding.owner.tenant_id,
+                        context.expected_binding.owner.user_id,
                     )
-                    if not matched_key:
-                        return False
-                    tenant = await read_private(row, dom.tenant, dom.maximum_value_bytes)
-                    user = await read_private(row, dom.user, dom.maximum_value_bytes)
-                    if (tenant != context.expected_binding.owner.tenant_id
-                            or user != context.expected_binding.owner.user_id):
-                        return False
                     if isinstance(plan.read_rule, RegisteredQueryReadRule):
                         assert dom.object_type is not None
-                        actual_type = await read_private(
-                            row, dom.object_type, dom.maximum_value_bytes
-                        )
-                        if actual_type != plan.read_rule.object_type:
-                            return False
-                    return True
+                        values += (dom.object_type,)
+                        expected += (plan.read_rule.object_type,)
+                    # Merge adjacent private DOM reads only. Both rounds still
+                    # surround the same fresh authority check; no proof is cached.
+                    matched = await self._consume(
+                        sealed, context, plan.read_rule.key_ref, "business_key",
+                        plan.verifier_id, lambda approved: region.evaluate(
+                            """(region, config) => {
+                              const row = config.row;
+                              if (!row || !region.contains(row)) return false;
+                              const read = field => {
+                                if (!row.isConnected) throw new Error('detached');
+                                const nodes = row.querySelectorAll(field.selector);
+                                if (nodes.length !== 1) return null;
+                                const node = nodes[0];
+                                const value = field.kind === 'text' ? node.textContent :
+                                  field.kind === 'value' ? node.value :
+                                  node.getAttribute(field.attribute);
+                                if (typeof value !== 'string') return null;
+                                if (new TextEncoder().encode(value).length > config.limit)
+                                  throw new Error('bound');
+                                return value;
+                              };
+                              if (read(config.fields[0]) !== config.expected[0]) return false;
+                              const tenant = read(config.fields[1]);
+                              const user = read(config.fields[2]);
+                              if (tenant !== config.expected[1] || user !== config.expected[2])
+                                return false;
+                              return config.fields.length === 3 ||
+                                read(config.fields[3]) === config.expected[3];
+                            }""",
+                            {"row": row, "limit": dom.maximum_value_bytes,
+                             "fields": [{"selector": value.selector, "kind": value.kind,
+                                         "attribute": value.attribute} for value in values],
+                             "expected": (approved, *expected)},
+                        ),
+                    )
+                    if type(matched) is not bool:
+                        raise failure("invalid_response")
+                    return matched
 
+                self._validation_mark(session, "row_identity")
                 if not await matches():
                     raise failure("stale")
+                self._validation_mark(session, "authority")
                 await self._authority(session, context, command)
+                self._validation_mark(session, "row_identity")
                 if not await matches():
                     raise failure("stale")
             finally:
@@ -655,6 +746,7 @@ class PlaywrightWebAdapter:
             await region.dispose()
         # The last awaited DOM work before read acknowledgment checks the same
         # selected node, after both borrowed row/region handles are released.
+        self._validation_mark(session, "target_identity")
         if (
             not await node.element.evaluate("el => el.isConnected")
             or not await node.element.is_visible()
@@ -668,23 +760,32 @@ class PlaywrightWebAdapter:
         session: BrowserSessionRef,
         command: ActionCommand,
         context: ExecutionContext,
+        *, scope: Literal["pre_dispatch", "dispatch_barrier"] = "pre_dispatch",
     ) -> tuple[Any, SealedParameter | None, Any | None]:
+        progress = self._validation_progress.setdefault(session.session_ref, _ValidationProgress())
+        progress.calls = min(10000, progress.calls + 1)
+        progress.scope = scope
+        self._validation_mark(session, "authority")
         plan, _ = await self._authority(session, context, command)
         rule = next(r for r in plan.steps if r.step == command.step)
+        self._validation_mark(session, "region_resolution")
         exact = await self._observer.resolve_region(session, rule.observation, plan.policy)
         self._origins(exact, context)
         node: Any = exact
         sealed: SealedParameter | None = None
         option: Any = None
         if command.target is not None:
+            self._validation_mark(session, "candidate_enumeration")
             candidates = await self.target_candidates(
                 session, command.step, exact.projection, context
             )
             if command.target not in tuple(c.ref for c in candidates):
                 raise failure("stale")
             if command.step.operation in {"fill", "select_option"}:
+                self._validation_mark(session, "target_resolution")
                 node = await self._observer.resolve_exact(session, command.target, plan.policy)
         if command.step.operation == "select_option":
+            self._validation_mark(session, "option_identity")
             assert command.target is not None
             candidates = await self.option_candidates(
                 session, command.target, command.step, context
@@ -703,6 +804,7 @@ class PlaywrightWebAdapter:
             ):
                 raise failure("stale")
         elif command.step.operation == "fill":
+            self._validation_mark(session, "parameter_resolution")
             assert command.step.value_ref is not None
             sealed = await self._sealed(
                 context, command.step.value_ref, "fill_value", command.step.step_id
@@ -710,6 +812,7 @@ class PlaywrightWebAdapter:
             if not await node.element.is_editable():
                 raise failure("stale")
         elif command.step.operation == "navigate":
+            self._validation_mark(session, "parameter_resolution")
             assert command.step.url_ref is not None
             sealed = await self._sealed(
                 context, command.step.url_ref, "navigation_url", command.step.step_id
@@ -727,8 +830,10 @@ class PlaywrightWebAdapter:
                 ),
             ):
                 raise failure("denied")
+        self._validation_mark(session, "authority")
         await self._authority(session, context, command)
         if command.step.operation == "select_option":
+            self._validation_mark(session, "option_identity")
             assert command.target is not None
             refreshed = await self._options_current(
                 session,
@@ -746,7 +851,9 @@ class PlaywrightWebAdapter:
             )
         # Final actual scope/ancestor check follows the independent subject IO.
         if command.target is not None:
+            self._validation_mark(session, "target_resolution")
             node = await self._observer.resolve_exact(session, command.target, plan.policy)
+            self._validation_mark(session, "target_identity")
             dom = next(
                 r for r in self._rules[plan.skill_digest].steps if r.step_id == command.step.step_id
             )
@@ -800,6 +907,7 @@ class PlaywrightWebAdapter:
                 finally:
                     await region_handle.dispose()
         else:
+            self._validation_mark(session, "region_resolution")
             node = await self._observer.resolve_region(
                 session,
                 ObservationRequest(
@@ -809,6 +917,7 @@ class PlaywrightWebAdapter:
                 plan.policy,
             )
         self._origins(node, context)
+        self._validation_mark(session, "target_identity")
         if command.target is not None:
             if (
                 not await node.element.evaluate("el => el.isConnected")
@@ -821,6 +930,7 @@ class PlaywrightWebAdapter:
         if command.step.operation == "read":
             node = await self._read_target_row(session, command, context, plan)
         if option is not None:
+            self._validation_mark(session, "option_identity")
             value = await option.evaluate(
                 """(el, parent) => {
                 if (!el.isConnected || el.closest('select') !== parent || el.disabled ||
@@ -841,6 +951,7 @@ class PlaywrightWebAdapter:
                 or hashlib.sha256(self._salt + value.encode()).hexdigest() != registered.signature
             ):
                 raise failure("stale")
+        self._validation_mark(session, None)
         return node, sealed, option
 
     @_neutral
@@ -869,7 +980,9 @@ class PlaywrightWebAdapter:
                     or permit.command != command
                 ):
                     raise failure("denied")
-                node, sealed, option = await self._validate(session, command, context)
+                node, sealed, option = await self._validate(
+                    session, command, context, scope="dispatch_barrier",
+                )
                 check_liveness(context)
                 timeout = max(1, (context.deadline_monotonic - time.monotonic()) * 1000)
                 operation = command.step.operation

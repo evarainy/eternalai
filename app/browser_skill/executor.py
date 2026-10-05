@@ -95,10 +95,21 @@ class _Progress:
     unsettled: bool = False
     stage: ReadAwaitStage = "bootstrap"
     stage_started: float = field(default_factory=time.monotonic)
+    elapsed: dict[ReadAwaitStage, float] = field(default_factory=dict)
 
     def mark(self, stage: ReadAwaitStage) -> None:
+        now = time.monotonic()
+        self.elapsed[self.stage] = self.elapsed.get(self.stage, 0.0) + now - self.stage_started
         self.stage = stage
-        self.stage_started = time.monotonic()
+        self.stage_started = now
+
+    def diagnostic(self) -> dict[str, int]:
+        elapsed = dict(self.elapsed)
+        elapsed[self.stage] = elapsed.get(self.stage, 0.0) + time.monotonic() - self.stage_started
+        return {
+            "read_total_" + stage + "_ms": max(0, min(300000, int(duration * 1000)))
+            for stage, duration in elapsed.items() if stage in get_args(ReadAwaitStage)
+        }
 
 
 class _DecisionStopped(Exception):
@@ -110,6 +121,7 @@ class BrowserExecutor:
         "_web", "_decision", "_verifier", "_site", "_resolve", "_contexts", "_pending",
         "_last_failure_diagnostic",
         "_last_decision_diagnostic",
+        "_last_stage_diagnostic",
     )
 
     def __init__(
@@ -132,11 +144,13 @@ class BrowserExecutor:
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
         self._last_failure_diagnostic: tuple[ReadAwaitStage, int, str] | None = None
         self._last_decision_diagnostic: dict[str, str] | None = None
+        self._last_stage_diagnostic: dict[str, int] = {}
 
     def _finish(
         self, outcome: ExecutionOutcome, progress: _Progress, *,
         stage: ReadAwaitStage | None = None, started: float | None = None,
     ) -> ExecutionOutcome:
+        self._last_stage_diagnostic = progress.diagnostic()
         if outcome.failure is not None and outcome.failure.code in _DIAGNOSTIC_CODES:
             began = progress.stage_started if started is None else started
             elapsed_ms = max(0, min(300000, int((time.monotonic() - began) * 1000)))
@@ -174,6 +188,7 @@ class BrowserExecutor:
     async def run(self, session: BrowserSessionRef, context: ExecutionContext) -> ExecutionOutcome:
         self._last_failure_diagnostic = None
         self._last_decision_diagnostic = None
+        self._last_stage_diagnostic = {}
         progress = _Progress()
         job = asyncio.create_task(self._run(session, context, progress))
         cancelled = asyncio.create_task(context.cancellation.wait())
