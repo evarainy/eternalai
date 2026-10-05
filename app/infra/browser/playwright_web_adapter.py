@@ -682,7 +682,8 @@ class PlaywrightWebAdapter:
             )
             if command.target not in tuple(c.ref for c in candidates):
                 raise failure("stale")
-            node = await self._observer.resolve_exact(session, command.target, plan.policy)
+            if command.step.operation in {"fill", "select_option"}:
+                node = await self._observer.resolve_exact(session, command.target, plan.policy)
         if command.step.operation == "select_option":
             assert command.target is not None
             candidates = await self.option_candidates(
