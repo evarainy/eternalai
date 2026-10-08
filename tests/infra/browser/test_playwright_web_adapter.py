@@ -944,6 +944,22 @@ def test_write_send_requires_final_reservation_before_browser_action(operation: 
             await w.adapter.execute(w.session, await w.command(), w.context)
         assert caught.value.failure.code == "denied" and sequence == []
 
+        async def stale_reservation(session, context, command) -> None:
+            sequence.append("reservation_refused")
+            raise failure("stale")
+
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(
+                w.session, w.context, w.confirmed.business_key,
+                write_reservation_authority=stale_reservation,
+            ),),
+        )
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, await w.command(), w.context)
+        assert caught.value.failure.code == "stale"
+        assert sequence == ["reservation_refused"]
+
     asyncio.run(run())
 
 
