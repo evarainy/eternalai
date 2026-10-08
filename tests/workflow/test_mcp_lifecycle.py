@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.api.v1.mcp import McpApiService, ResumeRequest
+from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore, _held_guards
 from app.mcp.models import McpFailure
 from app.ports.auth import AuthenticatedSessionContext, authenticated_session
 from app.ports.capability_gateway import ExecutionResult
@@ -841,6 +842,133 @@ def test_apps_confirm_endpoint_repairs_original_chat_before_later_confirmation_o
 
     with serving(Peer("2025-11-25")) as profile:
         asyncio.run(run(profile))
+
+
+@pytest.mark.parametrize("guard_kind", ["production_busy", "waiting"])
+def test_duplicate_chat_cleanup_preserves_apps_success_after_guard_contention(
+    monkeypatch, guard_kind
+):
+    async def run():
+        chat, h, pending, session = await governed_chat()
+        gate = await chat.gate.get_request(pending.gate_request_id)
+        initial_now = datetime.now(UTC)
+        h.store.op = h.op = h.op.model_copy(
+            update={"state": "WAITING_LOCAL_CONFIRM", "expires_at": gate.expires_at}
+        )
+
+        class Clock(datetime):
+            current = initial_now
+
+            @classmethod
+            def now(cls, tz=None):
+                return cls.current
+
+        # Exercise the production same-process admission, without connecting a DB.
+        class SyntheticSession:
+            async def execute(self, *args, **kwargs):
+                return SimpleNamespace(scalar_one=lambda: True)
+
+            async def commit(self): pass
+            async def close(self): pass
+            async def invalidate(self): pass
+
+        class Sessions:
+            kw = {}
+
+            def __call__(self):
+                return SyntheticSession()
+
+        real_guard = PostgreSQLWorkflowStore(SimpleNamespace(sessions=Sessions()))
+        original_guard = (
+            real_guard.execution_guard
+            if guard_kind == "production_busy" else h.store.execution_guard
+        )
+        sending, release, contended = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        sends = 0
+
+        @asynccontextmanager
+        async def guard(op):
+            if op.state == "SENDING":
+                contended.set()
+            async with original_guard(op):
+                yield
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+
+        async def execute(*args, **kwargs):
+            nonlocal sends
+            sends += 1
+            assert Clock.current < gate.expires_at
+            assert _held_guards.get() if guard_kind == "production_busy" else h.store.lock.locked()
+            await h.store.transition(h.store.op, state="SENDING")
+            sending.set()
+            await asyncio.wait_for(release.wait(), timeout=3)
+            return ExecutionResult(
+                status="completed", trace_id=pending.trace_id,
+                mcp_outcome=McpValidatedOutcome(state="VERIFIED_SUCCESS", persistence={}),
+            )
+
+        monkeypatch.setattr("app.api.v1.mcp.datetime", Clock)
+        monkeypatch.setattr("app.mcp.operations.datetime", Clock)
+        chat.runtime._utc_clock = lambda: Clock.current
+        chat.runtime._monotonic_clock = lambda: pending.monotonic_deadline - 1
+        h.store.execution_guard = guard
+        h.operations.owned = owned
+        h.operations.gateway = SimpleNamespace(execute_capability=execute)
+        profile = SimpleNamespace(
+            enabled=True, tenant_id=h.op.context.tenant_id,
+            service_config_version=h.op.context.service_config_version, display_name="Synthetic",
+        )
+        service = McpApiService(
+            SimpleNamespace(configs={h.op.context.service_config_id: profile}),
+            h.operations, chat.engine,
+        )
+        body = ResumeRequest(
+            action="confirm", expected_revision=h.op.revision,
+            preview_digest=service.view(h.op).preview_digest,
+        )
+        token = authenticated_session.set(session)
+        tasks = []
+        try:
+            apps = asyncio.create_task(service.resume(h.op, body))
+            tasks.append(apps)
+            await asyncio.wait_for(sending.wait(), timeout=3)
+            decision = await chat.gate.get_decision(gate.request_id)
+            Clock.current = initial_now + timedelta(seconds=1)
+            assert Clock.current < gate.expires_at
+            action = asyncio.create_task(_dispatch(chat))
+            tasks.append(action)
+            await asyncio.wait_for(contended.wait(), timeout=3)
+            if guard_kind == "production_busy":
+                with pytest.raises(McpFailure, match="^mcp_operation_busy$"):
+                    await action
+            else:
+                assert not action.done()
+            release.set()
+            assert (await asyncio.wait_for(apps, timeout=3)).state == "VERIFIED_SUCCESS"
+            responses = [] if guard_kind == "production_busy" else [await action]
+            responses.extend([await _dispatch(chat), await _dispatch(chat)])
+            assert await chat.gate.get_decision(gate.request_id) == decision
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            task = chat.runtime._task_store.records[pending.task_id]
+            assert task.status == "completed" and task.error_code is None
+            assert h.store.transitions == ["READY", "SENDING", "VERIFIED_SUCCESS"]
+            assert sends == 1 and not chat.runtime._pending_workflows
+            assert claim.state == "completed" and claim.cleanup_complete and claim.pending is None
+            for response in responses:
+                assert _outcome(response) == "action_already_claimed"
+                payload = response.model_dump_json()
+                assert "nothing was executed" not in payload and "本次未执行" not in payload
+        finally:
+            release.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("fault", ["task", "terminal", "evaluation", "none"])

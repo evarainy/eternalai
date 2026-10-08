@@ -1225,6 +1225,27 @@ class RuntimeImpl:
                 )
                 if not governed:
                     await self._workflow_engine.discard_checkpoint(pending.task_id)
+                elif claim.cleanup_governed_only:
+                    # A duplicate decision can collide with a still-active Apps
+                    # sender. Retirement only proves cleanup ownership; its bool
+                    # must not overwrite the sender's subsequently durable result.
+                    action = await self._workflow_engine.pending_confirmation_action_digest(
+                        pending.task_id
+                    )
+                    if action == pending.action_digest:
+                        result = await self._workflow_engine.finalize_governed_task(
+                            task_id=pending.task_id
+                        )
+                        current_action = (
+                            await self._workflow_engine.pending_confirmation_action_digest(
+                                pending.task_id
+                            )
+                        )
+                        if (
+                            isinstance(result, GovernedTerminalResult)
+                            and current_action == pending.action_digest
+                        ):
+                            self._retain_governed_terminal(pending_key, pending, result)
             if not governed and not claim.cleanup_governed_only:
                 await self._finish_confirmation_terminal(
                     pending=pending,
@@ -1442,12 +1463,20 @@ class RuntimeImpl:
                 error_code=None,
                 governed_only=True,
             )
+            claim = self._claimed_pending_confirmations[
+                _pending_confirmation_claim_key(pending_key, pending)
+            ]
+            handled = outcome == "action_already_claimed" or (
+                claim.governed_terminal is not None and claim.state == "completed"
+            )
             return self._response_builder.build_failed(
                 str(uuid4()),
                 pending.task_id,
                 session_id,
-                "结构化操作未被受理，本次未执行。",
-                "The structured action was not accepted; nothing was executed.",
+                "此确认已处理，本次没有再次执行。"
+                if handled else "结构化操作未被受理，本次未执行。",
+                "This confirmation was already handled; no additional execution was started."
+                if handled else "The structured action was not accepted; nothing was executed.",
                 pending.trace_id,
             ), outcome
         except OrchestrationContractError:
