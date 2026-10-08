@@ -1,6 +1,7 @@
 """Reject unverifiable native IPC and cleanup; never manufacture an exit proof."""
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import cast
@@ -8,9 +9,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.infra.browser.deployment_manifest import LocalOfflineManifest
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserReadLifecycle,
+    LocalChromiumDeployment,
     _NativeChromium,
+    local_deployment_configuration_digest,
     local_subject_digest,
 )
 from app.ports.browser_read_execution import BrowserReadExecutionError
@@ -64,6 +68,51 @@ def test_subject_digest_separates_owner_and_object() -> None:
     assert digest != local_subject_digest("other_tenant", "owner")
     assert digest != local_subject_digest("tenant", "other_owner")
     assert digest != local_subject_digest("tenant", "owner", "other_object")
+
+
+def test_offline_lock_rejects_configuration_change(tmp_path: Path) -> None:
+    node, package, browsers = (tmp_path / name for name in ("node", "playwright", "browsers"))
+    helper_hash, node_hash, chromium_hash = (b"h" * 32, b"n" * 32, b"c" * 32)
+    config_digest = local_deployment_configuration_digest(
+        provider_key="local", node_executable=node, playwright_package=package,
+        browsers_path=browsers, assets_root=tmp_path,
+        helper_digest=helper_hash, node_digest=node_hash,
+        chromium_digest=chromium_hash, enabled=True, timeout_seconds=25.0,
+        immutable_assets=False,
+    )
+    assets = []
+    for role, digest in (
+        ("node", node_hash), ("chromium", chromium_hash),
+        ("playwright", b"p" * 32), ("helper", helper_hash),
+        ("font", b"f" * 32), ("certificate", b"t" * 32),
+    ):
+        assets.append({
+            "asset_id": role, "role": role, "relative_path": role + ".bin",
+            "sha256": digest.hex(), "license_ref": "synthetic-license-record",
+        })
+    body = {
+        "deployment_id": "fixture", "assets": assets,
+        "runtime": {
+            "platform": "linux", "architecture": "x86_64",
+            "playwright_version": "1.63.0", "node_version": "v22.0.0",
+            "chromium_revision": "fixture", "configuration_digest": config_digest,
+        },
+    }
+    body["manifest_digest"] = hashlib.sha256((
+        "browser.local.offline.v1\n"
+        + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    ).encode("ascii")).hexdigest()
+    manifest = LocalOfflineManifest.model_validate(body)
+    common = dict(
+        provider_key="local", manifest_digest=bytes.fromhex(manifest.manifest_digest),
+        node_executable=node, playwright_package=package, browsers_path=browsers,
+        helper_digest=helper_hash, node_digest=node_hash,
+        chromium_digest=chromium_hash, enabled=True, assets_root=tmp_path,
+        offline_manifest=manifest,
+    )
+    LocalChromiumDeployment(**common)
+    with pytest.raises(ValueError, match="configuration_mismatch"):
+        LocalChromiumDeployment(**common, timeout_seconds=20.0)
 
 
 def test_denied_cleanup_grant_never_reaches_resource_or_lease() -> None:

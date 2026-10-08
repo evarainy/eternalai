@@ -4,8 +4,6 @@ import json
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.infra.browser.browserless_provider import BrowserlessProvider, SubjectEvidence
-from app.infra.browser.browserless_wire import WireResponse
 from app.infra.browser.deployment_manifest import (
     BrowserDeployment,
     CapabilityEvidence,
@@ -14,6 +12,11 @@ from app.infra.browser.deployment_manifest import (
 from app.infra.browser.playwright_actions import LiveBrowser
 from app.infra.browser.profile_codec import DIAGNOSTICS
 from app.infra.browser.resource_lifecycle import TerminationEvidence
+from experiments.browserless_v42_spike.browserless_provider import (
+    BrowserlessProvider,
+    SubjectEvidence,
+)
+from experiments.browserless_v42_spike.browserless_wire import WireResponse
 from tests.browser_skill.factories import DIGEST, binding
 
 ORIGIN = "https://mock-oa.example.com"

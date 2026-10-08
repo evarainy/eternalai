@@ -6,9 +6,9 @@ from unittest.mock import Mock
 import pytest
 
 from app.browser_skill.models import DecisionSource, ProfileRef
-from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.enterprise_provider import EnterpriseProvider
+from app.infra.browser.provider_shared import BrowserProviderError
 from app.ports.browser import BrowserProvider
+from experiments.browserless_v42_spike.enterprise_provider import EnterpriseProvider
 from tests.browser_skill.factories import binding
 from tests.infra.browser.test_enterprise_manifest import accepted_view, registration
 

@@ -1,4 +1,8 @@
-"""Cloud synthetic BrowserProvider. Persisted authorization and CAS remain outside infra."""
+"""Legacy cloud synthetic trial provider; never a registered-site runtime.
+
+Retained for bounded synthetic/Jev evidence. Formal business composition uses
+the local provider and does not import this module.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +24,11 @@ from app.browser_skill.models import (
     ScopeBinding,
     SessionStartResult,
 )
-from app.infra.browser.browserless_wire import (
+from app.infra.browser.deployment_manifest import BrowserDeployment, SyntheticSource
+from app.infra.browser.playwright_actions import BrowserConnector, LiveBrowser, PlaywrightConnector
+from app.infra.browser.profile_codec import from_playwright, validate_upload
+from app.infra.browser.resource_lifecycle import CapacityLedger, ResourceRecord, TerminationEvidence
+from experiments.browserless_v42_spike.browserless_wire import (
     BrowserlessWire,
     BrowserProviderError,
     HTTPSBrowserlessTransport,
@@ -28,10 +36,6 @@ from app.infra.browser.browserless_wire import (
     Phase,
     SessionWire,
 )
-from app.infra.browser.deployment_manifest import BrowserDeployment, SyntheticSource
-from app.infra.browser.playwright_actions import BrowserConnector, LiveBrowser, PlaywrightConnector
-from app.infra.browser.profile_codec import from_playwright, validate_upload
-from app.infra.browser.resource_lifecycle import CapacityLedger, ResourceRecord, TerminationEvidence
 
 
 class SubjectEvidence(Contract):

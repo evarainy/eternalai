@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Literal, Never
 from urllib.parse import urlsplit
 
-from app.infra.browser.browserless_wire import BrowserProviderError, Phase
-from app.infra.browser.enterprise_manifest import EnterpriseManifest
+from app.infra.browser.provider_shared import BrowserProviderError, Phase
+from experiments.browserless_v42_spike.enterprise_manifest import EnterpriseManifest
 
 Operation = Literal["session", "profile_create", "termination"]
 

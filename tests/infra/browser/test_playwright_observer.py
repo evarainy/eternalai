@@ -20,9 +20,9 @@ from app.browser_skill.models import (
     ObservationPolicy,
     ObservationRequest,
 )
-from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import _IDENTITY_BATCH
 from app.infra.browser.playwright_observer import PlaywrightObserver, RegisteredRegion
+from app.infra.browser.provider_shared import BrowserProviderError
 from tests.browser_skill.factories import DIGEST, binding
 
 

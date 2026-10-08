@@ -15,6 +15,7 @@ from typing import AsyncIterator, Mapping, cast
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.infra.browser.local_profile_cleanup import ProfileCleanupCandidatePage, retention_ready
 from app.infra.persistence.task_store.transactional import lock_owned_task
 from app.ports.browser_profile_store import (
     BrowserProfileCaptureFact,
@@ -94,7 +95,13 @@ class PostgreSQLBrowserProfileStore:
         capture_proof: BrowserProfileCaptureProofPort | None,
         cleanup_proof: BrowserProfileCleanupProofPort | None,
         cleanup_authority: BrowserProfileCleanupAuthorityPort | None,
+        retention_seconds: int | None = None,
     ) -> None:
+        if (retention_seconds is not None and (
+            type(retention_seconds) is not int
+            or not 1 <= retention_seconds <= 365 * 24 * 3600
+        )):
+            raise ValueError("browser_profile_retention_invalid")
         self._sessions = session_factory
         self._binder = session_binder
         self._auth = current_auth
@@ -102,6 +109,7 @@ class PostgreSQLBrowserProfileStore:
         self._capture = capture_proof
         self._cleanup = cleanup_proof
         self._cleanup_authority = cleanup_authority
+        self._retention_seconds = retention_seconds
 
     async def _authorize(self, context: BrowserProfileContext, *, cleanup: bool) -> None:
         owner = context.claim.auth.owner
@@ -282,6 +290,20 @@ class PostgreSQLBrowserProfileStore:
             .mappings()
             .one_or_none()
         )
+        if row is None:
+            raise BrowserProfileError("browser_profile_generation_missing")
+        return cast(Row, row)
+
+    async def _get_cleanup_row(
+        self, session: AsyncSession, context: BrowserProfileContext,
+        generation_id: str,
+    ) -> Row:
+        # Candidate checks have no reason to read the immutable ciphertext.
+        row = (await session.execute(text(
+            "SELECT generation_id,disposition,created_at,lease_epoch"
+            f" FROM browser_profile_generations WHERE {_OWNER}"
+            " AND generation_id=:generation_id FOR UPDATE"
+        ), {**_params(context), "generation_id": generation_id})).mappings().one_or_none()
         if row is None:
             raise BrowserProfileError("browser_profile_generation_missing")
         return cast(Row, row)
@@ -519,19 +541,28 @@ class PostgreSQLBrowserProfileStore:
         generation_id: str,
         head: Row | None,
         lease: Row | None,
-    ) -> BrowserProfileGeneration:
-        row = await self._get_generation(session, context, generation_id)
+    ) -> None:
+        row = await self._get_cleanup_row(session, context, generation_id)
         if row["disposition"] not in {"retired", "orphan"} or (
             head is not None and head["active_generation_id"] == generation_id
         ):
             raise BrowserProfileError("browser_profile_cleanup_referenced")
+        now = cast(datetime, (await session.execute(text("SELECT clock_timestamp()"))).scalar_one())
+        if not retention_ready(
+            disposition=row["disposition"],
+            created_at=cast(datetime, row["created_at"]),
+            head_updated_at=(cast(datetime, head["updated_at"]) if head is not None else None),
+            now=now, retention_seconds=self._retention_seconds,
+        ):
+            raise BrowserProfileError("browser_profile_retention_pending")
         runs = (
             await session.execute(
                 text(
                     f"SELECT run_id FROM browser_runs WHERE {_OWNER}"
-                    " AND (status IN ('running','waiting_user') OR cleanup IN"
+                    " AND (profile_generation_id=:generation_id OR"
+                    " ((status IN ('running','waiting_user') OR cleanup IN"
                     " ('pending','quarantined','failed'))"
-                    " AND (profile_generation_id=:generation_id OR lease_epoch=:generation_epoch)"
+                    " AND lease_epoch=:generation_epoch))"
                     " ORDER BY run_id FOR UPDATE"
                 ),
                 {
@@ -545,7 +576,50 @@ class PostgreSQLBrowserProfileStore:
             # Lease stores no generation reference. Conservatively protect every
             # generation while this binding has any outstanding provider resource.
             raise BrowserProfileError("browser_profile_cleanup_referenced")
-        return _generation(row)
+        return None
+
+    async def discover_cleanup_candidates(
+        self, context: BrowserProfileContext, *, limit: int = 100,
+        after_generation_id: str | None = None,
+    ) -> ProfileCleanupCandidatePage:
+        """Return only currently safe candidates; cleanup still needs real proof."""
+        if (type(limit) is not int or not 1 <= limit <= 1000
+                or (after_generation_id is not None and (
+                    type(after_generation_id) is not str
+                    or len(after_generation_id) > 96
+                    or not after_generation_id
+                    or not after_generation_id.replace("_", "").replace("-", "").isalnum()
+                ))):
+            raise BrowserProfileError("browser_profile_candidate_limit_invalid")
+        async with self._locked(context, cleanup=True) as (session, _run, head, lease):
+            rows = (await session.execute(text(
+                f"SELECT generation_id FROM browser_profile_generations WHERE {_OWNER}"
+                " AND disposition IN ('retired','orphan')"
+                " AND (:after_id IS NULL OR generation_id>:after_id)"
+                " ORDER BY generation_id LIMIT :limit"
+            ), {**_params(context), "limit": limit,
+                "after_id": after_generation_id})).mappings().all()
+            found: list[str] = []
+            deferred: list[tuple[str, str]] = []
+            for row in rows:
+                generation_id = cast(str, row["generation_id"])
+                try:
+                    await self._cleanup_candidate(
+                        session, context, generation_id, head, lease,
+                    )
+                except BrowserProfileError as error:
+                    if error.code in {
+                        "browser_profile_cleanup_referenced",
+                        "browser_profile_retention_pending",
+                    }:
+                        deferred.append((generation_id, error.code))
+                        continue
+                    raise
+                found.append(generation_id)
+            return ProfileCleanupCandidatePage(
+                tuple(found), tuple(deferred),
+                cast(str, rows[-1]["generation_id"]) if len(rows) == limit else None,
+            )
 
     async def cleanup(
         self,
@@ -553,34 +627,9 @@ class PostgreSQLBrowserProfileStore:
         generation_id: str,
         evidence: bytes,
     ) -> None:
-        if self._cleanup is None:
-            raise BrowserProfileError("browser_profile_cleanup_proof_unavailable")
-        async with self._locked(context, cleanup=True) as (session, _run, head, lease):
-            generation = await self._cleanup_candidate(session, context, generation_id, head, lease)
-        proof = await self._cleanup.verify_cleanup(context, generation, evidence)
-        fact = generation.fact
-        if (
-            proof.provider_key != fact.provider_key
-            or proof.capture_operation_id != fact.capture_operation_id
-            or proof.generation_id != fact.generation_id
-            or proof.generation_ref_digest != fact.generation_ref_digest
-            or type(proof.proof_digest) is not bytes
-            or len(proof.proof_digest) != 32
-        ):
-            raise BrowserProfileError("browser_profile_cleanup_proof_invalid")
-        async with self._locked(context, cleanup=True) as (session, _run, head, lease):
-            current = await self._cleanup_candidate(session, context, generation_id, head, lease)
-            if current != generation:
-                raise BrowserProfileError("browser_profile_cleanup_stale")
-            await session.execute(
-                text(
-                    "UPDATE browser_profile_generations SET disposition='cleanup_confirmed',"
-                    f" cleanup_proof_digest=:proof_digest WHERE {_OWNER} AND"
-                    f" generation_id=:generation_id"
-                ),
-                {
-                    **_params(context),
-                    "generation_id": generation_id,
-                    "proof_digest": proof.proof_digest,
-                },
-            )
+        # Current schema preserves immutable NOT NULL ciphertext and forbids
+        # DELETE. A provider receipt could at most prove provider-side release;
+        # it cannot prove destruction of this retained database generation.
+        # Discovery/readiness remains available, but no state is marked as
+        # cleaned until an approved destructive contract is actually possible.
+        raise BrowserProfileError("browser_profile_ciphertext_retained")

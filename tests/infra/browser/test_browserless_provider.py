@@ -6,8 +6,8 @@ import json
 import pytest
 
 from app.browser_skill.models import DecisionSource
-from app.infra.browser.browserless_provider import BrowserlessProvider
-from app.infra.browser.browserless_wire import BrowserProviderError
+from experiments.browserless_v42_spike.browserless_provider import BrowserlessProvider
+from experiments.browserless_v42_spike.browserless_wire import BrowserProviderError
 from tests.infra.browser.provider_factories import fixture, prove
 
 

@@ -79,8 +79,10 @@ class BrowserWorkerSupervisor:
 
     async def _poll(self, callback: Callable[[], Awaitable[object]], lane: str) -> None:
         while not self._stop.is_set():
+            completed = False
             try:
-                await callback()
+                result = await callback()
+                completed = lane == "business" and isinstance(result, tuple) and bool(result)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -90,6 +92,12 @@ class BrowserWorkerSupervisor:
             else:
                 self._failed_lanes.discard(lane)
             self.last_pass_failed = bool(self._failed_lanes)
+            # A completed business Run may have left another durable Run ready.
+            # Yield to cleanup/cancellation before scanning again; an empty or
+            # failed pass still uses the bounded polling delay below.
+            if completed:
+                await asyncio.sleep(0)
+                continue
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=2)
             except TimeoutError:

@@ -1,4 +1,7 @@
-"""Bounded vendor wire. Credentials and returned URLs never enter neutral models."""
+"""Legacy cloud synthetic trial wire; shared failures live in provider_shared.
+
+Credentials and returned URLs never enter neutral models.
+"""
 
 from __future__ import annotations
 
@@ -8,81 +11,32 @@ import json
 import re
 import ssl
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, Protocol, TypeAlias, cast
+from typing import Annotated, Protocol, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import Field, ValidationError
 
-from app.browser_skill.models import BrowserFailure, Contract
+from app.browser_skill.models import Contract
 from app.infra.browser.deployment_manifest import BrowserDeployment
-
-Phase: TypeAlias = Literal[
-    "acquire", "restore", "observe", "dispatch", "capture", "release", "terminate"
-]
-Code: TypeAlias = Literal[
-    "unavailable",
-    "unsupported",
-    "denied",
-    "stale",
-    "subject_mismatch",
-    "invalid_response",
-    "timeout",
-    "cancelled",
-    "effect_unknown",
-    "quarantined",
-    "overloaded",
-    "invalid_request",
-    "resource_not_found",
-]
-Reason: TypeAlias = Literal[
-    "disabled",
-    "transport",
-    "bad_input",
-    "unauthenticated",
-    "forbidden",
-    "not_found",
-    "deadline",
-    "capacity",
-    "malformed",
-    "redirect",
-    "budget",
-    "source",
-    "binding",
-    "subject",
-    "state",
-    "unsupported",
-    "profile_loss",
-    "proof",
-    "cancelled",
-]
-
-
-class BrowserProviderError(Exception):
-    def __init__(
-        self,
-        code: Code,
-        phase: Phase,
-        reason: Reason,
-        *,
-        sent: bool = False,
-        cleanup: bool = False,
-    ) -> None:
-        self.failure = BrowserFailure(
-            code=code,
-            phase=phase,
-            dispatch_state="possibly_sent" if sent else "not_sent",
-            cleanup_required=cleanup,
-        )
-        self.reason = reason
-        super().__init__(f"browser_{code}:{phase}:{reason}")
+from app.infra.browser.provider_shared import (
+    BrowserProviderError as BrowserProviderError,
+)
+from app.infra.browser.provider_shared import (
+    Code as Code,
+)
+from app.infra.browser.provider_shared import (
+    Phase as Phase,
+)
+from app.infra.browser.provider_shared import (
+    Reason as Reason,
+)
+from app.infra.browser.provider_shared import (
+    json_bytes as json_bytes,
+)
 
 
 def invalid(phase: Phase, reason: Reason = "malformed") -> BrowserProviderError:
     return BrowserProviderError("invalid_response", phase, reason, sent=True, cleanup=True)
-
-
-def json_bytes(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
 
 
 def parse_object(data: bytes, limit: int, phase: Phase) -> dict[str, object]:

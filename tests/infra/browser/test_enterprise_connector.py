@@ -3,8 +3,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.enterprise_connector import EnterpriseConnector
+from app.infra.browser.provider_shared import BrowserProviderError
+from experiments.browserless_v42_spike.enterprise_connector import EnterpriseConnector
 from tests.infra.browser.test_enterprise_manifest import accepted_view, registration
 
 

@@ -1,7 +1,7 @@
 import pytest
 
-from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.enterprise_wire import (
+from app.infra.browser.provider_shared import BrowserProviderError
+from experiments.browserless_v42_spike.enterprise_wire import (
     VERIFIED_CODEC_REVISIONS,
     chromium_path,
     require_verified_codec,

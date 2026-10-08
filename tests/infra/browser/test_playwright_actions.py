@@ -7,7 +7,7 @@ import pytest
 
 from app.browser_skill.models import BrowserSessionRef
 from app.infra.browser import playwright_actions
-from app.infra.browser.browserless_wire import BrowserProviderError
+from app.infra.browser.provider_shared import BrowserProviderError
 from tests.browser_skill.factories import binding
 from tests.infra.browser.provider_factories import Closable, deployment, source
 

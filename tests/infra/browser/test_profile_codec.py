@@ -5,13 +5,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.profile_codec import (
     DIAGNOSTICS,
     checked_playwright_state,
     from_playwright,
     validate_upload,
 )
+from app.infra.browser.provider_shared import BrowserProviderError
 from tests.infra.browser.provider_factories import source, state
 
 

@@ -21,18 +21,18 @@ from app.browser_skill.models import (
     ScopeBinding,
     SessionStartResult,
 )
-from app.infra.browser.browserless_wire import BrowserProviderError, Phase
-from app.infra.browser.enterprise_connector import EnterpriseConnector
-from app.infra.browser.enterprise_manifest import (
+from app.infra.browser.playwright_actions import LiveBrowser
+from app.infra.browser.provider_shared import BrowserProviderError, Phase
+from app.infra.browser.resource_lifecycle import CapacityLedger, ResourceRecord
+from experiments.browserless_v42_spike.enterprise_connector import EnterpriseConnector
+from experiments.browserless_v42_spike.enterprise_manifest import (
     DeploymentView,
     EnterpriseAuthority,
     EnterpriseManifest,
     EnterpriseSyntheticSource,
     require_current_view,
 )
-from app.infra.browser.enterprise_wire import require_verified_codec
-from app.infra.browser.playwright_actions import LiveBrowser
-from app.infra.browser.resource_lifecycle import CapacityLedger, ResourceRecord
+from experiments.browserless_v42_spike.enterprise_wire import require_verified_codec
 
 
 @dataclass(repr=False)

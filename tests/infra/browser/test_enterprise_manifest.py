@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.enterprise_manifest import (
+from app.infra.browser.provider_shared import BrowserProviderError
+from experiments.browserless_v42_spike.enterprise_manifest import (
     REQUIRED_FACTS,
     DeploymentView,
     EnterpriseManifest,

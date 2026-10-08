@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import platform
 import re
+import sys
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -79,6 +81,8 @@ class CapabilityEvidence(Contract):
 
 
 class BrowserDeployment(Contract):
+    """Legacy cloud synthetic trial registration, not a local business fallback."""
+
     deployment_id: OpaqueId
     manifest_digest: Digest
     endpoint_origin: str = Field(repr=False)
@@ -150,12 +154,30 @@ class LocalOfflineAsset(Contract):
         return self
 
 
+class LocalOfflineRuntime(Contract):
+    """Installed browser runtime lock; exact-file digests remain authoritative."""
+
+    platform: Literal["linux"] = "linux"
+    architecture: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    playwright_version: Literal["1.63.0"] = "1.63.0"
+    node_version: str = Field(min_length=1, max_length=64, pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+    chromium_revision: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    configuration_digest: Digest
+
+    def matches_host(self) -> bool:
+        return (
+            sys.platform == self.platform
+            and platform.machine().lower() == self.architecture.lower()
+        )
+
+
 class LocalOfflineManifest(Contract):
     """Audited offline inventory. Runtime verification reads only these files."""
 
     deployment_id: OpaqueId
     manifest_digest: Digest
     assets: Annotated[tuple[LocalOfflineAsset, ...], Field(min_length=4, max_length=4096)]
+    runtime: LocalOfflineRuntime | None = None
 
     @model_validator(mode="after")
     def complete_inventory(self) -> LocalOfflineManifest:
@@ -164,7 +186,9 @@ class LocalOfflineManifest(Contract):
                 or len({asset.asset_id for asset in self.assets}) != len(self.assets)
                 or len({asset.relative_path for asset in self.assets}) != len(self.assets)):
             raise ValueError("browser_local_asset_manifest_invalid")
-        payload = self.model_dump(mode="json", exclude={"manifest_digest"})
+        payload = self.model_dump(
+            mode="json", exclude={"manifest_digest"}, exclude_unset=True,
+        )
         digest = hashlib.sha256((
             "browser.local.offline.v1\n"
             + json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -172,6 +196,15 @@ class LocalOfflineManifest(Contract):
         if digest != self.manifest_digest:
             raise ValueError("browser_local_asset_manifest_digest_invalid")
         return self
+
+    def require_registered_site_lock(self) -> LocalOfflineRuntime:
+        runtime = self.runtime
+        if (runtime is None
+                or {"node", "chromium", "playwright", "helper", "font", "certificate"}
+                - {asset.role for asset in self.assets}
+                or not runtime.matches_host()):
+            raise ValueError("browser_local_offline_lock_incomplete")
+        return runtime
 
 
 def verify_local_offline_assets(root: Path, manifest: LocalOfflineManifest) -> None:
@@ -186,3 +219,26 @@ def verify_local_offline_assets(root: Path, manifest: LocalOfflineManifest) -> N
         with path.open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != asset.sha256:
                 raise ValueError("browser_local_asset_digest_invalid")
+
+
+def select_local_offline_manifest(
+    *, active: LocalOfflineManifest, rollback: LocalOfflineManifest | None,
+    requested_digest: str,
+) -> LocalOfflineManifest:
+    """Select only an explicitly requested, approved local inventory revision."""
+    if (type(requested_digest) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", requested_digest) is None
+            or (rollback is not None and rollback.manifest_digest == active.manifest_digest)):
+        raise ValueError("browser_local_manifest_selection_invalid")
+    selected = (
+        active if requested_digest == active.manifest_digest
+        else rollback if rollback is not None and requested_digest == rollback.manifest_digest
+        else None
+    )
+    if selected is None:
+        raise ValueError("browser_local_manifest_selection_invalid")
+    selected = LocalOfflineManifest.model_validate(
+        selected.model_dump(mode="json", exclude_unset=True),
+    )
+    selected.require_registered_site_lock()
+    return selected

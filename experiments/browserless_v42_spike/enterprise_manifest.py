@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, model_validator
 
 from app.browser_skill.models import Contract, Digest, OpaqueId, ScopeBinding
-from app.infra.browser.browserless_wire import BrowserProviderError, Phase
+from app.infra.browser.provider_shared import BrowserProviderError, Phase
 
 AcceptanceFact = Literal[
     "licensed_image", "offline_activation", "tls", "external_origin",

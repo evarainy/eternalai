@@ -7,13 +7,13 @@ import os
 from collections.abc import Callable
 from typing import Never
 
-from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.enterprise_manifest import (
+from app.infra.browser.provider_shared import BrowserProviderError
+from experiments.browserless_v42_spike.enterprise_manifest import (
     DeploymentView,
     EnterpriseManifest,
     require_current_view,
 )
-from app.infra.browser.enterprise_wire import require_verified_codec
+from experiments.browserless_v42_spike.enterprise_wire import require_verified_codec
 
 
 class EnterpriseConnector:

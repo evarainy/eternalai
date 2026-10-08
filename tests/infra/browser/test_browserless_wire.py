@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.infra.browser.browserless_wire import (
+from app.infra.browser.provider_shared import BrowserProviderError as SharedBrowserProviderError
+from experiments.browserless_v42_spike.browserless_wire import (
     BrowserlessWire,
     BrowserProviderError,
     HTTPSBrowserlessTransport,
@@ -15,6 +16,10 @@ from app.infra.browser.browserless_wire import (
     parse_object,
 )
 from tests.infra.browser.provider_factories import HTTP, deployment
+
+
+def test_legacy_wire_reexports_neutral_failure_class() -> None:
+    assert BrowserProviderError is SharedBrowserProviderError
 
 
 @pytest.mark.parametrize(
