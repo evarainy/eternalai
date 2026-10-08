@@ -83,6 +83,8 @@ function Operation({ generation }: { generation: number }) {
       <p role="status">{states[operation.state]}</p>
       <p>业务平台：{operation.service_name}；动作：{operation.action}</p>
       <dl aria-label="原参数安全摘要">{Object.entries(operation.argument_preview).map(([field, value]) => <div key={field}><dt>{field}</dt><dd>{String(value)}</dd></div>)}</dl>
+      {operation.state === 'VERIFIED_SUCCESS' && operation.result &&
+        <pre aria-label="已核实业务结果">{JSON.stringify(operation.result, null, 2)}</pre>}
       <p className={styles.muted}>仅显示允许展示的参数；确认绑定完整原参数，正文及敏感字段不会在此展开。</p>
       {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('confirm')}>确认原操作</Button>}
       {operation.recovery_action === 'confirm' && <Button disabled={busy} onClick={() => void run('cancel')}>取消</Button>}
@@ -97,7 +99,13 @@ function Operation({ generation }: { generation: number }) {
 
 function validOperation(value: unknown): value is OperationView {
   if (typeof value !== 'object' || value === null) return false;
+  if (Object.keys(value).some((key) => ![
+    'operation_id', 'service_config_id', 'state', 'revision', 'expires_at', 'action',
+    'service_name', 'argument_preview', 'preview_digest', 'review_url', 'recovery_action', 'result',
+  ].includes(key))) return false;
   const op = value as Partial<OperationView>;
+  if (op.result !== undefined && op.result !== null &&
+      (op.state !== 'VERIFIED_SUCCESS' || typeof op.result !== 'object' || Array.isArray(op.result))) return false;
   return typeof op.operation_id === 'string' && /^[a-f0-9]{32}$/.test(op.operation_id) &&
     typeof op.state === 'string' && Object.prototype.hasOwnProperty.call(states, op.state) &&
     typeof op.service_name === 'string' && typeof op.action === 'string' &&

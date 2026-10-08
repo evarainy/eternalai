@@ -55,6 +55,7 @@ class McpValidatedOutcome(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     state: Literal["VERIFIED_SUCCESS", "WAITING_EXTERNAL_CONFIRM"]
     persistence: dict[str, Any]
+    public_result: dict[str, Any] | None = None
     review_url: str | None = None
 
 

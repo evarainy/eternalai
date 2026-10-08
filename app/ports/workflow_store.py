@@ -6,9 +6,10 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.mcp.models import OperationState
+from app.ports.error_codes import ErrorCode
 from app.ports.human_gate import HumanGateRequest
 from app.ports.mcp import McpAuthorizationContext
 
@@ -43,8 +44,19 @@ class WorkflowOperation(BaseModel):
     external_confirmation_required: bool = False
     review_url: str | None = None
     safe_output: dict[str, Any] = Field(default_factory=dict)
+    public_result: dict[str, Any] | None = None
     identity_evidence_digest: str = "unconfirmed"
     previous_attempts: tuple[str, ...] = ()
+    # Internal cleanup evidence in the encrypted payload; legacy rows default to None.
+    confirmation_error_code: ErrorCode | None = None
+
+    @model_validator(mode="after")
+    def _validate_confirmation_failure(self) -> WorkflowOperation:
+        if self.confirmation_error_code is not None and (
+            self.state != "FAILED" or self.send_started
+        ):
+            raise ValueError("invalid presend confirmation failure")
+        return self
 
 
 class WorkflowStorePort(Protocol):
@@ -69,10 +81,12 @@ class WorkflowStorePort(Protocol):
         gate_request_id: str | None = None,
         attempt_id: str | None = None,
         safe_output: dict[str, Any] | None = None,
+        public_result: dict[str, Any] | None = None,
         review_url: str | None = None,
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
         renewed_gate_expires_at: datetime | None = None,
+        confirmation_error_code: ErrorCode | None = None,
     ) -> WorkflowOperation: ...
     async def consume(
         self,

@@ -701,11 +701,14 @@ export function projectResponse(
 
 function mcpRecoveryReference(data: unknown): { mcpRecoveryPath?: string } {
   const reference = isRecord(data) && 'action_outcome' in data ? data.result : data;
-  if (!isRecord(reference) || Object.keys(reference).sort().join(',') !== 'operation_id,state' ||
+  if (!isRecord(reference) ||
+      Object.keys(reference).some((key) => !['operation_id', 'state', 'result'].includes(key)) ||
       typeof reference.operation_id !== 'string' || !/^[a-f0-9]{32}$/.test(reference.operation_id) ||
       typeof reference.state !== 'string' || ![
         'READY', 'WAITING_LOCAL_CONFIRM', 'WAITING_EXTERNAL_CONFIRM', 'SENDING', 'UNKNOWN',
         'VERIFIED_SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED',
       ].includes(reference.state)) return {};
+  if (reference.result !== undefined && reference.result !== null &&
+      (reference.state !== 'VERIFIED_SUCCESS' || !isRecord(reference.result))) return {};
   return { mcpRecoveryPath: `/apps?operation=${reference.operation_id}` };
 }

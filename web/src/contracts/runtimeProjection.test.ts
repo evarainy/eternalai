@@ -28,6 +28,15 @@ function confirmCard(
 }
 
 describe('MCP original-operation navigation', () => {
+  it('accepts absent, null or verified object result while preserving navigation', () => {
+    const make = (data: unknown) => ({ schema_version: 'phase0.sdui.v1', status: 'completed',
+      response_id: 'r1', message: 'Done', fallback_text: 'Done', ui: { component_type: 'none', action: 'none' }, data });
+    for (const result of [undefined, null, { artifactId: 'b'.repeat(32) }]) {
+      expect(projectResponse(make({ operation_id: 'a'.repeat(32), state: 'VERIFIED_SUCCESS', result })).mcpRecoveryPath)
+        .toBe(`/apps?operation=${'a'.repeat(32)}`);
+    }
+    expect(projectResponse(make({ operation_id: 'a'.repeat(32), state: 'UNKNOWN', result: { artifactId: 'b'.repeat(32) } })).mcpRecoveryPath).toBeUndefined();
+  });
   const response = (data: unknown) => ({ schema_version: 'phase0.sdui.v1', status: 'failed',
     response_id: 'r1', message: '结果待核对', fallback_text: 'Unknown', ui: { component_type: 'none', action: 'none' }, data });
   it('projects only a server-local original-operation reference, including action results', () => {

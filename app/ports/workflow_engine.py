@@ -25,8 +25,13 @@ from typing import Any, Mapping, Protocol
 
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.human_gate import VersionBinding
-from app.workflow.models import WorkflowRunResult
+from app.ports.human_gate import HumanGateRequest, VersionBinding
+from app.workflow.models import (
+    GovernedConfirmationFailureResult,
+    GovernedFinalizationError,
+    GovernedTerminalResult,
+    WorkflowRunResult,
+)
 
 
 @dataclass(frozen=True)
@@ -84,5 +89,21 @@ class WorkflowEnginePort(Protocol):
 
     async def pending_confirmation_action_digest(self, task_id: str) -> str: ...
 
+    async def governed_confirmation(self, task_id: str) -> HumanGateRequest | None: ...
 
-__all__ = ("WorkflowEnginePort", "WorkflowVersionBindings")
+    async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None: ...
+
+    async def retire_owned_confirmation(
+        self,
+        task_id: str,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+        reason: str,
+    ) -> bool: ...
+
+
+__all__ = (
+    "GovernedConfirmationFailureResult",
+    "GovernedFinalizationError", "GovernedTerminalResult", "WorkflowEnginePort",
+    "WorkflowVersionBindings",
+)

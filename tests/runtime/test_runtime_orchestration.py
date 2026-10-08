@@ -33,7 +33,11 @@ from app.ports.agent_orchestration import (
 )
 from app.ports.capability_gateway import ExecutionResult, RequestOrgContext
 from app.ports.capability_registry import CapabilityRegistryPort
-from app.ports.human_gate import HumanGateConflictError, VersionBindingMismatchError
+from app.ports.human_gate import (
+    HumanGateConflictError,
+    HumanGateRequest,
+    VersionBindingMismatchError,
+)
 from app.ports.response_projection_contract import ProjectionContractSnapshot
 from app.runtime import runtime as runtime_module
 from app.runtime.models import CapabilityRef, IntentOutput, MatchedIntent
@@ -193,6 +197,68 @@ def _business_count(h: SimpleNamespace) -> int:
         capability_id in {"oa.structured.execute", "oa.structured.second.execute"}
         for capability_id, _ in h.gateway.calls
     )
+
+
+def test_persisted_gate_reference_is_published_for_initial_and_resumed_confirmations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def exercise() -> None:
+        h = _harness(two=True)
+        requests: list[HumanGateRequest] = []
+
+        async def persisted_gate(task_id: str) -> HumanGateRequest:
+            manifest = await h.gate.get_task_binding(task_id)
+            assert manifest is not None
+            action_digest = await h.engine.pending_confirmation_action_digest(task_id)
+            initial = not requests
+            preview = h.runtime._orchestration.prepare_confirmation(
+                capability_id=h.capability.capability_id,
+                arguments=h.arguments if initial else {},
+                capability=h.capability if initial else None,
+            )
+            now = h.runtime._utc_clock()
+            request = HumanGateRequest(
+                request_id=f"synthetic-persisted-gate-{len(requests)}",
+                task_id=task_id,
+                requested_for_ai_user_id=h.principal.ai_user_id,
+                requested_session_id=h.session_id,
+                requested_tenant_id=h.principal.org_ctx.tenant_id,
+                action_digest=action_digest,
+                request_digest=immutable_request_digest(
+                    task_id=task_id, action_digest=action_digest,
+                    preview=preview.to_payload(), binding_manifest_digest=manifest.manifest_digest,
+                ),
+                binding_manifest_digest=manifest.manifest_digest,
+                requested_at=now,
+                expires_at=now + timedelta(minutes=5),
+            )
+            requests.append(request)
+            return await h.gate.create_request(request)
+
+        monkeypatch.setattr(h.runtime._workflow_engine, "governed_confirmation", persisted_gate)
+        first = await _start(h)
+        assert first.response_id == _pending(h).response_id == requests[0].request_id
+        assert _pending(h).gate_request_id == requests[0].request_id
+        assert _business_count(h) == 0
+        second = await _confirm(h)
+        assert second.status == "waiting_user"
+        assert second.data["action_outcome"] == "accepted"
+        assert second.response_id == _pending(h).response_id == requests[1].request_id
+        assert _pending(h).gate_request_id == requests[1].request_id
+        assert _business_count(h) == 1
+        replay = await _confirm(h)
+        assert replay.data["action_outcome"] == "action_already_claimed"
+        assert _pending(h).response_id == second.response_id
+        assert _business_count(h) == 1
+        h.waiting = second
+        completed = await _confirm(h)
+        assert completed.status == "completed"
+        assert completed.data["action_outcome"] == "accepted"
+        assert _business_count(h) == 2
+        assert (await _confirm(h)).data["action_outcome"] == "action_already_claimed"
+        assert h.engine.resume_calls == _business_count(h) == 2
+
+    asyncio.run(exercise())
 
 
 def test_new_task_uses_port_for_selection_binding_execution_and_response() -> None:
@@ -757,6 +823,7 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
         if fault in {"exception", "cancelled-error", "cleanup-failure"}:
             monkeypatch.setattr(h.gateway, "execute_capability", execute)
         cleanup_error = RuntimeError("synthetic cleanup write failure")
+        original_update = h.tasks.update_status
         if fault == "cleanup-failure":
 
             async def fail_cleanup(*args: Any, **kwargs: Any) -> Any:
@@ -790,7 +857,10 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
             )
             assert response.status == response.data["action_outcome"] == expected_status
             assert response.data["result"] is None
-        assert key not in h.runtime._pending_workflows
+        if fault == "cleanup-failure":
+            assert h.runtime._pending_workflows[key] is pending
+        else:
+            assert key not in h.runtime._pending_workflows
         assert pending.task_id not in h.engine._checkpoints
         claim = h.runtime._claimed_pending_confirmations[claim_key]
         assert claim.state == (
@@ -814,8 +884,28 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
         if fault == "cleanup-failure":
             assert terminal_events == original_finalizations == []
             assert h.tasks.records[pending.task_id].status == "waiting_user"
-            with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            with pytest.raises(RuntimeError) as retried_cleanup:
                 await _confirm(h)
+            assert retried_cleanup.value is cleanup_error
+            assert h.runtime._pending_workflows[key] is claim.pending is pending
+            assert not claim.cleanup_in_progress
+            monkeypatch.setattr(h.tasks, "update_status", original_update)
+            recovered = await _confirm(h)
+            assert recovered.status == "confirmation_invalidated"
+            assert recovered.data == {"action_outcome": "confirmation_invalidated", "result": None}
+            assert key not in h.runtime._pending_workflows
+            assert claim.cleanup_complete and claim.pending is None
+            assert h.tasks.status_updates[-1] == ("confirmation_invalidated", "internal_error")
+            assert [
+                event["event_type"] for event in h.trace.steps
+                if event["task_id"] == pending.task_id
+                and event["event_type"] in {"task_confirmation_invalidated", "evaluation_recorded"}
+            ] == ["task_confirmation_invalidated", "evaluation_recorded"]
+            assert len([
+                event for event in h.trace.finalizations if event["args"][1] == pending.task_id
+            ]) == 1
+            replay = await _confirm(h)
+            assert replay.data == recovered.data
         else:
             status = "cancelled" if fault in {"reject", "cancel"} else "confirmation_invalidated"
             error = (
@@ -842,6 +932,48 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
             replay = await _confirm(h)
             assert replay.data["action_outcome"] == status
         assert h.engine.resume_calls == _business_count(h) == expected_executions
+
+    asyncio.run(exercise())
+
+
+def test_legacy_binding_cleanup_retry_keeps_legacy_terminal_owner(monkeypatch):
+    async def exercise():
+        h = _harness()
+        await _start(h)
+        pending = _pending(h)
+        before = list(h.tasks.status_updates)
+        original = h.runtime._workflow_engine.discard_checkpoint
+        injected = RuntimeError("synthetic legacy discard interruption")
+        discards = 0
+
+        async def discard(task_id):
+            nonlocal discards
+            discards += 1
+            if discards == 1:
+                raise injected
+            await original(task_id)
+
+        monkeypatch.setattr(h.runtime._workflow_engine, "discard_checkpoint", discard)
+        monkeypatch.setattr(
+            h.gate, "assert_task_bindings",
+            AsyncMock(side_effect=VersionBindingMismatchError("synthetic version conflict")),
+        )
+        with pytest.raises(RuntimeError) as interrupted:
+            await _confirm(h)
+        assert interrupted.value is injected
+        claim = next(iter(h.runtime._claimed_pending_confirmations.values()))
+        assert claim.cleanup_governed_only and claim.cleanup_governed is None
+        assert not claim.cleanup_complete and claim.pending is pending
+        assert h.tasks.status_updates == before
+        assert (await _confirm(h)).data["action_outcome"] == "action_already_claimed"
+        assert claim.cleanup_governed is False and claim.state == "completed"
+        assert claim.cleanup_complete and claim.pending is None
+        assert discards == 2 and h.tasks.status_updates == before
+        assert not h.runtime._pending_workflows and not h.engine._checkpoints
+        assert h.engine.resume_calls == _business_count(h) == 0
+        assert not any(step["event_type"] in {
+            "task_cancelled", "task_confirmation_invalidated",
+        } for step in h.trace.steps)
 
     asyncio.run(exercise())
 
@@ -933,6 +1065,7 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
                 assert result.status == "cancelled"
                 assert h.engine.resume_calls == _business_count(h) == 0
             else:
+                before = list(h.tasks.status_updates)
 
                 async def binding_failure(*args: Any, **kwargs: Any) -> Any:
                     install_winner()
@@ -942,6 +1075,10 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
                 result = await _confirm(h)
                 assert result.data["action_outcome"] == "action_version_conflict"
                 assert h.engine.resume_calls == _business_count(h) == 0
+                assert h.tasks.status_updates == before
+                assert not any(step["event_type"] in {
+                    "task_cancelled", "task_confirmation_invalidated",
+                } for step in h.trace.steps)
         if cas_winner:
             assert discard.call_args_list == [call(retired_task_id)]
             assert retired_task_id not in h.engine._checkpoints
@@ -980,7 +1117,7 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
         for node in ast.walk(method)
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "self._build_envelope"
     ]
-    assert sorted(entry_callers) == ["_resume_pending_workflow", "handle_user_message"]
+    assert sorted(entry_callers) == ["_complete_resumed_workflow", "handle_user_message"]
     builder_owners = [
         method.name
         for method in runtime_class.body
@@ -996,7 +1133,7 @@ def test_runtime_response_entry_is_only_port_forwarding() -> None:
             "_confirmation_terminal_envelope",
             "_process_pending_confirmation",
             "_build_stale_confirmation_response",
-            "_resume_pending_workflow",
+            "_complete_resumed_workflow",
             "_finish_version_binding_failure",
             "_finish_intent_failure",
             "_finish_candidate_failure",

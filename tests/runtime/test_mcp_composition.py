@@ -188,6 +188,7 @@ def test_http_runtime_confirmation_failure_and_apps_recovery_are_wired(
                     assert response.status_code == 200
                     failed = response.json()
                     assert failed["status"] == "failed"
+                    assert failed["data"]["action_outcome"] == "accepted"
                     assert failed["data"]["result"] == {
                         "operation_id": operation_id,
                         "state": "UNKNOWN",

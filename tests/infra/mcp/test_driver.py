@@ -10,6 +10,50 @@ from app.mcp.models import McpFailure
 from tests.infra.mcp.test_transport import Peer, Tokens, authorization, serving
 
 
+@pytest.mark.parametrize("revocation", ["disconnect", "logout", "rebind"])
+def test_final_hook_revocation_prevents_tools_call(revocation: str) -> None:
+    peer = Peer("2025-11-25")
+    with serving(peer) as profile:
+
+        class RevocableTokens(Tokens):
+            revoked: str | None = None
+
+            async def resolve(self, context):
+                if self.revoked is not None:
+                    raise McpFailure("mcp_authorization_invalid")
+                return await super().resolve(context)
+
+        async def run():
+            tokens = RevocableTokens()
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def before_send():
+                if any(call[2]["method"] == "tools/list" for call in peer.calls):
+                    entered.set()
+                    await release.wait()
+
+            task = asyncio.create_task(
+                McpDriver({"service-a": profile}, tokens).call(
+                    authorization(),
+                    "business_context_get",
+                    {},
+                    input_digest=input_digest("business_context_get"),
+                    safety_digest=safety_digest("business_context_get"),
+                    write=False,
+                    before_send=before_send,
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            tokens.revoked = revocation
+            release.set()
+            with pytest.raises(McpFailure, match="mcp_authorization_invalid"):
+                await task
+            assert peer.effects == 0
+            assert not any(call[2]["method"] == "tools/call" for call in peer.calls)
+
+        asyncio.run(run())
+
+
 def test_missing_service_never_falls_back_to_other_server() -> None:
     peer = Peer("2025-11-25")
     with serving(peer) as config:
