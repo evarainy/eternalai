@@ -27,6 +27,7 @@ from app.browser_skill.compiler import (
     validate_teaching_source,
 )
 from app.browser_skill.models import (
+    BrowserOperationError,
     Contract,
     Digest,
     Epoch,
@@ -780,6 +781,8 @@ async def explore_registered_reads(
             emitted.append(fact)
         return tuple(emitted)
     except RepairError:
+        raise
+    except BrowserOperationError:
         raise
     except Exception:
         raise RepairError("exploration_unavailable") from None

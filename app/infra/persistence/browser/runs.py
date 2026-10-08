@@ -1050,6 +1050,16 @@ class PostgreSQLBrowserRunStore:
         step_ids: tuple[str, ...], *, complete: bool,
     ) -> None:
         """Match the frozen sequence, allowing only its registered page advance to repeat."""
+        exploration = manifest.site.exploration
+        if exploration is not None:
+            catalog = {rule.step.step_id for rule in manifest.site.primitive_rules}
+            if (
+                len(step_ids) > exploration.max_steps
+                or (complete and not step_ids)
+                or any(step_id not in catalog for step_id in step_ids)
+            ):
+                raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
+            return
         expected = manifest.skill.steps
         traversal = manifest.site.traversal
         advance_id = traversal.advance_step_id if traversal is not None else None
@@ -1778,7 +1788,7 @@ class PostgreSQLBrowserRunStore:
         self, claim: RunSnapshot, *, command: ActionCommand,
         rule: SiteStepRule, scope: ScopeStamp, receipt: DispatchReceipt,
         policy_digest: str, sequence: int,
-    ) -> RunSnapshot:
+    ) -> tuple[RunSnapshot, RunTeachingStep]:
         """Fence and sign one Executor receipt in the existing Task event journal.
 
         This is after the actual send. Failure makes the caller's effect unknown;
@@ -1919,7 +1929,8 @@ class PostgreSQLBrowserRunStore:
                     payload=payload,
                 ),
             )
-            return await self._update(session, current, {"effect": "acknowledged"})
+            updated = await self._update(session, current, {"effect": "acknowledged"})
+            return updated, step
 
     async def read_teaching_steps(
         self, owner: BrowserOwner, task_id: str, run_id: str,

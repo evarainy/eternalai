@@ -18,7 +18,7 @@ import secrets
 import sys
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
@@ -81,6 +81,16 @@ class LocalLoginSkill(Protocol):
         ...
 
 
+class RegisteredExplorationSuggester(Protocol):
+    """Trusted proposal source; returned IDs are never execution authority."""
+
+    rule_digest: str
+
+    async def __call__(
+        self, run_id: str, prior_primitive_ids: tuple[str, ...],
+    ) -> str | None: ...
+
+
 class DownloadContentVerifier(Protocol):
     """Trusted, Site-specific file-key check; page metadata is not authority."""
 
@@ -116,6 +126,7 @@ def registered_local_digest(
     popup_expectations: tuple[ExpectedPopup, ...] = (),
     download_expectations: tuple[ExpectedDownload, ...] = (),
     download_content_verifier: DownloadContentVerifier | None = None,
+    exploration_suggest: RegisteredExplorationSuggester | None = None,
 ) -> str:
     """Bind browser-specific Site configuration without a publication hash cycle."""
     projector_type = type(projector)
@@ -137,6 +148,12 @@ def registered_local_digest(
     }
     if rules.traversal is not None:
         payload["traversal"] = _registered_value(rules.traversal)
+    if exploration_suggest is not None:
+        implementation = type(exploration_suggest)
+        payload["exploration_suggest"] = {
+            "implementation": f"{implementation.__module__}.{implementation.__qualname__}",
+            "rule_digest": exploration_suggest.rule_digest,
+        }
     if download_expectations:
         payload["download_expectations"] = tuple(
             rule.model_dump(mode="json") for rule in download_expectations
@@ -177,6 +194,9 @@ class RegisteredLocalSite:
     download_content_verifier: DownloadContentVerifier | None = field(
         default=None, repr=False,
     )
+    exploration_suggest: RegisteredExplorationSuggester | None = field(
+        default=None, repr=False,
+    )
 
     @property
     def origins(self) -> tuple[str, ...]:
@@ -196,6 +216,7 @@ class RegisteredLocalSite:
             popup_expectations=self.popup_expectations,
             download_expectations=self.download_expectations,
             download_content_verifier=self.download_content_verifier,
+            exploration_suggest=self.exploration_suggest,
         )
 
     def __post_init__(self) -> None:
@@ -219,6 +240,19 @@ class RegisteredLocalSite:
             or any(not isinstance(rule, ExpectedDownload)
                    for rule in self.download_expectations)
             or bool(self.download_expectations) != (self.download_content_verifier is not None)
+            or (self.manifest.site.exploration is not None
+                and self.exploration_suggest is None)
+            or (self.manifest.site.exploration is not None and (
+                self.manifest.site.exploration.allowed_regions != (self.region.region_id,)
+                or self.popup_expectations or self.download_expectations
+            ))
+            or (self.exploration_suggest is not None and (
+                not callable(self.exploration_suggest)
+                or type(getattr(self.exploration_suggest, "rule_digest", None)) is not str
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", self.exploration_suggest.rule_digest,
+                ) is None
+            ))
             or (self.download_content_verifier is not None and (
                 not callable(getattr(self.download_content_verifier, "matches", None))
                 or not callable(getattr(self.download_content_verifier, "matches_bytes", None))
@@ -302,6 +336,52 @@ class RegisteredLocalSite:
             or self.registration_digest() != self.manifest.site.source.fixture_digest
         ):
             raise ValueError("browser_local_site_registration_invalid")
+
+
+def derive_registered_teaching_site(
+    source: RegisteredLocalSite, candidate: BrowserPublicationManifest,
+) -> RegisteredLocalSite:
+    """Bind a reviewed route to the unchanged local primitive implementation.
+
+    The caller still needs the publication store's prepared/active authority,
+    current grants and the exact candidate's review before installing a Run.
+    """
+    candidate = BrowserPublicationManifest.model_validate_json(
+        candidate.model_dump_json()
+    )
+    base = source.manifest
+    if (
+        candidate.source_kind != "registered_site"
+        or candidate.effect != "read_only"
+        or any(rule.step.effect != "read_only"
+               or rule.effect.actual_effect != "read_only"
+               for rule in candidate.site.steps)
+        or candidate.site.exploration is not None
+        or candidate.site.site_id != base.site.site_id
+        or candidate.site.source != base.site.source
+        or candidate.site.policy != base.site.policy
+        or candidate.site.primitive_rules != base.site.primitive_rules
+        or not candidate.site.step_primitives
+        or candidate.site.read_rule != base.site.read_rule
+        or candidate.site.decision_manifest != base.site.decision_manifest
+        or candidate.site.decision_budget != base.site.decision_budget
+        or candidate.site.navigation_origins != base.site.navigation_origins
+        or candidate.verifier != base.verifier
+        or candidate.output != base.output
+        or candidate.capability_snapshot_json != base.capability_snapshot_json
+        or candidate.capability_bindings != base.capability_bindings
+    ):
+        raise ValueError("browser_teaching_source_mismatch")
+    rules = replace(
+        source.rules,
+        skill_digest=candidate.skill.digest,
+        site_digest=candidate.site.digest,
+        verifier_digest=candidate.verifier.digest,
+    )
+    return replace(
+        source, manifest=candidate, rules=rules,
+        site=FrozenSiteAdapter((candidate.site_plan(),)),
+    )
 
 
 def _json(value: object) -> bytes:

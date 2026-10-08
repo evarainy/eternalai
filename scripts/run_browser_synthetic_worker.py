@@ -49,6 +49,8 @@ async def run_worker(components: BrowserVerticalComponents, stop: asyncio.Event)
     """Reuse the application supervisor and always settle its background task."""
     supervisor = BrowserWorkerSupervisor(
         components.run_business_ready, cleanup_ready=components.cleanup_ready,
+        start_resources=components.start_resources,
+        stop_resources=components.stop_resources,
     )
     try:
         await supervisor.start()

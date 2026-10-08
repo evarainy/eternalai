@@ -29,6 +29,7 @@ from app.browser_skill.models import (
     ScopeStamp,
     SkillStep,
     TargetRef,
+    TeachingPlan,
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.registry import Publication, canonical_digest
@@ -649,13 +650,6 @@ class RunTeachingStep(Contract):
     dispatch_state: Literal["acknowledged"]
     dispatch_evidence_digest: Digest
 
-    @model_validator(mode="after")
-    def consistent(self) -> Self:
-        if self.primitive_id != self.event.step_id:
-            raise ValueError("teaching_primitive_reference_mismatch")
-        return self
-
-
 class RunTeachingManifest(Contract):
     """No parameters, DOM, screenshot, URL, cookie or raw business key."""
 
@@ -672,8 +666,10 @@ class RunTeachingManifest(Contract):
     verifier_digest: Digest
     object_type: OpaqueId
     parameter_set_ref: OpaqueId
-    steps: Annotated[tuple[RunTeachingStep, ...], Field(min_length=1, max_length=64)]
+    steps: Annotated[tuple[RunTeachingStep, ...], Field(min_length=1, max_length=126)]
     digest: Digest
+    execution_publication_digest: Digest | None = None
+    teaching_plan_digest: Digest | None = None
 
     @model_validator(mode="after")
     def integrity(self) -> Self:
@@ -681,7 +677,12 @@ class RunTeachingManifest(Contract):
             range(1, len(self.steps) + 1)
         ) or len({step.event.event_id for step in self.steps}) != len(self.steps):
             raise ValueError("teaching_run_steps_invalid")
-        if canonical_digest(self.schema_version, self.model_dump(mode="json")) != self.digest:
+        payload = self.model_dump(mode="json")
+        if self.execution_publication_digest is None:
+            payload.pop("execution_publication_digest")
+        if self.teaching_plan_digest is None:
+            payload.pop("teaching_plan_digest")
+        if canonical_digest(self.schema_version, payload) != self.digest:
             raise ValueError("teaching_run_digest_mismatch")
         return self
 
@@ -715,10 +716,12 @@ class RunTeachingAuthority(_Private):
     frozen_publication: Callable[[str, ScopeBinding], BrowserPublicationManifest]
     primitive_rule: Callable[[str, BrowserPublicationManifest], SiteStepRule | None]
     authorize_capture: Callable[[str, ScopeBinding], bool]
+    read_plan: Callable[[str, ScopeBinding], TeachingPlan | None] | None = None
     __getstate__ = _Private.__getstate__
 
     def __post_init__(self) -> None:
-        if not all(callable(value) for value in (
+        if (self.read_plan is not None and not callable(self.read_plan)) or not all(
+            callable(value) for value in (
             self.current_binding, self.read_run, self.read_steps,
             self.read_parameter_set_ref, self.frozen_publication,
             self.primitive_rule, self.authorize_capture,
@@ -754,45 +757,118 @@ def capture_authorized_run(
             or run.cancel_requested or run.cancel_acknowledged
         ):
             raise TrajectoryError("teaching_run_not_verified")
-        publication = BrowserPublicationManifest.model_validate_json(
+        executed = BrowserPublicationManifest.model_validate_json(
             authority.frozen_publication(run.admission.publication_digest.hex(), binding)
             .model_dump_json()
         )
-        if publication.digest != run.admission.publication_digest.hex():
+        if executed.digest != run.admission.publication_digest.hex():
             raise TrajectoryError("teaching_run_publication_mismatch")
+        plan = (authority.read_plan(run_id, _binding_copy(binding))
+                if authority.read_plan is not None else None)
+        publication = executed
+        if plan is not None:
+            publication = BrowserPublicationManifest.model_validate_json(
+                authority.frozen_publication(
+                    plan.source_publication_digest, binding,
+                ).model_dump_json()
+            )
+            if (
+                plan.task_id != run.task_id or plan.run_id != run_id
+                or plan.owner_digest != canonical_digest("browser.write_owner.v1", {
+                    "owner": [binding.owner.tenant_id, binding.owner.user_id,
+                              binding.owner.session_id],
+                })
+                or plan.binding_id != binding.binding_id
+                or plan.binding_revision != binding.binding_revision
+                or plan.publication_digest != executed.digest
+                or plan.skill_digest != executed.skill.digest
+                or plan.site_digest != executed.site.digest
+                or plan.policy_digest != executed.site.policy.digest
+                or plan.verifier_digest != executed.verifier.digest
+                or plan.sealed_input_digest != run.admission.input_digest.hex()
+                or publication.digest != plan.source_publication_digest
+                or executed.site.primitive_rules != publication.site.primitive_rules
+                or tuple(item.step_id for item in plan.steps)
+                != tuple(step.step_id for step in executed.skill.steps)
+                or tuple((item.step_id, item.primitive_id) for item in plan.steps)
+                != tuple((item.step_id, item.primitive_id)
+                         for item in executed.site.step_primitives)
+                or not publication.site.primitive_rules
+            ):
+                raise TrajectoryError("teaching_plan_publication_mismatch")
         raw_steps = authority.read_steps(run_id, _binding_copy(binding))
-        if type(raw_steps) is not tuple or not 1 <= len(raw_steps) <= 64:
+        if type(raw_steps) is not tuple or not 1 <= len(raw_steps) <= 126:
             raise TrajectoryError("teaching_run_steps_unavailable")
         steps = tuple(RunTeachingStep.model_validate_json(item.model_dump_json())
                       for item in raw_steps)
-        for step in steps:
+        routed: list[int] = []
+        if plan is not None:
+            cursor = 0
+            repeat_count = 0
+            traversal = executed.site.traversal
+            for item in steps:
+                if (cursor < len(plan.steps)
+                        and item.event.step_id == plan.steps[cursor].step_id):
+                    routed.append(cursor)
+                    cursor += 1
+                elif (
+                    traversal is not None and cursor > 0
+                    and plan.steps[cursor - 1].step_id == traversal.advance_step_id
+                    and item.event.step_id == traversal.advance_step_id
+                    and repeat_count < traversal.max_pages - 2
+                ):
+                    routed.append(cursor - 1)
+                    repeat_count += 1
+                else:
+                    raise TrajectoryError("teaching_plan_sequence_mismatch")
+            if cursor != len(plan.steps):
+                raise TrajectoryError("teaching_plan_sequence_mismatch")
+        for index, step in enumerate(steps):
             rule = authority.primitive_rule(step.primitive_id, publication)
             if rule is None:
                 raise TrajectoryError("teaching_primitive_unregistered")
             rule = SiteStepRule.model_validate_json(rule.model_dump_json())
             event = step.event
+            primitive_event = (
+                event.model_copy(update={"step_id": step.primitive_id})
+                if plan is not None else event
+            )
             if (
                 step.run_id != run_id
-                or step.skill_version != publication.skill.version
-                or step.skill_digest != publication.skill.digest
+                or step.skill_version != executed.skill.version
+                or step.skill_digest != executed.skill.digest
                 or step.binding != BindingRevisions.from_binding(binding)
-                or not event.matches_step(rule.step)
+                or not primitive_event.matches_step(rule.step)
+                or (plan is not None and (
+                    plan.steps[routed[index]].step_id != event.step_id
+                    or plan.steps[routed[index]].primitive_id != step.primitive_id
+                    or plan.steps[routed[index]].rule_digest != step.rule_digest
+                    or executed.site.steps[routed[index]].step
+                    != executed.skill.steps[routed[index]]
+                    or executed.site.steps[routed[index]] != rule.model_copy(update={
+                        "step": rule.step.model_copy(update={
+                            "step_id": event.step_id,
+                        }),
+                    })
+                ))
                 or rule.step.effect != "read_only"
                 or rule.effect.actual_effect != "read_only"
                 or event.effect_proof != rule.effect
-                or event.policy_digest != publication.site.policy.digest
+                or event.policy_digest != executed.site.policy.digest
                 or rule.observation.region_id != event.scope.region_id
                 or canonical_digest("browser_site_step.v1", rule.model_dump(mode="json"))
                 != step.rule_digest
                 or not set(event.approved_labels) <= set((
-                    *publication.site.policy.allowed_names,
-                    *publication.site.policy.allowed_context,
+                    *executed.site.policy.allowed_names,
+                    *executed.site.policy.allowed_context,
                 ))
             ):
                 raise TrajectoryError("teaching_step_evidence_mismatch")
         parameter_set_ref = TypeAdapter(OpaqueId).validate_python(
             authority.read_parameter_set_ref(run_id, _binding_copy(binding)), strict=True,
         )
+        if plan is not None and plan.parameter_set_ref != parameter_set_ref:
+            raise TrajectoryError("teaching_plan_parameter_mismatch")
         payload: dict[str, object] = dict(
             schema_version="browser_run_teaching.v1",
             source_run_id=run_id,
@@ -809,6 +885,11 @@ def capture_authorized_run(
             parameter_set_ref=parameter_set_ref,
             steps=[step.model_dump(mode="json") for step in steps],
         )
+        if plan is not None:
+            payload["execution_publication_digest"] = executed.digest
+            payload["teaching_plan_digest"] = canonical_digest(
+                "browser_teaching_plan.v1", plan.model_dump(mode="json"),
+            )
         payload["digest"] = canonical_digest("browser_run_teaching.v1", payload)
         source = RunTeachingSource(binding, RunTeachingManifest.model_validate_json(
             json.dumps(payload)
@@ -820,6 +901,8 @@ def capture_authorized_run(
             or authority.authorize_capture(run_id, _binding_copy(binding)) is not True
             or authority.read_run(run_id, _binding_copy(binding)) != run
             or authority.read_steps(run_id, _binding_copy(binding)) != raw_steps
+            or (authority.read_plan is not None
+                and authority.read_plan(run_id, _binding_copy(binding)) != plan)
         ):
             raise TrajectoryError("teaching_run_stale")
         return source

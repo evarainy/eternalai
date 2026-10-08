@@ -10,10 +10,23 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import (
+    ActionCommand,
+    BrowserOwner,
+    DispatchReceipt,
+    ReadSpec,
+    ScopeStamp,
+    TeachingPlan,
+)
 from app.browser_skill.run_contracts import CommitFact
+
+if TYPE_CHECKING:
+    from app.browser_skill.site_rules import SiteStepRule
+    from app.browser_skill.teaching import TeachingReplayProof
+    from app.browser_skill.trajectory import RunTeachingStep
+    from app.browser_skill.write_workflow import BrowserWritePreparation
 
 RunStatus = Literal["running", "waiting_user", "completed", "failed", "cancelled"]
 RunPhase = Literal["queued", "acquiring", "running", "verifying", "waiting_user"]
@@ -227,6 +240,13 @@ class BrowserRunAuthorityPort(Protocol):
         admission: RunAdmission,
     ) -> None: ...
 
+    async def check_teaching_admission(
+        self, transaction: object, request: CanonicalRequest,
+        admission: RunAdmission, plan: TeachingPlan,
+    ) -> None:
+        """Prove one prepared candidate and current authority before atomic admit."""
+        ...
+
     async def before_run_lock(
         self,
         transaction: object,
@@ -287,6 +307,13 @@ class BrowserRunStorePort(Protocol):
         """Insert Run and transition the same canonical Task; mint only after commit."""
         ...
 
+    async def accept_teaching(
+        self, request: CanonicalRequest, admission: RunAdmission,
+        plan: TeachingPlan,
+    ) -> CommitFact:
+        """Atomically insert the candidate Run and its signed teaching plan."""
+        ...
+
     async def get(self, owner: BrowserOwner, task_id: str, run_id: str) -> RunSnapshot: ...
 
     async def get_for_cleanup(
@@ -333,6 +360,83 @@ class BrowserRunStorePort(Protocol):
         phase: RunPhase,
         effect: RunEffect,
     ) -> RunSnapshot: ...
+
+    async def record_step(
+        self, claim: RunSnapshot, *, command: ActionCommand,
+        rule: SiteStepRule, scope: ScopeStamp, receipt: DispatchReceipt,
+        policy_digest: str, sequence: int,
+    ) -> tuple[RunSnapshot, RunTeachingStep]:
+        """Commit one acknowledged registered step under the Run worker CAS."""
+        ...
+
+    async def record_teaching_plan(
+        self, claim: RunSnapshot, plan: TeachingPlan,
+    ) -> RunSnapshot:
+        """Persist a signed candidate sequence before the Run is claimed."""
+        ...
+
+    async def load_teaching_plan(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> TeachingPlan | None:
+        """Read a MAC checked candidate plan for this exact owner and Run."""
+        ...
+
+    async def load_teaching_plan_in_session(
+        self, transaction: object, admission: RunAdmission,
+    ) -> TeachingPlan | None:
+        """Read the signed plan in an existing authority transaction."""
+        ...
+
+    async def record_write_preparation(
+        self, claim: RunSnapshot, preparation: BrowserWritePreparation,
+    ) -> RunSnapshot:
+        """Persist a HumanGate-created preview bound to this queued Run."""
+        ...
+
+    async def load_write_preparation(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> BrowserWritePreparation | None:
+        """Resolve an uncertain same-Run preview after current authority."""
+        ...
+
+    async def write_confirmation_ready(self, run: RunSnapshot) -> bool:
+        """Return a claim hint; the dispatch reservation must recheck it."""
+        ...
+
+    async def write_confirmation_ready_in_session(
+        self, transaction: object, run: RunSnapshot,
+    ) -> bool:
+        """Use the claim transaction for a current confirmation hint."""
+        ...
+
+    async def reserve_write_dispatch(
+        self, claim: RunSnapshot, *, command: ActionCommand,
+        rule: SiteStepRule, spec: ReadSpec, sequence: int,
+    ) -> RunSnapshot:
+        """Consume exact confirmation and reserve the send under worker CAS."""
+        ...
+
+    async def assert_write_reservation(
+        self, claim: RunSnapshot, *, command: ActionCommand, sequence: int,
+    ) -> None:
+        """Recheck the reserved send in the final dispatch barrier."""
+        ...
+
+    async def read_teaching_steps(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> tuple[RunTeachingStep, ...]:
+        """Owner scoped, MAC checked facts from the same persisted Run."""
+        ...
+
+    async def record_replay_proof(self, proof: TeachingReplayProof) -> bool:
+        """Bind a checked replay proof to its verified Run in durable audit."""
+        ...
+
+    async def load_replay_proof_in_session(
+        self, transaction: object, owner: BrowserOwner, replay_digest: str,
+    ) -> TeachingReplayProof | None:
+        """Read and check exact owner/Run proof in the publication transaction."""
+        ...
 
     async def attach_lease(
         self,

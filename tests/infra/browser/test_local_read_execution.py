@@ -109,9 +109,9 @@ def factory_at(path: Path) -> LocalBrowserReadExecutionFactory:
     )
 
 
-def registered_site() -> RegisteredLocalSite:
+def registered_site(decision_manifest: ModelManifest | None = None) -> RegisteredLocalSite:
     """Fictitious trusted registration, never an actual OA rule or credential."""
-    base = build_fixed_synthetic_query_source(ModelManifest(
+    base = build_fixed_synthetic_query_source(decision_manifest or ModelManifest(
         request_model="synthetic_model", deployment_model="synthetic_deployment",
         manifest_digest="a" * 64,
     ))

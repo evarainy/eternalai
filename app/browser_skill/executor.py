@@ -27,6 +27,7 @@ from app.browser_skill.models import (
     ObservationRequest,
     PageEvidence,
     ReadSpec,
+    ScopeBinding,
     ScopedSnapshot,
     ScopeStamp,
     SkillStep,
@@ -35,8 +36,15 @@ from app.browser_skill.models import (
     VisibleCandidate,
     VisibleProjection,
 )
+from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.repair import (
+    ReadOnlyExplorationAuthority,
+    RepairError,
+    explore_registered_reads,
+)
 from app.browser_skill.scoping import scope_snapshot
 from app.browser_skill.site_rules import RegisteredSitePlan, SiteStepRule
+from app.browser_skill.trajectory import RunTeachingStep
 from app.browser_skill.verifier import (
     IndependentVerifier,
     ReadSpecResolver,
@@ -72,7 +80,13 @@ class StepAudit(Protocol):
     async def __call__(
         self, command: ActionCommand, rule: SiteStepRule, scope: ScopeStamp,
         receipt: DispatchReceipt, policy_digest: str, sequence: int,
-    ) -> None: ...
+    ) -> RunTeachingStep: ...
+
+
+class ExplorationSuggester(Protocol):
+    async def __call__(
+        self, run_id: str, prior_primitive_ids: tuple[str, ...],
+    ) -> str | None: ...
 
 
 class WriteGate(Protocol):
@@ -176,6 +190,8 @@ class BrowserExecutor:
         "_last_stage_diagnostic",
         "_step_audit",
         "_write_gate",
+        "_exploration_publication",
+        "_exploration_suggest",
     )
 
     def __init__(
@@ -188,6 +204,8 @@ class BrowserExecutor:
         decision_contexts: DecisionContextFactory,
         step_audit: StepAudit | None = None,
         write_gate: WriteGate | None = None,
+        exploration_publication: BrowserPublicationManifest | None = None,
+        exploration_suggest: ExplorationSuggester | None = None,
     ) -> None:
         self._web = web
         self._decision = decision
@@ -197,6 +215,8 @@ class BrowserExecutor:
         self._contexts = decision_contexts
         self._step_audit = step_audit
         self._write_gate = write_gate
+        self._exploration_publication = exploration_publication
+        self._exploration_suggest = exploration_suggest
         # Retain ownership of cancellation-resistant adapter tasks until settled.
         # Their execution context is cancelled and no new action is scheduled.
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
@@ -477,7 +497,9 @@ class BrowserExecutor:
         if rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only":
             raise failure("unsupported")
         page_keys: set[str] = set()
-        row_count = 0
+        row_by_ordinal: dict[int, str] = {}
+        ordinal_by_row: dict[str, int] = {}
+        previous_page: PageEvidence | None = None
         for index in range(traversal.max_pages):
             check_liveness(context)
             progress.mark("authorization")
@@ -488,11 +510,42 @@ class BrowserExecutor:
             )
             if page.scope.region_id != traversal.region_id:
                 raise failure("invalid_response")
-            progress.pages.append(page)
-            row_count += len(page.row_key_digests)
-            if page.page_key_digest in page_keys or row_count > traversal.max_rows:
+            if page.page_key_digest in page_keys:
+                if (
+                    traversal.mode == "virtualized" and previous_page is not None
+                    and page.row_key_digests == previous_page.row_key_digests
+                    and page.row_ordinals == previous_page.row_ordinals
+                    and page.declared_total == previous_page.declared_total
+                    and not page.terminal_seen
+                ):
+                    # The selected scroll container made no observable progress.
+                    # The verifier will report incomplete from the last real page.
+                    return None
                 raise failure("invalid_response")
+            progress.pages.append(page)
+            previous_row_count = len(row_by_ordinal)
+            for key, ordinal in zip(page.row_key_digests, page.row_ordinals):
+                old_key = row_by_ordinal.get(ordinal)
+                old_ordinal = ordinal_by_row.get(key)
+                if (
+                    (old_key is not None and old_key != key)
+                    or (old_ordinal is not None and old_ordinal != ordinal)
+                    or (traversal.mode == "paged" and old_key is not None)
+                ):
+                    raise failure("invalid_response")
+                row_by_ordinal[ordinal] = key
+                ordinal_by_row[key] = ordinal
+            if len(row_by_ordinal) > traversal.max_rows:
+                raise failure("invalid_response")
+            if (
+                traversal.mode == "virtualized" and index > 0
+                and len(row_by_ordinal) == previous_row_count
+                and not page.terminal_seen
+            ):
+                # A changed page marker alone is not collection progress.
+                return None
             page_keys.add(page.page_key_digest)
+            previous_page = page
             if page.terminal_seen or index == traversal.max_pages - 1:
                 return None
             target = None
@@ -540,7 +593,12 @@ class BrowserExecutor:
             check_liveness(context)
             progress.dispatch_inflight = True
             progress.mark("dispatch")
-            receipt = await self._web.execute(session, command, context)
+            receipt = (
+                await self._web.advance_virtualized(
+                    session, command, page.scope, context,
+                ) if traversal.advance_mode == "scroll"
+                else await self._web.execute(session, command, context)
+            )
             receipt.validate_for(command)
             progress.receipts.append(receipt)
             if receipt.state != "acknowledged":
@@ -556,6 +614,137 @@ class BrowserExecutor:
             progress.dispatch_inflight = False
         return None
 
+    async def _execute_exploration_step(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, rule: SiteStepRule,
+        progress: _Progress,
+    ) -> RunTeachingStep:
+        """Dispatch one catalog primitive through this Executor's normal fences."""
+        if (
+            rule.step.operation not in {"read", "click"}
+            or rule.step.effect != "read_only"
+            or rule.effect.actual_effect != "read_only"
+            or self._step_audit is None
+        ):
+            raise failure("unsupported")
+        snapshot, candidates = await self._observe_targets(
+            session, rule.observation, rule.step, context, plan, spec, progress,
+        )
+        target = await self._choose(
+            candidates, snapshot.scope, rule.target_criteria,
+            context, plan, progress,
+            lambda: self._refresh_candidates(
+                session, rule.step, snapshot.scope, context, plan, spec, progress,
+            ),
+        )
+        command = ActionCommand(
+            skill_digest=context.skill.digest, step=rule.step,
+            binding=context.expected_binding, target=target,
+        )
+        if not self._site.permits(context.skill, command):
+            raise failure("denied")
+        progress.mark("authorization")
+        await authorize_current(session, context, command)
+        progress.mark("target_revalidation")
+        await self._web.revalidate(session, command, context)
+        check_liveness(context)
+        progress.dispatch_inflight = True
+        progress.mark("dispatch")
+        receipt = await self._web.execute(session, command, context)
+        receipt.validate_for(command)
+        progress.receipts.append(receipt)
+        if receipt.state != "acknowledged":
+            progress.dispatch_inflight = receipt.state == "possibly_sent"
+            if receipt.failure is None:
+                raise failure("invalid_response", dispatched=progress.dispatch_inflight)
+            raise BrowserOperationError(receipt.failure)
+        progress.audit_inflight = True
+        fact = await self._step_audit(
+            command, rule, snapshot.scope, receipt,
+            plan.policy.digest, len(progress.receipts),
+        )
+        progress.audit_inflight = False
+        progress.dispatch_inflight = False
+        return fact
+
+    async def _explore(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, progress: _Progress,
+    ) -> None:
+        exploration = plan.exploration
+        publication = self._exploration_publication
+        suggest = self._exploration_suggest
+        audit = self._step_audit
+        if (
+            exploration is None or publication is None or suggest is None
+            or audit is None or publication.source_kind != "registered_site"
+            or publication.skill != context.skill
+            or publication.site_plan() != plan
+        ):
+            raise failure("denied")
+        run_id = context.expected_binding.authorization_run_id
+        if run_id is None:
+            raise failure("denied")
+
+        async def authorize(
+            requested_run: str, binding: ScopeBinding,
+            requested_publication: BrowserPublicationManifest,
+        ) -> bool:
+            if (
+                requested_run != run_id or binding != context.expected_binding
+                or requested_publication != publication
+            ):
+                return False
+            check_liveness(context)
+            await authorize_current(session, context, spec)
+            return True
+
+        async def execute_step(
+            requested_run: str, primitive_id: str, binding: ScopeBinding,
+        ) -> RunTeachingStep:
+            if requested_run != run_id or binding != context.expected_binding:
+                raise failure("denied")
+            rule = next((
+                item for item in plan.primitive_rules
+                if item.step.step_id == primitive_id
+            ), None)
+            if rule is None:
+                raise failure("denied")
+            return await self._execute_exploration_step(
+                session, context, plan, spec, rule, progress,
+            )
+
+        deadline = min(
+            context.deadline_monotonic,
+            time.monotonic() + exploration.max_seconds,
+        )
+        authority = ReadOnlyExplorationAuthority(
+            current_binding=lambda: context.expected_binding,
+            authorize=authorize,
+            registered_rule=lambda primitive_id, frozen: next((
+                item for item in frozen.site.primitive_rules
+                if item.step.step_id == primitive_id
+            ), None),
+            suggest_next=suggest,
+            execute_step=execute_step,
+            clock=time.monotonic,
+            deadline_monotonic=deadline,
+            maximum_steps=exploration.max_steps,
+            allowed_regions=exploration.allowed_regions,
+        )
+        try:
+            async with asyncio.timeout_at(deadline):
+                steps = await explore_registered_reads(
+                    run_id, binding=context.expected_binding,
+                    publication=publication, authority=authority,
+                )
+        except TimeoutError:
+            raise failure("timeout") from None
+        except RepairError:
+            raise failure("invalid_response") from None
+        if not steps:
+            raise failure("unsupported")
+
     async def _run(
         self, session: BrowserSessionRef, context: ExecutionContext, progress: _Progress
     ) -> ExecutionOutcome:
@@ -567,7 +756,9 @@ class BrowserExecutor:
             # Establish independently confirmed admission before observing private DOM.
             progress.mark("confirmation")
             spec = await confirmed_spec(session, context, plan, self._resolve)
-            for rule in plan.steps:
+            if plan.exploration is not None:
+                await self._explore(session, context, plan, spec, progress)
+            for rule in (() if plan.exploration is not None else plan.steps):
                 check_liveness(context)
                 if (
                     plan.traversal is not None

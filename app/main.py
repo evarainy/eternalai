@@ -30,10 +30,16 @@ from app.api.v1.runtime import make_router as make_runtime_router
 from app.api.v1.work_objects import WorkObjectService
 from app.api.v1.work_objects import make_router as make_work_object_router
 from app.browser_skill.supervisor import BrowserWorkerSupervisor
-from app.composition import build_production_components
+from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
 from app.credential_polling import CredentialPollingScheduler
 from app.infra.browser.composition import BrowserVerticalComponents
+from app.infra.browser.local_installation import (
+    LocalBrowserInstallationDependencies,
+    build_local_browser_vertical,
+)
+from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
+from app.infra.browser.systemone_http import DecisionHTTPProvider
 from app.mcp.models import McpFailure
 from app.organization_directory_sync import OrganizationDirectoryScheduler
 from app.ports.auth import (
@@ -188,18 +194,58 @@ def create_production_app(
     settings: ProductionSettings | None = None,
     *,
     browser_vertical: BrowserVerticalComponents | None = None,
+    browser_installation: Callable[[ProductionComponents], LocalBrowserInstallationDependencies]
+    | None = None,
+    production_components: ProductionComponents | None = None,
 ) -> FastAPI:
     """Create the fail-fast production application with no optional dependency gaps."""
 
     resolved_settings = (
         ProductionSettings.from_environment() if settings is None else settings
     )
+    if (resolved_settings.browser.enabled and browser_vertical is None
+            and browser_installation is None):
+        raise RuntimeError("browser_vertical_installation_required")
+    if ((browser_vertical is not None or browser_installation is not None)
+            and not resolved_settings.browser.enabled):
+        raise RuntimeError("browser_vertical_enablement_required")
+    if browser_vertical is not None and browser_installation is not None:
+        raise RuntimeError("browser_vertical_installation_ambiguous")
     if not resolved_settings.session_cookie_secure:
         logging.getLogger(__name__).warning(
             "session_cookie_secure_disabled key=%s",
             "SESSION_COOKIE_SECURE",
         )
-    components = build_production_components(resolved_settings)
+    components = (
+        build_production_components(resolved_settings)
+        if production_components is None else production_components
+    )
+    if (browser_vertical is not None
+            and browser_vertical._seed.source_kind == "registered_site"):
+        raise RuntimeError("browser_production_installation_required")
+    if browser_installation is not None:
+        installation = browser_installation(components)
+        if (type(installation) is not LocalBrowserInstallationDependencies
+                or not isinstance(installation.source, RegisteredLocalSite)
+                or resolved_settings.browser.transport != "playwright"
+                or installation.session_factory is not components.browser_session_factory
+                or installation.capability_registry is not components.browser_capability_registry
+                or installation.session_binder is not components.session_binder
+                or installation.policy is not components.browser_policy
+                or installation.sessions is not components.browser_sessions
+                or installation.trace is not components.browser_trace
+                or type(installation.decision) is not DecisionHTTPProvider
+                or installation.decision._deployment.disposition != "local_model"
+                or installation.decision._deployment.endpoint_origin
+                != resolved_settings.browser.decision_origin
+                or installation.source.manifest.site.decision_manifest.request_model
+                != resolved_settings.browser.request_model
+                or installation.source.manifest.site.decision_manifest.deployment_model
+                != resolved_settings.browser.deployment_model):
+            raise RuntimeError("browser_production_authority_mismatch")
+        browser_vertical = build_local_browser_vertical(installation)
+        if browser_vertical is None:
+            raise RuntimeError("browser_vertical_installation_required")
     return create_app(
         runtime=components.runtime,
         admin_registry_service=components.admin_registry_service,
@@ -232,7 +278,16 @@ def create_production_app(
     )
 
 
-app = create_production_app()
+_default_settings = ProductionSettings.from_environment()
+if _default_settings.browser.enabled:
+    @asynccontextmanager
+    async def _browser_installation_required(_application: FastAPI) -> AsyncIterator[None]:
+        raise RuntimeError("browser_vertical_installation_required")
+        yield  # pragma: no cover
+
+    app = FastAPI(lifespan=_browser_installation_required)
+else:
+    app = create_production_app(_default_settings)
 
 
 __all__ = ("app", "create_app", "create_production_app")

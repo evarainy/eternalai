@@ -16,6 +16,7 @@ from typing import Never, SupportsIndex
 from pydantic import TypeAdapter
 
 from app.browser_skill.models import (
+    BrowserOwner,
     BrowserSkill,
     Epoch,
     OpaqueId,
@@ -29,7 +30,12 @@ from app.browser_skill.publication_contracts import (
     publication_digest,
 )
 from app.browser_skill.registry import Publication, canonical_digest
-from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredReadRule, RegisteredSitePlan
+from app.browser_skill.site_rules import (
+    FrozenSiteAdapter,
+    RegisteredReadRule,
+    RegisteredSitePlan,
+    StepPrimitiveBinding,
+)
 from app.browser_skill.trajectory import (
     BindingRevisions,
     CapturePermission,
@@ -40,6 +46,7 @@ from app.browser_skill.trajectory import (
     RecordingContext,
     RunTeachingAuthority,
     RunTeachingSource,
+    RunTeachingStep,
     SkillDraft,
     TrajectoryEvent,
     _binding_copy,
@@ -516,6 +523,127 @@ def _formal_required_purposes(
     return required
 
 
+def teaching_grant_scope_digest(
+    owner: BrowserOwner, base: BrowserPublicationManifest,
+    candidate: BrowserPublicationManifest,
+) -> str:
+    """Bind a teaching grant request to exact owner and both frozen versions.
+
+    This digest identifies the scope. Current grant checks remain mandatory.
+    """
+    return canonical_digest("browser.teaching_grant_scope.v1", {
+        "owner": [owner.tenant_id, owner.user_id, owner.session_id],
+        "base": [base.digest, base.skill.skill_id, base.skill.digest],
+        "candidate": [candidate.digest, candidate.skill.skill_id,
+                      candidate.skill.digest],
+    })
+
+
+def build_registered_teaching_candidate(
+    base: BrowserPublicationManifest, *, target_skill_id: str,
+    version: str, site_version: str,
+    steps: tuple[StepPrimitiveBinding, ...],
+    parameter_whitelist: tuple[ParameterApproval, ...],
+) -> BrowserPublicationManifest:
+    """Build the actual candidate before a teaching Run is admitted.
+
+    Only the audited base Site primitive catalog supplies action rules. The
+    caller must separately prove current grants, unpublished sequence and
+    owner-scoped input; this pure builder grants no execution authority.
+    """
+    try:
+        base = BrowserPublicationManifest.model_validate_json(base.model_dump_json())
+        target_skill_id = TypeAdapter(OpaqueId).validate_python(target_skill_id, strict=True)
+        version = TypeAdapter(OpaqueId).validate_python(version, strict=True)
+        site_version = TypeAdapter(OpaqueId).validate_python(site_version, strict=True)
+        if (
+            base.source_kind != "registered_site"
+            or base.effect != "read_only"
+            or not base.site.primitive_rules
+            or type(steps) is not tuple or not 1 <= len(steps) <= 64
+            or type(parameter_whitelist) is not tuple
+            or site_version == base.site.version
+            or (target_skill_id == base.skill.skill_id
+                and version == base.skill.version)
+        ):
+            raise TeachingError("teaching_candidate_invalid")
+        bindings = tuple(
+            StepPrimitiveBinding.model_validate_json(item.model_dump_json())
+            for item in steps
+        )
+        if len({item.step_id for item in bindings}) != len(bindings):
+            raise TeachingError("teaching_candidate_duplicate_step")
+        catalog = {rule.step.step_id: rule for rule in base.site.primitive_rules}
+        if len(catalog) != len(base.site.primitive_rules):
+            raise TeachingError("teaching_primitive_unregistered")
+        rules = []
+        for item in bindings:
+            source_rule = catalog.get(item.primitive_id)
+            if (
+                source_rule is None
+                or source_rule.step.effect != "read_only"
+                or source_rule.effect.actual_effect != "read_only"
+            ):
+                raise TeachingError("teaching_primitive_unregistered")
+            rules.append(source_rule.model_copy(update={
+                "step": source_rule.step.model_copy(update={"step_id": item.step_id}),
+            }))
+        checked_rules = tuple(
+            type(rule).model_validate_json(rule.model_dump_json()) for rule in rules
+        )
+        skill_steps = tuple(rule.step for rule in checked_rules)
+        approvals = tuple(
+            ParameterApproval.model_validate_json(item.model_dump_json())
+            for item in parameter_whitelist
+        )
+        required = _formal_required_purposes(base, skill_steps)
+        if ({item.name: item.purpose for item in approvals} != required
+                or len(approvals) != len(required)):
+            raise TeachingError("teaching_whitelist_invalid")
+        site_payload = base.site.model_dump(mode="json")
+        traversal = site_payload.get("traversal")
+        if isinstance(traversal, dict):
+            advance = next((
+                item.step_id for item in bindings
+                if item.primitive_id == traversal["advance_step_id"]
+            ), None)
+            site_payload["traversal"] = (
+                {**traversal, "advance_step_id": advance}
+                if advance is not None else None
+            )
+        site_payload.update(
+            version=site_version,
+            steps=[rule.model_dump(mode="json") for rule in checked_rules],
+            step_primitives=[item.model_dump(mode="json") for item in bindings],
+        )
+        site_payload["digest"] = publication_digest(
+            "browser_site.publication.v1", site_payload,
+        )
+        site = BrowserSiteDefinition.model_validate(site_payload)
+        skill_payload = base.skill.model_dump(mode="json")
+        skill_payload.update(
+            skill_id=target_skill_id, version=version,
+            site_digest=site.digest,
+            parameters=[item.name for item in approvals],
+            steps=[item.model_dump(mode="json") for item in skill_steps],
+        )
+        skill_payload["digest"] = canonical_digest("browser_skill.v1", skill_payload)
+        skill = BrowserSkill.model_validate(skill_payload)
+        candidate_payload = base.model_dump(mode="json")
+        candidate_payload.update(
+            skill=skill.model_dump(mode="json"),
+            site=site.model_dump(mode="json"),
+        )
+        candidate_payload["digest"] = publication_digest(
+            "browser_publication.durable.v1", candidate_payload,
+        )
+        return BrowserPublicationManifest.model_validate(candidate_payload)
+    except TeachingError:
+        raise
+    except Exception:
+        raise TeachingError("teaching_candidate_invalid") from None
+
+
 def compile_authorized_run(
     source: RunTeachingSource,
     *,
@@ -567,7 +695,22 @@ def compile_authorized_run(
             target_skill_id == base.skill.skill_id and version == base.skill.version
         ):
             raise TeachingError("teaching_version_not_new")
-        primitive_ids = tuple(item.primitive_id for item in source.manifest.steps)
+        logical_items = source.manifest.steps
+        if source.manifest.execution_publication_digest is not None:
+            read_plan = authority.run.read_plan
+            plan = (read_plan(source.manifest.source_run_id, binding)
+                    if read_plan is not None else None)
+            if (plan is None
+                    or plan.publication_digest
+                    != source.manifest.execution_publication_digest):
+                raise TeachingError("teaching_plan_unavailable")
+            by_step: dict[str, RunTeachingStep] = {}
+            for item in source.manifest.steps:
+                by_step.setdefault(item.event.step_id, item)
+            if set(by_step) != {item.step_id for item in plan.steps}:
+                raise TeachingError("teaching_plan_sequence_mismatch")
+            logical_items = tuple(by_step[item.step_id] for item in plan.steps)
+        primitive_ids = tuple(item.primitive_id for item in logical_items)
         if (
             primitive_ids == tuple(item.step_id for item in base.skill.steps)
             or authority.unpublished_combination(
@@ -576,23 +719,42 @@ def compile_authorized_run(
         ):
             raise TeachingError("teaching_flow_already_published")
         rules = []
-        for item in source.manifest.steps:
+        step_primitives: list[dict[str, str]] = []
+        for item in logical_items:
             raw_rule = authority.run.primitive_rule(item.primitive_id, base)
             if raw_rule is None:
                 raise TeachingError("teaching_primitive_unregistered")
             rule = type(raw_rule).model_validate_json(raw_rule.model_dump_json())
+            if base.source_kind == "registered_site" and (
+                not base.site.primitive_rules
+                or rule != next(
+                    (registered for registered in base.site.primitive_rules
+                     if registered.step.step_id == item.primitive_id),
+                    None,
+                )
+            ):
+                raise TeachingError("teaching_primitive_unregistered")
             if (
                 canonical_digest("browser_site_step.v1", rule.model_dump(mode="json"))
-                != item.rule_digest or not item.event.matches_step(rule.step)
+                != item.rule_digest or not item.event.model_copy(update={
+                    "step_id": item.primitive_id,
+                }).matches_step(rule.step)
                 or rule.effect.actual_effect != "read_only"
                 or rule.step.effect != "read_only"
             ):
                 raise TeachingError("teaching_primitive_changed")
             new_step = SkillStep.model_validate_json(
-                rule.step.model_copy(update={"step_id": canonical_step_id(item.event)})
+                rule.step.model_copy(update={"step_id": (
+                    item.event.step_id
+                    if source.manifest.execution_publication_digest is not None
+                    else canonical_step_id(item.event)
+                )})
                 .model_dump_json()
             )
             rules.append(rule.model_copy(update={"step": new_step}))
+            step_primitives.append({
+                "step_id": new_step.step_id, "primitive_id": item.primitive_id,
+            })
         checked_rules = tuple(type(rule).model_validate_json(rule.model_dump_json())
                               for rule in rules)
         steps = tuple(rule.step for rule in checked_rules)
@@ -608,7 +770,24 @@ def compile_authorized_run(
             raise TeachingError("teaching_whitelist_invalid")
         site_payload = base.site.model_dump(mode="json")
         site_payload.update(version=site_version,
-                            steps=[rule.model_dump(mode="json") for rule in checked_rules])
+                            steps=[rule.model_dump(mode="json") for rule in checked_rules],
+                            step_primitives=(
+                                step_primitives if base.source_kind == "registered_site" else []
+                            ))
+        # Exploration is a property of the source catalog. The compiled route
+        # is a fixed publication and must execute its complete sealed sequence.
+        site_payload["exploration"] = None
+        if source.manifest.execution_publication_digest is not None:
+            traversal = site_payload.get("traversal")
+            if isinstance(traversal, dict):
+                advance = next((
+                    item["step_id"] for item in step_primitives
+                    if item["primitive_id"] == traversal["advance_step_id"]
+                ), None)
+                site_payload["traversal"] = (
+                    {**traversal, "advance_step_id": advance}
+                    if advance is not None else None
+                )
         site_payload["digest"] = publication_digest(
             "browser_site.publication.v1", site_payload,
         )
@@ -630,6 +809,11 @@ def compile_authorized_run(
         candidate = BrowserPublicationManifest.model_validate_json(
             json.dumps(manifest_payload)
         )
+        if (
+            source.manifest.execution_publication_digest is not None
+            and candidate.digest != source.manifest.execution_publication_digest
+        ):
+            raise TeachingError("teaching_execution_candidate_mismatch")
         digest = canonical_digest("browser_durable_teaching_draft.v1", {
             "source_digest": source.manifest.digest,
             "publication_digest": candidate.digest,
@@ -644,7 +828,7 @@ def compile_authorized_run(
             authority.unpublished_combination(binding, target_skill_id, primitive_ids) is not True
         ):
             raise TeachingError("teaching_authorization_stale")
-        for item in source.manifest.steps:
+        for item in logical_items:
             current_rule = authority.run.primitive_rule(item.primitive_id, base)
             if current_rule is None or canonical_digest(
                 "browser_site_step.v1", current_rule.model_dump(mode="json"),

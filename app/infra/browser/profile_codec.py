@@ -7,7 +7,7 @@ import math
 from typing import Protocol, cast
 from urllib.parse import urlsplit
 
-from app.infra.browser.browserless_wire import BrowserProviderError, json_bytes
+from app.infra.browser.provider_shared import BrowserProviderError, json_bytes
 
 
 class ProfileOrigins(Protocol):

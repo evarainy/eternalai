@@ -8,31 +8,55 @@ labels. Persisted keys and real proof implementations are mandatory when enabled
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import TypeAdapter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.chat import BrowserChatService
-from app.browser_skill.submission import BrowserSubmissionService
-from app.browser_skill.models import BrowserOwner, OpaqueId
+from app.browser_skill.compiler import teaching_grant_scope_digest
+from app.browser_skill.models import (
+    BrowserOwner,
+    OpaqueId,
+    ScopeBinding,
+    TeachingPlan,
+    TeachingPlanStep,
+)
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
     BrowserPublicationRecord,
     canonical_json,
 )
+from app.browser_skill.registry import (
+    ReviewedPublicationAuthority,
+    canonical_digest,
+    publish_reviewed_candidate,
+)
+from app.browser_skill.run_contracts import BrowserArtifactView
 from app.browser_skill.runtime import BrowserReadWorker
+from app.browser_skill.submission import BrowserSubmissionService, _validate_schema
+from app.browser_skill.teaching import (
+    TeachingReplayAuthority,
+    TeachingReplayProof,
+    replay_draft,
+)
+from app.browser_skill.trajectory import ParameterApproval
+from app.browser_skill.write_workflow import _owner_digest
 from app.infra.auth.crypto import PrincipalSessionBinder
+from app.infra.browser.local_file_artifacts import FileArtifactOwner, LocalFileArtifacts
 from app.infra.browser.read_execution import (
     BrowserReadExecutionFactory,
     BrowserReadLifecycle,
     VerifiedBrowserReadExecution,
 )
+from app.infra.human_gate.postgresql import PostgreSQLHumanGate
 from app.infra.persistence.browser.authorization import (
     CleanupAuthorize,
     CleanupCheck,
@@ -49,6 +73,7 @@ from app.infra.persistence.browser.profiles import PostgreSQLBrowserProfileStore
 from app.infra.persistence.browser.publications import PostgreSQLBrowserPublicationStore
 from app.infra.persistence.browser.runs import PostgreSQLBrowserRunStore
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
+from app.ports.auth import Principal
 from app.ports.browser_chat import (
     BrowserChatBindingResolverPort,
     BrowserChatInputIdentity,
@@ -59,9 +84,19 @@ from app.ports.browser_profile_store import (
     BrowserProfileCleanupAuthorityPort,
     BrowserProfileCleanupProofPort,
 )
-from app.ports.browser_publication_store import BrowserPublicationError, PublicationOperation
-from app.ports.browser_run_store import BrowserRunStoreError, ProtectedRunEnvelope, RunSnapshot
+from app.ports.browser_publication_store import (
+    BrowserPublicationError,
+    BrowserPublicationReviewPort,
+    PublicationOperation,
+)
+from app.ports.browser_run_store import (
+    BrowserRunStoreError,
+    ProtectedRunEnvelope,
+    RunAdmission,
+    RunSnapshot,
+)
 from app.ports.capability_registry import CapabilitySpec
+from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.task_store import SessionStorePort
 from app.ports.trace import TracePort
@@ -113,7 +148,8 @@ class SingleSeedManifestAuthority:
         self, owner: BrowserOwner, skill_id: str, operation: PublicationOperation,
     ) -> bool:
         if (owner.tenant_id != self._tenant_id or skill_id != self._seed.skill.skill_id
-                or operation not in {"prepare", "activate", "deactivate", "read", "execute"}):
+                or operation not in {"prepare", "activate", "deactivate", "read", "execute",
+                                     "teach"}):
             return False
         detached_owner = BrowserOwner(tenant_id=owner.tenant_id, user_id=owner.user_id,
                                       session_id=owner.session_id)
@@ -126,7 +162,8 @@ class SingleSeedManifestAuthority:
         operation: PublicationOperation,
     ) -> bool:
         if (owner.tenant_id != self._tenant_id or skill_id != self._seed.skill.skill_id
-                or operation not in {"prepare", "activate", "deactivate", "read", "execute"}):
+                or operation not in {"prepare", "activate", "deactivate", "read", "execute",
+                                     "teach"}):
             return False
         # Explicit optional DB-only adapter; generic grant implementations keep their checks.
         check = getattr(self._grants, "check_in_session", None)
@@ -223,6 +260,19 @@ class BrowserVerticalDependencies:
         [AsyncSession, RunSnapshot], Awaitable[bool]
     ] | None = None
     cancel_check_in_session: CleanupAuthorize | None = None
+    publication_review: BrowserPublicationReviewPort | None = None
+    teaching_base: BrowserPublicationManifest | None = None
+    confirmed_key_digest: Callable[[bytes, str], str] | None = None
+    file_artifacts: LocalFileArtifacts | None = None
+    teaching_review_request: Callable[
+        [BrowserOwner, BrowserPublicationManifest, str, str, str],
+        Awaitable[HumanGateRequest],
+    ] | None = None
+    teaching_review_decide: Callable[
+        [BrowserOwner, BrowserPublicationManifest, str, str, str,
+         Literal["confirmed", "rejected"]],
+        Awaitable[HumanGateDecisionRecord],
+    ] | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -265,6 +315,9 @@ class BrowserVerticalComponents:
     _stop_resources: Callable[[], Awaitable[None]] | None = field(
         default=None, compare=False, repr=False,
     )
+    reviewed_publication: ReviewedPublicationAuthority | None = field(
+        default=None, compare=False, repr=False,
+    )
 
     async def start_resources(self) -> None:
         if self._start_resources is not None:
@@ -282,6 +335,138 @@ class BrowserVerticalComponents:
         """Explicit fixed-digest activation after trusted operator authorization."""
         return await self.publications.activate(
             owner, self._seed.skill.skill_id, self._seed.digest, expected_revision=0,
+        )
+
+    async def publish_teaching_candidate(
+        self, owner: BrowserOwner, *, draft_digest: str, replay_digest: str,
+    ) -> BrowserPublicationRecord:
+        authority = self.reviewed_publication
+        if authority is None or self._seed.source_kind != "registered_site":
+            raise BrowserPublicationError("browser_teaching_publication_unavailable")
+        return await publish_reviewed_candidate(
+            owner, self._seed, draft_digest=draft_digest,
+            replay_digest=replay_digest, authority=authority,
+        )
+
+    async def replay_teaching_candidate(
+        self, principal: Principal, bound_session: str, *,
+        source_task_id: str, source_run_id: str,
+        parameter_whitelist: tuple[ParameterApproval, ...],
+        heldout_arguments: dict[str, Any], client_request_id: str,
+        timeout_seconds: int = 300,
+    ) -> TeachingReplayProof:
+        """Submit a distinct sealed input through the installed worker and Verifier."""
+        if (self._seed.source_kind != "registered_site"
+                or type(heldout_arguments) is not dict
+                or type(timeout_seconds) is not int
+                or not 1 <= timeout_seconds <= 300):
+            raise BrowserPublicationError("browser_teaching_replay_unavailable")
+        draft, compiler, source_run = await self.submission._compile_teaching_context(
+            principal, bound_session, source_task_id, source_run_id,
+            parameter_whitelist,
+        )
+        binding = draft.binding
+        owner = binding.owner
+        _validate_schema(heldout_arguments, draft.publication.capability.input_schema)
+        original = self.cipher.decrypt_input(source_run.admission).get("arguments")
+        if (type(original) is not dict or original == heldout_arguments
+                or set(heldout_arguments) != set(draft.publication.skill.parameters)):
+            raise BrowserPublicationError("browser_teaching_replay_not_heldout")
+        ref_payload = canonical_json({
+            "owner": [owner.tenant_id, owner.user_id, owner.session_id],
+            "binding": [binding.binding_id, binding.binding_revision],
+            "publication": draft.publication.digest,
+            "arguments": heldout_arguments,
+        }).encode("utf-8")
+        heldout_ref = hmac.digest(
+            self.submission._input_key,
+            b"browser-heldout-parameters.v1\x00" + ref_payload,
+            hashlib.sha256,
+        ).hex()
+        deadline = time.monotonic() + timeout_seconds
+
+        async def authorize_replay(candidate: object, scope: ScopeBinding) -> bool:
+            if candidate != draft or scope != binding:
+                return False
+            refreshed, _, current_run = await self.submission._compile_teaching_context(
+                principal, bound_session, source_task_id, source_run_id,
+                parameter_whitelist,
+            )
+            return refreshed == draft and current_run == source_run
+
+        async def heldout_set(candidate: object, ref: str, scope: ScopeBinding) -> bool:
+            return (candidate == draft and scope == binding and ref == heldout_ref
+                    and original != heldout_arguments)
+
+        async def execute_draft(
+            candidate: object, ref: str, scope: ScopeBinding,
+        ) -> tuple[str, str]:
+            if candidate != draft or ref != heldout_ref or scope != binding:
+                raise BrowserPublicationError("browser_teaching_replay_denied")
+            envelope = await self.submission.submit_teaching(
+                principal=principal, bound_session=bound_session,
+                skill_id=draft.publication.skill.skill_id,
+                skill_version=draft.publication.skill.version,
+                arguments=heldout_arguments, client_request_id=client_request_id,
+            )
+            data = envelope.data
+            if not isinstance(data, dict):
+                raise BrowserPublicationError("browser_teaching_replay_admission_unavailable")
+            task_id, run_id = data.get("task_id"), data.get("run_id")
+            if type(task_id) is not str or type(run_id) is not str:
+                raise BrowserPublicationError("browser_teaching_replay_admission_unavailable")
+            while time.monotonic() < deadline:
+                current = await self.runs.get(owner, task_id, run_id)
+                if current.status in {"completed", "failed", "cancelled"}:
+                    return task_id, run_id
+                await asyncio.sleep(0.25)
+            raise BrowserPublicationError("browser_teaching_replay_timeout")
+
+        async def read_run(
+            task_id: str, run_id: str, scope: ScopeBinding,
+        ) -> RunSnapshot:
+            if scope != binding:
+                raise BrowserPublicationError("browser_teaching_replay_denied")
+            return await self.runs.get(owner, task_id, run_id)
+
+        async def same_subject(
+            first_run_id: str, second_run_id: str, scope: ScopeBinding,
+        ) -> bool:
+            if scope != binding or first_run_id != source_run_id:
+                return False
+            source_current = await self.runs.get(owner, source_task_id, first_run_id)
+            replay_current = await self.runs.get(
+                owner, replay_task_id, second_run_id,
+            )
+            return (
+                source_current == source_run
+                and replay_current.owner == source_current.owner
+                and replay_current.admission.binding_id
+                == source_current.admission.binding_id
+                and replay_current.admission.binding_revision
+                == source_current.admission.binding_revision
+                and replay_current.admission.target_system
+                == source_current.admission.target_system
+            )
+
+        replay_task_id = ""
+        async def execute_and_bind(
+            candidate: object, ref: str, scope: ScopeBinding,
+        ) -> tuple[str, str]:
+            nonlocal replay_task_id
+            replay_task_id, replay_run_id = await execute_draft(candidate, ref, scope)
+            return replay_task_id, replay_run_id
+
+        authority = TeachingReplayAuthority(
+            compiler=compiler, current_binding=lambda: binding,
+            authorize_replay=authorize_replay, heldout_set=heldout_set,
+            execute_draft=execute_and_bind, read_run=read_run,
+            same_subject=same_subject, record_proof=self.runs.record_replay_proof,
+            deadline_monotonic=deadline, clock=time.monotonic,
+        )
+        return await replay_draft(
+            draft, binding=binding, heldout_parameter_set_ref=heldout_ref,
+            authority=authority,
         )
 
     async def run_business_ready(self) -> tuple[RunSnapshot, ...]:
@@ -454,6 +639,22 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
                 deps.cancel_check, deps.cleanup_authorize, deps.cleanup_check,
             )) or deps.trace is None):
         raise ValueError("browser_vertical_trusted_dependency_required")
+    if (deps.seed.source_kind == "registered_site"
+            and not callable(getattr(deps.publication_review, "check_in_session", None))):
+        raise ValueError("browser_publication_review_authority_required")
+    if (deps.seed.effect == "controlled_write"
+            and (deps.seed.source_kind != "registered_site"
+                 or not callable(deps.confirmed_key_digest))):
+        raise ValueError("browser_write_confirmation_authority_required")
+    if (deps.teaching_base is not None
+            and (deps.seed.source_kind != "registered_site"
+                 or deps.seed.effect != "read_only"
+                 or deps.teaching_base.source_kind != "registered_site"
+                 or deps.teaching_base.effect != "read_only"
+                 or deps.teaching_base.digest == deps.seed.digest
+                 or not callable(getattr(deps.publication_grants,
+                                         "check_in_session", None)))):
+        raise ValueError("browser_teaching_installation_invalid")
 
 
 def build_browser_vertical(
@@ -484,6 +685,7 @@ def build_browser_vertical(
 
     publications = ActiveBrowserPublications(
         deps.session_factory, deps.capability_registry, authority,
+        review_authority=deps.publication_review,
         authorize_in_session=authority.authorize_in_session,
         capability_in_session=locked_capability,
     )
@@ -573,22 +775,322 @@ def build_browser_vertical(
         cancel_check_in_session=deps.cancel_check_in_session,
         cleanup_check=deps.cleanup_check,
     )
+    async def claim_ready_in_session(session: AsyncSession, run: RunSnapshot) -> bool:
+        if (seed.effect == "controlled_write"
+                and run.admission.publication_digest.hex() == seed.digest
+                and run.phase == "queued"
+                and not await runs.write_confirmation_ready_in_session(session, run)):
+            return False
+        return (deps.business_ready_in_session is None
+                or await deps.business_ready_in_session(session, run))
+
     runs = PostgreSQLBrowserRunStore(
         session_factory=deps.session_factory, authority=run_authority,
         digest_keys=dict(deps.request_digest_keys),
         active_digest_key_id=deps.active_request_digest_key_id,
         claim_ready=deps.business_ready,
-        claim_ready_in_session=deps.business_ready_in_session,
+        claim_ready_in_session=claim_ready_in_session,
+    )
+
+    async def teaching_publication_check(
+        session: AsyncSession, admission: RunAdmission,
+        plan: TeachingPlan, require_execution: bool,
+    ) -> CapabilitySpec:
+        owner = admission.owner
+        if (
+            seed.source_kind != "registered_site"
+            or seed.effect != "read_only"
+            or owner.tenant_id != deps.tenant_id
+            or admission.publication_digest.hex() != seed.digest
+            or plan.task_id != admission.task_id
+            or plan.run_id != admission.run_id
+            or plan.owner_digest != _owner_digest(owner)
+            or plan.binding_id != admission.binding_id
+            or plan.binding_revision != admission.binding_revision
+            or plan.sealed_input_digest != admission.input_digest.hex()
+            or plan.publication_digest != seed.digest
+            or plan.skill_digest != seed.skill.digest
+            or plan.site_digest != seed.site.digest
+            or plan.policy_digest != seed.site.policy.digest
+            or plan.verifier_digest != seed.verifier.digest
+            or not seed.site.primitive_rules
+            or len(plan.steps) != len(seed.skill.steps)
+            or tuple(item.step_id for item in plan.steps)
+            != tuple(item.step_id for item in seed.skill.steps)
+            or tuple((item.step_id, item.primitive_id) for item in plan.steps)
+            != tuple((item.step_id, item.primitive_id)
+                     for item in seed.site.step_primitives)
+        ):
+            raise BrowserPublicationError("browser_teaching_candidate_denied")
+        rows = (await session.execute(text(
+            "SELECT publication_digest,state,manifest FROM browser_publications"
+            " WHERE tenant_id=:tenant AND publication_digest IN (:candidate,:base)"
+            " FOR SHARE"
+        ), {
+            "tenant": owner.tenant_id,
+            "candidate": bytes.fromhex(seed.digest),
+            "base": bytes.fromhex(plan.source_publication_digest),
+        })).mappings().all()
+        by_digest = {bytes(row["publication_digest"]).hex(): row for row in rows}
+        candidate_row = by_digest.get(seed.digest)
+        base_row = by_digest.get(plan.source_publication_digest)
+        if (
+            candidate_row is None or base_row is None
+            or candidate_row["state"] not in {"prepared", "active", "inactive"}
+            or (require_execution and candidate_row["state"] == "inactive")
+            or (candidate_row["state"] == "prepared"
+                and base_row["state"] != "active")
+            or base_row["state"] not in {"active", "inactive"}
+        ):
+            raise BrowserPublicationError("browser_teaching_candidate_denied")
+        try:
+            candidate = BrowserPublicationManifest.model_validate(candidate_row["manifest"])
+            base = BrowserPublicationManifest.model_validate(base_row["manifest"])
+        except ValueError:
+            raise BrowserPublicationError("browser_teaching_candidate_denied") from None
+        if (
+            candidate != seed or base.digest != plan.source_publication_digest
+            or base.source_kind != "registered_site"
+            or base.effect != "read_only"
+            or (deps.teaching_base is not None and base != deps.teaching_base)
+            or seed.site.primitive_rules != base.site.primitive_rules
+            or base.site.read_rule != seed.site.read_rule
+            or seed.site.source != base.site.source
+            or plan.grant_digest != teaching_grant_scope_digest(owner, base, seed)
+        ):
+            raise BrowserPublicationError("browser_teaching_candidate_denied")
+        catalog = {rule.step.step_id: rule for rule in base.site.primitive_rules}
+        for index, item in enumerate(plan.steps):
+            primitive = catalog.get(item.primitive_id)
+            if (
+                primitive is None
+                or primitive.step.effect != "read_only"
+                or primitive.effect.actual_effect != "read_only"
+                or item.rule_digest != canonical_digest(
+                    "browser_site_step.v1", primitive.model_dump(mode="json"),
+                )
+                or seed.site.steps[index] != primitive.model_copy(update={
+                    "step": primitive.step.model_copy(update={"step_id": item.step_id}),
+                })
+            ):
+                raise BrowserPublicationError("browser_teaching_primitive_denied")
+        if not await authority.authorize_in_session(
+            session, owner, seed.skill.skill_id, "teach",
+        ):
+            raise BrowserPublicationError("browser_teaching_grant_denied")
+        check_in_session = getattr(deps.publication_grants, "check_in_session", None)
+        if not callable(check_in_session):
+            raise BrowserPublicationError("browser_teaching_grant_denied")
+        base_granted = await check_in_session(
+            session, owner, base.skill.skill_id, "execute", base.digest,
+        )
+        if base_granted is not True or await deps.source_verifier.verify(seed) is not True:
+            raise BrowserPublicationError("browser_teaching_grant_denied")
+        current = await locked_capability(session, seed.capability.capability_id)
+        if (
+            current is None or current.status != "active" or current.type != "query"
+            or canonical_json(current.model_dump(mode="json"))
+            != seed.capability_snapshot_json
+            or capability_version_bindings(current) != seed.capability_bindings
+        ):
+            raise BrowserPublicationError("browser_publication_capability_changed")
+        return current
+
+    current_auth.install_teaching_authority(
+        teaching_publication_check, runs.load_teaching_plan_in_session,
+    )
+
+    async def resolve_teaching_publication(
+        run: RunSnapshot,
+    ) -> BrowserPublicationRecord | None:
+        if (seed.source_kind != "registered_site" or seed.effect != "read_only"
+                or run.admission.publication_digest.hex() != seed.digest):
+            return None
+        async with deps.session_factory() as session, session.begin():
+            plan = await runs.load_teaching_plan_in_session(session, run.admission)
+            if plan is None:
+                return None
+            await current_auth.validate(session, run.admission, teaching_plan=plan)
+            row = (await session.execute(text(
+                "SELECT state,activation_revision,manifest FROM browser_publications"
+                " WHERE tenant_id=:tenant AND publication_digest=:digest FOR SHARE"
+            ), {"tenant": run.owner.tenant_id,
+                "digest": run.admission.publication_digest})).mappings().one_or_none()
+            if row is None:
+                raise BrowserPublicationError("browser_teaching_candidate_unavailable")
+            record = BrowserPublicationRecord.model_validate(dict(row))
+            if (record.manifest != seed or record.state == "inactive"):
+                raise BrowserPublicationError("browser_teaching_candidate_unavailable")
+            return record
+
+    async def current_teaching_publication(
+        run: RunSnapshot, manifest: BrowserPublicationManifest,
+    ) -> bool:
+        if (seed.source_kind != "registered_site" or seed.effect != "read_only"
+                or run.admission.publication_digest.hex() != seed.digest):
+            return False
+        async with deps.session_factory() as session, session.begin():
+            plan = await runs.load_teaching_plan_in_session(session, run.admission)
+            if plan is None:
+                return False
+            if manifest != seed:
+                raise BrowserPublicationError("browser_teaching_candidate_unavailable")
+            await current_auth.validate(session, run.admission, teaching_plan=plan)
+            return True
+
+    execution.install_teaching_publication(
+        resolve_teaching_publication, current_teaching_publication,
     )
     worker = BrowserReadWorker(
         runs, execution, profiles, worker_id=deps.worker_id, enabled=True,
         ttl_seconds=deps.worker_ttl_seconds,
         record_diagnostic=record_read_diagnostic,
     )
+    def file_owner(run: RunSnapshot) -> FileArtifactOwner:
+        admission = run.admission
+        return FileArtifactOwner(
+            tenant_id=run.owner.tenant_id, ai_user_id=run.owner.user_id,
+            session_id=run.owner.session_id, target_system=admission.target_system,
+            binding_id=admission.binding_id,
+            binding_revision=admission.binding_revision,
+            task_id=run.task_id, run_id=run.run_id,
+        )
+
+    async def list_file_views(run: RunSnapshot) -> tuple[BrowserArtifactView, ...]:
+        artifacts = deps.file_artifacts
+        if artifacts is None:
+            return ()
+        records = await artifacts.list_artifacts(file_owner(run), limit=64)
+        return tuple(BrowserArtifactView(
+            artifact_id=item.reference, kind="download", media_type=item.media_type,
+            size_bytes=item.size_bytes, expires_at=item.expires_at,
+            availability="available",
+        ) for item in records)
+
+    async def read_file(run: RunSnapshot, reference: str) -> tuple[str, bytes]:
+        artifacts = deps.file_artifacts
+        if artifacts is None:
+            raise BrowserPublicationError("browser_file_unavailable")
+        owner = file_owner(run)
+        metadata = await artifacts._authority.authorize_read(reference, owner)
+        payload = await artifacts.read(reference, owner)
+        return metadata.media_type, payload
+
+    async def prepared_teaching_publication(
+        owner: BrowserOwner, skill_id: str, skill_version: str,
+    ) -> BrowserPublicationRecord | None:
+        if (deps.teaching_base is None or owner.tenant_id != deps.tenant_id
+                or skill_id != seed.skill.skill_id
+                or skill_version != seed.skill.version):
+            return None
+        async with deps.session_factory() as session, session.begin():
+            row = (await session.execute(text(
+                "SELECT state,activation_revision,manifest FROM browser_publications"
+                " WHERE tenant_id=:tenant AND publication_digest=:digest FOR SHARE"
+            ), {"tenant": owner.tenant_id,
+                "digest": bytes.fromhex(seed.digest)})).mappings().one_or_none()
+            if row is None:
+                return None
+            record = BrowserPublicationRecord.model_validate(dict(row))
+            return record if record.state == "prepared" and record.manifest == seed else None
+
+    async def build_teaching_plan(
+        admission: RunAdmission, manifest: BrowserPublicationManifest,
+    ) -> TeachingPlan:
+        base = deps.teaching_base
+        if (base is None or manifest != seed
+                or admission.publication_digest.hex() != seed.digest):
+            raise BrowserPublicationError("browser_teaching_installation_invalid")
+        catalog = {rule.step.step_id: rule for rule in base.site.primitive_rules}
+        try:
+            steps = tuple(TeachingPlanStep(
+                step_id=item.step_id, primitive_id=item.primitive_id,
+                rule_digest=canonical_digest(
+                    "browser_site_step.v1",
+                    catalog[item.primitive_id].model_dump(mode="json"),
+                ),
+            ) for item in seed.site.step_primitives)
+        except KeyError:
+            raise BrowserPublicationError("browser_teaching_primitive_denied") from None
+        plan = TeachingPlan(
+            task_id=admission.task_id, run_id=admission.run_id,
+            owner_digest=_owner_digest(admission.owner),
+            binding_id=admission.binding_id,
+            binding_revision=admission.binding_revision,
+            source_publication_digest=base.digest,
+            publication_digest=seed.digest,
+            skill_digest=seed.skill.digest,
+            site_digest=seed.site.digest,
+            policy_digest=seed.site.policy.digest,
+            verifier_digest=seed.verifier.digest,
+            grant_digest=teaching_grant_scope_digest(admission.owner, base, seed),
+            sealed_input_digest=admission.input_digest.hex(),
+            parameter_set_ref=admission.input_digest.hex(),
+            steps=steps,
+        )
+        async with deps.session_factory() as session, session.begin():
+            await teaching_publication_check(session, admission, plan, True)
+        return plan
+
+    async def teaching_capture_grant(owner: BrowserOwner, digest: str) -> bool:
+        base = deps.teaching_base
+        if (base is None or digest != seed.digest or owner.tenant_id != deps.tenant_id):
+            return False
+        return (await deps.publication_grants.check(
+            owner, seed.skill.skill_id, "teach", seed.digest,
+        ) is True and await deps.publication_grants.check(
+            owner, base.skill.skill_id, "teach", base.digest,
+        ) is True)
+
+    async def teaching_published_routes(
+        owner: BrowserOwner, skill_id: str,
+    ) -> frozenset[tuple[str, ...]]:
+        if (owner.tenant_id != deps.tenant_id or skill_id != seed.skill.skill_id):
+            raise BrowserPublicationError("browser_teaching_catalog_denied")
+        async with deps.session_factory() as session, session.begin():
+            rows = (await session.execute(text(
+                "SELECT publication_digest,manifest FROM browser_publications"
+                " WHERE tenant_id=:tenant AND skill_id=:skill"
+                " AND state IN ('active','inactive') FOR SHARE"
+            ), {"tenant": owner.tenant_id, "skill": skill_id})).mappings().all()
+            routes: set[tuple[str, ...]] = set()
+            for row in rows:
+                manifest = BrowserPublicationManifest.model_validate(row["manifest"])
+                if (manifest.skill.skill_id != skill_id
+                        or manifest.digest != bytes(row["publication_digest"]).hex()):
+                    raise BrowserPublicationError("browser_teaching_catalog_invalid")
+                routes.add(tuple(
+                    item.primitive_id for item in manifest.site.step_primitives
+                ) if manifest.site.step_primitives else tuple(
+                    item.step_id for item in manifest.skill.steps
+                ))
+            return frozenset(routes)
+
     submission = BrowserSubmissionService(
         runs, publications, deps.chat_bindings, BrowserChatPayloadCipher(cipher),
         deps.session_binder.bind, deps.trace, sessions=deps.sessions,
         skill_id=seed.skill.skill_id, input_digest_key=deps.input_digest_key, enabled=True,
+        write_gate=(PostgreSQLHumanGate(deps.session_factory)
+                    if seed.effect == "controlled_write" else None),
+        confirmed_key_digest=deps.confirmed_key_digest,
+        list_artifacts=list_file_views if deps.file_artifacts is not None else None,
+        read_artifact=read_file if deps.file_artifacts is not None else None,
+        teaching_base_digest=(deps.teaching_base.digest
+                              if deps.teaching_base is not None else None),
+        teaching_candidate_digest=(seed.digest
+                                   if deps.teaching_base is not None else None),
+        teaching_candidate_version=(seed.skill.version
+                                    if deps.teaching_base is not None else None),
+        teaching_publication=(prepared_teaching_publication
+                              if deps.teaching_base is not None else None),
+        teaching_plan=(build_teaching_plan
+                       if deps.teaching_base is not None else None),
+        teaching_capture_grant=(teaching_capture_grant
+                                if deps.teaching_base is not None else None),
+        teaching_published_routes=(teaching_published_routes
+                                   if deps.teaching_base is not None else None),
+        teaching_review_request=deps.teaching_review_request,
+        teaching_review_decide=deps.teaching_review_decide,
     )
     chat = (
         BrowserChatService(submission, deps.chat_parser)

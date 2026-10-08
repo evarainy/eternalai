@@ -20,6 +20,7 @@ from app.browser_skill.models import BrowserOwner, BrowserSkill, Contract, Diges
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
     BrowserPublicationRecord,
+    rollback_version_manifest,
 )
 from app.ports.browser_publication_store import BrowserPublicationStorePort
 
@@ -342,15 +343,10 @@ class ReviewedPublicationAuthority:
     authorize: Callable[[BrowserOwner, str, str], Awaitable[bool]]
     replay_current: Callable[[BrowserOwner, str, str, str], Awaitable[bool]]
     review_fact: Callable[[BrowserOwner, str, str], Awaitable[TeachingReviewFact | None]]
-    rollback_reviewed: Callable[
-        [BrowserOwner, BrowserPublicationRecord, TeachingReviewFact],
-        Awaitable[BrowserPublicationRecord],
-    ]
 
     def __post_init__(self) -> None:
         if not all(callable(value) for value in (
             self.authorize, self.replay_current, self.review_fact,
-            self.rollback_reviewed,
         )):
             raise PublicationError("teaching_publication_authority_required")
 
@@ -444,11 +440,13 @@ async def rollback_reviewed_publication(
     owner: BrowserOwner,
     target_digest: str,
     *,
+    skill_version: str,
+    site_version: str,
     draft_digest: str,
     replay_digest: str,
     authority: ReviewedPublicationAuthority,
 ) -> BrowserPublicationRecord:
-    """Return to an already frozen version through the same PG head authority."""
+    """Publish reviewed old content as a fresh version with a locked source."""
     try:
         owner = _owner_copy(owner)
         TypeAdapter(Digest).validate_python(target_digest, strict=True)
@@ -457,15 +455,35 @@ async def rollback_reviewed_publication(
         target = await authority.store.get_frozen(owner, target_digest)
         if target is None or target.state != "inactive":
             raise PublicationError("teaching_rollback_target_unavailable")
-        fact = await _review_current(
-            owner, target.manifest, draft_digest, replay_digest, authority, "rollback",
+        candidate = rollback_version_manifest(
+            target.manifest, skill_version=skill_version,
+            site_version=site_version,
         )
-        current = await authority.store.get_active(owner, target.manifest.skill.skill_id)
+        current = await authority.store.get_active(owner, candidate.skill.skill_id)
         if current is None or current.manifest.digest == target_digest:
             raise PublicationError("teaching_rollback_head_invalid")
-        result = await authority.rollback_reviewed(owner, target, fact)
-        if result.manifest != target.manifest or result.state != "active":
+        fact = await _review_current(
+            owner, candidate, draft_digest, replay_digest, authority, "rollback",
+        )
+        prepared = await authority.store.prepare(owner, candidate)
+        if prepared.manifest != candidate or prepared.state != "prepared":
+            raise PublicationError("teaching_rollback_prepare_mismatch")
+        if await _review_current(
+            owner, candidate, draft_digest, replay_digest, authority, "rollback",
+        ) != fact:
+            raise PublicationError("teaching_review_stale")
+        result = await authority.store.activate_reviewed(
+            owner, candidate, draft_digest=draft_digest,
+            replay_digest=replay_digest, approval_ref=fact.approval_ref,
+            reviewer_ref=fact.reviewer_ref, evidence_digest=fact.evidence_digest,
+            expected_active_digest=current.manifest.digest,
+        )
+        if result.manifest != candidate or result.state != "active":
             raise PublicationError("teaching_rollback_mismatch")
+        frozen = await authority.store.get_frozen(owner, target_digest)
+        active = await authority.store.get_active(owner, candidate.skill.skill_id)
+        if frozen is None or frozen.manifest != target.manifest or active != result:
+            raise PublicationError("teaching_rollback_head_mismatch")
         return result
     except PublicationError:
         raise

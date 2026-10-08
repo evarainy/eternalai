@@ -17,7 +17,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import BrowserOwner, TeachingPlan
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.auth import Principal, authenticated_session
@@ -42,6 +42,12 @@ from app.ports.request_context import RequestOrgContext
 PublicationCheck = Callable[[BrowserOwner, bytes, str, bool], Awaitable[CapabilitySpec]]
 PublicationCheckInSession = Callable[
     [AsyncSession, BrowserOwner, bytes, str, bool], Awaitable[CapabilitySpec]
+]
+TeachingPublicationCheck = Callable[
+    [AsyncSession, RunAdmission, TeachingPlan, bool], Awaitable[CapabilitySpec]
+]
+TeachingPlanLookup = Callable[
+    [AsyncSession, RunAdmission], Awaitable[TeachingPlan | None]
 ]
 RunProofCheck = Callable[[RunSnapshot], Awaitable[None]]
 CleanupAuthorize = Callable[[AsyncSession, RunSnapshot], Awaitable[None]]
@@ -137,6 +143,19 @@ class PostgreSQLBrowserCurrentAuth:
         self._sessions, self._cipher = session_factory, cipher
         self._binder, self._policy, self._publication = session_binder, policy, publication_check
         self._publication_in_session = publication_check_in_session
+        self._teaching_publication: TeachingPublicationCheck | None = None
+        self._teaching_plan_lookup: TeachingPlanLookup | None = None
+
+    def install_teaching_authority(
+        self, check: TeachingPublicationCheck, lookup: TeachingPlanLookup,
+    ) -> None:
+        """Wire the signed Run-plan reader after Run store construction."""
+        if (self._teaching_publication is not None
+                or self._teaching_plan_lookup is not None
+                or not callable(check) or not callable(lookup)):
+            raise ValueError("browser_teaching_authority_installation_invalid")
+        self._teaching_publication = check
+        self._teaching_plan_lookup = lookup
 
     def input(self, admission: RunAdmission) -> VerifiedBrowserInput:
         payload = self._cipher.decrypt_input(admission)
@@ -183,6 +202,8 @@ class PostgreSQLBrowserCurrentAuth:
 
     async def validate(
         self, session: AsyncSession, admission: RunAdmission, *, require_active: bool = True,
+        teaching_plan: TeachingPlan | None = None,
+        lookup_teaching: bool = True,
         binding_fact: BrowserBindingFact | None = None,
         binding_row: Mapping[str, Any] | None = None,
     ) -> VerifiedBrowserInput:
@@ -259,7 +280,16 @@ class PostgreSQLBrowserCurrentAuth:
             ):
                 raise BrowserAuthorizationError("browser_binding_stale")
             PostgreSQLBrowserBindingReader.check_row(binding, binding_fact)
-        if self._publication_in_session is None:
+        if (lookup_teaching and teaching_plan is None
+                and self._teaching_plan_lookup is not None):
+            teaching_plan = await self._teaching_plan_lookup(session, admission)
+        if teaching_plan is not None:
+            if self._teaching_publication is None:
+                raise BrowserAuthorizationError("browser_teaching_authority_unavailable")
+            capability = await self._teaching_publication(
+                session, admission, teaching_plan, require_active,
+            )
+        elif self._publication_in_session is None:
             capability = await self._publication(
                 admission.owner, admission.publication_digest,
                 decoded.capability_id, require_active,
@@ -270,13 +300,14 @@ class PostgreSQLBrowserCurrentAuth:
                 decoded.capability_id, require_active,
             )
         if (
-            capability.type != "query"
+            capability.capability_id != decoded.capability_id
+            or capability.type not in {"query", "action"}
             or capability.status != "active"
             or capability.target_system != admission.target_system
             or not capability.binding_required
             or capability.execution_identity != "user_delegated"
         ):
-            raise BrowserAuthorizationError("browser_capability_not_readonly")
+            raise BrowserAuthorizationError("browser_capability_type_invalid")
         context = RequestOrgContext(
             request_id=admission.run_id,
             tenant_id=admission.owner.tenant_id,
@@ -402,9 +433,32 @@ class PostgreSQLBrowserRunAuthority:
             or captured.expires_at != admission.auth_expires_at
         ):
             raise BrowserRunStoreError("browser_admission_evidence_invalid")
-        decoded = await self._auth.validate(session, admission)
+        decoded = await self._auth.validate(session, admission, lookup_teaching=False)
         if decoded.principal != captured.principal:
             raise BrowserRunStoreError("browser_admission_evidence_invalid")
+
+    async def check_teaching_admission(
+        self, transaction: object, request: CanonicalRequest,
+        admission: RunAdmission, plan: TeachingPlan,
+    ) -> None:
+        session = self._session(transaction)
+        captured = authenticated_session.get()
+        if (
+            captured is None or request.owner != admission.owner
+            or request.task_id != admission.task_id
+            or captured.principal.ai_user_id != admission.owner.user_id
+            or captured.fingerprint != admission.auth_fingerprint
+            or captured.expires_at != admission.auth_expires_at
+            or plan.task_id != admission.task_id
+            or plan.run_id != admission.run_id
+            or plan.parameter_set_ref != admission.input_digest.hex()
+        ):
+            raise BrowserRunStoreError("browser_teaching_admission_evidence_invalid")
+        decoded = await self._auth.validate(
+            session, admission, teaching_plan=plan,
+        )
+        if decoded.principal != captured.principal:
+            raise BrowserRunStoreError("browser_teaching_admission_evidence_invalid")
 
     async def before_run_lock(
         self,

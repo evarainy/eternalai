@@ -178,6 +178,12 @@ class ProductionComponents:
     diagnostic_checks: Mapping[str, HealthCheck]
     validate_workflows: Callable[[], Awaitable[None]]
     mcp_service: McpApiService
+    # The browser installation must use these exact production authorities.
+    browser_session_factory: async_sessionmaker[AsyncSession]
+    browser_capability_registry: PostgreSQLCapabilityRegistry
+    browser_policy: MinimalPolicyGuard
+    browser_sessions: SessionStorePort
+    browser_trace: TracePort
 
 
 def build_credential_store(
@@ -855,6 +861,11 @@ def build_production_components(
     else:
         resolved_health_checks = dict(health_checks)
     return ProductionComponents(
+        browser_session_factory=session_factory,
+        browser_capability_registry=capability_registry,
+        browser_policy=policy_guard,
+        browser_sessions=session_store,
+        browser_trace=resolved_trace_port,
         mcp_service=McpApiService(
             OAuthConnections(
                 mcp_profiles,

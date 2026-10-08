@@ -28,6 +28,7 @@ from app.browser_skill.models import (
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
     BrowserPublicationRecord,
+    rollback_version_manifest,
 )
 from app.browser_skill.registry import (
     PublicationError,
@@ -35,6 +36,7 @@ from app.browser_skill.registry import (
     TeachingReviewFact,
     canonical_digest,
     publish_reviewed_candidate,
+    rollback_reviewed_publication,
 )
 from app.browser_skill.repair import (
     FormalFailedStep,
@@ -69,6 +71,7 @@ from app.ports.browser_run_store import (
     RunSnapshot,
 )
 from tests.browser_skill.factories import binding, scope
+from tests.infra.browser.test_local_read_execution import registered_site
 
 
 def _base() -> BrowserPublicationManifest:
@@ -308,9 +311,11 @@ def test_reviewed_publication_reads_approval_and_switches_pg_head() -> None:
             self, who: BrowserOwner, manifest: BrowserPublicationManifest, *,
             draft_digest: str, replay_digest: str, approval_ref: str,
             reviewer_ref: str, evidence_digest: str,
+            expected_active_digest: str | None = None,
         ) -> BrowserPublicationRecord:
             nonlocal active
             assert prepared is not None and who == owner
+            assert expected_active_digest is None
             assert (draft_digest, replay_digest, approval_ref, reviewer_ref,
                     evidence_digest) == (draft.digest, "b" * 64, "approval",
                                          "reviewer", "c" * 64)
@@ -328,13 +333,9 @@ def test_reviewed_publication_reads_approval_and_switches_pg_head() -> None:
             "approval", "reviewer", "c" * 64, True,
         )
 
-    async def rollback_unused(*_args: object) -> BrowserPublicationRecord:
-        raise AssertionError("rollback was not requested")
-
     authority = ReviewedPublicationAuthority(
         store=cast(BrowserPublicationStorePort, Store()), authorize=yes, replay_current=yes,
         review_fact=review,
-        rollback_reviewed=rollback_unused,
     )
     result = asyncio.run(publish_reviewed_candidate(
         owner, draft.publication, draft_digest=draft.digest,
@@ -352,6 +353,85 @@ def test_reviewed_publication_reads_approval_and_switches_pg_head() -> None:
             owner, draft.publication, draft_digest=draft.digest,
             replay_digest=replay_digest, authority=denied,
         ))
+
+
+def test_rollback_publishes_new_version_with_expected_head() -> None:
+    source = registered_site().manifest
+    current = rollback_version_manifest(
+        source, skill_version="current_v2", site_version="current_site_v2",
+    )
+    expected = rollback_version_manifest(
+        source, skill_version="restored_v3", site_version="restored_site_v3",
+    )
+    owner = binding().owner
+    head = BrowserPublicationRecord(
+        manifest=current, state="active", activation_revision=1,
+    )
+    old = BrowserPublicationRecord(
+        manifest=source, state="inactive", activation_revision=2,
+    )
+    calls: list[tuple[str, str]] = []
+
+    class Store:
+        async def get_frozen(
+            self, _who: BrowserOwner, digest: str,
+        ) -> BrowserPublicationRecord | None:
+            return old if digest == source.digest else head if digest == expected.digest else None
+
+        async def get_active(
+            self, _who: BrowserOwner, _skill: str,
+        ) -> BrowserPublicationRecord:
+            return head
+
+        async def prepare(
+            self, _who: BrowserOwner, manifest: BrowserPublicationManifest,
+        ) -> BrowserPublicationRecord:
+            assert manifest == expected
+            calls.append(("prepare", manifest.digest))
+            return BrowserPublicationRecord(
+                manifest=manifest, state="prepared", activation_revision=0,
+            )
+
+        async def activate_reviewed(
+            self, _who: BrowserOwner, manifest: BrowserPublicationManifest, *,
+            draft_digest: str, replay_digest: str, approval_ref: str,
+            reviewer_ref: str, evidence_digest: str,
+            expected_active_digest: str | None = None,
+        ) -> BrowserPublicationRecord:
+            nonlocal head
+            assert manifest == expected
+            assert expected_active_digest == current.digest
+            assert (draft_digest, replay_digest, approval_ref,
+                    reviewer_ref, evidence_digest) == (
+                "d" * 64, "b" * 64, "approval", "reviewer", "e" * 64,
+            )
+            calls.append(("activate", manifest.digest))
+            head = BrowserPublicationRecord(
+                manifest=manifest, state="active", activation_revision=1,
+            )
+            return head
+
+    async def yes(*_args: object) -> bool:
+        return True
+
+    async def review(*_args: object) -> TeachingReviewFact:
+        return TeachingReviewFact(
+            owner, "d" * 64, "b" * 64, expected.digest,
+            "approval", "reviewer", "e" * 64, True,
+        )
+
+    authority = ReviewedPublicationAuthority(
+        store=cast(BrowserPublicationStorePort, Store()), authorize=yes,
+        replay_current=yes, review_fact=review,
+    )
+    result = asyncio.run(rollback_reviewed_publication(
+        owner, source.digest, skill_version="restored_v3",
+        site_version="restored_site_v3", draft_digest="d" * 64,
+        replay_digest="b" * 64, authority=authority,
+    ))
+    assert result.manifest == expected
+    assert result.manifest.rollback_source_digest == source.digest
+    assert calls == [("prepare", expected.digest), ("activate", expected.digest)]
 
 
 def test_exploration_suggestions_are_registered_read_only_and_bounded() -> None:

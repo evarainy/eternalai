@@ -38,8 +38,8 @@ from app.browser_skill.models import (
     VisibleProjection,
 )
 from app.browser_skill.scoping import scope_snapshot
-from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import DOMBatchError, match_actual_nodes
+from app.infra.browser.provider_shared import BrowserProviderError
 
 
 class LiveResourceRegistry(Protocol):

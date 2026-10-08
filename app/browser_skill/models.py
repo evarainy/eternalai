@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Annotated, Literal, Never, Self, SupportsIndex, TypeVar
 from urllib.parse import urlsplit
 
@@ -80,6 +82,96 @@ class ScopeBinding(Contract):
         return self
 
 
+class TeachingPlanStep(Contract):
+    """One frozen candidate step and its audited primitive implementation."""
+
+    step_id: OpaqueId
+    primitive_id: OpaqueId
+    rule_digest: Digest
+
+
+class TeachingPlan(Contract):
+    """Value-free queued Run plan; its persisted MAC and current grant are separate.
+
+    A catalog entry alone never permits an action. The Run store checks this
+    exact sequence while the factory rechecks the frozen candidate and owner.
+    """
+
+    schema_version: Literal["browser_teaching_plan.v1"] = "browser_teaching_plan.v1"
+    task_id: OpaqueId
+    run_id: OpaqueId
+    owner_digest: Digest
+    binding_id: OpaqueId
+    binding_revision: Epoch
+    source_publication_digest: Digest
+    publication_digest: Digest
+    skill_digest: Digest
+    site_digest: Digest
+    policy_digest: Digest
+    verifier_digest: Digest
+    grant_digest: Digest
+    sealed_input_digest: Digest
+    parameter_set_ref: OpaqueId
+    steps: Annotated[tuple[TeachingPlanStep, ...], Field(min_length=1, max_length=64)]
+
+    @model_validator(mode="after")
+    def ordered_unique_steps(self) -> Self:
+        if (
+            self.binding_revision < 1
+            or len({item.step_id for item in self.steps}) != len(self.steps)
+        ):
+            raise ValueError("browser_teaching_plan_invalid")
+        return self
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class DownloadEvidence:
+    """Private per-execution handle, never a model, Trace or Run payload."""
+
+    step_id: str
+    reference: str
+    owner: BrowserOwner
+    target_system: str
+    binding_id: str
+    binding_revision: int
+    task_id: str
+    run_id: str
+    media_type: Literal[
+        "application/pdf", "text/plain", "text/csv", "image/png",
+    ]
+    size_bytes: int
+    sha256_digest: str
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            re.fullmatch(r"[A-Za-z0-9_-]{40,64}", self.reference) is None
+            or self.media_type not in {
+                "application/pdf", "text/plain", "text/csv", "image/png",
+            }
+            or type(self.size_bytes) is not int
+            or not 0 < self.size_bytes <= 16 * 1024 * 1024
+            or type(self.binding_revision) is not int
+            or self.binding_revision < 1
+            or self.expires_at.tzinfo is None
+            or self.expires_at.utcoffset() is None
+        ):
+            raise ValueError("browser_download_evidence_invalid")
+        for value in (self.step_id, self.target_system, self.binding_id,
+                      self.task_id, self.run_id):
+            TypeAdapter(OpaqueId).validate_python(value, strict=True)
+        TypeAdapter(Digest).validate_python(self.sha256_digest, strict=True)
+
+    def __repr__(self) -> str:
+        return "<DownloadEvidence: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("browser_download_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("browser_download_private_serialization_forbidden")
+
+
 class FrameHop(Contract):
     frame_id: OpaqueId
     frame_epoch: Epoch
@@ -92,6 +184,30 @@ class ScopeStamp(Contract):
     frame_path: Annotated[tuple[FrameHop, ...], Field(min_length=1, max_length=32)]
     region_id: OpaqueId
     region_digest: Digest
+
+
+class PageEvidence(Contract):
+    """Value-free facts from one actual registered collection viewport."""
+
+    scope: ScopeStamp
+    page_key_digest: Digest
+    row_key_digests: Annotated[tuple[Digest, ...], Field(max_length=255)]
+    row_ordinals: Annotated[tuple[int, ...], Field(max_length=255)]
+    declared_total: Annotated[int, Field(ge=0, le=65_536)]
+    terminal_seen: bool
+    evidence_digest: Digest
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if (
+            len(self.row_key_digests) != len(self.row_ordinals)
+            or len(set(self.row_key_digests)) != len(self.row_key_digests)
+            or len(set(self.row_ordinals)) != len(self.row_ordinals)
+            or any(type(index) is not int or index < 0 or index >= self.declared_total
+                   for index in self.row_ordinals)
+        ):
+            raise ValueError("page_evidence_invalid")
+        return self
 
 
 class ObservationRequest(Contract):
@@ -472,6 +588,9 @@ class ReadEvidence(Contract):
 class VerificationResult(Contract):
     status: Literal["verified", "mismatch", "incomplete", "unsupported"]
     evidence_digest: Digest | None = None
+    # When traversal or file proof contributes to the final verifier digest,
+    # retain the independent read digest for one-use result transfer.
+    read_evidence_digest: Digest | None = None
 
     @model_validator(mode="after")
     def verified_requires_evidence(self) -> Self:

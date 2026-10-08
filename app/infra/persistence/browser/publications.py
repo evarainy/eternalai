@@ -27,6 +27,7 @@ from app.infra.persistence.capability_registry.schema import capabilities
 from app.ports.browser_publication_store import (
     BrowserManifestAuthorityPort,
     BrowserPublicationError,
+    BrowserPublicationReviewPort,
     PublicationOperation,
 )
 from app.ports.capability_registry import CapabilityRegistryPort, CapabilitySpec
@@ -81,12 +82,36 @@ def _record(row: RowMapping) -> BrowserPublicationRecord:
         raise BrowserPublicationError("browser_publication_storage_invalid") from None
 
 
+def _rollback_compatible(
+    source: BrowserPublicationManifest, candidate: BrowserPublicationManifest,
+) -> bool:
+    """The candidate may change identity/version, never audited behavior."""
+    return (
+        candidate.source_kind == source.source_kind == "registered_site"
+        and candidate.rollback_source_digest == source.digest
+        and candidate.skill.skill_id == source.skill.skill_id
+        and candidate.skill.version != source.skill.version
+        and candidate.site.version != source.site.version
+        and candidate.site.model_dump(exclude={"version", "digest"})
+        == source.site.model_dump(exclude={"version", "digest"})
+        and candidate.skill.model_dump(exclude={"version", "digest", "site_digest"})
+        == source.skill.model_dump(exclude={"version", "digest", "site_digest"})
+        and candidate.verifier == source.verifier
+        and candidate.output == source.output
+        and candidate.capability_snapshot_json == source.capability_snapshot_json
+        and candidate.capability_bindings == source.capability_bindings
+        and candidate.effect == source.effect
+        and candidate.execution_mode == source.execution_mode
+    )
+
+
 class PostgreSQLBrowserPublicationStore:
     def __init__(
         self, session_factory: async_sessionmaker[AsyncSession],
         capability_registry: CapabilityRegistryPort,
         manifest_authority: BrowserManifestAuthorityPort,
         *,
+        review_authority: BrowserPublicationReviewPort | None = None,
         authorize_in_session: Callable[
             [AsyncSession, BrowserOwner, str, PublicationOperation], Awaitable[bool]
         ] | None = None,
@@ -97,6 +122,7 @@ class PostgreSQLBrowserPublicationStore:
         self._sessions = session_factory
         self._registry = capability_registry
         self._authority = manifest_authority
+        self._review = review_authority
         self._authorize_session = authorize_in_session
         self._capability_session = capability_in_session
 
@@ -125,14 +151,16 @@ class PostgreSQLBrowserPublicationStore:
 
     @staticmethod
     def _compare(manifest: BrowserPublicationManifest, current: CapabilitySpec | None) -> None:
-        if current is None or current.status != "active" or current.type != "query":
+        expected_type = "action" if manifest.effect == "controlled_write" else "query"
+        if current is None or current.status != "active" or current.type != expected_type:
             raise BrowserPublicationError("browser_publication_capability_unavailable")
         if (canonical_json(current.model_dump(mode="json")) != manifest.capability_snapshot_json
                 or capability_version_bindings(current) != manifest.capability_bindings):
             raise BrowserPublicationError("browser_publication_capability_changed")
 
     async def _current(self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
-                       session: AsyncSession) -> CapabilitySpec:
+                       session: AsyncSession, *, source_required: bool = True,
+                       ) -> CapabilitySpec:
         if self._capability_session is not None:
             # Installed only by composition after checking the concrete PG
             # registry and identical session factory. This locked row replaces
@@ -159,7 +187,8 @@ class PostgreSQLBrowserPublicationStore:
             self._compare(
                 manifest, None if row is None else CapabilitySpec.model_validate(dict(row))
             )
-        await self._source(owner, manifest)
+        if source_required:
+            await self._source(owner, manifest)
         assert current is not None
         return current
 
@@ -291,6 +320,17 @@ class PostgreSQLBrowserPublicationStore:
             previous = (await session.execute(text(
                 "SELECT * FROM browser_publications WHERE " + _OWNER_SKILL + " FOR UPDATE"
             ), params)).mappings().all()
+            if manifest.rollback_source_digest is not None:
+                source = [
+                    _record(row) for row in previous
+                    if bytes(cast(bytes, row["publication_digest"])).hex()
+                    == manifest.rollback_source_digest
+                ]
+                if (len(source) != 1 or source[0].state != "inactive"
+                        or not _rollback_compatible(source[0].manifest, manifest)):
+                    raise BrowserPublicationError(
+                        "browser_publication_rollback_source_invalid"
+                    )
             # Independent observe instances append only; existing records stay unchanged.
             # No inactive record may return to prepared.
             if observe_attempt_id is not None:
@@ -321,6 +361,22 @@ class PostgreSQLBrowserPublicationStore:
                     if new[0].state == "prepared" and new[0].activation_revision == 0:
                         return new[0]
                     raise BrowserPublicationError("browser_publication_already_prepared")
+            elif manifest.source_kind == "registered_site":
+                # A registered Site may add an immutable Skill version while the
+                # previous head serves existing Runs. Keep only one unreviewed
+                # candidate per Skill and never recycle a version or inactive row.
+                records = [_record(row) for row in previous]
+                same = [record for record in records if record.manifest == manifest]
+                if same:
+                    if len(same) == 1 and same[0].state == "prepared":
+                        return same[0]
+                    raise BrowserPublicationError("browser_publication_already_prepared")
+                if any(
+                    record.state == "prepared"
+                    or record.manifest.skill.version == manifest.skill.version
+                    for record in records
+                ):
+                    raise BrowserPublicationError("browser_publication_version_conflict")
             elif previous:
                 existing = _record(previous[0])
                 if (len(previous) == 1 and existing.manifest == manifest
@@ -344,6 +400,27 @@ class PostgreSQLBrowserPublicationStore:
         return await self._transition(owner, skill_id, publication_digest,
                                       expected_revision, "activate")
 
+    async def activate_reviewed(
+        self, owner: BrowserOwner, manifest: BrowserPublicationManifest, *,
+        draft_digest: str, replay_digest: str, approval_ref: str,
+        reviewer_ref: str, evidence_digest: str,
+        expected_active_digest: str | None = None,
+    ) -> BrowserPublicationRecord:
+        """Switch a registered version only after a current stored review check."""
+        checked = _manifest(manifest)
+        if checked.source_kind != "registered_site" or self._review is None:
+            raise BrowserPublicationError("browser_publication_review_required")
+        if checked.rollback_source_digest is not None and expected_active_digest is None:
+            raise BrowserPublicationError("browser_publication_head_required")
+        if expected_active_digest is not None:
+            _params(_owner(owner), digest=expected_active_digest)
+        return await self._transition(
+            owner, checked.skill.skill_id, checked.digest, 0, "activate",
+            review=(checked, draft_digest, replay_digest, approval_ref,
+                    reviewer_ref, evidence_digest),
+            expected_active_digest=expected_active_digest,
+        )
+
     async def deactivate(self, owner: BrowserOwner, skill_id: str, publication_digest: str,
                          *, expected_revision: int) -> BrowserPublicationRecord:
         return await self._transition(owner, skill_id, publication_digest,
@@ -351,7 +428,11 @@ class PostgreSQLBrowserPublicationStore:
 
     async def _transition(self, owner: BrowserOwner, skill_id: str, digest: str,
                           expected_revision: int,
-                          operation: PublicationOperation) -> BrowserPublicationRecord:
+                          operation: PublicationOperation, *,
+                          review: tuple[BrowserPublicationManifest, str, str, str, str, str]
+                          | None = None,
+                          expected_active_digest: str | None = None,
+                          ) -> BrowserPublicationRecord:
         owner = _owner(owner)
         params = _params(owner, skill_id, digest)
         if type(expected_revision) is not int or expected_revision not in (0, 1):
@@ -370,10 +451,47 @@ class PostgreSQLBrowserPublicationStore:
             if (record.manifest.skill.skill_id != skill_id or record.state != before
                     or record.activation_revision != expected_revision):
                 raise BrowserPublicationError("browser_publication_revision_conflict")
+            if operation == "activate" and record.manifest.source_kind == "registered_site":
+                if review is None or self._review is None or review[0] != record.manifest:
+                    raise BrowserPublicationError("browser_publication_review_required")
+                checked, draft, replay, approval, reviewer, evidence = review
+                try:
+                    accepted = await self._review.check_in_session(
+                        session, owner, checked, draft_digest=draft,
+                        replay_digest=replay, approval_ref=approval,
+                        reviewer_ref=reviewer, evidence_digest=evidence,
+                    )
+                except Exception:
+                    raise BrowserPublicationError(
+                        "browser_publication_review_unavailable"
+                    ) from None
+                if accepted is not True:
+                    raise BrowserPublicationError("browser_publication_review_denied")
             await self._authorize(owner, skill_id, operation)
             # Deactivation must remain possible after source/Capability revocation.
             if operation == "activate":
                 await self._current(owner, record.manifest, session)
+                if record.manifest.source_kind == "registered_site":
+                    # The existing PG partial unique index enforces one active
+                    # head. Retire it and activate the reviewed candidate in
+                    # this same transaction; rollback keeps the old head live.
+                    prior = (await session.execute(text(
+                        "SELECT * FROM browser_publications WHERE " + _OWNER_SKILL
+                        + " AND state='active' FOR UPDATE"
+                    ), params)).mappings().first()
+                    if expected_active_digest is not None and (
+                        prior is None or bytes(cast(bytes, prior["publication_digest"])).hex()
+                        != expected_active_digest
+                    ):
+                        raise BrowserPublicationError("browser_publication_head_changed")
+                    if prior is not None:
+                        previous = _record(prior)
+                        await self._authorize(owner, skill_id, "deactivate", session)
+                        await session.execute(text(
+                            "UPDATE browser_publications SET state='inactive',"
+                            "activation_revision=activation_revision+1 WHERE "
+                            + _OWNER_DIGEST + " AND state='active' AND activation_revision=1"
+                        ), _params(owner, skill_id, previous.manifest.digest))
             params.update({"before": before, "after": after, "revision": expected_revision})
             updated = (await session.execute(text(
                 "UPDATE browser_publications SET state=:after,"
@@ -413,7 +531,11 @@ class PostgreSQLBrowserPublicationStore:
                 return None
             record = _record(row)
             await self._authorize(owner, record.manifest.skill.skill_id, "read")
-            await self._current(owner, record.manifest, session)
+            # Historical metadata/result access still requires the live
+            # Capability and grant, but the old browser source need not stay
+            # installed after a reviewed version switch.
+            await self._current(owner, record.manifest, session,
+                                source_required=False)
             return record
 
     async def assert_current(self, owner: BrowserOwner,
@@ -442,7 +564,10 @@ class PostgreSQLBrowserPublicationStore:
         if require_active and record.state != "active":
             raise BrowserPublicationError("browser_publication_inactive")
         await self._authorize(owner, manifest.skill.skill_id, "read", session)
-        capability = await self._current(owner, manifest, session)
+        capability = await self._current(
+            owner, manifest, session,
+            source_required=require_active or operation == "execute",
+        )
         await self._authorize(owner, manifest.skill.skill_id, "read", session)
         await self._authorize(owner, manifest.skill.skill_id, operation, session)
         return capability

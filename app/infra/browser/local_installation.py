@@ -7,14 +7,18 @@ capacity or start browsers. Explicit publication operations remain separate.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
 
+import httpx2
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.browser_skill.models import BrowserOwner
+from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.chat_inputs import (
     FrozenBrowserChatParser,
@@ -28,6 +32,7 @@ from app.infra.browser.composition import (
     BrowserVerticalDependencies,
     build_browser_vertical,
 )
+from app.infra.browser.decision_adapters import LocalChoiceCodec
 from app.infra.browser.fixed_synthetic_seed import (
     DIAGNOSTIC_SKILL_VERSION,
     OBSERVE_SKILL_VERSION,
@@ -41,6 +46,7 @@ from app.infra.browser.fixed_synthetic_seed import (
     build_fixed_synthetic_visible_query_source,
     observe_attempt_id_from_version,
 )
+from app.infra.browser.local_file_artifacts import LocalFileArtifacts
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserReadLifecycle,
@@ -50,8 +56,17 @@ from app.infra.browser.local_resource_lifecycle import (
     RegisteredLocalSite,
 )
 from app.infra.browser.read_execution import BrowserReadExecutionFactory
+from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPProvider
+from app.infra.browser.teaching_installation import (
+    InstalledReplayProofLookup,
+    PostgreSQLTeachingPublicationReview,
+    reviewed_publication_authority,
+)
 from app.infra.persistence.browser.authorization import CleanupAuthorize
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext, BrowserResourceCipher
+from app.infra.persistence.browser.file_artifacts import (
+    PostgreSQLBrowserFileArtifactAuthority,
+)
 from app.infra.persistence.browser.leases import (
     BrowserProviderPoolRegistry,
     PostgreSQLBrowserLeaseStore,
@@ -67,6 +82,7 @@ from app.ports.browser_profile_store import (
     BrowserProfileError,
     BrowserProfileGeneration,
 )
+from app.ports.browser_publication_store import BrowserPublicationReviewPort
 from app.ports.browser_run_store import RunSnapshot
 from app.ports.browser_store import (
     BrowserBindingKey,
@@ -75,11 +91,13 @@ from app.ports.browser_store import (
     BrowserLeaseError,
 )
 from app.ports.credential_vault import BrowserBindingFact
+from app.ports.human_gate import HumanGateDecisionRecord, HumanGateRequest
 from app.ports.llm_provider import LLMProviderPort
 from app.ports.policy_guard import PolicyGuardPort
 from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort
 from app.ports.trace import TracePort
+from services.decision.manifest import PinnedCheckpoint
 
 
 class PostgreSQLLocalCleanupGrant:
@@ -273,6 +291,40 @@ class LocalBrowserInstallationDependencies:
     ttl_seconds: int = 60
     input_mode: Literal["chat", "structured"] = "chat"
     execution_timeout_seconds: int | None = None
+    publication_review: BrowserPublicationReviewPort | None = None
+    file_artifacts: LocalFileArtifacts | None = None
+    teaching_base: BrowserPublicationManifest | None = None
+    approved_checkpoint: PinnedCheckpoint | None = None
+
+
+@asynccontextmanager
+async def open_registered_local_decision(
+    *, source: RegisteredLocalSite, checkpoint: PinnedCheckpoint,
+    endpoint_origin: str, request_model: str, deployment_model: str,
+) -> AsyncIterator[DecisionHTTPProvider]:
+    """Own the isolated local Decision transport for one approved Site.
+
+    The caller keeps this context open across the API/worker lifetime and passes
+    its provider into LocalBrowserInstallationDependencies. No model is loaded
+    or source registered by constructing this client.
+    """
+    model = source.manifest.site.decision_manifest
+    if (source.manifest.source_kind != "registered_site"
+            or model.request_model != request_model
+            or model.deployment_model != deployment_model
+            or checkpoint.digest != model.manifest_digest
+            or checkpoint.deployment != deployment_model):
+        raise ValueError("browser_local_decision_installation_invalid")
+    deployment = DecisionDeployment(
+        disposition="local_model", endpoint_origin=endpoint_origin,
+        manifest_digest=checkpoint.digest,
+        registered_sources=(source.manifest.site.source,),
+    )
+    async with httpx2.AsyncClient(
+        base_url=endpoint_origin, trust_env=False, follow_redirects=False,
+        timeout=30,
+    ) as client:
+        yield DecisionHTTPProvider(client, LocalChoiceCodec(), deployment)
 
 
 def build_local_browser_vertical(
@@ -304,6 +356,51 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_recovery", None))
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
+    replay_lookup: InstalledReplayProofLookup | None = None
+    review: PostgreSQLTeachingPublicationReview | None = None
+    if registered:
+        if deps.publication_review is None:
+            replay_lookup = InstalledReplayProofLookup(deps.session_factory)
+            review = PostgreSQLTeachingPublicationReview(
+                deps.session_factory, replay_lookup,
+            )
+        elif isinstance(deps.publication_review, PostgreSQLTeachingPublicationReview):
+            review = deps.publication_review
+            existing_lookup = review._load_proof
+            if type(existing_lookup) is InstalledReplayProofLookup:
+                replay_lookup = existing_lookup
+        if (review is None or review._sessions is not deps.session_factory
+                or replay_lookup is None
+                or replay_lookup._sessions is not deps.session_factory
+                or (isinstance(source, RegisteredLocalSite)
+                    and bool(source.download_expectations)
+                    and not isinstance(deps.file_artifacts, LocalFileArtifacts))):
+            raise ValueError("browser_local_review_installation_invalid")
+    if registered and review is None:
+        raise ValueError("browser_local_review_installation_invalid")
+    if registered and isinstance(source, RegisteredLocalSite):
+        decision = deps.decision
+        checkpoint = deps.approved_checkpoint
+        if (type(decision) is not DecisionHTTPProvider
+                or not isinstance(checkpoint, PinnedCheckpoint)
+                or decision._deployment.disposition != "local_model"
+                or checkpoint.digest != source.manifest.site.decision_manifest.manifest_digest
+                or checkpoint.deployment
+                != source.manifest.site.decision_manifest.deployment_model
+                or decision._deployment.manifest_digest
+                != checkpoint.digest
+                or decision._deployment.registered_sources
+                != (source.manifest.site.source,)):
+            raise ValueError("browser_local_decision_installation_invalid")
+    file_authority: PostgreSQLBrowserFileArtifactAuthority | None = None
+    if (registered and isinstance(source, RegisteredLocalSite)
+            and source.download_expectations):
+        assert deps.file_artifacts is not None
+        installed_file_authority = deps.file_artifacts._authority
+        if (not isinstance(installed_file_authority, PostgreSQLBrowserFileArtifactAuthority)
+                or installed_file_authority._sessions is not deps.session_factory):
+            raise ValueError("browser_file_authority_installation_invalid")
+        file_authority = installed_file_authority
     wrapped: BrowserReadExecutionFactory
     source_verifier: BrowserRegisteredSourceVerifier
     if isinstance(source, FixedSyntheticSource):
@@ -355,11 +452,13 @@ def build_local_browser_vertical(
     driver = LocalPlaywrightDriver(deps.deployment)
     resources = LocalBrowserResources(
         deps.deployment, deps.proof_context, deps.cleanup_authority, driver,
+        file_artifacts=deps.file_artifacts if registered else None,
     )
     factory = LocalBrowserReadExecutionFactory(
         deps.source, resources, deps.binding, deps.decision, ttl_seconds=deps.ttl_seconds,
         execution_timeout_seconds=deps.execution_timeout_seconds,
         session_factory=deps.session_factory if registered else None,
+        file_artifacts=deps.file_artifacts if registered else None,
     )
     async def no_resource(run: RunSnapshot) -> bool:
         return await leases._prove_no_run_resource(run)
@@ -415,11 +514,45 @@ def build_local_browser_vertical(
         # Both hints are sequential in this exact claim transaction.
         return await readiness(run, session)
 
+    async def request_teaching_review(
+        owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        draft_digest: str, replay_digest: str, request_id: str,
+    ) -> HumanGateRequest:
+        if (not isinstance(source, RegisteredLocalSite)
+                or not isinstance(review, PostgreSQLTeachingPublicationReview)
+                or owner.tenant_id != deps.binding.tenant_id
+                or manifest != source.manifest
+                or await deps.publication_grants.check(
+                    owner, manifest.skill.skill_id, "activate", manifest.digest,
+                ) is not True):
+            raise ValueError("browser_teaching_review_denied")
+        return await review.request_review(
+            owner, manifest, draft_digest, replay_digest, request_id,
+        )
+
+    async def decide_teaching_review(
+        owner: BrowserOwner, manifest: BrowserPublicationManifest,
+        draft_digest: str, replay_digest: str, request_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> HumanGateDecisionRecord:
+        if (not isinstance(source, RegisteredLocalSite)
+                or not isinstance(review, PostgreSQLTeachingPublicationReview)
+                or owner.tenant_id != deps.binding.tenant_id
+                or manifest != source.manifest
+                or await deps.publication_grants.check(
+                    owner, manifest.skill.skill_id, "activate", manifest.digest,
+                ) is not True):
+            raise ValueError("browser_teaching_review_denied")
+        return await review.decide_review(
+            owner, manifest, draft_digest, replay_digest, request_id, decision,
+        )
+
     configured = build_browser_vertical(BrowserVerticalDependencies(
         session_factory=deps.session_factory, capability_registry=deps.capability_registry,
         session_binder=deps.session_binder, policy=deps.policy, tenant_id=deps.binding.tenant_id,
         seed=deps.source.manifest, publication_grants=deps.publication_grants,
-        source_verifier=source_verifier, payload_keys=deps.payload_keys,
+        source_verifier=source_verifier, publication_review=review,
+        payload_keys=deps.payload_keys,
         active_payload_key_id=deps.active_payload_key_id,
         request_digest_keys=deps.request_digest_keys,
         active_request_digest_key_id=deps.active_request_digest_key_id,
@@ -437,9 +570,20 @@ def build_local_browser_vertical(
         trace=deps.trace, sessions=deps.sessions, worker_id=deps.worker_id,
         enabled=True, worker_ttl_seconds=deps.ttl_seconds, business_ready=business_ready,
         business_ready_in_session=business_ready_in_session,
+        confirmed_key_digest=lambda digest, key: deps.proof_context.digest(
+            "browser-local-admitted-key.v1", digest + key.encode("utf-8"),
+        ).hex(),
+        file_artifacts=deps.file_artifacts if registered else None,
+        teaching_base=deps.teaching_base if registered else None,
+        teaching_review_request=request_teaching_review if registered else None,
+        teaching_review_decide=decide_teaching_review if registered else None,
     ))
     if configured is None:
         raise ValueError("browser_local_composition_unavailable")
+    if replay_lookup is not None:
+        replay_lookup.install_runs(configured.runs)
+    if file_authority is not None:
+        file_authority.install_runs(configured.runs)
     leases = PostgreSQLBrowserLeaseStore(
         session_factory=deps.session_factory, current_auth=configured.current_auth,
         binding_reader=configured.binding_reader, registry=deps.provider_pools,
@@ -489,6 +633,14 @@ def build_local_browser_vertical(
         except Exception as error:
             raise RuntimeError("browser_worker_shutdown_pending") from error
 
+    reviewed = (
+        reviewed_publication_authority(
+            configured, source.manifest, deps.publication_grants, review,
+        ) if isinstance(source, RegisteredLocalSite)
+        and isinstance(review, PostgreSQLTeachingPublicationReview)
+        else None
+    )
     return replace(
         configured, _start_resources=resources.start, _stop_resources=stop_resources,
+        reviewed_publication=reviewed,
     )

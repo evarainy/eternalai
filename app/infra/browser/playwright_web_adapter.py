@@ -53,6 +53,7 @@ from app.browser_skill.models import (
     ReadEvidence,
     ReadFieldEvidence,
     ReadSpec,
+    ScopeStamp,
     SealedParameter,
     SkillStep,
     TargetRef,
@@ -69,7 +70,6 @@ from app.browser_skill.site_rules import (
     navigation_allowed,
 )
 from app.browser_skill.verifier import authorize_current, check_liveness, failure
-from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.local_file_artifacts import StoredFileArtifact
 from app.infra.browser.playwright_dom_rules import (
     ROW_IDENTITY_MATCH,
@@ -93,6 +93,7 @@ from app.infra.browser.playwright_observer import (
     _dispose,
     _dispose_many,
 )
+from app.infra.browser.provider_shared import BrowserProviderError
 from app.ports.browser import SiteAdapter
 
 if TYPE_CHECKING:
@@ -1139,7 +1140,13 @@ class PlaywrightWebAdapter:
             "operation": command.step.operation, "fields": [], "row_selector": None,
             "target": command.target is not None,
         }
-        if command.step.operation == "read" or command.step.locator.kind == "business_key":
+        virtual_scroll = (
+            plan.traversal is not None
+            and plan.traversal.advance_mode == "scroll"
+            and command.step.step_id == plan.traversal.advance_step_id
+        )
+        if ((command.step.operation == "read" and not virtual_scroll)
+                or command.step.locator.kind == "business_key"):
             read = rules.read
             row_selector = (
                 read.row_selector if command.step.operation == "read" else step.row_selector
@@ -1444,6 +1451,12 @@ class PlaywrightWebAdapter:
         popup_guard: _OriginGuard | None = None
         try:
             plan, _ = await self._authority(session, context, command)
+            if (
+                plan.traversal is not None
+                and plan.traversal.advance_mode == "scroll"
+                and command.step.step_id == plan.traversal.advance_step_id
+            ):
+                raise failure("denied")
             async with context.dispatch_barrier(
                 session, command, context.expected_binding
             ) as permit:
@@ -1811,6 +1824,12 @@ class PlaywrightWebAdapter:
             await self._authority(session, context)
             check_liveness(context)
             page_key, row_keys, ordinals, total, terminal = after
+            if traversal.mode == "virtualized":
+                page_key = self._collection_digest(
+                    b"viewport",
+                    page_key + ":" + ",".join(str(index) for index in ordinals)
+                    + (":terminal" if terminal else ":continuing"),
+                )
             safe = {
                 "scope": final.projection.scope.model_dump(mode="json"),
                 "page_key_digest": page_key,
@@ -1835,6 +1854,101 @@ class PlaywrightWebAdapter:
             )
         finally:
             await _dispose_many((region,), suppress_cancel=sys.exc_info()[0] is not None)
+
+    @_neutral
+    async def advance_virtualized(
+        self, session: BrowserSessionRef, command: ActionCommand,
+        scope: ScopeStamp, context: ExecutionContext,
+    ) -> DispatchReceipt:
+        """Scroll only the frozen read target under the normal send barrier."""
+        node: Any = None
+        permit: DispatchPermit | None = None
+        failed = False
+        try:
+            plan, _ = await self._authority(session, context, command)
+            traversal = plan.traversal
+            if (
+                traversal is None or traversal.mode != "virtualized"
+                or traversal.advance_mode != "scroll"
+                or traversal.advance_step_id != command.step.step_id
+                or command.step.operation != "read"
+                or command.step.effect != "read_only"
+                or command.target is None or command.target.scope != scope
+                or scope.region_id != traversal.region_id
+            ):
+                raise failure("unsupported")
+            async with context.dispatch_barrier(
+                session, command, context.expected_binding,
+            ) as permit:
+                if (
+                    not isinstance(permit, DispatchPermit)
+                    or permit.execution_id != context.execution_id
+                    or permit.command != command
+                ):
+                    raise failure("denied")
+                node, _, _ = await self._validate(
+                    session, command, context, scope="dispatch_barrier",
+                )
+                check_liveness(context)
+                # The DOM step resolves one exact, registered scroll container.
+                # Only this fixed script may run; model/caller data is never JS.
+                permit.begin_send()
+                metrics = await node.element.evaluate("""async el => {
+                    if (!el.isConnected) return null;
+                    const viewport = el.clientHeight;
+                    const height = el.scrollHeight;
+                    const before = el.scrollTop;
+                    if (!Number.isFinite(viewport) || !Number.isFinite(height)
+                        || !Number.isFinite(before) || viewport <= 0
+                        || height < viewport || height > 1000000000) return null;
+                    const max = Math.max(0, height - viewport);
+                    el.scrollTop = Math.min(max, before + Math.max(1, Math.floor(viewport / 2)));
+                    await new Promise(resolve => requestAnimationFrame(() =>
+                        requestAnimationFrame(resolve)));
+                    return {before, after: el.scrollTop, max, viewport};
+                }""")
+                if (
+                    type(metrics) is not dict
+                    or any(type(metrics.get(key)) not in {int, float}
+                           for key in ("before", "after", "max", "viewport"))
+                    or not 0 <= metrics["before"] <= metrics["after"] <= metrics["max"] + 1
+                    or not 0 < metrics["viewport"] <= 1_000_000_000
+                ):
+                    raise failure("invalid_response")
+                await self._authority(session, context, command)
+                check_liveness(context)
+                if self._guards[session.session_ref].failed:
+                    raise failure("denied")
+            proof = hmac.new(
+                self._salt,
+                json.dumps({
+                    "scope": scope.model_dump(mode="json"),
+                    "step_id": command.step.step_id,
+                    "before": metrics["before"],
+                    "after": metrics["after"],
+                    "max": metrics["max"],
+                }, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            return DispatchReceipt(
+                skill_digest=command.skill_digest, step_id=command.step.step_id,
+                state="acknowledged", evidence_digest=proof,
+            )
+        except BaseException as error:
+            failed = True
+            if permit is not None and permit.send_started:
+                return DispatchReceipt(
+                    skill_digest=command.skill_digest, step_id=command.step.step_id,
+                    state="possibly_sent",
+                    failure=failure("effect_unknown", dispatched=True).failure,
+                )
+            if isinstance(error, (BrowserOperationError, BrowserProviderError,
+                                  asyncio.CancelledError)):
+                raise
+            raise failure("invalid_response") from None
+        finally:
+            if node is not None:
+                await _dispose_validated_node(node, failed=failed)
 
     @_neutral
     async def read(

@@ -359,10 +359,12 @@ class PostgreSQLBrowserChatBindingResolver:
                 raise BrowserChatError("browser_binding_missing", http_status=409)
             if len(rows) != 1:
                 raise BrowserChatError("scope_clarification_required", http_status=409)
+            if current.target_system is None:
+                raise BrowserChatError("browser_capability_changed", http_status=409)
             row = rows[0]
             return BrowserBindingFact(
                 tenant_id=principal.org_ctx.tenant_id, ai_user_id=principal.ai_user_id,
-                target_system="oa", binding_id=row["binding_id"],
+                target_system=current.target_system, binding_id=row["binding_id"],
                 binding_revision=row["binding_revision"],
                 subject_digest=row["binding_subject_digest"],
             )

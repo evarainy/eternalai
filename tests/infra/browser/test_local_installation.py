@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
+import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import BrowserOwner, ModelManifest
 from app.infra.auth.crypto import PrincipalSessionBinder
+from app.infra.browser.decision_adapters import LocalChoiceCodec
 from app.infra.browser.deployment_manifest import LocalOfflineManifest
 from app.infra.browser.local_installation import (
     LocalBrowserInstallationDependencies,
@@ -25,6 +27,7 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalChromiumDeployment,
     registered_subject_digest,
 )
+from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPProvider
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
 from app.infra.persistence.browser.leases import BrowserProviderPool, BrowserProviderPoolRegistry
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
@@ -40,6 +43,7 @@ from app.ports.policy_guard import PolicyGuardPort
 from app.ports.task_store import SessionStorePort
 from app.ports.trace import TracePort
 from tests.infra.browser.test_local_read_execution import registered_site
+from tests.services.decision.test_manifest import artifact_bundle
 
 
 def _grant(*, expires: datetime | None = None) -> PostgreSQLLocalCleanupGrant:
@@ -177,7 +181,22 @@ def test_local_profiles_never_claim_capture_or_cleanup_success() -> None:
 def test_registered_site_builds_the_existing_vertical_without_chat_parser(
     tmp_path: Path,
 ) -> None:
-    source = registered_site()
+    checkpoint = artifact_bundle(tmp_path / "checkpoint")
+    source = registered_site(ModelManifest(
+        request_model="fixture_model", deployment_model=checkpoint.deployment,
+        manifest_digest=checkpoint.digest,
+    ))
+    decision_client = Mock(spec=httpx2.AsyncClient)
+    decision_client.base_url = httpx2.URL("http://decision")
+    decision_client.trust_env = False
+    decision_client.follow_redirects = False
+    decision = DecisionHTTPProvider(
+        decision_client, LocalChoiceCodec(), DecisionDeployment(
+            disposition="local_model", endpoint_origin="http://decision",
+            manifest_digest=checkpoint.digest,
+            registered_sources=(source.manifest.site.source,),
+        ),
+    )
     assets = [
         {"asset_id": role, "role": role, "relative_path": role + ".bin",
          "sha256": digest.hex(), "license_ref": "fixture_license"}
@@ -209,12 +228,13 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
         capability_registry=PostgreSQLCapabilityRegistry(sessions),
         session_binder=binder,
         policy=Mock(spec=PolicyGuardPort), source=source, binding=binding,
-        deployment=deployment, decision=Mock(),
+        deployment=deployment, decision=decision,
         provider_pools=BrowserProviderPoolRegistry((BrowserProviderPool(
             "local", (), deployment.manifest_digest,
         ),)),
         proof_context=BrowserClaimProofContext(b"p" * 32),
-        publication_grants=Mock(), cleanup_authority=Mock(),
+        publication_grants=Mock(),
+        cleanup_authority=Mock(),
         cleanup_authorize=AsyncMock(),
         payload_keys={"payload": b"p" * 32}, active_payload_key_id="payload",
         resource_keys={"resource": b"r" * 32}, active_resource_key_id="resource",
@@ -224,6 +244,7 @@ def test_registered_site_builds_the_existing_vertical_without_chat_parser(
         llm_provider=None, structured_output=None, intent_model=None,
         trace=Mock(spec=TracePort), sessions=Mock(spec=SessionStorePort),
         worker_id="fixture_worker", enabled=True, input_mode="structured",
+        approved_checkpoint=checkpoint,
     ))
     assert installed is not None
     assert installed.chat is None

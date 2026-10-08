@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from app.browser_skill.models import ActionCommand, DispatchReceipt, ScopeStamp
+from app.browser_skill.site_rules import SiteStepRule
+from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
 from app.ports.browser_run_store import (
     DispatchFailureCode,
@@ -38,6 +41,19 @@ class BrowserWorkerCheckpoint(Protocol):
     ) -> RunSnapshot: ...
 
     async def start_execution(self) -> RunSnapshot: ...
+
+    async def record_step(
+        self, command: ActionCommand, rule: SiteStepRule, scope: ScopeStamp,
+        receipt: DispatchReceipt, policy_digest: str, sequence: int,
+    ) -> RunTeachingStep:
+        """Persist one acknowledged, registered step before the next browser send."""
+        ...
+
+    async def assert_write_reservation(
+        self, command: ActionCommand,
+    ) -> None:
+        """Recheck the durable exact send reservation immediately before IO."""
+        ...
 
 
 @dataclass(frozen=True, slots=True, repr=False)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import math
 import time
 from typing import Literal, Self
@@ -53,7 +54,7 @@ class DecisionDeployment(Contract):
     accepts only that registered class; real/local data needs the M2 egress gate.
     """
 
-    disposition: Literal["cloud_synthetic", "local_synthetic"]
+    disposition: Literal["cloud_synthetic", "local_synthetic", "local_model"]
     endpoint_origin: str
     manifest_digest: Digest
     registered_sources: tuple[DecisionSource, ...]
@@ -78,6 +79,18 @@ class DecisionDeployment(Contract):
             "https://"
         ):
             raise ValueError("decision_cloud_requires_tls")
+        if self.disposition == "local_model":
+            host = urlsplit(self.endpoint_origin).hostname
+            assert host is not None
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                if (host != "localhost" and "." in host
+                        and not host.endswith((".local", ".internal", ".lan"))):
+                    raise ValueError("decision_local_origin_invalid") from None
+            else:
+                if address.is_global:
+                    raise ValueError("decision_local_origin_invalid")
         ids = [source.source_id for source in self.registered_sources]
         if not ids or len(ids) != len(set(ids)):
             raise ValueError("decision_source_registry_invalid")
@@ -99,6 +112,11 @@ class DecisionHTTPProvider:
     ) -> None:
         if str(client.base_url).rstrip("/") != deployment.endpoint_origin:
             raise ValueError("decision_endpoint_mismatch")
+        if client.trust_env is not False or client.follow_redirects is not False:
+            raise ValueError("decision_transport_not_isolated")
+        if (deployment.disposition == "local_model"
+                and type(codec) is not LocalChoiceCodec):
+            raise ValueError("decision_local_codec_required")
         self._client = client
         self._codec = codec
         self._deployment = deployment

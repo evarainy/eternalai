@@ -15,7 +15,8 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from typing import Protocol, get_args
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, get_args
 
 from jsonschema import Draft202012Validator
 from referencing import Registry
@@ -38,10 +39,19 @@ from app.browser_skill.models import (
     ScopeBinding,
     SealedParameter,
 )
-from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    BrowserPublicationRecord,
+)
 from app.browser_skill.runtime import _BrowserReadDeferred
-from app.browser_skill.site_rules import RegisteredQueryReadRule
-from app.browser_skill.verifier import IndependentVerifier, ReadSpecResolver, failure
+from app.browser_skill.site_rules import ExpectedDownload, RegisteredQueryReadRule
+from app.browser_skill.verifier import (
+    DownloadVerifier,
+    IndependentVerifier,
+    ReadSpecResolver,
+    failure,
+)
+from app.infra.browser.local_file_artifacts import StoredFileArtifact
 from app.infra.browser.playwright_dom_rules import RegisteredDOMRules
 from app.infra.browser.playwright_observer import PlaywrightObserver
 from app.infra.browser.playwright_web_adapter import (
@@ -60,6 +70,9 @@ from app.ports.browser_read_execution import (
     BrowserWorkerCheckpoint,
 )
 from app.ports.browser_run_store import RunCleanup, RunEffect, RunSnapshot
+
+if TYPE_CHECKING:
+    from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
 
 
 class BrowserOutputProjector(Protocol):
@@ -87,6 +100,15 @@ class RegisteredReadExecution:
     bind_operation_authority: Callable[[ExecutionContext], OperationAuthority] | None = None
     authority_diagnostic: Callable[[], dict[str, int]] | None = None
     decision_http_diagnostic: Callable[[], dict[str, str | int]] | None = None
+    registered_popup_source: RegisteredLocalSite | None = None
+    write_reservation_authority: Callable[
+        [BrowserSessionRef, ExecutionContext, ActionCommand], Awaitable[None]
+    ] | None = None
+    download_sink: Callable[
+        [Path, ExpectedDownload], Awaitable[StoredFileArtifact]
+    ] | None = None
+    expected_downloads: tuple[ExpectedDownload, ...] = ()
+    verify_downloads: DownloadVerifier | None = None
 
 
 class BrowserReadExecutionFactory(Protocol):
@@ -146,6 +168,41 @@ class VerifiedBrowserReadExecution:
         self._emissions: dict[str, _VerifiedEmission] = {}
         self._observe_only_manifest: BrowserPublicationManifest | None = None
         self._observe_only_receipt: tuple[RunSnapshot, int] | None = None
+        self._teaching_publication: Callable[
+            [RunSnapshot], Awaitable[BrowserPublicationRecord | None]
+        ] | None = None
+        self._teaching_current: Callable[
+            [RunSnapshot, BrowserPublicationManifest], Awaitable[bool]
+        ] | None = None
+
+    def install_teaching_publication(
+        self,
+        resolve: Callable[[RunSnapshot], Awaitable[BrowserPublicationRecord | None]],
+        current: Callable[[RunSnapshot, BrowserPublicationManifest], Awaitable[bool]],
+    ) -> None:
+        if (self._teaching_publication is not None or self._teaching_current is not None
+                or not callable(resolve) or not callable(current)):
+            raise ValueError("browser_teaching_publication_installation_invalid")
+        self._teaching_publication, self._teaching_current = resolve, current
+
+    async def _frozen_for_run(
+        self, run: RunSnapshot,
+    ) -> BrowserPublicationRecord | None:
+        if self._teaching_publication is not None:
+            teaching = await self._teaching_publication(run)
+            if teaching is not None:
+                return teaching
+        return await self._publications.get_frozen(
+            run.owner, run.admission.publication_digest.hex(),
+        )
+
+    async def _assert_run_publication(
+        self, run: RunSnapshot, manifest: BrowserPublicationManifest,
+    ) -> None:
+        if (self._teaching_current is not None
+                and await self._teaching_current(run, manifest)):
+            return
+        await self._publications.assert_current(run.owner, manifest)
 
     def _install_fixed_observe_only(self, manifest: BrowserPublicationManifest) -> None:
         """Trusted one-off installation; a version label alone cannot enable stopping."""
@@ -330,9 +387,7 @@ class VerifiedBrowserReadExecution:
                 or run.verification == "verified"
             ):
                 raise BrowserReadExecutionError("denied")
-            publication = await self._publications.get_frozen(
-                run.owner, run.admission.publication_digest.hex(),
-            )
+            publication = await self._frozen_for_run(run)
             run = await checkpoint.refresh()
             if (
                 run.phase != "acquiring" or run.effect != "not_sent"
@@ -391,6 +446,13 @@ class VerifiedBrowserReadExecution:
                 or execution.context.source != manifest.site.source
                 or execution.context.navigation_origins != manifest.site.navigation_origins
                 or execution.site.bootstrap(manifest.skill) != manifest.site_plan()
+                or (execution.registered_popup_source is not None and (
+                    execution.registered_popup_source.manifest != manifest
+                    or execution.registered_popup_source.region
+                    != execution.observer._regions.get(
+                        execution.registered_popup_source.region.region_id
+                    )
+                ))
             ):
                 raise BrowserReadExecutionError("denied")
             context = self._fenced_context(
@@ -412,15 +474,31 @@ class VerifiedBrowserReadExecution:
                         stop_after_observe=observe_only,
                         operation_authority=operation_authority,
                         authority_diagnostic=execution.authority_diagnostic,
+                        registered_popup_source=execution.registered_popup_source,
+                        write_reservation_authority=execution.write_reservation_authority,
+                        download_sink=execution.download_sink,
                     ),
                 ),
             )
             # Construct the verifier here; the factory cannot substitute an
             # executor completion flag or a model-supplied verification result.
-            verifier = IndependentVerifier(web, execution.site, execution.resolver)
+            verifier = IndependentVerifier(
+                web, execution.site, execution.resolver,
+                expected_downloads=execution.expected_downloads,
+                verify_downloads=execution.verify_downloads,
+            )
             executor = BrowserExecutor(
                 web, execution.decision, verifier, execution.site,
                 execution.resolver, execution.decision_contexts,
+                step_audit=getattr(checkpoint, "record_step", None),
+                exploration_publication=(
+                    execution.registered_popup_source.manifest
+                    if execution.registered_popup_source is not None else None
+                ),
+                exploration_suggest=(
+                    execution.registered_popup_source.exploration_suggest
+                    if execution.registered_popup_source is not None else None
+                ),
             )
             await checkpoint.start_execution()
             attempted = True
@@ -454,7 +532,7 @@ class VerifiedBrowserReadExecution:
             if verified.evidence_digest is None:
                 raise BrowserReadExecutionError("invalid_response")
             mark("publication")
-            await self._publications.assert_current(run.owner, manifest)
+            await self._assert_run_publication(run, manifest)
             run = await checkpoint.refresh()
             mark("output_emission")
             evidence_digest = bytes.fromhex(verified.evidence_digest)
@@ -621,7 +699,7 @@ class VerifiedBrowserReadExecution:
             if (run.admission.publication_digest.hex() != manifest.digest
                     or run.owner != original.expected_binding.owner):
                 raise failure("denied")
-            await self._publications.assert_current(run.owner, manifest)
+            await self._assert_run_publication(run, manifest)
 
         # A registered concrete context can compose publication checks into its
         # DB-only fences. Generic factories retain the full bridge wrappers.
@@ -634,7 +712,7 @@ class VerifiedBrowserReadExecution:
         async def fence() -> None:
             try:
                 run = await checkpoint.refresh()
-                await self._publications.assert_current(run.owner, manifest)
+                await self._assert_run_publication(run, manifest)
                 await checkpoint.refresh()
             except Exception:
                 original.cancellation.set()

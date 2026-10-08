@@ -12,22 +12,44 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Never
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as SchemaValidationError
 from referencing import Registry
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.compiler import (
+    DurableTeachingCompilerAuthority,
+    DurableTeachingDraft,
+    compile_authorized_run,
+)
+from app.browser_skill.models import (
+    BrowserOwner,
+    ConfirmedBusinessKey,
+    ScopeBinding,
+    TeachingPlan,
+)
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    BrowserPublicationRecord,
+)
 from app.browser_skill.run_contracts import (
     BrowserAcceptedView,
+    BrowserArtifactView,
     BrowserCancelView,
     BrowserProgressView,
     BrowserResultView,
     BrowserRunView,
     project_accepted,
 )
+from app.browser_skill.trajectory import (
+    ParameterApproval,
+    RunTeachingAuthority,
+    RunTeachingSource,
+    capture_authorized_run,
+)
+from app.browser_skill.write_workflow import BrowserWritePreparation, prepare_browser_write
 from app.ports.auth import Principal, SessionBindingError, authenticated_session
 from app.ports.browser_chat import (
     BrowserChatBindingResolverPort,
@@ -36,7 +58,6 @@ from app.ports.browser_chat import (
     BrowserChatInputIdentity,
     BrowserRunResponse,
 )
-from app.ports.capability_registry import CapabilitySpec
 from app.ports.browser_publication_store import BrowserPublicationStorePort
 from app.ports.browser_run_store import (
     BrowserRunStoreError,
@@ -46,7 +67,16 @@ from app.ports.browser_run_store import (
     RunSnapshot,
     checked_run_id,
 )
+from app.ports.capability_registry import CapabilitySpec
 from app.ports.credential_vault import BrowserAuthorizationError
+from app.ports.human_gate import (
+    HumanGateConflictError,
+    HumanGateDecisionRecord,
+    HumanGatePort,
+    HumanGateRequest,
+    VersionBinding,
+    build_task_version_binding_manifest,
+)
 from app.ports.response_envelope import ResponseEnvelope, UIComponent
 from app.ports.task_store import SessionRecord, SessionStorePort
 from app.ports.trace import TracePort
@@ -57,6 +87,10 @@ def _json(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":"),
     ).encode("ascii")
+
+
+def _raise_teaching_source_unavailable() -> Never:
+    raise BrowserChatError("browser_teaching_capture_unavailable")
 
 
 def _validate_schema(value: object, schema: dict[str, Any]) -> None:
@@ -95,6 +129,36 @@ class BrowserSubmissionService:
         cipher: BrowserChatCipherPort, session_binder: Callable[[Principal, str], str],
         trace: TracePort, *, sessions: SessionStorePort, skill_id: str,
         input_digest_key: bytes, enabled: bool = False,
+        write_gate: HumanGatePort | None = None,
+        confirmed_key_digest: Callable[[bytes, str], str] | None = None,
+        list_artifacts: Callable[[RunSnapshot], Awaitable[tuple[BrowserArtifactView, ...]]]
+        | None = None,
+        read_artifact: Callable[[RunSnapshot, str], Awaitable[tuple[str, bytes]]]
+        | None = None,
+        teaching_base_digest: str | None = None,
+        teaching_candidate_digest: str | None = None,
+        teaching_candidate_version: str | None = None,
+        teaching_publication: Callable[
+            [BrowserOwner, str, str], Awaitable[BrowserPublicationRecord | None]
+        ] | None = None,
+        teaching_plan: Callable[
+            [RunAdmission, BrowserPublicationManifest], Awaitable[TeachingPlan]
+        ] | None = None,
+        teaching_capture_grant: Callable[
+            [BrowserOwner, str], Awaitable[bool]
+        ] | None = None,
+        teaching_published_routes: Callable[
+            [BrowserOwner, str], Awaitable[frozenset[tuple[str, ...]]]
+        ] | None = None,
+        teaching_review_request: Callable[
+            [BrowserOwner, BrowserPublicationManifest, str, str, str],
+            Awaitable[HumanGateRequest],
+        ] | None = None,
+        teaching_review_decide: Callable[
+            [BrowserOwner, BrowserPublicationManifest, str, str, str,
+             Literal["confirmed", "rejected"]],
+            Awaitable[HumanGateDecisionRecord],
+        ] | None = None,
     ) -> None:
         if (
             type(enabled) is not bool or type(input_digest_key) is not bytes
@@ -107,6 +171,19 @@ class BrowserSubmissionService:
         self._input_key, self._enabled = input_digest_key, enabled
         checked_run_id(skill_id)
         self._sessions, self._skill_id = sessions, skill_id
+        self._write_gate = write_gate
+        self._confirmed_key_digest = confirmed_key_digest
+        self._list_artifacts = list_artifacts
+        self._read_artifact = read_artifact
+        self._teaching_base_digest = teaching_base_digest
+        self._teaching_candidate_digest = teaching_candidate_digest
+        self._teaching_candidate_version = teaching_candidate_version
+        self._teaching_publication = teaching_publication
+        self._teaching_plan = teaching_plan
+        self._teaching_capture_grant = teaching_capture_grant
+        self._teaching_published_routes = teaching_published_routes
+        self._teaching_review_request = teaching_review_request
+        self._teaching_review_decide = teaching_review_decide
 
     @property
     def skill_id(self) -> str:
@@ -200,6 +277,40 @@ class BrowserSubmissionService:
             entrypoint="structured_internal",
         )
 
+    async def submit_teaching(
+        self, *, principal: Principal, bound_session: str,
+        skill_id: str, skill_version: str, arguments: dict[str, Any],
+        client_request_id: str,
+    ) -> ResponseEnvelope:
+        """Internal prepared-candidate admission; one Run and MAC plan commit."""
+        self._invocation(principal, bound_session)
+        if (type(arguments) is not dict or self._teaching_base_digest is None
+                or self._teaching_candidate_digest is None
+                or self._teaching_publication is None or self._teaching_plan is None):
+            raise BrowserChatError("browser_teaching_unavailable")
+        try:
+            semantic = _json({
+                "schema_version": "browser.request.semantic.teaching.v1",
+                "skill_id": skill_id, "skill_version": skill_version,
+                "candidate_digest": self._teaching_candidate_digest,
+                "source_publication_digest": self._teaching_base_digest,
+                "arguments": arguments,
+            })
+        except (TypeError, ValueError):
+            raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
+        if len(semantic) > 1_048_576 or len(_json(arguments)) > 16_384:
+            raise BrowserChatError("browser_request_input_invalid", http_status=422)
+
+        async def supplied(_capability: CapabilitySpec) -> dict[str, Any]:
+            return arguments
+
+        return await self._submit(
+            principal=principal, bound_session=bound_session, skill_id=skill_id,
+            skill_version=skill_version, semantic=semantic, arguments_for=supplied,
+            client_request_id=client_request_id, channel="api",
+            entrypoint="structured_internal", teaching=True,
+        )
+
     async def submit_chat(
         self, *, principal: Principal, bound_session: str, skill_id: str,
         message: str, client_capabilities: dict[str, Any], client_request_id: str,
@@ -233,6 +344,7 @@ class BrowserSubmissionService:
         arguments_for: Callable[[CapabilitySpec], Awaitable[dict[str, Any]]],
         client_request_id: str, channel: Literal["web", "cli", "api", "mock"],
         entrypoint: Literal["runtime_chat", "structured_internal"],
+        teaching: bool = False,
     ) -> ResponseEnvelope:
         invocation = self._invocation(principal, bound_session)
         owner = invocation.owner
@@ -280,9 +392,32 @@ class BrowserSubmissionService:
                 except BrowserAuthorizationError as error:
                     raise BrowserChatError(error.code, http_status=403) from None
                 self._recheck(invocation)
+            if (not teaching and request.run is not None
+                    and entrypoint == "structured_internal"):
+                publication = await self._publications.get_active(owner, skill_id)
+                if (publication is not None
+                        and publication.manifest.digest
+                        == request.run.admission.publication_digest.hex()
+                        and publication.manifest.effect == "controlled_write"):
+                    arguments = await arguments_for(publication.manifest.capability)
+                    _validate_schema(arguments, publication.manifest.capability.input_schema)
+                    current = await self._store.get(owner, request.task_id, request.run.run_id)
+                    if current.phase == "queued":
+                        await self._ensure_write_preparation(
+                            owner, request.task_id, request.run.run_id,
+                            publication.manifest, arguments,
+                        )
+                    current = await self._store.get(owner, request.task_id, request.run.run_id)
+                    self._recheck(invocation)
+                    return self._duplicate(request, run=current)
             return self._duplicate(request)
         try:
-            publication = await self._publications.get_active(owner, skill_id)
+            publication = (
+                await self._teaching_publication(owner, skill_id, skill_version)
+                if teaching and self._teaching_publication is not None
+                and skill_version is not None
+                else await self._publications.get_active(owner, skill_id)
+            )
             if publication is None or (
                 skill_version is not None and publication.manifest.skill.version != skill_version
             ):
@@ -297,14 +432,29 @@ class BrowserSubmissionService:
                 manifest.source_kind == "registered_synthetic_fixture"
                 and capability.target_system == "oa"
             )
+            controlled_write = manifest.effect == "controlled_write"
             if (
-                manifest.skill.skill_id != skill_id or manifest.effect != "read_only"
-                or capability.type != "query" or capability.status != "active"
+                manifest.skill.skill_id != skill_id
+                or manifest.effect not in {"read_only", "controlled_write"}
+                or capability.type != ("action" if controlled_write else "query")
+                or capability.status != "active"
                 or not (registered_target or synthetic_oa)
                 or not capability.binding_required
                 or capability.execution_identity != "user_delegated"
+                or (controlled_write and (
+                    manifest.source_kind != "registered_site"
+                    or entrypoint != "structured_internal"
+                    or self._write_gate is None
+                    or self._confirmed_key_digest is None
+                ))
+                or (teaching and (
+                    manifest.source_kind != "registered_site"
+                    or manifest.effect != "read_only"
+                    or manifest.digest != self._teaching_candidate_digest
+                    or self._teaching_plan is None
+                ))
             ):
-                raise BrowserChatError("browser_capability_not_readonly", http_status=403)
+                raise BrowserChatError("browser_capability_unavailable", http_status=403)
             arguments = await arguments_for(capability)
             if type(arguments) is not dict:
                 raise BrowserChatError("browser_request_input_invalid", http_status=422)
@@ -315,7 +465,8 @@ class BrowserSubmissionService:
                 or binding.target_system != capability.target_system
             ):
                 raise BrowserChatError("browser_binding_stale", http_status=403)
-            await self._publications.assert_current(owner, manifest)
+            if not teaching:
+                await self._publications.assert_current(owner, manifest)
             self._recheck(invocation)
             run_id = uuid4().hex
             payload: dict[str, object] = {
@@ -347,6 +498,10 @@ class BrowserSubmissionService:
                 publication_digest=identity.publication_digest,
                 input_revision=1, input_digest=input_digest, protected_input=protected,
             )
+            plan = (
+                await self._teaching_plan(admission, manifest)
+                if teaching and self._teaching_plan is not None else None
+            )
         except Exception as error:
             code = (
                 error.code if isinstance(
@@ -364,7 +519,11 @@ class BrowserSubmissionService:
         # Store mints acceptance provenance only after the Run/Task COMMIT.
         # Never reject or rewrite this request if post-commit tracing fails.
         try:
-            committed = await self._store.accept(request, admission)
+            committed = (
+                await self._store.accept_teaching(request, admission, plan)
+                if teaching and plan is not None
+                else await self._store.accept(request, admission)
+            )
         except BrowserRunStoreError as error:
             raise self._store_error(error) from None
         except Exception:
@@ -372,6 +531,20 @@ class BrowserSubmissionService:
             # Never issue reject_request after attempting the accept transaction.
             raise BrowserChatError("browser_request_admission_unavailable") from None
         accepted = project_accepted(committed, owner)
+        if manifest.effect == "controlled_write":
+            try:
+                await self._ensure_write_preparation(
+                    owner, request.task_id, run_id, manifest, arguments,
+                )
+                current = await self._store.get(owner, request.task_id, run_id)
+                accepted = BrowserAcceptedView(
+                    task_id=current.task_id, run_id=current.run_id,
+                    state_revision=current.state_revision,
+                )
+            except Exception:
+                # The Run has committed and remains queued. A canonical retry
+                # can recover the same preview; never claim dispatch readiness.
+                raise BrowserChatError("browser_write_preparation_unavailable") from None
         diagnostic = None
         try:
             if request.trace_id is None:
@@ -391,14 +564,84 @@ class BrowserSubmissionService:
             diagnostic = "browser_task_created_trace_unavailable"
         return self._envelope(request, "running", accepted.model_dump(), diagnostic=diagnostic)
 
-    def _duplicate(self, request: CanonicalRequest) -> ResponseEnvelope:
+    @staticmethod
+    def _write_confirmation_view(preparation: BrowserWritePreparation) -> dict[str, object]:
+        return {
+            "request_id": preparation.request_id,
+            "action_digest": preparation.action_digest,
+            "request_digest": preparation.request_digest,
+            "skill_id": preparation.skill_id,
+            "skill_version": preparation.skill_version,
+            "publication_digest": preparation.publication_digest,
+            "site_id": preparation.site_id,
+            "object_type": preparation.object_type,
+            "business_key_digest": preparation.business_key_digest,
+            "parameter_set_digest": preparation.parameter_set_digest,
+            "binding_revision": preparation.binding_revision,
+            "write_steps_digest": preparation.write_steps_digest,
+            "expires_at": preparation.expires_at.isoformat(),
+        }
+
+    async def _ensure_write_preparation(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+        manifest: BrowserPublicationManifest, arguments: dict[str, Any],
+    ) -> BrowserWritePreparation:
+        gate, key_digest = self._write_gate, self._confirmed_key_digest
+        if gate is None or key_digest is None:
+            raise BrowserChatError("browser_write_preparation_unavailable")
+        run = await self._store.get(owner, task_id, run_id)
+        if run.admission.publication_digest.hex() != manifest.digest:
+            raise BrowserChatError("browser_publication_unavailable")
+        key_name = manifest.site.read_rule.key_ref.name
+        value = arguments.get(key_name)
+        if (type(value) is not str or not 1 <= len(value) <= 256
+                or len(value.encode("utf-8")) > 512):
+            raise BrowserChatError("browser_request_input_invalid", http_status=422)
+        confirmed = ConfirmedBusinessKey(
+            confirmation_ref=run_id,
+            object_type=manifest.site.read_rule.object_type,
+            key_digest=key_digest(run.admission.input_digest, value),
+            value_ref=manifest.site.read_rule.key_ref,
+        )
+        expected_binding = VersionBinding(
+            resource_type="skill", resource_id=manifest.skill.skill_id,
+            version=manifest.skill.version, digest=manifest.skill.digest,
+        )
+        binding = await gate.get_task_binding(task_id)
+        if binding is None:
+            try:
+                binding = await gate.bind_task(build_task_version_binding_manifest(
+                    task_id=task_id, bindings=(expected_binding,), locked_at=datetime.now(UTC),
+                ))
+            except HumanGateConflictError:
+                binding = await gate.get_task_binding(task_id)
+                if binding is None:
+                    raise
+        if binding.bindings != (expected_binding,):
+            raise BrowserChatError("browser_write_task_binding_invalid")
+        existing = await self._store.load_write_preparation(owner, task_id, run_id)
+        preparation = prepare_browser_write(
+            run, manifest, confirmed, binding,
+            now=existing.requested_at if existing is not None else datetime.now(UTC),
+        )
+        if existing is not None and existing != preparation:
+            raise BrowserChatError("browser_write_preparation_mismatch")
+        await gate.create_request(preparation.gate_request(owner))
+        if existing is None:
+            await self._store.record_write_preparation(run, preparation)
+        return preparation
+
+    def _duplicate(
+        self, request: CanonicalRequest, *, run: RunSnapshot | None = None,
+    ) -> ResponseEnvelope:
         if request.run is not None:
-            run = request.run
+            run = run or request.run
             if run.owner != request.owner or run.task_id != request.task_id:
                 raise BrowserChatError("browser_run_projection_invalid")
-            return self._envelope(request, "running", BrowserAcceptedView(
+            data = BrowserAcceptedView(
                 task_id=run.task_id, run_id=run.run_id, state_revision=run.state_revision,
-            ).model_dump())
+            ).model_dump()
+            return self._envelope(request, "running", data)
         if request.task_status == "failed":
             return self._envelope(request, "failed", {
                 "kind": "failed", "error_code": request.error_code or "browser_request_abandoned",
@@ -453,14 +696,335 @@ class BrowserSubmissionService:
                 ):
                     raise BrowserChatError("browser_target_stale", http_status=409)
                 run = fresh
+            artifacts: tuple[BrowserArtifactView, ...] = ()
+            if (run.status == "completed" and run.verification == "verified"
+                    and run.verification_evidence_digest is not None
+                    and self._list_artifacts is not None):
+                artifacts = await self._list_artifacts(run)
+                fresh = await self._store.get(owner, task_id, run_id)
+                if (fresh.admission != run.admission or fresh.status != run.status
+                        or fresh.verification != run.verification
+                        or fresh.result_digest != run.result_digest):
+                    raise BrowserChatError("browser_target_stale", http_status=409)
+                run = fresh
             self._recheck(invocation)
-            return BrowserRunResponse(run=self._view(run), value=value)
+            return BrowserRunResponse(run=self._view(run, artifacts=artifacts), value=value)
         except BrowserRunStoreError as error:
             raise self._store_error(error) from None
         except BrowserChatError:
             raise
         except Exception:
             raise BrowserChatError("browser_run_projection_invalid") from None
+
+    async def read_artifact(
+        self, principal: Principal, bound_session: str, task_id: str,
+        run_id: str, reference: str,
+    ) -> tuple[str, bytes]:
+        """Internal authenticated retrieval; transport is installed separately."""
+        invocation = self._invocation(principal, bound_session)
+        if self._read_artifact is None:
+            raise BrowserChatError("browser_file_unavailable")
+        owner = invocation.owner
+        try:
+            run = await self._store.get(owner, task_id, run_id)
+            if (run.status != "completed" or run.verification != "verified"
+                    or run.verification_evidence_digest is None):
+                raise BrowserChatError("browser_file_unavailable", http_status=404)
+            media_type, payload = await self._read_artifact(run, reference)
+            fresh = await self._store.get(owner, task_id, run_id)
+            if (fresh.admission != run.admission or fresh.status != run.status
+                    or fresh.verification != run.verification
+                    or fresh.result_digest != run.result_digest):
+                raise BrowserChatError("browser_target_stale", http_status=409)
+            self._recheck(invocation)
+            return media_type, payload
+        except BrowserChatError:
+            raise
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except Exception:
+            raise BrowserChatError("browser_file_unavailable") from None
+
+    async def _prepared_teaching_candidate(
+        self, owner: BrowserOwner, digest: str,
+    ) -> BrowserPublicationRecord:
+        resolve = self._teaching_publication
+        version = self._teaching_candidate_version
+        if resolve is None or version is None or digest != self._teaching_candidate_digest:
+            raise BrowserChatError("browser_teaching_candidate_unavailable")
+        record = await resolve(owner, self._skill_id, version)
+        if (record is None or record.state != "prepared"
+                or record.manifest.digest != digest):
+            raise BrowserChatError("browser_teaching_candidate_unavailable")
+        return record
+
+    async def _capture_teaching_context(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> tuple[RunTeachingSource, RunTeachingAuthority, ScopeBinding, RunSnapshot, TeachingPlan]:
+        """Read one verified teaching Run's signed steps into a private draft source."""
+        invocation = self._invocation(principal, bound_session)
+        owner = invocation.owner
+        grant = self._teaching_capture_grant
+        if grant is None:
+            raise BrowserChatError("browser_teaching_unavailable")
+        try:
+            run = await self._store.get(owner, task_id, run_id)
+            plan = await self._store.load_teaching_plan(owner, task_id, run_id)
+            if (plan is None or plan.task_id != task_id or plan.run_id != run_id
+                    or plan.publication_digest != run.admission.publication_digest.hex()
+                    or run.lease_epoch is None
+                    or await grant(owner, plan.publication_digest) is not True):
+                raise BrowserChatError("browser_teaching_capture_denied", http_status=403)
+            steps = await self._store.read_teaching_steps(owner, task_id, run_id)
+            candidate = await self._prepared_teaching_candidate(
+                owner, plan.publication_digest,
+            )
+            base = await self._publications.get_frozen(owner, plan.source_publication_digest)
+            if (candidate is None or base is None
+                    or candidate.manifest.digest != plan.publication_digest
+                    or base.manifest.digest != plan.source_publication_digest):
+                raise BrowserChatError("browser_teaching_capture_denied", http_status=403)
+            binding = ScopeBinding(
+                owner=owner, binding_id=run.admission.binding_id,
+                binding_revision=run.admission.binding_revision,
+                authorization_run_id=run_id,
+                evidence_version=run.admission.auth_evidence_version,
+                lease_epoch=run.lease_epoch,
+            )
+            frozen = {
+                candidate.manifest.digest: candidate.manifest,
+                base.manifest.digest: base.manifest,
+            }
+            rules = {item.step.step_id: item for item in base.manifest.site.primitive_rules}
+            authority = RunTeachingAuthority(
+                current_binding=lambda: binding,
+                read_run=lambda requested, scope: run if (requested == run_id and scope == binding)
+                else (_raise_teaching_source_unavailable()),
+                read_steps=lambda requested, scope: steps
+                if (requested == run_id and scope == binding)
+                else (_raise_teaching_source_unavailable()),
+                read_parameter_set_ref=lambda requested, scope: plan.parameter_set_ref
+                if (requested == run_id and scope == binding)
+                else (_raise_teaching_source_unavailable()),
+                frozen_publication=lambda digest, scope: frozen[digest]
+                if scope == binding and digest in frozen
+                else (_raise_teaching_source_unavailable()),
+                primitive_rule=lambda primitive_id, publication: rules.get(primitive_id)
+                if publication == base.manifest else None,
+                authorize_capture=lambda requested, scope: requested == run_id and scope == binding,
+                read_plan=lambda requested, scope: plan
+                if requested == run_id and scope == binding else None,
+            )
+            source = capture_authorized_run(run_id, binding=binding, authority=authority)
+            fresh = await self._store.get(owner, task_id, run_id)
+            if (fresh != run or await grant(owner, plan.publication_digest) is not True):
+                raise BrowserChatError("browser_target_stale", http_status=409)
+            self._recheck(invocation)
+            return source, authority, binding, run, plan
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_teaching_capture_unavailable") from None
+
+    async def capture_teaching(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> RunTeachingSource:
+        return (await self._capture_teaching_context(
+            principal, bound_session, task_id, run_id,
+        ))[0]
+
+    async def _compile_teaching_context(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        parameter_whitelist: tuple[ParameterApproval, ...],
+    ) -> tuple[DurableTeachingDraft, DurableTeachingCompilerAuthority, RunSnapshot]:
+        """Compile a verified Run only into the installed prepared candidate."""
+        routes_for = self._teaching_published_routes
+        resolve = self._teaching_publication
+        grant = self._teaching_capture_grant
+        if routes_for is None or resolve is None or grant is None:
+            raise BrowserChatError("browser_teaching_unavailable")
+        source, run_authority, binding, run, plan = await self._capture_teaching_context(
+            principal, bound_session, task_id, run_id,
+        )
+        try:
+            owner = binding.owner
+            candidate = await self._prepared_teaching_candidate(
+                owner, plan.publication_digest,
+            )
+            current = await resolve(
+                owner, candidate.manifest.skill.skill_id,
+                candidate.manifest.skill.version,
+            )
+            if current != candidate:
+                raise BrowserChatError("browser_teaching_candidate_unavailable")
+            base = run_authority.frozen_publication(
+                plan.source_publication_digest, binding,
+            )
+            published = await routes_for(owner, candidate.manifest.skill.skill_id)
+            compiler = DurableTeachingCompilerAuthority(
+                run=run_authority,
+                authorize_target=lambda scope, source_base, target: (
+                    scope == binding and source_base == base
+                    and target == candidate.manifest.skill.skill_id
+                ),
+                unpublished_combination=lambda scope, target, primitives: (
+                    scope == binding and target == candidate.manifest.skill.skill_id
+                    and primitives not in published
+                ),
+            )
+            draft = compile_authorized_run(
+                source, binding=binding,
+                target_skill_id=candidate.manifest.skill.skill_id,
+                version=candidate.manifest.skill.version,
+                site_version=candidate.manifest.site.version,
+                parameter_whitelist=parameter_whitelist, authority=compiler,
+            )
+            if draft.publication != candidate.manifest:
+                raise BrowserChatError("browser_teaching_candidate_mismatch")
+            if (await self._store.get(owner, task_id, run_id) != run
+                    or await routes_for(owner, candidate.manifest.skill.skill_id) != published
+                    or await grant(owner, candidate.manifest.digest) is not True):
+                raise BrowserChatError("browser_target_stale", http_status=409)
+            self._recheck(self._invocation(principal, bound_session))
+            return draft, compiler, run
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_teaching_compile_unavailable") from None
+
+    async def compile_teaching(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+        parameter_whitelist: tuple[ParameterApproval, ...],
+    ) -> DurableTeachingDraft:
+        return (await self._compile_teaching_context(
+            principal, bound_session, task_id, run_id, parameter_whitelist,
+        ))[0]
+
+    async def request_teaching_review(
+        self, principal: Principal, bound_session: str, *,
+        draft_digest: str, replay_digest: str, request_id: str,
+    ) -> HumanGateRequest:
+        """Create a value-free HumanGate request for this installed candidate."""
+        invocation = self._invocation(principal, bound_session)
+        callback, digest = self._teaching_review_request, self._teaching_candidate_digest
+        if callback is None or digest is None:
+            raise BrowserChatError("browser_teaching_review_unavailable")
+        try:
+            publication = await self._prepared_teaching_candidate(invocation.owner, digest)
+            self._recheck(invocation)
+            request = await callback(
+                invocation.owner, publication.manifest,
+                draft_digest, replay_digest, request_id,
+            )
+            self._recheck(invocation)
+            return request
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_teaching_review_unavailable") from None
+
+    async def decide_teaching_review(
+        self, principal: Principal, bound_session: str, *,
+        draft_digest: str, replay_digest: str, request_id: str,
+        decision: Literal["confirmed", "rejected"],
+    ) -> HumanGateDecisionRecord:
+        """Record the reviewer subject's exact decision through existing HumanGate."""
+        invocation = self._invocation(principal, bound_session)
+        callback, digest = self._teaching_review_decide, self._teaching_candidate_digest
+        if callback is None or digest is None or decision not in {"confirmed", "rejected"}:
+            raise BrowserChatError("browser_teaching_review_unavailable")
+        try:
+            publication = await self._prepared_teaching_candidate(invocation.owner, digest)
+            self._recheck(invocation)
+            record = await callback(
+                invocation.owner, publication.manifest,
+                draft_digest, replay_digest, request_id, decision,
+            )
+            self._recheck(invocation)
+            return record
+        except BrowserChatError:
+            raise
+        except Exception:
+            raise BrowserChatError("browser_teaching_review_unavailable") from None
+
+    async def decide_write(
+        self, principal: Principal, bound_session: str, task_id: str,
+        run_id: str, decision: Literal["confirmed", "rejected"],
+    ) -> BrowserRunResponse:
+        """Internal same-subject HumanGate decision for an exact queued Run."""
+        invocation = self._invocation(principal, bound_session)
+        gate = self._write_gate
+        if gate is None or decision not in {"confirmed", "rejected"}:
+            raise BrowserChatError("browser_write_confirmation_unavailable")
+        owner = invocation.owner
+        try:
+            run = await self._store.get(owner, task_id, run_id)
+            preparation = await self._store.load_write_preparation(owner, task_id, run_id)
+            if (run.phase != "queued" or run.cancel_requested or preparation is None
+                    or preparation.run_id != run_id or preparation.task_id != task_id):
+                raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
+            request = await gate.get_request(preparation.request_id)
+            if (request != preparation.gate_request(owner)
+                    or request.expires_at <= datetime.now(UTC)):
+                raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
+            candidate = HumanGateDecisionRecord(
+                request_id=request.request_id, task_id=task_id,
+                decided_by_ai_user_id=owner.user_id,
+                decided_session_id=owner.session_id,
+                decided_tenant_id=owner.tenant_id,
+                decision=decision, request_digest=request.request_digest,
+                binding_manifest_digest=request.binding_manifest_digest,
+                decided_at=datetime.now(UTC),
+            )
+            self._recheck(invocation)
+            existing = await gate.get_decision(request.request_id)
+            if existing is None:
+                try:
+                    existing = await gate.record_decision(candidate)
+                except HumanGateConflictError:
+                    existing = await gate.get_decision(request.request_id)
+            if (existing is None
+                    or existing.model_dump(exclude={"decided_at"})
+                    != candidate.model_dump(exclude={"decided_at"})):
+                raise BrowserChatError("browser_write_confirmation_conflict", http_status=409)
+            fresh = await self._store.get(owner, task_id, run_id)
+            if fresh.admission != run.admission:
+                raise BrowserChatError("browser_target_stale", http_status=409)
+            self._recheck(invocation)
+            return BrowserRunResponse(run=self._view(fresh), value=None)
+        except BrowserChatError:
+            raise
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except Exception:
+            raise BrowserChatError("browser_write_confirmation_unavailable") from None
+
+    async def write_preview(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> dict[str, object]:
+        """Internal value-free preview for the same authenticated Run owner."""
+        invocation = self._invocation(principal, bound_session)
+        gate = self._write_gate
+        if gate is None:
+            raise BrowserChatError("browser_write_confirmation_unavailable")
+        try:
+            run = await self._store.get(invocation.owner, task_id, run_id)
+            preparation = await self._store.load_write_preparation(
+                invocation.owner, task_id, run_id,
+            )
+            if (run.phase != "queued" or run.cancel_requested or preparation is None
+                    or preparation.expires_at <= datetime.now(UTC)
+                    or await gate.get_request(preparation.request_id)
+                    != preparation.gate_request(invocation.owner)):
+                raise BrowserChatError("browser_write_confirmation_unavailable", http_status=409)
+            self._recheck(invocation)
+            return self._write_confirmation_view(preparation)
+        except BrowserChatError:
+            raise
+        except BrowserRunStoreError as error:
+            raise self._store_error(error) from None
+        except Exception:
+            raise BrowserChatError("browser_write_confirmation_unavailable") from None
 
     async def cancel(
         self, principal: Principal, bound_session: str, task_id: str, run_id: str,
@@ -480,7 +1044,9 @@ class BrowserSubmissionService:
             raise BrowserChatError("browser_run_projection_invalid") from None
 
     @staticmethod
-    def _view(run: RunSnapshot) -> BrowserRunView:
+    def _view(
+        run: RunSnapshot, *, artifacts: tuple[BrowserArtifactView, ...] = (),
+    ) -> BrowserRunView:
         terminal = run.status in {"completed", "failed", "cancelled"}
         result = None
         progress = None
@@ -500,7 +1066,7 @@ class BrowserSubmissionService:
             status=run.status, progress=progress, result=result,
             cancel=BrowserCancelView(
                 requested=run.cancel_requested, acknowledged=run.cancel_acknowledged,
-            ),
+            ), artifacts=artifacts,
         )
 
     @staticmethod

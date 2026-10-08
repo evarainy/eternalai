@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from jsonschema import Draft202012Validator
@@ -35,6 +36,7 @@ from app.browser_skill.models import (
     DecisionResult,
     DecisionSource,
     DispatchPermit,
+    DownloadEvidence,
     ExecutionContext,
     ParameterPurpose,
     ParameterRef,
@@ -45,8 +47,13 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.runtime import _BrowserReadDeferred
-from app.browser_skill.site_rules import RegisteredQueryReadRule
+from app.browser_skill.site_rules import ExpectedDownload, RegisteredQueryReadRule
 from app.browser_skill.verifier import ReadSpecResolver, check_liveness, failure
+from app.infra.browser.local_file_artifacts import (
+    FileArtifactOwner,
+    LocalFileArtifacts,
+    StoredFileArtifact,
+)
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
     RegisteredLocalSite,
@@ -103,6 +110,7 @@ class _Execution:
     profile_revision: int | None = None
     account_connection: AsyncConnection | None = field(default=None, repr=False)
     account_locks: tuple[int, ...] = ()
+    downloads: list[DownloadEvidence] = field(default_factory=list, repr=False)
 
     def count(self, name: str) -> None:
         self.authority_counts[name] = min(10000, self.authority_counts.get(name, 0) + 1)
@@ -147,6 +155,7 @@ class LocalBrowserReadExecutionFactory:
         ttl_seconds: int = 60,
         execution_timeout_seconds: int | None = None,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
+        file_artifacts: LocalFileArtifacts | None = None,
     ) -> None:
         from app.infra.browser.fixed_synthetic_seed import (
             SYNTHETIC_TENANT,
@@ -168,6 +177,8 @@ class LocalBrowserReadExecutionFactory:
                 or binding.subject_digest != local_subject_digest(SYNTHETIC_TENANT, SYNTHETIC_USER)
             ))
             or (registered and (session_factory is None or not binding.subject_digest))
+            or (isinstance(source, RegisteredLocalSite) and bool(source.download_expectations)
+                and not isinstance(file_artifacts, LocalFileArtifacts))
             or not isinstance(source.manifest.site.read_rule, RegisteredQueryReadRule)
             or not callable(getattr(decision, "decide", None))
             or type(ttl_seconds) is not int
@@ -192,6 +203,7 @@ class LocalBrowserReadExecutionFactory:
         self._opening: set[str] = set()
         self._lease_reserved: Callable[[RunSnapshot], Awaitable[bool]] | None = None
         self._session_factory = session_factory
+        self._file_artifacts = file_artifacts
         self._profiles: BrowserProfileStorePort | None = None
         self._cipher: BrowserPayloadCipher | None = None
 
@@ -674,6 +686,158 @@ class LocalBrowserReadExecutionFactory:
 
                 return operation_authority
 
+            async def write_reservation_authority(
+                session: BrowserSessionRef, actual: ExecutionContext,
+                command: ActionCommand,
+            ) -> None:
+                if (
+                    self._state(session) is not state
+                    or actual is not state.operation_context
+                    or command.binding != actual.expected_binding
+                    or command.step.effect != "may_write"
+                ):
+                    raise failure("denied")
+                await self._fence(state, renew=True)
+                self._check_subject(
+                    state, manifest, session, actual.skill,
+                    command, actual.expected_binding,
+                )
+                await self.resolve_live(session)
+                await checkpoint.assert_write_reservation(command)
+                await self._fence(state, renew=True)
+                self._check_subject(
+                    state, manifest, session, actual.skill,
+                    command, actual.expected_binding,
+                )
+
+            async def download_sink(
+                source_path: Path, rule: ExpectedDownload,
+            ) -> StoredFileArtifact:
+                artifacts = self._file_artifacts
+                if (
+                    artifacts is None
+                    or not isinstance(self.source, RegisteredLocalSite)
+                    or rule not in self.source.download_expectations
+                    or state.session is None
+                    or state.run.admission.publication_digest.hex() != manifest.digest
+                ):
+                    raise failure("denied")
+                await self._fence(state, renew=True)
+                verifier = self.source.download_content_verifier
+                if (
+                    verifier is None
+                    or verifier.rule_digest != rule.content_rule_digest
+                    or await verifier.matches(source_path, state.key, rule) is not True
+                ):
+                    raise failure("denied")
+                await self._fence(state, renew=True)
+                owner = FileArtifactOwner(
+                    tenant_id=state.run.owner.tenant_id,
+                    ai_user_id=state.run.owner.user_id,
+                    session_id=state.run.owner.session_id,
+                    target_system=state.run.admission.target_system,
+                    binding_id=state.run.admission.binding_id,
+                    binding_revision=state.run.admission.binding_revision,
+                    task_id=state.run.task_id,
+                    run_id=state.run.run_id,
+                )
+                artifact = await artifacts.seal_download(
+                    source_path, owner, media_type=rule.media_type,
+                    ttl_seconds=rule.ttl_seconds, max_bytes=rule.max_bytes,
+                )
+                await self._fence(state, renew=True)
+                if artifact.owner != owner:
+                    raise failure("denied")
+                state.downloads.append(DownloadEvidence(
+                    step_id=rule.step_id,
+                    reference=artifact.reference,
+                    owner=state.run.owner,
+                    target_system=owner.target_system,
+                    binding_id=owner.binding_id,
+                    binding_revision=owner.binding_revision,
+                    task_id=owner.task_id,
+                    run_id=owner.run_id,
+                    media_type=artifact.media_type,
+                    size_bytes=artifact.size_bytes,
+                    sha256_digest=artifact.sha256.hex(),
+                    expires_at=artifact.expires_at,
+                ))
+                return artifact
+
+            async def verify_downloads(
+                session: BrowserSessionRef, context: ExecutionContext,
+                expected: tuple[ExpectedDownload, ...],
+            ) -> str:
+                artifacts = self._file_artifacts
+                source = self.source
+                if (
+                    artifacts is None
+                    or not isinstance(source, RegisteredLocalSite)
+                    or context is not state.operation_context
+                    or self._state(session) is not state
+                    or not expected
+                    or expected != source.download_expectations
+                    or len(state.downloads) != len(expected)
+                    or len({item.step_id for item in state.downloads})
+                    != len(state.downloads)
+                ):
+                    raise failure("denied")
+                verifier = source.download_content_verifier
+                if verifier is None:
+                    raise failure("denied")
+                await self._fence(state, renew=True)
+                by_step = {item.step_id: item for item in state.downloads}
+                facts: list[dict[str, object]] = []
+                for rule in expected:
+                    item = by_step.get(rule.step_id)
+                    if (
+                        item is None or item.owner != state.run.owner
+                        or item.target_system != state.run.admission.target_system
+                        or item.binding_id != state.run.admission.binding_id
+                        or item.binding_revision != state.run.admission.binding_revision
+                        or item.task_id != state.run.task_id
+                        or item.run_id != state.run.run_id
+                        or item.media_type != rule.media_type
+                        or item.size_bytes > rule.max_bytes
+                        or verifier.rule_digest != rule.content_rule_digest
+                        or item.expires_at <= datetime.now(UTC)
+                    ):
+                        raise failure("denied")
+                    owner = FileArtifactOwner(
+                        tenant_id=item.owner.tenant_id,
+                        ai_user_id=item.owner.user_id,
+                        session_id=item.owner.session_id,
+                        target_system=item.target_system,
+                        binding_id=item.binding_id,
+                        binding_revision=item.binding_revision,
+                        task_id=item.task_id,
+                        run_id=item.run_id,
+                    )
+                    payload = await artifacts.read(item.reference, owner)
+                    if (
+                        len(payload) != item.size_bytes
+                        or hashlib.sha256(payload).hexdigest() != item.sha256_digest
+                        or await verifier.matches_bytes(payload, state.key, rule) is not True
+                    ):
+                        raise failure("denied")
+                    await self._fence(state, renew=True)
+                    facts.append({
+                        "step_id": item.step_id,
+                        "reference_digest": hashlib.sha256(
+                            item.reference.encode("ascii")
+                        ).hexdigest(),
+                        "sha256": item.sha256_digest,
+                        "media_type": item.media_type,
+                        "size_bytes": item.size_bytes,
+                        "expires_at": item.expires_at.isoformat(),
+                        "content_rule_digest": rule.content_rule_digest,
+                    })
+                encoded = json.dumps(
+                    {"run_id": state.run.run_id, "files": facts},
+                    sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                ).encode("ascii")
+                return hashlib.sha256(b"browser_download_verified.v1\n" + encoded).hexdigest()
+
             decision = _FencedDecision(self, state)
             return RegisteredReadExecution(
                 state.session,
@@ -691,6 +855,25 @@ class LocalBrowserReadExecutionFactory:
                 bind_operation_authority,
                 lambda: dict(state.authority_counts),
                 decision.http_diagnostic,
+                registered_popup_source=(
+                    self.source if isinstance(self.source, RegisteredLocalSite) else None
+                ),
+                write_reservation_authority=(
+                    write_reservation_authority
+                    if isinstance(self.source, RegisteredLocalSite) else None
+                ),
+                download_sink=(
+                    download_sink if isinstance(self.source, RegisteredLocalSite)
+                    and self.source.download_expectations else None
+                ),
+                expected_downloads=(
+                    self.source.download_expectations
+                    if isinstance(self.source, RegisteredLocalSite) else ()
+                ),
+                verify_downloads=(
+                    verify_downloads if isinstance(self.source, RegisteredLocalSite)
+                    and self.source.download_expectations else None
+                ),
             )
         except BaseException as error:
             if state is not None:

@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.browser_skill.models import BrowserSessionRef
-from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.deployment_manifest import BrowserDeployment, SyntheticSource
+from app.infra.browser.provider_shared import BrowserProviderError
 
 
 @dataclass(repr=False)

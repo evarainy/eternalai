@@ -15,6 +15,7 @@ from app.browser_skill.models import (
     ScopeStamp,
 )
 from app.browser_skill.site_rules import SiteStepRule
+from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
@@ -85,7 +86,7 @@ class _Checkpoint:
         self, command: ActionCommand, rule: SiteStepRule,
         scope: ScopeStamp, receipt: DispatchReceipt,
         policy_digest: str, sequence: int,
-    ) -> None:
+    ) -> RunTeachingStep:
         """One current worker/lease fence and durable audit per actual receipt."""
         if (
             command.step.effect == "may_write"
@@ -93,12 +94,13 @@ class _Checkpoint:
         ):
             raise BrowserReadExecutionError("denied")
         await self.refresh()
-        self.run = await self.store.record_step(
+        self.run, step = await self.store.record_step(
             self.run, command=command, rule=rule, scope=scope,
             receipt=receipt, policy_digest=policy_digest, sequence=sequence,
         )
         if command.step.effect == "may_write":
             self._write_reservation = None
+        return step
 
     async def reserve_write_dispatch(
         self, command: ActionCommand, rule: SiteStepRule,

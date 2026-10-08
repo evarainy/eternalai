@@ -31,6 +31,7 @@ from app.browser_skill.models import (
     LocatorHint,
     ObservationPolicy,
     ObservationRequest,
+    PageEvidence,
     ParameterPurpose,
     ParameterRef,
     ReadEvidence,
@@ -460,6 +461,11 @@ class FakeWorld:
                 else None,
             )
 
+    async def page_evidence(
+        self, session: BrowserSessionRef, region_id: str, context: ExecutionContext,
+    ) -> PageEvidence:
+        raise failure("unsupported")
+
     async def read(
         self, session: BrowserSessionRef, spec: ReadSpec, ctx: ExecutionContext
     ) -> ReadEvidence:
@@ -474,6 +480,8 @@ class FakeWorld:
         records = [r for r in self.records if r.key == key]
         comparisons = []
         for rule in self.plan.read_rule.fields:
+            if not isinstance(rule, ExpectedField):
+                raise failure("unsupported")
             expected = await self._consume(
                 rule.value_ref, "expected_field", ctx, self.skill.verifier_id
             )

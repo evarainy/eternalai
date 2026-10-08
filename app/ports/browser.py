@@ -14,11 +14,13 @@ from app.browser_skill.models import (
     ExecutionContext,
     ObservationPolicy,
     ObservationRequest,
+    PageEvidence,
     ProfileRef,
     ReadEvidence,
     ReadSpec,
     ResourceOutcome,
     ScopeBinding,
+    ScopeStamp,
     SessionStartResult,
     SkillStep,
     TargetRef,
@@ -105,7 +107,8 @@ class WebAdapter(Protocol):
         Direct calls cannot bypass current authorization, frozen Skill/parameters,
         source/Site effect facts, cancellation, exact DOM identity or actionability.
         Navigation enforces registered exact origins on every redirect/popup hop.
-        may_write is denied in M0/M1; unknown effects are never automatically replayed.
+        may_write requires the durable exact HumanGate send reservation;
+        unknown effects are never automatically replayed.
         Acknowledgment is not business success. Exceptions must be neutral failures.
         """
         ...
@@ -139,6 +142,19 @@ class WebAdapter(Protocol):
         """
         ...
 
+    async def page_evidence(
+        self, session: BrowserSessionRef, region_id: str, context: ExecutionContext,
+    ) -> PageEvidence:
+        """Read value-free coverage facts from the registered collection viewport."""
+        ...
+
+    async def advance_virtualized(
+        self, session: BrowserSessionRef, command: ActionCommand,
+        scope: ScopeStamp, context: ExecutionContext,
+    ) -> DispatchReceipt:
+        """Scroll the frozen read target within the normal dispatch barrier."""
+        ...
+
 
 class SiteAdapter(Protocol):
     """Pure site rules; no resource acquisition, network or model invocation."""
@@ -149,7 +165,7 @@ class SiteAdapter(Protocol):
 
     def observation_policy(self, skill: BrowserSkill) -> ObservationPolicy: ...
     def permits(self, skill: BrowserSkill, command: ActionCommand) -> bool:
-        """Require frozen Site effect evidence; the step's read_only label is insufficient."""
+        """Require frozen Site effect evidence; step labels grant no authority alone."""
         ...
 
 
@@ -167,6 +183,7 @@ class BrowserVerifierPort(Protocol):
         session: BrowserSessionRef,
         spec: ReadSpec,
         context: ExecutionContext,
+        pages: tuple[PageEvidence, ...] = (),
     ) -> VerificationResult: ...
 
 

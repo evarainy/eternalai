@@ -146,6 +146,8 @@ class IndependentVerifier:
         page_keys: set[str] = set()
         row_keys: set[str] = set()
         ordinals: set[int] = set()
+        row_by_ordinal: dict[int, str] = {}
+        ordinal_by_row: dict[str, int] = {}
         total: int | None = None
         checked: list[dict[str, object]] = []
         for index, raw in enumerate(pages):
@@ -160,9 +162,26 @@ class IndependentVerifier:
                 or page.page_key_digest in page_keys
                 or (total is not None and page.declared_total != total)
                 or (page.terminal_seen != (index == len(pages) - 1))
-                or len(row_keys) + len(page.row_key_digests) > traversal.max_rows
-                or any(key in row_keys for key in page.row_key_digests)
-                or any(ordinal in ordinals for ordinal in page.row_ordinals)
+            ):
+                return None
+            new_rows = 0
+            for key, ordinal in zip(page.row_key_digests, page.row_ordinals):
+                prior_key = row_by_ordinal.get(ordinal)
+                prior_ordinal = ordinal_by_row.get(key)
+                if (
+                    (prior_key is not None and prior_key != key)
+                    or (prior_ordinal is not None and prior_ordinal != ordinal)
+                    or (traversal.mode == "paged" and prior_key is not None)
+                ):
+                    return None
+                if prior_key is None:
+                    new_rows += 1
+                row_by_ordinal[ordinal] = key
+                ordinal_by_row[key] = ordinal
+            if (
+                len(row_by_ordinal) > traversal.max_rows
+                or (traversal.mode == "virtualized" and index > 0
+                    and new_rows == 0 and not page.terminal_seen)
             ):
                 return None
             total = page.declared_total

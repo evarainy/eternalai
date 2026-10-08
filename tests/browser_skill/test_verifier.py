@@ -238,3 +238,36 @@ def test_page_chain_requires_unique_complete_terminal_coverage() -> None:
     assert IndependentVerifier._page_chain(traversal, (
         first, last.model_copy(update={"terminal_seen": False}),
     )) is None
+
+
+def test_virtualized_page_chain_accepts_consistent_overlap_only_with_full_coverage() -> None:
+    world = FakeWorld()
+    traversal = RegisteredTraversal(
+        region_id=world.view.scope.region_id,
+        object_type=world.plan.read_rule.object_type,
+        mode="virtualized", advance_step_id=world.skill.steps[0].step_id,
+        max_pages=3, max_rows=3,
+        page_key_rule_digest="1" * 64,
+        row_key_rule_digest="2" * 64,
+        ordinal_rule_digest="3" * 64,
+        total_rule_digest="4" * 64,
+        terminal_rule_digest="5" * 64,
+    )
+    first = PageEvidence(
+        scope=world.view.scope, page_key_digest="a" * 64,
+        row_key_digests=("c" * 64, "d" * 64), row_ordinals=(0, 1),
+        declared_total=3, terminal_seen=False, evidence_digest="e" * 64,
+    )
+    last = PageEvidence(
+        scope=world.view.scope, page_key_digest="b" * 64,
+        row_key_digests=("d" * 64, "f" * 64), row_ordinals=(1, 2),
+        declared_total=3, terminal_seen=True, evidence_digest="9" * 64,
+    )
+    assert IndependentVerifier._page_chain(traversal, (first, last)) is not None
+    assert IndependentVerifier._page_chain(traversal, (
+        first, last.model_copy(update={"row_key_digests": ("8" * 64, "f" * 64)}),
+    )) is None
+    assert IndependentVerifier._page_chain(traversal, (
+        first, last.model_copy(update={"terminal_seen": False}),
+    )) is None
+    assert IndependentVerifier._page_chain(traversal, (last,)) is None
