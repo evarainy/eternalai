@@ -12,6 +12,7 @@ from app.api.v1.mcp import McpApiService, ResumeRequest
 from app.mcp.models import McpFailure
 from app.ports.auth import AuthenticatedSessionContext, authenticated_session
 from app.ports.capability_gateway import ExecutionResult
+from app.ports.human_gate import VersionBindingMismatchError
 from app.ports.mcp import McpValidatedOutcome
 from app.ports.workflow_engine import GovernedFinalizationError
 from app.ports.workflow_store import WorkflowOperation
@@ -19,6 +20,7 @@ from tests.infra.mcp.test_transport import Peer, serving
 from tests.mcp.test_operations import fixture
 from tests.runtime.test_runtime_user_action import (
     _START_MESSAGE,
+    ControllableVersionGate,
     _build_harness,
     _dispatch,
     _outcome,
@@ -26,8 +28,8 @@ from tests.runtime.test_runtime_user_action import (
 )
 
 
-async def governed_chat():
-    chat = await _build_harness()
+async def governed_chat(*, gate=None):
+    chat = await _build_harness(gate=gate)
     pending = next(iter(chat.runtime._pending_workflows.values()))
     h = await fixture()
     context = h.op.context.model_copy(
@@ -127,6 +129,203 @@ def test_presend_exception_retirement_preserves_internal_error_and_replay(state,
             ]
             repaired = await chat.engine.finalize_governed_task(task_id=pending.task_id)
             assert repaired.error_code == "internal_error" and len(chat.trace.once) == 2
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("boundary", ["gate_binding", "workflow_contract"])
+@pytest.mark.parametrize("fault", ["none", "task", "evaluation_after_write"])
+def test_version_rejection_finishes_governed_confirmation_without_replay(boundary, fault):
+    async def run():
+        gate = ControllableVersionGate()
+        chat, h, pending, session = await governed_chat(gate=gate)
+        h.store.op = h.op.model_copy(update={"state": "WAITING_LOCAL_CONFIRM"})
+        calls_before = len(chat.gateway.calls)
+        original_update = chat.runtime._task_store.update_status
+        original_once = chat.trace.record_event_once
+        failures = 0
+        injected = RuntimeError("synthetic version retirement interruption")
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+
+        async def reject_contract(capability):
+            assert capability.capability_id == pending.capability_id
+            raise VersionBindingMismatchError("synthetic changed workflow contract")
+
+        async def update(task_id, *args, **kwargs):
+            nonlocal failures
+            if fault == "task" and task_id == pending.task_id and not failures:
+                failures += 1
+                raise injected
+            return await original_update(task_id, *args, **kwargs)
+
+        async def once(event, key):
+            nonlocal failures
+            await original_once(event, key)
+            if (
+                fault == "evaluation_after_write"
+                and event.event_type == "evaluation_recorded"
+                and not failures
+            ):
+                failures += 1
+                raise injected
+
+        h.operations.owned = owned
+        chat.runtime._task_store.update_status = update
+        chat.trace.record_event_once = once
+        if boundary == "gate_binding":
+            gate.fail_bindings = True
+        else:
+            chat.engine.configure_governed_validation(reject_contract)
+        token = authenticated_session.set(session)
+        try:
+            if fault == "none":
+                assert _outcome(await _dispatch(chat)) == "action_version_conflict"
+                assert chat.runtime._task_store.records[pending.task_id].status == "cancelled"
+            else:
+                with pytest.raises(GovernedFinalizationError) as interrupted:
+                    await _dispatch(chat)
+                assert interrupted.value.__cause__ is injected
+                claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+                assert not claim.cleanup_complete and claim.pending is pending
+            assert h.store.op.state == "CANCELLED" and not h.store.op.send_started
+            assert h.store.op.confirmation_error_code is None
+            # Restore only the durable operation; finalization must survive a reload.
+            h.store.op = WorkflowOperation.model_validate_json(h.store.op.model_dump_json())
+            response = await _dispatch(chat)
+            task = chat.runtime._task_store.records[pending.task_id]
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            assert task.status == claim.state == _outcome(response) == "cancelled"
+            assert task.error_code is claim.error_code is None
+            assert claim.cleanup_complete and claim.pending is None
+            assert h.store.transitions == ["CANCELLED"] and failures == (fault != "none")
+            assert len(chat.gateway.calls) == calls_before
+            assert chat.engine.resume_calls == (boundary == "workflow_contract")
+            assert not chat.runtime._pending_workflows
+            assert not chat.runtime._session_memory.recall(pending.owner)
+            terminal = sorted((event.event_type, event.error_code)
+                              for event in chat.trace.once.values())
+            assert terminal == [
+                ("evaluation_recorded", None), ("task_cancelled", None),
+            ]
+            assert _outcome(await _dispatch(chat)) == "cancelled"
+            assert len(chat.trace.once) == 2 and h.store.transitions == ["CANCELLED"]
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("entry", ["readable_view", "operation"])
+@pytest.mark.parametrize("fault", ["none", "task", "evaluation_after_write"])
+def test_first_expired_api_read_finishes_original_task_without_replay(entry, fault, monkeypatch):
+    async def run():
+        chat, h, pending, session = await governed_chat()
+        gate = await chat.gate.get_request(pending.gate_request_id)
+        h.store.op = h.op.model_copy(
+            update={"state": "WAITING_LOCAL_CONFIRM", "expires_at": gate.expires_at}
+        )
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return gate.expires_at + timedelta(seconds=1)
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+
+        async def mapping(*args):
+            return SimpleNamespace()
+
+        async def build(**kwargs):
+            return h.store.op.context
+
+        h.operations.owned = owned
+        h.operations.contexts = SimpleNamespace(store=SimpleNamespace(mapping=mapping), build=build)
+        profile = SimpleNamespace(enabled=True, tenant_id=h.op.context.tenant_id,
+                                  service_config_version=h.op.context.service_config_version,
+                                  display_name="Synthetic")
+        service = McpApiService(SimpleNamespace(configs={h.op.context.service_config_id: profile}),
+                                h.operations, chat.engine)
+        monkeypatch.setattr("app.mcp.operations.datetime", Clock)
+        original_update = chat.runtime._task_store.update_status
+        original_once = chat.trace.record_event_once
+        failures = 0
+        injected = RuntimeError("synthetic expiry read interruption")
+
+        async def read():
+            if entry == "readable_view":
+                return await service.readable_view(h.store.op)
+            return await service.operation(h.op.operation_id, session)
+
+        foreign = replace(
+            session, principal=session.principal.model_copy(update={"ai_user_id": "other"})
+        )
+        foreign_token = authenticated_session.set(foreign)
+        try:
+            with pytest.raises(McpFailure, match="mcp_authorization_invalid"):
+                await read()
+            assert h.store.transitions == [] and chat.trace.once == {}
+            assert chat.runtime._task_store.records[pending.task_id].status == "waiting_user"
+        finally:
+            authenticated_session.reset(foreign_token)
+
+        async def update(task_id, *args, **kwargs):
+            nonlocal failures
+            if fault == "task" and task_id == pending.task_id and not failures:
+                failures += 1
+                raise injected
+            return await original_update(task_id, *args, **kwargs)
+
+        async def once(event, key):
+            nonlocal failures
+            await original_once(event, key)
+            if (
+                fault == "evaluation_after_write"
+                and event.event_type == "evaluation_recorded"
+                and not failures
+            ):
+                failures += 1
+                raise injected
+
+        chat.runtime._task_store.update_status = update
+        chat.trace.record_event_once = once
+        token = authenticated_session.set(session)
+        try:
+            if fault == "none":
+                with pytest.raises(McpFailure, match="mcp_confirmation_expired"):
+                    await read()
+                assert (
+                    chat.runtime._task_store.records[pending.task_id].status
+                    == "confirmation_invalidated"
+                )
+            else:
+                with pytest.raises(GovernedFinalizationError) as interrupted:
+                    await read()
+                assert interrupted.value.__cause__ is injected
+            assert h.store.op.state == "EXPIRED" and not h.store.op.send_started
+            h.store.op = WorkflowOperation.model_validate_json(h.store.op.model_dump_json())
+            await read()
+            response = await _dispatch(chat)
+            task = chat.runtime._task_store.records[pending.task_id]
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            assert task.status == claim.state == _outcome(response) == "confirmation_invalidated"
+            assert task.error_code == claim.error_code == "confirm_required"
+            assert claim.cleanup_complete and claim.pending is None
+            assert h.store.transitions == ["EXPIRED"] and failures == (fault != "none")
+            assert chat.engine.resume_calls == 0 and len(chat.gateway.calls) == 1
+            assert not chat.runtime._pending_workflows
+            terminal = sorted((event.event_type, event.error_code)
+                              for event in chat.trace.once.values())
+            assert terminal == [
+                ("evaluation_recorded", "confirm_required"),
+                ("task_confirmation_invalidated", "confirm_required"),
+            ]
+            await read()
+            assert len(chat.trace.once) == 2 and h.store.transitions == ["EXPIRED"]
         finally:
             authenticated_session.reset(token)
 

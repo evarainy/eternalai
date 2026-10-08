@@ -83,8 +83,17 @@ class McpApiService:
         await self.workflows.finalize_governed_task(task_id=op.context.task_id)
         await self.operations.owned(op)
         if op.state == "WAITING_LOCAL_CONFIRM":
-            op, _ = await self.operations.ensure_confirmation(op)
+            op = await self._read_confirmation(op)
         return op
+
+    async def _read_confirmation(self, op: WorkflowOperation) -> WorkflowOperation:
+        try:
+            current, _ = await self.operations.ensure_confirmation(op)
+            return current
+        except McpFailure as exc:
+            if exc.code == "mcp_confirmation_expired":
+                await self.workflows.finalize_governed_task(task_id=op.context.task_id)
+            raise
 
     def view(self, op: WorkflowOperation, *, takeover: bool = False) -> OperationView:
         profile = self.oauth.configs.get(op.context.service_config_id)
@@ -209,7 +218,7 @@ class McpApiService:
                 raise
             return self.view(op, takeover=True)
         if op.state == "WAITING_LOCAL_CONFIRM":
-            op, _ = await self.operations.ensure_confirmation(op)
+            op = await self._read_confirmation(op)
         return self.view(op)
 
 

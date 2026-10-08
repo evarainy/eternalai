@@ -1421,12 +1421,13 @@ class RuntimeImpl:
                 if isinstance(exc, _ActionAlreadyClaimedError)
                 else "action_version_conflict"
             )
-            if self._compare_and_swap_pending_workflow(
-                pending_key, expected=pending, replacement=None
-            ):
-                if self._workflow_engine is not None:
-                    await self._workflow_engine.discard_checkpoint(pending.task_id)
-            self._archive_confirmation(pending_key, pending, cleanup_complete=False)
+            await self._retire_pending_confirmation(
+                pending_key=pending_key,
+                pending=pending,
+                status="cancelled",
+                reason="cancelled",
+                error_code=None,
+            )
             return self._response_builder.build_failed(
                 str(uuid4()),
                 pending.task_id,
