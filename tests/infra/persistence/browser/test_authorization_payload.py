@@ -37,7 +37,10 @@ def test_v2_decodes_exact_channel_without_assuming_web(
         asyncio.run(h.engine.dispose())
 
 
-@pytest.mark.parametrize("case", ["v1", "v1_with_channel", "missing", "invalid", "unhashable"])
+@pytest.mark.parametrize("case", [
+    "v1", "v1_with_channel", "missing", "invalid", "unhashable",
+    "forged_subject", "forged_operator", "forged_caller", "forged_entrypoint",
+])
 def test_unverifiable_channel_fails_closed(case: str) -> None:
     h = RunHarness("postgresql://browser_v42_test@127.0.0.1:15432/eternalai_test")
     try:
@@ -57,6 +60,22 @@ def test_unverifiable_channel_fails_closed(case: str) -> None:
             payload["channel"] = "unknown"
         elif case == "unhashable":
             payload["channel"] = ["web"]
+        elif case.startswith("forged_"):
+            payload["invocation"] = {
+                "caller": "authenticated_session_v1",
+                "entrypoint": "runtime_chat",
+                "operator_user_id": h.principal.ai_user_id,
+                "represented_user_id": h.principal.ai_user_id,
+            }
+            field = {
+                "forged_subject": "represented_user_id",
+                "forged_operator": "operator_user_id",
+                "forged_caller": "caller",
+                "forged_entrypoint": "entrypoint",
+            }[case]
+            payload["invocation"][field] = (
+                ["runtime_chat"] if case == "forged_entrypoint" else "other"
+            )
         protected = h.cipher.encrypt_input(
             BrowserRunCryptoIdentity.from_admission(admission), payload,
         )

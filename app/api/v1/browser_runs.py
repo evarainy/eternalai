@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.auth import PrincipalDependency
 from app.ports.auth import Principal, SessionBindingError
-from app.ports.browser_chat import BrowserChatError, BrowserChatPort, BrowserRunResponse
+from app.ports.browser_chat import BrowserChatError, BrowserRunAccessPort, BrowserRunResponse
 
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 RunIdentifier = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]{1,96}$")]
@@ -49,13 +49,13 @@ class BrowserCancelRequest(BaseModel):
 
 
 def make_router(
-    service: BrowserChatPort | None, require_principal: PrincipalDependency,
+    service: BrowserRunAccessPort | None, require_principal: PrincipalDependency,
     session_binder: Callable[[Principal, str], str] | None,
 ) -> APIRouter:
     """The injected verified Principal dependency must also enforce POST CSRF."""
     router = APIRouter(route_class=_PrivateRunRoute)
 
-    def bind(principal: Principal, requested: str) -> tuple[BrowserChatPort, str]:
+    def bind(principal: Principal, requested: str) -> tuple[BrowserRunAccessPort, str]:
         if session_binder is None:
             raise HTTPException(401, {"code": "authentication_required"}, headers=_HEADERS)
         try:

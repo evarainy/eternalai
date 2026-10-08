@@ -73,7 +73,33 @@ class BrowserRunResponse(Contract):
     value: dict[str, Any] | None = Field(default=None, repr=False)
 
 
-class BrowserChatPort(Protocol):
+class BrowserRunAccessPort(Protocol):
+    """Current-authority Run reads and cancellation for authenticated adapters."""
+
+    async def get(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> BrowserRunResponse: ...
+
+    async def cancel(
+        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
+    ) -> BrowserRunResponse: ...
+
+
+class BrowserSubmissionPort(BrowserRunAccessPort, Protocol):
+    """Internal same-subject structured submission and current Run access.
+
+    Principal and bound session are checked against trusted authentication
+    context by the implementation. This does not grant service delegation,
+    publish an HTTP route, or accept caller-authored authority evidence.
+    """
+
+    async def submit(
+        self, *, principal: Principal, bound_session: str, skill_id: str,
+        skill_version: str, arguments: dict[str, Any], client_request_id: str,
+    ) -> ResponseEnvelope: ...
+
+
+class BrowserChatPort(BrowserRunAccessPort, Protocol):
     @property
     def skill_id(self) -> str: ...
 
@@ -86,11 +112,3 @@ class BrowserChatPort(Protocol):
         bound_session: str, message: str, client_capabilities: dict[str, Any],
         client_request_id: str, skill_id: str,
     ) -> ResponseEnvelope: ...
-
-    async def get(
-        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
-    ) -> BrowserRunResponse: ...
-
-    async def cancel(
-        self, principal: Principal, bound_session: str, task_id: str, run_id: str,
-    ) -> BrowserRunResponse: ...

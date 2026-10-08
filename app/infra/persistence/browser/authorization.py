@@ -154,6 +154,22 @@ class PostgreSQLBrowserCurrentAuth:
         ):
             raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
         principal = Principal.model_validate(payload["principal"])
+        invocation = payload.get("invocation")
+        # Older v2 Runs lack this audit fact; their original session proof stays
+        # valid. New first-party submissions must describe only the authenticated
+        # owner. No caller-supplied channel or represented identity can widen it.
+        if invocation is not None and (
+            type(invocation) is not dict
+            or type(invocation.get("entrypoint")) is not str
+            or invocation.get("entrypoint") not in {"runtime_chat", "structured_internal"}
+            or invocation != {
+                "caller": "authenticated_session_v1",
+                "entrypoint": invocation["entrypoint"],
+                "operator_user_id": principal.ai_user_id,
+                "represented_user_id": principal.ai_user_id,
+            }
+        ):
+            raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
         if (
             principal.ai_user_id != admission.owner.user_id
             or principal.org_ctx.tenant_id != admission.owner.tenant_id

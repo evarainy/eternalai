@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.chat import BrowserChatService
+from app.browser_skill.submission import BrowserSubmissionService
 from app.browser_skill.models import BrowserOwner, OpaqueId
 from app.browser_skill.publication_contracts import (
     BrowserPublicationManifest,
@@ -210,7 +211,7 @@ class BrowserVerticalDependencies:
     cancel_check: RunProofCheck
     cleanup_authorize: CleanupAuthorize
     cleanup_check: CleanupCheck
-    chat_parser: BrowserChatParserPort
+    chat_parser: BrowserChatParserPort | None
     chat_bindings: BrowserChatBindingResolverPort
     trace: TracePort
     sessions: SessionStorePort
@@ -246,7 +247,8 @@ class BrowserVerticalComponents:
     runs: PostgreSQLBrowserRunStore
     execution: VerifiedBrowserReadExecution
     worker: BrowserReadWorker
-    chat: BrowserChatService
+    chat: BrowserChatService | None
+    submission: BrowserSubmissionService
     _sessions: async_sessionmaker[AsyncSession]
     _tenant_id: str
     _seed: BrowserPublicationManifest
@@ -442,10 +444,12 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
         (deps.profile_capture_proof, "check_live_subject"),
         (deps.profile_cleanup_proof, "verify_cleanup"),
         (deps.profile_cleanup_authority, "check_cleanup"),
-        (deps.chat_parser, "parse"), (deps.chat_bindings, "resolve"),
+        (deps.chat_bindings, "resolve"),
         (deps.sessions, "get_session"), (deps.sessions, "create_session"),
     )
     if (any(not callable(getattr(dependency, method, None)) for dependency, method in required)
+            or (deps.chat_parser is not None
+                and not callable(getattr(deps.chat_parser, "parse", None)))
             or not all(callable(callback) for callback in (
                 deps.cancel_check, deps.cleanup_authorize, deps.cleanup_check,
             )) or deps.trace is None):
@@ -581,12 +585,16 @@ def build_browser_vertical(
         ttl_seconds=deps.worker_ttl_seconds,
         record_diagnostic=record_read_diagnostic,
     )
-    chat = BrowserChatService(
-        runs, publications, deps.chat_parser, deps.chat_bindings, BrowserChatPayloadCipher(cipher),
+    submission = BrowserSubmissionService(
+        runs, publications, deps.chat_bindings, BrowserChatPayloadCipher(cipher),
         deps.session_binder.bind, deps.trace, sessions=deps.sessions,
         skill_id=seed.skill.skill_id, input_digest_key=deps.input_digest_key, enabled=True,
     )
+    chat = (
+        BrowserChatService(submission, deps.chat_parser)
+        if deps.chat_parser is not None else None
+    )
     return BrowserVerticalComponents(
         publications, cipher, current_auth, binding_reader, profiles, runs, execution,
-        worker, chat, deps.session_factory, deps.tenant_id, seed,
+        worker, chat, submission, deps.session_factory, deps.tenant_id, seed,
     )
