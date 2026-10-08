@@ -696,6 +696,7 @@ class RuntimeImpl:
                 persisted_gate = await self._workflow_engine.governed_confirmation(task_id)
                 if persisted_gate is not None:
                     gate_request_id = persisted_gate.request_id
+                    response_id = persisted_gate.request_id
                     action_digest = persisted_gate.action_digest
                     request_digest = persisted_gate.request_digest
                     gate_manifest_digest = persisted_gate.binding_manifest_digest
@@ -1737,6 +1738,7 @@ class RuntimeImpl:
                 persisted_gate = await self._workflow_engine.governed_confirmation(pending.task_id)
                 if persisted_gate is not None:
                     next_gate_request_id = persisted_gate.request_id
+                    response_id = persisted_gate.request_id
                     next_action_digest = persisted_gate.action_digest
                     next_request_digest = persisted_gate.request_digest
                     gate_expires_at = persisted_gate.expires_at

@@ -445,6 +445,7 @@ def test_six_writes_require_durable_confirmation_and_do_not_replay(
                 assert result.output == {
                     "operation_id": op.operation_id,
                     "state": "VERIFIED_SUCCESS",
+                    "result": None,
                 }
                 again = await h["engine"]().resume(
                     task_id=op.context.task_id,
