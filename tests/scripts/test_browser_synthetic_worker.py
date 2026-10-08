@@ -12,6 +12,10 @@ import pytest
 from scripts import run_browser_synthetic_worker as entry
 
 
+async def _cleanup_ready() -> object:
+    return ()
+
+
 def test_worker_reuses_supervisor_and_stops_after_stop_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -26,8 +30,9 @@ def test_worker_reuses_supervisor_and_stops_after_stop_event(
         class FakeSupervisor:
             last_pass_failed = False
 
-            def __init__(self, callback: object) -> None:
+            def __init__(self, callback: object, *, cleanup_ready: object) -> None:
                 assert callback == run_ready
+                assert cleanup_ready == _cleanup_ready
 
             async def start(self) -> None:
                 events.append("start")
@@ -37,7 +42,9 @@ def test_worker_reuses_supervisor_and_stops_after_stop_event(
                 events.append("stop")
 
         monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FakeSupervisor)
-        await entry.run_worker(SimpleNamespace(run_ready=run_ready), stop)
+        await entry.run_worker(SimpleNamespace(
+            run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+        ), stop)
 
     asyncio.run(execute())
     assert events == ["start", "stop"]
@@ -51,8 +58,9 @@ def test_worker_does_not_report_success_after_failed_supervisor_pass(
     class FailedPassSupervisor:
         last_pass_failed = False
 
-        def __init__(self, callback: object) -> None:
-            assert callable(callback)
+        def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+            assert callback == run_ready
+            assert cleanup_ready == _cleanup_ready
             self._run_ready = callback
 
         async def start(self) -> None:
@@ -71,7 +79,9 @@ def test_worker_does_not_report_success_after_failed_supervisor_pass(
     async def execute() -> None:
         stop = asyncio.Event()
         stop.set()
-        await entry.run_worker(SimpleNamespace(run_ready=run_ready), stop)
+        await entry.run_worker(SimpleNamespace(
+            run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+        ), stop)
 
     monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FailedPassSupervisor)
     with pytest.raises(ValueError):
@@ -83,8 +93,9 @@ def test_worker_stops_supervisor_when_start_fails(monkeypatch: pytest.MonkeyPatc
     events: list[str] = []
 
     class FailingSupervisor:
-        def __init__(self, callback: object) -> None:
-            assert callable(callback)
+        def __init__(self, callback: object, *, cleanup_ready: object) -> None:
+            assert callback == run_ready
+            assert cleanup_ready == _cleanup_ready
 
         async def start(self) -> None:
             events.append("start")
@@ -98,7 +109,9 @@ def test_worker_stops_supervisor_when_start_fails(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FailingSupervisor)
     with pytest.raises(RuntimeError, match="synthetic start failure"):
-        asyncio.run(entry.run_worker(SimpleNamespace(run_ready=run_ready), asyncio.Event()))
+        asyncio.run(entry.run_worker(SimpleNamespace(
+            run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+        ), asyncio.Event()))
     assert events == ["start", "stop"]
 
 
@@ -114,8 +127,9 @@ def test_worker_stops_supervisor_on_cancellation(monkeypatch: pytest.MonkeyPatch
         class FakeSupervisor:
             last_pass_failed = False
 
-            def __init__(self, callback: object) -> None:
+            def __init__(self, callback: object, *, cleanup_ready: object) -> None:
                 assert callback == run_ready
+                assert cleanup_ready == _cleanup_ready
 
             async def start(self) -> None:
                 events.append("start")
@@ -126,15 +140,86 @@ def test_worker_stops_supervisor_on_cancellation(monkeypatch: pytest.MonkeyPatch
 
         monkeypatch.setattr(entry, "BrowserWorkerSupervisor", FakeSupervisor)
         task = asyncio.create_task(
-            entry.run_worker(SimpleNamespace(run_ready=run_ready), asyncio.Event())
+            entry.run_worker(SimpleNamespace(
+                run_business_ready=run_ready, cleanup_ready=_cleanup_ready,
+            ), asyncio.Event())
         )
-        await started.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        started_waiter = asyncio.create_task(started.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (task, started_waiter), timeout=2, return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                await task
+                pytest.fail("worker exited before cancellation")
+            assert started_waiter in done, "supervisor did not start within the timeout"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        finally:
+            for pending in (task, started_waiter):
+                if not pending.done():
+                    pending.cancel()
+            _, pending = await asyncio.wait((task, started_waiter), timeout=2)
+            assert not pending, "worker test tasks did not stop within the timeout"
+            await asyncio.gather(task, started_waiter, return_exceptions=True)
 
     asyncio.run(execute())
     assert events == ["start", "stop"]
+
+
+@pytest.mark.parametrize("outcome", ["stop", "cancel", "business_failure", "cleanup_failure"])
+def test_worker_settles_both_lanes_with_actual_supervisor(outcome: str) -> None:
+    calls: list[str] = []
+
+    async def execute() -> None:
+        business_started, cleanup_started, stop = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def business() -> object:
+            calls.append("business")
+            business_started.set()
+            if outcome == "business_failure":
+                raise RuntimeError("synthetic business failure")
+            return ()
+
+        async def cleanup() -> object:
+            calls.append("cleanup")
+            cleanup_started.set()
+            if outcome == "cleanup_failure":
+                raise RuntimeError("synthetic cleanup failure")
+            return ()
+
+        task = asyncio.create_task(entry.run_worker(SimpleNamespace(
+            run_business_ready=business, cleanup_ready=cleanup,
+        ), stop))
+        readiness = asyncio.gather(business_started.wait(), cleanup_started.wait())
+        try:
+            await asyncio.wait_for(readiness, timeout=2)
+            if outcome == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=2)
+            else:
+                stop.set()
+                if outcome.endswith("failure"):
+                    with pytest.raises(entry._StartupError):
+                        await asyncio.wait_for(task, timeout=2)
+                else:
+                    await asyncio.wait_for(task, timeout=2)
+        finally:
+            for pending in (task, readiness):
+                if not pending.done():
+                    pending.cancel()
+            _, pending = await asyncio.wait((task, readiness), timeout=2)
+            assert not pending, "actual supervisor did not settle within the timeout"
+            await asyncio.gather(task, readiness, return_exceptions=True)
+        assert not any(
+            pending.get_name() in {"browser-readonly-worker", "browser-readonly-cleanup"}
+            for pending in asyncio.all_tasks()
+        )
+
+    asyncio.run(execute())
+    assert calls == ["business", "cleanup"]
 
 
 @pytest.mark.parametrize(
