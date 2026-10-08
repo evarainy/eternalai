@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from pydantic import ValidationError
+
 from app.browser_skill.executor import DecisionContextFactory
 from app.browser_skill.models import (
     ActionCommand,
@@ -321,22 +323,27 @@ class LocalBrowserReadExecutionFactory:
         try:
             if not await self.verify_source(manifest):
                 raise BrowserReadExecutionError("denied")
-            await self.resources.ensure_started()
             from app.infra.browser.fixed_synthetic_seed import SyntheticDetailArguments
 
             if (
                 private_input.get("schema_version") != "browser.request.input.v2"
                 or private_input.get("capability_id") != manifest.capability.capability_id
-                or private_input.get("channel") not in {"web", "cli", "api", "mock"}
+                or private_input.get("channel") not in ("web", "cli", "api", "mock")
             ):
                 raise BrowserReadExecutionError("denied")
-            principal = Principal.model_validate(private_input.get("principal"))
+            try:
+                principal = Principal.model_validate(private_input.get("principal"))
+                arguments = SyntheticDetailArguments.model_validate(private_input.get("arguments"))
+            except ValidationError:
+                raise BrowserReadExecutionError("denied") from None
             if (
                 principal.ai_user_id != run.owner.user_id
                 or principal.org_ctx.tenant_id != run.owner.tenant_id
             ):
                 raise BrowserReadExecutionError("denied")
-            arguments = SyntheticDetailArguments.model_validate(private_input.get("arguments"))
+            # No worker transport is created until the complete private input
+            # shape and admitted owner have passed local validation.
+            await self.resources.ensure_started()
             auth = BrowserAuthFact(
                 run.owner,
                 None,

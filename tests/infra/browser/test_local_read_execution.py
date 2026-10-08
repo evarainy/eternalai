@@ -29,6 +29,7 @@ from app.infra.browser.fixed_synthetic_seed import (
 )
 from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory, _FencedDecision
 from app.infra.browser.local_resource_lifecycle import (
+    LocalBrowserReadLifecycle,
     LocalBrowserResources,
     LocalChromiumDeployment,
     LocalPlaywrightDriver,
@@ -114,9 +115,14 @@ def test_authority_is_required_and_cannot_be_replaced(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("recovered", [False, True])
+@pytest.mark.parametrize("invalid_field", [
+    "schema_version", "capability_id", "channel", "principal", "owner", "arguments",
+])
 def test_invalid_input_or_recovered_lease_never_starts_provider(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     recovered: bool,
+    invalid_field: str,
 ) -> None:
     factory = factory_at(tmp_path)
     leases, auth, bindings = (
@@ -142,21 +148,50 @@ def test_invalid_input_or_recovered_lease_never_starts_provider(
         lease_epoch=1 if recovered else None,
         provider_manifest_digest=b"m" * 32 if recovered else None,
     )
-    # A zero-argument/v1 envelope cannot silently gain the query-detail key.
+    driver_start = AsyncMock(side_effect=AssertionError("invalid input started worker driver"))
+    monkeypatch.setattr(factory.resources.driver, "ensure_started", driver_start)
+    private_input = {
+        "schema_version": "browser.request.input.v2",
+        "capability_id": factory.source.manifest.capability.capability_id,
+        "channel": "web",
+        "principal": {
+            "ai_user_id": SYNTHETIC_USER,
+            "display_name": "Synthetic user",
+            "roles": [],
+            "org_ctx": {"tenant_id": SYNTHETIC_TENANT},
+        },
+        "arguments": {"business_key": "explicit_input_key"},
+    }
+    if invalid_field == "schema_version":
+        private_input["schema_version"] = "browser.request.input.v1"
+    elif invalid_field == "capability_id":
+        private_input["capability_id"] = "another_capability"
+    elif invalid_field == "channel":
+        private_input["channel"] = ["web"]
+    elif invalid_field == "principal":
+        private_input["principal"] = {"ai_user_id": SYNTHETIC_USER}
+    elif invalid_field == "owner":
+        private_input["principal"] = {
+            **private_input["principal"], "ai_user_id": "another_user",
+        }
+    else:
+        private_input["arguments"] = {"business_key": "invalid key"}
     with pytest.raises(BrowserReadExecutionError) as denied:
         asyncio.run(
             factory.open(
                 run,
                 factory.source.manifest,
-                {"schema_version": "browser.request.input.v1"},
+                private_input,
                 checkpoint,
             )
         )
     assert denied.value.code == "denied"
+    driver_start.assert_not_awaited()
     leases.reserve.assert_not_awaited()
     auth.check_current.assert_not_awaited()
     checkpoint.refresh.assert_not_awaited()
     assert factory.resources._resources == {}
+    assert factory.state_for_cleanup(run) is None
 
 
 @pytest.mark.parametrize("revoke_after_call", [False, True])
@@ -207,6 +242,16 @@ def _open_with_simulated_transport(
     )
     leases, auth, bindings, checkpoint = Mock(), Mock(), Mock(), Mock()
 
+    async def start_driver():
+        if resources.driver.ready:
+            events.append("driver_reuse")
+            return
+        resources.driver._driver = Mock()
+        resources.driver._state = "ready"
+        events.append("driver_start")
+
+    monkeypatch.setattr(resources.driver, "ensure_started", start_driver)
+
     async def boundary(name):
         calls.append(name)
         if facts.hook is not None:
@@ -255,8 +300,10 @@ def _open_with_simulated_transport(
         assert current.lease_epoch == claim.lease_epoch and given_source is source
 
         async def native_status(operation):
-            assert operation == "status"
-            events.append("native_status")
+            assert operation in {"status", "stop"}
+            events.append("native_status" if operation == "status" else "native_stop")
+            if operation == "stop":
+                native.exited = True
 
         async def dom_subject(*args):
             events.append("subject_dom")
@@ -268,9 +315,16 @@ def _open_with_simulated_transport(
         page.evaluate = AsyncMock(side_effect=dom_subject)
         native = Mock(exited=False)
         native.call = AsyncMock(side_effect=native_status)
-        live = LiveBrowser(session, Mock(), Mock(pages=[page]), Mock())
+        native.dispose_helper = AsyncMock(return_value=True)
+        browser = Mock()
+        browser.is_connected.return_value = True
+        browser.close = AsyncMock()
+        context = Mock(pages=[page])
+        context.close = AsyncMock()
+        live = LiveBrowser(session, browser, context)
         item = _Resource(
-            claim, session, native, b"synthetic_resource", live, page, source, subject_guard
+            claim, session, native, b"synthetic_resource", live, page, source, subject_guard,
+            connection=browser, context=context,
         )
         resources._resources["synthetic_instance"] = item
         return item
@@ -370,6 +424,76 @@ def test_factory_order_and_real_subject_proof_hooks_with_simulated_transport(
     assert result.observer._pages[result.session.session_ref].page is not None
     assert result.confirmed_key.value_ref.name == "business_key"
     assert factory._states[current.run_id].key == "explicit_input_key"
+    assert events.count("driver_start") == 1
+    assert events.index("driver_start") < events.index("reserve")
+    assert factory.state_for_cleanup(current) is transport.state
+    assert transport.state.resource is factory.resources.resource(
+        transport.state.resource.reference
+    )
+
+
+def test_cancel_cleanup_closes_only_run_context_and_keeps_worker_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _open_with_simulated_transport(tmp_path, monkeypatch)
+    factory, state = transport.factory, transport.state
+    item = state.resource
+    assert item is not None and item.live is not None
+    context, browser = item.live.context, item.live.browser
+    cleanup_authority = Mock()
+    cleanup_authority.check_recovery = AsyncMock()
+    cleanup_authority.check_cleanup = AsyncMock()
+    factory.resources.cleanup_authority = cleanup_authority
+    leases = factory.authority()[0]
+    leases.cleanup = AsyncMock(return_value=True)
+    driver_stop = AsyncMock(side_effect=AssertionError("Run cleanup stopped worker driver"))
+    monkeypatch.setattr(factory.resources.driver, "stop", driver_stop)
+    cancelled = replace(transport.facts.run, cancel_requested=True)
+    transport.facts.run = cancelled
+    lifecycle = LocalBrowserReadLifecycle(factory, cleanup_authority)
+
+    async def scenario():
+        await lifecycle.stop(cancelled, transport.checkpoint)
+        await factory.resources.ensure_started()
+
+    asyncio.run(scenario())
+    assert state.cancellation.is_set() and state.released
+    assert state.cleanup_outcome == "terminated"
+    assert lifecycle._cancel[cancelled.run_id][0] == cancelled
+    assert factory.state_for_cleanup(cancelled) is state
+    context.close.assert_awaited_once()
+    browser.close.assert_awaited_once()
+    driver_stop.assert_not_awaited()
+    assert factory.resources.driver.ready
+    assert transport.events.count("driver_start") == 1
+    assert transport.events.count("driver_reuse") == 1
+    assert leases.cleanup.await_count == 1
+
+
+def test_failed_run_termination_retains_cleanup_state_and_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = _open_with_simulated_transport(tmp_path, monkeypatch)
+    factory, state = transport.factory, transport.state
+    cleanup_authority = Mock()
+    cleanup_authority.check_recovery = AsyncMock()
+    cleanup_authority.check_cleanup = AsyncMock()
+    leases = factory.authority()[0]
+    leases.cleanup = AsyncMock(return_value=False)
+    termination = AsyncMock(side_effect=BrowserReadExecutionError("unavailable"))
+    monkeypatch.setattr(factory.resources, "terminate", termination)
+    driver_stop = AsyncMock(side_effect=AssertionError("failed cleanup stopped worker driver"))
+    monkeypatch.setattr(factory.resources.driver, "stop", driver_stop)
+    lifecycle = LocalBrowserReadLifecycle(factory, cleanup_authority)
+
+    outcome = asyncio.run(lifecycle.cleanup(transport.facts.run))
+    assert outcome == "quarantined"
+    assert state.cancellation.is_set() and not state.released
+    assert factory.state_for_cleanup(transport.facts.run) is state
+    termination.assert_awaited_once_with(state.resource)
+    assert leases.cleanup.await_count == 1
+    driver_stop.assert_not_awaited()
+    assert factory.resources.driver.ready
 
 
 def test_current_binding_fences_each_independent_call_without_subject_projection(
