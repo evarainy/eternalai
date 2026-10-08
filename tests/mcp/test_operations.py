@@ -79,6 +79,7 @@ class Store:
             ("public_result", "public_result"),
             ("safe_output", "safe_output"),
             ("attempt_id", "attempt_id"),
+            ("confirmation_error_code", "confirmation_error_code"),
         ):
             if source in changes:
                 update[target] = changes[source]

@@ -345,7 +345,10 @@ class GovernedOperations:
                     raise McpFailure("mcp_confirmation_not_expired")
                 await self.store.transition(
                     current,
-                    state="EXPIRED" if reason == "expired" else "CANCELLED",
+                    state="EXPIRED" if reason == "expired" else (
+                        "FAILED" if reason == "exception" else "CANCELLED"
+                    ),
+                    confirmation_error_code="internal_error" if reason == "exception" else None,
                 )
             elif current.state not in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}:
                 raise McpFailure("mcp_outcome_unknown")
@@ -696,5 +699,7 @@ class GovernedOperations:
             if status in {"completed", "waiting_confirm"}
             else "mcp_outcome_unknown"
             if op.state in {"UNKNOWN", "WAITING_EXTERNAL_CONFIRM", "SENDING"}
+            else op.confirmation_error_code
+            if op.state == "FAILED" and op.confirmation_error_code is not None
             else "policy_denied",
         )

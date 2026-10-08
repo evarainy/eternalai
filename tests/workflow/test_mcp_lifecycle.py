@@ -14,6 +14,7 @@ from app.ports.auth import AuthenticatedSessionContext, authenticated_session
 from app.ports.capability_gateway import ExecutionResult
 from app.ports.mcp import McpValidatedOutcome
 from app.ports.workflow_engine import GovernedFinalizationError
+from app.ports.workflow_store import WorkflowOperation
 from tests.infra.mcp.test_transport import Peer, serving
 from tests.mcp.test_operations import fixture
 from tests.runtime.test_runtime_user_action import (
@@ -56,6 +57,123 @@ async def governed_chat():
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     return chat, h, pending, session
+
+
+@pytest.mark.parametrize("state", ["WAITING_LOCAL_CONFIRM", "READY"])
+@pytest.mark.parametrize("fault", ["none", "task", "evaluation_after_write"])
+def test_presend_exception_retirement_preserves_internal_error_and_replay(state, fault):
+    async def run():
+        chat, h, pending, session = await governed_chat()
+        h.store.op = h.op.model_copy(update={"state": state})
+        original_update = chat.runtime._task_store.update_status
+        original_once = chat.trace.record_event_once
+        failures = 0
+
+        async def update(task_id, *args, **kwargs):
+            nonlocal failures
+            if fault == "task" and task_id == pending.task_id and not failures:
+                failures += 1
+                raise RuntimeError("synthetic retirement task failure")
+            return await original_update(task_id, *args, **kwargs)
+
+        async def once(event, key):
+            nonlocal failures
+            await original_once(event, key)
+            if (
+                fault == "evaluation_after_write" and event.event_type == "evaluation_recorded"
+                and not failures
+            ):
+                failures += 1
+                raise RuntimeError("synthetic retirement trace failure")
+
+        chat.runtime._task_store.update_status = update
+        chat.trace.record_event_once = once
+        token = authenticated_session.set(session)
+        try:
+            async def retire():
+                return await chat.runtime._retire_pending_confirmation(
+                    pending_key=next(iter(chat.runtime._pending_workflows)), pending=pending,
+                    status="confirmation_invalidated", reason="exception",
+                    error_code="internal_error",
+                )
+
+            if fault == "none":
+                response = await retire()
+                assert _outcome(response) == "confirmation_invalidated"
+            else:
+                with pytest.raises(GovernedFinalizationError) as interrupted:
+                    await retire()
+                assert interrupted.value.result.error_code == "internal_error"
+                claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+                assert not claim.cleanup_complete and claim.pending is pending
+            assert h.store.op.state == "FAILED" and not h.store.op.send_started
+            # Repair uses only the persisted operation after a reload, not the exception object.
+            h.store.op = WorkflowOperation.model_validate_json(h.store.op.model_dump_json())
+            assert h.operations.result(h.store.op, pending.trace_id).error_code == "internal_error"
+            response = await _dispatch(chat)
+            task = chat.runtime._task_store.records[pending.task_id]
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            assert task.status == claim.state == _outcome(response) == "confirmation_invalidated"
+            assert task.error_code == claim.error_code == "internal_error"
+            assert claim.cleanup_complete and claim.pending is None
+            assert not chat.runtime._pending_workflows and chat.engine.resume_calls == 0
+            assert not chat.runtime._session_memory.recall(pending.owner)
+            assert h.store.transitions == ["FAILED"] and failures == (fault != "none")
+            terminal = sorted((event.event_type, event.error_code)
+                              for event in chat.trace.once.values())
+            assert terminal == [
+                ("evaluation_recorded", "internal_error"),
+                ("task_confirmation_invalidated", "internal_error"),
+            ]
+            repaired = await chat.engine.finalize_governed_task(task_id=pending.task_id)
+            assert repaired.error_code == "internal_error" and len(chat.trace.once) == 2
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
+
+
+def test_runtime_gateway_presend_exception_retires_ready_without_replay_send():
+    async def run():
+        chat, h, pending, session = await governed_chat()
+        h.store.op = h.op.model_copy(update={"state": "WAITING_LOCAL_CONFIRM"})
+        calls = 0
+
+        async def owned(op):
+            h.operations.lifecycle_owner(op)
+
+        async def execute(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            assert h.store.op.state == "READY" and not h.store.op.send_started
+            raise RuntimeError("synthetic gateway registry failure before send")
+
+        h.operations.owned = owned
+        h.operations.gateway = SimpleNamespace(execute_capability=execute)
+        token = authenticated_session.set(session)
+        try:
+            response = await _dispatch(chat)
+            assert calls == chat.engine.resume_calls == 1
+            assert _outcome(response) == "confirmation_invalidated"
+            assert h.store.op.state == "FAILED" and not h.store.op.send_started
+            task = chat.runtime._task_store.records[pending.task_id]
+            assert task.status == "confirmation_invalidated" and task.error_code == "internal_error"
+            assert h.operations.result(h.store.op, pending.trace_id).error_code == "internal_error"
+            terminal = sorted((event.event_type, event.error_code)
+                              for event in chat.trace.once.values())
+            assert terminal == [
+                ("evaluation_recorded", "internal_error"),
+                ("task_confirmation_invalidated", "internal_error"),
+            ]
+            replay = await _dispatch(chat)
+            assert _outcome(replay) == "confirmation_invalidated"
+            assert calls == chat.engine.resume_calls == 1
+            assert not chat.runtime._pending_workflows
+            assert not chat.runtime._session_memory.recall(pending.owner)
+        finally:
+            authenticated_session.reset(token)
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("state", ["VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"])

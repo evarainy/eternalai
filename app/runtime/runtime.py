@@ -1483,9 +1483,10 @@ class RuntimeImpl:
                 _pending_confirmation_claim_key(key, pending)
             ]
             state = result.output["state"]
+            presend_failure = state == "FAILED" and result.error_code == "internal_error"
             claim.state = (
                 "cancelled" if state == "CANCELLED" else
-                "confirmation_invalidated" if state == "EXPIRED" else "completed"
+                "confirmation_invalidated" if state == "EXPIRED" or presend_failure else "completed"
             )
             claim.error_code = (
                 None if state == "CANCELLED" else
@@ -1494,6 +1495,8 @@ class RuntimeImpl:
             claim.governed_terminal = result
             if state in {"CANCELLED", "EXPIRED"}:
                 claim.cleanup_reason = "cancelled" if state == "CANCELLED" else "expired"
+            elif presend_failure:
+                claim.cleanup_reason = "exception"
             claim.cleanup_complete = False
             claim.pending = pending
             remember = state == "VERIFIED_SUCCESS" and not claim.completion_remembered

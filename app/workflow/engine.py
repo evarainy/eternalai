@@ -219,11 +219,13 @@ class WorkflowEngine:
             "EXPIRED": ("confirmation_invalidated", "task_confirmation_invalidated", "failed"),
         }
         status, event_type, trace_status = terminal[op.state]
+        if op.state == "FAILED" and op.confirmation_error_code == "internal_error":
+            status, event_type = "confirmation_invalidated", "task_confirmation_invalidated"
         error: ErrorCode | None = (
             None
             if status in {"completed", "cancelled"}
             else (
-                "confirm_required"
+                op.confirmation_error_code or "confirm_required"
                 if status == "confirmation_invalidated"
                 else self._governed.result(op, task.trace_id).error_code
             )

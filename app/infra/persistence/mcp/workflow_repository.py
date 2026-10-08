@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import anyio
 import sqlalchemy as sa
@@ -243,8 +243,16 @@ class PostgreSQLWorkflowStore:
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
         renewed_gate_expires_at: datetime | None = None,
+        confirmation_error_code: Literal["internal_error"] | None = None,
     ) -> WorkflowOperation:
         op = operation
+        if confirmation_error_code is not None and (
+            confirmation_error_code != "internal_error"
+            or state != "FAILED"
+            or op.state not in {"WAITING_LOCAL_CONFIRM", "READY"}
+            or op.send_started
+        ):
+            raise McpFailure("mcp_operation_transition_invalid")
         allowed = {
             "WAITING_LOCAL_CONFIRM": {"READY", "CANCELLED", "EXPIRED", "WAITING_LOCAL_CONFIRM"},
             "READY": {"SENDING", "CANCELLED", "EXPIRED", "WAITING_LOCAL_CONFIRM"},
@@ -259,7 +267,9 @@ class PostgreSQLWorkflowStore:
             "UNKNOWN": {"VERIFIED_SUCCESS", "FAILED", "WAITING_LOCAL_CONFIRM", "UNKNOWN"},
             "EXPIRED": {"WAITING_LOCAL_CONFIRM"},
         }
-        if state not in allowed.get(op.state, set()):
+        if state not in allowed.get(op.state, set()) and not (
+            state == "FAILED" and confirmation_error_code == "internal_error"
+        ):
             raise McpFailure("mcp_operation_transition_invalid")
         renewal = renewed_action_digest is not None
         if renewal:
@@ -295,6 +305,7 @@ class PostgreSQLWorkflowStore:
                 "send_started": op.send_started or state == "SENDING",
                 "safe_output": op.safe_output if safe_output is None else safe_output,
                 "public_result": public_result if state == "VERIFIED_SUCCESS" else None,
+                "confirmation_error_code": confirmation_error_code,
                 "review_url": review_url if review_url is not None else op.review_url,
                 "context": op.context.model_copy(
                     update={

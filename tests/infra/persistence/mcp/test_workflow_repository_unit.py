@@ -6,9 +6,11 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore
 from app.mcp.models import McpFailure
+from app.ports.workflow_store import WorkflowOperation
 from tests.mcp.test_operations import fixture
 
 
@@ -26,6 +28,74 @@ class Session:
     async def execute(self, statement):
         self.statements.append(statement.compile().params)
         return SimpleNamespace(scalar_one_or_none=lambda: self.operation_id)
+
+
+@pytest.mark.parametrize("state", ["WAITING_LOCAL_CONFIRM", "READY"])
+def test_presend_internal_failure_serializes_and_reloads_without_schema_change(state):
+    async def run():
+        h = await fixture()
+        session = Session(h.op.operation_id)
+        store = SimpleNamespace(
+            sessions=SimpleNamespace(begin=lambda: session),
+            encrypt=lambda payload, aad: json.dumps(payload).encode(),
+            decrypt=lambda payload, aad: json.loads(payload),
+        )
+        repository = PostgreSQLWorkflowStore(store)
+        op = h.op.model_copy(update={"state": state})
+        with pytest.raises(McpFailure, match="mcp_operation_transition_invalid"):
+            await repository.transition(op, state="FAILED")
+        assert not session.statements
+        failed = await repository.transition(
+            op, state="FAILED", confirmation_error_code="internal_error",
+        )
+        assert failed.state == "FAILED" and not failed.send_started
+        assert failed.confirmation_error_code == "internal_error" and failed.public_result is None
+        sql_values = session.statements[0]
+        row = {
+            **repository._aad(failed),
+            "encrypted_payload": sql_values["encrypted_payload"],
+            "state": failed.state, "revision": failed.revision,
+            "send_started": failed.send_started, "attempt_id": failed.attempt_id,
+            "expires_at": sql_values["expires_at"],
+            "checkpoint": session.statements[1]["checkpoint"],
+        }
+        reloaded = repository._decode(row)
+        assert reloaded == failed
+        assert h.operations.result(reloaded, "synthetic-trace").error_code == "internal_error"
+        assert set(session.statements[1]["checkpoint"]) == {
+            "definition", "version", "state", "revision", "step_index", "gate_request_id",
+        }
+        legacy = op.model_dump(mode="json", exclude={"confirmation_error_code"})
+        assert WorkflowOperation.model_validate(legacy).confirmation_error_code is None
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("state,send_started", [
+    ("WAITING_LOCAL_CONFIRM", True), ("READY", True), ("SENDING", True),
+    ("UNKNOWN", True), ("WAITING_EXTERNAL_CONFIRM", True),
+    ("VERIFIED_SUCCESS", False), ("FAILED", False), ("CANCELLED", False), ("EXPIRED", False),
+])
+def test_presend_failure_marker_cannot_retire_started_or_terminal_operations(state, send_started):
+    async def run():
+        h = await fixture()
+        session = Session(h.op.operation_id)
+        repository = PostgreSQLWorkflowStore(SimpleNamespace(
+            sessions=SimpleNamespace(begin=lambda: session),
+        ))
+        op = h.op.model_copy(update={"state": state, "send_started": send_started})
+        with pytest.raises(McpFailure, match="mcp_operation_transition_invalid"):
+            await repository.transition(
+                op, state="FAILED", confirmation_error_code="internal_error",
+            )
+        assert not session.statements
+        with pytest.raises(ValidationError):
+            WorkflowOperation.model_validate({
+                **op.model_dump(), "confirmation_error_code": "internal_error",
+                "state": "READY" if state == "FAILED" else state,
+            })
+
+    asyncio.run(run())
 
 
 def test_real_transition_keeps_public_output_separate_and_checkpoint_expiry_exact():
