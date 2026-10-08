@@ -28,14 +28,26 @@ class NoopTraceWriter:
             os.environ.get("ENV", "").lower() == "testing"
             or os.environ.get("PHASE0_MOCK_MODE", "").lower() == "true"
         ):
-            raise RuntimeError(
-                "persistent TracePort is required outside testing or mock mode"
-            )
+            raise RuntimeError("persistent TracePort is required outside testing or mock mode")
         self._logger = logger or logging.getLogger(__name__)
         self._sanitizer: SanitizerHookFn = redact_trace_attributes
+        self._once: dict[str, TraceEvent] = {}
 
     def set_sanitizer(self, hook: SanitizerHookFn) -> None:
         self._sanitizer = hook
+
+    async def record_event_once(self, event: TraceEvent, idempotency_key: str) -> None:
+        attributes = self._sanitize_attributes(event.attributes)
+        if attributes is None or not idempotency_key:
+            raise TraceSanitizationError("trace attribute sanitization failed")
+        sanitized = event.model_copy(update={"attributes": attributes})
+        existing = self._once.get(idempotency_key)
+        if existing is not None:
+            if existing != sanitized:
+                raise TraceSanitizationError("trace idempotency conflict")
+            return
+        await self.record_event(sanitized)
+        self._once[idempotency_key] = sanitized
 
     async def record_event(self, event: TraceEvent) -> None:
         attributes = self._sanitize_attributes(event.attributes)

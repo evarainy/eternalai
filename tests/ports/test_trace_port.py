@@ -323,6 +323,7 @@ def test_trace_port_protocol_defines_expected_methods() -> None:
     assert TracePort.__protocol_attrs__ == {
         "set_sanitizer",
         "record_event",
+        "record_event_once",
         "start_task_trace",
         "record_step",
         "record_policy_decision",

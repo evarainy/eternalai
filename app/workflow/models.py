@@ -79,7 +79,25 @@ class WorkflowRunResult:
     evaluation_observations: tuple[StepObservation, ...] = ()
 
 
+class GovernedTerminalResult(WorkflowRunResult):
+    """Typed in-process proof returned only after a durable governed terminal."""
+
+
+class GovernedConfirmationFailureResult(GovernedTerminalResult):
+    """Durable unsent failure; confirmation is invalid, original error is retained."""
+
+
+class GovernedFinalizationError(RuntimeError):
+    """Business terminal is durable; task/trace writes still require repair."""
+
+    def __init__(self, result: WorkflowRunResult) -> None:
+        super().__init__("governed terminal finalizer incomplete")
+        self.result = result
+
+
 __all__ = (
+    "GovernedFinalizationError",
+    "GovernedTerminalResult",
     "WorkflowCondition",
     "WorkflowDefinition",
     "WorkflowInputRef",

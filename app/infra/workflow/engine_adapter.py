@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
-from app.ports.human_gate import VersionBinding
+from app.ports.human_gate import HumanGateRequest, VersionBinding
 from app.ports.workflow_engine import WorkflowVersionBindings
 from app.workflow.engine import WorkflowEngine
 from app.workflow.models import WorkflowRunResult
@@ -87,6 +87,26 @@ class WorkflowEngineAdapter:
 
     async def pending_confirmation_action_digest(self, task_id: str) -> str:
         return await self._engine.pending_confirmation_action_digest(task_id)
+
+    async def governed_confirmation(self, task_id: str) -> HumanGateRequest | None:
+        return await self._engine.governed_confirmation(task_id)
+
+    async def finalize_governed_task(self, *, task_id: str) -> WorkflowRunResult | None:
+        return await self._engine.finalize_governed_task(task_id=task_id)
+
+    async def retire_owned_confirmation(
+        self,
+        task_id: str,
+        expected_action_digest: str,
+        expected_gate_request_id: str,
+        reason: str,
+    ) -> bool:
+        return await self._engine.retire_owned_confirmation(
+            task_id,
+            expected_action_digest,
+            expected_gate_request_id,
+            reason,
+        )
 
 
 __all__ = ("WorkflowEngineAdapter",)

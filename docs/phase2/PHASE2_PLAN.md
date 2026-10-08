@@ -559,6 +559,12 @@ P2 把已完成的 **Mock/低风险 B2→B5 闭环**，推进为**至少 1 个�
 | MCP 真实部署与业务验收 | 当前证据为合成合同、真实本地 SDK/HTTP/PG 及生产装配；未使用正式业务账号，未执行真实写或生产迁移 | `P2-MCP-PLATFORM-001`（正式服务及真实动作专项授权待具备） | 待 GOV-SYNC 分配 | 正式服务可用，专项授权齐备，逐工具完成普通用户权限、确认/恢复与可核验业务后态验收 | `docs/dev/mcp_activation_checklist.md`；候选及 PR 验证记录 |
 | 开发诊断敏感输出处置 | 固定测试库连接敏感值曾出现于工具会话，未撤回/轮换；官方后台原始日志接缝未修改，补丁两次被自动审批拒绝。本棒内存 wrapper 仅约束本次验证 | `P2-MCP-PLATFORM-001`（owner 处置及工具修复授权待安排） | 待 GOV-SYNC 分配 | owner 在明确授权范围内完成既有会话风险处置与诊断输出安全改进并验证；不得自行读原素材或改凭证 | `docs/dev/mcp_offline_acceptance.md` 结果与限制；仓库外事件/拒绝/等价全量授权证据 |
 
+### MCP PR #218 修复验证欠债（2026-10-01）
+
+| 项目 | reason | blocked_by_task_id | activation_task_id | expiry_condition | evidence |
+|---|---|---|---|---|---|
+| MCP 修复的真实 PostgreSQL 定向验证 | 固定测试库不可达，已注册迁移版本未知；相关 `migrated_database_url` fixture 会隐式升级 schema，本次未授权迁移，故未执行。内存故障注入和真实持久化代码的 SQL/序列化单元验证不证明 PG 事务、advisory lock、跨进程唯一写入和恢复 | `P2-MCP-PR218-FIX-001`（环境恢复与迁移专项授权） | `P2-MCP-PR218-FIX-001` | 固定测试库及迁移授权具备后，只对确认决定持久化窗口、终态幂等 Trace、operation/checkpoint/gate 期限与已有 MCP API/恢复路径完成真实 PG 定向验收；本条不要求或授权全量 | 本次本地执行交付的定向验证记录；`tests/api/test_mcp.py`、`tests/workflow/test_mcp_recovery.py`、`tests/infra/observability/test_postgresql_trace.py`；不新增 migration |
+
 ## 6. P2 不做什么
 
 - 不把“能连到接口”当试点完成；缺可信身份、正式凭证、审计、Evaluator 或负向 Golden 时仍是半成品。（蓝图 §3.2 L176-L186、§7.0 L1383-L1404、§13 L2701-L2717）

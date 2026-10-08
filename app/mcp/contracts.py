@@ -122,6 +122,68 @@ class OutputContract:
         }[purpose]
         return {key: validated[key] for key in fields if key in validated}
 
+    def public_result(self, validated: dict[str, Any]) -> dict[str, Any] | None:
+        fields = set(self.model_fields) & set(self.ui_fields) & set(self.persistence_fields)
+        result = {key: validated[key] for key in sorted(fields) if key in validated}
+        return result or None
+
+    def public_result_schema(self) -> dict[str, Any]:
+        from copy import deepcopy
+
+        fields = set(self.model_fields) & set(self.ui_fields) & set(self.persistence_fields)
+        properties = self.schema.get("properties", {})
+        if not fields:
+            return {"type": "null"}
+        if not fields <= properties.keys():
+            raise McpFailure("mcp_output_contract_invalid")
+        result_schema = {
+            "type": "object",
+            "properties": {key: deepcopy(properties[key]) for key in sorted(fields)},
+            "required": [key for key in self.schema.get("required", []) if key in fields],
+            "additionalProperties": False,
+        }
+        # Preserve only definitions reachable from approved fields. Local refs
+        # resolve at the schema root, including when this schema is embedded.
+        definitions = self.schema.get("$defs", {})
+        selected: dict[str, Any] = {}
+
+        def collect(value: Any) -> None:
+            if isinstance(value, Mapping):
+                reference = value.get("$ref")
+                if reference is not None:
+                    prefix = "#/$defs/"
+                    if not isinstance(reference, str) or not reference.startswith(prefix):
+                        raise McpFailure("mcp_output_contract_invalid")
+                    name = reference[len(prefix) :]
+                    if not name or "/" in name or name not in definitions:
+                        raise McpFailure("mcp_output_contract_invalid")
+                    if name not in selected:
+                        selected[name] = deepcopy(definitions[name])
+                        collect(selected[name])
+                # Walk schema positions only. Property names and annotation or
+                # validation data (examples/default/enum/const) are not schemas.
+                for keyword in ("properties", "patternProperties", "dependentSchemas"):
+                    children = value.get(keyword)
+                    if isinstance(children, Mapping):
+                        for child in children.values():
+                            collect(child)
+                for keyword in (
+                    "items", "additionalProperties", "contains", "propertyNames",
+                    "unevaluatedProperties", "unevaluatedItems", "not", "if", "then", "else",
+                ):
+                    collect(value.get(keyword))
+                for keyword in ("anyOf", "allOf", "oneOf", "prefixItems"):
+                    children = value.get(keyword)
+                    if isinstance(children, list):
+                        for child in children:
+                            collect(child)
+
+        collect(result_schema)
+        output: dict[str, Any] = {"anyOf": [result_schema, {"type": "null"}]}
+        if selected:
+            output["$defs"] = selected
+        return output
+
 
 def input_digest(tool: str) -> str:
     return digest(INPUT_SCHEMAS[tool])

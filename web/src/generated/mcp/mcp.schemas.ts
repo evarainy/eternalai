@@ -36,6 +36,10 @@ export const OperationViewRecoveryAction = {
   none: 'none',
 } as const;
 
+export type OperationViewResultAnyOf = { [key: string]: unknown };
+
+export type OperationViewResult = OperationViewResultAnyOf | null;
+
 export type OperationViewReviewUrl = string | null;
 
 export type OperationViewState = typeof OperationViewState[keyof typeof OperationViewState];
@@ -61,6 +65,7 @@ export interface OperationView {
   operation_id: string;
   preview_digest: string;
   recovery_action: OperationViewRecoveryAction;
+  result?: OperationViewResult;
   review_url?: OperationViewReviewUrl;
   revision: number;
   service_config_id: string;

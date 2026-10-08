@@ -18,6 +18,23 @@ async function query() {
   await screen.findByRole('status');
 }
 describe('MCP operation recovery', () => {
+  it('shows only verified optional business results', async () => {
+    const result = { artifactId: 'c'.repeat(32), payloadHash: 'd'.repeat(64) };
+    api.get.mockResolvedValue({ ...operation, state: 'VERIFIED_SUCCESS', result });
+    await query();
+    expect(screen.getByLabelText('已核实业务结果')).toHaveTextContent(result.artifactId);
+    expect(screen.getByLabelText('已核实业务结果')).toHaveTextContent(result.payloadHash);
+    expect(api.resume).not.toHaveBeenCalled();
+  });
+  it.each(['UNKNOWN', 'FAILED', 'WAITING_LOCAL_CONFIRM'])('rejects result in %s state', async (state) => {
+    api.get.mockResolvedValue({ ...operation, state, result: { artifactId: 'c'.repeat(32) } });
+    render(<McpOperationPanel />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: id } });
+    fireEvent.click(screen.getByRole('button', { name: '查询状态' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前无法继续');
+    expect(screen.queryByLabelText('已核实业务结果')).not.toBeInTheDocument();
+    expect(api.resume).not.toHaveBeenCalled();
+  });
   it('selects owned work and shows the preview before explicit crash recovery', async () => {
     api.list.mockResolvedValue([{ ...operation, state: 'SENDING', recovery_action: 'recover' }]);
     api.resume.mockResolvedValue(operation);

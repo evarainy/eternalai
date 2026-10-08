@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from app.infra.adapters.business_mcp.writes import validate_bound_task
+from app.infra.sdui.response_projection import project_response_data
 from app.mcp.contracts import SUBMIT_TOOLS, WRITE_TOOLS, OutputContract, validate_input
 from app.mcp.models import McpFailure, ServiceConfig, digest
 from app.ports.adapter import AdapterResult
@@ -170,6 +171,10 @@ class BusinessMcpAdapter:
                     outcome = McpValidatedOutcome(
                         state="VERIFIED_SUCCESS",
                         persistence=policy.project(validated, "persistence"),
+                        public_result=project_response_data(
+                            policy.public_result(validated),
+                            policy.public_result_schema(),
+                        ),
                     )
                 else:
                     raise McpFailure("mcp_postcondition_unconfirmed", may_have_sent=True)

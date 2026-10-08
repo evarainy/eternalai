@@ -86,13 +86,14 @@ def test_api_auth_csrf_owner_recovery_and_duplicate_confirmation(migrated_databa
                         "service_name",
                         "argument_preview",
                         "preview_digest",
+                        "result",
                     }
                     assert result.json()["argument_preview"] == {"personId": "p1"}
                     listing = await client.get("/api/v1/mcp/operations")
                     assert listing.status_code == 200 and listing.json() == [result.json()]
                     body = {
                         "action": "confirm",
-                        "expected_revision": 1,
+                        "expected_revision": result.json()["revision"],
                         "preview_digest": result.json()["preview_digest"],
                     }
                     assert (await client.post(path + "/resume", json=body)).status_code == 403

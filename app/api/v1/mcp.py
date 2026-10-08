@@ -18,7 +18,7 @@ from app.mcp.models import McpFailure, OperationState, digest
 from app.mcp.oauth import OAuthConnections
 from app.mcp.operations import GovernedOperations
 from app.ports.auth import AuthenticatedSessionContext, Principal, authenticated_session
-from app.ports.human_gate import HumanGateDecisionRecord
+from app.ports.human_gate import HumanGateConflictError, HumanGateDecisionRecord
 from app.ports.workflow_engine import WorkflowEnginePort
 from app.ports.workflow_store import WorkflowOperation
 
@@ -51,6 +51,7 @@ class OperationView(BaseModel):
     argument_preview: dict[str, str | int | float | bool | None]
     preview_digest: str
     review_url: str | None = None
+    result: dict[str, Any] | None = None
     recovery_action: Literal[
         "confirm", "recover", "read_original", "manual_reconcile", "takeover", "none"
     ]
@@ -79,8 +80,20 @@ class McpApiService:
         )
         if op is None:
             raise McpFailure("mcp_operation_unavailable")
+        await self.workflows.finalize_governed_task(task_id=op.context.task_id)
         await self.operations.owned(op)
+        if op.state == "WAITING_LOCAL_CONFIRM":
+            op = await self._read_confirmation(op)
         return op
+
+    async def _read_confirmation(self, op: WorkflowOperation) -> WorkflowOperation:
+        try:
+            current, _ = await self.operations.ensure_confirmation(op)
+            return current
+        except McpFailure as exc:
+            if exc.code == "mcp_confirmation_expired":
+                await self.workflows.finalize_governed_task(task_id=op.context.task_id)
+            raise
 
     def view(self, op: WorkflowOperation, *, takeover: bool = False) -> OperationView:
         profile = self.oauth.configs.get(op.context.service_config_id)
@@ -112,6 +125,7 @@ class McpApiService:
             argument_preview=op.argument_preview,
             preview_digest=digest(snapshot),
             review_url=None if takeover else op.review_url,
+            result=op.public_result if not takeover and op.state == "VERIFIED_SUCCESS" else None,
             recovery_action="takeover"
             if takeover
             else "recover"
@@ -138,19 +152,33 @@ class McpApiService:
             request = await self.operations.store.confirmation(op)
             if request is None or op.state != "WAITING_LOCAL_CONFIRM":
                 raise McpFailure("mcp_confirmation_unavailable")
-            await self.operations.gates.record_decision(
-                HumanGateDecisionRecord(
-                    request_id=request.request_id,
-                    task_id=op.context.task_id,
-                    decided_by_ai_user_id=op.context.user_id,
-                    decided_session_id=op.context.chat_session_id,
-                    decided_tenant_id=op.context.tenant_id,
-                    decision="confirmed",
-                    request_digest=request.request_digest,
-                    binding_manifest_digest=request.binding_manifest_digest,
-                    decided_at=datetime.now(UTC),
-                )
+            candidate = HumanGateDecisionRecord(
+                request_id=request.request_id,
+                task_id=op.context.task_id,
+                decided_by_ai_user_id=op.context.user_id,
+                decided_session_id=op.context.chat_session_id,
+                decided_tenant_id=op.context.tenant_id,
+                decision="confirmed",
+                request_digest=request.request_digest,
+                binding_manifest_digest=request.binding_manifest_digest,
+                decided_at=datetime.now(UTC),
             )
+            existing = await self.operations.gates.get_decision(request.request_id)
+            if existing is None:
+                try:
+                    existing = await self.operations.gates.record_decision(candidate)
+                except HumanGateConflictError:
+                    existing = await self.operations.gates.get_decision(request.request_id)
+            if (
+                existing is None
+                or existing.model_dump(exclude={"decided_at"})
+                != candidate.model_dump(exclude={"decided_at"})
+                or request.action_digest != op.action_digest
+                or request.expires_at <= datetime.now(UTC)
+                or existing.decided_at < request.requested_at
+                or existing.decided_at > request.expires_at
+            ):
+                raise McpFailure("mcp_confirmation_unavailable")
             await self.workflows.resume(
                 task_id=op.context.task_id, confirmed=True, expected_action_digest=op.action_digest
             )
@@ -160,6 +188,7 @@ class McpApiService:
             await self.operations.recover(op)
         elif body.action == "takeover":
             await self.operations.takeover(op)
+        await self.workflows.finalize_governed_task(task_id=op.context.task_id)
         updated = await self.operations.store.load(
             op.operation_id, tenant_id=op.context.tenant_id, user_id=op.context.user_id
         )
@@ -169,6 +198,7 @@ class McpApiService:
 
     async def readable_view(self, op: WorkflowOperation) -> OperationView:
         # Enforce a current owner/service grant before exposing even a safe summary.
+        await self.workflows.finalize_governed_task(task_id=op.context.task_id)
         mapping = await self.operations.contexts.store.mapping(
             op.leaf_capability_id, op.leaf_version
         )
@@ -187,6 +217,8 @@ class McpApiService:
             if exc.code != "mcp_authorization_invalid":
                 raise
             return self.view(op, takeover=True)
+        if op.state == "WAITING_LOCAL_CONFIRM":
+            op = await self._read_confirmation(op)
         return self.view(op)
 
 

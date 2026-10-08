@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
 from app.infra.persistence.mcp.schema import operations, workflow_runs
 from app.mcp.models import McpFailure, OperationState, digest
+from app.ports.error_codes import ErrorCode
 from app.ports.human_gate import HumanGateRequest
 from app.ports.mcp import McpAuthorizationContext
 from app.ports.workflow_store import GovernedWorkflowAuthorization, WorkflowOperation
@@ -98,11 +99,12 @@ class PostgreSQLWorkflowStore:
         op = WorkflowOperation.model_validate(
             self._store.decrypt(bytes(row["encrypted_payload"]), aad)
         )
-        if (op.state, op.revision, op.send_started, op.attempt_id) != (
+        if (op.state, op.revision, op.send_started, op.attempt_id, op.expires_at) != (
             row["state"],
             row["revision"],
             row["send_started"],
             row["attempt_id"],
+            row["expires_at"],
         ):
             raise McpFailure("mcp_checkpoint_inconsistent")
         if row["checkpoint"] != {
@@ -237,12 +239,20 @@ class PostgreSQLWorkflowStore:
         gate_request_id: str | None = None,
         attempt_id: str | None = None,
         safe_output: dict[str, Any] | None = None,
+        public_result: dict[str, Any] | None = None,
         review_url: str | None = None,
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
         renewed_gate_expires_at: datetime | None = None,
+        confirmation_error_code: ErrorCode | None = None,
     ) -> WorkflowOperation:
         op = operation
+        if confirmation_error_code is not None and (
+            state != "FAILED"
+            or op.state not in {"WAITING_LOCAL_CONFIRM", "READY"}
+            or op.send_started
+        ):
+            raise McpFailure("mcp_operation_transition_invalid")
         allowed = {
             "WAITING_LOCAL_CONFIRM": {"READY", "CANCELLED", "EXPIRED", "WAITING_LOCAL_CONFIRM"},
             "READY": {"SENDING", "CANCELLED", "EXPIRED", "WAITING_LOCAL_CONFIRM"},
@@ -257,7 +267,9 @@ class PostgreSQLWorkflowStore:
             "UNKNOWN": {"VERIFIED_SUCCESS", "FAILED", "WAITING_LOCAL_CONFIRM", "UNKNOWN"},
             "EXPIRED": {"WAITING_LOCAL_CONFIRM"},
         }
-        if state not in allowed.get(op.state, set()):
+        if state not in allowed.get(op.state, set()) and not (
+            state == "FAILED" and confirmation_error_code is not None
+        ):
             raise McpFailure("mcp_operation_transition_invalid")
         renewal = renewed_action_digest is not None
         if renewal:
@@ -292,6 +304,8 @@ class PostgreSQLWorkflowStore:
                 "attempt_id": attempt_id or op.attempt_id,
                 "send_started": op.send_started or state == "SENDING",
                 "safe_output": op.safe_output if safe_output is None else safe_output,
+                "public_result": public_result if state == "VERIFIED_SUCCESS" else None,
+                "confirmation_error_code": confirmation_error_code,
                 "review_url": review_url if review_url is not None else op.review_url,
                 "context": op.context.model_copy(
                     update={
@@ -308,7 +322,7 @@ class PostgreSQLWorkflowStore:
                     ),
                     "action_digest": renewed_action_digest,
                     "expires_at": renewed_gate_expires_at or op.expires_at,
-                    "gate_request_id": None,
+                    "gate_request_id": gate_request_id,
                     "attempt_id": None if state == "WAITING_LOCAL_CONFIRM" else op.attempt_id,
                     "send_started": False if state == "WAITING_LOCAL_CONFIRM" else op.send_started,
                     "review_url": None,
@@ -320,6 +334,7 @@ class PostgreSQLWorkflowStore:
                     ),
                 }
             )
+        updated = WorkflowOperation.model_validate(updated.model_dump())
         async with self._store.sessions.begin() as session:
             changed = (
                 await session.execute(
@@ -380,6 +395,7 @@ class PostgreSQLWorkflowStore:
                             "WHERE task_id = :task "
                             "AND action_digest = :action AND requested_for_ai_user_id = :user "
                             "AND requested_session_id = :chat AND requested_tenant_id = :tenant "
+                            "AND (CAST(:gate_id AS TEXT) IS NULL OR request_id = :gate_id) "
                             "ORDER BY requested_at DESC LIMIT 2"
                         ),
                         {
@@ -388,6 +404,7 @@ class PostgreSQLWorkflowStore:
                             "user": context.user_id,
                             "chat": context.chat_session_id,
                             "tenant": context.tenant_id,
+                            "gate_id": operation.gate_request_id,
                         },
                     )
                 )

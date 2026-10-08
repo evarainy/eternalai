@@ -98,6 +98,29 @@ class RecordingTrace:
     def __init__(self) -> None:
         self.steps: list[dict[str, Any]] = []
         self.owners: list[tuple[str, str]] = []
+        self.once = {}
+
+    async def record_event_once(self, event, idempotency_key):
+        existing = self.once.get(idempotency_key)
+        if existing is not None:
+            assert existing == event
+            return
+        await self.record_step(
+            event.trace_id,
+            event.task_id,
+            event.session_id,
+            tenant_id=event.tenant_id,
+            ai_user_id=event.ai_user_id,
+            event_type=event.event_type,
+            status=event.status,
+            capability_id=event.capability_id,
+            error_code=event.error_code,
+            attributes=event.attributes,
+        )
+        self.once[idempotency_key] = event
+
+    async def finalize_task_trace(self, *args, **kwargs):
+        return None
 
     async def record_step(
         self,

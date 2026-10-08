@@ -644,6 +644,7 @@ def build_production_components(
         capability_registry,
     )
     validate_workflow_configuration(definitions, descriptors)
+    terminal_evaluator = TerminalEvaluator()
     workflow_engine = WorkflowEngine(
         definitions=definitions,
         capability_registry=capability_registry,
@@ -652,6 +653,7 @@ def build_production_components(
         trace_port=resolved_trace_port,
         human_gate_port=human_gate_port,
         governed_operations=governed_operations if mcp_profiles else None,
+        evaluator=terminal_evaluator,
     )
     if workflow_engine is None:
         raise RuntimeError("workflow_configuration_invalid")
@@ -667,6 +669,7 @@ def build_production_components(
         definitions=definitions,
         descriptors=descriptors,
     )
+    workflow_engine.configure_governed_validation(validate_workflow)
     production_llm = OpenAICompatibleLLMProvider(
         base_url=settings.llm_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -694,6 +697,7 @@ def build_production_components(
         workflow_engine=workflow_engine,
         validate_workflow=validate_workflow,
         overview_evaluator=overview_evaluator,
+        evaluator=terminal_evaluator,
         semantic_knowledge=BasicKnowledge(
             static_items=ENTERPRISE_TERM_ITEMS
             + {

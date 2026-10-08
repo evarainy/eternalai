@@ -117,6 +117,18 @@
             "title": "Recovery Action",
             "type": "string"
           },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
           "review_url": {
             "anyOf": [
               {

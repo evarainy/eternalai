@@ -241,6 +241,10 @@ class TracePort(Protocol):
 
     async def record_event(self, event: TraceEvent) -> None: ...
 
+    async def record_event_once(self, event: TraceEvent, idempotency_key: str) -> None:
+        """Persist the same sanitized semantic event once; reject a key collision."""
+        ...
+
     async def start_task_trace(
         self,
         trace_id: str,

@@ -37,6 +37,14 @@ class PostgreSQLTraceWriter:
         self._sanitizer = hook
 
     async def record_event(self, event: TraceEvent) -> None:
+        await self._persist_event(event, uuid4().hex, once=False)
+
+    async def record_event_once(self, event: TraceEvent, idempotency_key: str) -> None:
+        if not idempotency_key:
+            raise TraceSanitizationError("trace idempotency key is empty")
+        await self._persist_event(event, idempotency_key, once=True)
+
+    async def _persist_event(self, event: TraceEvent, event_id: str, *, once: bool) -> None:
         attributes = self._sanitize_attributes(event.attributes)
         if attributes is None:
             raise TraceSanitizationError("trace attribute sanitization failed")
@@ -53,9 +61,10 @@ class PostgreSQLTraceWriter:
                     " :ai_user_id, :event_type,"
                     " :status, :capability_id, :error_code,"
                     " CAST(:attributes AS JSONB), :created_at)"
+                    + (" ON CONFLICT (event_id) DO NOTHING" if once else "")
                 ),
                 {
-                    "event_id": uuid4().hex,
+                    "event_id": event_id,
                     "trace_id": event.trace_id,
                     "task_id": event.task_id,
                     "session_id": event.session_id,
@@ -69,6 +78,25 @@ class PostgreSQLTraceWriter:
                     "created_at": datetime.now(UTC),
                 },
             )
+            if once:
+                row = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT trace_id, task_id, session_id, tenant_id, ai_user_id, "
+                                "event_type, status, capability_id, error_code, attributes "
+                                "FROM trace_events WHERE event_id = :event_id"
+                            ),
+                            {"event_id": event_id},
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                expected = event.model_dump()
+                expected["attributes"] = attributes
+                if dict(row) != expected:
+                    raise TraceSanitizationError("trace idempotency conflict")
             await session.commit()
 
     def _sanitize_attributes(

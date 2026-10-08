@@ -237,6 +237,10 @@ class WaitingWorkflow:
     async def execute(self, **kwargs: Any) -> WorkflowRunResult:
         return _workflow_result("waiting_confirm", "confirm_required")
 
+    async def finalize_governed_task(self, *, task_id: str) -> None:
+        # This fake only runs ordinary Workflows, with no governed MCP operation.
+        return None
+
     async def resume(
         self,
         *,

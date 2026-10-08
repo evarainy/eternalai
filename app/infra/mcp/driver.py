@@ -91,10 +91,9 @@ class McpDriver:
         before_send: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         async def token() -> str:
-            value = await self._tokens.resolve(context)
             if before_send is not None:
                 await before_send()
-            return value
+            return await self._tokens.resolve(context)
 
         transport = BoundedPostTransport(config, token)
         called = False

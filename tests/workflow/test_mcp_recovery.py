@@ -26,6 +26,7 @@ from app.infra.human_gate.postgresql import PostgreSQLHumanGate
 from app.infra.identity.mcp_identity import McpIdentityMapping
 from app.infra.identity.unconfigured import UnconfiguredIdentityMapping
 from app.infra.mcp.driver import McpDriver
+from app.infra.observability.postgresql_trace import PostgreSQLTraceWriter
 from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.infra.persistence.capability_registry.schema import capabilities
 from app.infra.persistence.mcp import schema as mcp_schema
@@ -46,7 +47,6 @@ from app.ports.auth import (
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.human_gate import (
     HumanGateDecisionRecord,
-    HumanGateRequest,
     build_task_version_binding_manifest,
 )
 from app.ports.mcp import McpSubmitPermit
@@ -197,11 +197,27 @@ def test_submit_precondition_is_independent_and_rechecked_before_http(
                 )
                 op = await h["workflows"].by_task(h["task"])
                 assert result.status == "failed" and peer.effects == 0
-                assert op.state == ("UNKNOWN" if fault == "before_http" else "CANCELLED")
+                assert op is not None
+                assert op.state == ("UNKNOWN" if fault == "before_http" else "FAILED")
+                expected_error = (
+                    "mcp_outcome_unknown" if fault == "before_http" else "adapter_payload_invalid"
+                )
+                assert result.output["state"] == op.state and result.error_code == expected_error
+                assert op.confirmation_error_code == (
+                    None if fault == "before_http" else expected_error
+                )
                 assert op.send_started is (fault == "before_http")
                 assert not any(body["method"] == "tools/call" for _, _, body in peer.calls)
                 if fault == "before_http":
                     assert provider.calls == 2
+                calls, provider_calls = list(peer.calls), provider.calls
+                replay = await h["workflow"].resume(
+                    task_id=h["task"], confirmed=True, expected_action_digest=h["op"].action_digest
+                )
+                assert replay.output["state"] == op.state and replay.error_code == expected_error
+                assert await h["workflows"].by_task(h["task"]) == op
+                assert peer.calls == calls and peer.effects == 0
+                assert provider.calls == provider_calls
 
         asyncio.run(run(), loop_factory=make_event_loop)
 
@@ -254,6 +270,8 @@ async def harness(
     durable: bool = False,
     arguments=None,
     trusted_task_deadline=False,
+    trace_writer=False,
+    output_contracts=None,
 ):
     async with (
         durable_database(url, profile) if durable else database(url) as (
@@ -280,7 +298,9 @@ async def harness(
             gates = PostgreSQLHumanGate(store.sessions)
             workflows = PostgreSQLWorkflowStore(store)
             tasks = PostgreSQLTaskStore(store.sessions)
-            specs, mappings = catalog(profile, {name: output_contract() for name in INPUT_SCHEMAS})
+            contracts = {name: output_contract() for name in INPUT_SCHEMAS}
+            contracts.update(output_contracts or {})
+            specs, mappings = catalog(profile, contracts)
             for spec in specs:
                 await registry.create(spec)
             for mapping in mappings:
@@ -295,7 +315,10 @@ async def harness(
             adapter = BusinessMcpAdapter(
                 McpDriver({profile.service_config_id: profile}, store),
                 store,
-                {(profile.service_config_id, name): output_contract() for name in INPUT_SCHEMAS},
+                {
+                    (profile.service_config_id, name): contract
+                    for name, contract in contracts.items()
+                },
                 isolated_test_contracts=True,
                 workflows=workflows,
                 profiles={profile.service_config_id: profile},
@@ -304,7 +327,7 @@ async def harness(
                     for name in ("clothing_plan_submit", "talk_record_submit")
                 },
             )
-            trace = RecordingTrace()
+            trace = PostgreSQLTraceWriter(store.sessions) if trace_writer else RecordingTrace()
             gateway = CapabilityGateway(
                 capability_registry=registry,
                 identity_mapping=McpIdentityMapping(UnconfiguredIdentityMapping(), store),
@@ -342,6 +365,7 @@ async def harness(
 
             workflow = engine()
             task = uuid4().hex
+            trace_id = uuid4().hex
             outer = f"business.{profile.service_config_id}.{tool}"
             spec = next(item for item in specs if item.capability_id == outer)
             await tasks.create_task(
@@ -351,6 +375,7 @@ async def harness(
                     ai_user_id="synthetic-user",
                     tenant_id="default",
                     status="running",
+                    trace_id=trace_id,
                 )
             )
             bindings = await workflow.version_bindings(workflow_capability=spec)
@@ -367,7 +392,7 @@ async def harness(
                 session_id="synthetic-chat",
                 ai_user_id="synthetic-user",
                 initial_input=VALID[tool] if arguments is None else arguments,
-                request_context=RequestOrgContext(request_id=uuid4().hex, tenant_id="default"),
+                request_context=RequestOrgContext(request_id=trace_id, tenant_id="default"),
             )
             op = await workflows.by_task(task)
             assert op is not None and result.status == "waiting_confirm"
@@ -378,20 +403,9 @@ async def harness(
 
 async def confirm(h: dict[str, Any], *, decide: bool = True) -> None:
     op, gates = h["op"], h["gates"]
-    binding = await gates.get_task_binding(op.context.task_id)
-    request = HumanGateRequest(
-        request_id=uuid4().hex,
-        task_id=op.context.task_id,
-        requested_for_ai_user_id=op.context.user_id,
-        requested_session_id=op.context.chat_session_id,
-        requested_tenant_id=op.context.tenant_id,
-        action_digest=op.action_digest,
-        request_digest="c" * 64,
-        binding_manifest_digest=binding.manifest_digest,
-        requested_at=datetime.now(UTC),
-        expires_at=op.expires_at,
-    )
-    await gates.create_request(request)
+    request = await h["workflow"].governed_confirmation(op.context.task_id)
+    assert request is not None and request.action_digest == op.action_digest
+    h["op"] = await h["operations"].store.by_task(op.context.task_id)
     if not decide:
         return
     await gates.record_decision(
@@ -447,6 +461,7 @@ def test_six_writes_require_durable_confirmation_and_do_not_replay(
                 assert result.output == {
                     "operation_id": op.operation_id,
                     "state": "VERIFIED_SUCCESS",
+                    "result": None,
                 }
                 again = await h["engine"]().resume(
                     task_id=op.context.task_id,
@@ -506,6 +521,7 @@ async def durable_database(url, profile):
                     )
                 )
             for name in (
+                "trace_events",
                 "human_gate_requests",
                 "task_version_binding_manifests",
                 "task_events",
@@ -515,6 +531,41 @@ async def durable_database(url, profile):
                 await conn.execute(sa.delete(table).where(table.c.task_id.in_(tasks)))
             ids = [spec.capability_id for spec in catalog(profile, {})[0]]
             await conn.execute(sa.delete(capabilities).where(capabilities.c.capability_id.in_(ids)))
+        async with engine.connect() as conn:
+            for table in (
+                mcp_schema.operations,
+                mcp_schema.workflow_runs,
+                mcp_schema.grants,
+                mcp_schema.transactions,
+                mcp_schema.connections,
+                mcp_schema.mappings,
+                mcp_schema.registrations,
+                mcp_schema.services,
+            ):
+                remaining = await conn.scalar(
+                    sa.select(sa.func.count()).select_from(table).where(
+                        table.c.service_config_id == profile.service_config_id
+                    )
+                )
+                assert remaining == 0
+            for name in (
+                "trace_events",
+                "human_gate_requests",
+                "task_version_binding_manifests",
+                "task_events",
+                "tasks",
+            ):
+                table = sa.table(name, sa.column("task_id"))
+                remaining = await conn.scalar(
+                    sa.select(sa.func.count()).select_from(table).where(table.c.task_id.in_(tasks))
+                )
+                assert remaining == 0
+            remaining = await conn.scalar(
+                sa.select(sa.func.count()).select_from(capabilities).where(
+                    capabilities.c.capability_id.in_(ids)
+                )
+            )
+            assert remaining == 0
         await engine.dispose()
 
 
@@ -831,7 +882,9 @@ def test_concurrent_confirmation_consumes_only_one_send_permission(migrated_data
                 )
                 assert peer.effects == 1
                 stored = await h["workflows"].by_task(h["task"])
-                assert stored.state == "VERIFIED_SUCCESS" and stored.revision == 4
+                assert stored.state == "VERIFIED_SUCCESS"
+                # READY, SENDING and success follow the persisted confirmation snapshot.
+                assert stored.revision == h["op"].revision + 3
 
         asyncio.run(run(), loop_factory=make_event_loop)
 
