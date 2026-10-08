@@ -20,16 +20,22 @@ class LiveBrowser:
     session: BrowserSessionRef
     browser: Any = field(repr=False)
     context: Any = field(repr=False)
-    driver: Any = field(repr=False)
+    # A connected Run does not own the worker's Playwright driver. Legacy
+    # connectors that start their own driver pass it here and retain ownership.
+    driver: Any = field(default=None, repr=False)
 
     async def storage_state(self) -> object:
         return await self.context.storage_state(indexed_db=True)
 
     async def close(self) -> None:
         try:
-            await self.browser.close()
+            try:
+                await self.context.close()
+            finally:
+                await self.browser.close()
         finally:
-            await self.driver.stop()
+            if self.driver is not None:
+                await self.driver.stop()
 
 
 class BrowserConnector(Protocol):

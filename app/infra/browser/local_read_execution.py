@@ -321,6 +321,7 @@ class LocalBrowserReadExecutionFactory:
         try:
             if not await self.verify_source(manifest):
                 raise BrowserReadExecutionError("denied")
+            await self.resources.ensure_started()
             from app.infra.browser.fixed_synthetic_seed import SyntheticDetailArguments
 
             if (
@@ -522,6 +523,8 @@ class LocalBrowserReadExecutionFactory:
         reference = await self.authority()[0].authorize_resource(state.claim)
         state.count("factory_resource_authorization_successes")
         await self._fence(state, renew=True)
+        if not self.resources.driver.ready:
+            raise failure("unavailable")
         if (self._state(session) is not state
                 or reference != state.resource.reference or state.resource.live is None):
             raise failure("denied")

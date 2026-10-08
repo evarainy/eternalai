@@ -8,7 +8,7 @@ capacity or start browsers. Explicit publication operations remain separate.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -45,6 +45,7 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserReadLifecycle,
     LocalBrowserResources,
     LocalChromiumDeployment,
+    LocalPlaywrightDriver,
 )
 from app.infra.persistence.browser.authorization import CleanupAuthorize
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext, BrowserResourceCipher
@@ -313,7 +314,10 @@ def build_local_browser_vertical(
     if (pool.provider_key != deps.deployment.provider_key
             or pool.manifest_digest != deps.deployment.manifest_digest):
         raise ValueError("browser_local_pool_registration_invalid")
-    resources = LocalBrowserResources(deps.deployment, deps.proof_context, deps.cleanup_authority)
+    driver = LocalPlaywrightDriver(deps.deployment)
+    resources = LocalBrowserResources(
+        deps.deployment, deps.proof_context, deps.cleanup_authority, driver,
+    )
     factory = LocalBrowserReadExecutionFactory(
         deps.source, resources, deps.binding, deps.decision, ttl_seconds=deps.ttl_seconds,
         execution_timeout_seconds=deps.execution_timeout_seconds,
@@ -346,6 +350,11 @@ def build_local_browser_vertical(
                 or run.effect != "not_sent" or run.lease_epoch is not None
                 or run.phase not in {"queued", "acquiring"}):
             return True
+        if not driver.admitting:
+            if not driver.ready or not await driver.probe():
+                return False
+        elif driver.ready and not await driver.probe():
+            return False
         held = (await leases.has_run_lease(run) if session is None
                 else await leases._has_run_lease_in_session(session, run))
         if held:
@@ -401,4 +410,38 @@ def build_local_browser_vertical(
         binding_reader=configured.binding_reader,
         lease_reserved=leases.has_run_lease,
     )
-    return configured
+
+    async def stop_resources() -> None:
+        # Supervisor cancellation normally settles the claimed Run. Reconcile
+        # any still-owned local resource before closing the shared transport.
+        if configured._active_owners or configured._cleanup_owners:
+            raise RuntimeError("browser_worker_shutdown_pending")
+        unsettled = False
+        candidates = dict(configured.worker.shutdown_unsettled_runs)
+        for state in tuple(factory._states.values()):
+            if state.resource is not None and not state.released:
+                candidates[state.run.run_id] = state.run
+        for run in candidates.values():
+            try:
+                historical = await configured.runs.get_for_cleanup(
+                    run.owner, run.task_id, run.run_id,
+                )
+                if historical.cleanup not in {"released", "terminated", "quarantined"}:
+                    historical = await configured.worker.cleanup(historical)
+                if (historical.status not in {"completed", "failed", "cancelled"}
+                        or historical.cleanup not in {"released", "terminated", "quarantined"}):
+                    unsettled = True
+            except Exception:
+                unsettled = True
+        if unsettled:
+            raise RuntimeError("browser_worker_shutdown_pending")
+        configured.worker.shutdown_unsettled_runs.clear()
+        configured.worker.shutdown_unsettled = False
+        try:
+            await resources.stop()
+        except Exception as error:
+            raise RuntimeError("browser_worker_shutdown_pending") from error
+
+    return replace(
+        configured, _start_resources=resources.start, _stop_resources=stop_resources,
+    )

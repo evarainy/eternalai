@@ -95,6 +95,8 @@ class BrowserReadWorker:
         self._store, self._execution, self._profiles = store, execution, profiles
         self._worker_id, self._enabled, self._ttl = worker_id, enabled, ttl_seconds
         self._record_diagnostic = record_diagnostic
+        self.shutdown_unsettled = False
+        self.shutdown_unsettled_runs: dict[str, RunSnapshot] = {}
 
     async def run_next(self, owner: BrowserOwner) -> RunSnapshot | None:
         if not self._enabled:
@@ -239,6 +241,14 @@ class BrowserReadWorker:
             return checkpoint.run
         except asyncio.CancelledError:
             interrupted = True
+            try:
+                async with asyncio.timeout(50):
+                    await self._settle_interrupted(checkpoint)
+            except Exception:
+                # The durable Run and lease remain recoverable. Never claim that
+                # cancellation itself proves no dispatch or resource cleanup.
+                self.shutdown_unsettled = True
+                self.shutdown_unsettled_runs[checkpoint.run.run_id] = checkpoint.run
             raise
         finally:
             # Cleanup is separately authorized, can outlive auth expiry and
@@ -253,13 +263,16 @@ class BrowserReadWorker:
             mark("cleanup", worker_result)
             cleanup_result = "skipped"
             try:
-                if checkpoint.run.status in {"completed", "failed", "cancelled"}:
+                if interrupted or checkpoint.run.status in {"completed", "failed", "cancelled"}:
                     cleanup = await self._execution.cleanup(checkpoint.run)
                     if cleanup != "pending":
                         await self._store.record_cleanup(checkpoint.run, cleanup=cleanup)
                     cleanup_result = cleanup
             except Exception:
                 cleanup_result = "failed"
+                if interrupted:
+                    self.shutdown_unsettled = True
+                    self.shutdown_unsettled_runs[checkpoint.run.run_id] = checkpoint.run
                 pass  # Existing pending/quarantined state remains the truthful obligation.
             mark(None, cleanup_result)
             claimed_ms = max(0, min(300000, int((time.monotonic() - origin) * 1000)))
@@ -281,6 +294,44 @@ class BrowserReadWorker:
                     )
                 except Exception:
                     logging.getLogger(__name__).warning("browser_worker_diagnostic_trace_unavailable")
+
+    async def _settle_interrupted(self, checkpoint: _Checkpoint) -> None:
+        """Persist an interrupted claim without repeating a possibly sent Skill."""
+        await checkpoint.refresh(allow_cancel=True)
+        run = checkpoint.run
+        if run.status in {"completed", "failed", "cancelled"}:
+            return
+        if run.verification == "verified":
+            # A durable verified result stays authoritative. The local capture
+            # obligation is settled as quarantined when shutdown interrupts it.
+            if run.capture_status == "not_requested":
+                checkpoint.run = await self._store.prepare_capture(run)
+                run = checkpoint.run
+            if run.capture_status not in {"promoted", "failed", "quarantined"}:
+                checkpoint.run = await self._store.transition_capture(
+                    run, status="quarantined",
+                )
+            checkpoint.run = await self._store.finalize(
+                checkpoint.run, status="completed",
+            )
+            return
+        if (run.phase in {"running", "verifying", "waiting_user"}
+                or run.effect != "not_sent"):
+            if run.phase is None:
+                raise BrowserReadExecutionError("stale")
+            checkpoint.run = await self._store.advance(
+                run, phase=run.phase, effect="unknown",
+            )
+        if checkpoint.run.cancel_requested:
+            checkpoint.run = await self._cancel(checkpoint)
+            return
+        effect_unknown = checkpoint.run.effect == "unknown"
+        checkpoint.run = await self._store.finalize(
+            checkpoint.run, status="failed",
+            error_code="browser_effect_unknown" if effect_unknown
+            else "browser_read_execution_failed",
+            dispatch_failure_code="effect_unknown" if effect_unknown else "cancelled",
+        )
 
     async def _cancel(self, checkpoint: _Checkpoint) -> RunSnapshot:
         await checkpoint.refresh(allow_cancel=True)

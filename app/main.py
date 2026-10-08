@@ -75,26 +75,30 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
-        if validate_workflows is not None:
-            await validate_workflows()
-        if credential_polling_scheduler is not None:
-            await credential_polling_scheduler.start()
-        if organization_directory_scheduler is not None:
-            await organization_directory_scheduler.start()
-        if browser_worker_supervisor is not None:
-            await browser_worker_supervisor.start()
+        credential_started = organization_started = browser_started = False
         try:
+            if validate_workflows is not None:
+                await validate_workflows()
+            if credential_polling_scheduler is not None:
+                await credential_polling_scheduler.start()
+                credential_started = True
+            if organization_directory_scheduler is not None:
+                await organization_directory_scheduler.start()
+                organization_started = True
+            if browser_worker_supervisor is not None:
+                await browser_worker_supervisor.start()
+                browser_started = True
             yield
         finally:
             try:
-                if browser_worker_supervisor is not None:
+                if browser_started and browser_worker_supervisor is not None:
                     await browser_worker_supervisor.stop()
             finally:
                 try:
-                    if organization_directory_scheduler is not None:
+                    if organization_started and organization_directory_scheduler is not None:
                         await organization_directory_scheduler.stop()
                 finally:
-                    if credential_polling_scheduler is not None:
+                    if credential_started and credential_polling_scheduler is not None:
                         await credential_polling_scheduler.stop()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
@@ -220,6 +224,8 @@ def create_production_app(
         browser_worker_supervisor=(
             BrowserWorkerSupervisor(
                 browser_vertical.run_business_ready, cleanup_ready=browser_vertical.cleanup_ready,
+                start_resources=browser_vertical.start_resources,
+                stop_resources=browser_vertical.stop_resources,
             )
             if browser_vertical is not None else None
         ),

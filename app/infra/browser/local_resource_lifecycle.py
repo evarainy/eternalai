@@ -109,6 +109,150 @@ class LocalChromiumDeployment:
             raise ValueError("browser_local_deployment_invalid")
 
 
+class LocalPlaywrightDriver:
+    """One installed worker's Python transport, never a Run-owned resource."""
+
+    def __init__(self, deployment: LocalChromiumDeployment) -> None:
+        self._deployment = deployment
+        self._lock = asyncio.Lock()
+        self._driver: Any = None
+        self._starting: asyncio.Task[Any] | None = None
+        self._stopping: asyncio.Task[None] | None = None
+        self._state = "new"
+        self._suspect = False
+        self._probe_lock = asyncio.Lock()
+        self._last_probe = 0.0
+
+    @property
+    def ready(self) -> bool:
+        return self._state == "ready" and self._driver is not None
+
+    @property
+    def admitting(self) -> bool:
+        return self._state == "new" or (self.ready and not self._suspect)
+
+    def fail(self) -> None:
+        # No automatic restart or new admission after a transport disconnect.
+        if self._state == "ready":
+            self._state = "failed"
+
+    def suspect(self) -> None:
+        # A single Browser disconnect is ambiguous. Pause new admission until
+        # a public Playwright API round trip distinguishes it from driver loss.
+        if self.ready:
+            self._suspect = True
+
+    async def probe(self) -> bool:
+        if not self.ready:
+            return False
+        async with self._probe_lock:
+            if not self.ready:
+                return False
+            if not self._suspect and time.monotonic() - self._last_probe < 1.5:
+                return True
+            try:
+                # This creates no browser or network request. It checks the
+                # shared transport through the documented request API.
+                request = await asyncio.wait_for(self._driver.request.new_context(), 3)
+                await asyncio.wait_for(request.dispose(), 3)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.fail()
+                return False
+            self._suspect = False
+            self._last_probe = time.monotonic()
+            return True
+
+    def chromium(self) -> Any:
+        if not self.ready:
+            raise BrowserReadExecutionError("unavailable")
+        return self._driver.chromium
+
+    async def start(self) -> None:
+        await self._start()
+
+    async def ensure_started(self) -> None:
+        # Direct one-shot callers start on first execution. Later Runs reuse
+        # the same owner without adding another shutdown claim.
+        await self._start()
+        if not await self.probe():
+            raise BrowserReadExecutionError("unavailable")
+
+    async def _start(self) -> None:
+        async with self._lock:
+            if self.ready:
+                return
+            if self._state != "new":
+                raise BrowserReadExecutionError("unavailable")
+            self._state = "starting"
+            try:
+                if (not self._deployment.enabled or sys.platform != "linux"
+                        or any(os.environ.get(name) for name in (
+                            "DEBUG", "PWDEBUG", "SSLKEYLOGFILE", "NODE_OPTIONS",
+                        ))
+                        or importlib.metadata.version("playwright") != "1.63.0"):
+                    raise BrowserReadExecutionError("unsupported")
+                from playwright.async_api import async_playwright
+
+                self._starting = asyncio.create_task(async_playwright().start())
+                self._driver = await asyncio.wait_for(
+                    asyncio.shield(self._starting), self._deployment.timeout_seconds,
+                )
+                self._starting = None
+                self._state = "ready"
+            except BaseException as error:
+                self._state = "failed"
+                if isinstance(error, (BrowserReadExecutionError, asyncio.CancelledError)):
+                    raise
+                if isinstance(error, TimeoutError):
+                    raise BrowserReadExecutionError("timeout") from None
+                raise BrowserReadExecutionError("unavailable") from None
+
+    async def stop(self) -> None:
+        async with self._lock:
+            if self._state == "stopped":
+                return
+            driver, starting = self._driver, self._starting
+            self._state = "stopping"
+            if starting is not None:
+                try:
+                    driver = await asyncio.wait_for(asyncio.shield(starting), 3)
+                except TimeoutError:
+                    self._state = "failed"
+                    raise BrowserReadExecutionError("unavailable") from None
+                except asyncio.CancelledError:
+                    if asyncio.current_task().cancelling():
+                        self._state = "failed"
+                        raise
+                    self._starting = None
+                    self._state = "stopped"
+                    return
+                except Exception:
+                    # A failed start task produced no driver handle to own.
+                    self._starting = None
+                    self._state = "stopped"
+                    return
+                self._driver = driver
+                self._starting = None
+            if driver is not None:
+                if self._stopping is None or self._stopping.cancelled() or (
+                    self._stopping.done() and self._stopping.exception() is not None
+                ):
+                    self._stopping = asyncio.create_task(driver.stop())
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._stopping), 3)
+                except asyncio.CancelledError:
+                    self._state = "failed"
+                    raise
+                except Exception:
+                    self._state = "failed"
+                    raise BrowserReadExecutionError("unavailable") from None
+            self._driver = self._starting = None
+            self._stopping = None
+            self._state = "stopped"
+
+
 @dataclass(slots=True, repr=False)
 class _NativeChromium:
     process: asyncio.subprocess.Process
@@ -194,7 +338,7 @@ class _NativeChromium:
             except Exception:
                 raise BrowserReadExecutionError("unavailable") from None
 
-    async def dispose_helper(self) -> None:
+    async def dispose_helper(self) -> bool:
         # EOF asks this owned helper to shut down its own browser. It never
         # supplies proof if the helper/native exit response was lost.
         if self.process.stdin is not None:
@@ -203,7 +347,8 @@ class _NativeChromium:
             async with asyncio.timeout(3):
                 await self.process.wait()
         except TimeoutError:
-            pass
+            return False
+        return True
 
 
 @dataclass(slots=True, repr=False)
@@ -216,11 +361,13 @@ class _Resource:
     page: Any
     source: FixedSyntheticSource
     guard: Guard
-    driver: Any = None
+    connection: Any = None
+    context: Any = None
     acquire_token: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     exit_token: bytes | None = None
     terminal_at: float | None = None
     faulted: bool = False
+    closing: bool = False
 
 
 class LocalBrowserResources:
@@ -231,6 +378,7 @@ class LocalBrowserResources:
         deployment: LocalChromiumDeployment,
         proof_context: BrowserClaimProofContext,
         cleanup_authority: BrowserCleanupAuthorityPort,
+        driver: LocalPlaywrightDriver,
     ) -> None:
         self.deployment, self._proof, self.cleanup_authority = (
             deployment,
@@ -238,10 +386,40 @@ class LocalBrowserResources:
             cleanup_authority,
         )
         self._resources: dict[str, _Resource] = {}
+        self._helpers: dict[int, _NativeChromium] = {}
+        self.driver = driver
+
+    async def start(self) -> None:
+        await self.driver.start()
+
+    async def ensure_started(self) -> None:
+        await self.driver.ensure_started()
+
+    async def stop(self) -> None:
+        # EOF contains an unproven native child; it never manufactures exit proof.
+        unsettled = False
+        for native in tuple(self._helpers.values()):
+            if native.process.returncode is None:
+                try:
+                    if not await native.dispose_helper():
+                        unsettled = True
+                except Exception:
+                    unsettled = True
+        if unsettled:
+            raise BrowserReadExecutionError("unavailable")
+        try:
+            await self.driver.stop()
+        except Exception:
+            raise BrowserReadExecutionError("unavailable")
 
     def _prune(self) -> None:
+        for key, native in tuple(self._helpers.items()):
+            if native.process.returncode is not None:
+                del self._helpers[key]
         for identity, item in tuple(self._resources.items()):
-            if item.terminal_at is not None and time.monotonic() - item.terminal_at > 120:
+            if (item.terminal_at is not None
+                    and item.native.process.returncode is not None
+                    and time.monotonic() - item.terminal_at > 120):
                 del self._resources[identity]
 
     def resource(self, reference: bytes) -> _Resource:
@@ -249,6 +427,11 @@ class LocalBrowserResources:
             if hmac.compare_digest(item.reference, reference):
                 return item
         raise BrowserLeaseError("browser_local_resource_unknown")
+
+    def _disconnected(self, item: _Resource) -> None:
+        if not item.closing and not item.native.exited:
+            item.faulted = True
+            self.driver.suspect()
 
     async def launch(
         self,
@@ -262,16 +445,19 @@ class LocalBrowserResources:
         deployment = self.deployment
         self._prune()
         helper = Path(__file__).with_name("managed_chromium.js")
+        if not await self.driver.probe():
+            raise BrowserReadExecutionError("unavailable")
         if (
             not deployment.enabled
             or sys.platform != "linux"
-            or len(self._resources) >= 32
+            or not self.driver.ready
+            or sum(item.exit_token is None for item in self._resources.values()) >= 32
+            or len(self._helpers) >= 32
             or claim.provider_key != deployment.provider_key
             or any(
                 os.environ.get(name)
                 for name in ("DEBUG", "PWDEBUG", "SSLKEYLOGFILE", "NODE_OPTIONS")
             )
-            or importlib.metadata.version("playwright") != "1.63.0"
             or hashlib.sha256(helper.read_bytes()).digest() != deployment.helper_digest
         ):
             raise BrowserReadExecutionError("unsupported")
@@ -305,6 +491,9 @@ class LocalBrowserResources:
             deployment.node_digest,
             deployment.chromium_digest,
         )
+        # Ownership begins at subprocess creation, before launch can return a
+        # verified identity or an endpoint. Failed starts remain tracked.
+        self._helpers[id(native)] = native
         item: _Resource | None = None
         try:
             await guard()
@@ -315,15 +504,15 @@ class LocalBrowserResources:
             item = _Resource(claim, session, native, reference, None, None, source, subject_guard)
             self._resources[identity] = item
             await guard()
-            from playwright.async_api import async_playwright
-
-            driver = await asyncio.wait_for(async_playwright().start(), deployment.timeout_seconds)
-            item.driver = driver
-            await guard()
-            browser = await driver.chromium.connect(
-                result["endpoint"],
-                timeout=deployment.timeout_seconds * 1000,
-            )
+            try:
+                browser = await self.driver.chromium().connect(
+                    result["endpoint"], timeout=deployment.timeout_seconds * 1000,
+                )
+            except Exception:
+                self.driver.suspect()
+                raise
+            item.connection = browser
+            browser.on("disconnected", lambda _browser: self._disconnected(item))
             await guard()
             context = await asyncio.wait_for(
                 browser.new_context(
@@ -333,7 +522,8 @@ class LocalBrowserResources:
                 ),
                 deployment.timeout_seconds,
             )
-            item.live = LiveBrowser(session, browser, context, driver)
+            item.context = context
+            item.live = LiveBrowser(session, browser, context)
             await guard()
 
             async def route(request: Any) -> None:
@@ -371,6 +561,7 @@ class LocalBrowserResources:
             # native exit proof run. EOF is best-effort containment, not proof.
             if item is not None:
                 item.faulted = True
+                item.closing = True
             else:
                 await native.dispose_helper()
             if isinstance(
@@ -411,7 +602,8 @@ class LocalBrowserResources:
             await item.guard()
             await item.native.call("status")
             await item.guard()
-            if item.faulted or item.native.exited or item.live is None:
+            if (item.faulted or item.native.exited or item.live is None
+                    or not self.driver.ready or not item.live.browser.is_connected()):
                 raise BrowserLeaseError("browser_local_proof_invalid")
             outcome: ProviderOutcome = "acquired"
         else:
@@ -438,6 +630,8 @@ class LocalBrowserResources:
             or item.page is None
             or item.native.exited
             or item.faulted
+            or not self.driver.ready
+            or not item.live.browser.is_connected()
         ):
             raise BrowserLeaseError("browser_local_subject_unavailable")
         await item.guard()
@@ -482,23 +676,33 @@ class LocalBrowserResources:
     async def terminate(self, item: _Resource) -> bytes:
         await self.cleanup_authority.check_cleanup(item.claim)
         if item.exit_token is None:
-            try:
-                await item.native.call("stop")
-            except BrowserReadExecutionError:
-                await item.native.dispose_helper()
-                raise
+            item.closing = True
+            if item.connection is not None:
+                try:
+                    if item.live is not None:
+                        await asyncio.wait_for(item.live.close(), 3)
+                    else:
+                        try:
+                            if item.context is not None:
+                                await asyncio.wait_for(item.context.close(), 3)
+                        finally:
+                            await asyncio.wait_for(item.connection.close(), 3)
+                except BaseException:
+                    # Context/connection closure is not native termination proof.
+                    item.faulted = True
+            if not item.native.exited:
+                try:
+                    await item.native.call("stop")
+                except BrowserReadExecutionError:
+                    await item.native.dispose_helper()
+                    raise
             await self.cleanup_authority.check_cleanup(item.claim)
             if not item.native.exited:
                 raise BrowserLeaseError("browser_local_exit_unproven")
             item.exit_token = secrets.token_bytes(32)
             item.terminal_at = time.monotonic()
-            if item.driver is not None:
-                try:
-                    await asyncio.wait_for(item.driver.stop(), 3)
-                except Exception:
-                    pass  # Not termination evidence; native exit was already observed.
             await item.native.dispose_helper()
-            item.live = item.page = item.driver = None
+            item.live = item.page = item.connection = item.context = None
         return item.exit_token
 
 
@@ -564,7 +768,7 @@ class LocalBrowserReadLifecycle:
                 async with state.dispatch_lock:
                     try:
                         evidence = await self._factory.resources.terminate(state.resource)
-                    except BrowserReadExecutionError:
+                    except (BrowserReadExecutionError, BrowserLeaseError):
                         await self._authority.check_cleanup(claim)
                         # The store retains quota when acquisition was sent and
                         # no original-process exit proof can be supplied.

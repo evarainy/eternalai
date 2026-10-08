@@ -13,8 +13,12 @@ class BrowserWorkerSupervisor:
     def __init__(
         self, run_ready: Callable[[], Awaitable[object]], *,
         cleanup_ready: Callable[[], Awaitable[object]] | None = None,
+        start_resources: Callable[[], Awaitable[None]] | None = None,
+        stop_resources: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._run_ready, self._cleanup_ready = run_ready, cleanup_ready
+        self._start_resources, self._stop_resources = start_resources, stop_resources
+        self._resources_started = False
         self._task: asyncio.Task[None] | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -24,6 +28,13 @@ class BrowserWorkerSupervisor:
     async def start(self) -> None:
         if self._task is not None or self._cleanup_task is not None:
             return
+        if self._start_resources is not None:
+            self._resources_started = True
+            try:
+                await self._start_resources()
+            except BaseException:
+                await self._close_resources()
+                raise
         self._stop.clear()
         self._failed_lanes.clear()
         self.last_pass_failed = False
@@ -40,21 +51,28 @@ class BrowserWorkerSupervisor:
         tasks = tuple(
             task for task in (self._task, self._cleanup_task) if task is not None
         )
-        if not tasks:
-            return
-        self._stop.set()
-        for task in tasks:
-            task.cancel()
-        _done, pending = await asyncio.wait(tasks, timeout=5)
-        # Keep ownership of a task that has not stopped; never report it settled.
-        if pending:
-            self._failed_lanes.add("shutdown")
-            self.last_pass_failed = True
-            raise RuntimeError("browser_worker_shutdown_pending")
-        for task in tasks:
-            if not task.cancelled() and task.exception() is not None:
+        if tasks:
+            self._stop.set()
+            for task in tasks:
+                task.cancel()
+            _done, pending = await asyncio.wait(tasks, timeout=90)
+            # Keep the transport alive for an unsettled task; a later stop may
+            # retry the bounded drain without pretending that cleanup finished.
+            if pending:
+                self._failed_lanes.add("shutdown")
                 self.last_pass_failed = True
-        self._task = self._cleanup_task = None
+                raise RuntimeError("browser_worker_shutdown_pending")
+            for task in tasks:
+                if not task.cancelled() and task.exception() is not None:
+                    self.last_pass_failed = True
+            self._task = self._cleanup_task = None
+        await self._close_resources()
+
+    async def _close_resources(self) -> None:
+        if self._resources_started:
+            if self._stop_resources is not None:
+                await self._stop_resources()
+            self._resources_started = False
 
     async def _run(self) -> None:
         await self._poll(self._run_ready, "business")

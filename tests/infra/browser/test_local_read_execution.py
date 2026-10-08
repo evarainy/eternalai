@@ -31,6 +31,7 @@ from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFact
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
     LocalChromiumDeployment,
+    LocalPlaywrightDriver,
     _Resource,
     local_subject_digest,
 )
@@ -64,20 +65,22 @@ def factory_at(path: Path) -> LocalBrowserReadExecutionFactory:
             manifest_digest="a" * 64,
         )
     )
+    deployment = LocalChromiumDeployment(
+        "local",
+        b"m" * 32,
+        path / "node",
+        path / "package",
+        path / "browsers",
+        b"h" * 32,
+        b"n" * 32,
+        b"c" * 32,
+        enabled=True,
+    )
     resources = LocalBrowserResources(
-        LocalChromiumDeployment(
-            "local",
-            b"m" * 32,
-            path / "node",
-            path / "package",
-            path / "browsers",
-            b"h" * 32,
-            b"n" * 32,
-            b"c" * 32,
-            enabled=True,
-        ),
+        deployment,
         BrowserClaimProofContext(b"p" * 32),
         Mock(spec=BrowserCleanupAuthorityPort),
+        LocalPlaywrightDriver(deployment),
     )
     return LocalBrowserReadExecutionFactory(
         source,

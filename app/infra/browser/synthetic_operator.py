@@ -369,6 +369,7 @@ async def open_synthetic_operator(
     trial_id: str = ORIGINAL_TRIAL,
     attempt_id: str | None = None,
     full_run: bool = False,
+    worker_resources: bool = False,
 ) -> AsyncIterator[SyntheticOperatorComponents]:
     """Read-only installation/preflight; caller explicitly serves API or starts worker.
 
@@ -376,6 +377,7 @@ async def open_synthetic_operator(
     signing key. Missing existing signed operator/service authority fails closed.
     """
     if (enabled is not True or type(require_active_publication) is not bool
+            or type(worker_resources) is not bool
             or input_mode not in {"chat", "structured"}):
         raise ValueError("browser_operator_disabled")
     attempt_id = approved_attempt_id(attempt_id, trial_id=trial_id)
@@ -471,10 +473,15 @@ async def open_synthetic_operator(
                 raise ValueError("browser_operator_installation_unavailable")
             if trial_id == OBSERVE_TRIAL and not full_run:
                 vertical.execution._install_fixed_observe_only(source.manifest)
-            yield SyntheticOperatorComponents(
-                vertical, tokens, binder, PostgreSQLSessionRevocationStore(sessions),
-                grants.owner,
-            )
+            try:
+                if worker_resources:
+                    await vertical.start_resources()
+                yield SyntheticOperatorComponents(
+                    vertical, tokens, binder, PostgreSQLSessionRevocationStore(sessions),
+                    grants.owner,
+                )
+            finally:
+                await vertical.stop_resources()
     finally:
         await engine.dispose()
 
@@ -485,7 +492,7 @@ async def worker_components() -> AsyncIterator[BrowserVerticalComponents]:
     bundle = prompt_operator_bundle()
     key = prompt_openrouter_key()
     async with open_synthetic_operator(
-        bundle, jev_key=key, enabled=True, input_mode="structured"
+        bundle, jev_key=key, enabled=True, input_mode="structured", worker_resources=True,
     ) as components:
         yield components.vertical
 
@@ -498,7 +505,7 @@ async def vault_worker_components() -> AsyncIterator[BrowserVerticalComponents]:
     bundle = prompt_operator_bundle(encrypted_path=VAULT_DIRECTORY / OPERATOR_FILE)
     key = prompt_openrouter_key()
     async with open_synthetic_operator(
-        bundle, jev_key=key, enabled=True, input_mode="structured"
+        bundle, jev_key=key, enabled=True, input_mode="structured", worker_resources=True,
     ) as components:
         yield components.vertical
 

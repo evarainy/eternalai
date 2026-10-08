@@ -257,6 +257,20 @@ class BrowserVerticalComponents:
     _cleanup_owners: set[tuple[str, str, str]] = field(
         default_factory=set, compare=False, repr=False,
     )
+    _start_resources: Callable[[], Awaitable[None]] | None = field(
+        default=None, compare=False, repr=False,
+    )
+    _stop_resources: Callable[[], Awaitable[None]] | None = field(
+        default=None, compare=False, repr=False,
+    )
+
+    async def start_resources(self) -> None:
+        if self._start_resources is not None:
+            await self._start_resources()
+
+    async def stop_resources(self) -> None:
+        if self._stop_resources is not None:
+            await self._stop_resources()
 
     async def prepare_seed(self, owner: BrowserOwner) -> BrowserPublicationRecord:
         """Explicit service operation; constructing components never calls this."""
