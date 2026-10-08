@@ -53,7 +53,7 @@ def test_installed_failure_never_falls_back_to_generic_registry(error, code) -> 
     else:
         with pytest.raises(BrowserPublicationError) as caught:
             asyncio.run(store._current(owner, manifest, session))
-        assert caught.value.code == code
+        assert caught.value.args == (code,)
     registry.get.assert_not_awaited()
     session.execute.assert_not_awaited()
     authority.verify_manifest.assert_not_awaited()
@@ -66,7 +66,7 @@ def test_generic_registry_keeps_both_observations_and_rejects_locked_change() ->
     result.mappings.return_value.first.return_value = changed.model_dump(mode="python")
     with pytest.raises(BrowserPublicationError) as caught:
         asyncio.run(store._current(owner, manifest, session))
-    assert caught.value.code == "browser_publication_capability_changed"
+    assert caught.value.args == ("browser_publication_capability_changed",)
     registry.get.assert_awaited_once_with(manifest.capability.capability_id)
     assert session.execute.await_count == 1
     authority.verify_manifest.assert_not_awaited()
@@ -77,6 +77,6 @@ def test_locked_capability_is_authoritative_and_unavailable_never_reaches_source
     store, owner, manifest, registry, authority, session = fixtures(callback)
     with pytest.raises(BrowserPublicationError) as caught:
         asyncio.run(store._current(owner, manifest, session))
-    assert caught.value.code == "browser_publication_capability_unavailable"
+    assert caught.value.args == ("browser_publication_capability_unavailable",)
     registry.get.assert_not_awaited()
     authority.verify_manifest.assert_not_awaited()

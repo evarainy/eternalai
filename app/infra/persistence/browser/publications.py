@@ -305,7 +305,8 @@ class PostgreSQLBrowserPublicationStore:
                     raise BrowserPublicationError("browser_publication_already_prepared")
             elif predecessor is not None:
                 records = [_record(row) for row in previous]
-                history = ((predecessor,) if diagnostic_predecessor is None
+                history: tuple[BrowserPublicationManifest | None, ...] = (
+                    (predecessor,) if diagnostic_predecessor is None
                            else (predecessor, diagnostic_predecessor))
                 if visible_predecessor is not None:
                     history = (predecessor, diagnostic_predecessor, visible_predecessor)

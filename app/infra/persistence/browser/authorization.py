@@ -110,7 +110,9 @@ class PostgreSQLBrowserBindingReader:
         self.check_row(row, fact)
 
     @staticmethod
-    def check_row(row: Mapping[str, Any] | None, fact: BrowserBindingFact) -> None:
+    def check_row(
+        row: Mapping[str, Any] | RowMapping | None, fact: BrowserBindingFact
+    ) -> None:
         if (
             row is None
             or row["binding_state"] != "active"
@@ -211,7 +213,7 @@ class PostgreSQLBrowserCurrentAuth:
             .all()
         )
         current_roles = sorted(set(decoded.principal.roles).intersection(str(v) for v in roles))
-        binding = binding_row
+        binding: Mapping[str, Any] | RowMapping | None = binding_row
         if binding is None:
             binding = (
                 await session.execute(

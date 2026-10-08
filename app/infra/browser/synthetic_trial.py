@@ -9,7 +9,7 @@ import stat
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from app.browser_skill.models import BrowserOwner
 from app.infra.browser import synthetic_vault as vault
@@ -242,6 +242,12 @@ def create_trial_file(name: str, document: dict[str, Any], *,
         raise ValueError("browser_trial_already_attempted") from None
 
 
+class _TrialFileOptions(TypedDict):
+    trial_id: str
+    attempt_id: str | None
+    identity_attempt_id: str | None
+
+
 class SingleJevAttempt:
     """Burn the task's only transport attempt before dispatch, including failures."""
 
@@ -272,8 +278,10 @@ class SingleJevAttempt:
         if self.trial_id == ORIGINAL_TRIAL:
             create_trial_file("trial.jev-attempt.json", document)
         elif self.full_run:
-            options = {"trial_id": self.trial_id, "attempt_id": self.attempt_id,
-                       "identity_attempt_id": self.identity_attempt_id}
+            options: _TrialFileOptions = {
+                "trial_id": self.trial_id, "attempt_id": self.attempt_id,
+                "identity_attempt_id": self.identity_attempt_id,
+            }
             run = read_trial_file("trial.run.json", **options)
             if (set(run) != {"task_id", "run_id", *self.reference}
                     or any(run[name] != value for name, value in self.reference.items())
