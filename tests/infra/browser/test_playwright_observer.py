@@ -103,11 +103,13 @@ class RegionHandle(Handle):
 
 
 class CandidateLocator:
-    def __init__(self, region: Region, role: str, name: str | re.Pattern[str]) -> None:
+    def __init__(self, region: Region, role: str, name: str | re.Pattern[str] | None) -> None:
         self.region, self.role, self.name = region, role, name
 
-    async def element_handles(self) -> list[Handle]:
+    def _matching_nodes(self) -> list[Node]:
         def name_matches(actual: str | None) -> bool:
+            if self.name is None:
+                return True
             if isinstance(self.name, str):
                 return actual == self.name
             return self.name.fullmatch(actual or "") is not None
@@ -115,8 +117,14 @@ class CandidateLocator:
         for node, data in self.region.items:
             if data["role"] == self.role and name_matches(data["name"]):
                 node.candidate = data
-                result.append(Handle(node))
+                result.append(node)
         return result
+
+    async def count(self) -> int:
+        return len(self._matching_nodes())
+
+    async def element_handles(self) -> list[Handle]:
+        return [Handle(node) for node in self._matching_nodes()]
 
 
 class RegionLocator:
@@ -128,9 +136,10 @@ class RegionLocator:
         return RegionHandle(self.region)
 
     def get_by_role(
-        self, role: str, *, name: str | re.Pattern[str], exact: bool,
+        self, role: str, *, name: str | re.Pattern[str] | None = None,
+        exact: bool = False,
     ) -> CandidateLocator:
-        assert exact
+        assert exact or name is None
         return CandidateLocator(self.region, role, name)
 
 
@@ -257,6 +266,56 @@ def fixture(
         region,
         policy,
     )
+
+
+def test_registered_role_discovery_redacts_unknown_names_and_keeps_node_identity() -> None:
+    async def run() -> None:
+        observer, _, session, _, _, region, policy = fixture(nested=False)
+        registered = observer._regions["inbox"]
+        observer._regions["inbox"] = RegisteredRegion(
+            region_id=registered.region_id,
+            policy_id=registered.policy_id,
+            policy_digest=registered.policy_digest,
+            region_selector=registered.region_selector,
+            complete_selector=registered.complete_selector,
+            empty_selector=registered.empty_selector,
+            discover_role_members=True,
+        )
+        secret_label = "Private employee number 123456789"
+        region.items = [label(secret_label)]
+        first = await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert len(first.candidates) == 1
+        assert first.candidates[0].name is None
+        assert secret_label not in first.model_dump_json()
+        exact = await observer.resolve_exact(session, first.candidates[0].ref, policy)
+        assert exact.element.node is region.items[0][0]
+
+        region.items = [label(secret_label)]
+        with pytest.raises(BrowserOperationError) as exc:
+            await observer.resolve_exact(session, first.candidates[0].ref, policy)
+        assert exc.value.failure.code == "stale"
+
+    asyncio.run(run())
+
+
+def test_role_discovery_is_bounded_by_the_existing_candidate_budget() -> None:
+    async def run() -> None:
+        observer, _, session, _, _, region, policy = fixture(nested=False)
+        registered = observer._regions["inbox"]
+        observer._regions["inbox"] = RegisteredRegion(
+            region_id=registered.region_id,
+            policy_id=registered.policy_id,
+            policy_digest=registered.policy_digest,
+            region_selector=registered.region_selector,
+            discover_role_members=True,
+        )
+        region.items = [label(f"unknown {index}") for index in range(3)]
+        limited = policy.model_copy(update={"maximum_candidates": 2})
+        with pytest.raises(BrowserOperationError) as exc:
+            await observer.observe(session, ObservationRequest(region_id="inbox"), limited)
+        assert exc.value.failure.code == "overloaded"
+
+    asyncio.run(run())
 
 
 def test_recursive_actual_frame_and_stable_local_freshness() -> None:

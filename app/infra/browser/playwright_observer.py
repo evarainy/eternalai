@@ -61,6 +61,9 @@ class RegisteredRegion:
     empty_selector: str | None = None
     pagination_selector: str | None = None
     virtualized_selector: str | None = None
+    # Trusted Site opt-in. Unknown accessible names remain private; the
+    # projection contains only role and Site-allowlisted metadata.
+    discover_role_members: bool = False
 
     def __post_init__(self) -> None:
         if not self.region_id or not self.policy_id or len(self.policy_digest) != 64:
@@ -71,6 +74,8 @@ class RegisteredRegion:
             not selector.strip() for selector in self.frame_selectors
         ):
             raise ValueError("browser_frame_configuration_invalid")
+        if type(self.discover_role_members) is not bool:
+            raise ValueError("browser_region_configuration_invalid")
 
 
 @dataclass(slots=True)
@@ -477,15 +482,29 @@ class PlaywrightObserver:
                     await _dispose(located)
             candidates: list[dict[str, Any]] = []
             # Native role/name computation replaces our generic DOM walk and
-            # hand-maintained accessible-name rules. Include unnamed controls
-            # only through an exact empty-name regex.
+            # hand-maintained accessible-name rules. The registered discovery
+            # mode deliberately suppresses *all* names: otherwise an unknown
+            # label could include unapproved protected data. It never expands
+            # the registered region, role set, or candidate budget.
             for role in dict.fromkeys(policy.allowed_roles):
-                for name in (*dict.fromkeys(policy.allowed_names), None):
-                    match_name = name if name is not None else re.compile(r"^$")
-                    found = await region.get_by_role(
-                        role, name=match_name, exact=True,
-                    ).element_handles()
+                names = ((None,) if site.discover_role_members else
+                         (*dict.fromkeys(policy.allowed_names), None))
+                for name in names:
+                    locator = (region.get_by_role(role) if site.discover_role_members
+                               else region.get_by_role(
+                                   role,
+                                   name=name if name is not None else re.compile(r"^$"),
+                                   exact=True,
+                               ))
+                    count = await locator.count()
+                    if type(count) is not int or count < 0:
+                        raise _failure("invalid_response")
+                    if count > policy.maximum_candidates - len(allocated):
+                        raise _failure("overloaded")
+                    found = await locator.element_handles()
                     allocated.extend(found)
+                    if len(found) != count:
+                        raise _failure("stale")
                     if len(allocated) > policy.maximum_candidates:
                         raise _failure("overloaded")
                     for node in found:

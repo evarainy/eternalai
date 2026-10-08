@@ -21,6 +21,7 @@ from app.browser_skill.models import (
     TargetRef,
     VisibleCandidate,
 )
+from app.browser_skill.site_rules import FrozenSiteAdapter, StepPrimitiveBinding
 from app.browser_skill.verifier import IndependentVerifier, failure
 from app.infra.browser.playwright_dom_rules import (
     _FILTER_BATCH,
@@ -397,6 +398,7 @@ class World(FakeWorld):
         self.page = SimpleNamespace(goto=self.goto)
         self.frame = SimpleNamespace(url=self.context.source.origin, parent_frame=None)
         self.live = SimpleNamespace(session=self.session, context=Context())
+        self.live.context.pages = [self.page]
         self.view = self.view.model_copy(update={"candidates": self.view.candidates[:1]})
         self.controls = {
             c.ref.target_id: Node(tag="SELECT" if operation == "select_option" else "BUTTON")
@@ -726,6 +728,43 @@ def test_redirect_and_popup_monitor_block_subsequent_business_actions() -> None:
     asyncio.run(run())
 
 
+def test_discovered_controls_without_distinguishing_allowed_facts_are_rejected() -> None:
+    async def run() -> None:
+        w = World()
+        original = w.view.candidates[0]
+        duplicate = original.model_copy(update={
+            "ref": original.ref.model_copy(update={"target_id": "another_control"}),
+        })
+        w.view = w.view.model_copy(update={"candidates": (original, duplicate)})
+        another = Node(parent=w.row)
+        w.row.children.append(another)
+        w.controls[duplicate.ref.target_id] = another
+        w.observer._regions["inbox"] = SimpleNamespace(
+            region_selector="#region", discover_role_members=True,
+        )
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.target_candidates(
+                w.session, w.skill.steps[0], w.view, w.context,
+            )
+        assert caught.value.failure.code == "unsupported"
+        assert w.dom_sends == []
+
+    asyncio.run(run())
+
+
+def test_candidate_step_uses_registered_primitive_dom_without_granting_execution() -> None:
+    w = World()
+    candidate_plan = w.plan.model_copy(update={
+        "step_primitives": (StepPrimitiveBinding(
+            step_id="candidate_open", primitive_id="open",
+        ),),
+    })
+    assert w.adapter._dom_step(candidate_plan, "candidate_open").step_id == "open"
+    with pytest.raises(BrowserOperationError) as caught:
+        w.adapter._dom_step(candidate_plan, "unregistered")
+    assert caught.value.failure.code == "denied"
+
+
 @pytest.mark.parametrize("operation", ["click", "fill", "select_option", "navigate", "read"])
 def test_domain_executor_composes_single_actual_adapter_and_verifier(operation: str) -> None:
     async def run():
@@ -851,6 +890,59 @@ def test_begin_send_immediately_precedes_real_action() -> None:
         assert receipt.state == "acknowledged" and sequence == ["begin", "fill"]
         private_reached_renderer = w.control.value == w._inputs["input"]
         assert private_reached_renderer is True
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["click", "fill", "select_option", "navigate"])
+def test_write_send_requires_final_reservation_before_browser_action(operation: str) -> None:
+    async def run() -> None:
+        w = World(operation)
+        write_step = w.skill.steps[0].model_copy(update={"effect": "may_write"})
+        write_rule = w.plan.steps[0].model_copy(update={
+            "step": write_step,
+            "effect": w.plan.steps[0].effect.model_copy(update={
+                "actual_effect": "may_write",
+            }),
+        })
+        w.skill = w.skill.model_copy(update={"steps": (write_step,)})
+        w.plan = w.plan.model_copy(update={"steps": (write_rule,)})
+        w.site = FrozenSiteAdapter((w.plan,))
+        sequence: list[str] = []
+
+        @asynccontextmanager
+        async def barrier(session, command, binding):
+            yield DispatchPermit(w.context.execution_id, command, lambda: sequence.append("begin"))
+
+        async def sent(actual: str) -> None:
+            sequence.append(actual)
+
+        async def reserved(session, context, command) -> None:
+            assert session == w.session and context is w.context
+            assert command.step == write_step
+            sequence.append("reserved")
+
+        w.sent = sent
+        w.context = replace(w.context, skill=w.skill, dispatch_barrier=barrier)
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(
+                w.session, w.context, w.confirmed.business_key,
+                write_reservation_authority=reserved,
+            ),),
+        )
+        receipt = await w.adapter.execute(w.session, await w.command(), w.context)
+        assert receipt.state == "acknowledged"
+        assert sequence == ["reserved", "begin", operation]
+
+        sequence.clear()
+        w.adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key),),
+        )
+        with pytest.raises(BrowserOperationError) as caught:
+            await w.adapter.execute(w.session, await w.command(), w.context)
+        assert caught.value.failure.code == "denied" and sequence == []
 
     asyncio.run(run())
 

@@ -135,12 +135,58 @@ class DOMRead:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class DOMTraversal:
+    """Trusted private collection markers; no page text leaves the adapter."""
+
+    page_key: DOMValue
+    row_key: DOMValue
+    ordinal: DOMValue
+    total: DOMValue
+    terminal_selector: str
+
+    def __post_init__(self) -> None:
+        if (
+            any(not isinstance(item, DOMValue) for item in (
+                self.page_key, self.row_key, self.ordinal, self.total,
+            ))
+            or type(self.terminal_selector) is not str
+            or not 1 <= len(self.terminal_selector) <= 512
+            or self.terminal_selector.strip().lower()
+            in {"", "*", "body", "html", ":root"}
+        ):
+            raise ValueError("browser_dom_traversal_registration_invalid")
+
+    def rule_digests(self) -> dict[str, str]:
+        from app.browser_skill.registry import canonical_digest
+
+        values = {
+            "page_key": self.page_key,
+            "row_key": self.row_key,
+            "ordinal": self.ordinal,
+            "total": self.total,
+        }
+        result = {
+            name: canonical_digest("browser_dom_traversal_value.v1", {
+                "field": name,
+                "selector": value.selector,
+                "kind": value.kind,
+                "attribute": value.attribute,
+            }) for name, value in values.items()
+        }
+        result["terminal"] = canonical_digest("browser_dom_traversal_terminal.v1", {
+            "selector": self.terminal_selector,
+        })
+        return result
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class RegisteredDOMRules:
     skill_digest: str
     site_digest: str
     verifier_digest: str
     steps: tuple[DOMStep, ...]
     read: DOMRead
+    traversal: DOMTraversal | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -150,6 +196,7 @@ class RegisteredDOMRules:
             )
             or not self.steps
             or len({step.step_id for step in self.steps}) != len(self.steps)
+            or (self.traversal is not None and not isinstance(self.traversal, DOMTraversal))
         ):
             raise ValueError("browser_dom_registration_invalid")
 

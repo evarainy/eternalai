@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
+import re
 import secrets
 import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import wraps
+from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
@@ -27,6 +31,7 @@ from typing import (
     cast,
     get_args,
 )
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 from referencing import Registry
@@ -42,6 +47,7 @@ from app.browser_skill.models import (
     ExecutionContext,
     ObservationPolicy,
     ObservationRequest,
+    PageEvidence,
     ParameterPurpose,
     ParameterRef,
     ReadEvidence,
@@ -55,6 +61,8 @@ from app.browser_skill.models import (
     VisibleProjection,
 )
 from app.browser_skill.site_rules import (
+    ExpectedDownload,
+    ExpectedPopup,
     RegisteredQueryReadRule,
     RegisteredReadRule,
     RegisteredSitePlan,
@@ -62,9 +70,13 @@ from app.browser_skill.site_rules import (
 )
 from app.browser_skill.verifier import authorize_current, check_liveness, failure
 from app.infra.browser.browserless_wire import BrowserProviderError
+from app.infra.browser.local_file_artifacts import StoredFileArtifact
 from app.infra.browser.playwright_dom_rules import (
     ROW_IDENTITY_MATCH,
     DOMBatchError,
+    DOMRead,
+    DOMStep,
+    DOMTraversal,
     DOMValue,
     RegisteredDOMRules,
     bounded_children,
@@ -83,6 +95,9 @@ from app.infra.browser.playwright_observer import (
 )
 from app.ports.browser import SiteAdapter
 
+if TYPE_CHECKING:
+    from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
+
 
 class BusinessRegistry(Protocol):
     async def assert_business_authority(
@@ -93,6 +108,10 @@ class BusinessRegistry(Protocol):
 OperationAuthority = Callable[
     [BrowserSessionRef, ExecutionContext, ActionCommand | ReadSpec], Awaitable[Any]
 ]
+WriteReservationAuthority = Callable[
+    [BrowserSessionRef, ExecutionContext, ActionCommand], Awaitable[None]
+]
+DownloadSink = Callable[[Path, ExpectedDownload], Awaitable[StoredFileArtifact]]
 
 
 _OPTION_IDENTITY = """el => {
@@ -167,6 +186,9 @@ class RegisteredExecution:
     stop_after_observe: bool = False
     operation_authority: OperationAuthority | None = None
     authority_diagnostic: Callable[[], dict[str, int]] | None = None
+    registered_popup_source: RegisteredLocalSite | None = None
+    write_reservation_authority: WriteReservationAuthority | None = None
+    download_sink: DownloadSink | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -199,6 +221,9 @@ class _OriginGuard:
     context: Any
     execution: ExecutionContext
     failed: bool = False
+    popup_rule: ExpectedPopup | None = None
+    popup_started: float = 0.0
+    popup_pages: list[Any] = field(default_factory=list)
 
 
 _ValidationStage = Literal[
@@ -287,6 +312,10 @@ class PlaywrightWebAdapter:
         rules: tuple[RegisteredDOMRules, ...],
         executions: tuple[RegisteredExecution, ...],
     ) -> None:
+        # Import after the read-execution bridge is loaded; the local provider
+        # imports that bridge for its output-projector protocol.
+        from app.infra.browser.local_resource_lifecycle import RegisteredLocalSite
+
         if (
             not executions
             or len({e.session.session_ref for e in executions}) != len(executions)
@@ -295,6 +324,9 @@ class PlaywrightWebAdapter:
             raise ValueError("browser_adapter_registration_invalid")
         self._registry, self._observer, self._site = registry, observer, site
         self._executions = {e.session.session_ref: e for e in executions}
+        self._popup_sources = {
+            e.session.session_ref: e.registered_popup_source for e in executions
+        }
         self._rules = {r.skill_digest: r for r in rules}
         self._options: dict[tuple[str, str], _OptionSet] = {}
         self._guards: dict[str, _OriginGuard] = {}
@@ -314,18 +346,29 @@ class PlaywrightWebAdapter:
             plan = site.bootstrap(registration.context.skill)
             plan.validate_context(registration.context)
             dom = self._rules.get(plan.skill_digest)
+            popup_source = registration.registered_popup_source
             if (
                 registration.session.binding != registration.context.expected_binding
                 or dom is None
                 or dom.site_digest != plan.site_digest
                 or dom.verifier_digest != plan.verifier_digest
-                or tuple(s.step_id for s in dom.steps) != tuple(s.step.step_id for s in plan.steps)
+                or {s.step_id for s in dom.steps} != {
+                    s.step.step_id for s in (plan.primitive_rules or plan.steps)
+                }
                 or tuple(name for name, _ in dom.read.fields)
                 != tuple(f.field_id for f in plan.read_rule.fields)
                 or registration.confirmed_key.object_type != plan.read_rule.object_type
                 or registration.confirmed_key.value_ref != plan.read_rule.key_ref
                 or (isinstance(plan.read_rule, RegisteredQueryReadRule) and (
                     dom.read.object_type is None or registration.project_output is None
+                ))
+                or (popup_source is not None and (
+                    not isinstance(popup_source, RegisteredLocalSite)
+                    or popup_source.manifest.skill != registration.context.skill
+                    or popup_source.manifest.site_plan() != plan
+                    or popup_source.rules != dom
+                    or self._observer._regions.get(popup_source.region.region_id)
+                    != popup_source.region
                 ))
             ):
                 raise ValueError("browser_adapter_registration_invalid")
@@ -341,6 +384,14 @@ class PlaywrightWebAdapter:
             or item.session != session
             or (context is not None and context is not item.context)
         ):
+            raise failure("denied")
+        return item
+
+    def _dom_step(self, plan: RegisteredSitePlan, step_id: str) -> DOMStep:
+        primitive_id = plan.primitive_for_step(step_id)
+        item = next((rule for rule in self._rules[plan.skill_digest].steps
+                     if rule.step_id == primitive_id), None)
+        if item is None:
             raise failure("denied")
         return item
 
@@ -423,6 +474,8 @@ class PlaywrightWebAdapter:
                 # Acquiring this lock may have waited for another installation.
                 self._check_origin_guard(session, ctx, live)
                 return True
+            if len(live.context.pages) != 1:
+                raise failure("denied")
             guard = _OriginGuard(live.context, ctx)
 
             def inspect_request(request: Any) -> None:
@@ -440,9 +493,13 @@ class PlaywrightWebAdapter:
                     await route.fallback()
 
             def page_created(page: Any) -> None:
-                # Popups never silently replace the explicitly registered Page.
-                guard.failed = True
-                ctx.cancellation.set()
+                rule = guard.popup_rule
+                if (rule is None or time.monotonic() - guard.popup_started
+                        > rule.wait_ms / 1000 or len(guard.popup_pages) >= rule.maximum_pages):
+                    guard.failed = True
+                    ctx.cancellation.set()
+                else:
+                    guard.popup_pages.append(page)
 
             try:
                 live.context.on("request", inspect_request)
@@ -465,6 +522,145 @@ class PlaywrightWebAdapter:
             if frame is None:
                 return
         raise failure("unsupported")
+
+    def _expected_popup(
+        self, session: BrowserSessionRef, command: ActionCommand,
+        plan: RegisteredSitePlan,
+    ) -> ExpectedPopup | None:
+        source = self._popup_sources.get(session.session_ref)
+        if source is None:
+            return None
+        rule = next((item for item in source.popup_expectations
+                     if item.step_id == command.step.step_id), None)
+        if rule is None:
+            return None
+        if (
+            command.step.operation != "click"
+            or command.step.effect != "read_only"
+            or rule.maximum_pages != 1
+            or rule.object_type != plan.read_rule.object_type
+            or not isinstance(plan.read_rule, RegisteredQueryReadRule)
+            or not any(item.step == command.step and item.effect.actual_effect == "read_only"
+                       for item in plan.steps)
+        ):
+            raise failure("unsupported")
+        return rule
+
+    def _expected_download(
+        self, session: BrowserSessionRef, command: ActionCommand,
+        plan: RegisteredSitePlan,
+    ) -> ExpectedDownload | None:
+        source = self._popup_sources.get(session.session_ref)
+        if source is None:
+            return None
+        rule = next((item for item in source.download_expectations
+                     if item.step_id == command.step.step_id), None)
+        if rule is None:
+            return None
+        if (
+            command.step.operation != "click"
+            or command.step.effect != "read_only"
+            or rule.object_type != plan.read_rule.object_type
+            or not any(item.step == command.step and item.effect.actual_effect == "read_only"
+                       for item in plan.steps)
+            or self._registration(session).download_sink is None
+        ):
+            raise failure("unsupported")
+        return rule
+
+    async def _seal_download(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        command: ActionCommand, page: Any, download: Any,
+        rule: ExpectedDownload,
+    ) -> None:
+        sink = self._registration(session, context).download_sink
+        if sink is None or download.page is not page:
+            raise failure("denied")
+        if (not navigation_allowed(download.url, context.navigation_origins)
+                or await download.failure() is not None):
+            raise failure("denied")
+        source_path = await download.path()
+        if not isinstance(source_path, str):
+            raise failure("denied")
+        source = Path(source_path)
+        if not source.is_absolute():
+            raise failure("denied")
+        await self._authority(session, context, command)
+        check_liveness(context)
+        artifact = await sink(source, rule)
+        registered_source = self._popup_sources.get(session.session_ref)
+        binding = context.expected_binding
+        if (
+            not isinstance(artifact, StoredFileArtifact)
+            or artifact.media_type != rule.media_type
+            or artifact.size_bytes > rule.max_bytes
+            or registered_source is None
+            or artifact.owner.tenant_id != binding.owner.tenant_id
+            or artifact.owner.ai_user_id != binding.owner.user_id
+            or artifact.owner.session_id != binding.owner.session_id
+            or artifact.owner.binding_id != binding.binding_id
+            or artifact.owner.binding_revision != binding.binding_revision
+            or artifact.owner.target_system
+            != registered_source.manifest.capability.target_system
+        ):
+            raise failure("denied")
+
+    async def _adopt_popup(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, opener: Any, opened: Any, rule: ExpectedPopup,
+    ) -> None:
+        """Bind a single expected popup to the registered business key before observation."""
+        source = self._popup_sources.get(session.session_ref)
+        guard = self._guards[session.session_ref]
+        if (source is None or guard.failed or len(guard.popup_pages) != 1
+                or guard.popup_pages[0] is not opened):
+            raise failure("denied")
+        await opened.wait_for_url(
+            lambda url: url != "about:blank", timeout=rule.wait_ms,
+        )
+        location = urlsplit(opened.url)
+        if (
+            opened.is_closed() or await opened.opener() is not opener
+            or not navigation_allowed(opened.url, (rule.origin,))
+            or not location.path.startswith(rule.path_prefix)
+        ):
+            raise failure("denied")
+        target_frame = await self._observer._target_frame(opened, source.region)
+        frame = target_frame
+        for _ in range(32):
+            if not navigation_allowed(frame.url, context.navigation_origins):
+                raise failure("denied")
+            frame = frame.parent_frame
+            if frame is None:
+                break
+        else:
+            raise failure("unsupported")
+        regions = await target_frame.query_selector_all(source.region.region_selector)
+        try:
+            if len(regions) != 1:
+                raise failure("denied")
+            registration = self._registration(session, context)
+            spec = ReadSpec(
+                binding=session.binding,
+                business_key=registration.confirmed_key,
+                verifier_id=plan.verifier_id,
+                verifier_digest=plan.verifier_digest,
+                fields=tuple(item.field_id for item in plan.read_rule.fields),
+                mode="independent_query_detail_v1",
+            )
+            key = await self._sealed(
+                context, spec.business_key.value_ref, "business_key", plan.verifier_id,
+            )
+            count, owner, object_match, _, _, _ = await self._compare_rows(
+                regions[0], spec, context, plan, key, {},
+            )
+            if count != 1 or not owner or not object_match:
+                raise failure("denied")
+            await self._authority(session, context, spec)
+            check_liveness(context)
+            await self._observer.register_page(session, opened)
+        finally:
+            await _dispose_many(tuple(regions), suppress_cancel=sys.exc_info()[0] is not None)
 
     @staticmethod
     async def _sealed(
@@ -650,7 +846,7 @@ class PlaywrightWebAdapter:
         rule = next((r for r in plan.steps if r.step == step), None)
         if rule is None or region.projection.scope.region_id != rule.observation.region_id:
             raise failure("denied")
-        dom = next(r for r in self._rules[plan.skill_digest].steps if r.step_id == step.step_id)
+        dom = self._dom_step(plan, step.step_id)
         key = None
         if step.locator.kind == "business_key":
             if dom.key is None:
@@ -687,6 +883,27 @@ class PlaywrightWebAdapter:
                 if not matched:
                     continue
             matches.append(candidate)
+        registered_region = self._observer._regions.get(region.projection.scope.region_id)
+        if registered_region is not None and getattr(
+            registered_region, "discover_role_members", False,
+        ):
+            if key is None and any(
+                not candidate.context
+                and candidate.row_label is None
+                and candidate.column_label is None
+                for candidate in matches
+            ):
+                # Role and opaque ID alone do not identify an unknown control.
+                raise failure("unsupported")
+            visible_facts = [
+                (candidate.role, candidate.name, candidate.context,
+                 candidate.row_label, candidate.column_label,
+                 candidate.value_state, candidate.enabled)
+                for candidate in matches
+            ]
+            if len(visible_facts) != len(set(visible_facts)):
+                # Opaque target IDs cannot stand in for semantic evidence.
+                raise failure("unsupported")
         return tuple(matches)
 
 
@@ -913,7 +1130,7 @@ class PlaywrightWebAdapter:
     ) -> dict[str, Any]:
         """Prepare private expectations before the round's final authority wait."""
         rules = self._rules[plan.skill_digest]
-        step = next(item for item in rules.steps if item.step_id == command.step.step_id)
+        step = self._dom_step(plan, command.step.step_id)
         config: dict[str, Any] = {
             "region_selector": self._observer._regions[
                 resolution.region.projection.scope.region_id
@@ -1120,9 +1337,7 @@ class PlaywrightWebAdapter:
             self._validation_mark(session, "target_resolution")
             node = resolution.node(command.target)
             self._validation_mark(session, "target_identity")
-            dom = next(
-                r for r in self._rules[plan.skill_digest].steps if r.step_id == command.step.step_id
-            )
+            dom = self._dom_step(plan, command.step.step_id)
             if not await node.element.evaluate(
                 "(el, selector) => el.matches(selector)",
                 dom.selector,
@@ -1222,12 +1437,13 @@ class PlaywrightWebAdapter:
         command: ActionCommand,
         context: ExecutionContext,
     ) -> DispatchReceipt:
-        self._registration(session, context)
+        registration = self._registration(session, context)
         permit: DispatchPermit | None = None
         node: Any = None
         failed = False
+        popup_guard: _OriginGuard | None = None
         try:
-            await self._authority(session, context, command)
+            plan, _ = await self._authority(session, context, command)
             async with context.dispatch_barrier(
                 session, command, context.expected_binding
             ) as permit:
@@ -1243,6 +1459,32 @@ class PlaywrightWebAdapter:
                 check_liveness(context)
                 timeout = max(1, (context.deadline_monotonic - time.monotonic()) * 1000)
                 operation = command.step.operation
+                popup_rule = self._expected_popup(session, command, plan)
+                download_rule = self._expected_download(session, command, plan)
+                if popup_rule is not None and download_rule is not None:
+                    raise failure("denied")
+                if popup_rule is not None:
+                    popup_guard = self._guards[session.session_ref]
+                    if popup_guard.popup_rule is not None:
+                        raise failure("denied")
+                    popup_guard.popup_rule = popup_rule
+                    popup_guard.popup_started = time.monotonic()
+                    popup_guard.popup_pages.clear()
+                write_authority = registration.write_reservation_authority
+                if command.step.effect == "may_write" and (
+                    next(item for item in plan.steps if item.step == command.step)
+                    .effect.actual_effect != "may_write" or write_authority is None
+                ):
+                    raise failure("denied")
+
+                async def assert_reserved() -> None:
+                    if write_authority is None:
+                        raise failure("denied")
+                    await write_authority(session, context, command)
+                    check_liveness(context)
+                    if self._guards[session.session_ref].failed:
+                        raise failure("denied")
+
                 # No await between begin_send and the actual Playwright action.
                 if operation == "fill":
                     assert sealed is not None and command.step.value_ref is not None
@@ -1251,6 +1493,8 @@ class PlaywrightWebAdapter:
                         if type(value) is not str or len(value.encode()) > 16384:
                             raise failure("unsupported")
                         assert permit is not None
+                        if command.step.effect == "may_write":
+                            await assert_reserved()
                         permit.begin_send()
                         await node.element.fill(value, timeout=timeout)
 
@@ -1267,6 +1511,11 @@ class PlaywrightWebAdapter:
 
                     async def navigate(url: str | tuple[str, ...]) -> None:
                         assert permit is not None
+                        if (type(url) is not str or len(url) > 2048
+                                or not navigation_allowed(url, context.navigation_origins)):
+                            raise failure("denied")
+                        if command.step.effect == "may_write":
+                            await assert_reserved()
                         permit.begin_send()
                         await node.page.goto(url, timeout=timeout, wait_until="domcontentloaded")
 
@@ -1279,11 +1528,39 @@ class PlaywrightWebAdapter:
                         navigate,
                     )
                 elif operation == "select_option":
+                    if command.step.effect == "may_write":
+                        await assert_reserved()
                     permit.begin_send()
                     await node.element.select_option(element=option, timeout=timeout)
                 elif operation == "click":
-                    permit.begin_send()
-                    await node.element.click(timeout=timeout)
+                    if download_rule is not None:
+                        async with node.page.expect_download(
+                            timeout=min(timeout, download_rule.wait_ms),
+                        ) as downloaded_event:
+                            check_liveness(context)
+                            permit.begin_send()
+                            await node.element.click(timeout=timeout)
+                        download = await downloaded_event.value
+                        await self._seal_download(
+                            session, context, command, node.page, download,
+                            download_rule,
+                        )
+                    elif popup_rule is None:
+                        if command.step.effect == "may_write":
+                            await assert_reserved()
+                        permit.begin_send()
+                        await node.element.click(timeout=timeout)
+                    else:
+                        async with node.page.expect_popup(
+                            timeout=min(timeout, popup_rule.wait_ms),
+                        ) as opened_event:
+                            check_liveness(context)
+                            permit.begin_send()
+                            await node.element.click(timeout=timeout)
+                        opened = await opened_event.value
+                        await self._adopt_popup(
+                            session, context, plan, node.page, opened, popup_rule,
+                        )
                 else:
                     # _validate just bound this live target to the registered
                     # read row under the dispatch barrier.
@@ -1312,6 +1589,9 @@ class PlaywrightWebAdapter:
                 raise
             raise failure("invalid_response") from None
         finally:
+            if popup_guard is not None:
+                popup_guard.popup_rule = None
+                popup_guard.popup_pages.clear()
             if node is not None:
                 await _dispose_validated_node(node, failed=failed)
 
@@ -1412,6 +1692,149 @@ class PlaywrightWebAdapter:
             return count, owner, object_match, fields, digest.hexdigest(), tuple(values)
         finally:
             await _dispose_many(tuple(rows), suppress_cancel=sys.exc_info()[0] is not None)
+
+    def _collection_digest(self, kind: bytes, value: str) -> str:
+        return hmac.new(self._salt, kind + b"\0" + value.encode("utf-8"),
+                        hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _collection_number(raw: str | None, limit: int) -> int:
+        if (raw is None or re.fullmatch(r"(?:0|[1-9][0-9]{0,5})", raw) is None):
+            raise failure("unsupported")
+        value = int(raw)
+        if value > limit:
+            raise failure("unsupported")
+        return value
+
+    async def _collection_facts(
+        self, region: Any, read: DOMRead, traversal: DOMTraversal, max_rows: int,
+    ) -> tuple[str, tuple[str, ...], tuple[int, ...], int, bool]:
+        """Read one viewport through registered selectors without returning raw values."""
+        page_key, total_raw = await read_private_many(
+            region, (traversal.page_key, traversal.total), read.maximum_value_bytes,
+        )
+        if not page_key:
+            raise failure("unsupported")
+        total = self._collection_number(total_raw, max_rows)
+        terminal_nodes = await region.query_selector_all(traversal.terminal_selector)
+        try:
+            if len(terminal_nodes) > 1:
+                raise failure("invalid_response")
+            terminal = bool(terminal_nodes and await terminal_nodes[0].is_visible())
+        finally:
+            await _dispose_many(tuple(terminal_nodes),
+                                suppress_cancel=sys.exc_info()[0] is not None)
+        rows = await bounded_children(
+            region, read.row_selector, min(read.maximum_rows, max_rows, 255),
+        )
+        keys: list[str] = []
+        ordinals: list[int] = []
+        byte_count = len(page_key.encode("utf-8")) + len((total_raw or "").encode("utf-8"))
+        try:
+            for row in rows:
+                key, ordinal_raw = await read_private_many(
+                    row, (traversal.row_key, traversal.ordinal),
+                    read.maximum_value_bytes,
+                )
+                if not key:
+                    raise failure("unsupported")
+                byte_count += len(key.encode("utf-8")) + len((ordinal_raw or "").encode())
+                if byte_count > 262_144:
+                    raise failure("unsupported")
+                keys.append(self._collection_digest(b"row", key))
+                ordinal = self._collection_number(ordinal_raw, total)
+                if ordinal >= total:
+                    raise failure("unsupported")
+                ordinals.append(ordinal)
+        finally:
+            await _dispose_many(tuple(rows), suppress_cancel=sys.exc_info()[0] is not None)
+        if (len(keys) != len(set(keys)) or len(ordinals) != len(set(ordinals))
+                or ordinals != sorted(ordinals)
+                or any(right != left + 1 for left, right in zip(ordinals, ordinals[1:]))):
+            raise failure("unsupported")
+        return (
+            self._collection_digest(b"page", page_key), tuple(keys),
+            tuple(ordinals), total, terminal,
+        )
+
+    @_neutral
+    async def page_evidence(
+        self, session: BrowserSessionRef, region_id: str,
+        context: ExecutionContext,
+    ) -> PageEvidence:
+        """Value-free local viewport facts; completeness belongs to the verifier."""
+        registration = self._registration(session, context)
+        plan, _ = await self._authority(session, context)
+        traversal = plan.traversal
+        dom = self._rules[plan.skill_digest]
+        if (
+            traversal is None or dom.traversal is None
+            or region_id != traversal.region_id
+            or dom.read.observation.region_id != region_id
+            or traversal.object_type != registration.confirmed_key.object_type
+            or dom.traversal.rule_digests() != {
+                "page_key": traversal.page_key_rule_digest,
+                "row_key": traversal.row_key_rule_digest,
+                "ordinal": traversal.ordinal_rule_digest,
+                "total": traversal.total_rule_digest,
+                "terminal": traversal.terminal_rule_digest,
+            }
+        ):
+            raise failure("unsupported")
+        exact = await self._observer.resolve_region(
+            session, ObservationRequest(region_id=region_id), plan.policy,
+        )
+        self._origins(exact, context)
+        if exact.projection.coverage.reason in {"unobservable", "cross_origin"}:
+            raise failure("unsupported")
+        region = await exact.element.evaluate_handle("el => el")
+        try:
+            before = await self._collection_facts(
+                region, dom.read, dom.traversal, traversal.max_rows,
+            )
+            await self._authority(session, context)
+            final = await self._observer.resolve_region(
+                session,
+                ObservationRequest(region_id=region_id, expected_scope=exact.projection.scope),
+                plan.policy,
+            )
+            self._origins(final, context)
+            if not await region.evaluate(
+                "(old, fresh) => old === fresh && old.isConnected", final.element,
+            ):
+                raise failure("stale")
+            after = await self._collection_facts(
+                region, dom.read, dom.traversal, traversal.max_rows,
+            )
+            if before != after:
+                raise failure("stale")
+            await self._authority(session, context)
+            check_liveness(context)
+            page_key, row_keys, ordinals, total, terminal = after
+            safe = {
+                "scope": final.projection.scope.model_dump(mode="json"),
+                "page_key_digest": page_key,
+                "row_key_digests": row_keys,
+                "row_ordinals": ordinals,
+                "declared_total": total,
+                "terminal_seen": terminal,
+                "source_digest": context.source.fixture_digest,
+                "skill_digest": context.skill.digest,
+                "business_key_digest": registration.confirmed_key.key_digest,
+                "traversal": traversal.model_dump(mode="json"),
+            }
+            evidence_digest = hmac.new(
+                self._salt, json.dumps(safe, sort_keys=True).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            return PageEvidence(
+                scope=final.projection.scope, page_key_digest=page_key,
+                row_key_digests=row_keys, row_ordinals=ordinals,
+                declared_total=total, terminal_seen=terminal,
+                evidence_digest=evidence_digest,
+            )
+        finally:
+            await _dispose_many((region,), suppress_cancel=sys.exc_info()[0] is not None)
 
     @_neutral
     async def read(
@@ -1558,10 +1981,11 @@ class PlaywrightWebAdapter:
         self._registration(session, context)
         item = self._private_reads.pop(session.session_ref, None)
         check_liveness(context)
+        read_digest = verification.read_evidence_digest or verification.evidence_digest
         if (
             item is None or verification.status != "verified"
-            or verification.evidence_digest is None
-            or item[1].evidence_digest != verification.evidence_digest
+            or read_digest is None
+            or item[1].evidence_digest != read_digest
             or item[0].binding != context.expected_binding
         ):
             raise failure("denied")
