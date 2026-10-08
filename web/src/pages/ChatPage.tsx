@@ -358,11 +358,15 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   skillIdRef.current = meSkillId;
   const identityCheck = useRef(0);
   const requestInFlight = useRef(false);
+  const activeSubmission = useRef<ChatSubmission | null>(null);
   const browserSubmitContext = useRef<{
     controller: AbortController; ownerKey: string;
   } | null>(null);
 
-  useEffect(() => () => { browserSubmitContext.current?.controller.abort(); }, []);
+  useEffect(() => () => {
+    browserSubmitContext.current?.controller.abort();
+    activeSubmission.current = null;
+  }, []);
   useEffect(() => { setBrowserIdentityReady(true); }, [authGeneration]);
   useEffect(() => {
     if (browserSubmitContext.current !== null
@@ -522,8 +526,12 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
   };
 
   const mutation = useMutation({
-    mutationFn: async (submission: ChatSubmission) => {
-      const { message, sessionId } = submission;
+    mutationFn: async (message: string) => {
+      const submission = activeSubmission.current;
+      if (submission === null || submission.message !== message) {
+        throw new Error('chat_submission_invalid');
+      }
+      const { sessionId } = submission;
       const reference = /^(?:确认|confirm)\s+(\S+)$/i.exec(message)?.[1] ?? null;
       try {
         const response = submission.browser === null
@@ -580,6 +588,7 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       }
     },
     onSettled: () => {
+      activeSubmission.current = null;
       requestInFlight.current = false;
     },
   });
@@ -609,7 +618,8 @@ export default function ChatPage({ browserSkillId }: ChatPageProps) {
       appendTranscript({ role: 'user', text: message });
       setDraft('');
     }
-    mutation.mutate(submission);
+    activeSubmission.current = submission;
+    mutation.mutate(message);
   };
 
   const submitConfirmation = async (action: UserAction) => {

@@ -1179,6 +1179,24 @@ describe('ChatPage response projection', () => {
     expect(document.body.textContent).not.toContain('RAW_NON_JSON_RESPONSE');
   });
 
+  it('keeps submission context out of mutation variables while pending and after completion', async () => {
+    let resolveResponse!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    const message = '私有执行上下文测试';
+    sendMessage(message);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const variables = () => client.getMutationCache().getAll().map((item) => item.state.variables);
+    expect(useAIDockStore.getState().sessionId).toBe(SESSION_A);
+    expect(variables()).toEqual([message]);
+    await act(async () => { resolveResponse(response(envelope())); });
+    await screen.findByText('办理完成');
+    expect(variables()).toEqual([message]);
+    expect(JSON.stringify(variables())).not.toContain(SESSION_A);
+  });
+
   it('retains only approved projections and does not expose other raw envelope fields', async () => {
     const sensitiveMarkers = [
       'RAW_DATA_SECRET',

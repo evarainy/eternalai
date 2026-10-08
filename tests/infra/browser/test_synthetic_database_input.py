@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import importlib.util
+import json
 import secrets
 import stat
 import sys
@@ -311,7 +312,61 @@ def test_publication_later_configuration_failure_is_distinct(
     publication_cli.vertical.prepare_seed.assert_not_awaited()
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "browser_synthetic_publication_configuration_invalid\n"
+    reason, details = captured.err.splitlines()
+    assert reason == "browser_synthetic_publication_configuration_invalid"
+    assert json.loads(details) == {
+        "stage": "operator", "error_code": "browser_operator_installation_unavailable",
+    }
+
+
+@pytest.mark.parametrize("stage", ["operator", "prepare", "activate", "deactivate"])
+@pytest.mark.parametrize("error_code", [
+    "browser_operator_installation_unavailable", "browser_vertical_digest_key_invalid",
+])
+def test_publication_configuration_details_preserve_closed_code_and_stage(
+    stage: str, error_code: str, publication_cli: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    operation = stage if stage in {"activate", "deactivate"} else "prepare"
+    error = ValueError(error_code)
+    if stage == "operator":
+        publication_cli.context.__aenter__.side_effect = error
+    elif stage == "deactivate":
+        monkeypatch.setattr(publication_cli.cli, "prompt_deactivation_bundle", Mock())
+        monkeypatch.setattr(
+            publication_cli.cli, "deactivate_synthetic_publication", AsyncMock(side_effect=error),
+        )
+    else:
+        getattr(publication_cli.vertical, f"{stage}_seed").side_effect = error
+    assert publication_cli.cli.main(["--enable", "--operation", operation]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    reason, details = captured.err.splitlines()
+    assert reason == "browser_synthetic_publication_configuration_invalid"
+    assert json.loads(details) == {"stage": stage, "error_code": error_code}
+
+
+@pytest.mark.parametrize("shape", ["exception_subclass", "string_subclass", "extra_args"])
+def test_publication_configuration_lookalikes_do_not_emit_details(
+    shape: str, publication_cli: SimpleNamespace, capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DerivedError(ValueError):
+        pass
+
+    class DerivedString(str):
+        pass
+
+    code = "browser_operator_installation_unavailable"
+    errors = {
+        "exception_subclass": DerivedError(code),
+        "string_subclass": ValueError(DerivedString(code)),
+        "extra_args": ValueError(code, secrets.token_urlsafe(24)),
+    }
+    publication_cli.context.__aenter__.side_effect = errors[shape]
+    assert publication_cli.cli.main(["--enable", "--operation", "prepare"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "browser_synthetic_publication_unavailable\n"
 
 
 def test_publication_prepare_database_error_emits_only_fixed_code(

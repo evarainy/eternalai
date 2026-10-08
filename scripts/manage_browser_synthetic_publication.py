@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import re
 import sys
 from pathlib import Path
@@ -68,8 +69,23 @@ _CONFIG_CODES = frozenset({
 
 
 class _PublicationDiagnostic(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self, code: str, *, stage: str | None = None, error_code: str | None = None,
+    ) -> None:
         self.code = code
+        self.stage = stage
+        self.error_code = error_code
+
+    def details(self) -> dict[str, str] | None:
+        if (
+            self.code == "browser_synthetic_publication_configuration_invalid"
+            and type(self.stage) is str
+            and self.stage in {"operator", "prepare", "activate", "deactivate"}
+            and type(self.error_code) is str
+            and self.error_code in _CONFIG_CODES
+        ):
+            return {"stage": self.stage, "error_code": self.error_code}
+        return None
 
 
 def _has_known_code(error: ValueError, codes: frozenset[str]) -> bool:
@@ -176,6 +192,7 @@ async def _operate(
             if _has_known_code(error, _CONFIG_CODES):
                 raise _PublicationDiagnostic(
                     "browser_synthetic_publication_configuration_invalid",
+                    stage=stage, error_code=error.args[0],
                 ) from None
         raise
 
@@ -207,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
         ))
     except _PublicationDiagnostic as error:
         print(error.code, file=sys.stderr)
+        details = error.details()
+        if details is not None:
+            print(json.dumps(details, sort_keys=True), file=sys.stderr)
         return 2
     except BrowserPublicationError as error:
         code = str(error)
