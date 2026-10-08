@@ -25,6 +25,7 @@ from app.browser_skill.models import (
     DispatchReceipt,
     ExecutionContext,
     ObservationRequest,
+    PageEvidence,
     ReadSpec,
     ScopedSnapshot,
     ScopeStamp,
@@ -35,8 +36,9 @@ from app.browser_skill.models import (
     VisibleProjection,
 )
 from app.browser_skill.scoping import scope_snapshot
-from app.browser_skill.site_rules import RegisteredSitePlan
+from app.browser_skill.site_rules import RegisteredSitePlan, SiteStepRule
 from app.browser_skill.verifier import (
+    IndependentVerifier,
     ReadSpecResolver,
     authorize_current,
     check_liveness,
@@ -58,6 +60,29 @@ class DecisionContextFactory(Protocol):
     def __call__(
         self, context: ExecutionContext, request: DecisionRequest
     ) -> DecisionCallContext: ...
+
+
+class StepAudit(Protocol):
+    """Trusted Run audit. It must persist a sanitized receipt before the next send.
+
+    The callback is installed by the Run owner, never by a caller or Decision.
+    An absent callback preserves legacy reads but produces no teaching evidence.
+    """
+
+    async def __call__(
+        self, command: ActionCommand, rule: SiteStepRule, scope: ScopeStamp,
+        receipt: DispatchReceipt, policy_digest: str, sequence: int,
+    ) -> None: ...
+
+
+class WriteGate(Protocol):
+    """Trusted Run reservation; must read HumanGate under the PG Run fence."""
+
+    async def __call__(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, command: ActionCommand,
+        rule: SiteStepRule, sequence: int,
+    ) -> None: ...
 
 
 class ExecutionOutcome(Contract):
@@ -90,8 +115,12 @@ _DIAGNOSTIC_CODES = frozenset(get_args(BrowserFailure.model_fields["code"].annot
 class _Progress:
     receipts: list[DispatchReceipt] = field(default_factory=list)
     decisions: list[DecisionResult] = field(default_factory=list)
+    pages: list[PageEvidence] = field(default_factory=list)
     model_calls: int = 0
     dispatch_inflight: bool = False
+    audit_inflight: bool = False
+    write_gate_inflight: bool = False
+    write_reserved: bool = False
     unsettled: bool = False
     stage: ReadAwaitStage = "bootstrap"
     stage_started: float = field(default_factory=time.monotonic)
@@ -145,6 +174,8 @@ class BrowserExecutor:
         "_last_failure_diagnostic",
         "_last_decision_diagnostic",
         "_last_stage_diagnostic",
+        "_step_audit",
+        "_write_gate",
     )
 
     def __init__(
@@ -155,6 +186,8 @@ class BrowserExecutor:
         site: SiteAdapter,
         resolver: ReadSpecResolver,
         decision_contexts: DecisionContextFactory,
+        step_audit: StepAudit | None = None,
+        write_gate: WriteGate | None = None,
     ) -> None:
         self._web = web
         self._decision = decision
@@ -162,6 +195,8 @@ class BrowserExecutor:
         self._site = site
         self._resolve = resolver
         self._contexts = decision_contexts
+        self._step_audit = step_audit
+        self._write_gate = write_gate
         # Retain ownership of cancellation-resistant adapter tasks until settled.
         # Their execution context is cancelled and no new action is scheduled.
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
@@ -242,9 +277,13 @@ class BrowserExecutor:
                 job.add_done_callback(self._settled)
             elif not job.cancelled():
                 job.exception()
+            uncertain = (
+                progress.dispatch_inflight or progress.audit_inflight
+                or progress.write_gate_inflight or progress.write_reserved
+            )
             problem = failure(
-                "effect_unknown" if progress.dispatch_inflight else reason,
-                dispatched=progress.dispatch_inflight,
+                "effect_unknown" if uncertain else reason,
+                dispatched=uncertain,
             ).failure
             return self._finish(
                 self._outcome(progress, context, problem=problem), progress,
@@ -353,6 +392,7 @@ class BrowserExecutor:
         plan: RegisteredSitePlan,
         spec: ReadSpec,
         progress: _Progress,
+        *, allow_partial: bool = False,
     ) -> tuple[ScopedSnapshot, tuple[VisibleCandidate, ...]]:
         progress.mark("authorization")
         await authorize_current(session, context, spec)
@@ -363,7 +403,11 @@ class BrowserExecutor:
             raise failure("invalid_response")
         if request.expected_scope is not None and snapshot.scope != request.expected_scope:
             raise failure("stale")
-        if snapshot.coverage.state != "complete":
+        if snapshot.coverage.state != "complete" and not (
+            allow_partial
+            and snapshot.coverage.state == "partial"
+            and snapshot.coverage.reason in {"pagination", "virtualized"}
+        ):
             raise failure("unsupported")
         progress.mark("target_candidates")
         candidates = await self._web.target_candidates(session, step, snapshot, context)
@@ -383,6 +427,7 @@ class BrowserExecutor:
         *,
         parent: TargetRef | None = None,
         original_targets: tuple[VisibleCandidate, ...] = (),
+        allow_partial: bool = False,
     ) -> tuple[VisibleCandidate, ...]:
         snapshot, targets = await self._observe_targets(
             session,
@@ -392,6 +437,7 @@ class BrowserExecutor:
             plan,
             spec,
             progress,
+            allow_partial=allow_partial,
         )
         if parent is None:
             return targets
@@ -419,6 +465,97 @@ class BrowserExecutor:
         )
         scope_snapshot(option_view, context.expected_binding, plan.policy)
 
+    async def _traverse(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, rule: SiteStepRule,
+        progress: _Progress,
+    ) -> BrowserFailure | None:
+        """Advance only the frozen read-only step inside this same Executor."""
+        traversal = plan.traversal
+        if traversal is None or rule.step.step_id != traversal.advance_step_id:
+            raise failure("denied")
+        if rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only":
+            raise failure("unsupported")
+        page_keys: set[str] = set()
+        row_count = 0
+        for index in range(traversal.max_pages):
+            check_liveness(context)
+            progress.mark("authorization")
+            await authorize_current(session, context, spec)
+            progress.mark("target_observation")
+            page = await self._web.page_evidence(
+                session, traversal.region_id, context,
+            )
+            if page.scope.region_id != traversal.region_id:
+                raise failure("invalid_response")
+            progress.pages.append(page)
+            row_count += len(page.row_key_digests)
+            if page.page_key_digest in page_keys or row_count > traversal.max_rows:
+                raise failure("invalid_response")
+            page_keys.add(page.page_key_digest)
+            if page.terminal_seen or index == traversal.max_pages - 1:
+                return None
+            target = None
+            if rule.step.operation == "navigate":
+                observed = await self._web.observe(
+                    session,
+                    ObservationRequest(
+                        region_id=traversal.region_id,
+                        expected_scope=page.scope,
+                    ),
+                    plan.policy,
+                )
+                if scope_snapshot(
+                    observed, context.expected_binding, plan.policy,
+                ).scope != page.scope:
+                    raise failure("stale")
+            else:
+                snapshot, candidates = await self._observe_targets(
+                    session,
+                    ObservationRequest(
+                        region_id=traversal.region_id,
+                        expected_scope=page.scope,
+                    ),
+                    rule.step, context, plan, spec, progress,
+                    allow_partial=True,
+                )
+                target = await self._choose(
+                    candidates, snapshot.scope, rule.target_criteria,
+                    context, plan, progress,
+                    lambda: self._refresh_candidates(
+                        session, rule.step, snapshot.scope, context, plan,
+                        spec, progress, allow_partial=True,
+                    ),
+                )
+            command = ActionCommand(
+                skill_digest=context.skill.digest, step=rule.step,
+                binding=context.expected_binding, target=target,
+            )
+            if not self._site.permits(context.skill, command):
+                raise failure("denied")
+            progress.mark("authorization")
+            await authorize_current(session, context, command)
+            progress.mark("target_revalidation")
+            await self._web.revalidate(session, command, context)
+            check_liveness(context)
+            progress.dispatch_inflight = True
+            progress.mark("dispatch")
+            receipt = await self._web.execute(session, command, context)
+            receipt.validate_for(command)
+            progress.receipts.append(receipt)
+            if receipt.state != "acknowledged":
+                progress.dispatch_inflight = receipt.state == "possibly_sent"
+                return receipt.failure
+            if self._step_audit is not None:
+                progress.audit_inflight = True
+                await self._step_audit(
+                    command, rule, page.scope, receipt,
+                    plan.policy.digest, len(progress.receipts),
+                )
+                progress.audit_inflight = False
+            progress.dispatch_inflight = False
+        return None
+
     async def _run(
         self, session: BrowserSessionRef, context: ExecutionContext, progress: _Progress
     ) -> ExecutionOutcome:
@@ -432,9 +569,34 @@ class BrowserExecutor:
             spec = await confirmed_spec(session, context, plan, self._resolve)
             for rule in plan.steps:
                 check_liveness(context)
-                if rule.step.effect != "read_only" or rule.effect.actual_effect != "read_only":
+                if (
+                    plan.traversal is not None
+                    and rule.step.step_id == plan.traversal.advance_step_id
+                ):
+                    problem = await self._traverse(
+                        session, context, plan, spec, rule, progress,
+                    )
+                    if problem is not None:
+                        return self._outcome(progress, context, problem=problem)
+                    if not progress.pages or not progress.pages[-1].terminal_seen:
+                        break
+                    # A later step may write. Prove the registered collection
+                    # boundary now so a malformed terminal page cannot release it.
+                    if IndependentVerifier._page_chain(
+                        plan.traversal, tuple(progress.pages),
+                    ) is None:
+                        raise failure("invalid_response")
+                    continue
+                if (
+                    rule.effect.actual_effect == "unknown"
+                    or rule.step.effect != rule.effect.actual_effect
+                ):
+                    raise failure("unsupported")
+                writing = rule.effect.actual_effect == "may_write"
+                if writing and (self._write_gate is None or self._step_audit is None):
                     raise failure("unsupported")
                 target = option = None
+                audit_scope: ScopeStamp | None = None
                 if rule.step.operation == "navigate":
                     progress.mark("authorization")
                     await authorize_current(session, context, spec)
@@ -442,6 +604,7 @@ class BrowserExecutor:
                     snapshot, candidates = await self._observe_targets(
                         session, rule.observation, rule.step, context, plan, spec, progress
                     )
+                    audit_scope = snapshot.scope
                     target = await self._choose(
                         candidates,
                         snapshot.scope,
@@ -492,19 +655,57 @@ class BrowserExecutor:
                 await authorize_current(session, context, command)
                 progress.mark("target_revalidation")
                 await self._web.revalidate(session, command, context)
+                if writing:
+                    assert self._write_gate is not None
+                    progress.mark("confirmation")
+                    progress.write_gate_inflight = True
+                    await self._write_gate(
+                        session, context, plan, spec, command, rule,
+                        len(progress.receipts) + 1,
+                    )
+                    progress.write_reserved = True
+                    progress.write_gate_inflight = False
+                    # Confirmation may have taken time. The adapter repeats
+                    # these checks under its final dispatch barrier as well.
+                    progress.mark("authorization")
+                    await authorize_current(session, context, command)
+                    progress.mark("target_revalidation")
+                    await self._web.revalidate(session, command, context)
                 check_liveness(context)
                 progress.dispatch_inflight = True
                 progress.mark("dispatch")
                 receipt = await self._web.execute(session, command, context)
                 receipt.validate_for(command)
                 progress.receipts.append(receipt)
-                progress.dispatch_inflight = False
                 if receipt.state != "acknowledged":
+                    progress.dispatch_inflight = receipt.state == "possibly_sent"
                     return self._outcome(progress, context, problem=receipt.failure)
+                if self._step_audit is not None:
+                    progress.audit_inflight = True
+                    if audit_scope is None:
+                        # Navigation has no selected target. Obtain its scope
+                        # from a real post-send observation; failure remains
+                        # unknown and cannot release the next action.
+                        progress.mark("target_observation")
+                        observed = await self._web.observe(
+                            session, rule.observation, plan.policy,
+                        )
+                        audit_scope = scope_snapshot(
+                            observed, context.expected_binding, plan.policy,
+                        ).scope
+                    await self._step_audit(
+                        command, rule, audit_scope, receipt, plan.policy.digest,
+                        len(progress.receipts),
+                    )
+                    progress.audit_inflight = False
+                progress.dispatch_inflight = False
+                progress.write_reserved = False
             progress.mark("confirmation")
             spec = await confirmed_spec(session, context, plan, self._resolve)
             progress.mark("verification")
-            verification = await self._verifier.verify(session, spec, context)
+            verification = await self._verifier.verify(
+                session, spec, context, pages=tuple(progress.pages),
+            )
             check_liveness(context)
             return self._outcome(progress, context, verification=verification)
         except _DecisionStopped:
@@ -512,11 +713,21 @@ class BrowserExecutor:
         except BrowserOperationError as exc:
             # An adapter may provide an authoritative not_sent failure after
             # entry. Unexpected/cancelled transport interruption cannot do so.
+            if progress.audit_inflight or progress.write_gate_inflight or progress.write_reserved:
+                progress.dispatch_inflight = True
+                return self._outcome(
+                    progress, context,
+                    problem=failure("effect_unknown", dispatched=True).failure,
+                )
             progress.dispatch_inflight = exc.failure.dispatch_state == "possibly_sent"
             return self._outcome(progress, context, problem=exc.failure)
         except Exception:
+            uncertain = (
+                progress.dispatch_inflight or progress.audit_inflight
+                or progress.write_gate_inflight or progress.write_reserved
+            )
             problem = failure(
-                "effect_unknown" if progress.dispatch_inflight else "invalid_response",
-                dispatched=progress.dispatch_inflight,
+                "effect_unknown" if uncertain else "invalid_response",
+                dispatched=uncertain,
             ).failure
             return self._outcome(progress, context, problem=problem)

@@ -3,11 +3,23 @@ import secrets
 
 import pytest
 
-from app.browser_skill.models import BrowserOperationError, Coverage, ReadFieldEvidence
+from app.browser_skill.models import (
+    BrowserOperationError,
+    BrowserSessionRef,
+    Coverage,
+    ExecutionContext,
+    PageEvidence,
+    ReadEvidence,
+    ReadFieldEvidence,
+    ReadSpec,
+    VerificationResult,
+)
+from app.browser_skill.site_rules import ExpectedDownload, RegisteredTraversal
+from app.browser_skill.verifier import IndependentVerifier
 from tests.browser_skill.fakes import FakeWorld, SyntheticRecord
 
 
-def verify(world: FakeWorld):
+def verify(world: FakeWorld) -> VerificationResult:
     return asyncio.run(world.verifier.verify(world.session, world.confirmed, world.context))
 
 
@@ -105,7 +117,9 @@ def test_reader_evidence_is_checked_against_frozen_declared_fields(
     world = FakeWorld()
     original = world.read
 
-    async def faulty_read(session, spec, ctx):
+    async def faulty_read(
+        session: BrowserSessionRef, spec: ReadSpec, ctx: ExecutionContext,
+    ) -> ReadEvidence:
         evidence = await original(session, spec, ctx)
         if kind == "unsupported":
             return evidence.model_copy(
@@ -121,10 +135,106 @@ def test_reader_evidence_is_checked_against_frozen_declared_fields(
             }
         )
 
-    world.read = faulty_read
+    setattr(world, "read", faulty_read)
     if expected == "invalid_response":
         with pytest.raises(BrowserOperationError) as error:
             verify(world)
         assert error.value.failure.code == expected
     else:
         assert verify(world).status == expected
+
+
+def _expected_download(world: FakeWorld) -> ExpectedDownload:
+    return ExpectedDownload(
+        step_id=world.skill.steps[0].step_id,
+        object_type=world.plan.read_rule.object_type,
+        media_type="text/plain", max_bytes=1024, ttl_seconds=60,
+        content_rule_digest="a" * 64,
+    )
+
+
+def test_download_expectation_requires_independent_file_verifier() -> None:
+    world = FakeWorld()
+    world.verifier = IndependentVerifier(
+        world, world.site, world.read_spec,
+        expected_downloads=(_expected_download(world),),
+    )
+    assert verify(world).status == "unsupported"
+    assert world.reads == 0
+
+
+def test_file_proof_is_bound_into_final_digest_and_keeps_raw_read_digest() -> None:
+    world = FakeWorld()
+    ordinary = verify(world)
+    requested: list[tuple[ExpectedDownload, ...]] = []
+
+    async def verify_files(
+        session: BrowserSessionRef, context: ExecutionContext,
+        expected: tuple[ExpectedDownload, ...],
+    ) -> str:
+        assert session == world.session and context is world.context
+        requested.append(expected)
+        return "b" * 64
+
+    expected = _expected_download(world)
+    world.verifier = IndependentVerifier(
+        world, world.site, world.read_spec,
+        expected_downloads=(expected,), verify_downloads=verify_files,
+    )
+    result = verify(world)
+    assert result.status == "verified"
+    assert requested == [(expected,)]
+    assert result.evidence_digest != ordinary.evidence_digest
+    assert result.read_evidence_digest == ordinary.evidence_digest
+
+
+def test_invalid_file_proof_cannot_verify() -> None:
+    world = FakeWorld()
+
+    async def invalid_file_proof(
+        session: BrowserSessionRef, context: ExecutionContext,
+        expected: tuple[ExpectedDownload, ...],
+    ) -> str:
+        return "unverified"
+
+    world.verifier = IndependentVerifier(
+        world, world.site, world.read_spec,
+        expected_downloads=(_expected_download(world),),
+        verify_downloads=invalid_file_proof,
+    )
+    assert verify(world).status == "incomplete"
+
+
+def test_page_chain_requires_unique_complete_terminal_coverage() -> None:
+    world = FakeWorld()
+    traversal = RegisteredTraversal(
+        region_id=world.view.scope.region_id,
+        object_type=world.plan.read_rule.object_type,
+        mode="paged", advance_step_id=world.skill.steps[0].step_id,
+        max_pages=3, max_rows=3,
+        page_key_rule_digest="1" * 64,
+        row_key_rule_digest="2" * 64,
+        ordinal_rule_digest="3" * 64,
+        total_rule_digest="4" * 64,
+        terminal_rule_digest="5" * 64,
+    )
+    first = PageEvidence(
+        scope=world.view.scope, page_key_digest="a" * 64,
+        row_key_digests=("c" * 64,), row_ordinals=(0,), declared_total=2,
+        terminal_seen=False, evidence_digest="e" * 64,
+    )
+    last = PageEvidence(
+        scope=world.view.scope, page_key_digest="b" * 64,
+        row_key_digests=("d" * 64,), row_ordinals=(1,), declared_total=2,
+        terminal_seen=True, evidence_digest="f" * 64,
+    )
+    assert IndependentVerifier._page_chain(traversal, (first, last)) is not None
+    assert IndependentVerifier._page_chain(traversal, (
+        first, last.model_copy(update={"page_key_digest": first.page_key_digest}),
+    )) is None
+    assert IndependentVerifier._page_chain(traversal, (
+        first, last.model_copy(update={"row_ordinals": (0,)}),
+    )) is None
+    assert IndependentVerifier._page_chain(traversal, (
+        first, last.model_copy(update={"terminal_seen": False}),
+    )) is None

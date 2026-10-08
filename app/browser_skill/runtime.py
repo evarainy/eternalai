@@ -7,7 +7,14 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import (
+    ActionCommand,
+    BrowserOwner,
+    DispatchReceipt,
+    ReadSpec,
+    ScopeStamp,
+)
+from app.browser_skill.site_rules import SiteStepRule
 from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
@@ -33,6 +40,7 @@ class _Checkpoint:
     def __init__(self, store: BrowserRunStorePort, run: RunSnapshot, ttl: int) -> None:
         self.store, self.run, self.ttl = store, run, ttl
         self.refresh_calls = 0
+        self._write_reservation: tuple[ActionCommand, int] | None = None
 
     async def refresh(self, *, allow_cancel: bool = False) -> RunSnapshot:
         old = self.run
@@ -72,6 +80,51 @@ class _Checkpoint:
             raise BrowserReadExecutionError("denied")
         self.run = await self.store.advance(self.run, phase="running", effect=self.run.effect)
         return self.run
+
+    async def record_step(
+        self, command: ActionCommand, rule: SiteStepRule,
+        scope: ScopeStamp, receipt: DispatchReceipt,
+        policy_digest: str, sequence: int,
+    ) -> None:
+        """One current worker/lease fence and durable audit per actual receipt."""
+        if (
+            command.step.effect == "may_write"
+            and self._write_reservation != (command, sequence)
+        ):
+            raise BrowserReadExecutionError("denied")
+        await self.refresh()
+        self.run = await self.store.record_step(
+            self.run, command=command, rule=rule, scope=scope,
+            receipt=receipt, policy_digest=policy_digest, sequence=sequence,
+        )
+        if command.step.effect == "may_write":
+            self._write_reservation = None
+
+    async def reserve_write_dispatch(
+        self, command: ActionCommand, rule: SiteStepRule,
+        spec: ReadSpec, sequence: int,
+    ) -> None:
+        """Consume the persisted HumanGate decision under this worker's fence."""
+        if self._write_reservation is not None:
+            raise BrowserReadExecutionError("denied")
+        await self.refresh()
+        self.run = await self.store.reserve_write_dispatch(
+            self.run, command=command, rule=rule, spec=spec,
+            sequence=sequence,
+        )
+        self._write_reservation = (command, sequence)
+
+    async def assert_write_reservation(
+        self, command: ActionCommand,
+    ) -> None:
+        """Recheck the same durable send reservation at the final barrier."""
+        reservation = self._write_reservation
+        if reservation is None or reservation[0] != command:
+            raise BrowserReadExecutionError("denied")
+        await self.refresh()
+        await self.store.assert_write_reservation(
+            self.run, command=command, sequence=reservation[1],
+        )
 
 
 class BrowserReadWorker:

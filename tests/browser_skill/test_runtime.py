@@ -3,12 +3,14 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
 
-from app.browser_skill.models import BrowserOwner
-from app.browser_skill.runtime import BrowserReadWorker
+from app.browser_skill.models import ActionCommand, BrowserOwner, ReadSpec
+from app.browser_skill.runtime import BrowserReadWorker, _Checkpoint
+from app.browser_skill.site_rules import SiteStepRule
 from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import BrowserReadExecutionPort, BrowserWorkerCheckpoint
 from app.ports.browser_run_store import (
@@ -111,6 +113,38 @@ class RecordingStore:
             terminal_revision=claim.state_revision + 1, terminal_event_id="terminal",
         )
         return self.run
+
+
+def test_final_write_barrier_uses_actual_reserved_dispatch_sequence() -> None:
+    """A preceding repeated page advance can put a write after its Skill index."""
+    class ReservationStore(RecordingStore):
+        reserved: int | None = None
+        asserted: int | None = None
+
+        async def reserve_write_dispatch(
+            self, claim: RunSnapshot, *, command: ActionCommand,
+            rule: SiteStepRule, spec: ReadSpec, sequence: int,
+        ) -> RunSnapshot:
+            self.reserved = sequence
+            return claim
+
+        async def assert_write_reservation(
+            self, claim: RunSnapshot, *, command: ActionCommand, sequence: int,
+        ) -> None:
+            self.asserted = sequence
+
+    store = ReservationStore(persisted_run(phase="running"))
+    checkpoint = _Checkpoint(cast(BrowserRunStorePort, store), store.run, 60)
+    command = cast(ActionCommand, SimpleNamespace(step=SimpleNamespace(effect="may_write")))
+
+    async def exercise() -> None:
+        await checkpoint.reserve_write_dispatch(
+            command, cast(SiteStepRule, object()), cast(ReadSpec, object()), 4,
+        )
+        await checkpoint.assert_write_reservation(command)
+
+    asyncio.run(exercise())
+    assert (store.reserved, store.asserted) == (4, 4)
 
 
 class RejectBusinessIO:

@@ -24,8 +24,30 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import (
+    ActionCommand,
+    BrowserOwner,
+    DispatchReceipt,
+    ReadSpec,
+    ScopeBinding,
+    ScopeStamp,
+    TeachingPlan,
+)
+from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.registry import canonical_digest
 from app.browser_skill.run_contracts import BrowserRunRef, CommitFact, _mint_commit_fact
+from app.browser_skill.site_rules import SiteStepRule
+from app.browser_skill.teaching import TeachingReplayProof
+from app.browser_skill.trajectory import (
+    BindingRevisions,
+    RunTeachingStep,
+    TrajectoryEvent,
+)
+from app.browser_skill.write_workflow import (
+    BrowserWritePreparation,
+    _owner_digest,
+    _write_steps_digest,
+)
 from app.infra.persistence.task_store.transactional import (
     append_owned_event,
     lock_owned_task,
@@ -58,6 +80,14 @@ _TASK = _OWNER + " AND task_id=:task_id"
 _RUN = _TASK + " AND run_id=:run_id"
 _WRITER_LOCK = 746420212000
 _REQUEST_VERSION = "browser.request.v1"
+_STEP_AUDIT_VERSION = "browser.run_step_audit.v1"
+_WRITE_PREPARED_VERSION = "browser.write_prepared.v1"
+_WRITE_CONSUMED_VERSION = "browser.write_consumed.v1"
+_WRITE_SEND_VERSION = "browser.write_send_reserved.v1"
+_WRITE_BARRIER_VERSION = "browser.write_final_barrier.v1"
+_REPLAY_PROOF_VERSION = "browser.teaching_replay_proof.v1"
+_TEACHING_PLAN_VERSION = "browser.teaching_plan_record.v1"
+_MAX_STEP_AUDITS = 126
 _ACTIVE = {"running", "waiting_user"}
 _CLAIM_BATCH = 16
 _CLAIM_SKIPPABLE = frozenset({
@@ -457,6 +487,21 @@ class PostgreSQLBrowserRunStore:
             )
 
     async def accept(self, request: CanonicalRequest, admission: RunAdmission) -> CommitFact:
+        return await self._accept(request, admission, teaching_plan=None)
+
+    async def accept_teaching(
+        self, request: CanonicalRequest, admission: RunAdmission,
+        plan: TeachingPlan,
+    ) -> CommitFact:
+        """Admit a prepared candidate and its signed plan in one transaction."""
+        if not isinstance(plan, TeachingPlan):
+            raise BrowserRunStoreError("browser_teaching_plan_invalid")
+        return await self._accept(request, admission, teaching_plan=plan)
+
+    async def _accept(
+        self, request: CanonicalRequest, admission: RunAdmission,
+        *, teaching_plan: TeachingPlan | None,
+    ) -> CommitFact:
         if request.owner != admission.owner or request.task_id != admission.task_id:
             raise BrowserRunStoreError("browser_request_owner_mismatch")
         # Revalidate immutable scalar invariants even for an unchecked object construction.
@@ -464,7 +509,12 @@ class PostgreSQLBrowserRunStore:
         async with self._transaction() as session:
             await self._authority.check_owner(session, request.owner)
             await self._lock_request(session, request)
-            await self._authority.check_admission(session, request, admission)
+            if teaching_plan is None:
+                await self._authority.check_admission(session, request, admission)
+            else:
+                await self._authority.check_teaching_admission(
+                    session, request, admission, teaching_plan,
+                )
             if admission.auth_expires_at <= await self._now(session):
                 raise BrowserRunStoreError("browser_run_authorization_expired")
             if await self._task_run(session, request.owner, request.task_id) is not None:
@@ -493,6 +543,31 @@ class PostgreSQLBrowserRunStore:
                 ),
                 parameters,
             )
+            if teaching_plan is not None:
+                run = await self._read_run(
+                    session, admission.owner, admission.task_id, admission.run_id,
+                )
+                manifest = await self._frozen_publication(session, run)
+                state = (await session.execute(text(
+                    "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
+                    " AND publication_digest=:digest"
+                ), {"tenant": admission.owner.tenant_id,
+                    "digest": admission.publication_digest})).scalar_one_or_none()
+                if state != "prepared":
+                    raise BrowserRunStoreError("browser_teaching_candidate_not_prepared")
+                plan_data: dict[str, object] = {
+                    "plan": teaching_plan.model_dump(mode="json"),
+                }
+                await self._append_write_event(
+                    session, run, kind=_TEACHING_PLAN_VERSION,
+                    event_id=self._write_event_id("teaching-plan", run.run_id),
+                    data=plan_data,
+                    revision_delta=0,
+                )
+                if await self._teaching_plan_in_session(
+                    session, run, manifest,
+                ) != teaching_plan:
+                    raise BrowserRunStoreError("browser_teaching_plan_mismatch")
             updated = await transition_owned_task(
                 session,
                 tenant_id=admission.owner.tenant_id,
@@ -912,6 +987,998 @@ class PostgreSQLBrowserRunStore:
             if status != current.status:
                 await self._transition_task(session, result, status, None)
         return result
+
+    async def _frozen_publication(
+        self, session: AsyncSession, run: RunSnapshot,
+    ) -> BrowserPublicationManifest:
+        row = (await session.execute(text(
+            "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
+            " AND publication_digest=:digest"
+        ), {"tenant": run.owner.tenant_id,
+            "digest": run.admission.publication_digest})).mappings().one_or_none()
+        if row is None:
+            raise BrowserRunStoreError("browser_step_publication_unavailable")
+        try:
+            manifest = BrowserPublicationManifest.model_validate(row["manifest"])
+        except ValueError:
+            raise BrowserRunStoreError("browser_step_publication_invalid") from None
+        if manifest.digest != run.admission.publication_digest.hex():
+            raise BrowserRunStoreError("browser_step_publication_invalid")
+        return manifest
+
+    async def _audited_steps(
+        self, session: AsyncSession, run: RunSnapshot,
+    ) -> tuple[RunTeachingStep, ...]:
+        rows = (await session.execute(text(
+            "SELECT payload FROM task_events WHERE task_id=:task"
+            " AND event_type='browser_run_step' AND payload->>'run_id'=:run"
+            " ORDER BY (payload->>'sequence')::integer"
+        ), {"task": run.task_id, "run": run.run_id})).mappings().all()
+        if len(rows) > _MAX_STEP_AUDITS:
+            raise BrowserRunStoreError("browser_step_audit_overflow")
+        result: list[RunTeachingStep] = []
+        for sequence, row in enumerate(rows, start=1):
+            payload = row["payload"]
+            if not isinstance(payload, dict):
+                raise BrowserRunStoreError("browser_step_audit_invalid")
+            unsigned = {key: value for key, value in payload.items() if key != "mac"}
+            key_id = payload.get("key_id")
+            mac = payload.get("mac")
+            if (
+                type(key_id) is not str or type(mac) is not str
+                or payload.get("schema_version") != _STEP_AUDIT_VERSION
+                or payload.get("run_id") != run.run_id
+                or payload.get("sequence") != sequence
+                or type(payload.get("run_revision")) is not int
+                or payload["run_revision"] < 1
+                or payload["run_revision"] > run.state_revision
+                or not hmac.compare_digest(mac, self._step_mac(unsigned, key_id))
+            ):
+                raise BrowserRunStoreError("browser_step_audit_invalid")
+            try:
+                step = RunTeachingStep.model_validate(payload["step"])
+            except (KeyError, ValueError):
+                raise BrowserRunStoreError("browser_step_audit_invalid") from None
+            if step.run_id != run.run_id or step.event.sequence != sequence:
+                raise BrowserRunStoreError("browser_step_audit_invalid")
+            result.append(step)
+        return tuple(result)
+
+    @staticmethod
+    def _check_step_route(
+        manifest: BrowserPublicationManifest,
+        step_ids: tuple[str, ...], *, complete: bool,
+    ) -> None:
+        """Match the frozen sequence, allowing only its registered page advance to repeat."""
+        expected = manifest.skill.steps
+        traversal = manifest.site.traversal
+        advance_id = traversal.advance_step_id if traversal is not None else None
+        cursor = 0
+        advances = 0
+        for step_id in step_ids:
+            if cursor >= len(expected):
+                raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
+            if step_id == expected[cursor].step_id:
+                if step_id == advance_id:
+                    advances += 1
+                    if traversal is None or advances >= traversal.max_pages:
+                        raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
+                else:
+                    cursor += 1
+            elif (
+                expected[cursor].step_id == advance_id
+                and advances > 0 and cursor + 1 < len(expected)
+                and step_id == expected[cursor + 1].step_id
+            ):
+                cursor += 2
+            else:
+                raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
+        if complete and not (
+            cursor == len(expected)
+            or (cursor == len(expected) - 1 and advances > 0
+                and expected[cursor].step_id == advance_id)
+        ):
+            raise BrowserRunStoreError("browser_step_audit_incomplete")
+
+    @staticmethod
+    def _primitive_id(manifest: BrowserPublicationManifest, step_id: str) -> str:
+        for binding in manifest.site.step_primitives:
+            if binding.step_id == step_id:
+                return binding.primitive_id
+        return step_id
+
+    @staticmethod
+    def _primitive_rule(
+        manifest: BrowserPublicationManifest, primitive_id: str,
+    ) -> SiteStepRule | None:
+        return next((item for item in manifest.site.primitive_rules
+                     if item.step.step_id == primitive_id), None)
+
+    def _step_mac(self, data: dict[str, object], key_id: str) -> str:
+        key = self._digest_keys.get(key_id)
+        if key is None:
+            raise BrowserRunStoreError("browser_step_audit_key_unavailable")
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+        return hmac.new(key, b"browser-run-step-audit-v1\x00" + encoded,
+                        hashlib.sha256).hexdigest()
+
+    def _write_mac(self, data: dict[str, object], key_id: str) -> str:
+        key = self._digest_keys.get(key_id)
+        if key is None:
+            raise BrowserRunStoreError("browser_write_audit_key_unavailable")
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+        return hmac.new(key, b"browser-write-audit-v1\x00" + encoded,
+                        hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _write_event_id(kind: str, identity: str) -> str:
+        return uuid5(NAMESPACE_URL, f"browser-{kind}-v1:{identity}").hex
+
+    async def _write_event(
+        self, session: AsyncSession, run: RunSnapshot, kind: str,
+        event_id: str,
+    ) -> dict[str, object] | None:
+        row = (await session.execute(text(
+            "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+            " AND event_id=:event_id"
+        ), {"task": run.task_id, "event_id": event_id})).mappings().one_or_none()
+        if row is None:
+            return None
+        payload = row["payload"]
+        if not isinstance(payload, dict) or row["event_type"] != kind:
+            raise BrowserRunStoreError("browser_write_audit_invalid")
+        unsigned = {key: value for key, value in payload.items() if key != "mac"}
+        key_id = payload.get("key_id")
+        mac = payload.get("mac")
+        if (
+            type(key_id) is not str or type(mac) is not str
+            or not hmac.compare_digest(mac, self._write_mac(unsigned, key_id))
+            or payload.get("run_id") != run.run_id
+        ):
+            raise BrowserRunStoreError("browser_write_audit_invalid")
+        return payload
+
+    async def _append_write_event(
+        self, session: AsyncSession, run: RunSnapshot,
+        *, kind: str, event_id: str, data: dict[str, object],
+        revision_delta: int = 1,
+    ) -> None:
+        if revision_delta not in {0, 1}:
+            raise BrowserRunStoreError("browser_write_audit_revision_invalid")
+        payload: dict[str, object] = {
+            "schema_version": kind, "run_id": run.run_id,
+            "run_revision": run.state_revision + revision_delta,
+            "key_id": self._active_digest_key_id, **data,
+        }
+        payload["mac"] = self._write_mac(payload, self._active_digest_key_id)
+        await append_owned_event(
+            session, tenant_id=run.owner.tenant_id,
+            ai_user_id=run.owner.user_id,
+            session_id=run.owner.session_id, task_id=run.task_id,
+            event=TaskEventRecord(
+                event_id=event_id, task_id=run.task_id, event_type=kind,
+                timestamp=await self._now(session), payload=payload,
+            ),
+        )
+
+    async def _gate_request(
+        self, session: AsyncSession, run: RunSnapshot,
+        preparation: BrowserWritePreparation,
+        *, confirmed: bool,
+    ) -> None:
+        row = (await session.execute(text(
+            "SELECT * FROM human_gate_requests WHERE request_id=:request_id FOR SHARE"
+        ), {"request_id": preparation.request_id})).mappings().one_or_none()
+        if row is None:
+            raise BrowserRunStoreError("browser_write_confirmation_missing")
+        expected = preparation.gate_request(run.owner)
+        if any(row[key] != value for key, value in expected.model_dump().items()):
+            raise BrowserRunStoreError("browser_write_confirmation_mismatch")
+        now = await self._now(session)
+        if row["expires_at"] <= now:
+            raise BrowserRunStoreError("browser_write_confirmation_expired")
+        if confirmed and (
+            row["decision"] != "confirmed"
+            or row["decided_by_ai_user_id"] != run.owner.user_id
+            or row["decided_tenant_id"] != run.owner.tenant_id
+            or row["decided_session_id"] != run.owner.session_id
+            or row["decided_at"] is None
+            or row["decided_at"] < row["requested_at"]
+            or row["decided_at"] >= row["expires_at"]
+        ):
+            raise BrowserRunStoreError("browser_write_confirmation_unapproved")
+
+    async def _prepared_write(
+        self, session: AsyncSession, run: RunSnapshot,
+    ) -> BrowserWritePreparation:
+        event_id = self._write_event_id("write-prepared", run.run_id)
+        event = await self._write_event(session, run, _WRITE_PREPARED_VERSION, event_id)
+        if event is None or event.get("schema_version") != _WRITE_PREPARED_VERSION:
+            raise BrowserRunStoreError("browser_write_preparation_missing")
+        try:
+            preparation = BrowserWritePreparation.model_validate(event["preparation"])
+        except (KeyError, ValueError):
+            raise BrowserRunStoreError("browser_write_preparation_invalid") from None
+        if (
+            preparation.task_id != run.task_id
+            or preparation.run_id != run.run_id
+            or preparation.owner_digest != _owner_digest(run.owner)
+            or preparation.publication_digest != run.admission.publication_digest.hex()
+            or preparation.binding_id != run.admission.binding_id
+            or preparation.binding_revision != run.admission.binding_revision
+            or preparation.input_revision != run.admission.input_revision
+            or preparation.parameter_set_digest != run.admission.input_digest.hex()
+        ):
+            raise BrowserRunStoreError("browser_write_preparation_mismatch")
+        return preparation
+
+    async def _teaching_plan_in_session(
+        self, session: AsyncSession, run: RunSnapshot,
+        manifest: BrowserPublicationManifest,
+    ) -> TeachingPlan | None:
+        event = await self._write_event(
+            session, run, _TEACHING_PLAN_VERSION,
+            self._write_event_id("teaching-plan", run.run_id),
+        )
+        if event is None:
+            return None
+        if event.get("schema_version") != _TEACHING_PLAN_VERSION:
+            raise BrowserRunStoreError("browser_teaching_plan_invalid")
+        try:
+            plan = TeachingPlan.model_validate(event["plan"])
+        except (KeyError, ValueError):
+            raise BrowserRunStoreError("browser_teaching_plan_invalid") from None
+        if (
+            plan.task_id != run.task_id or plan.run_id != run.run_id
+            or plan.owner_digest != _owner_digest(run.owner)
+            or plan.binding_id != run.admission.binding_id
+            or plan.binding_revision != run.admission.binding_revision
+            or plan.publication_digest != manifest.digest
+            or plan.skill_digest != manifest.skill.digest
+            or plan.site_digest != manifest.site.digest
+            or plan.policy_digest != manifest.site.policy.digest
+            or plan.verifier_digest != manifest.verifier.digest
+            or plan.sealed_input_digest != run.admission.input_digest.hex()
+            or not manifest.site.primitive_rules
+            or tuple(item.step_id for item in plan.steps) != tuple(
+                item.step_id for item in manifest.skill.steps
+            )
+        ):
+            raise BrowserRunStoreError("browser_teaching_plan_mismatch")
+        source_row = (await session.execute(text(
+            "SELECT manifest FROM browser_publications WHERE tenant_id=:tenant"
+            " AND publication_digest=:digest AND state IN ('active','inactive')"
+        ), {"tenant": run.owner.tenant_id,
+            "digest": bytes.fromhex(plan.source_publication_digest)})).mappings().one_or_none()
+        if source_row is None:
+            raise BrowserRunStoreError("browser_teaching_source_unavailable")
+        try:
+            source = BrowserPublicationManifest.model_validate(source_row["manifest"])
+        except ValueError:
+            raise BrowserRunStoreError("browser_teaching_source_invalid") from None
+        if source.digest != plan.source_publication_digest:
+            raise BrowserRunStoreError("browser_teaching_source_invalid")
+        source_rules = {
+            item.step.step_id: item for item in (
+                *source.site.steps, *source.site.primitive_rules,
+            )
+        }
+        by_id = {item.step.step_id: item for item in manifest.site.primitive_rules}
+        candidate_rules = {item.step.step_id: item for item in manifest.site.steps}
+        for item in plan.steps:
+            primitive = by_id.get(item.primitive_id)
+            candidate = candidate_rules.get(item.step_id)
+            if (
+                primitive is None or candidate is None
+                or source_rules.get(item.primitive_id) != primitive
+                or self._primitive_id(manifest, item.step_id) != item.primitive_id
+                or candidate != primitive.model_copy(update={
+                    "step": primitive.step.model_copy(update={"step_id": item.step_id}),
+                })
+                or primitive.step.effect != "read_only"
+                or primitive.effect.actual_effect != "read_only"
+                or item.rule_digest != canonical_digest(
+                    "browser_site_step.v1", primitive.model_dump(mode="json"),
+                )
+            ):
+                raise BrowserRunStoreError("browser_teaching_primitive_mismatch")
+        return plan
+
+    async def record_teaching_plan(
+        self, claim: RunSnapshot, plan: TeachingPlan,
+    ) -> RunSnapshot:
+        """Sign a trusted queued Run's exact approved primitive sequence."""
+        if not isinstance(plan, TeachingPlan):
+            raise BrowserRunStoreError("browser_teaching_plan_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "read", worker=False)
+            if (
+                current.phase != "queued" or current.worker_id is not None
+                or current.lease_epoch is not None or current.cancel_requested
+                or current.effect != "not_sent" or current.verification is not None
+                or await self._write_event(
+                    session, current, _TEACHING_PLAN_VERSION,
+                    self._write_event_id("teaching-plan", current.run_id),
+                ) is not None
+            ):
+                raise BrowserRunStoreError("browser_teaching_plan_stale")
+            manifest = await self._frozen_publication(session, current)
+            # Reuse the read validator before writing; a catalog name is not
+            # authority unless the exact frozen rule and input are bound.
+            payload: dict[str, object] = {"plan": plan.model_dump(mode="json")}
+            await self._append_write_event(
+                session, current, kind=_TEACHING_PLAN_VERSION,
+                event_id=self._write_event_id("teaching-plan", current.run_id),
+                data=payload,
+            )
+            try:
+                checked = await self._teaching_plan_in_session(
+                    session, current, manifest,
+                )
+            except BrowserRunStoreError:
+                raise
+            if checked != plan:
+                raise BrowserRunStoreError("browser_teaching_plan_mismatch")
+            return await self._update(session, current, {"effect": current.effect})
+
+    async def load_teaching_plan(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> TeachingPlan | None:
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            manifest = await self._frozen_publication(session, run)
+            return await self._teaching_plan_in_session(session, run, manifest)
+
+    async def load_teaching_plan_in_session(
+        self, transaction: object, admission: RunAdmission,
+    ) -> TeachingPlan | None:
+        """Read the exact Run's MAC plan inside an existing authority transaction."""
+        if not isinstance(transaction, AsyncSession):
+            raise BrowserRunStoreError("browser_teaching_transaction_invalid")
+        run = await self._read_run(
+            transaction, admission.owner, admission.task_id, admission.run_id,
+        )
+        if run.admission != admission:
+            raise BrowserRunStoreError("browser_teaching_admission_mismatch")
+        manifest = await self._frozen_publication(transaction, run)
+        return await self._teaching_plan_in_session(transaction, run, manifest)
+
+    async def record_write_preparation(
+        self, claim: RunSnapshot, preparation: BrowserWritePreparation,
+    ) -> RunSnapshot:
+        """Persist only a HumanGate-created exact preview on a queued Run."""
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "read", worker=False)
+            existing = await self._write_event(
+                session, current, _WRITE_PREPARED_VERSION,
+                self._write_event_id("write-prepared", current.run_id),
+            )
+            if existing is not None:
+                recorded = await self._prepared_write(session, current)
+                if recorded != preparation:
+                    raise BrowserRunStoreError("browser_write_preparation_mismatch")
+                return current
+            if (
+                current.phase != "queued" or current.worker_id is not None
+                or current.lease_epoch is not None or current.cancel_requested
+                or current.effect != "not_sent" or current.verification is not None
+            ):
+                raise BrowserRunStoreError("browser_write_preparation_stale")
+            manifest = await self._frozen_publication(session, current)
+            if (
+                preparation.task_id != current.task_id
+                or preparation.run_id != current.run_id
+                or preparation.owner_digest != _owner_digest(current.owner)
+                or preparation.publication_digest != manifest.digest
+                or preparation.skill_id != manifest.skill.skill_id
+                or preparation.skill_version != manifest.skill.version
+                or preparation.skill_digest != manifest.skill.digest
+                or preparation.site_id != manifest.site.site_id
+                or preparation.site_digest != manifest.site.digest
+                or preparation.verifier_id != manifest.verifier.verifier_id
+                or preparation.verifier_digest != manifest.verifier.digest
+                or preparation.binding_id != current.admission.binding_id
+                or preparation.binding_revision != current.admission.binding_revision
+                or preparation.input_revision != current.admission.input_revision
+                or preparation.parameter_set_digest != current.admission.input_digest.hex()
+                or preparation.object_type != manifest.site.read_rule.object_type
+                or preparation.write_steps_digest != _write_steps_digest(manifest)
+            ):
+                raise BrowserRunStoreError("browser_write_preparation_invalid")
+            binding_row = (await session.execute(text(
+                "SELECT bindings FROM task_version_binding_manifests"
+                " WHERE task_id=:task AND manifest_digest=:digest"
+            ), {"task": current.task_id,
+                "digest": preparation.binding_manifest_digest})).mappings().one_or_none()
+            if binding_row is None or not any(
+                item.get("resource_type") == "skill"
+                and item.get("resource_id") == preparation.skill_id
+                and item.get("version") == preparation.skill_version
+                and item.get("digest") == preparation.skill_digest
+                for item in binding_row["bindings"].get("bindings", ())
+            ):
+                raise BrowserRunStoreError("browser_write_task_binding_invalid")
+            await self._gate_request(session, current, preparation, confirmed=False)
+            await self._append_write_event(
+                session, current, kind=_WRITE_PREPARED_VERSION,
+                event_id=self._write_event_id("write-prepared", current.run_id),
+                data={"preparation": preparation.model_dump(mode="json")},
+            )
+            return await self._update(session, current, {"effect": current.effect})
+
+    async def load_write_preparation(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> BrowserWritePreparation | None:
+        """Resolve an uncertain post-accept request without creating a second gate."""
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            try:
+                return await self._prepared_write(session, run)
+            except BrowserRunStoreError as error:
+                if error.code == "browser_write_preparation_missing":
+                    return None
+                raise
+
+    async def write_confirmation_ready(
+        self, run: RunSnapshot,
+    ) -> bool:
+        """Claim readiness hint; reserve still rechecks everything under a fence."""
+        async with self._transaction() as session:
+            return await self.write_confirmation_ready_in_session(session, run)
+
+    async def write_confirmation_ready_in_session(
+        self, transaction: object, run: RunSnapshot,
+    ) -> bool:
+        """The same bounded hint in an existing claim transaction."""
+        if not isinstance(transaction, AsyncSession):
+            raise BrowserRunStoreError("browser_write_transaction_invalid")
+        session = transaction
+        current = await self._read_run(session, run.owner, run.task_id, run.run_id)
+        await self._authority.check_run(session, current, "read")
+        if current != run or current.phase != "queued" or current.cancel_requested:
+            return False
+        try:
+            preparation = await self._prepared_write(session, current)
+            await self._gate_request(session, current, preparation, confirmed=True)
+        except BrowserRunStoreError as error:
+            if error.code in {
+                "browser_write_preparation_missing",
+                "browser_write_confirmation_missing",
+                "browser_write_confirmation_unapproved",
+                "browser_write_confirmation_expired",
+            }:
+                return False
+            raise
+        return True
+
+    async def reserve_write_dispatch(
+        self, claim: RunSnapshot, *, command: ActionCommand,
+        rule: SiteStepRule, spec: ReadSpec, sequence: int,
+    ) -> RunSnapshot:
+        """Atomically consume one HumanGate decision and reserve this send.
+
+        Both events and the Run CAS commit together. A lost send receipt leaves
+        phase=running, which recovery already marks UNKNOWN without replay.
+        """
+        if type(sequence) is not int or not 1 <= sequence <= _MAX_STEP_AUDITS:
+            raise BrowserRunStoreError("browser_write_sequence_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                current.phase != "running" or current.cancel_requested
+                or current.lease_epoch is None or current.effect == "unknown"
+                or current.verification is not None
+                or command.binding.owner != current.owner
+                or command.binding.binding_id != current.admission.binding_id
+                or command.binding.binding_revision != current.admission.binding_revision
+                or command.binding.authorization_run_id != current.run_id
+                or command.binding.lease_epoch != current.lease_epoch
+            ):
+                raise BrowserRunStoreError("browser_write_dispatch_stale")
+            manifest = await self._frozen_publication(session, current)
+            preparation = await self._prepared_write(session, current)
+            rules = {item.step.step_id: item for item in manifest.site.steps}
+            expected_steps = {item.step_id: item for item in manifest.skill.steps}
+            if (
+                expected_steps.get(command.step.step_id) != command.step
+                or rules.get(command.step.step_id) != rule
+                or command.skill_digest != manifest.skill.digest
+                or rule.step.effect != "may_write"
+                or rule.effect.actual_effect != "may_write"
+                or spec.binding != command.binding
+                or spec.business_key.object_type != preparation.object_type
+                or spec.business_key.key_digest != preparation.business_key_digest
+                or spec.business_key.confirmation_ref
+                != preparation.business_key_confirmation_ref
+                or preparation.write_steps_digest != _write_steps_digest(manifest)
+            ):
+                raise BrowserRunStoreError("browser_write_dispatch_mismatch")
+            await self._gate_request(session, current, preparation, confirmed=True)
+            previous = await self._audited_steps(session, current)
+            if len(previous) != sequence - 1:
+                raise BrowserRunStoreError("browser_write_sequence_conflict")
+            self._check_step_route(
+                manifest, tuple(item.event.step_id for item in previous)
+                + (command.step.step_id,), complete=False,
+            )
+            consumed_id = self._write_event_id(
+                "write-consumed", preparation.request_id,
+            )
+            consumed = await self._write_event(
+                session, current, _WRITE_CONSUMED_VERSION, consumed_id,
+            )
+            if consumed is None:
+                previous_writes = {
+                    item.event.step_id for item in previous
+                    if item.event.effect == "may_write"
+                }
+                if previous_writes:
+                    raise BrowserRunStoreError("browser_write_confirmation_not_consumed")
+                await self._append_write_event(
+                    session, current, kind=_WRITE_CONSUMED_VERSION,
+                    event_id=consumed_id,
+                    data={
+                        "request_id": preparation.request_id,
+                        "action_digest": preparation.action_digest,
+                        "worker_epoch": current.worker_epoch,
+                        "lease_epoch": current.lease_epoch,
+                    },
+                )
+            elif (
+                consumed.get("request_id") != preparation.request_id
+                or consumed.get("action_digest") != preparation.action_digest
+                or consumed.get("worker_epoch") != current.worker_epoch
+                or consumed.get("lease_epoch") != current.lease_epoch
+            ):
+                raise BrowserRunStoreError("browser_write_confirmation_reused")
+            send_id = self._write_event_id(
+                "write-send", f"{current.run_id}:{sequence}",
+            )
+            if await self._write_event(
+                session, current, _WRITE_SEND_VERSION, send_id,
+            ) is not None:
+                raise BrowserRunStoreError("browser_write_send_reused")
+            await self._append_write_event(
+                session, current, kind=_WRITE_SEND_VERSION,
+                event_id=send_id,
+                data={
+                    "request_id": preparation.request_id,
+                    "action_digest": preparation.action_digest,
+                    "sequence": sequence,
+                    "step_id": command.step.step_id,
+                    "worker_epoch": current.worker_epoch,
+                    "lease_epoch": current.lease_epoch,
+                },
+            )
+            return await self._update(session, current, {"effect": current.effect})
+
+    async def assert_write_reservation(
+        self, claim: RunSnapshot, *, command: ActionCommand,
+        sequence: int,
+    ) -> None:
+        """Final DB side of the adapter's dispatch barrier; no permission cache."""
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                current.phase != "running" or current.cancel_requested
+                or current.lease_epoch is None or current.effect == "unknown"
+                or command.binding.owner != current.owner
+                or command.binding.authorization_run_id != current.run_id
+                or command.binding.lease_epoch != current.lease_epoch
+            ):
+                raise BrowserRunStoreError("browser_write_dispatch_stale")
+            preparation = await self._prepared_write(session, current)
+            await self._gate_request(session, current, preparation, confirmed=True)
+            send = await self._write_event(
+                session, current, _WRITE_SEND_VERSION,
+                self._write_event_id(
+                    "write-send", f"{current.run_id}:{sequence}",
+                ),
+            )
+            if (
+                send is None or send.get("schema_version") != _WRITE_SEND_VERSION
+                or send.get("request_id") != preparation.request_id
+                or send.get("action_digest") != preparation.action_digest
+                or send.get("step_id") != command.step.step_id
+                or send.get("sequence") != sequence
+                or send.get("worker_epoch") != current.worker_epoch
+                or send.get("lease_epoch") != current.lease_epoch
+            ):
+                raise BrowserRunStoreError("browser_write_send_unreserved")
+            previous = await self._audited_steps(session, current)
+            if len(previous) != sequence - 1:
+                raise BrowserRunStoreError("browser_write_sequence_conflict")
+            manifest = await self._frozen_publication(session, current)
+            self._check_step_route(
+                manifest, tuple(item.event.step_id for item in previous)
+                + (command.step.step_id,), complete=False,
+            )
+            barrier_id = self._write_event_id(
+                "write-barrier", f"{current.run_id}:{sequence}",
+            )
+            if await self._write_event(
+                session, current, _WRITE_BARRIER_VERSION, barrier_id,
+            ) is not None:
+                raise BrowserRunStoreError("browser_write_barrier_reused")
+            await self._append_write_event(
+                session, current, kind=_WRITE_BARRIER_VERSION,
+                event_id=barrier_id, revision_delta=0,
+                data={
+                    "sequence": sequence,
+                    "step_id": command.step.step_id,
+                    "worker_epoch": current.worker_epoch,
+                    "lease_epoch": current.lease_epoch,
+                },
+            )
+
+    async def record_replay_proof(self, proof: TeachingReplayProof) -> bool:
+        """Keep the independently verified replay fact with its existing Task."""
+        if type(proof) is not TeachingReplayProof:
+            raise BrowserRunStoreError("browser_replay_proof_invalid")
+        owner = proof.binding.owner
+        async with self._transaction() as session:
+            replay = await self._read_run(
+                session, owner, proof.replay_task_id, proof.replay_run_id,
+            )
+            source_row = (await session.execute(text(
+                "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
+                " AND ai_user_id=:user AND session_id=:session"
+            ), {"run": proof.source_run_id, "tenant": owner.tenant_id,
+                "user": owner.user_id,
+                "session": owner.session_id})).mappings().one_or_none()
+            if source_row is None:
+                raise BrowserRunStoreError("browser_replay_source_unavailable")
+            source = _snapshot(source_row)
+            await self._authority.check_run(session, replay, "read")
+            await self._authority.check_run(session, source, "read")
+            if (
+                replay.status != "completed" or source.status != "completed"
+                or replay.verification != "verified"
+                or source.verification != "verified"
+                or replay.effect != "acknowledged"
+                or source.effect != "acknowledged"
+                or replay.verification_evidence_digest is None
+                or source.verification_evidence_digest is None
+                or replay.verification_evidence_digest.hex()
+                != proof.verifier_evidence_digest
+                or replay.admission.publication_digest.hex()
+                != proof.publication_digest
+                or replay.owner != source.owner
+                or replay.admission.binding_id != proof.binding.binding_id
+                or source.admission.binding_id != proof.binding.binding_id
+                or replay.admission.binding_revision
+                != proof.binding.binding_revision
+                or source.admission.binding_revision
+                != proof.binding.binding_revision
+                or replay.cancel_requested or source.cancel_requested
+                or replay.error_code is not None or source.error_code is not None
+                or replay.protected_result is None or source.protected_result is None
+            ):
+                raise BrowserRunStoreError("browser_replay_proof_unverified")
+            event_id = self._write_event_id("replay-proof", replay.run_id)
+            if await self._write_event(
+                session, replay, _REPLAY_PROOF_VERSION, event_id,
+            ) is not None:
+                raise BrowserRunStoreError("browser_replay_proof_reused")
+            await self._append_write_event(
+                session, replay, kind=_REPLAY_PROOF_VERSION,
+                event_id=event_id,
+                revision_delta=0,
+                data={
+                    "digest": proof.digest,
+                    "draft_digest": proof.draft_digest,
+                    "publication_digest": proof.publication_digest,
+                    "source_run_id": proof.source_run_id,
+                    "replay_task_id": proof.replay_task_id,
+                    "replay_run_id": proof.replay_run_id,
+                    "heldout_parameter_set_ref": proof.heldout_parameter_set_ref,
+                    "verifier_evidence_digest": proof.verifier_evidence_digest,
+                    "binding": BindingRevisions.from_binding(
+                        proof.binding,
+                    ).model_dump(mode="json"),
+                    "input_digest": replay.admission.input_digest.hex(),
+                    "source_input_digest": source.admission.input_digest.hex(),
+                },
+            )
+            return True
+
+    async def load_replay_proof_in_session(
+        self, transaction: object, owner: BrowserOwner, replay_digest: str,
+    ) -> TeachingReplayProof | None:
+        """Reload a signed proof and both immutable verified Runs in one tx."""
+        if not isinstance(transaction, AsyncSession):
+            raise BrowserRunStoreError("browser_replay_transaction_invalid")
+        session = transaction
+        rows = (await session.execute(text(
+            "SELECT e.event_type,e.payload FROM task_events e JOIN tasks t"
+            " ON t.task_id=e.task_id WHERE t.tenant_id=:tenant"
+            " AND t.ai_user_id=:user AND t.session_id=:session"
+            " AND e.event_type=:kind AND e.payload->>'digest'=:digest LIMIT 2"
+        ), {"tenant": owner.tenant_id, "user": owner.user_id,
+            "session": owner.session_id, "kind": _REPLAY_PROOF_VERSION,
+            "digest": replay_digest})).mappings().all()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise BrowserRunStoreError("browser_replay_proof_ambiguous")
+        payload = rows[0]["payload"]
+        if not isinstance(payload, dict):
+            raise BrowserRunStoreError("browser_replay_proof_invalid")
+        unsigned = {key: value for key, value in payload.items() if key != "mac"}
+        key_id = payload.get("key_id")
+        mac = payload.get("mac")
+        if (
+            type(key_id) is not str or type(mac) is not str
+            or payload.get("schema_version") != _REPLAY_PROOF_VERSION
+            or not hmac.compare_digest(mac, self._write_mac(unsigned, key_id))
+        ):
+            raise BrowserRunStoreError("browser_replay_proof_invalid")
+        try:
+            binding = ScopeBinding.model_validate({
+                "owner": owner, **payload["binding"],
+            })
+            proof = TeachingReplayProof(
+                binding=binding,
+                draft_digest=payload["draft_digest"],
+                publication_digest=payload["publication_digest"],
+                source_run_id=payload["source_run_id"],
+                replay_task_id=payload["replay_task_id"],
+                replay_run_id=payload["replay_run_id"],
+                heldout_parameter_set_ref=payload["heldout_parameter_set_ref"],
+                verifier_evidence_digest=payload["verifier_evidence_digest"],
+                digest=payload["digest"],
+            )
+        except (KeyError, TypeError, ValueError):
+            raise BrowserRunStoreError("browser_replay_proof_invalid") from None
+        replay = await self._read_run(
+            session, owner, proof.replay_task_id, proof.replay_run_id,
+        )
+        source_row = (await session.execute(text(
+            "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
+            " AND ai_user_id=:user AND session_id=:session"
+        ), {"run": proof.source_run_id, "tenant": owner.tenant_id,
+            "user": owner.user_id, "session": owner.session_id})).mappings().one_or_none()
+        if source_row is None:
+            raise BrowserRunStoreError("browser_replay_source_unavailable")
+        source = _snapshot(source_row)
+        await self._authority.check_run(session, replay, "read")
+        await self._authority.check_run(session, source, "read")
+        if (
+            proof.digest != replay_digest
+            or replay.status != "completed" or source.status != "completed"
+            or replay.verification != "verified"
+            or source.verification != "verified"
+            or replay.effect != "acknowledged"
+            or source.effect != "acknowledged"
+            or replay.verification_evidence_digest is None
+            or replay.verification_evidence_digest.hex()
+            != proof.verifier_evidence_digest
+            or replay.admission.publication_digest.hex()
+            != proof.publication_digest
+            or replay.admission.input_digest.hex() != payload.get("input_digest")
+            or source.admission.input_digest.hex()
+            != payload.get("source_input_digest")
+            or replay.admission.binding_id != proof.binding.binding_id
+            or source.admission.binding_id != proof.binding.binding_id
+            or replay.admission.binding_revision
+            != proof.binding.binding_revision
+            or source.admission.binding_revision
+            != proof.binding.binding_revision
+            or replay.cancel_requested or source.cancel_requested
+            or replay.error_code is not None or source.error_code is not None
+        ):
+            raise BrowserRunStoreError("browser_replay_proof_stale")
+        return proof
+
+    async def record_step(
+        self, claim: RunSnapshot, *, command: ActionCommand,
+        rule: SiteStepRule, scope: ScopeStamp, receipt: DispatchReceipt,
+        policy_digest: str, sequence: int,
+    ) -> RunSnapshot:
+        """Fence and sign one Executor receipt in the existing Task event journal.
+
+        This is after the actual send. Failure makes the caller's effect unknown;
+        no later step may be sent or taught without this committed fact.
+        """
+        if type(sequence) is not int or not 1 <= sequence <= _MAX_STEP_AUDITS:
+            raise BrowserRunStoreError("browser_step_sequence_invalid")
+        try:
+            receipt.validate_for(command)
+        except ValueError:
+            raise BrowserRunStoreError("browser_step_receipt_invalid") from None
+        if (
+            receipt.state != "acknowledged" or receipt.evidence_digest is None
+            or command.step != rule.step
+            or command.step.effect != rule.effect.actual_effect
+            or command.step.effect not in {"read_only", "may_write"}
+            or command.binding.owner != claim.owner
+            or command.binding.binding_id != claim.admission.binding_id
+            or command.binding.binding_revision != claim.admission.binding_revision
+            or command.binding.authorization_run_id != claim.run_id
+            or command.binding.evidence_version != claim.admission.auth_evidence_version
+            or command.binding.lease_epoch != claim.lease_epoch
+            or scope.region_id != rule.observation.region_id
+        ):
+            raise BrowserRunStoreError("browser_step_audit_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                current.phase != "running" or current.cancel_requested
+                or current.effect == "unknown" or current.verification is not None
+                or current.lease_epoch is None
+            ):
+                raise BrowserRunStoreError("browser_step_audit_stale")
+            manifest = await self._frozen_publication(session, current)
+            publication_state = (await session.execute(text(
+                "SELECT state FROM browser_publications WHERE tenant_id=:tenant"
+                " AND publication_digest=:digest"
+            ), {"tenant": current.owner.tenant_id,
+                "digest": current.admission.publication_digest})).scalar_one_or_none()
+            if publication_state == "prepared" and await self._teaching_plan_in_session(
+                session, current, manifest,
+            ) is None:
+                raise BrowserRunStoreError("browser_teaching_plan_required")
+            rules = {item.step.step_id: item for item in manifest.site.steps}
+            expected_steps = {item.step_id: item for item in manifest.skill.steps}
+            if (
+                expected_steps.get(command.step.step_id) != command.step
+                or rules.get(command.step.step_id) != rule
+                or manifest.skill.digest != command.skill_digest
+                or manifest.site.policy.digest != policy_digest
+            ):
+                raise BrowserRunStoreError("browser_step_audit_publication_mismatch")
+            primitive_id = self._primitive_id(manifest, command.step.step_id)
+            primitive_rule = self._primitive_rule(manifest, primitive_id)
+            if primitive_rule is None:
+                if primitive_id != command.step.step_id:
+                    raise BrowserRunStoreError("browser_step_primitive_unregistered")
+                primitive_rule = rule
+            previous = await self._audited_steps(session, current)
+            if len(previous) != sequence - 1:
+                raise BrowserRunStoreError("browser_step_audit_sequence_conflict")
+            self._check_step_route(
+                manifest, tuple(item.event.step_id for item in previous)
+                + (command.step.step_id,), complete=False,
+            )
+            if command.step.effect == "may_write":
+                send = await self._write_event(
+                    session, current, _WRITE_SEND_VERSION,
+                    self._write_event_id(
+                        "write-send", f"{current.run_id}:{sequence}",
+                    ),
+                )
+                if (
+                    send is None or send.get("schema_version") != _WRITE_SEND_VERSION
+                    or send.get("sequence") != sequence
+                    or send.get("step_id") != command.step.step_id
+                    or send.get("worker_epoch") != current.worker_epoch
+                    or send.get("lease_epoch") != current.lease_epoch
+                ):
+                    raise BrowserRunStoreError("browser_write_send_unreserved")
+                barrier = await self._write_event(
+                    session, current, _WRITE_BARRIER_VERSION,
+                    self._write_event_id(
+                        "write-barrier", f"{current.run_id}:{sequence}",
+                    ),
+                )
+                if (
+                    barrier is None
+                    or barrier.get("schema_version") != _WRITE_BARRIER_VERSION
+                    or barrier.get("sequence") != sequence
+                    or barrier.get("step_id") != command.step.step_id
+                    or barrier.get("worker_epoch") != current.worker_epoch
+                    or barrier.get("lease_epoch") != current.lease_epoch
+                ):
+                    raise BrowserRunStoreError("browser_write_barrier_missing")
+            event = TrajectoryEvent(
+                sequence=sequence,
+                event_id=uuid5(NAMESPACE_URL,
+                               f"browser-run-step-v1:{current.run_id}:{sequence}").hex,
+                step_id=command.step.step_id, scope=scope,
+                target=command.target, option=command.option,
+                operation=command.step.operation, effect=command.step.effect,
+                effect_proof=rule.effect,
+                value_ref=command.step.value_ref,
+                url_ref=command.step.url_ref,
+                option_ref=command.step.option_ref,
+                policy_digest=policy_digest, approved_labels=(),
+            )
+            step = RunTeachingStep(
+                run_id=current.run_id, skill_version=manifest.skill.version,
+                skill_digest=manifest.skill.digest,
+                binding=BindingRevisions.from_binding(command.binding),
+                primitive_id=primitive_id,
+                event=event,
+                rule_digest=canonical_digest(
+                    "browser_site_step.v1", primitive_rule.model_dump(mode="json"),
+                ),
+                dispatch_state="acknowledged",
+                dispatch_evidence_digest=receipt.evidence_digest,
+            )
+            payload: dict[str, object] = {
+                "schema_version": _STEP_AUDIT_VERSION,
+                "run_id": current.run_id,
+                "sequence": sequence,
+                "run_revision": current.state_revision + 1,
+                "step": step.model_dump(mode="json"),
+                "key_id": self._active_digest_key_id,
+            }
+            payload["mac"] = self._step_mac(payload, self._active_digest_key_id)
+            await append_owned_event(
+                session, tenant_id=current.owner.tenant_id,
+                ai_user_id=current.owner.user_id,
+                session_id=current.owner.session_id,
+                task_id=current.task_id,
+                event=TaskEventRecord(
+                    event_id=event.event_id, task_id=current.task_id,
+                    event_type="browser_run_step", timestamp=await self._now(session),
+                    payload=payload,
+                ),
+            )
+            return await self._update(session, current, {"effect": "acknowledged"})
+
+    async def read_teaching_steps(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> tuple[RunTeachingStep, ...]:
+        """Owner-scoped, MAC-checked facts from a completed verified Run only."""
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            if (
+                run.status != "completed" or run.verification != "verified"
+                or run.verification_evidence_digest is None
+                or run.effect != "acknowledged" or run.cancel_requested
+            ):
+                raise BrowserRunStoreError("browser_step_source_unverified")
+            manifest = await self._frozen_publication(session, run)
+            if any(
+                rule.step.effect != "read_only"
+                or rule.effect.actual_effect != "read_only"
+                for rule in manifest.site.steps
+            ):
+                raise BrowserRunStoreError("browser_step_source_not_read_only")
+            result = await self._audited_steps(session, run)
+            self._check_step_route(
+                manifest, tuple(step.event.step_id for step in result),
+                complete=True,
+            )
+            rules = {rule.step.step_id: rule for rule in manifest.site.steps}
+            expected = {step.step_id: step for step in manifest.skill.steps}
+            for sequence, step in enumerate(result, start=1):
+                candidate_id = step.event.step_id
+                rule = rules.get(candidate_id)
+                primitive = self._primitive_rule(manifest, step.primitive_id)
+                if primitive is None and step.primitive_id == candidate_id:
+                    primitive = rule
+                if rule is None or primitive is None:
+                    raise BrowserRunStoreError("browser_step_audit_invalid")
+                if (
+                    step.run_id != run_id
+                    or step.event.sequence != sequence
+                    or expected.get(candidate_id) != rule.step
+                    or step.primitive_id != self._primitive_id(manifest, candidate_id)
+                    or not step.event.matches_step(rule.step)
+                    or step.event.scope.region_id != rule.observation.region_id
+                    or step.event.effect_proof != rule.effect
+                    or step.event.policy_digest != manifest.site.policy.digest
+                    or step.rule_digest != canonical_digest(
+                        "browser_site_step.v1", primitive.model_dump(mode="json"),
+                    )
+                    or step.skill_digest != manifest.skill.digest
+                    or step.skill_version != manifest.skill.version
+                    or step.binding.binding_id != run.admission.binding_id
+                    or step.binding.binding_revision != run.admission.binding_revision
+                    or step.binding.authorization_run_id != run_id
+                    or step.binding.evidence_version
+                    != run.admission.auth_evidence_version
+                    or step.binding.lease_epoch != run.lease_epoch
+                ):
+                    raise BrowserRunStoreError("browser_step_audit_invalid")
+            return result
 
     async def attach_lease(
         self,
