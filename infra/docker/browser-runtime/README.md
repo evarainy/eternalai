@@ -1,5 +1,11 @@
 # Browser v4.2 structured single-run trial
 
+This runbook and its two Compose files describe a fixed synthetic trial, not
+the formal intranet deployment. Its dated deadlines and machine-specific paths
+are historical trial conditions; do not reuse them as current deployment
+parameters. For the separate, evidence-bound deployment material inventory and
+offline acceptance boundary, see [OFFLINE_DEPLOYMENT.md](OFFLINE_DEPLOYMENT.md).
+
 `compose.yaml` is the existing opt-in API/supervisor definition.
 `compose.single-run.yaml` is the manual, one-run override. Use both files and
 select each service with `docker compose run`; do not use `up` for this trial.
