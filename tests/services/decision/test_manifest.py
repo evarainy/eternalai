@@ -54,11 +54,21 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
         score_semantics="laya_answer_confidence",
         input_adapter_digest=hashlib.sha256(adapter_bytes).hexdigest(),
     )
+    synthetic_wheel_sha = "e" * 64
+    wheel_lock_bytes = (
+        'lock-version = "1.0"\nrequires-python = ">=3.12"\n'
+        '[[packages]]\nname = "pydantic"\n'
+        f'version = "{runtime[0]["version"]}"\n'
+        'wheels = [{ url = "https://files.pythonhosted.org/packages/'
+        f'pydantic-{runtime[0]["version"]}-py3-none-any.whl", '
+        f'hashes = {{ sha256 = "{synthetic_wheel_sha}" }} }}]\n'
+    ).encode()
     dependency_lock = dict(
         schema_version="decision_dependencies.v1",
         checkpoint_revision="a" * 40,
         python_version=platform.python_version(),
         runtime=runtime,
+        wheel_lock_sha256=hashlib.sha256(wheel_lock_bytes).hexdigest(),
     )
     artifacts = []
     for role in (
@@ -69,6 +79,7 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
         "input_adapter",
         "calibration",
         "dependency_lock",
+        "wheel_lock",
         "license",
     ):
         content = (
@@ -78,6 +89,8 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
             if role == "dependency_lock"
             else adapter_bytes.decode()
             if role == "input_adapter"
+            else wheel_lock_bytes.decode()
+            if role == "wheel_lock"
             else f"generated synthetic {role}, no actual model"
         )
         path = f"{role}.synthetic"
@@ -118,7 +131,7 @@ def seal_manifest(payload: dict[str, Any]) -> PinnedCheckpoint:
 
 def test_generated_manifest_pins_all_roles_schemas_and_metadata(tmp_path: Path) -> None:
     manifest = artifact_bundle(tmp_path)
-    assert len(manifest.artifacts) == 8
+    assert len(manifest.artifacts) == 9
     assert manifest.calibration.input_schema_digest == schema_digest(ChoiceRequest)
     assert manifest.tokenizer_revision == manifest.revision
     assert manifest.arbiter_reference == ARBITER_REFERENCE

@@ -69,6 +69,32 @@ def test_matching_hash_cannot_hide_wrong_checkpoint_metadata(tmp_path: Path, par
     assert result.codes == ("artifact_metadata_mismatch",)
 
 
+def test_rehashed_wheel_lock_cannot_disagree_with_installed_runtime(tmp_path: Path) -> None:
+    manifest = artifact_bundle(tmp_path)
+    artifact = next(item for item in manifest.artifacts if item.role == "wheel_lock")
+    path = tmp_path / artifact.path
+    raw = path.read_bytes().replace(b'name = "pydantic"', b'name = "other-package"')
+    path.write_bytes(raw)
+    dependency = next(item for item in manifest.artifacts if item.role == "dependency_lock")
+    dependency_path = tmp_path / dependency.path
+    metadata = json.loads(dependency_path.read_bytes())
+    metadata["wheel_lock_sha256"] = hashlib.sha256(raw).hexdigest()
+    dependency_raw = json.dumps(metadata).encode()
+    dependency_path.write_bytes(dependency_raw)
+    payload = manifest.model_dump(mode="json")
+    for entry in payload["artifacts"]:
+        if entry["role"] == "wheel_lock":
+            entry.update(size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        elif entry["role"] == "dependency_lock":
+            entry.update(
+                size_bytes=len(dependency_raw),
+                sha256=hashlib.sha256(dependency_raw).hexdigest(),
+            )
+    assert inspect_offline(seal_manifest(payload), tmp_path).codes == (
+        "artifact_metadata_mismatch",
+    )
+
+
 def test_symlink_cannot_escape_exact_root(tmp_path: Path) -> None:
     root = tmp_path / "bundle"
     manifest = artifact_bundle(root)

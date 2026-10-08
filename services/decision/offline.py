@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Never, SupportsIndex
 
-from app.browser_skill.models import Contract
+from app.browser_skill.models import Contract, Digest
 from services.decision.manifest import (
     CalibrationEvidence,
     ExactVersion,
@@ -21,6 +21,7 @@ from services.decision.manifest import (
     RuntimeRequirement,
     strict_json,
 )
+from services.decision.wheelhouse import _load_lock, _normalized
 
 
 class DependencyLock(Contract):
@@ -28,6 +29,7 @@ class DependencyLock(Contract):
     checkpoint_revision: Revision
     python_version: ExactVersion
     runtime: tuple[RuntimeRequirement, ...]
+    wheel_lock_sha256: Digest
 
 
 _ISSUER = object()
@@ -110,7 +112,7 @@ def inspect_offline(manifest: PinnedCheckpoint, artifact_root: Path) -> OfflineR
         if actual != requirement.version:
             return OfflineResult("FAIL", ("runtime_dependency_version_mismatch",))
     metadata: dict[str, list[bytes]] = {
-        "calibration": [], "dependency_lock": [], "input_adapter": []
+        "calibration": [], "dependency_lock": [], "input_adapter": [], "wheel_lock": []
     }
     for artifact in checked.artifacts:
         try:
@@ -146,11 +148,13 @@ def inspect_offline(manifest: PinnedCheckpoint, artifact_root: Path) -> OfflineR
         calibration_raw = metadata["calibration"][0]
         dependency_raw = metadata["dependency_lock"][0]
         adapter_raw = metadata["input_adapter"][0]
+        wheel_lock_raw = metadata["wheel_lock"][0]
         strict_json(calibration_raw)
         strict_json(dependency_raw)
         strict_json(adapter_raw)
         calibration = CalibrationEvidence.model_validate_json(calibration_raw)
         dependencies = DependencyLock.model_validate_json(dependency_raw)
+        wheels = _load_lock(wheel_lock_raw, reference=False)
         LayaInputAdapter.model_validate_json(adapter_raw)
         if calibration != checked.calibration or (
             dependencies.checkpoint_revision,
@@ -158,6 +162,12 @@ def inspect_offline(manifest: PinnedCheckpoint, artifact_root: Path) -> OfflineR
             dependencies.runtime,
         ) != (checked.revision, checked.python_version, checked.runtime):
             raise ValueError("metadata_mismatch")
+        if (
+            dependencies.wheel_lock_sha256 != hashlib.sha256(wheel_lock_raw).hexdigest()
+            or {_normalized(item.package): item.version for item in checked.runtime}
+            != {wheel.name: wheel.version for wheel in wheels}
+        ):
+            raise ValueError("wheel_lock_mismatch")
     except (ValueError, TypeError):
         return OfflineResult("FAIL", ("artifact_metadata_mismatch",))
     return OfflineResult("READY", (), VerifiedArtifacts(checked.digest, _ISSUER))

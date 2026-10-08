@@ -70,6 +70,7 @@ class Artifact(Contract):
         "input_adapter",
         "calibration",
         "dependency_lock",
+        "wheel_lock",
         "license",
     ]
     sha256: Digest
@@ -123,7 +124,7 @@ class PinnedCheckpoint(Contract):
     calibration: CalibrationEvidence
     python_version: ExactVersion
     runtime: Annotated[tuple[RuntimeRequirement, ...], Field(min_length=1, max_length=128)]
-    artifacts: Annotated[tuple[Artifact, ...], Field(min_length=8, max_length=4096)]
+    artifacts: Annotated[tuple[Artifact, ...], Field(min_length=9, max_length=4096)]
     arbiter_reference: Literal["bf71358774c85aeff2051ec7b1dcc4577a87706d"] = ARBITER_REFERENCE
     digest: Digest
 
@@ -143,6 +144,7 @@ class PinnedCheckpoint(Contract):
             "input_adapter",
             "calibration",
             "dependency_lock",
+            "wheel_lock",
             "license",
         }
         if {artifact.role for artifact in self.artifacts} != required:

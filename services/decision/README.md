@@ -4,8 +4,9 @@ This package implements the existing `LocalChoiceCodec` contract at `POST /selec
 It is independent of the main Runtime LLM and does not start a listener, import a
 model library, download weights, or create a second serving stack on import.
 
-`checkpoint_inventory.json` is **WAITING_ENV**, not a launch manifest. No immutable
-checkpoint revision has been selected. Synthetic tests are explicitly served as
+`checkpoint_inventory.json` is **WAITING_ENV**, not a launch manifest. Its observed
+`cklxx/laya-browser` commit and file hashes are candidate source metadata, not an
+operator-approved checkpoint or downloaded weight verification. Synthetic tests are explicitly served as
 `synthetic-decision-test-v1`; they provide no model-quality or Arbiter evidence.
 
 ## Model and serving boundaries
@@ -35,8 +36,8 @@ revisions, subfolder, dtype, device, `laya_eager` backend, wire-schema and
 projection-policy digests, calibration, Python/runtime versions, and exact paths,
 sizes and SHA256 values for weights,
 tokenizer, configuration, audited model code, input adapter, calibration, dependency
-lock and checkpoint license/notice. Runtime dependency notices also need an
-operator-reviewed bundle. `digest()` canonicalizes JSON and excludes only the
+lock, its exact wheel lock and checkpoint license/notice. Runtime dependency notices
+also need an operator-reviewed bundle. `digest()` canonicalizes JSON and excludes only the
 object's own digest;
 nested digests remain covered. Never use this public hash for private parameter values.
 
@@ -44,13 +45,72 @@ The calibration artifact must parse as `CalibrationEvidence` and equal the manif
 checkpoint-bound evidence, including the `laya_answer_confidence` semantics and
 SHA256 of the exact input-adapter artifact. That artifact must parse as
 `decision_laya_input.v1`, pinning the choice instruction and minimal state format.
-The dependency-lock artifact must parse as `DependencyLock`
-and match the exact checkpoint, Python version and runtime requirements. Registration
+The dependency-lock artifact must parse as `DependencyLock`, bind the SHA256 of its
+`wheel_lock` artifact, and match the exact checkpoint, Python version and runtime
+requirements. The wheel lock must contain one hash-pinned wheel for every runtime
+package, including transitive dependencies. Registration
 alone is insufficient: the offline checker checks installed versions and reads only
 listed artifacts under the explicitly authorized absolute root. It rejects links,
 junctions, path escapes, forbidden paths, missing files and mismatched bytes. It does
 not execute artifact code. The approved artifact root must remain immutable during
 subsequent trusted model loading; the preflight receipt is not evidence of loaded weights.
+
+## Reproducible CPU reference, separate from checkpoint approval
+
+`requirements-linux-cpu.in` pins the direct packages; `pylock.linux_cpu.toml` pins
+all 35 resolved wheels, exact versions, source URLs and SHA256 values for **CPython
+3.12, Linux x86_64, glibc 2.28+, CPU PyTorch**. It was resolved from public PyPI and
+PyTorch metadata with uv 0.12.13 using `--torch-backend cpu --only-binary :all:`;
+no package, model or weight was installed or run. It does not lock a specific Python
+patch release, the company's unconfirmed server, CUDA/GPU drivers or checkpoint
+quality. The selected deployment must bind its actual Python patch and device in
+`PinnedCheckpoint`, carry the wheel lock as a hashed artifact, enumerate **all**
+installed runtime package versions from that lock in `DependencyLock` and
+`PinnedCheckpoint.runtime`, and pass the existing offline preflight before loading.
+Choosing another hardware target requires a separately resolved and reviewed lock.
+
+`license_sources.json` records each of the 35 exact package versions' PyPI license
+metadata source. These declarations do not contain actual wheel notice bytes and
+are not a legal approval. The approved air-gap bundle has this layout:
+
+```text
+<approved-bundle-root>/
+  <35 exact wheel filenames from pylock.linux_cpu.toml>
+  notices.json
+  notices/<one approved notice file per package>
+```
+
+`notices.json` uses `decision_wheel_notices.v1` with `lock_sha256` and exactly one
+entry per wheel: `name`, `version`, `wheel_sha256`, `source_url` (the exact PyPI
+version metadata URL), `license_id`, `notice_path` under `notices/`, and
+`notice_sha256`. An operator must extract and review the actual license and
+third-party notices from the exact wheels, then hash the chosen notice files.
+`wheelhouse.py` rejects missing, extra or changed wheels, lock/notice mismatches,
+unsafe paths and missing notices without importing model packages or contacting an
+index. This is a pre-install integrity check; it does not prove installation,
+license sufficiency, model loading or network isolation.
+
+```powershell
+python -m services.decision.wheelhouse --bundle-root <absolute-approved-bundle-root>
+```
+
+The verifier exits `0` only when the local bundle is complete, `2` for missing
+materials, and `1` for invalid materials. On the approved **Linux CPU reference**
+target, a fresh isolated Python 3.12 environment may then install only the verified
+wheel files with a local-only installer (`--no-index`, `--no-deps` and egress deny),
+followed by exact installed-version and checkpoint preflight checks. The installer
+and actual wheelhouse remain untested in this stage. Do not add these dependencies
+to the main Runtime's vLLM environment or treat this CPU lock as a GPU lock.
+
+The preferred candidate snapshot in `checkpoint_inventory.json` records HF commit
+`645cf366a2ae35f1086e8c20eff48f909bb49206`, two LFS SHA256 values, and SHA256
+of five small public metadata/code files at that commit. The LFS values came from
+the repository tree API; neither weights nor tokenizer bytes were downloaded. The
+model card declares Apache-2.0, but the observed root tree has no license notice
+file. Approval of that exact revision, notice bytes, audited code, dtype, calibration
+and real inference still requires separate evidence. Keep `launchable=false` until
+the full checkpoint manifest and bundle can actually pass preflight and target
+acceptance.
 
 From the approved isolated source export, using its existing Python environment:
 
