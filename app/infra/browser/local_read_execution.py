@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 import secrets
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -38,8 +38,9 @@ from app.browser_skill.models import (
     TargetRef,
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.runtime import _BrowserReadDeferred
 from app.browser_skill.site_rules import RegisteredQueryReadRule
-from app.browser_skill.verifier import ReadSpecResolver, failure
+from app.browser_skill.verifier import ReadSpecResolver, check_liveness, failure
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
     _Resource,
@@ -47,12 +48,14 @@ from app.infra.browser.local_resource_lifecycle import (
 )
 from app.infra.browser.playwright_actions import LiveBrowser
 from app.infra.browser.playwright_observer import PlaywrightObserver
+from app.infra.browser.playwright_web_adapter import OperationAuthority
 from app.infra.browser.read_execution import RegisteredReadExecution
+from app.infra.browser.systemone_http import DecisionHTTPProvider
 from app.ports.auth import Principal
 from app.ports.browser import DecisionProvider
 from app.ports.browser_read_execution import BrowserReadExecutionError, BrowserWorkerCheckpoint
 from app.ports.browser_run_store import RunCleanup, RunSnapshot
-from app.ports.browser_store import BrowserLeaseClaim, BrowserLeaseStorePort
+from app.ports.browser_store import BrowserLeaseClaim, BrowserLeaseError, BrowserLeaseStorePort
 from app.ports.credential_vault import (
     BrowserAuthFact,
     BrowserBindingFact,
@@ -83,19 +86,38 @@ class _Execution:
     released: bool = False
     terminal_at: float | None = None
     cleanup_outcome: RunCleanup | None = None
+    publication_guard: Callable[[RunSnapshot], Awaitable[None]] | None = None
+    operation_context: ExecutionContext | None = None
+    authority_counts: dict[str, int] = field(default_factory=dict)
+
+    def count(self, name: str) -> None:
+        self.authority_counts[name] = min(10000, self.authority_counts.get(name, 0) + 1)
 
 
 class _FencedDecision:
     def __init__(self, factory: LocalBrowserReadExecutionFactory, state: _Execution) -> None:
         self._factory, self._state = factory, state
+        self._http_snapshot: dict[str, str | int] = {}
+
+    def http_diagnostic(self) -> dict[str, str | int]:
+        return dict(self._http_snapshot)
 
     async def decide(
         self,
         request: DecisionRequest,
         context: DecisionCallContext,
     ) -> DecisionResult:
+        self._http_snapshot = {}
         await self._factory._fence(self._state, renew=True)
-        result = await self._factory.decision.decide(request, context)
+        collector: dict[str, str | int] = {}
+        try:
+            provider = self._factory.decision
+            if isinstance(provider, DecisionHTTPProvider):
+                result = await provider._decide_with_collector(request, context, collector)
+            else:
+                result = await provider.decide(request, context)
+        finally:
+            self._http_snapshot = dict(collector)
         await self._factory._fence(self._state, renew=True)
         return result
 
@@ -148,6 +170,7 @@ class LocalBrowserReadExecutionFactory:
         ) = None
         self._states: dict[str, _Execution] = {}
         self._opening: set[str] = set()
+        self._lease_reserved: Callable[[RunSnapshot], Awaitable[bool]] | None = None
 
     def install_authority(
         self,
@@ -155,7 +178,10 @@ class LocalBrowserReadExecutionFactory:
         leases: BrowserLeaseStorePort,
         current_auth: BrowserCurrentAuthPort,
         binding_reader: BrowserBindingReaderPort,
+        lease_reserved: Callable[[RunSnapshot], Awaitable[bool]] | None = None,
     ) -> None:
+        if (lease_reserved is not None and not callable(lease_reserved)):
+            raise ValueError("browser_local_authority_installation_invalid")
         if self._authority is not None or not all(
             (
                 callable(getattr(leases, "record_acquired", None)),
@@ -166,6 +192,7 @@ class LocalBrowserReadExecutionFactory:
         ):
             raise ValueError("browser_local_authority_installation_invalid")
         self._authority = (leases, current_auth, binding_reader)
+        self._lease_reserved = lease_reserved
 
     def authority(
         self,
@@ -220,6 +247,7 @@ class LocalBrowserReadExecutionFactory:
             await self._fence_locked(state, renew=renew)
 
     async def _fence_locked(self, state: _Execution, *, renew: bool) -> None:
+        state.count("factory_fence_attempts")
         leases, auth, bindings = self.authority()
         previous = state.run
         if state.cancellation.is_set() or state.released:
@@ -235,8 +263,9 @@ class LocalBrowserReadExecutionFactory:
             state.cancellation.set()
             raise failure("stale")
         state.run = fresh
-        await auth.check_current(state.auth)
-        await bindings.check_binding(self.binding)
+        if state.claim is None or not renew:
+            await auth.check_current(state.auth)
+            await bindings.check_binding(self.binding)
         if state.claim is not None:
             if not self.claim_matches_run(state.claim, fresh):
                 raise failure("stale")
@@ -245,6 +274,8 @@ class LocalBrowserReadExecutionFactory:
                     state.claim = await leases.renew(state.claim, ttl_seconds=self.ttl_seconds)
             elif state.claim.deadline <= datetime.now(UTC):
                 raise failure("stale")
+        if state.publication_guard is not None:
+            await state.publication_guard(state.run)
         final = await state.checkpoint.refresh()
         if (
             final.admission != previous.admission
@@ -254,6 +285,7 @@ class LocalBrowserReadExecutionFactory:
             state.cancellation.set()
             raise failure("stale")
         state.run = final
+        state.count("factory_fence_successes")
 
     async def open(
         self,
@@ -315,12 +347,24 @@ class LocalBrowserReadExecutionFactory:
             state = _Execution(run, checkpoint, auth, arguments.business_key)
             self._states[run.run_id] = state
             await self._fence(state)
-            state.claim = await leases.reserve(
-                auth,
-                self.binding,
-                self.resources.deployment.provider_key,
-                ttl_seconds=self.ttl_seconds,
-            )
+            try:
+                state.claim = await leases.reserve(
+                    auth,
+                    self.binding,
+                    self.resources.deployment.provider_key,
+                    ttl_seconds=self.ttl_seconds,
+                )
+            except BrowserLeaseError as error:
+                if error.code == "browser_capacity_exhausted":
+                    raise _BrowserReadDeferred() from None
+                if (error.code == "browser_binding_busy" and self._lease_reserved is not None
+                        and not await self._lease_reserved(state.run)):
+                    # Another Run owns the binding. Our first reservation has
+                    # not succeeded; retain waiting eligibility without replay.
+                    raise _BrowserReadDeferred() from None
+                # This Run's old pre-attach reservation needs the existing
+                # failure/independent cleanup path, never repeated acquisition.
+                raise
             await self._fence(state)
             state.run = await checkpoint.attach_lease(
                 provider_key=self.resources.deployment.provider_key,
@@ -373,6 +417,54 @@ class LocalBrowserReadExecutionFactory:
                 value_ref=manifest.site.read_rule.key_ref,
             )
             context = self._context(state, manifest)
+            assert state.session is not None
+            bound_session = state.session
+
+            def bind_publication_guard(
+                guard: Callable[[RunSnapshot], Awaitable[None]],
+            ) -> ExecutionContext:
+                if state.publication_guard is not None:
+                    raise BrowserReadExecutionError("denied")
+                state.publication_guard = guard
+                return context
+
+            def bind_operation_authority(bound: ExecutionContext) -> OperationAuthority:
+                if (state.publication_guard is None or state.operation_context is not None
+                        or self._state(bound_session) is not state
+                        or bound.execution_id != context.execution_id
+                        or bound.skill != context.skill
+                        or bound.expected_binding != context.expected_binding
+                        or bound.source != context.source
+                        or bound.navigation_origins != context.navigation_origins
+                        or bound.cancellation is not context.cancellation
+                        or bound.deadline_monotonic != context.deadline_monotonic):
+                    raise failure("denied")
+                state.operation_context = bound
+
+                async def operation_authority(
+                    session: BrowserSessionRef, actual: ExecutionContext,
+                    subject: ActionCommand | ReadSpec,
+                ) -> LiveBrowser:
+                    if actual is not bound or state.operation_context is not actual:
+                        raise failure("denied")
+                    check_liveness(actual)
+                    self._check_subject(state, manifest, session, actual.skill,
+                                        subject, actual.expected_binding)
+                    if actual.source != manifest.site.source:
+                        raise failure("denied")
+                    live = await self.resolve_live(session)
+                    # resolve_live contains both renewing fences and the real
+                    # resource authorization, including its post-subject locks.
+                    if self._state(session) is not state or live.session != session:
+                        raise failure("denied")
+                    self._check_subject(state, manifest, session, actual.skill,
+                                        subject, actual.expected_binding)
+                    check_liveness(actual)
+                    return live
+
+                return operation_authority
+
+            decision = _FencedDecision(self, state)
             return RegisteredReadExecution(
                 state.session,
                 context,
@@ -381,14 +473,22 @@ class LocalBrowserReadExecutionFactory:
                 observer,
                 (self.source.rules,),
                 self.source.site,
-                _FencedDecision(self, state),
+                decision,
                 self._resolver(state),
                 self._decisions(state),
                 self.source.projector,
+                bind_publication_guard,
+                bind_operation_authority,
+                lambda: dict(state.authority_counts),
+                decision.http_diagnostic,
             )
         except BaseException as error:
             if state is not None:
                 state.cancellation.set()
+                if (isinstance(error, _BrowserReadDeferred)
+                        and state.claim is None and state.resource is None
+                        and self._states.get(run.run_id) is state):
+                    self._states.pop(run.run_id)
                 if state.resource is None and state.claim is not None:
                     state.resource = next(
                         (
@@ -418,9 +518,12 @@ class LocalBrowserReadExecutionFactory:
         state = self._state(session)
         await self._fence(state, renew=True)
         assert state.claim is not None and state.resource is not None
+        state.count("factory_resource_authorization_attempts")
         reference = await self.authority()[0].authorize_resource(state.claim)
+        state.count("factory_resource_authorization_successes")
         await self._fence(state, renew=True)
-        if reference != state.resource.reference or state.resource.live is None:
+        if (self._state(session) is not state
+                or reference != state.resource.reference or state.resource.live is None):
             raise failure("denied")
         return state.resource.live
 
@@ -432,6 +535,24 @@ class LocalBrowserReadExecutionFactory:
         if source != self.source.manifest.site.source:
             raise failure("denied")
         return await self.resolve_live(session)
+
+    def _check_subject(
+        self, state: _Execution, manifest: BrowserPublicationManifest,
+        session: BrowserSessionRef, skill: BrowserSkill,
+        subject: ActionCommand | ReadSpec, binding: ScopeBinding,
+    ) -> None:
+        """Shared static subject checks for original and operation callbacks."""
+        if (self._state(session) is not state or state.session != session
+                or skill != manifest.skill or binding != session.binding):
+            raise failure("denied")
+        if subject.binding != binding:
+            raise failure("stale")
+        if isinstance(subject, ReadSpec):
+            manifest.site_plan().validate_read(subject)
+            if subject.business_key != state.confirmed:
+                raise failure("denied")
+        elif not self.source.site.permits(skill, subject):
+            raise failure("denied")
 
     def _context(self, state: _Execution, manifest: BrowserPublicationManifest) -> ExecutionContext:
         assert state.session is not None
@@ -449,14 +570,9 @@ class LocalBrowserReadExecutionFactory:
             subject: ActionCommand | ReadSpec,
             binding: ScopeBinding,
         ) -> None:
-            if session != state.session or skill != manifest.skill or binding != scope:
+            if binding != scope:
                 raise failure("denied")
-            if isinstance(subject, ReadSpec):
-                manifest.site_plan().validate_read(subject)
-                if subject.business_key != state.confirmed:
-                    raise failure("denied")
-            elif not self.source.site.permits(skill, subject):
-                raise failure("denied")
+            self._check_subject(state, manifest, session, skill, subject, binding)
             await self.resolve_live(session)
 
         async def resolve(
@@ -507,6 +623,8 @@ class LocalBrowserReadExecutionFactory:
                         raise failure("stale")
 
                 yield DispatchPermit(execution_id, command, begin)
+                # Recheck after the actual send/DOM work before returning success.
+                await self._fence(state)
 
         return ExecutionContext(
             execution_id,

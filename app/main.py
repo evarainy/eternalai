@@ -86,12 +86,16 @@ def create_app(
         try:
             yield
         finally:
-            if browser_worker_supervisor is not None:
-                await browser_worker_supervisor.stop()
-            if organization_directory_scheduler is not None:
-                await organization_directory_scheduler.stop()
-            if credential_polling_scheduler is not None:
-                await credential_polling_scheduler.stop()
+            try:
+                if browser_worker_supervisor is not None:
+                    await browser_worker_supervisor.stop()
+            finally:
+                try:
+                    if organization_directory_scheduler is not None:
+                        await organization_directory_scheduler.stop()
+                finally:
+                    if credential_polling_scheduler is not None:
+                        await credential_polling_scheduler.stop()
 
     application = FastAPI(title="EternalAI", version="0.1.0", lifespan=lifespan)
 
@@ -214,7 +218,9 @@ def create_production_app(
         mcp_service=components.mcp_service,
         browser_chat=browser_vertical.chat if browser_vertical is not None else None,
         browser_worker_supervisor=(
-            BrowserWorkerSupervisor(browser_vertical.run_ready)
+            BrowserWorkerSupervisor(
+                browser_vertical.run_business_ready, cleanup_ready=browser_vertical.cleanup_ready,
+            )
             if browser_vertical is not None else None
         ),
     )

@@ -4,12 +4,16 @@ import asyncio
 import json
 import time
 from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import httpx2
 import pytest
 
 from app.browser_skill.models import DecisionBudget, DecisionSource
 from app.infra.browser.decision_adapters import LocalChoiceCodec, TypeSafeCodec
+from app.infra.browser.local_read_execution import _FencedDecision
+from app.infra.browser.read_execution import VerifiedBrowserReadExecution
 from app.infra.browser.systemone_http import DecisionDeployment, DecisionHTTPProvider
 from tests.browser_skill.factories import DIGEST, context, request, source
 
@@ -70,6 +74,212 @@ def test_actual_typesafe_http_serialization_and_strict_decode() -> None:
     assert wire["state"]["scope"]["frame_path"][1] == {"frame_id": "nested", "frame_epoch": 2}
     assert b"tenant" not in calls[0].content and b"deadline" not in calls[0].content
     assert b"fixture.invalid" not in calls[0].content
+
+
+@pytest.mark.parametrize("boundary,expected", [
+    ("status", {"http_status": 504, "http_headers_received": True, "http_exception": "none"}),
+    ("timeout", {"http_status": "unknown", "http_headers_received": False,
+                 "http_exception": "timeout",
+                 "http_exception_kind": "read_timeout", "http_timeout_phase": "read"}),
+    ("transport", {"http_status": "unknown", "http_headers_received": False,
+                   "http_exception": "transport",
+                   "http_exception_kind": "connect_error", "http_timeout_phase": "none"}),
+])
+def test_http_collector_records_only_same_invocation_transport_facts(boundary, expected) -> None:
+    async def scenario():
+        def handler(req):
+            if boundary == "timeout":
+                raise httpx2.ReadTimeout("private exception marker", request=req)
+            if boundary == "transport":
+                raise httpx2.ConnectError("private exception marker", request=req)
+            return httpx2.Response(504, content=b"private body marker")
+
+        async with httpx2.AsyncClient(base_url="https://decision.invalid", trust_env=False,
+                                     transport=httpx2.MockTransport(handler)) as client:
+            collector = {}
+            result = await DecisionHTTPProvider(client, TypeSafeCodec(), deployment())._decide_with_collector(
+                request(), context(), collector)
+            assert collector == expected
+            assert result.error == ("unavailable" if boundary == "transport" else "timeout")
+            assert "private" not in json.dumps(collector)
+
+    asyncio.run(scenario())
+
+
+class _SyntheticUnknownHTTPError(httpx2.HTTPError):
+    def __str__(self) -> str:
+        raise AssertionError("exception text must not be read")
+
+
+@pytest.mark.parametrize("error_type,kind,phase,category", [
+    (httpx2.ConnectTimeout, "connect_timeout", "connect", "timeout"),
+    (httpx2.ReadTimeout, "read_timeout", "read", "timeout"),
+    (httpx2.WriteTimeout, "write_timeout", "write", "timeout"),
+    (httpx2.PoolTimeout, "pool_timeout", "pool", "timeout"),
+    (httpx2.TimeoutException, "timeout", "unknown", "timeout"),
+    (httpx2.ConnectError, "connect_error", "none", "transport"),
+    (httpx2.ReadError, "read_error", "none", "transport"),
+    (httpx2.WriteError, "write_error", "none", "transport"),
+    (httpx2.CloseError, "close_error", "none", "transport"),
+    (httpx2.ProxyError, "proxy_error", "none", "transport"),
+    (httpx2.LocalProtocolError, "local_protocol_error", "none", "transport"),
+    (httpx2.RemoteProtocolError, "remote_protocol_error", "none", "transport"),
+    (httpx2.UnsupportedProtocol, "unsupported_protocol", "none", "transport"),
+    (httpx2.DecodingError, "decoding_error", "none", "transport"),
+    (httpx2.HTTPError, "http_error", "none", "transport"),
+    (_SyntheticUnknownHTTPError, "http_error", "none", "transport"),
+])
+def test_transport_classification_reaches_bounded_trace_without_text_or_retry(
+    error_type, kind: str, phase: str, category: str, caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "synthetic-exception-detail-must-not-leave"
+
+    async def scenario() -> None:
+        calls = []
+
+        def handler(req):
+            calls.append(req)
+            raise error_type(marker)
+
+        async with httpx2.AsyncClient(
+            base_url="https://decision.invalid", trust_env=False,
+            transport=httpx2.MockTransport(handler),
+        ) as client:
+            provider = DecisionHTTPProvider(client, TypeSafeCodec(), deployment())
+            factory = SimpleNamespace(decision=provider, _fence=AsyncMock())
+            decision = _FencedDecision(factory, object())
+            result = await decision.decide(request(), context())
+            diagnostic = decision.http_diagnostic()
+            assert diagnostic == {
+                "http_status": "unknown", "http_headers_received": False,
+                "http_exception": category, "http_exception_kind": kind,
+                "http_timeout_phase": phase,
+            }
+            expected_error = "timeout" if category == "timeout" else "unavailable"
+            expected_reason = "deadline" if category == "timeout" else "transport"
+            assert (result.error, result.reason, result.selected) == (
+                expected_error, expected_reason, None,
+            )
+            assert len(calls) == 1 and factory._fence.await_count == 2
+            writer, run_ref = AsyncMock(), Mock()
+            bridge = VerifiedBrowserReadExecution(
+                Mock(), Mock(), Mock(), Mock(), result_digest_key=b"d" * 32,
+                record_diagnostic=writer,
+            )
+            await bridge._record_failure_diagnostic(
+                run_ref, None, decision=result, http_diagnostic=diagnostic,
+            )
+            assert writer.await_count == 1
+            assert writer.await_args.args[0] is run_ref
+            attributes = writer.await_args.args[1]
+            assert attributes == {
+                "browser_read_outcome": "failed",
+                "browser_completion_scope": "adapter_execution",
+                "browser_timing_clock": "monotonic_relative_ms",
+                "browser_stage_parent": "worker_adapter_execution",
+                "browser_stage_offsets_origin": "adapter_execution",
+                "read_stage_offsets_origin": "read_bridge_executor",
+                "decision_http_status": "unknown", "decision_http_headers_received": False,
+                "decision_http_exception": category, "decision_http_exception_kind": kind,
+                "decision_http_timeout_phase": phase,
+                "decision_error": expected_error, "decision_reason": expected_reason,
+            }
+            assert marker not in (
+                json.dumps(diagnostic) + json.dumps(attributes) + result.model_dump_json()
+            )
+            assert "_SyntheticUnknownHTTPError" not in json.dumps(attributes)
+
+    asyncio.run(scenario())
+    assert marker not in caplog.text
+
+
+@pytest.mark.parametrize("error_type,kind,phase", [
+    (httpx2.ReadTimeout, "read_timeout", "read"),
+    (httpx2.ReadError, "read_error", "none"),
+])
+def test_transport_classification_preserves_headers_when_response_body_fails(
+    error_type, kind: str, phase: str,
+) -> None:
+    async def scenario() -> None:
+        class FailedBody(httpx2.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"{"
+                raise error_type("synthetic body failure detail")
+
+        calls = []
+
+        def handler(req):
+            calls.append(req)
+            return httpx2.Response(200, stream=FailedBody())
+
+        async with httpx2.AsyncClient(
+            base_url="https://decision.invalid", trust_env=False,
+            transport=httpx2.MockTransport(handler),
+        ) as client:
+            collector = {}
+            provider = DecisionHTTPProvider(client, TypeSafeCodec(), deployment())
+            result = await provider._decide_with_collector(
+                request(), context(), collector,
+            )
+        assert collector == {
+            "http_status": 200, "http_headers_received": True,
+            "http_exception": "timeout" if phase == "read" else "transport",
+            "http_exception_kind": kind, "http_timeout_phase": phase,
+        }
+        assert result.error == ("timeout" if phase == "read" else "unavailable")
+        assert result.selected is None and len(calls) == 1
+        assert "synthetic body failure detail" not in (
+            json.dumps(collector) + result.model_dump_json()
+        )
+
+    asyncio.run(scenario())
+
+
+def test_late_cancelled_http_task_cannot_change_frozen_or_next_invocation_summary() -> None:
+    async def scenario():
+        entered, resume = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def handler(req):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                try:
+                    await resume.wait()
+                except asyncio.CancelledError:
+                    await resume.wait()  # Simulate a transport completing after cancellation.
+                return httpx2.Response(401, content=b"late private response")
+            return httpx2.Response(200, json=response_body())
+
+        async with httpx2.AsyncClient(base_url="https://decision.invalid", trust_env=False,
+                                     transport=httpx2.MockTransport(handler)) as client:
+            provider = DecisionHTTPProvider(client, TypeSafeCodec(), deployment())
+            factory = SimpleNamespace(decision=provider, _fence=AsyncMock())
+            decision = _FencedDecision(factory, object())
+            first_context = context()
+            first = asyncio.create_task(decision.decide(request(), first_context))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first_context.cancellation.set()
+                assert (await asyncio.wait_for(first, 2)).error == "cancelled"
+                frozen = decision.http_diagnostic()
+                assert frozen == {"http_status": "unknown", "http_headers_received": False, "http_exception": "none"}
+                pending = tuple(provider._pending)
+                assert len(pending) == 1
+                assert (await decision.decide(request(), context())).status == "selected"
+                second = decision.http_diagnostic()
+                assert second == {"http_status": 200, "http_headers_received": True, "http_exception": "none"}
+                resume.set()
+                await asyncio.wait_for(asyncio.gather(*pending), 2)
+                assert decision.http_diagnostic() == second
+                assert frozen == {"http_status": "unknown", "http_headers_received": False, "http_exception": "none"}
+                assert factory._fence.await_count == 4 and calls == 2
+            finally:
+                resume.set()
+                await asyncio.gather(first, *tuple(provider._pending), return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(

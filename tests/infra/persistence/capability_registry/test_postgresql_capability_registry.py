@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import delete, update
+from sqlalchemy import delete, insert, update
 
 from app.infra.persistence.capability_registry.schema import capabilities
 
@@ -122,6 +122,29 @@ def test_create_happy_path() -> None:
             await engine.dispose()
 
     asyncio.run(_run())
+
+
+def test_caller_session_reads_its_uncommitted_row_at_share_lock_position() -> None:
+    """The installed observation sees the caller transaction, unlike public get."""
+    _require_db()
+    capability = _capability()
+
+    async def scenario() -> None:
+        engine = _make_engine()
+        try:
+            factory = _make_factory(engine)
+            registry = _registry(factory)
+            async with factory() as session, session.begin():
+                await session.execute(insert(capabilities).values(**capability.model_dump(mode="python")))
+                assert await registry.get(capability.capability_id) is None
+                assert await registry._get_in_session(session, capability.capability_id, for_share=True) == capability
+                assert session.in_transaction()
+                # This synthetic test row has never been committed.
+                await session.rollback()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_create_duplicate_rejected() -> None:

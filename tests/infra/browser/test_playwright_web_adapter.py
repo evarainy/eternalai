@@ -22,8 +22,14 @@ from app.browser_skill.models import (
     VisibleCandidate,
 )
 from app.browser_skill.verifier import IndependentVerifier, failure
-from app.infra.browser.playwright_dom_rules import DOMRead, DOMStep, DOMValue, RegisteredDOMRules
-from app.infra.browser.playwright_web_adapter import PlaywrightWebAdapter, RegisteredExecution
+from app.infra.browser.playwright_dom_rules import (
+    DOMRead, DOMStep, DOMValue, RegisteredDOMRules,
+    _FILTER_BATCH, _READ, _READ_MANY, _ROW_IDENTITY_EVALUATE,
+)
+from app.infra.browser.playwright_observer import ExactNode, ExactRegion, ResolutionRound
+from app.infra.browser.playwright_web_adapter import (
+    PlaywrightWebAdapter, RegisteredExecution, _FINAL_IDENTITY, _OPTION_IDENTITY,
+)
 from tests.browser_skill.fakes import FakeWorld
 
 
@@ -50,9 +56,52 @@ class Handle:
     async def evaluate(self, script: str, arg: Any = None) -> Any:
         if self.disposed:
             raise RuntimeError("disposed")
+        if script == _READ_MANY:
+            assert set(arg) == {"fields", "limit"} and 1 <= len(arg["fields"]) <= 32
+            if not self.node.connected:
+                raise ValueError("detached")
+            result = []
+            for field in arg["fields"]:
+                self.world.private_selectors.append(field["selector"])
+                value = self.node.values.get(field["selector"])
+                if value is not None and len(value.encode()) > arg["limit"]:
+                    raise ValueError("bounded")
+                result.append(value)
+            return result
+        if script == _FILTER_BATCH:
+            assert set(arg) == {"nodes", "selector", "row_selector", "key", "limit"}
+            results = []
+            for index, handle in enumerate(arg["nodes"]):
+                node = handle.node
+                state, value, code = "match", None, None
+                if not self.node.connected or not node.connected:
+                    state, code = "fatal", "invalid_response"
+                elif not contains(self.node, node):
+                    state, code = "fatal", "denied"
+                elif not node_matches(node, arg["selector"]):
+                    state = "no_match"
+                elif arg["key"] is not None:
+                    row = closest(node, arg["row_selector"])
+                    if row is None or not contains(self.node, row):
+                        state, code = "fatal", "denied"
+                    else:
+                        value = row.values.get(arg["key"]["selector"])
+                        if value is not None and len(value.encode()) > arg["limit"]:
+                            state, value, code = "fatal", None, "invalid_response"
+                results.append({"index": index, "state": state, "value": value, "code": code})
+            return results
+        if script == _ROW_IDENTITY_EVALUATE:
+            assert set(arg) == {"row_selector", "selector", "fields", "node", "row"}
+            return row_identity(self.node, arg["node"].node, arg["row"].node, arg, self.world, True)
+        if script == _OPTION_IDENTITY:
+            assert arg is None
+            if len(self.node.value.encode()) > 4096 or len(self.node.label) > 256:
+                raise ValueError("bounded")
+            return [self.node.value, self.node.label]
         if "old === fresh" in script:
             return self.node is arg.node and self.node.connected
-        if "querySelectorAll(config.selector)" in script:
+        if script == _READ:
+            self.world.private_selectors.append(arg["selector"])
             value = self.node.values.get(arg["selector"])
             if value is not None and len(value.encode()) > arg["limit"]:
                 raise ValueError("bounded")
@@ -82,11 +131,16 @@ class Handle:
             return self.node.value
         if "region.contains(row)" in script:
             return arg.node in self.node.children
-        if "isConnected" in script:
+        if script == "el => el.isConnected":
             return self.node.connected
         raise AssertionError("unexpected_fixed_dom_primitive")
 
     async def evaluate_handle(self, script: str, arg: Any = None) -> Handle:
+        if script == ("(el, config) => ({node: el, region: config.region, "
+                      "row: config.selector ? el.closest(config.selector) : null})"):
+            assert set(arg) == {"region", "selector"}
+            return IdentityHandle(self.node, self.world, arg["region"].node,
+                                  closest(self.node, arg["selector"]) if arg["selector"] else None)
         if "closest(selector)" in script:
             current: Node | None = self.node
             while (current is not None and current.selector != arg
@@ -128,6 +182,84 @@ class Handle:
         return [self.node.value]
 
 
+def node_matches(node: Node, selector: str) -> bool:
+    return node.selector == selector or selector in node.also_matches
+
+
+def closest(node: Node, selector: str) -> Node | None:
+    current: Node | None = node
+    while current is not None:
+        if node_matches(current, selector):
+            return current
+        current = current.parent
+    return None
+
+
+def contains(region: Node, node: Node) -> bool:
+    return region is node or any(contains(child, node) for child in region.children)
+
+
+def row_identity(region: Node, node: Node, row: Node, config: dict, world: World, strict: bool) -> bool:
+    if not contains(region, row) or closest(node, config["row_selector"]) is not row:
+        return False
+    if config["selector"] and not node_matches(node, config["selector"]):
+        return False
+
+    def read(field):
+        world.private_selectors.append(field["selector"])
+        if not row.connected:
+            if strict:
+                raise ValueError("detached")
+            return None
+        value = row.values.get(field["selector"])
+        if value is not None and len(value.encode()) > field["limit"]:
+            if strict:
+                raise ValueError("bounded")
+            return None
+        return value
+
+    fields = config["fields"]
+    if read(fields[0]) != fields[0]["expected"]:
+        return False
+    if len(fields) >= 3:
+        tenant, user = read(fields[1]), read(fields[2])
+        if tenant != fields[1]["expected"] or user != fields[2]["expected"]:
+            return False
+    return len(fields) < 4 or read(fields[3]) == fields[3]["expected"]
+
+
+class IdentityHandle(Handle):
+    def __init__(self, node: Node, world: World, region: Node, row: Node | None) -> None:
+        super().__init__(node, world)
+        self.region, self.row = region, row
+
+    async def evaluate(self, script: str, config: Any = None) -> bool:
+        assert script == _FINAL_IDENTITY and not self.disposed
+        node, region = self.node, self.region
+        if (node is not config["element"].node or not node.connected or not region.connected
+                or not contains(region, node) or self.world.region is not region
+                or not node_matches(region, config["region_selector"])):
+            return False
+        if config["selector"] and not node_matches(node, config["selector"]):
+            return False
+        if config["row_selector"]:
+            row = closest(node, config["row_selector"])
+            if row is None or row is not self.row or not row.connected:
+                return False
+            if not row_identity(region, node, row, config, self.world, False):
+                return False
+        if config["target"] and (not node.visible or not node.enabled
+                                  or (config["operation"] == "fill" and not node.editable)):
+            return False
+        option = config["option"]
+        if option is not None and (not option.node.connected or option.node.parent is not node
+                                   or not option.node.enabled
+                                   or option.node.value != config["option_value"]
+                                   or option.node.label != config["option_label"]):
+            return False
+        return True
+
+
 class Context:
     def __init__(self) -> None:
         self.events: dict[str, Any] = {}
@@ -146,6 +278,8 @@ class Observer:
         self.world = world
         self.calls = 0
         self.borrowed: list[Handle] = []
+        self._regions = {"inbox": SimpleNamespace(region_selector="#region")}
+        self._round: ResolutionRound | None = None
 
     def borrow(self, node: Node) -> Handle:
         for previous in self.borrowed:
@@ -172,6 +306,66 @@ class Observer:
             raise failure("stale")
         return SimpleNamespace(page=w.page, frame=w.frame, element=self.borrow(node), ref=ref)
 
+    async def observe(self, session: Any, request: Any, policy: Any) -> Any:
+        self.calls += 1
+        if request.expected_scope is not None and request.expected_scope != self.world.view.scope:
+            raise failure("stale")
+        return self.world.view
+
+    def _make_round(self, session: Any, policy: Any) -> ResolutionRound:
+        w = self.world
+        region = ExactRegion(w.page, w.frame, Handle(w.region, w), w.view)
+        nodes = tuple((candidate, ExactNode(w.page, w.frame,
+                                           Handle(w.controls[candidate.ref.target_id], w), candidate.ref))
+                      for candidate in w.view.candidates)
+        return ResolutionRound(self, session, policy, region, nodes)
+
+    async def _check_projection_locked(self, session: Any, projection: Any, policy: Any) -> Any:
+        w = self.world
+        assert self._round is not None
+        await w.assert_business_authority(session, w.context.source)
+        if projection != w.view or not w.region.connected:
+            raise failure("stale")
+        for candidate, node in self._round.nodes:
+            if (w.controls.get(candidate.ref.target_id) is not node.element.node
+                    or not node.element.node.connected
+                    or (candidate.visible and not node.element.node.visible)
+                    or (candidate.enabled and not node.element.node.enabled)):
+                raise failure("stale")
+        await w.assert_business_authority(session, w.context.source)
+        return self._round.region, self._round.nodes
+
+    @asynccontextmanager
+    async def resolution_round(self, session: Any, request: Any, policy: Any):
+        projection = await self.observe(session, request, policy)
+        self._round = self._make_round(session, policy)
+        resolution = self._round
+        try:
+            await self._check_projection_locked(session, projection, policy)
+            yield resolution
+            await resolution.check()
+            # A mutation here models a change after the round's final real
+            # authority await and before the adapter's owned identity barrier.
+            self.world.after_round_hook()
+        finally:
+            resolution.active = False
+            for handle in (resolution.region.element, *(n.element for _, n in resolution.nodes)):
+                await handle.dispose()
+            self._round = None
+
+    @asynccontextmanager
+    async def _candidate_batch(self, session: Any, projection: Any, policy: Any):
+        self._round = self._make_round(session, policy)
+        resolution = self._round
+        try:
+            yield await self._check_projection_locked(session, projection, policy)
+            await self._check_projection_locked(session, projection, policy)
+        finally:
+            resolution.active = False
+            for handle in (resolution.region.element, *(n.element for _, n in resolution.nodes)):
+                await handle.dispose()
+            self._round = None
+
 
 class World(FakeWorld):
     def __init__(self, operation: str = "click") -> None:
@@ -181,6 +375,8 @@ class World(FakeWorld):
         self.business = True
         self.authority_calls = 0
         self.authority_hook = lambda: None
+        self.after_round_hook = lambda: None
+        self.private_selectors: list[str] = []
         self.page = SimpleNamespace(goto=self.goto)
         self.frame = SimpleNamespace(url=self.context.source.origin, parent_frame=None)
         self.live = SimpleNamespace(session=self.session, context=Context())
@@ -200,8 +396,9 @@ class World(FakeWorld):
             },
         )
         self.region = Node(selector="#region", children=[self.row])
-        if operation == "read":
-            self.control.parent = self.row
+        self.row.parent = self.region
+        self.control.parent = self.row
+        self.row.children.append(self.control)
         if operation == "select_option":
             self.control.children = [
                 Node(
@@ -363,23 +560,19 @@ def test_read_action_rechecks_selected_row_inside_dispatch_barrier() -> None:
 @pytest.mark.parametrize("mutation", ["owner", "hidden", "disabled", "detached"])
 def test_read_action_rechecks_row_after_current_authority(mutation: str) -> None:
     async def run() -> None:
-        baseline = World("read")
-        await baseline.adapter.execute(baseline.session, await baseline.command(), baseline.context)
-        last_authority_call = baseline.authority_calls
         w = World("read")
 
         def change() -> None:
-            if w.authority_calls == last_authority_call:
-                if mutation == "owner":
-                    w.row.values[".user"] = "other"
-                elif mutation == "hidden":
-                    w.control.visible = False
-                elif mutation == "disabled":
-                    w.control.enabled = False
-                else:
-                    w.control.connected = False
+            if mutation == "owner":
+                w.row.values[".user"] = "other"
+            elif mutation == "hidden":
+                w.control.visible = False
+            elif mutation == "disabled":
+                w.control.enabled = False
+            else:
+                w.control.connected = False
 
-        w.authority_hook = change
+        w.after_round_hook = change
         with pytest.raises(BrowserOperationError) as caught:
             await w.adapter.execute(w.session, await w.command(), w.context)
         assert caught.value.failure.code == "stale"
@@ -537,7 +730,7 @@ def test_private_record_changes_during_subject_recheck_fail_stale() -> None:
         w = World()
 
         def change():
-            if w.authority_calls == 2:
+            if w.observer.calls == 1:
                 w.row.values[".state"] = secrets.token_urlsafe(24)
 
         w.authority_hook = change
@@ -754,15 +947,13 @@ def test_business_key_locator_matches_private_actual_row_within_region(scenario:
                 receipt = await w.adapter.execute(w.session, command, w.context)
                 assert receipt.state == "acknowledged" and w.dom_sends == ["click"]
                 if scenario == "last_recheck":
-                    last_call = w.authority_calls
                     w.authority_calls = 0
                     w.dom_sends.clear()
 
                     def change():
-                        if w.authority_calls == last_call:
-                            w.row.values[".key"] = secrets.token_urlsafe(24)
+                        w.row.values[".key"] = secrets.token_urlsafe(24)
 
-                    w.authority_hook = change
+                    w.after_round_hook = change
                     with pytest.raises(BrowserOperationError) as caught:
                         await w.adapter.execute(w.session, command, w.context)
                     assert caught.value.failure.code == "stale" and w.dom_sends == []
@@ -772,22 +963,105 @@ def test_business_key_locator_matches_private_actual_row_within_region(scenario:
 
 def test_option_value_mutation_at_last_authority_check_invalidates_selected_ref() -> None:
     async def run():
-        baseline = World("select_option")
-        command = await baseline.command()
-        baseline.authority_calls = 0
-        await baseline.adapter.execute(baseline.session, command, baseline.context)
-        last_call = baseline.authority_calls
         w = World("select_option")
         command = await w.command()
         w.authority_calls = 0
 
         def mutate():
-            if w.authority_calls == last_call:
-                w.control.children[0].value = secrets.token_urlsafe(24)
+            w.control.children[0].value = secrets.token_urlsafe(24)
 
-        w.authority_hook = mutate
+        w.after_round_hook = mutate
         with pytest.raises(BrowserOperationError) as caught:
             await w.adapter.execute(w.session, command, w.context)
         assert caught.value.failure.code == "stale" and w.dom_sends == []
+
+    asyncio.run(run())
+
+
+def test_installed_operation_authority_is_exclusive_and_rechecked_after_cold_route() -> None:
+    async def run():
+        from unittest.mock import AsyncMock
+
+        w = World()
+        callback = AsyncMock(return_value=w.live)
+        adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key,
+                                            operation_authority=callback),),
+        )
+        await adapter._authority(w.session, w.context)
+        assert callback.await_count == 2  # Before and after the awaited route installation.
+        assert w.authority_calls == 0
+        callback.reset_mock()
+        await adapter._authority(w.session, w.context)
+        callback.assert_awaited_once()
+        session, actual, subject = callback.await_args.args
+        assert session == w.session and actual is w.context
+        assert subject.binding == w.session.binding and subject.business_key == w.confirmed.business_key
+        assert w.authority_calls == 0
+        callback.side_effect = failure("denied")
+        with pytest.raises(BrowserOperationError) as denied:
+            await adapter._authority(w.session, w.context)
+        assert denied.value.failure.code == "denied" and w.authority_calls == 0
+        assert w.dom_sends == []
+
+    asyncio.run(run())
+
+
+def test_route_installation_await_cannot_reuse_preinstall_operation_authority(monkeypatch) -> None:
+    async def run():
+        from unittest.mock import AsyncMock
+
+        w = World()
+        authorized = True
+
+        async def operation(session, actual, subject):
+            assert session == w.session and actual is w.context
+            if not authorized:
+                raise failure("denied")
+            return w.live
+
+        async def install(pattern, handler):
+            nonlocal authorized
+            assert pattern == "**/*" and callable(handler)
+            authorized = False
+
+        monkeypatch.setattr(w.live.context, "route", install)
+        callback = AsyncMock(side_effect=operation)
+        adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key,
+                                            operation_authority=callback),),
+        )
+        with pytest.raises(BrowserOperationError) as denied:
+            await adapter._authority(w.session, w.context)
+        assert denied.value.failure.code == "denied"
+        assert callback.await_count == 2 and w.authority_calls == 0 and w.dom_sends == []
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_failed_cold_route_cancels_execution_without_committing_guard(monkeypatch, cancel) -> None:
+    async def run():
+        from unittest.mock import AsyncMock
+
+        w = World()
+        callback = AsyncMock(return_value=w.live)
+        error = asyncio.CancelledError() if cancel else RuntimeError("synthetic route failure")
+        monkeypatch.setattr(w.live.context, "route", AsyncMock(side_effect=error))
+        adapter = PlaywrightWebAdapter(
+            registry=w, observer=w.observer, site=w.site, rules=(w.rules,),
+            executions=(RegisteredExecution(w.session, w.context, w.confirmed.business_key,
+                                            operation_authority=callback),),
+        )
+        with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
+            await adapter._authority(w.session, w.context)
+        assert w.context.cancellation.is_set()
+        assert w.session.session_ref not in adapter._guards
+        assert callback.await_count == 1 and w.dom_sends == []
+        with pytest.raises(BrowserOperationError) as closed:
+            await adapter._authority(w.session, w.context)
+        assert closed.value.failure.code == "cancelled" and callback.await_count == 1
 
     asyncio.run(run())

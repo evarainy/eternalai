@@ -318,9 +318,50 @@ def build_local_browser_vertical(
         deps.source, resources, deps.binding, deps.decision, ttl_seconds=deps.ttl_seconds,
         execution_timeout_seconds=deps.execution_timeout_seconds,
     )
-    lifecycle = LocalBrowserReadLifecycle(factory, deps.cleanup_authority)
+    async def no_resource(run: RunSnapshot) -> bool:
+        return await leases._prove_no_run_resource(run)
+
+    async def no_resource_in_session(transaction: object, run: RunSnapshot) -> bool:
+        if not isinstance(transaction, AsyncSession):
+            raise BrowserLeaseError("browser_lease_stale")
+        return await leases._prove_no_run_resource_in_session(transaction, run)
+
+    lifecycle = LocalBrowserReadLifecycle(
+        factory, deps.cleanup_authority,
+        no_resource=no_resource, no_resource_in_session=no_resource_in_session,
+    )
     wrapped = FixedSourceReadFactory(factory, deps.source)
     unsupported = UnsupportedLocalProfiles()
+    async def readiness(run: RunSnapshot, session: AsyncSession | None) -> bool:
+        if (run.owner.tenant_id != deps.binding.tenant_id
+                or run.owner.user_id != deps.binding.ai_user_id
+                or run.admission.binding_id != deps.binding.binding_id
+                or run.admission.binding_revision != deps.binding.binding_revision
+                or run.admission.target_system != deps.binding.target_system
+                or run.admission.publication_digest.hex() != deps.source.manifest.digest):
+            return False
+        # Only this candidate's persisted progress/reservation is exempt.
+        # worker_epoch alone cannot exempt a retry that still needs a new slot.
+        if (run.cancel_requested or run.verification == "verified"
+                or run.effect != "not_sent" or run.lease_epoch is not None
+                or run.phase not in {"queued", "acquiring"}):
+            return True
+        held = (await leases.has_run_lease(run) if session is None
+                else await leases._has_run_lease_in_session(session, run))
+        if held:
+            return True
+        return (await leases.has_capacity(deps.binding, deps.deployment.provider_key)
+                if session is None else await leases._has_capacity_in_session(
+                    session, deps.binding, deps.deployment.provider_key,
+                ))
+
+    async def business_ready(run: RunSnapshot) -> bool:
+        return await readiness(run, None)
+
+    async def business_ready_in_session(session: AsyncSession, run: RunSnapshot) -> bool:
+        # Both hints are sequential in this exact claim transaction.
+        return await readiness(run, session)
+
     configured = build_browser_vertical(BrowserVerticalDependencies(
         session_factory=deps.session_factory, capability_registry=deps.capability_registry,
         session_binder=deps.session_binder, policy=deps.policy, tenant_id=deps.binding.tenant_id,
@@ -333,13 +374,15 @@ def build_local_browser_vertical(
         execution_factory=wrapped, lifecycle=lifecycle,
         profile_capture_proof=unsupported, profile_cleanup_proof=unsupported,
         profile_cleanup_authority=unsupported, cancel_check=lifecycle.check_cancel,
+        cancel_check_in_session=lifecycle.check_cancel_in_session,
         cleanup_authorize=deps.cleanup_authorize, cleanup_check=lifecycle.check_cleanup,
         chat_parser=chat_parser,
         chat_bindings=PostgreSQLBrowserChatBindingResolver(
             deps.session_factory, deps.session_binder, seed=deps.source.manifest,
         ),
         trace=deps.trace, sessions=deps.sessions, worker_id=deps.worker_id,
-        enabled=True, worker_ttl_seconds=deps.ttl_seconds,
+        enabled=True, worker_ttl_seconds=deps.ttl_seconds, business_ready=business_ready,
+        business_ready_in_session=business_ready_in_session,
     ))
     if configured is None:
         raise ValueError("browser_local_composition_unavailable")
@@ -351,9 +394,11 @@ def build_local_browser_vertical(
         ),
         proof_context=deps.proof_context, proof_verifier=resources,
         cleanup_authority=deps.cleanup_authority, resource_subject=resources,
+        current_in_session=configured.current_auth.check_current_in_session,
     )
     factory.install_authority(
         leases=leases, current_auth=configured.current_auth,
         binding_reader=configured.binding_reader,
+        lease_reserved=leases.has_run_lease,
     )
     return configured

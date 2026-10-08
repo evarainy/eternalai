@@ -96,20 +96,43 @@ class _Progress:
     stage: ReadAwaitStage = "bootstrap"
     stage_started: float = field(default_factory=time.monotonic)
     elapsed: dict[ReadAwaitStage, float] = field(default_factory=dict)
+    first_started: dict[ReadAwaitStage, float] = field(default_factory=dict)
+    last_ended: dict[ReadAwaitStage, float] = field(default_factory=dict)
+    timing_origin: float = field(default_factory=time.monotonic)
 
     def mark(self, stage: ReadAwaitStage) -> None:
         now = time.monotonic()
+        self.first_started.setdefault(self.stage, self.stage_started)
+        self.last_ended[self.stage] = now
         self.elapsed[self.stage] = self.elapsed.get(self.stage, 0.0) + now - self.stage_started
         self.stage = stage
         self.stage_started = now
 
-    def diagnostic(self) -> dict[str, int]:
+    def diagnostic(self, result: str) -> dict[str, str | int]:
+        now = time.monotonic()
         elapsed = dict(self.elapsed)
-        elapsed[self.stage] = elapsed.get(self.stage, 0.0) + time.monotonic() - self.stage_started
-        return {
+        elapsed[self.stage] = elapsed.get(self.stage, 0.0) + now - self.stage_started
+        diagnostic: dict[str, str | int] = {
             "read_total_" + stage + "_ms": max(0, min(300000, int(duration * 1000)))
             for stage, duration in elapsed.items() if stage in get_args(ReadAwaitStage)
         }
+        for stage in elapsed:
+            if stage not in get_args(ReadAwaitStage):
+                continue
+            prefix = "read_" + stage
+            start = self.first_started.get(stage, self.stage_started)
+            end = now if stage == self.stage else self.last_ended[stage]
+            # Revisited stages expose first/last offsets and cumulative active time,
+            # not a second total to add to their enclosing executor span.
+            diagnostic[prefix + "_start_ms"] = max(0, min(
+                300000, int((start - self.timing_origin) * 1000),
+            ))
+            diagnostic[prefix + "_end_ms"] = max(0, min(
+                300000, int((end - self.timing_origin) * 1000),
+            ))
+            diagnostic[prefix + "_parent"] = "read_bridge_executor"
+            diagnostic[prefix + "_result"] = result if stage == self.stage else "ok"
+        return diagnostic
 
 
 class _DecisionStopped(Exception):
@@ -144,13 +167,19 @@ class BrowserExecutor:
         self._pending: set[asyncio.Task[ExecutionOutcome]] = set()
         self._last_failure_diagnostic: tuple[ReadAwaitStage, int, str] | None = None
         self._last_decision_diagnostic: dict[str, str] | None = None
-        self._last_stage_diagnostic: dict[str, int] = {}
+        self._last_stage_diagnostic: dict[str, str | int] = {}
 
     def _finish(
         self, outcome: ExecutionOutcome, progress: _Progress, *,
         stage: ReadAwaitStage | None = None, started: float | None = None,
     ) -> ExecutionOutcome:
-        self._last_stage_diagnostic = progress.diagnostic()
+        result = (
+            "ok" if outcome.verification is not None and outcome.verification.status == "verified"
+            else "cancelled" if outcome.failure is not None and outcome.failure.code == "cancelled"
+            else "failed" if outcome.failure is not None or outcome.verification is not None
+            else "stopped"
+        )
+        self._last_stage_diagnostic = progress.diagnostic(result)
         if outcome.failure is not None and outcome.failure.code in _DIAGNOSTIC_CODES:
             began = progress.stage_started if started is None else started
             elapsed_ms = max(0, min(300000, int((time.monotonic() - began) * 1000)))

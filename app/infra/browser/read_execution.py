@@ -39,12 +39,14 @@ from app.browser_skill.models import (
     SealedParameter,
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.runtime import _BrowserReadDeferred
 from app.browser_skill.site_rules import RegisteredQueryReadRule
 from app.browser_skill.verifier import IndependentVerifier, ReadSpecResolver, failure
 from app.infra.browser.playwright_dom_rules import RegisteredDOMRules
 from app.infra.browser.playwright_observer import PlaywrightObserver
 from app.infra.browser.playwright_web_adapter import (
     BusinessRegistry,
+    OperationAuthority,
     PlaywrightWebAdapter,
     RegisteredExecution,
 )
@@ -79,6 +81,12 @@ class RegisteredReadExecution:
     resolver: ReadSpecResolver
     decision_contexts: DecisionContextFactory
     project_output: BrowserOutputProjector
+    bind_publication_guard: Callable[
+        [Callable[[RunSnapshot], Awaitable[None]]], ExecutionContext
+    ] | None = None
+    bind_operation_authority: Callable[[ExecutionContext], OperationAuthority] | None = None
+    authority_diagnostic: Callable[[], dict[str, int]] | None = None
+    decision_http_diagnostic: Callable[[], dict[str, str | int]] | None = None
 
 
 class BrowserReadExecutionFactory(Protocol):
@@ -172,24 +180,74 @@ class VerifiedBrowserReadExecution:
         *, web: PlaywrightWebAdapter | None = None, session_ref: str | None = None,
         decision: DecisionResult | None = None,
         decision_diagnostic: Mapping[str, str] | None = None,
-        stage_diagnostic: Mapping[str, int] | None = None,
+        http_diagnostic: Mapping[str, str | int] | None = None,
+        stage_diagnostic: Mapping[str, str | int] | None = None,
+        bridge_diagnostic: Mapping[str, str | int] | None = None,
+        verified: bool = False, refresh_calls: int | None = None,
+        acquisition_ms: int | None = None,
+        read_result: str = "failed", model_calls: int | None = None,
     ) -> None:
-        if self._record_diagnostic is None or (
-            diagnostic is None and (decision is None or decision.selected is not None)
-        ):
+        if self._record_diagnostic is None:
             return
         try:
             # Existing Trace routing metadata is separate from these attributes.
             # No DOM, identity, input or exception text enters the diagnostic.
-            attributes: dict[str, str | int] = {}
+            attributes: dict[str, str | int] = {
+                "browser_read_outcome": "verified" if verified else read_result,
+                "browser_completion_scope": "adapter_execution",
+                "browser_timing_clock": "monotonic_relative_ms",
+                "browser_stage_parent": "worker_adapter_execution",
+                "browser_stage_offsets_origin": "adapter_execution",
+                "read_stage_offsets_origin": "read_bridge_executor",
+            }
+            if type(model_calls) is int and 0 <= model_calls <= 10000:
+                attributes["read_model_calls"] = model_calls
+            if type(refresh_calls) is int and 0 <= refresh_calls <= 10000:
+                attributes["worker_refresh_calls"] = refresh_calls
+            if type(acquisition_ms) is int and 0 <= acquisition_ms <= 300000:
+                attributes["read_acquisition_ms"] = acquisition_ms
             if stage_diagnostic is not None:
                 for stage in get_args(ReadAwaitStage):
                     name = "read_total_" + stage + "_ms"
                     value = stage_diagnostic.get(name)
                     if type(value) is int and 0 <= value <= 300000:
                         attributes[name] = value
+                    for suffix in ("start_ms", "end_ms", "parent", "result"):
+                        name = "read_" + stage + "_" + suffix
+                        value = stage_diagnostic.get(name)
+                        if ((type(value) is int and 0 <= value <= 300000)
+                                or (suffix == "parent" and value == "read_bridge_executor")
+                                or (suffix == "result" and value in {
+                                    "ok", "failed", "cancelled", "stopped",
+                                })):
+                            attributes[name] = value
+            if bridge_diagnostic is not None:
+                attributes.update(bridge_diagnostic)
             if web is not None and session_ref is not None:
                 attributes.update(web._execution_diagnostic(session_ref))
+            if http_diagnostic is not None:
+                status = http_diagnostic.get("http_status")
+                if status == "unknown" or (type(status) is int and 100 <= status <= 599):
+                    attributes["decision_http_status"] = status
+                headers = http_diagnostic.get("http_headers_received")
+                if type(headers) is bool:
+                    attributes["decision_http_headers_received"] = headers
+                category = http_diagnostic.get("http_exception")
+                if type(category) is str and category in {"none", "timeout", "transport", "cancelled"}:
+                    attributes["decision_http_exception"] = category
+                kind = http_diagnostic.get("http_exception_kind")
+                if type(kind) is str and kind in {
+                    "connect_timeout", "read_timeout", "write_timeout", "pool_timeout", "timeout",
+                    "connect_error", "read_error", "write_error", "close_error", "proxy_error",
+                    "local_protocol_error", "remote_protocol_error", "unsupported_protocol",
+                    "decoding_error", "http_error",
+                }:
+                    attributes["decision_http_exception_kind"] = kind
+                phase = http_diagnostic.get("http_timeout_phase")
+                if type(phase) is str and phase in {
+                    "connect", "read", "write", "pool", "unknown", "none",
+                }:
+                    attributes["decision_http_timeout_phase"] = phase
             if diagnostic is not None:
                 stage, elapsed_ms, code = diagnostic
                 attributes.update({
@@ -239,6 +297,27 @@ class VerifiedBrowserReadExecution:
         web: PlaywrightWebAdapter | None = None
         execution: RegisteredReadExecution | None = None
         attempted = False
+        executor: BrowserExecutor | None = None
+        outcome = None
+        acquisition_ms: int | None = None
+        read_result = "failed"
+        origin = phase_started = time.monotonic()
+        phase: str | None = "bootstrap"
+        bridge_diagnostic: dict[str, str | int] = {}
+
+        def mark(next_phase: str | None, result: str = "ok") -> None:
+            nonlocal phase, phase_started
+            now = time.monotonic()
+            if phase is not None:
+                prefix = "read_bridge_" + phase
+                bridge_diagnostic.update({
+                    prefix + "_start_ms": max(0, min(300000, int((phase_started - origin) * 1000))),
+                    prefix + "_end_ms": max(0, min(300000, int((now - origin) * 1000))),
+                    prefix + "_duration_ms": max(0, min(300000, int((now - phase_started) * 1000))),
+                    prefix + "_parent": "adapter_execution", prefix + "_result": result,
+                })
+            phase, phase_started = next_phase, now
+
         try:
             run = await checkpoint.refresh()
             if (
@@ -261,6 +340,7 @@ class VerifiedBrowserReadExecution:
             observe_only = self._observe_only_manifest is not None and (
                 manifest == self._observe_only_manifest
             )
+            mark("input")
             private_input = self._cipher.decrypt_input(run.admission)
             query_business_key: str | None = None
             if isinstance(manifest.site.read_rule, RegisteredQueryReadRule):
@@ -284,9 +364,14 @@ class VerifiedBrowserReadExecution:
                 Draft202012Validator.check_schema(schema)
                 Draft202012Validator(schema, registry=Registry()).validate(arguments)
                 query_business_key = arguments["business_key"]
+            mark("acquisition")
             execution = await self._factory.open(
                 run, manifest, private_input, checkpoint,
             )
+            acquisition_ms = min(300000, max(0, int(
+                (time.monotonic() - phase_started) * 1000
+            )))
+            mark("context_setup")
             run = await checkpoint.refresh()
             binding = execution.context.expected_binding
             if (
@@ -305,7 +390,13 @@ class VerifiedBrowserReadExecution:
                 raise BrowserReadExecutionError("denied")
             context = self._fenced_context(
                 execution.context, manifest, checkpoint, business_key=query_business_key,
+                bind_publication_guard=execution.bind_publication_guard,
             )
+            operation_authority = None
+            if execution.bind_operation_authority is not None:
+                if execution.bind_publication_guard is None:
+                    raise failure("denied")
+                operation_authority = execution.bind_operation_authority(context)
             web = PlaywrightWebAdapter(
                 registry=execution.registry, observer=execution.observer, site=execution.site,
                 rules=execution.rules,
@@ -314,6 +405,8 @@ class VerifiedBrowserReadExecution:
                         execution.session, context, execution.confirmed_key,
                         project_output=execution.project_output,
                         stop_after_observe=observe_only,
+                        operation_authority=operation_authority,
+                        authority_diagnostic=execution.authority_diagnostic,
                     ),
                 ),
             )
@@ -326,14 +419,10 @@ class VerifiedBrowserReadExecution:
             )
             await checkpoint.start_execution()
             attempted = True
+            mark("executor")
             outcome = await executor.run(execution.session, context)
-            await self._record_failure_diagnostic(
-                run, executor._last_failure_diagnostic,
-                web=web, session_ref=execution.session.session_ref,
-                decision=outcome.decisions[-1] if outcome.decisions else None,
-                decision_diagnostic=executor._last_decision_diagnostic,
-                stage_diagnostic=executor._last_stage_diagnostic,
-            )
+            mark("post_execution", "verified" if outcome.verification is not None
+                 and outcome.verification.status == "verified" else "failed")
             await checkpoint.refresh(allow_cancel=True)
             observed_ms = web._observe_only_completed.get(execution.session.session_ref)
             if (observe_only and observed_ms is not None and outcome.verification is None
@@ -351,14 +440,18 @@ class VerifiedBrowserReadExecution:
                 effect = "acknowledged"
             verified = outcome.verification
             if verified is None or verified.status != "verified":
+                if outcome.failure is not None and outcome.failure.code == "cancelled":
+                    read_result = "cancelled"
                 return BrowserReadOutcome(
                     effect, verified.status if verified else None,
                     dispatch_failure_code=outcome.failure.code if outcome.failure else None,
                 )
             if verified.evidence_digest is None:
                 raise BrowserReadExecutionError("invalid_response")
+            mark("publication")
             await self._publications.assert_current(run.owner, manifest)
             run = await checkpoint.refresh()
+            mark("output_emission")
             evidence_digest = bytes.fromhex(verified.evidence_digest)
             projector = execution.project_output
 
@@ -391,17 +484,31 @@ class VerifiedBrowserReadExecution:
             if len(self._emissions) >= 128 and run.run_id not in self._emissions:
                 raise BrowserReadExecutionError("unavailable")
             self._emissions[run.run_id] = _VerifiedEmission(run, protected, time.monotonic() + 120)
+            read_result = "verified"
             return protected
+        except _BrowserReadDeferred:
+            if execution is None and not attempted:
+                read_result = "deferred"
+                raise
+            # No deferred retry is permitted after a resource was opened.
+            return BrowserReadOutcome("unknown", None, dispatch_failure_code="unavailable")
         except BrowserReadExecutionError as error:
+            if error.code == "cancelled":
+                read_result = "cancelled"
             if attempted:
                 return BrowserReadOutcome("unknown", None, dispatch_failure_code=error.code)
             raise
         except BrowserOperationError as error:
+            if error.failure.code == "cancelled":
+                read_result = "cancelled"
             return BrowserReadOutcome(
                 "unknown" if attempted or error.failure.dispatch_state == "possibly_sent"
                 else "not_sent",
                 None, dispatch_failure_code=error.failure.code,
             )
+        except asyncio.CancelledError:
+            read_result = "cancelled"
+            raise
         except Exception:
             if attempted:
                 return BrowserReadOutcome("unknown", None, dispatch_failure_code="invalid_response")
@@ -409,6 +516,30 @@ class VerifiedBrowserReadExecution:
         finally:
             if web is not None and execution is not None:
                 web._discard_private_result(execution.session)
+            mark(None, "ok" if read_result == "verified" else read_result)
+            adapter_ms = max(0, min(300000, int((time.monotonic() - origin) * 1000)))
+            bridge_diagnostic.update({
+                "read_adapter_start_ms": 0,
+                "read_adapter_end_ms": adapter_ms,
+                "read_adapter_duration_ms": adapter_ms,
+                "read_adapter_result": read_result,
+            })
+            # One end-of-attempt summary, after every adapter success condition.
+            # Durable verification/finalization remains owned by worker/store.
+            await self._record_failure_diagnostic(
+                run, executor._last_failure_diagnostic if executor is not None else None,
+                web=web, session_ref=execution.session.session_ref if execution is not None else None,
+                decision=outcome.decisions[-1] if outcome is not None and outcome.decisions else None,
+                decision_diagnostic=executor._last_decision_diagnostic if executor is not None else None,
+                http_diagnostic=(execution.decision_http_diagnostic()
+                                 if execution is not None and execution.decision_http_diagnostic is not None
+                                 else None),
+                stage_diagnostic=executor._last_stage_diagnostic if executor is not None else None,
+                bridge_diagnostic=bridge_diagnostic, verified=read_result == "verified",
+                refresh_calls=getattr(checkpoint, "refresh_calls", None),
+                acquisition_ms=acquisition_ms, read_result=read_result,
+                model_calls=outcome.model_calls if outcome is not None else None,
+            )
 
     def _prune_emissions(self) -> None:
         now = time.monotonic()
@@ -467,7 +598,24 @@ class VerifiedBrowserReadExecution:
     def _fenced_context(
         self, original: ExecutionContext, manifest: BrowserPublicationManifest,
         checkpoint: BrowserWorkerCheckpoint, *, business_key: str | None = None,
+        bind_publication_guard: Callable[
+            [Callable[[RunSnapshot], Awaitable[None]]], ExecutionContext
+        ] | None = None,
     ) -> ExecutionContext:
+        async def publication_guard(run: RunSnapshot) -> None:
+            if (run.admission.publication_digest.hex() != manifest.digest
+                    or run.owner != original.expected_binding.owner):
+                raise failure("denied")
+            await self._publications.assert_current(run.owner, manifest)
+
+        # A registered concrete context can compose publication checks into its
+        # DB-only fences. Generic factories retain the full bridge wrappers.
+        composed = bind_publication_guard is not None
+        if bind_publication_guard is not None:
+            bound = bind_publication_guard(publication_guard)
+            if bound is not original:
+                raise failure("denied")
+
         async def fence() -> None:
             try:
                 run = await checkpoint.refresh()
@@ -478,28 +626,34 @@ class VerifiedBrowserReadExecution:
                 raise failure("denied") from None
 
         async def current_binding(session: BrowserSessionRef) -> ScopeBinding:
-            await fence()
+            if not composed:
+                await fence()
             binding = await original.current_binding(session)
-            await fence()
+            if not composed:
+                await fence()
             return binding
 
         async def authorize(
             session: BrowserSessionRef, skill: BrowserSkill,
             subject: ActionCommand | ReadSpec, binding: ScopeBinding,
         ) -> None:
-            await fence()
+            if not composed:
+                await fence()
             await original.authorize(session, skill, subject, binding)
-            await fence()
+            if not composed:
+                await fence()
 
         async def resolve_parameter(
             ref: ParameterRef, purpose: ParameterPurpose, binding: ScopeBinding,
             skill_digest: str, step_id: str,
         ) -> SealedParameter:
-            await fence()
+            if not composed:
+                await fence()
             if purpose == "expected_field":
                 raise failure("denied")
             sealed = await original.resolve_parameter(ref, purpose, binding, skill_digest, step_id)
-            await fence()
+            if not composed:
+                await fence()
             if purpose == "business_key" and (
                 business_key is None or ref != manifest.site.read_rule.key_ref
                 or not sealed.consume(
@@ -515,11 +669,14 @@ class VerifiedBrowserReadExecution:
         async def barrier(
             session: BrowserSessionRef, command: ActionCommand, binding: ScopeBinding,
         ) -> AsyncIterator[DispatchPermit]:
-            await fence()
-            async with original.dispatch_barrier(session, command, binding) as permit:
+            if not composed:
                 await fence()
+            async with original.dispatch_barrier(session, command, binding) as permit:
+                if not composed:
+                    await fence()
                 yield permit
-            await fence()
+            if not composed:
+                await fence()
 
         return replace(
             original, current_binding=current_binding,

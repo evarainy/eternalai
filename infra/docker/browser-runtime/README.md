@@ -281,3 +281,58 @@ Jev attempt at USD 0.01; the platform cap remains USD 0.15. On failure retain
 all state and stop; no retry, reset, bootstrap or third round. Stop the exact
 API container `browser-v42-diagnostic-2-api` after deactivation or its failure.
 These instructions do not imply that any second-round operation has run.
+
+## Continue on another computer
+
+The 2026-10-08 delivery preserves the complete task branch, including its
+previously uncommitted performance, scheduling, DOM batching, diagnostic and
+regression-test changes. Fetch `phase2/P2-BROWSER-RUNTIME-V42-001` and use that
+branch for review and continuation. The branch is a draft candidate: its
+browser/runtime changes are not approved for main-branch integration.
+
+The latest owner-window trial, attempt
+`80b4ae03d9a040b997659760136c969f`, stopped during `prepare` with
+`browser_synthetic_publication_configuration_invalid`. Renewal of the three
+identities succeeded, but Task/Run creation and Jev dispatch both remained at
+zero. Total duration was 42.411 seconds; resources were not occupied and the
+containers exited. These facts were supplied by the original task window;
+this delivery did not rerun the trial or inspect private runtime artifacts.
+The publication configuration failure remains unresolved. No completed
+browser business flow or paid-model success is claimed.
+
+The source task reports that diagnostic image
+`sha256:75fb90e8faa4300814f23076fef3722b6422575f5fbeb2ea651888a2bc9ccfca`
+was checked against a 240-source-file inventory before delivery. This is an
+image identity from that audit, not a fresh build or validation result for the
+Git delivery commit. A different computer must establish its own reviewed
+image/source binding before any authorized run.
+
+Git carries the Python entry points under `scripts/`, the decision service,
+Dockerfile and both Compose definitions. It does not carry the local Documents
+console, its session state, the private DB file, encrypted vault volume,
+credentials, temporary refresh helper, empty env file or local seccomp profile.
+The current launcher and Compose override still contain original machine paths;
+cloning the branch alone does not make those paths usable on another computer.
+This delivery intentionally preserves those entry points.
+
+For a later approved environment setup, reconstruct the console from the tracked
+launcher interfaces and this runbook rather than copying a machine's Documents
+folder. Review these dependencies and map their paths explicitly:
+
+| Dependency | Recovery information |
+|---|---|
+| Checkout and Python | Use the fetched task branch and its locked dependencies. `_WORKTREE` in `run_browser_synthetic_jev_launcher.py` currently identifies the original checkout. |
+| Owner input | `_SOURCE` identifies the original local configuration source. Keep all input values outside Git and use the existing owner-terminal/private-stdin interface; do not pass values through command arguments or output. |
+| Compose environment | `_EMPTY_ENV` is the original task's empty env file. It is distinct from owner credential configuration. |
+| Chromium sandbox | `_SECCOMP` identifies an externally reviewed profile; its required hash is `_SECCOMP_SHA256`. Obtain and verify the reviewed profile; do not replace it with a permissive fallback. |
+| Refresh helper | `_REFRESH_SCRIPT` is an external helper with a required public hash. It is not included in Git. Its future recovery requires the original reviewed source or a separately reviewed equivalent. |
+| Fixed test database and vault | The Compose override refers to the original private DB-file mount and external network, plus the encrypted named vault volume. Recover or create these only under the applicable DB/identity authority; an existing initialization must not be repeated as a transfer shortcut. |
+| Image and deadline | Set a reviewed immutable image ID and a newly authorized future deadline. Historical trial deadlines and identity renewal do not establish authorization for a new attempt. |
+
+Before requesting another paid or business attempt, finish the read-only
+diagnosis of the publication configuration failure and review any proposed
+change separately. Pro review should examine scheduling/lease fencing,
+same-session authorization reuse, DOM handle ownership and batching,
+diagnostic redaction/error paths, cleanup, and source/image/launcher consistency.
+Earlier test receipts must retain their original source binding; this delivery
+did not run tests, build an image or launch containers.

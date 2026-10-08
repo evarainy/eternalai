@@ -22,6 +22,30 @@ from app.browser_skill.models import (
 from app.infra.browser.decision_adapters import DecisionCodec, LocalChoiceCodec, ModelMismatch
 
 
+def _http_exception_diagnostic(exc: httpx2.HTTPError) -> dict[str, str]:
+    # Fixed labels only: exception messages, requests and dynamic class names
+    # can contain private data. A generic timeout does not prove a wait phase.
+    for error_type, kind, phase in (
+        (httpx2.ConnectTimeout, "connect_timeout", "connect"),
+        (httpx2.ReadTimeout, "read_timeout", "read"),
+        (httpx2.WriteTimeout, "write_timeout", "write"),
+        (httpx2.PoolTimeout, "pool_timeout", "pool"),
+        (httpx2.TimeoutException, "timeout", "unknown"),
+        (httpx2.ConnectError, "connect_error", "none"),
+        (httpx2.ReadError, "read_error", "none"),
+        (httpx2.WriteError, "write_error", "none"),
+        (httpx2.CloseError, "close_error", "none"),
+        (httpx2.ProxyError, "proxy_error", "none"),
+        (httpx2.LocalProtocolError, "local_protocol_error", "none"),
+        (httpx2.RemoteProtocolError, "remote_protocol_error", "none"),
+        (httpx2.UnsupportedProtocol, "unsupported_protocol", "none"),
+        (httpx2.DecodingError, "decoding_error", "none"),
+    ):
+        if isinstance(exc, error_type):
+            return {"http_exception_kind": kind, "http_timeout_phase": phase}
+    return {"http_exception_kind": "http_error", "http_timeout_phase": "none"}
+
+
 class DecisionDeployment(Contract):
     """Operator-verified registry, not request-controlled flags or ENV labels.
 
@@ -92,6 +116,15 @@ class DecisionHTTPProvider:
         request: DecisionRequest,
         context: DecisionCallContext,
     ) -> DecisionResult:
+        return await self._decide_with_collector(request, context, {})
+
+    async def _decide_with_collector(
+        self, request: DecisionRequest, context: DecisionCallContext,
+        collector: dict[str, str | int],
+    ) -> DecisionResult:
+        # One invocation owns this collector. The trusted caller freezes a copy;
+        # a late task can only update this discarded invocation's dictionary.
+        collector.update(http_status="unknown", http_headers_received=False, http_exception="none")
         def failure(error: str, reason: str) -> DecisionResult:
             return DecisionResult.model_validate(
                 {
@@ -130,7 +163,7 @@ class DecisionHTTPProvider:
         if len(body) > context.budget.max_request_bytes:
             return failure("input_unsupported", "budget")
 
-        async def send() -> DecisionResult:
+        async def exchange() -> DecisionResult:
             async with self._client.stream(
                 "POST",
                 self._codec.path,
@@ -139,6 +172,9 @@ class DecisionHTTPProvider:
                 timeout=remaining,
                 follow_redirects=False,
             ) as response:
+                collector["http_headers_received"] = True
+                status = response.status_code
+                collector["http_status"] = status if type(status) is int and 100 <= status <= 599 else "unknown"
                 if response.status_code == 401:
                     return failure("unavailable", "unauthorized")
                 if response.status_code == 422:
@@ -166,6 +202,21 @@ class DecisionHTTPProvider:
                     return failure("model_mismatch", "model")
                 except (ValueError, TypeError, RecursionError):
                     return failure("invalid_response", "malformed")
+
+        async def send() -> DecisionResult:
+            try:
+                return await exchange()
+            except httpx2.TimeoutException as exc:
+                collector["http_exception"] = "timeout"
+                collector.update(_http_exception_diagnostic(exc))
+                raise
+            except httpx2.HTTPError as exc:
+                collector["http_exception"] = "transport"
+                collector.update(_http_exception_diagnostic(exc))
+                raise
+            except asyncio.CancelledError:
+                collector["http_exception"] = "cancelled"
+                raise
 
         operation = asyncio.create_task(send())
         cancellation = asyncio.create_task(context.cancellation.wait())

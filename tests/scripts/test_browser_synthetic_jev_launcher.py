@@ -429,3 +429,217 @@ def test_preflight_failures_stop_before_secret_read_or_dispatch(
         entry.launch("api", approved_deadline_utc=_future(), expected_image_id=image_id)
     source.assert_not_called()
     process.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["unquoted", "single", "double", "unicode", "escapes", "quotes"])
+def test_passport_input_routes_preserve_same_synthetic_value(
+    kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.infra.browser import synthetic_private_input as private
+
+    phrase = {
+        "unquoted": "synthetic-only phrase", "single": "  synthetic-only phrase \t ",
+        "double": "synthetic-only phrase", "unicode": "synthetic-only \u4e00\U0001f31f e\u0301",
+        "escapes": r"synthetic-only\n\t literal", "quotes": '"synthetic-only phrase"',
+    }[kind]
+    quote = b"" if kind == "unquoted" else b'"' if kind == "double" else b"'"
+    payload = b"jev-passport= \t" + quote + phrase.encode("utf-8") + quote + b" \t\r\n"
+    assert entry._project_field(io.BytesIO(payload), b"jev-passport") == phrase
+    monkeypatch.setattr(entry, "sys", SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True),
+                                                      stderr=SimpleNamespace(isatty=lambda: True)))
+    monkeypatch.setattr(entry.getpass, "getpass", Mock(return_value=phrase))
+    monkeypatch.setattr(entry, "_preflight", Mock())
+    monkeypatch.setattr(entry, "_check_image", Mock())
+    monkeypatch.setattr(entry, "_check_refresh_script", Mock())
+    field_reader = Mock(side_effect=AssertionError("real field read forbidden"))
+    key_reader = Mock(side_effect=AssertionError("provider key forbidden"))
+    monkeypatch.setattr(entry, "_read_exact_field", field_reader)
+    monkeypatch.setattr(entry, "read_exact_jev_key", key_reader)
+    captured: list[bytes] = []
+
+    class Process:
+        returncode = 0
+
+        def __init__(self, arguments, **kwargs):
+            assert kwargs["stdin"] is subprocess.PIPE
+            assert phrase not in repr(arguments) and phrase not in repr(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def communicate(self, *, input):
+            captured.append(input)
+
+    monkeypatch.setattr(entry.subprocess, "Popen", Process)
+    assert entry.launch("refresh", approved_deadline_utc=_future(),
+                        expected_image_id="sha256:" + "a" * 64, trial_id="observe-only",
+                        attempt_id="b" * 32, identity_attempt_id="a" * 32,
+                        refresh_script_sha256="c" * 64) == 0
+    assert len(captured) == 1
+    monkeypatch.setattr(private, "sys", SimpleNamespace(stdin=SimpleNamespace(
+        isatty=lambda: False, buffer=io.BytesIO(captured[0]),
+    )))
+    assert private.read_private_passphrase().get_secret_value() == phrase
+    field_reader.assert_not_called()
+    key_reader.assert_not_called()
+
+
+def test_passport_projection_rejects_quoted_multiline_value() -> None:
+    with pytest.raises(ValueError):
+        entry._project_field(io.BytesIO(b"jev-passport='synthetic-only phrase\nsecond-line'\n"),
+                             b"jev-passport")
+
+
+def test_phrase_only_frame_preserves_escaped_newline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.infra.browser import synthetic_private_input as private
+
+    phrase = "synthetic-only phrase\nsecond-line"
+    frame = json.dumps({
+        "version": private.FRAME_VERSION, "vault_passphrase": phrase,
+    }).encode("ascii")
+    assert b"\\n" in frame and b"\n" not in frame
+    monkeypatch.setattr(private, "sys", SimpleNamespace(stdin=SimpleNamespace(
+        isatty=lambda: False, buffer=io.BytesIO(frame),
+    )))
+    assert private.read_private_passphrase().get_secret_value() == phrase
+
+
+
+def test_complete_owner_exact_env_selection_reuses_exact_readers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    phrase, key = "synthetic-only \u4e00 e\u0301 literal\\n", _key()
+    source = tmp_path / "synthetic.input"
+    source.write_bytes(b"other=\xff\xfe\r\njev-passport='" + phrase.encode()
+                       + b"'\r\njev-key=" + key.encode() + b"\r\n")
+    monkeypatch.setattr(entry, "_SOURCE", source)
+    monkeypatch.setattr(entry, "sys", SimpleNamespace(
+        stdin=SimpleNamespace(isatty=lambda: True),
+        stderr=SimpleNamespace(isatty=lambda: True),
+    ))
+    confirmation = Mock(return_value="LOAD")
+    hidden_key = Mock(side_effect=AssertionError("hidden key input forbidden"))
+    hidden_phrase = Mock(side_effect=AssertionError("hidden phrase input forbidden"))
+    monkeypatch.setattr("builtins.input", confirmation)
+    monkeypatch.setattr(entry, "_prompt_phrase", hidden_phrase)
+    assert entry.read_owner_credentials("exact-env", prompt_key=hidden_key) == (phrase, key)
+    confirmation.assert_called_once()
+    assert "E:/code/eternalai/.env" in confirmation.call_args.args[0]
+    hidden_key.assert_not_called()
+    hidden_phrase.assert_not_called()
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_passport", "missing_key", "duplicate_passport", "duplicate_key",
+    "bad_utf8", "key_nonascii",
+])
+def test_complete_owner_exact_env_invalid_fields_stop_without_dispatch(
+    mutation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    phrase, key = _key().encode(), _key().encode()
+    passport_line, key_line = b"jev-passport=" + phrase + b"\n", b"jev-key=" + key + b"\n"
+    contents = {
+        "missing_passport": key_line,
+        "missing_key": passport_line,
+        "duplicate_passport": passport_line + passport_line + key_line,
+        "duplicate_key": passport_line + key_line + key_line,
+        "bad_utf8": b"jev-passport=\xff\n" + key_line,
+        "key_nonascii": passport_line + b"jev-key=\xff\n",
+    }
+    source = tmp_path / "synthetic.input"
+    source.write_bytes(contents[mutation])
+    monkeypatch.setattr(entry, "_SOURCE", source)
+    monkeypatch.setattr(entry, "sys", SimpleNamespace(
+        stdin=SimpleNamespace(isatty=lambda: True),
+        stderr=SimpleNamespace(isatty=lambda: True),
+    ))
+    monkeypatch.setattr("builtins.input", Mock(return_value="LOAD"))
+    dispatch, hidden = Mock(), Mock()
+    monkeypatch.setattr(entry.subprocess, "Popen", dispatch)
+    with pytest.raises(ValueError, match="^browser_jev_exact_field_invalid$") as caught:
+        entry.read_owner_credentials("exact-env", prompt_key=hidden)
+    assert caught.value.__suppress_context__ is True
+    dispatch.assert_not_called()
+    hidden.assert_not_called()
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("blocked", ["stdin", "stderr", "confirmation"])
+def test_complete_owner_exact_env_requires_local_confirmation_before_read(
+    blocked: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(entry, "sys", SimpleNamespace(
+        stdin=SimpleNamespace(isatty=lambda: blocked != "stdin"),
+        stderr=SimpleNamespace(isatty=lambda: blocked != "stderr"),
+    ))
+    confirmation, reader, key, hidden = Mock(return_value="CANCEL"), Mock(), Mock(), Mock()
+    monkeypatch.setattr("builtins.input", confirmation)
+    monkeypatch.setattr(entry, "_read_exact_field", reader)
+    monkeypatch.setattr(entry, "read_exact_jev_key", key)
+    expected = ("browser_jev_owner_confirmation_cancelled" if blocked == "confirmation"
+                else "browser_jev_owner_terminal_required")
+    with pytest.raises(ValueError, match="^" + expected + "$"):
+        entry.read_owner_credentials("exact-env", prompt_key=hidden)
+    reader.assert_not_called()
+    key.assert_not_called()
+    hidden.assert_not_called()
+    if blocked != "confirmation":
+        confirmation.assert_not_called()
+
+
+def test_complete_owner_hidden_mode_keeps_original_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    phrase, key = _key(), _key()
+    phrase_prompt, key_prompt = Mock(return_value=phrase), Mock(return_value=key)
+    reader, file_key, confirmation = Mock(), Mock(), Mock()
+    monkeypatch.setattr(entry, "_prompt_phrase", phrase_prompt)
+    monkeypatch.setattr(entry, "_read_exact_field", reader)
+    monkeypatch.setattr(entry, "read_exact_jev_key", file_key)
+    monkeypatch.setattr("builtins.input", confirmation)
+    assert entry.read_owner_credentials("hidden", prompt_key=key_prompt) == (phrase, key)
+    phrase_prompt.assert_called_once_with()
+    key_prompt.assert_called_once_with()
+    reader.assert_not_called()
+    file_key.assert_not_called()
+    confirmation.assert_not_called()
+
+
+def test_complete_owner_unknown_mode_stops_before_confirmation_or_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader, confirmation, hidden = Mock(), Mock(), Mock()
+    monkeypatch.setattr(entry, "_read_exact_field", reader)
+    monkeypatch.setattr("builtins.input", confirmation)
+    with pytest.raises(ValueError, match="^browser_jev_launcher_arguments_invalid$"):
+        entry.read_owner_credentials("unknown", prompt_key=hidden)
+    reader.assert_not_called()
+    confirmation.assert_not_called()
+    hidden.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["refresh", "once"])
+def test_complete_owner_exact_field_failure_stops_actual_launcher_before_pipe(
+    operation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "synthetic.input"
+    source.write_bytes(b"other=synthetic-only\n")
+    monkeypatch.setattr(entry, "_SOURCE", source)
+    monkeypatch.setattr(entry, "_preflight", Mock())
+    monkeypatch.setattr(entry, "_check_image", Mock())
+    monkeypatch.setattr(entry, "_check_refresh_script", Mock())
+    dispatch = Mock()
+    monkeypatch.setattr(entry.subprocess, "Popen", dispatch)
+    options = ({"refresh_script_sha256": "c" * 64} if operation == "refresh"
+               else {"full_run": True})
+    with pytest.raises(ValueError, match="^browser_jev_exact_field_invalid$"):
+        entry.launch(operation, approved_deadline_utc=_future(),
+                     expected_image_id="sha256:" + "a" * 64,
+                     phrase_from_exact_field=True, trial_id="observe-only",
+                     attempt_id="b" * 32, identity_attempt_id="a" * 32, **options)
+    dispatch.assert_not_called()

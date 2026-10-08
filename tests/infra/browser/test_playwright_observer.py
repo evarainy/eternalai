@@ -1,7 +1,7 @@
 """Synthetic Playwright-shaped objects test observer identity and fail-closed paths.
 
-Actual Chromium DOM behavior is validated separately; these objects prove the
-Python projection contract without claiming a provider or cloud browser run.
+Actual Chromium cases are separate and await execution approval; these objects
+exercise the Python projection contract without a provider or cloud browser claim.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from app.browser_skill.models import (
 )
 from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_observer import PlaywrightObserver, RegisteredRegion
+from app.infra.browser.playwright_dom_rules import _IDENTITY_BATCH
 from tests.browser_skill.factories import DIGEST, binding
 
 
@@ -36,7 +37,19 @@ class Handle:
         self.node = node
         self.disposed = False
 
-    async def evaluate(self, expression: str, arg: Any = None) -> bool:
+    async def evaluate(self, expression: str, arg: Any = None) -> Any:
+        if expression == _IDENTITY_BATCH:
+            assert set(arg) == {"region", "previous", "current"}
+            if not self.node.connected or any(not handle.node.connected for handle in arg["current"]):
+                return {"status": "stale", "same_region": False, "indices": []}
+            current = [handle.node for handle in arg["current"]]
+            previous = [handle.node for handle in arg["previous"]]
+            if len({id(node) for node in current}) != len(current):
+                return {"status": "invalid_response", "same_region": False, "indices": []}
+            same = arg["region"] is not None and arg["region"].node is self.node
+            positions = {id(node): index for index, node in enumerate(previous) if node.connected}
+            return {"status": "ok", "same_region": same,
+                    "indices": [positions.get(id(node), -1) if same else -1 for node in current]}
         if "fresh" in expression:
             return self.node is arg.node and self.node.connected
         return self.node.connected

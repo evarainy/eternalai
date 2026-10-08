@@ -7,9 +7,9 @@ locked and compared; there is no independent browser capability catalog.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import TypeAdapter
 from sqlalchemy import select, text
@@ -86,15 +86,30 @@ class PostgreSQLBrowserPublicationStore:
         self, session_factory: async_sessionmaker[AsyncSession],
         capability_registry: CapabilityRegistryPort,
         manifest_authority: BrowserManifestAuthorityPort,
+        *,
+        authorize_in_session: Callable[
+            [AsyncSession, BrowserOwner, str, PublicationOperation], Awaitable[bool]
+        ] | None = None,
+        capability_in_session: Callable[
+            [AsyncSession, str], Awaitable[CapabilitySpec | None]
+        ] | None = None,
     ) -> None:
         self._sessions = session_factory
         self._registry = capability_registry
         self._authority = manifest_authority
+        self._authorize_session = authorize_in_session
+        self._capability_session = capability_in_session
 
     async def _authorize(self, owner: BrowserOwner, skill_id: str,
-                         operation: PublicationOperation) -> None:
+                         operation: PublicationOperation,
+                         session: AsyncSession | None = None) -> None:
         try:
-            permitted = await self._authority.authorize(_owner(owner), skill_id, operation)
+            if session is not None and self._authorize_session is not None:
+                permitted = await self._authorize_session(
+                    session, _owner(owner), skill_id, operation,
+                )
+            else:
+                permitted = await self._authority.authorize(_owner(owner), skill_id, operation)
         except Exception:
             raise BrowserPublicationError("browser_publication_denied") from None
         if permitted is not True:
@@ -117,19 +132,34 @@ class PostgreSQLBrowserPublicationStore:
             raise BrowserPublicationError("browser_publication_capability_changed")
 
     async def _current(self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
-                       session: AsyncSession) -> None:
-        # Existing registry remains the port-level authority. FOR SHARE on its
-        # actual row fences concurrent disable/update through this transaction.
-        try:
-            current = await self._registry.get(manifest.capability.capability_id)
-        except Exception:
-            raise BrowserPublicationError("browser_publication_registry_unavailable") from None
-        self._compare(manifest, current)
-        row = (await session.execute(select(capabilities).where(
-            capabilities.c.capability_id == manifest.capability.capability_id
-        ).with_for_update(read=True))).mappings().first()
-        self._compare(manifest, None if row is None else CapabilitySpec.model_validate(dict(row)))
+                       session: AsyncSession) -> CapabilitySpec:
+        if self._capability_session is not None:
+            # Installed only by composition after checking the concrete PG
+            # registry and identical session factory. This locked row replaces
+            # the earlier independent-transaction observation; no fallback.
+            try:
+                current = await self._capability_session(
+                    session, manifest.capability.capability_id,
+                )
+            except SQLAlchemyError:
+                raise  # Preserve the enclosing transaction's store error mapping.
+            except Exception:
+                raise BrowserPublicationError("browser_publication_registry_unavailable") from None
+            self._compare(manifest, current)
+        else:
+            # Generic installations retain both existing authority observations.
+            try:
+                current = await self._registry.get(manifest.capability.capability_id)
+            except Exception:
+                raise BrowserPublicationError("browser_publication_registry_unavailable") from None
+            self._compare(manifest, current)
+            row = (await session.execute(select(capabilities).where(
+                capabilities.c.capability_id == manifest.capability.capability_id
+            ).with_for_update(read=True))).mappings().first()
+            self._compare(manifest, None if row is None else CapabilitySpec.model_validate(dict(row)))
         await self._source(owner, manifest)
+        assert current is not None
+        return current
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[AsyncSession]:
@@ -383,9 +413,31 @@ class PostgreSQLBrowserPublicationStore:
 
     async def assert_current(self, owner: BrowserOwner,
                              manifest: BrowserPublicationManifest) -> None:
+        async with self._transaction() as session:
+            await self.assert_current_in_session(session, owner, manifest, require_active=False)
+
+    async def assert_current_in_session(
+        self, session: AsyncSession, owner: BrowserOwner,
+        manifest: BrowserPublicationManifest, *, require_active: bool = True,
+        operation: Literal["read", "execute"] = "execute",
+    ) -> CapabilitySpec:
+        """One exact publication read, with live grants on both sides of DB/source checks."""
         owner, manifest = _owner(owner), _manifest(manifest)
-        await self._authorize(owner, manifest.skill.skill_id, "execute")
-        frozen = await self.get_frozen(owner, manifest.digest)
-        if frozen is None or frozen.manifest != manifest:
+        await session.execute(text("SELECT pg_advisory_xact_lock_shared(746420212000)"))
+        await self._authorize(owner, manifest.skill.skill_id, operation, session)
+        row = (await session.execute(text(
+            "SELECT * FROM browser_publications WHERE " + _OWNER_DIGEST
+            + " AND state IN ('active','inactive') FOR SHARE"
+        ), _params(owner, digest=manifest.digest))).mappings().first()
+        if row is None:
             raise BrowserPublicationError("browser_publication_not_found")
-        await self._authorize(owner, manifest.skill.skill_id, "execute")
+        record = _record(row)
+        if record.manifest != manifest:
+            raise BrowserPublicationError("browser_publication_not_found")
+        if require_active and record.state != "active":
+            raise BrowserPublicationError("browser_publication_inactive")
+        await self._authorize(owner, manifest.skill.skill_id, "read", session)
+        capability = await self._current(owner, manifest, session)
+        await self._authorize(owner, manifest.skill.skill_id, "read", session)
+        await self._authorize(owner, manifest.skill.skill_id, operation, session)
+        return capability

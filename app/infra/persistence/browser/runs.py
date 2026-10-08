@@ -13,7 +13,7 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -193,6 +193,10 @@ class PostgreSQLBrowserRunStore:
         authority: BrowserRunAuthorityPort,
         digest_keys: Mapping[str, bytes],
         active_digest_key_id: str,
+        claim_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None,
+        claim_ready_in_session: Callable[
+            [AsyncSession, RunSnapshot], Awaitable[bool]
+        ] | None = None,
     ) -> None:
         if (
             authority is None
@@ -208,6 +212,8 @@ class PostgreSQLBrowserRunStore:
         self._authority = authority
         self._digest_keys = dict(digest_keys)
         self._active_digest_key_id = active_digest_key_id
+        self._claim_ready = claim_ready
+        self._claim_ready_session = claim_ready_in_session
         # Retain progress for outstanding owners; discard entries once no due
         # work remains. A fixed cycle upper prevents new arrivals delaying wrap.
         self._claim_scans: dict[tuple[str, str, str], _ClaimScan] = {}
@@ -646,9 +652,16 @@ class PostgreSQLBrowserRunStore:
     async def _claim_candidate(
         self, owner: BrowserOwner, task_id: str, run_id: str,
         worker_id: str, ttl: timedelta,
-    ) -> RunSnapshot:
+    ) -> RunSnapshot | None:
         async with self._transaction() as session:
             before = await self._read_run(session, owner, task_id, run_id)
+            # A local/DB scheduling hint only, bound to this candidate. No row
+            # changes on rejection; the finite scan can reach a recovering Run.
+            if self._claim_ready_session is not None:
+                if not await self._claim_ready_session(session, before):
+                    return None
+            elif self._claim_ready is not None and not await self._claim_ready(before):
+                return None
             # Exact protected admission is checked before acquiring earlier locks.
             # This action uses nonblocking credential -> lease -> session locks.
             await self._authority.before_run_lock(session, before, "claim")
@@ -705,11 +718,18 @@ class PostgreSQLBrowserRunStore:
         worker: bool = True,
         terminal_ok: bool = False,
         cleanup_outcome: RunCleanup | None = None,
+        read_candidate: RunSnapshot | None = None,
     ) -> RunSnapshot:
         if action == "cleanup":
             if cleanup_outcome is None:
                 raise BrowserRunStoreError("browser_run_cleanup_invalid")
-        before = await self._read_run(session, expected.owner, expected.task_id, expected.run_id)
+        before = read_candidate
+        if before is None:
+            before = await self._read_run(
+                session, expected.owner, expected.task_id, expected.run_id,
+            )
+        elif before != expected:
+            raise BrowserRunStoreError("browser_run_stale")
         await self._authority.before_run_lock(session, before, action)
         task = await lock_owned_task(
             session,
@@ -801,9 +821,9 @@ class PostgreSQLBrowserRunStore:
                 or candidate.status not in _ACTIVE
             ):
                 raise BrowserRunStoreError("browser_run_checkpoint_stale")
-            # Retain the existing repeated SELECT, lock order, lock-after-read CAS
-            # and fresh authority checks. previous is never the UPDATE candidate.
-            current = await self._locked(session, candidate, "renew")
+            # Reuse only the candidate read in this transaction, before any locks.
+            # _locked still reads the actual row again after locks and checks authority/CAS.
+            current = await self._locked(session, candidate, "renew", read_candidate=candidate)
             if current.state_revision >= MAX_RUN_REVISION:
                 raise BrowserRunStoreError("browser_run_revision_exhausted")
             row = (

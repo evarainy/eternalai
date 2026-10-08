@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from typing import Any, cast
 from uuid import uuid4
 
@@ -49,6 +50,48 @@ async def _epoch(h: RunHarness, admission: RunAdmission) -> int:
             " AND session_id=:session AND task_id=:task AND run_id=:run",
         ), {"tenant": h.tenant, "user": h.user, "session": h.owner.session_id,
             "task": admission.task_id, "run": admission.run_id})).scalar_one())
+
+
+@pytest.mark.parametrize("reject", ["not_ready", "installed_failure"])
+def test_same_session_readiness_rejects_before_authority_locks_without_fallback(
+    migrated_database_url: str, reject: str,
+) -> None:
+    async def scenario() -> None:
+        async with harness(migrated_database_url) as h:
+            admission = await _admit(h, "same_session_readiness")
+            seen = []
+
+            async def ready(session, run):
+                assert session.in_transaction()
+                assert run.admission == admission
+                first = (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                second = (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                assert first == second
+                seen.append(session)
+                if reject == "installed_failure":
+                    raise RuntimeError("synthetic installed readiness failure")
+                return False
+
+            generic = AsyncMock(side_effect=AssertionError("forbidden_fallback"))
+            h.store._claim_ready_session = ready
+            h.store._claim_ready = generic
+            before_lock = AsyncMock(wraps=h.authority.before_run_lock)
+            h.authority.before_run_lock = before_lock
+            token = authenticated_session.set(None)
+            try:
+                if reject == "installed_failure":
+                    with pytest.raises(RuntimeError, match="synthetic installed readiness failure"):
+                        await h.store.claim_next(h.owner, worker_id="worker")
+                else:
+                    assert await h.store.claim_next(h.owner, worker_id="worker") is None
+                assert len(seen) == 1
+                generic.assert_not_awaited()
+                before_lock.assert_not_awaited()
+                assert await _epoch(h, admission) == 0
+            finally:
+                authenticated_session.reset(token)
+
+    asyncio.run(scenario())
 
 
 def test_exact_older_run_remains_authorized_when_latest_is_revoked(

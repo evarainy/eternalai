@@ -507,10 +507,14 @@ class LocalBrowserReadLifecycle:
         self,
         factory: LocalBrowserReadExecutionFactory,
         cleanup_authority: BrowserCleanupAuthorityPort,
+        *,
+        no_resource: Callable[[RunSnapshot], Awaitable[bool]] | None = None,
+        no_resource_in_session: Callable[[object, RunSnapshot], Awaitable[bool]] | None = None,
     ) -> None:
         self._factory, self._authority = factory, cleanup_authority
-        self._cleanup: dict[str, tuple[RunSnapshot, RunCleanup, float]] = {}
-        self._cancel: dict[str, tuple[RunSnapshot, float]] = {}
+        self._no_resource, self._no_resource_in_session = no_resource, no_resource_in_session
+        self._cleanup: dict[str, tuple[RunSnapshot, RunCleanup, float, bool]] = {}
+        self._cancel: dict[str, tuple[RunSnapshot, float, bool]] = {}
 
     async def lookup_capture(
         self,
@@ -538,6 +542,13 @@ class LocalBrowserReadLifecycle:
         await self._authority.check_recovery(key)
         leases = self._factory.authority()[0]
         state = self._factory.state_for_cleanup(run)
+        if (self._no_resource is not None
+                and (state is None or (state.claim is None and state.resource is None))
+                and await self._no_resource(run)):
+            # Durable absence, not memory absence or a failed recover_cleanup.
+            # Own reservation_only claims still take the original cleanup path.
+            self._remember_cleanup(run, "released", no_resource=True)
+            return "released"
         outcome: RunCleanup = "quarantined"
         if state is not None and state.released:
             if state.cleanup_outcome not in {"terminated", "released"}:
@@ -583,32 +594,38 @@ class LocalBrowserReadLifecycle:
         self._remember_cleanup(run, outcome)
         return outcome
 
-    def _remember_cleanup(self, run: RunSnapshot, outcome: RunCleanup) -> None:
+    def _remember_cleanup(
+        self, run: RunSnapshot, outcome: RunCleanup, *, no_resource: bool = False,
+    ) -> None:
         now = time.monotonic()
-        for run_id, (_, _, deadline) in tuple(self._cleanup.items()):
+        for run_id, (_, _, deadline, _) in tuple(self._cleanup.items()):
             if deadline <= now:
                 del self._cleanup[run_id]
         if len(self._cleanup) >= 32 and run.run_id not in self._cleanup:
             raise BrowserReadExecutionError("unavailable")
-        self._cleanup[run.run_id] = (run, outcome, now + 120)
+        # Private proof provenance only; never persisted or accepted as proof.
+        self._cleanup[run.run_id] = (run, outcome, now + 120, no_resource)
 
     async def stop(self, run: RunSnapshot, checkpoint: BrowserWorkerCheckpoint) -> None:
         fresh = await checkpoint.refresh(allow_cancel=True)
         if (
             not fresh.cancel_requested
             or fresh.admission != run.admission
+            or fresh.worker_id != run.worker_id
             or fresh.worker_epoch != run.worker_epoch
         ):
             raise BrowserReadExecutionError("denied")
         if await self.cleanup(fresh) not in {"released", "terminated"}:
             raise BrowserReadExecutionError("unavailable")
         fresh = await checkpoint.refresh(allow_cancel=True)
-        for run_id, (_, deadline) in tuple(self._cancel.items()):
+        for run_id, (_, deadline, _) in tuple(self._cancel.items()):
             if deadline <= time.monotonic():
                 del self._cancel[run_id]
         if len(self._cancel) >= 32 and fresh.run_id not in self._cancel:
             raise BrowserReadExecutionError("unavailable")
-        self._cancel[fresh.run_id] = (fresh, time.monotonic() + 120)
+        self._cancel[fresh.run_id] = (
+            fresh, time.monotonic() + 120, self._cleanup[fresh.run_id][3],
+        )
 
     async def check_cancel(self, run: RunSnapshot) -> None:
         emission = self._cancel.get(run.run_id)
@@ -624,6 +641,13 @@ class LocalBrowserReadLifecycle:
         ):
             raise BrowserReadExecutionError("denied")
 
+    async def check_cancel_in_session(self, transaction: object, run: RunSnapshot) -> None:
+        await self.check_cancel(run)
+        if self._cancel[run.run_id][2]:
+            if (self._no_resource_in_session is None
+                    or not await self._no_resource_in_session(transaction, run)):
+                raise BrowserReadExecutionError("denied")
+
     async def check_cleanup(
         self,
         transaction: object,
@@ -631,7 +655,9 @@ class LocalBrowserReadLifecycle:
         outcome: RunCleanup,
     ) -> None:
         # The separately injected SQL cleanup_authorize callback runs first. This
-        # local check performs no provider/DB IO while the Run transaction is held.
+        # Resource proofs remain local. The no-resource branch additionally
+        # rereads durable evidence in this already-locked transaction, with no
+        # provider IO or new locks/session.
         emission = self._cleanup.get(run.run_id)
         if (
             emission is None
@@ -642,3 +668,7 @@ class LocalBrowserReadLifecycle:
             or emission[0].lease_epoch != run.lease_epoch
         ):
             raise BrowserReadExecutionError("denied")
+        if emission[3]:
+            if (self._no_resource_in_session is None
+                    or not await self._no_resource_in_session(transaction, run)):
+                raise BrowserReadExecutionError("denied")

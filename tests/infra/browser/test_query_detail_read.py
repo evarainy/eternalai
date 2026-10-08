@@ -15,7 +15,7 @@ from app.browser_skill.site_rules import FrozenSiteAdapter, QueryField, Register
 from app.browser_skill.verifier import IndependentVerifier
 from app.infra.browser.playwright_dom_rules import DOMValue
 from app.infra.browser.playwright_web_adapter import PlaywrightWebAdapter, RegisteredExecution
-from tests.infra.browser.test_playwright_web_adapter import World
+from tests.infra.browser.test_playwright_web_adapter import Node, World
 
 
 def query_world() -> World:
@@ -126,3 +126,48 @@ def test_previous_verification_cannot_consume_a_later_dynamic_read() -> None:
             w.adapter._consume_verified_result(w.session, w.context, first, dict)
         assert caught.value.failure.code == "denied"
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("boundary,selectors", [
+    ("key", [".key"]), ("owner", [".key", ".tenant", ".user"]),
+    ("object", [".key", ".tenant", ".user", ".object_type"]),
+])
+def test_compare_rows_never_reads_later_fields_before_key_owner_and_type(boundary, selectors) -> None:
+    async def run():
+        w = query_world()
+        wrong = {"key": ".key", "owner": ".tenant", "object": ".object_type"}[boundary]
+        w.row.values[wrong] = "other"
+        evidence = await w.adapter.read(w.session, w.confirmed, w.context)
+        assert w.private_selectors == selectors * 2
+        assert ".state" not in w.private_selectors
+        assert not evidence.schema_validated and w.adapter._private_reads == {}
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("rows,over_budget", [(43, False), (44, True)])
+def test_unmatched_unicode_keys_still_consume_python_json_fingerprint_budget(rows, over_budget) -> None:
+    async def scenario():
+        w = query_world()
+        private_key = "雨" * 1000
+        assert len(private_key.encode()) == 3000
+        encoded_bytes = len(json.dumps(private_key).encode()) * rows
+        assert (encoded_bytes > 262144) is over_budget
+        w.row.values[".key"] = private_key
+        w.region.children = [w.row, *(Node(selector=".record", parent=w.region,
+                                          values={".key": private_key}) for _ in range(rows - 1))]
+        w.rules = replace(w.rules, read=replace(w.rules.read, maximum_rows=64, maximum_value_bytes=4096))
+        w.adapter._rules[w.plan.skill_digest] = w.rules
+        if over_budget:
+            with pytest.raises(BrowserOperationError) as caught:
+                await w.adapter.read(w.session, w.confirmed, w.context)
+            assert caught.value.failure.code == "unsupported"
+            assert w.private_selectors == [".key"] * rows
+        else:
+            evidence = await w.adapter.read(w.session, w.confirmed, w.context)
+            assert evidence.match_count == 0 and not evidence.schema_validated
+            assert w.private_selectors == [".key"] * (rows * 2)
+        assert w.adapter._private_reads == {}
+        assert ".state" not in w.private_selectors
+
+    asyncio.run(scenario())

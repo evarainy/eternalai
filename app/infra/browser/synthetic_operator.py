@@ -280,6 +280,15 @@ class SyntheticPublicationGrants:
         self, owner: BrowserOwner, skill_id: str, operation: PublicationOperation,
         publication_digest: str,
     ) -> bool:
+        async with self._sessions() as session:
+            return await self.check_in_session(
+                session, owner, skill_id, operation, publication_digest,
+            )
+
+    async def check_in_session(
+        self, session: AsyncSession, owner: BrowserOwner, skill_id: str,
+        operation: PublicationOperation, publication_digest: str,
+    ) -> bool:
         if (owner.tenant_id != SYNTHETIC_TENANT
                 or skill_id != self._source.manifest.skill.skill_id
                 or publication_digest != self._source.manifest.digest):
@@ -292,10 +301,9 @@ class SyntheticPublicationGrants:
                 return False
         else:
             return False
-        async with self._sessions() as session:
-            await self.current(session)
-            if operation in {"prepare", "activate", "deactivate"}:
-                await self.current_business(session)
+        await self.current(session)
+        if operation in {"prepare", "activate", "deactivate"}:
+            await self.current_business(session)
         return True
 
 

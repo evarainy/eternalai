@@ -7,7 +7,7 @@ Provider/network calls are deliberately absent from this adapter.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -40,6 +40,9 @@ from app.ports.policy_guard import PolicyGuardPort
 from app.ports.request_context import RequestOrgContext
 
 PublicationCheck = Callable[[BrowserOwner, bytes, str, bool], Awaitable[CapabilitySpec]]
+PublicationCheckInSession = Callable[
+    [AsyncSession, BrowserOwner, bytes, str, bool], Awaitable[CapabilitySpec]
+]
 RunProofCheck = Callable[[RunSnapshot], Awaitable[None]]
 CleanupAuthorize = Callable[[AsyncSession, RunSnapshot], Awaitable[None]]
 CleanupCheck = Callable[[AsyncSession, RunSnapshot, RunCleanup], Awaitable[None]]
@@ -85,26 +88,29 @@ class PostgreSQLBrowserBindingReader:
 
     async def check_binding(self, fact: BrowserBindingFact) -> None:
         async with self._sessions() as session:
-            row = (
-                (
-                    await session.execute(
-                        text(
-                            "SELECT binding_revision,binding_state,binding_subject_digest,"
-                            "revoked_at FROM oa_session_credentials WHERE tenant_id=:tenant"
-                            " AND ai_user_id=:user"
-                            " AND target_system=:target AND binding_id=:binding"
-                        ),
-                        {
-                            "tenant": fact.tenant_id,
-                            "user": fact.ai_user_id,
-                            "target": fact.target_system,
-                            "binding": fact.binding_id,
-                        },
-                    )
-                )
-                .mappings()
-                .one_or_none()
+            await self.check_binding_in_session(session, fact)
+
+    async def check_binding_in_session(
+        self, session: AsyncSession, fact: BrowserBindingFact,
+    ) -> None:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT binding_revision,binding_state,binding_subject_digest,"
+                    "revoked_at FROM oa_session_credentials WHERE tenant_id=:tenant"
+                    " AND ai_user_id=:user"
+                    " AND target_system=:target AND binding_id=:binding"
+                ),
+                {
+                    "tenant": fact.tenant_id, "user": fact.ai_user_id,
+                    "target": fact.target_system, "binding": fact.binding_id,
+                },
             )
+        ).mappings().one_or_none()
+        self.check_row(row, fact)
+
+    @staticmethod
+    def check_row(row: Mapping[str, Any] | None, fact: BrowserBindingFact) -> None:
         if (
             row is None
             or row["binding_state"] != "active"
@@ -124,9 +130,11 @@ class PostgreSQLBrowserCurrentAuth:
         session_binder: PrincipalSessionBinder,
         policy: PolicyGuardPort,
         publication_check: PublicationCheck,
+        publication_check_in_session: PublicationCheckInSession | None = None,
     ) -> None:
         self._sessions, self._cipher = session_factory, cipher
         self._binder, self._policy, self._publication = session_binder, policy, publication_check
+        self._publication_in_session = publication_check_in_session
 
     def input(self, admission: RunAdmission) -> VerifiedBrowserInput:
         payload = self._cipher.decrypt_input(admission)
@@ -157,6 +165,8 @@ class PostgreSQLBrowserCurrentAuth:
 
     async def validate(
         self, session: AsyncSession, admission: RunAdmission, *, require_active: bool = True,
+        binding_fact: BrowserBindingFact | None = None,
+        binding_row: Mapping[str, Any] | None = None,
     ) -> VerifiedBrowserInput:
         """Reads only; caller controls transaction/lock order and action fencing."""
         if (
@@ -201,21 +211,19 @@ class PostgreSQLBrowserCurrentAuth:
             .all()
         )
         current_roles = sorted(set(decoded.principal.roles).intersection(str(v) for v in roles))
-        binding = (
-            (
+        binding = binding_row
+        if binding is None:
+            binding = (
                 await session.execute(
                     text(
-                        "SELECT binding_revision,binding_state,revoked_at"
+                        "SELECT binding_revision,binding_state,binding_subject_digest,revoked_at"
                         " FROM oa_session_credentials"
                         " WHERE tenant_id=:tenant AND ai_user_id=:user AND target_system=:target"
                         " AND binding_id=:binding"
                     ),
                     params,
                 )
-            )
-            .mappings()
-            .one_or_none()
-        )
+            ).mappings().one_or_none()
         if (
             binding is None
             or binding["binding_state"] != "active"
@@ -223,9 +231,26 @@ class PostgreSQLBrowserCurrentAuth:
             or binding["binding_revision"] != admission.binding_revision
         ):
             raise BrowserAuthorizationError("browser_binding_stale")
-        capability = await self._publication(
-            admission.owner, admission.publication_digest, decoded.capability_id, require_active,
-        )
+        if binding_fact is not None:
+            if (
+                binding_fact.tenant_id != admission.owner.tenant_id
+                or binding_fact.ai_user_id != admission.owner.user_id
+                or binding_fact.target_system != admission.target_system
+                or binding_fact.binding_id != admission.binding_id
+                or binding_fact.binding_revision != admission.binding_revision
+            ):
+                raise BrowserAuthorizationError("browser_binding_stale")
+            PostgreSQLBrowserBindingReader.check_row(binding, binding_fact)
+        if self._publication_in_session is None:
+            capability = await self._publication(
+                admission.owner, admission.publication_digest,
+                decoded.capability_id, require_active,
+            )
+        else:
+            capability = await self._publication_in_session(
+                session, admission.owner, admission.publication_digest,
+                decoded.capability_id, require_active,
+            )
         if (
             capability.type != "query"
             or capability.status != "active"
@@ -253,39 +278,42 @@ class PostgreSQLBrowserCurrentAuth:
         return decoded
 
     async def check_current(self, fact: BrowserAuthFact) -> None:
-        if fact.evidence_version != "verified-session-v1" or fact.authorization_run_id is None:
-            raise BrowserAuthorizationError("browser_authorization_revision_unavailable")
         try:
             async with self._sessions() as session:
-                row = (
-                    (
-                        await session.execute(
-                            text(
-                                "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
-                                " AND ai_user_id=:user AND session_id=:session"
-                            ),
-                            {
-                                "run": fact.authorization_run_id,
-                                "tenant": fact.owner.tenant_id,
-                                "user": fact.owner.user_id,
-                                "session": fact.owner.session_id,
-                            },
-                        )
-                    )
-                    .mappings()
-                    .one_or_none()
-                )
-                if (
-                    row is None
-                    or row["auth_fingerprint"] != fact.fingerprint
-                    or row["auth_expires_at"] != fact.expires_at
-                ):
-                    raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
-                await self.validate(session, admission_from_row(row))
+                await self.check_current_in_session(session, fact)
         except BrowserAuthorizationError:
             raise
         except Exception:
             raise BrowserAuthorizationError("browser_authorization_unavailable") from None
+
+    async def check_current_in_session(
+        self, session: AsyncSession, fact: BrowserAuthFact,
+        binding: BrowserBindingFact | None = None,
+        credential: Mapping[str, Any] | None = None,
+    ) -> None:
+        """DB-only check; supplied credential belongs to this caller's locked binding."""
+        if fact.evidence_version != "verified-session-v1" or fact.authorization_run_id is None:
+            raise BrowserAuthorizationError("browser_authorization_revision_unavailable")
+        row = (
+            await session.execute(
+                text(
+                    "SELECT * FROM browser_runs WHERE run_id=:run AND tenant_id=:tenant"
+                    " AND ai_user_id=:user AND session_id=:session"
+                ),
+                {
+                    "run": fact.authorization_run_id, "tenant": fact.owner.tenant_id,
+                    "user": fact.owner.user_id, "session": fact.owner.session_id,
+                },
+            )
+        ).mappings().one_or_none()
+        if (
+            row is None or row["auth_fingerprint"] != fact.fingerprint
+            or row["auth_expires_at"] != fact.expires_at
+        ):
+            raise BrowserAuthorizationError("browser_authorization_evidence_invalid")
+        await self.validate(
+            session, admission_from_row(row), binding_fact=binding, binding_row=credential,
+        )
 
 
 class PostgreSQLBrowserRunAuthority:
@@ -297,11 +325,13 @@ class PostgreSQLBrowserRunAuthority:
         current_auth: PostgreSQLBrowserCurrentAuth,
         verification_check: RunProofCheck | None = None,
         cancel_check: RunProofCheck | None = None,
+        cancel_check_in_session: CleanupAuthorize | None = None,
         cleanup_authorize: CleanupAuthorize | None = None,
         cleanup_check: CleanupCheck | None = None,
     ) -> None:
         self._auth, self._cleanup = current_auth, cleanup_check
         self._verify, self._cancel = verification_check, cancel_check
+        self._cancel_in_session = cancel_check_in_session
         self._cleanup_authorize = cleanup_authorize
 
     @staticmethod
@@ -436,9 +466,12 @@ class PostgreSQLBrowserRunAuthority:
                 raise BrowserRunStoreError("browser_verification_proof_unavailable")
             await self._verify(run)
         if action == "cancel" and run.cancel_acknowledged:
-            if self._cancel is None:
+            if self._cancel_in_session is not None:
+                await self._cancel_in_session(session, run)
+            elif self._cancel is None:
                 raise BrowserRunStoreError("browser_cancellation_proof_unavailable")
-            await self._cancel(run)
+            else:
+                await self._cancel(run)
         # Durable verification and current business authority allow historical
         # projection/recovery; a released browser lease cannot invalidate the
         # already proven value. New browser IO remains fenced separately.

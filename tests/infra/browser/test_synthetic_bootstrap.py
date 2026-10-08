@@ -91,6 +91,72 @@ def test_vault_ciphertext_rejects_tamper_wrong_name_and_wrong_passphrase() -> No
             vault.decrypt_document(name, ciphertext, supplied)
 
 
+@pytest.mark.parametrize("phrase", [
+    "  synthetic-only phrase \t ", '"synthetic-only quoted phrase"',
+    "synthetic-only \u4e00\U0001f31f e\u0301", r"synthetic-only\n\t literal",
+], ids=["whitespace", "literal-quotes", "unicode", "literal-escapes"])
+def test_vault_diagnostic_round_trip_keeps_phrase_and_source_aad(phrase: str) -> None:
+    document = {"synthetic_metadata": "fixture"}
+    options = {"trial_id": vault.OBSERVE_TRIAL, "attempt_id": "a" * 32}
+    ciphertext = vault.encrypt_document(vault.OPERATOR_FILE, document, phrase, **options)
+    assert vault.decrypt_document(vault.OPERATOR_FILE, ciphertext, phrase, **options) == document
+    with pytest.raises(vault._VaultUnlockError) as caught:
+        vault.decrypt_document(vault.OPERATOR_FILE, ciphertext, phrase,
+                               trial_id=vault.OBSERVE_TRIAL, attempt_id="b" * 32)
+    assert caught.value.stage == "authentication"
+    assert caught.value.args == ("browser_vault_unlock_failed",)
+
+
+@pytest.mark.parametrize("kind,stage", [
+    ("format", "format"), ("kdf", "kdf"), ("backend", "kdf"),
+    ("authentication", "authentication"), ("nonce", "authentication"),
+    ("json", "json"), ("encoding", "json"), ("contract", "contract"),
+])
+def test_vault_diagnostic_categories_remain_fixed_and_do_not_render_input(
+    kind: str, stage: str, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import traceback
+
+    phrase = secrets.token_urlsafe(24)
+    marker = secrets.token_urlsafe(24)
+    ciphertext = vault.encrypt_document(vault.OPERATOR_FILE, {"synthetic_metadata": marker}, phrase)
+    supplied = phrase
+    if kind == "format":
+        ciphertext = b"BAD!" + ciphertext[4:]
+    elif kind == "kdf":
+        supplied = "too-short"
+    elif kind == "backend":
+        monkeypatch.setattr(vault, "_derive", Mock(side_effect=vault.UnsupportedAlgorithm(marker)))
+    elif kind == "authentication":
+        supplied = secrets.token_urlsafe(24)
+    elif kind == "nonce":
+        ciphertext = ciphertext[:20] + bytes([ciphertext[20] ^ 1]) + ciphertext[21:]
+    else:
+        payload = {"json": b"{bad", "encoding": b"\xff", "contract": b"[]"}[kind]
+        salt, nonce = secrets.token_bytes(16), secrets.token_bytes(12)
+        ciphertext = b"BSV1" + salt + nonce + vault.AESGCM(vault._derive(phrase, salt)).encrypt(
+            nonce, payload, vault._aad(vault.OPERATOR_FILE),
+        )
+    with pytest.raises(vault._VaultUnlockError) as caught:
+        vault.decrypt_document(vault.OPERATOR_FILE, ciphertext, supplied)
+    assert caught.value.stage == stage
+    assert caught.value.args == ("browser_vault_unlock_failed",)
+    assert caught.value.__suppress_context__
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert phrase not in rendered and marker not in rendered
+    assert capsys.readouterr() == ("", "")
+
+
+def test_vault_diagnostic_invalid_format_stops_before_kdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    derive = Mock(side_effect=AssertionError("KDF must not run"))
+    monkeypatch.setattr(vault, "_derive", derive)
+    with pytest.raises(vault._VaultUnlockError) as caught:
+        vault.decrypt_document(vault.OPERATOR_FILE, b"BSV1", "synthetic-only phrase")
+    assert caught.value.stage == "format"
+    derive.assert_not_called()
+
+
 def test_vault_requires_exact_explicit_path_before_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vault, "_private_console", lambda: None)
     directory_check = Mock(side_effect=AssertionError("filesystem reached"))

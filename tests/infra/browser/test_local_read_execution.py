@@ -35,6 +35,7 @@ from app.infra.browser.local_resource_lifecycle import (
     local_subject_digest,
 )
 from app.infra.browser.playwright_actions import LiveBrowser
+from app.infra.browser.playwright_web_adapter import PlaywrightWebAdapter, RegisteredExecution
 from app.infra.browser.read_execution import VerifiedBrowserReadExecution
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
 from app.ports.browser import DecisionProvider, WebAdapter
@@ -333,7 +334,7 @@ def _open_with_simulated_transport(
     )
     return SimpleNamespace(
         factory=factory, execution=result, context=context, facts=facts, calls=calls,
-        events=events, state=factory._states[current.run_id],
+        events=events, state=factory._states[current.run_id], bridge=bridge, checkpoint=checkpoint,
     )
 
 
@@ -407,17 +408,32 @@ def test_current_binding_rejects_another_registered_execution_session(
     assert not {"auth", "binding", "lease_renew", "subject_dom"} & set(transport.calls)
 
 
+@pytest.mark.parametrize("route", ["original", "operation"])
 @pytest.mark.parametrize("change", ["auth", "binding", "lease", "publication", "cancel"])
 def test_authorization_rechecks_changes_across_subject_await(
-    change: str, monkeypatch: pytest.MonkeyPatch,
+    change: str, route: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = _open_with_simulated_transport(Path.cwd(), monkeypatch)
     continued: list[str] = []
 
     async def scenario():
         session, context = transport.execution.session, transport.context
+        operation_authority = None
+        if route == "operation":
+            context = transport.bridge._fenced_context(
+                transport.execution.context, transport.factory.source.manifest, transport.checkpoint,
+                business_key="explicit_input_key",
+                bind_publication_guard=transport.execution.bind_publication_guard,
+            )
+            operation_authority = transport.execution.bind_operation_authority(context)
         spec = await transport.execution.resolver(session, context, session.binding)
-        await authorize_current(session, context, spec)
+        async def authorize():
+            if operation_authority is None:
+                await authorize_current(session, context, spec)
+            else:
+                await operation_authority(session, context, spec)
+
+        await authorize()
         entered, resume = asyncio.Event(), asyncio.Event()
 
         async def pause(name):
@@ -426,7 +442,7 @@ def test_authorization_rechecks_changes_across_subject_await(
                 await resume.wait()
 
         async def authorize_then_continue():
-            await authorize_current(session, context, spec)
+            await authorize()
             continued.append("authorized")
 
         transport.facts.hook = pause
@@ -461,6 +477,81 @@ def test_authorization_rechecks_changes_across_subject_await(
 
     asyncio.run(scenario())
     assert continued == []
+
+
+def test_operation_authority_is_bound_and_retains_nested_subject_fences(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _open_with_simulated_transport(Path.cwd(), monkeypatch)
+
+    async def scenario():
+        execution = transport.execution
+        context = transport.bridge._fenced_context(
+            execution.context, transport.factory.source.manifest, transport.checkpoint,
+            business_key="explicit_input_key", bind_publication_guard=execution.bind_publication_guard,
+        )
+        authority = execution.bind_operation_authority(context)
+        spec = await execution.resolver(execution.session, context, execution.session.binding)
+        transport.state.authority_counts.clear()
+        transport.calls.clear()
+        live = await authority(execution.session, context, spec)
+        assert live.session == execution.session
+        assert execution.authority_diagnostic() == {
+            # Two renewing outer fences plus the two real subject-DOM fences.
+            "factory_fence_attempts": 4, "factory_fence_successes": 4,
+            "factory_resource_authorization_attempts": 1,
+            "factory_resource_authorization_successes": 1,
+        }
+        assert transport.calls.count("refresh") == 8
+        transport.state.authority_counts.clear()
+        with pytest.raises(BrowserOperationError) as cloned:
+            await authority(execution.session, replace(context), spec)
+        assert cloned.value.failure.code == "denied" and transport.state.authority_counts == {}
+        wrong = spec.model_copy(update={"binding": spec.binding.model_copy(update={"lease_epoch": 2})})
+        with pytest.raises(BrowserOperationError) as rebound:
+            await authority(execution.session, context, wrong)
+        assert rebound.value.failure.code == "stale" and transport.state.authority_counts == {}
+        with pytest.raises(BrowserOperationError) as second_registration:
+            execution.bind_operation_authority(context)
+        assert second_registration.value.failure.code == "denied"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("route,fences,refreshes,resources", [
+    ("original", 16, 32, 3), ("operation", 4, 8, 1),
+])
+def test_warm_authority_counts_include_real_subject_callback_fences(
+    monkeypatch: pytest.MonkeyPatch, route: str, fences: int, refreshes: int, resources: int,
+) -> None:
+    transport = _open_with_simulated_transport(Path.cwd(), monkeypatch)
+
+    async def scenario():
+        execution = transport.execution
+        context = transport.bridge._fenced_context(
+            execution.context, transport.factory.source.manifest, transport.checkpoint,
+            business_key="explicit_input_key", bind_publication_guard=execution.bind_publication_guard,
+        )
+        callback = execution.bind_operation_authority(context) if route == "operation" else None
+        transport.state.resource.live.context.route = AsyncMock()
+        adapter = PlaywrightWebAdapter(
+            registry=execution.registry, observer=execution.observer,
+            site=execution.site, rules=execution.rules,
+            executions=(RegisteredExecution(execution.session, context, execution.confirmed_key,
+                                            project_output=execution.project_output,
+                                            operation_authority=callback),),
+        )
+        await adapter._authority(execution.session, context)  # Complete the cold route separately.
+        transport.state.authority_counts.clear()
+        transport.calls.clear()
+        await adapter._authority(execution.session, context)
+        assert transport.state.authority_counts == {
+            "factory_fence_attempts": fences, "factory_fence_successes": fences,
+            "factory_resource_authorization_attempts": resources,
+            "factory_resource_authorization_successes": resources,
+        }
+        assert transport.calls.count("refresh") == refreshes
+        assert transport.calls.count("subject_dom") == resources
+
+    asyncio.run(scenario())
 
 
 def test_direct_dispatch_barrier_rechecks_actual_subject_before_permit(

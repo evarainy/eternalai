@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hmac
 import re
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -25,6 +26,8 @@ from app.infra.persistence.browser.crypto import (
     BrowserResourceCipher,
     ResourceEnvelope,
 )
+from app.infra.persistence.browser.runs import _snapshot
+from app.ports.browser_run_store import RunSnapshot
 from app.ports.browser_store import (
     MAX_BROWSER_REVISION,
     BrowserBindingKey,
@@ -144,6 +147,9 @@ class PostgreSQLBrowserLeaseStore:
         proof_verifier: BrowserProviderProofPort | None,
         cleanup_authority: BrowserCleanupAuthorityPort | None,
         resource_subject: BrowserResourceSubjectPort | None,
+        current_in_session: Callable[
+            [AsyncSession, BrowserAuthFact, BrowserBindingFact, Row | None], Awaitable[None]
+        ] | None = None,
     ) -> None:
         self._sessions = session_factory
         self._auth = current_auth
@@ -154,6 +160,7 @@ class PostgreSQLBrowserLeaseStore:
         self._proof_verifier = proof_verifier
         self._cleanup_authority = cleanup_authority
         self._subject = resource_subject
+        self._current_session = current_in_session
 
     def _pool(self, alias: str) -> BrowserProviderPool:
         if (self._registry is None or self._proof_context is None or self._proof_verifier is None
@@ -163,6 +170,7 @@ class PostgreSQLBrowserLeaseStore:
 
     async def _current(
         self, auth: BrowserAuthFact, binding: BrowserBindingFact | BrowserLeaseBindingSnapshot,
+        *, session: AsyncSession | None = None, credential: Row | None = None,
     ) -> None:
         if not isinstance(binding, BrowserBindingFact):
             raise BrowserLeaseError("browser_cleanup_claim_not_business")
@@ -170,8 +178,192 @@ class PostgreSQLBrowserLeaseStore:
                 or auth.owner.tenant_id != binding.tenant_id
                 or auth.owner.user_id != binding.ai_user_id):
             raise BrowserLeaseError("browser_authority_unavailable")
-        await self._auth.check_current(auth)
-        await self._binding.check_binding(binding)
+        if self._current_session is None:
+            await self._auth.check_current(auth)
+            await self._binding.check_binding(binding)
+        elif session is None:
+            async with self._sessions() as current, current.begin():
+                await self._current_session(current, auth, binding, None)
+        else:
+            await self._current_session(session, auth, binding, credential)
+
+    async def has_capacity(self, binding: BrowserBindingFact, provider_alias: str) -> bool:
+        """Scheduling hint only; reserve remains the atomic, authorized admission."""
+        async with self._sessions() as session:
+            return await self._has_capacity_in_session(session, binding, provider_alias)
+
+    async def _has_capacity_in_session(
+        self, session: AsyncSession, binding: BrowserBindingFact, provider_alias: str,
+    ) -> bool:
+        """Nonlocking hint in the caller's session; never reserve capacity here."""
+        pool = self._pool(provider_alias)
+        params = {**_key(binding), "provider_key": pool.provider_key}
+        row = (await session.execute(text(
+            "SELECT "
+            "(SELECT max_active FROM browser_capacity_limits"
+            " WHERE provider_key=:provider_key AND tenant_id IS NULL) AS global_limit,"
+            "(SELECT max_active FROM browser_capacity_limits"
+            " WHERE provider_key=:provider_key AND tenant_id=:tenant_id) AS tenant_limit,"
+            "(SELECT count(*) FROM browser_binding_leases"
+            " WHERE provider_key=:provider_key AND capacity_held) AS global_count,"
+            "(SELECT count(*) FROM browser_binding_leases WHERE provider_key=:provider_key"
+            " AND tenant_id=:tenant_id AND capacity_held) AS tenant_count,"
+            f"EXISTS (SELECT 1 FROM {_TABLE} WHERE {_B}"
+            " AND state<>'released') AS binding_busy"
+        ), params)).mappings().one()
+        if (type(row["global_limit"]) is not int or type(row["tenant_limit"]) is not int
+                or row["global_limit"] <= 0 or row["tenant_limit"] <= 0):
+            raise BrowserLeaseError("browser_capacity_unconfigured")
+        return (not row["binding_busy"] and row["global_count"] < row["global_limit"]
+                and row["tenant_count"] < row["tenant_limit"])
+
+    async def has_run_lease(self, run: RunSnapshot) -> bool:
+        """Exact persisted reservation hint, including a crash before attach.
+
+        This neither grants business authority nor recovers a resource. Epoch
+        and provider also match when already attached; reserve remains atomic.
+        """
+        async with self._sessions() as session:
+            return await self._has_run_lease_in_session(session, run)
+
+    async def _has_run_lease_in_session(self, session: AsyncSession, run: RunSnapshot) -> bool:
+        """Exact reservation hint without opening or closing another session."""
+        admission = run.admission
+        params = {
+            "tenant_id": run.owner.tenant_id, "ai_user_id": run.owner.user_id,
+            "target_system": admission.target_system, "binding_id": admission.binding_id,
+            "binding_revision": admission.binding_revision,
+            "session_id": run.owner.session_id, "run_id": run.run_id,
+            "fingerprint": admission.auth_fingerprint, "expires_at": admission.auth_expires_at,
+        }
+        exact = (
+            " AND binding_revision=:binding_revision AND holder_session_id=:session_id"
+            " AND authorization_run_id=:run_id AND authorization_revision IS NULL"
+            " AND auth_session_fingerprint=:fingerprint AND auth_expires_at=:expires_at"
+            " AND capacity_held AND state IN ('held','quarantined')"
+        )
+        if run.lease_epoch is not None:
+            exact += " AND lease_epoch=:lease_epoch"
+            params["lease_epoch"] = run.lease_epoch
+        if run.provider_key is not None:
+            exact += " AND provider_key=:provider_key"
+            params["provider_key"] = run.provider_key
+        return bool((await session.execute(text(
+            f"SELECT EXISTS (SELECT 1 FROM {_TABLE} WHERE {_B}" + exact + ")",
+        ), params)).scalar_one())
+
+    async def _prove_no_run_resource(self, run: RunSnapshot) -> bool:
+        """Cancellation proof under the same earlier locks used by Run actions.
+
+        The credential row also serializes a missing lease row with reserve's
+        INSERT. This is a read-only proof, never a release of a foreign claim.
+        """
+        params = {
+            "tenant_id": run.owner.tenant_id, "ai_user_id": run.owner.user_id,
+            "session_id": run.owner.session_id, "task_id": run.task_id, "run_id": run.run_id,
+            "target_system": run.admission.target_system, "binding_id": run.admission.binding_id,
+        }
+        async with self._sessions() as session, session.begin():
+            await session.execute(text("SELECT pg_advisory_xact_lock_shared(:key)"),
+                                  {"key": _WRITER_LOCK})
+            credential = (await session.execute(text(
+                f"SELECT binding_id FROM oa_session_credentials WHERE {_B} FOR UPDATE",
+            ), params)).scalar_one_or_none()
+            if credential is None:
+                raise BrowserLeaseError("browser_binding_missing")
+            statements = (
+                f"SELECT lease_epoch FROM {_TABLE} WHERE {_B} FOR UPDATE",
+                "SELECT session_id FROM sessions WHERE tenant_id=:tenant_id"
+                " AND session_id=:session_id FOR UPDATE",
+                "SELECT task_id FROM tasks WHERE tenant_id=:tenant_id AND ai_user_id=:ai_user_id"
+                " AND session_id=:session_id AND task_id=:task_id FOR UPDATE",
+                "SELECT run_id FROM browser_runs WHERE tenant_id=:tenant_id"
+                " AND ai_user_id=:ai_user_id AND session_id=:session_id"
+                " AND task_id=:task_id AND run_id=:run_id FOR UPDATE",
+            )
+            for statement in statements:
+                await session.execute(text(statement), params)
+            return await self._prove_no_run_resource_in_session(session, run)
+
+    async def _prove_no_run_resource_in_session(
+        self, session: AsyncSession, run: RunSnapshot,
+    ) -> bool:
+        """Caller holds credential -> lease -> session -> Task -> Run locks."""
+        if not session.in_transaction():
+            raise BrowserLeaseError("browser_lease_stale")
+        params = {
+            "tenant_id": run.owner.tenant_id, "ai_user_id": run.owner.user_id,
+            "session_id": run.owner.session_id, "task_id": run.task_id, "run_id": run.run_id,
+            "target_system": run.admission.target_system, "binding_id": run.admission.binding_id,
+        }
+        row = (await session.execute(text(
+            "SELECT * FROM browser_runs WHERE tenant_id=:tenant_id AND ai_user_id=:ai_user_id"
+            " AND session_id=:session_id AND task_id=:task_id AND run_id=:run_id",
+        ), params)).mappings().one_or_none()
+        if row is None:
+            return False
+        current = _snapshot(row)
+        # acknowledge_cancel checks a candidate with this one flag changed,
+        # before persistence. Every other admission/worker/state field matches.
+        if current != run and replace(current, cancel_acknowledged=True) != run:
+            return False
+        active = current.status in {"running", "waiting_user"}
+        if (not current.cancel_requested or current.effect != "not_sent"
+                or current.lease_epoch is not None or current.provider_key is not None
+                or current.provider_manifest_digest is not None or current.verification is not None
+                or current.capture_status != "not_requested"
+                or current.capture_operation_id is not None or current.profile_generation_id is not None
+                or current.protected_result is not None or current.result_digest is not None
+                or current.verification_evidence_digest is not None):
+            return False
+        if active:
+            now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            if (current.phase not in {"queued", "acquiring"} or current.worker_id is None
+                    or current.worker_epoch < 1 or current.worker_deadline is None
+                    or current.worker_deadline <= now):
+                return False
+        elif (current.status != "cancelled" or current.phase is not None
+              or not current.cancel_acknowledged):
+            return False
+        # A run_id match blocks proof even if another associated field is
+        # missing/corrupt or points at a different binding. Never infer absence
+        # from failure of the narrower has_run_lease identity match.
+        if (await session.execute(text(
+            f"SELECT 1 FROM {_TABLE} WHERE tenant_id=:tenant_id"
+            " AND authorization_run_id=:run_id LIMIT 1",
+        ), params)).scalar_one_or_none() is not None:
+            return False
+        lease = (await session.execute(text(
+            f"SELECT * FROM {_TABLE} WHERE {_B}",
+        ), params)).mappings().one_or_none()
+        if lease is None:
+            return True
+        if lease["state"] == "released":
+            # Reuse cleanup's fully cleared reservation/acquisition fields.
+            return (not lease["capacity_held"] and not lease["acquisition_send_started"]
+                    and lease["acquisition_phase"] == "reservation_only"
+                    and all(lease[name] is None for name in (
+                        "holder_id", "holder_session_id", "binding_revision",
+                        "authorization_revision", "authorization_run_id",
+                        "auth_session_fingerprint", "auth_expires_at", "deadline", "provider_key",
+                        "acquisition_operation_id", "resource_cipher_version", "resource_key_id",
+                        "resource_nonce", "encrypted_resource_ref", "resource_proof_digest",
+                    ))
+                    and (lease["lease_epoch"] == 0 or (
+                        lease["release_outcome"] in {"released", "terminated"}
+                        and lease["release_proof_digest"] is not None)))
+        # A complete, positively identified other Run is allowed to retain its
+        # own lease/acquisition. Unknown/partial ownership fails closed.
+        return (lease["state"] in {"held", "quarantined"} and lease["capacity_held"]
+                and isinstance(lease["authorization_run_id"], str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", lease["authorization_run_id"]) is not None
+                and lease["authorization_run_id"] != run.run_id
+                and lease["authorization_revision"] is None
+                and lease["acquisition_phase"] in {"reservation_only", "acquiring", "acquired", "unknown"}
+                and all(lease[name] is not None for name in (
+                    "holder_id", "holder_session_id", "binding_revision", "auth_session_fingerprint",
+                    "auth_expires_at", "deadline", "provider_key", "acquisition_operation_id",
+                )))
 
     async def _cleanup_allowed(self, claim: BrowserLeaseClaim) -> None:
         if self._cleanup_authority is None:
@@ -249,8 +441,25 @@ class PostgreSQLBrowserLeaseStore:
         duration, pool = _ttl(ttl_seconds), self._pool(provider_alias)
         await self._current(auth, binding)
         async with self._locked(binding, pool) as (session, credential, row, now, glob, tenant):
-            await self._current(auth, binding)
+            await self._current(auth, binding, session=session, credential=credential)
             _binding_current(credential, binding)
+            if auth.authorization_run_id is not None:
+                # The credential lock is shared with cancellation/proof. An
+                # old pre-reserve await cannot create a claim after cancel.
+                eligible = (await session.execute(text(
+                    "SELECT 1 FROM browser_runs WHERE tenant_id=:tenant_id"
+                    " AND ai_user_id=:ai_user_id AND session_id=:session_id AND run_id=:run_id"
+                    " AND target_system=:target_system AND binding_id=:binding_id"
+                    " AND binding_revision=:binding_revision AND auth_fingerprint=:fingerprint"
+                    " AND auth_expires_at=:expires_at AND status IN ('running','waiting_user')"
+                    " AND phase='acquiring' AND effect='not_sent' AND NOT cancel_requested"
+                    " AND lease_epoch IS NULL AND provider_key IS NULL",
+                ), {**_key(binding), "session_id": auth.owner.session_id,
+                    "run_id": auth.authorization_run_id, "binding_revision": binding.binding_revision,
+                    "fingerprint": auth.fingerprint, "expires_at": auth.expires_at,
+                })).scalar_one_or_none()
+                if eligible != 1:
+                    raise BrowserLeaseError("browser_lease_stale")
             if auth.expires_at <= now:
                 raise BrowserLeaseError("browser_auth_expired")
             if row is not None and row["state"] != "released":
@@ -286,9 +495,10 @@ class PostgreSQLBrowserLeaseStore:
         return claim
 
     async def _business_locked(
-        self, claim: BrowserLeaseClaim, credential: Row, row: Row | None, now: datetime,
+        self, session: AsyncSession, claim: BrowserLeaseClaim,
+        credential: Row, row: Row | None, now: datetime,
     ) -> Row:
-        await self._current(claim.auth, claim.binding)
+        await self._current(claim.auth, claim.binding, session=session, credential=credential)
         if not isinstance(claim.binding, BrowserBindingFact):
             raise BrowserLeaseError("browser_cleanup_claim_not_business")
         _binding_current(credential, claim.binding)
@@ -302,7 +512,7 @@ class PostgreSQLBrowserLeaseStore:
     async def start_acquisition(self, claim: BrowserLeaseClaim) -> BrowserLeaseClaim:
         pool = self._pool(claim.provider_key)
         async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):
-            row = await self._business_locked(claim, credential, row, now)
+            row = await self._business_locked(session, claim, credential, row, now)
             if row["acquisition_phase"] != "reservation_only" or row["acquisition_send_started"]:
                 raise BrowserLeaseError("browser_acquisition_already_started")
             revision = _increment(row["lease_revision"])
@@ -316,8 +526,8 @@ class PostgreSQLBrowserLeaseStore:
     async def _snapshot(self, claim: BrowserLeaseClaim, *, business: bool) -> Row:
         if business:
             pool = self._pool(claim.provider_key)
-            async with self._locked(claim.binding, pool) as (_, credential, row, now, _, _):
-                checked = await self._business_locked(claim, credential, row, now)
+            async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):
+                checked = await self._business_locked(session, claim, credential, row, now)
                 snapshot = dict(checked)
             return snapshot
         async with self._sessions() as session:
@@ -390,7 +600,7 @@ class PostgreSQLBrowserLeaseStore:
         await self._current(claim.auth, claim.binding)
         envelope = self._cipher.encrypt(claim, fact.resource_ref)
         async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):
-            row = await self._business_locked(claim, credential, row, now)
+            row = await self._business_locked(session, claim, credential, row, now)
             if row["acquisition_phase"] != "acquiring":
                 raise BrowserLeaseError("browser_acquisition_phase_invalid")
             revision = _increment(row["lease_revision"])
@@ -409,7 +619,7 @@ class PostgreSQLBrowserLeaseStore:
     ) -> BrowserLeaseClaim:
         duration, pool = _ttl(ttl_seconds), self._pool(claim.provider_key)
         async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):
-            row = await self._business_locked(claim, credential, row, now)
+            row = await self._business_locked(session, claim, credential, row, now)
             revision = _increment(row["lease_revision"])
             deadline = min(now + duration, claim.auth.expires_at)
             await self._update(session, claim.binding,
@@ -418,18 +628,17 @@ class PostgreSQLBrowserLeaseStore:
 
     async def authorize_resource(self, claim: BrowserLeaseClaim) -> bytes:
         pool = self._pool(claim.provider_key)
-        await self._current(claim.auth, claim.binding)
+        # _snapshot performs the pre-subject authority check under the lease locks.
         snapshot = await self._snapshot(claim, business=True)
         if snapshot["acquisition_phase"] != "acquired":
             raise BrowserLeaseError("browser_resource_unavailable")
-        await self._current(claim.auth, claim.binding)
         resource = self._resource(snapshot, claim)
         if resource is None or self._subject is None:
             raise BrowserLeaseError("browser_resource_unavailable")
         await self._subject.check_subject(claim, resource)
-        await self._current(claim.auth, claim.binding)
-        async with self._locked(claim.binding, pool) as (_, credential, row, now, _, _):
-            row = await self._business_locked(claim, credential, row, now)
+        # A new lock transaction rechecks authority after the external DOM await.
+        async with self._locked(claim.binding, pool) as (session, credential, row, now, _, _):
+            row = await self._business_locked(session, claim, credential, row, now)
             if row["encrypted_resource_ref"] != snapshot["encrypted_resource_ref"]:
                 raise BrowserLeaseError("browser_lease_stale")
         return resource

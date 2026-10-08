@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
@@ -120,6 +120,22 @@ class SingleSeedManifestAuthority:
             detached_owner, skill_id, operation, self._seed.digest,
         ) is True
 
+    async def authorize_in_session(
+        self, session: AsyncSession, owner: BrowserOwner, skill_id: str,
+        operation: PublicationOperation,
+    ) -> bool:
+        if (owner.tenant_id != self._tenant_id or skill_id != self._seed.skill.skill_id
+                or operation not in {"prepare", "activate", "deactivate", "read", "execute"}):
+            return False
+        # Explicit optional DB-only adapter; generic grant implementations keep their checks.
+        check = getattr(self._grants, "check_in_session", None)
+        if not callable(check):
+            return await self.authorize(owner, skill_id, operation)
+        detached_owner = BrowserOwner(
+            tenant_id=owner.tenant_id, user_id=owner.user_id, session_id=owner.session_id,
+        )
+        return await check(session, detached_owner, skill_id, operation, self._seed.digest) is True
+
     async def verify_manifest(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
     ) -> bool:
@@ -135,10 +151,8 @@ class ActiveBrowserPublications(PostgreSQLBrowserPublicationStore):
     async def assert_current(
         self, owner: BrowserOwner, manifest: BrowserPublicationManifest,
     ) -> None:
-        await super().assert_current(owner, manifest)
-        active = await self.get_active(owner, manifest.skill.skill_id)
-        if active is None or active.manifest != manifest:
-            raise BrowserPublicationError("browser_publication_inactive")
+        async with self._transaction() as session:
+            await self.assert_current_in_session(session, owner, manifest, require_active=True)
 
 
 class BrowserChatPayloadCipher:
@@ -203,6 +217,11 @@ class BrowserVerticalDependencies:
     worker_id: str
     enabled: bool = False
     worker_ttl_seconds: int = 60
+    business_ready: Callable[[RunSnapshot], Awaitable[bool]] | None = None
+    business_ready_in_session: Callable[
+        [AsyncSession, RunSnapshot], Awaitable[bool]
+    ] | None = None
+    cancel_check_in_session: CleanupAuthorize | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -232,6 +251,12 @@ class BrowserVerticalComponents:
     _tenant_id: str
     _seed: BrowserPublicationManifest
     _owner_scan: _OwnerScan = field(default_factory=_OwnerScan, compare=False)
+    _active_owners: set[tuple[str, str, str]] = field(
+        default_factory=set, compare=False, repr=False,
+    )
+    _cleanup_owners: set[tuple[str, str, str]] = field(
+        default_factory=set, compare=False, repr=False,
+    )
 
     async def prepare_seed(self, owner: BrowserOwner) -> BrowserPublicationRecord:
         """Explicit service operation; constructing components never calls this."""
@@ -243,14 +268,26 @@ class BrowserVerticalComponents:
             owner, self._seed.skill.skill_id, self._seed.digest, expected_revision=0,
         )
 
-    async def run_ready(self, *, maximum_owners: int = 16) -> tuple[RunSnapshot, ...]:
+    async def run_business_ready(self) -> tuple[RunSnapshot, ...]:
+        # One business lane for the installed single-binding factory. Busy owners
+        # can be skipped through the existing finite discovery cycle.
+        return await self.run_ready(maximum_owners=1, include_cleanup=False, maximum_runs=1)
+
+    async def run_ready(
+        self, *, maximum_owners: int = 16, include_cleanup: bool = True,
+        maximum_runs: int | None = None,
+    ) -> tuple[RunSnapshot, ...]:
         """One bounded supervisor pass over durable owner identities, no implicit loop.
 
         The database supplies owners, never a client owner list. Worker claim/current
         checks still verify each exact protected Run and its current authorization.
         Closing this discovery transaction precedes all worker/provider operations.
         """
-        if type(maximum_owners) is not int or not 1 <= maximum_owners <= 64:
+        if (type(maximum_owners) is not int or not 1 <= maximum_owners <= 64
+                or type(include_cleanup) is not bool
+                or (maximum_runs is not None and (
+                    type(maximum_runs) is not int or not 1 <= maximum_runs <= maximum_owners
+                ))):
             raise ValueError("browser_worker_batch_invalid")
         eligible = (
             "tenant_id=:tenant AND publication_digest=:publication"
@@ -285,7 +322,8 @@ class BrowserVerticalComponents:
                     params.update(after_user=scan.after[0], after_session=scan.after[1])
                     after_clause = " AND (ai_user_id,session_id)>(:after_user,:after_session)"
                 rows = list((await session.execute(text(
-                    "SELECT tenant_id,ai_user_id,session_id FROM browser_runs WHERE " + eligible
+                    "SELECT tenant_id,ai_user_id,session_id"
+                    " FROM browser_runs WHERE " + eligible
                     + " AND (ai_user_id,session_id)<=(:upper_user,:upper_session)" + after_clause
                     + " GROUP BY tenant_id,ai_user_id,session_id"
                     " ORDER BY ai_user_id,session_id LIMIT :limit",
@@ -300,8 +338,17 @@ class BrowserVerticalComponents:
         for row in rows:
             owner = BrowserOwner(tenant_id=row["tenant_id"], user_id=row["ai_user_id"],
                                  session_id=row["session_id"])
+            owner_key = (owner.tenant_id, owner.user_id, owner.session_id)
+            if owner_key in self._active_owners or owner_key in self._cleanup_owners:
+                continue
             try:
-                result = await self.worker.run_next(owner)
+                # Readiness is checked on each exact claim candidate in the
+                # store; one recovering Run cannot exempt its owner's queue.
+                self._active_owners.add(owner_key)
+                try:
+                    result = await self.worker.run_next(owner)
+                finally:
+                    self._active_owners.discard(owner_key)
             except Exception:
                 # One revoked/stale owner must not block unrelated authorized
                 # owners. Report the pass failure without retaining identity,
@@ -310,6 +357,21 @@ class BrowserVerticalComponents:
                 continue
             if result is not None:
                 completed.append(result)
+                if maximum_runs is not None and len(completed) >= maximum_runs:
+                    break
+        if include_cleanup:
+            try:
+                await self.cleanup_ready(maximum_owners=maximum_owners)
+            except Exception:
+                failed_owners += 1
+        if failed_owners:
+            raise BrowserRunStoreError("browser_worker_pass_failed")
+        return tuple(completed)
+
+    async def cleanup_ready(self, *, maximum_owners: int = 16) -> None:
+        if type(maximum_owners) is not int or not 1 <= maximum_owners <= 64:
+            raise ValueError("browser_worker_batch_invalid")
+        failed_owners = 0
         # Historical cleanup has independent service authority. A revoked or
         # expired business session must not prevent exact resource reconciliation.
         async with self._sessions() as session:
@@ -333,14 +395,19 @@ class BrowserVerticalComponents:
         for row in cleanup_rows:
             owner = BrowserOwner(tenant_id=row["tenant_id"], user_id=row["ai_user_id"],
                                  session_id=row["session_id"])
+            owner_key = (owner.tenant_id, owner.user_id, owner.session_id)
+            if owner_key in self._active_owners or owner_key in self._cleanup_owners:
+                continue
+            self._cleanup_owners.add(owner_key)
             try:
                 historical = await self.runs.get_for_cleanup(owner, row["task_id"], row["run_id"])
                 await self.worker.cleanup(historical)
             except Exception:
                 failed_owners += 1
+            finally:
+                self._cleanup_owners.discard(owner_key)
         if failed_owners:
             raise BrowserRunStoreError("browser_worker_pass_failed")
-        return tuple(completed)
 
 
 def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
@@ -392,8 +459,15 @@ def build_browser_vertical(
         tenant_id=deps.tenant_id, seed=seed, grants=deps.publication_grants,
         source_verifier=deps.source_verifier,
     )
+    async def locked_capability(session: AsyncSession, capability_id: str) -> CapabilitySpec | None:
+        return await deps.capability_registry._get_in_session(
+            session, capability_id, for_share=True,
+        )
+
     publications = ActiveBrowserPublications(
         deps.session_factory, deps.capability_registry, authority,
+        authorize_in_session=authority.authorize_in_session,
+        capability_in_session=locked_capability,
     )
     cipher = BrowserPayloadCipher(dict(deps.payload_keys), active_key_id=deps.active_payload_key_id)
 
@@ -420,9 +494,24 @@ def build_browser_vertical(
         # immediately after this check; the snapshot itself never grants access.
         return current
 
+    async def publication_check_in_session(
+        session: AsyncSession, owner: BrowserOwner, digest: bytes,
+        capability_id: str, require_active: bool,
+    ) -> CapabilitySpec:
+        if (type(digest) is not bytes or len(digest) != 32
+                or not hmac.compare_digest(digest, bytes.fromhex(seed.digest))
+                or capability_id != seed.capability.capability_id
+                or type(require_active) is not bool):
+            raise BrowserPublicationError("browser_publication_reference_invalid")
+        return await publications.assert_current_in_session(
+            session, owner, seed, require_active=require_active,
+            operation="execute" if require_active else "read",
+        )
+
     current_auth = PostgreSQLBrowserCurrentAuth(
         session_factory=deps.session_factory, cipher=cipher, session_binder=deps.session_binder,
         policy=deps.policy, publication_check=publication_check,
+        publication_check_in_session=publication_check_in_session,
     )
     binding_reader = PostgreSQLBrowserBindingReader(deps.session_factory)
     profiles = PostgreSQLBrowserProfileStore(
@@ -442,10 +531,18 @@ def build_browser_vertical(
                 "user": run.owner.user_id, "session": run.owner.session_id})).scalar_one()
         if type(trace_id) is not str or not trace_id:
             raise ValueError("browser_read_diagnostic_trace_unavailable")
+        succeeded = (attributes.get("browser_read_outcome") == "verified"
+                     or attributes.get("browser_worker_outcome") == "completed")
+        skipped = (attributes.get("browser_read_outcome") in {"deferred", "cancelled"}
+                   or attributes.get("browser_worker_outcome") in {"deferred", "cancelled"})
         await deps.trace.record_step(
             trace_id, run.task_id, run.owner.session_id,
             tenant_id=run.owner.tenant_id, ai_user_id=run.owner.user_id,
-            event_type="adapter_error", status="failed", attributes=attributes,
+            event_type=(
+                "adapter_called" if succeeded or skipped else "adapter_error"
+            ),
+            status="ok" if succeeded else "skipped" if skipped else "failed",
+            attributes=attributes,
         )
 
     execution = VerifiedBrowserReadExecution(
@@ -455,16 +552,20 @@ def build_browser_vertical(
     run_authority = PostgreSQLBrowserRunAuthority(
         current_auth=current_auth, verification_check=execution.check_verified_candidate,
         cancel_check=deps.cancel_check, cleanup_authorize=deps.cleanup_authorize,
+        cancel_check_in_session=deps.cancel_check_in_session,
         cleanup_check=deps.cleanup_check,
     )
     runs = PostgreSQLBrowserRunStore(
         session_factory=deps.session_factory, authority=run_authority,
         digest_keys=dict(deps.request_digest_keys),
         active_digest_key_id=deps.active_request_digest_key_id,
+        claim_ready=deps.business_ready,
+        claim_ready_in_session=deps.business_ready_in_session,
     )
     worker = BrowserReadWorker(
         runs, execution, profiles, worker_id=deps.worker_id, enabled=True,
         ttl_seconds=deps.worker_ttl_seconds,
+        record_diagnostic=record_read_diagnostic,
     )
     chat = BrowserChatService(
         runs, publications, deps.chat_parser, deps.chat_bindings, BrowserChatPayloadCipher(cipher),

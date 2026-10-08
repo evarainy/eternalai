@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
+from collections.abc import Awaitable, Callable
 
 from app.browser_skill.models import BrowserOwner
 from app.ports.browser_profile_store import BrowserProfileStorePort
@@ -19,12 +22,21 @@ from app.ports.browser_run_store import (
 )
 
 
+class _BrowserReadDeferred(BrowserReadExecutionError):
+    """Internal pre-resource scheduling signal; no public protocol/status change."""
+
+    def __init__(self) -> None:
+        super().__init__("unavailable")
+
+
 class _Checkpoint:
     def __init__(self, store: BrowserRunStorePort, run: RunSnapshot, ttl: int) -> None:
         self.store, self.run, self.ttl = store, run, ttl
+        self.refresh_calls = 0
 
     async def refresh(self, *, allow_cancel: bool = False) -> RunSnapshot:
         old = self.run
+        self.refresh_calls = min(10000, self.refresh_calls + 1)
         try:
             current = await self.store.refresh_worker(old, ttl_seconds=self.ttl)
         except BrowserRunStoreError as error:
@@ -69,12 +81,14 @@ class BrowserReadWorker:
         self, store: BrowserRunStorePort, execution: BrowserReadExecutionPort,
         profiles: BrowserProfileStorePort, *, worker_id: str, enabled: bool = False,
         ttl_seconds: int = 60,
+        record_diagnostic: Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]] | None = None,
     ) -> None:
         checked_run_id(worker_id)
         if type(enabled) is not bool or type(ttl_seconds) is not int or not 5 <= ttl_seconds <= 300:
             raise ValueError("browser_worker_configuration_invalid")
         self._store, self._execution, self._profiles = store, execution, profiles
         self._worker_id, self._enabled, self._ttl = worker_id, enabled, ttl_seconds
+        self._record_diagnostic = record_diagnostic
 
     async def run_next(self, owner: BrowserOwner) -> RunSnapshot | None:
         if not self._enabled:
@@ -89,6 +103,24 @@ class BrowserReadWorker:
         if not self._enabled or run.worker_id != self._worker_id:
             raise BrowserReadExecutionError("denied")
         checkpoint = _Checkpoint(self._store, run, self._ttl)
+        origin = stage_started = time.monotonic()
+        stage: str | None = "checkpoint"
+        diagnostic: dict[str, str | int] = {}
+        deferred = interrupted = False
+
+        def mark(next_stage: str | None, result: str = "ok") -> None:
+            nonlocal stage, stage_started
+            now = time.monotonic()
+            if stage is not None:
+                prefix = "worker_" + stage
+                diagnostic.update({
+                    prefix + "_start_ms": max(0, min(300000, int((stage_started - origin) * 1000))),
+                    prefix + "_end_ms": max(0, min(300000, int((now - origin) * 1000))),
+                    prefix + "_duration_ms": max(0, min(300000, int((now - stage_started) * 1000))),
+                    prefix + "_parent": "worker_claimed", prefix + "_result": result,
+                })
+            stage, stage_started = next_stage, now
+
         try:
             await checkpoint.refresh(allow_cancel=True)
             if checkpoint.run.verification != "verified":
@@ -96,6 +128,7 @@ class BrowserReadWorker:
                     checkpoint.run.phase in {"running", "verifying", "waiting_user"}
                     or checkpoint.run.effect != "not_sent"
                 ):
+                    mark("recovery")
                     # A crash can lose the in-memory send receipt. An old
                     # not_sent column is not proof that started work was never
                     # sent; never enter the factory or replay its Skill.
@@ -105,24 +138,47 @@ class BrowserReadWorker:
                         checkpoint.run, phase=checkpoint.run.phase, effect="unknown",
                     )
                     if checkpoint.run.cancel_requested:
+                        mark("cancel")
                         return await self._cancel(checkpoint)
+                    mark("finalize")
                     checkpoint.run = await self._store.finalize(
                         checkpoint.run, status="failed", error_code="browser_effect_unknown",
                         dispatch_failure_code="effect_unknown",
                     )
                     return checkpoint.run
                 if checkpoint.run.cancel_requested:
+                    mark("cancel")
                     return await self._cancel(checkpoint)
                 if checkpoint.run.phase == "queued":
                     checkpoint.run = await self._store.advance(
                         checkpoint.run, phase="acquiring", effect=checkpoint.run.effect,
                     )
                 try:
+                    mark("adapter_execution")
                     outcome = await self._execution.execute(checkpoint.run, checkpoint)
-                except BrowserReadExecutionError as error:
+                except _BrowserReadDeferred:
+                    mark("deferred", "deferred")
                     await checkpoint.refresh(allow_cancel=True)
                     if checkpoint.run.cancel_requested:
+                        mark("cancel")
                         return await self._cancel(checkpoint)
+                    if (checkpoint.run.phase != "acquiring"
+                            or checkpoint.run.lease_epoch is not None
+                            or checkpoint.run.provider_key is not None
+                            or checkpoint.run.effect != "not_sent"
+                            or checkpoint.run.verification == "verified"):
+                        raise BrowserReadExecutionError("stale") from None
+                    # Keep the active acquiring Run and its current worker TTL.
+                    # A later expired claim may retry only pre-resource work.
+                    deferred = True
+                    return checkpoint.run
+                except BrowserReadExecutionError as error:
+                    mark("execution_failure", "failed")
+                    await checkpoint.refresh(allow_cancel=True)
+                    if checkpoint.run.cancel_requested:
+                        mark("cancel")
+                        return await self._cancel(checkpoint)
+                    mark("finalize")
                     checkpoint.run = await self._store.finalize(
                         checkpoint.run, status="failed",
                         error_code="browser_effect_unknown" if checkpoint.run.effect == "unknown"
@@ -130,6 +186,9 @@ class BrowserReadWorker:
                         dispatch_failure_code=error.code,
                     )
                     return checkpoint.run
+                mark(
+                    "result_settlement", "verified" if outcome.verification == "verified" else "failed",
+                )
                 await checkpoint.refresh(allow_cancel=True)
                 effect = "unknown" if checkpoint.run.effect == "unknown" else outcome.effect
                 if checkpoint.run.cancel_requested:
@@ -139,12 +198,14 @@ class BrowserReadWorker:
                         checkpoint.run, phase=checkpoint.run.phase, effect=effect,
                     )
                 if checkpoint.run.cancel_requested and outcome.verification != "verified":
+                    mark("cancel")
                     return await self._cancel(checkpoint)
                 if not checkpoint.run.cancel_requested:
                     checkpoint.run = await self._store.advance(
                         checkpoint.run, phase="verifying", effect=effect,
                     )
                 if outcome.verification == "verified":
+                    mark("persist_verified")
                     assert outcome.result is not None
                     assert outcome.result_digest is not None and outcome.evidence_digest is not None
                     checkpoint.run = await self._store.persist_verified(
@@ -153,6 +214,7 @@ class BrowserReadWorker:
                     )
                     self._execution.verified_persisted(checkpoint.run)
                 else:
+                    mark("finalize")
                     checkpoint.run = await self._store.finalize(
                         checkpoint.run, status="failed",
                         error_code="browser_effect_unknown" if effect == "unknown"
@@ -163,20 +225,55 @@ class BrowserReadWorker:
                     return checkpoint.run
             # This branch intentionally never opens an execution, runs a query,
             # or calls a verifier for an already durable verified result.
+            mark("capture")
             await self._settle_capture(checkpoint)
+            mark("finalize")
             checkpoint.run = await self._store.finalize(checkpoint.run, status="completed")
             return checkpoint.run
+        except asyncio.CancelledError:
+            interrupted = True
+            raise
         finally:
             # Cleanup is separately authorized, can outlive auth expiry and
             # cannot overwrite a verified business outcome or replay the query.
             # No cleanup assertion is inferred from a disconnect or exception.
+            worker_result = (
+                "interrupted" if interrupted else "deferred" if deferred
+                else checkpoint.run.status
+                if checkpoint.run.status in {"completed", "failed", "cancelled"}
+                else "error"
+            )
+            mark("cleanup", worker_result)
+            cleanup_result = "skipped"
             try:
                 if checkpoint.run.status in {"completed", "failed", "cancelled"}:
                     cleanup = await self._execution.cleanup(checkpoint.run)
                     if cleanup != "pending":
                         await self._store.record_cleanup(checkpoint.run, cleanup=cleanup)
+                    cleanup_result = cleanup
             except Exception:
+                cleanup_result = "failed"
                 pass  # Existing pending/quarantined state remains the truthful obligation.
+            mark(None, cleanup_result)
+            claimed_ms = max(0, min(300000, int((time.monotonic() - origin) * 1000)))
+            diagnostic.update({
+                "browser_completion_scope": "worker_claimed",
+                "browser_worker_outcome": worker_result,
+                "browser_timing_clock": "monotonic_relative_ms",
+                "browser_stage_offsets_origin": "worker_claimed",
+                "worker_claimed_start_ms": 0,
+                "worker_claimed_end_ms": claimed_ms,
+                "worker_claimed_duration_ms": claimed_ms,
+                "worker_claimed_result": worker_result,
+                "worker_refresh_calls": checkpoint.refresh_calls,
+            })
+            if self._record_diagnostic is not None:
+                try:
+                    await asyncio.wait_for(
+                        self._record_diagnostic(checkpoint.run, diagnostic), timeout=1.0,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).warning("browser_worker_diagnostic_trace_unavailable")
 
     async def _cancel(self, checkpoint: _Checkpoint) -> RunSnapshot:
         await checkpoint.refresh(allow_cancel=True)

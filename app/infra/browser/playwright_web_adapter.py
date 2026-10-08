@@ -10,12 +10,22 @@ import asyncio
 import hashlib
 import json
 import secrets
+import sys
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import (
-    Any, Awaitable, Callable, Coroutine, Literal, ParamSpec, Protocol, TypeVar, cast, get_args,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Literal,
+    ParamSpec,
+    Protocol,
+    TypeVar,
+    cast,
+    get_args,
 )
 
 from jsonschema import Draft202012Validator
@@ -54,11 +64,23 @@ from app.browser_skill.verifier import authorize_current, check_liveness, failur
 from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import (
     DOMValue,
+    DOMBatchError,
     RegisteredDOMRules,
+    ROW_IDENTITY_MATCH,
     bounded_children,
+    filter_private_candidates,
+    private_row_identity,
     read_private,
+    read_private_many,
 )
-from app.infra.browser.playwright_observer import PlaywrightObserver
+from app.infra.browser.playwright_observer import (
+    ExactNode,
+    ExactRegion,
+    PlaywrightObserver,
+    ResolutionRound,
+    _dispose,
+    _dispose_many,
+)
 from app.ports.browser import SiteAdapter
 
 
@@ -66,6 +88,62 @@ class BusinessRegistry(Protocol):
     async def assert_business_authority(
         self, session: BrowserSessionRef, source: DecisionSource
     ) -> Any: ...
+
+
+OperationAuthority = Callable[
+    [BrowserSessionRef, ExecutionContext, ActionCommand | ReadSpec], Awaitable[Any]
+]
+
+
+_OPTION_IDENTITY = """el => {
+  const label = el.label;
+  if (new TextEncoder().encode(el.value).length > 4096 || label.length > 256)
+    throw new Error('bound');
+  return [el.value, label];
+}"""
+
+
+_FINAL_IDENTITY = ("(identity, config) => { const privateIdentity = " + ROW_IDENTITY_MATCH + ";"
+                + """
+              const node = identity.node, region = identity.region;
+              if (node !== config.element || !node.isConnected || !region.isConnected ||
+                  node.ownerDocument !== region.ownerDocument || !region.contains(node)) return false;
+              const regions = node.ownerDocument.querySelectorAll(config.region_selector);
+              if (regions.length !== 1 || regions[0] !== region) return false;
+              if (config.selector && !node.matches(config.selector)) return false;
+              if (config.row_selector) {
+                const row = node.closest(config.row_selector);
+                if (!row || row !== identity.row || !row.isConnected || !region.contains(row))
+                  return false;
+                if (!privateIdentity(region, node, row, config, false)) return false;
+              }
+              if (config.target) {
+                // The nearest explicit ARIA value overrides ancestors, including
+                // across shadow hosts; Playwright parses true/false without case.
+                let ariaDisabled = false;
+                for (let ancestor = node; ancestor;
+                     ancestor = ancestor.parentElement || ancestor.getRootNode().host || null) {
+                  const value = (ancestor.getAttribute('aria-disabled') || '').toLowerCase();
+                  if (value === 'true' || value === 'false') {
+                    ariaDisabled = value === 'true';
+                    break;
+                  }
+                }
+                const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+                if (style.visibility === 'hidden' || style.visibility === 'collapse' ||
+                    rect.width <= 0 || rect.height <= 0 || node.matches(':disabled') ||
+                    ariaDisabled) return false;
+                if (config.operation === 'fill' && (node.readOnly ||
+                    node.getAttribute('aria-readonly') === 'true' ||
+                    !(node.isContentEditable || node.matches('input,textarea')))) return false;
+              }
+              const option = config.option;
+              if (option && (!option.isConnected || option.closest('select') !== node ||
+                  option.disabled || option.closest('optgroup[disabled]') || node.multiple ||
+                  option.value !== config.option_value || option.label !== config.option_label))
+                return false;
+              return true;
+            }""")
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -82,6 +160,8 @@ class RegisteredExecution:
     confirmed_key: ConfirmedBusinessKey
     project_output: Callable[[Mapping[str, str]], Mapping[str, object]] | None = None
     stop_after_observe: bool = False
+    operation_authority: OperationAuthority | None = None
+    authority_diagnostic: Callable[[], dict[str, int]] | None = None
 
 
 @dataclass(slots=True, repr=False)
@@ -95,6 +175,18 @@ class _Option:
 class _OptionSet:
     parent: TargetRef
     options: list[_Option]
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _ValidatedNode:
+    page: Any
+    frame: Any
+    element: Any
+    identity: Any
+
+
+async def _dispose_validated_node(node: _ValidatedNode, *, failed: bool = False) -> None:
+    await _dispose_many((node.element, node.identity), suppress_cancel=failed)
 
 
 @dataclass(slots=True, repr=False)
@@ -205,6 +297,7 @@ class PlaywrightWebAdapter:
         self._observe_wait: dict[str, tuple[str, float]] = {}
         self._observe_only_completed: dict[str, int] = {}
         self._authority_calls: dict[str, int] = {}
+        self._filter_counts: dict[str, dict[str, int]] = {}
         self._validation_progress: dict[str, _ValidationProgress] = {}
         self._salt = secrets.token_bytes(32)
         # One bounded private result per registered execution. Never included in
@@ -279,24 +372,52 @@ class PlaywrightWebAdapter:
         else:
             if not self._site.permits(context.skill, subject):
                 raise failure("unsupported")
-        await authorize_current(session, context, subject)
-        live = await self._registry.assert_business_authority(session, context.source)
-        if live.session != session:
-            raise failure("denied")
-        await authorize_current(session, context, subject)
-        await self._origin_guard(session, context, live)
+        assert subject is not None
+        async def current_live() -> Any:
+            if registration.operation_authority is not None:
+                # An installed callback is authoritative: failure never falls back.
+                value = await registration.operation_authority(session, context, subject)
+            else:
+                await authorize_current(session, context, subject)
+                value = await self._registry.assert_business_authority(session, context.source)
+                if value.session != session:
+                    raise failure("denied")
+                await authorize_current(session, context, subject)
+            if value.session != session:
+                raise failure("denied")
+            check_liveness(context)
+            return value
+
+        live = await current_live()
+        if await self._origin_guard(session, context, live):
+            # route installation awaited external work. Renew operation authority
+            # afterward, then synchronously inspect the installed guard again.
+            live = await current_live()
+            self._check_origin_guard(session, context, live)
         check_liveness(context)
         return plan, live
 
+    def _check_origin_guard(
+        self, session: BrowserSessionRef, ctx: ExecutionContext, live: Any,
+    ) -> None:
+        guard = self._guards.get(session.session_ref)
+        if (guard is None or guard.context is not live.context
+                or guard.execution is not ctx or guard.failed):
+            raise failure("denied")
+        check_liveness(ctx)
+
     async def _origin_guard(
         self, session: BrowserSessionRef, ctx: ExecutionContext, live: Any
-    ) -> None:
+    ) -> bool:
+        if session.session_ref in self._guards:
+            self._check_origin_guard(session, ctx, live)
+            return False
         async with self._guard_lock:
             guard = self._guards.get(session.session_ref)
             if guard is not None:
-                if guard.context is not live.context or guard.failed:
-                    raise failure("denied")
-                return
+                # Acquiring this lock may have waited for another installation.
+                self._check_origin_guard(session, ctx, live)
+                return True
             guard = _OriginGuard(live.context, ctx)
 
             def inspect_request(request: Any) -> None:
@@ -318,10 +439,16 @@ class PlaywrightWebAdapter:
                 guard.failed = True
                 ctx.cancellation.set()
 
-            live.context.on("request", inspect_request)
-            live.context.on("page", page_created)
-            await live.context.route("**/*", route_request)
+            try:
+                live.context.on("request", inspect_request)
+                live.context.on("page", page_created)
+                await live.context.route("**/*", route_request)
+            except BaseException:
+                guard.failed = True
+                ctx.cancellation.set()
+                raise
             self._guards[session.session_ref] = guard
+            return True
 
     @staticmethod
     def _origins(exact: Any, context: ExecutionContext) -> None:
@@ -380,8 +507,23 @@ class PlaywrightWebAdapter:
         result: dict[str, str | int] = {
             "adapter_authority_calls": self._authority_calls.get(session_ref, 0),
         }
+        registration = self._executions.get(session_ref)
+        if registration is not None and registration.authority_diagnostic is not None:
+            counters = registration.authority_diagnostic()
+            for name in ("factory_fence_attempts", "factory_fence_successes",
+                         "factory_resource_authorization_attempts",
+                         "factory_resource_authorization_successes"):
+                value = counters.get(name)
+                if type(value) is int and 0 <= value <= 10000:
+                    result[name] = value
         if isinstance(self._observer, PlaywrightObserver):
             result["observer_observe_calls"] = self._observer._observe_calls.get(session_ref, 0)
+            result["observer_snapshot_calls"] = self._observer._snapshot_calls.get(session_ref, 0)
+            for name, value in self._observer._batch_counts.get(session_ref, {}).items():
+                if name in {"observer_identity_batch_attempts", "observer_identity_batch_successes",
+                            "observer_projection_check_attempts", "observer_projection_check_successes"}:
+                    result[name] = value
+        result.update(self._filter_counts.get(session_ref, {}))
         progress = self._validation_progress.get(session_ref)
         if progress is not None:
             result.update(progress.diagnostic())
@@ -458,16 +600,41 @@ class PlaywrightWebAdapter:
 
     @_neutral
     async def target_candidates(
-        self,
-        session: BrowserSessionRef,
-        step: SkillStep,
-        projection: VisibleProjection,
-        context: ExecutionContext,
+        self, session: BrowserSessionRef, step: SkillStep,
+        projection: VisibleProjection, context: ExecutionContext,
     ) -> tuple[VisibleCandidate, ...]:
         self._observe_wait[session.session_ref] = ("candidate_authority_before", time.monotonic())
         plan, _ = await self._authority(session, context)
+        self._observe_wait[session.session_ref] = ("candidate_batch", time.monotonic())
+        async with self._observer._candidate_batch(session, projection, plan.policy) as (
+            region, nodes,
+        ):
+            matches = await self._filter_candidates(session, step, context, plan, region, nodes)
+            self._observe_wait[session.session_ref] = (
+                "candidate_authority_after", time.monotonic(),
+            )
+            await self._authority(session, context)
+            self._observe_wait[session.session_ref] = ("candidate_batch_after", time.monotonic())
+        return matches
+
+    async def _target_candidates_in_round(
+        self, session: BrowserSessionRef, step: SkillStep,
+        context: ExecutionContext, resolution: ResolutionRound,
+    ) -> tuple[VisibleCandidate, ...]:
+        plan, _ = await self._authority(session, context)
+        matches = await self._filter_candidates(
+            session, step, context, plan, resolution.region, resolution.nodes,
+        )
+        await self._authority(session, context)
+        return matches
+
+    async def _filter_candidates(
+        self, session: BrowserSessionRef, step: SkillStep, context: ExecutionContext,
+        plan: RegisteredSitePlan, region: ExactRegion,
+        nodes: tuple[tuple[VisibleCandidate, ExactNode], ...],
+    ) -> tuple[VisibleCandidate, ...]:
         rule = next((r for r in plan.steps if r.step == step), None)
-        if rule is None or projection.scope.region_id != rule.observation.region_id:
+        if rule is None or region.projection.scope.region_id != rule.observation.region_id:
             raise failure("denied")
         dom = next(r for r in self._rules[plan.skill_digest].steps if r.step_id == step.step_id)
         key = None
@@ -477,48 +644,37 @@ class PlaywrightWebAdapter:
             self._observe_wait[session.session_ref] = ("candidate_key_resolution", time.monotonic())
             key = await self._sealed(context, plan.read_rule.key_ref, "business_key", step.step_id)
         matches = []
-        self._observe_wait[session.session_ref] = ("candidate_batch", time.monotonic())
-        async with self._observer._candidate_batch(session, projection, plan.policy) as (
-            region, nodes,
-        ):
-            self._origins(region, context)
-            for candidate, node in nodes:
-                self._origins(node, context)
-                self._observe_wait[session.session_ref] = ("candidate_selector", time.monotonic())
-                if not await node.element.evaluate(
-                    "(el, selector) => el.matches(selector)", dom.selector
-                ):
+        self._origins(region, context)
+        for candidate, node in nodes:
+            self._origins(node, context)
+        counters = self._filter_counts.setdefault(session.session_ref, {})
+        counters["adapter_filter_batch_attempts"] = min(
+            10000, counters.get("adapter_filter_batch_attempts", 0) + 1,
+        )
+        self._observe_wait[session.session_ref] = ("candidate_selector", time.monotonic())
+        try:
+            packet = await filter_private_candidates(
+                region.element, tuple(node.element for _, node in nodes), dom.selector,
+                dom.row_selector, dom.key if key is not None else None, 4096,
+            )
+        except DOMBatchError as error:
+            raise failure(error.code) from None
+        counters["adapter_filter_batch_successes"] = min(
+            10000, counters.get("adapter_filter_batch_successes", 0) + 1,
+        )
+        for (candidate, _node), (selector_match, raw) in zip(nodes, packet, strict=True):
+            if not selector_match:
+                continue
+            if key is not None and dom.key is not None:
+                matched = self._consume(
+                    key, context, plan.read_rule.key_ref, "business_key", step.step_id,
+                    lambda expected: raw == expected,
+                )
+                if not matched:
                     continue
-                if key is not None and dom.key is not None:
-                    self._observe_wait[session.session_ref] = ("candidate_key_read", time.monotonic())
-                    row = await node.element.evaluate_handle(
-                        "(el, selector) => el.closest(selector)",
-                        dom.row_selector,
-                    )
-                    try:
-                        if not await region.element.evaluate(
-                            "(region, row) => row && region.contains(row)",
-                            row,
-                        ):
-                            raise failure("denied")
-                        raw = await read_private(row, dom.key, 4096)
-                        matched = self._consume(
-                            key,
-                            context,
-                            plan.read_rule.key_ref,
-                            "business_key",
-                            step.step_id,
-                            lambda expected: raw == expected,
-                        )
-                    finally:
-                        await row.dispose()
-                    if not matched:
-                        continue
-                matches.append(candidate)
-            self._observe_wait[session.session_ref] = ("candidate_authority_after", time.monotonic())
-            await self._authority(session, context)
-            self._observe_wait[session.session_ref] = ("candidate_batch_after", time.monotonic())
+            matches.append(candidate)
         return tuple(matches)
+
 
     async def _options_current(
         self,
@@ -527,12 +683,14 @@ class PlaywrightWebAdapter:
         step: SkillStep,
         context: ExecutionContext,
         plan: RegisteredSitePlan,
+        resolution: ResolutionRound | None = None,
     ) -> tuple[VisibleCandidate, ...]:
         if step.operation != "select_option" or step.option_ref is None:
             raise failure("denied")
         if "option" not in plan.policy.allowed_roles:
             raise failure("unsupported")
-        parent = await self._observer.resolve_exact(session, target, plan.policy)
+        parent = (resolution.node(target) if resolution is not None
+                  else await self._observer.resolve_exact(session, target, plan.policy))
         self._origins(parent, context)
         if not await parent.element.evaluate("el => el.tagName === 'SELECT' && !el.multiple"):
             raise failure("unsupported")
@@ -541,6 +699,8 @@ class PlaywrightWebAdapter:
         current: list[_Option] = []
         key = (session.session_ref, step.step_id)
         previous = self._options.get(key)
+        committed = False
+        temporary = list(handles)
         try:
             for handle in handles:
                 data = await handle.evaluate(
@@ -601,24 +761,20 @@ class PlaywrightWebAdapter:
             if unchanged and previous is not None:
                 for old, new in zip(previous.options, current, strict=True):
                     new.candidate = old.candidate
+            kept = {id(item.element) for item in current}
+            temporary = [handle for handle in handles if id(handle) in kept]
+            await _dispose_many(tuple(handle for handle in handles if id(handle) not in kept))
+            if previous is not None:
+                # Retire the old holder before releasing its owned handles. A
+                # cancelled cleanup must never leave a partially disposed holder.
+                self._options.pop(key, None)
+                await _dispose_many(tuple(old.element for old in previous.options))
             self._options[key] = _OptionSet(target, current)
-            if previous is not None:
-                for old in previous.options:
-                    await old.element.dispose()
+            committed = True
             return tuple(item.candidate for item in current)
-        except BaseException:
-            self._options.pop(key, None)
-            if previous is not None:
-                for old in previous.options:
-                    await old.element.dispose()
-            raise
         finally:
-            kept = {
-                id(item.element) for item in self._options.get(key, _OptionSet(target, [])).options
-            }
-            for handle in handles:
-                if id(handle) not in kept:
-                    await handle.dispose()
+            if not committed:
+                await _dispose_many(tuple(temporary), suppress_cancel=True)
 
     @_neutral
     async def option_candidates(
@@ -653,6 +809,7 @@ class PlaywrightWebAdapter:
         command: ActionCommand,
         context: ExecutionContext,
         plan: RegisteredSitePlan,
+        resolution: ResolutionRound,
     ) -> Any:
         """Bind a read action to its live registered row before acknowledging it.
 
@@ -668,16 +825,12 @@ class PlaywrightWebAdapter:
             context, plan.read_rule.key_ref, "business_key", plan.verifier_id
         )
         self._validation_mark(session, "region_resolution")
-        exact = await self._observer.resolve_region(
-            session,
-            ObservationRequest(region_id=target.scope.region_id, expected_scope=target.scope),
-            plan.policy,
-        )
+        exact = resolution.region
         self._origins(exact, context)
         region = await exact.element.evaluate_handle("el => el")
         try:
             self._validation_mark(session, "target_resolution")
-            node = await self._observer.resolve_exact(session, target, plan.policy)
+            node = resolution.node(target)
             self._origins(node, context)
             row = await node.element.evaluate_handle(
                 "(el, selector) => el.closest(selector)", dom.row_selector
@@ -697,35 +850,12 @@ class PlaywrightWebAdapter:
                     # surround the same fresh authority check; no proof is cached.
                     matched = await self._consume(
                         sealed, context, plan.read_rule.key_ref, "business_key",
-                        plan.verifier_id, lambda approved: region.evaluate(
-                            """(region, config) => {
-                              const row = config.row;
-                              if (!row || !region.contains(row)) return false;
-                              const read = field => {
-                                if (!row.isConnected) throw new Error('detached');
-                                const nodes = row.querySelectorAll(field.selector);
-                                if (nodes.length !== 1) return null;
-                                const node = nodes[0];
-                                const value = field.kind === 'text' ? node.textContent :
-                                  field.kind === 'value' ? node.value :
-                                  node.getAttribute(field.attribute);
-                                if (typeof value !== 'string') return null;
-                                if (new TextEncoder().encode(value).length > config.limit)
-                                  throw new Error('bound');
-                                return value;
-                              };
-                              if (read(config.fields[0]) !== config.expected[0]) return false;
-                              const tenant = read(config.fields[1]);
-                              const user = read(config.fields[2]);
-                              if (tenant !== config.expected[1] || user !== config.expected[2])
-                                return false;
-                              return config.fields.length === 3 ||
-                                read(config.fields[3]) === config.expected[3];
-                            }""",
-                            {"row": row, "limit": dom.maximum_value_bytes,
-                             "fields": [{"selector": value.selector, "kind": value.kind,
-                                         "attribute": value.attribute} for value in values],
-                             "expected": (approved, *expected)},
+                        plan.verifier_id, lambda approved: private_row_identity(
+                            region, node.element, row,
+                            {"row_selector": dom.row_selector, "selector": None,
+                             "fields": self._identity_fields(
+                                 values, (approved, *expected), dom.maximum_value_bytes,
+                             )},
                         ),
                     )
                     if type(matched) is not bool:
@@ -741,9 +871,9 @@ class PlaywrightWebAdapter:
                 if not await matches():
                     raise failure("stale")
             finally:
-                await row.dispose()
+                await _dispose_many((row,), suppress_cancel=sys.exc_info()[0] is not None)
         finally:
-            await region.dispose()
+            await _dispose_many((region,), suppress_cancel=sys.exc_info()[0] is not None)
         # The last awaited DOM work before read acknowledgment checks the same
         # selected node, after both borrowed row/region handles are released.
         self._validation_mark(session, "target_identity")
@@ -755,10 +885,78 @@ class PlaywrightWebAdapter:
             raise failure("stale")
         return node
 
+    @staticmethod
+    def _identity_fields(
+        values: tuple[DOMValue, ...], expected: tuple[str | tuple[str, ...], ...], limit: int,
+    ) -> list[dict[str, Any]]:
+        return [{"selector": field.selector, "kind": field.kind, "attribute": field.attribute,
+                 "expected": value, "limit": limit}
+                for field, value in zip(values, expected, strict=True)]
+
+    async def _final_identity_config(
+        self, command: ActionCommand, context: ExecutionContext,
+        plan: RegisteredSitePlan, resolution: ResolutionRound, option: Any,
+    ) -> dict[str, Any]:
+        """Prepare private expectations before the round's final authority wait."""
+        rules = self._rules[plan.skill_digest]
+        step = next(item for item in rules.steps if item.step_id == command.step.step_id)
+        config: dict[str, Any] = {
+            "region_selector": self._observer._regions[
+                resolution.region.projection.scope.region_id
+            ].region_selector,
+            "selector": step.selector if command.target is not None else None,
+            "operation": command.step.operation, "fields": [], "row_selector": None,
+            "target": command.target is not None,
+        }
+        if command.step.operation == "read" or command.step.locator.kind == "business_key":
+            read = rules.read
+            row_selector = (
+                read.row_selector if command.step.operation == "read" else step.row_selector
+            )
+            key_field = read.key if command.step.operation == "read" else step.key
+            if row_selector is None or key_field is None:
+                raise failure("unsupported")
+            purpose_id = (
+                plan.verifier_id if command.step.operation == "read" else command.step.step_id
+            )
+            key = await self._sealed(context, plan.read_rule.key_ref, "business_key", purpose_id)
+            expected_key = self._consume(
+                key, context, plan.read_rule.key_ref, "business_key", purpose_id, lambda value: value,
+            )
+            fields = [
+                (key_field, expected_key,
+                 read.maximum_value_bytes if command.step.operation == "read" else 4096),
+                (read.tenant, context.expected_binding.owner.tenant_id, read.maximum_value_bytes),
+                (read.user, context.expected_binding.owner.user_id, read.maximum_value_bytes),
+            ]
+            if isinstance(plan.read_rule, RegisteredQueryReadRule):
+                if read.object_type is None:
+                    raise failure("unsupported")
+                fields.append(
+                    (read.object_type, plan.read_rule.object_type, read.maximum_value_bytes)
+                )
+            config.update(row_selector=row_selector, fields=[
+                packet for value, expected, limit in fields
+                for packet in self._identity_fields((value,), (expected,), limit)
+            ])
+        if option is not None:
+            option_identity = await option.evaluate(_OPTION_IDENTITY)
+            registered = next(
+                item for item in self._options[
+                    (resolution.session.session_ref, command.step.step_id)
+                ].options
+                if item.candidate.ref == command.option
+            )
+            if (not isinstance(option_identity, list) or len(option_identity) != 2
+                    or any(type(value) is not str for value in option_identity)
+                    or hashlib.sha256(self._salt + option_identity[0].encode()).hexdigest()
+                    != registered.signature):
+                raise failure("stale")
+            config.update(option_value=option_identity[0], option_label=option_identity[1])
+        return config
+
     async def _validate(
-        self,
-        session: BrowserSessionRef,
-        command: ActionCommand,
+        self, session: BrowserSessionRef, command: ActionCommand,
         context: ExecutionContext,
         *, scope: Literal["pre_dispatch", "dispatch_barrier"] = "pre_dispatch",
     ) -> tuple[Any, SealedParameter | None, Any | None]:
@@ -769,27 +967,75 @@ class PlaywrightWebAdapter:
         plan, _ = await self._authority(session, context, command)
         rule = next(r for r in plan.steps if r.step == command.step)
         self._validation_mark(session, "region_resolution")
-        exact = await self._observer.resolve_region(session, rule.observation, plan.policy)
+        owned: Any = None
+        try:
+            async with self._observer.resolution_round(
+                session, rule.observation, plan.policy,
+            ) as resolution:
+                node, sealed, option = await self._validate_in_round(
+                    session, command, context, plan, resolution,
+                )
+                config = await self._final_identity_config(
+                    command, context, plan, resolution, option,
+                )
+                # Own node and actual ancestor identities before releasing the
+                # round. Borrowed handles never escape their lock lifetime.
+                element = await node.element.evaluate_handle("el => el")
+                try:
+                    identity = await element.evaluate_handle(
+                        "(el, config) => ({node: el, region: config.region, "
+                        "row: config.selector ? el.closest(config.selector) : null})",
+                        {"region": resolution.region.element, "selector": config["row_selector"]},
+                    )
+                except BaseException:
+                    await _dispose(element, suppress_cancel=True)
+                    raise
+                owned = _ValidatedNode(node.page, node.frame, element, identity)
+            # resolution_round has now completed its last current-authority
+            # await. Only live DOM identity/state is read here, with no helper
+            # that can renew authority or re-resolve a different target.
+            config.update(element=owned.element, option=option)
+            self._validation_mark(session, "target_identity")
+            matched = await owned.identity.evaluate(_FINAL_IDENTITY, config)
+            if matched is not True:
+                raise failure("stale")
+            self._origins(owned, context)
+            check_liveness(context)
+            self._validation_mark(session, None)
+            return owned, sealed, option
+        except BaseException:
+            if owned is not None:
+                await _dispose_validated_node(owned, failed=True)
+            raise
+
+    async def _validate_in_round(
+        self, session: BrowserSessionRef, command: ActionCommand,
+        context: ExecutionContext, plan: RegisteredSitePlan,
+        resolution: ResolutionRound,
+    ) -> tuple[Any, SealedParameter | None, Any | None]:
+        exact = resolution.region
         self._origins(exact, context)
         node: Any = exact
         sealed: SealedParameter | None = None
         option: Any = None
         if command.target is not None:
             self._validation_mark(session, "candidate_enumeration")
-            candidates = await self.target_candidates(
-                session, command.step, exact.projection, context
+            candidates = await self._target_candidates_in_round(
+                session, command.step, context, resolution,
             )
             if command.target not in tuple(c.ref for c in candidates):
                 raise failure("stale")
             if command.step.operation in {"fill", "select_option"}:
                 self._validation_mark(session, "target_resolution")
-                node = await self._observer.resolve_exact(session, command.target, plan.policy)
+                node = resolution.node(command.target)
         if command.step.operation == "select_option":
             self._validation_mark(session, "option_identity")
             assert command.target is not None
-            candidates = await self.option_candidates(
-                session, command.target, command.step, context
+            await self._authority(session, context, command)
+            candidates = await self._options_current(
+                session, command.target, command.step, context, plan, resolution,
             )
+            await self._authority(session, context, command)
             if command.option not in tuple(c.ref for c in candidates):
                 raise failure("stale")
             option = next(
@@ -797,8 +1043,8 @@ class PlaywrightWebAdapter:
                 for item in self._options[(session.session_ref, command.step.step_id)].options
                 if item.candidate.ref == command.option
             )
-            # Parent re-observation during option enumeration may dispose the old handle.
-            node = await self._observer.resolve_exact(session, command.target, plan.policy)
+            # This round retains the parent handle while options are enumerated.
+            node = resolution.node(command.target)
             if not await option.evaluate(
                 "(el, parent) => el.isConnected && el.closest('select') === parent", node.element
             ):
@@ -841,6 +1087,7 @@ class PlaywrightWebAdapter:
                 command.step,
                 context,
                 plan,
+                resolution,
             )
             if command.option not in tuple(item.ref for item in refreshed):
                 raise failure("stale")
@@ -852,7 +1099,7 @@ class PlaywrightWebAdapter:
         # Final actual scope/ancestor check follows the independent subject IO.
         if command.target is not None:
             self._validation_mark(session, "target_resolution")
-            node = await self._observer.resolve_exact(session, command.target, plan.policy)
+            node = resolution.node(command.target)
             self._validation_mark(session, "target_identity")
             dom = next(
                 r for r in self._rules[plan.skill_digest].steps if r.step_id == command.step.step_id
@@ -871,17 +1118,10 @@ class PlaywrightWebAdapter:
                     "business_key",
                     command.step.step_id,
                 )
-                current_region = await self._observer.resolve_region(
-                    session,
-                    ObservationRequest(
-                        region_id=command.target.scope.region_id,
-                        expected_scope=command.target.scope,
-                    ),
-                    plan.policy,
-                )
+                current_region = resolution.region
                 region_handle = await current_region.element.evaluate_handle("el => el")
                 try:
-                    node = await self._observer.resolve_exact(session, command.target, plan.policy)
+                    node = resolution.node(command.target)
                     row = await node.element.evaluate_handle(
                         "(el, selector) => el.closest(selector)",
                         dom.row_selector,
@@ -903,19 +1143,12 @@ class PlaywrightWebAdapter:
                         ):
                             raise failure("stale")
                     finally:
-                        await row.dispose()
+                        await _dispose_many((row,), suppress_cancel=sys.exc_info()[0] is not None)
                 finally:
-                    await region_handle.dispose()
+                    await _dispose_many((region_handle,), suppress_cancel=sys.exc_info()[0] is not None)
         else:
             self._validation_mark(session, "region_resolution")
-            node = await self._observer.resolve_region(
-                session,
-                ObservationRequest(
-                    region_id=exact.projection.scope.region_id,
-                    expected_scope=exact.projection.scope,
-                ),
-                plan.policy,
-            )
+            node = resolution.region
         self._origins(node, context)
         self._validation_mark(session, "target_identity")
         if command.target is not None:
@@ -928,7 +1161,7 @@ class PlaywrightWebAdapter:
             if command.step.operation == "fill" and not await node.element.is_editable():
                 raise failure("stale")
         if command.step.operation == "read":
-            node = await self._read_target_row(session, command, context, plan)
+            node = await self._read_target_row(session, command, context, plan, resolution)
         if option is not None:
             self._validation_mark(session, "option_identity")
             value = await option.evaluate(
@@ -958,7 +1191,8 @@ class PlaywrightWebAdapter:
     async def revalidate(
         self, session: BrowserSessionRef, command: ActionCommand, context: ExecutionContext
     ) -> None:
-        await self._validate(session, command, context)
+        node, _, _ = await self._validate(session, command, context)
+        await _dispose_validated_node(node)
 
     @_neutral
     async def execute(
@@ -969,6 +1203,8 @@ class PlaywrightWebAdapter:
     ) -> DispatchReceipt:
         self._registration(session, context)
         permit: DispatchPermit | None = None
+        node: Any = None
+        failed = False
         try:
             await self._authority(session, context, command)
             async with context.dispatch_barrier(
@@ -1041,6 +1277,7 @@ class PlaywrightWebAdapter:
                 evidence_digest=hashlib.sha256(secrets.token_bytes(32)).hexdigest(),
             )
         except BaseException as error:
+            failed = True
             if permit is not None and permit.send_started:
                 return DispatchReceipt(
                     skill_digest=command.skill_digest,
@@ -1053,6 +1290,9 @@ class PlaywrightWebAdapter:
             ):
                 raise
             raise failure("invalid_response") from None
+        finally:
+            if node is not None:
+                await _dispose_validated_node(node, failed=failed)
 
     async def _compare_rows(
         self,
@@ -1098,8 +1338,9 @@ class PlaywrightWebAdapter:
                 if not matched_key:
                     continue
                 count += 1
-                tenant = await read_private(row, dom.tenant, dom.maximum_value_bytes)
-                user = await read_private(row, dom.user, dom.maximum_value_bytes)
+                tenant, user = await read_private_many(
+                    row, (dom.tenant, dom.user), dom.maximum_value_bytes,
+                )
                 fingerprint([tenant, user])
                 owner = (
                     tenant == context.expected_binding.owner.tenant_id
@@ -1116,8 +1357,12 @@ class PlaywrightWebAdapter:
                         continue
                 comparisons = []
                 values = []
-                for index, (field_id, location) in enumerate(dom.fields):
-                    raw = await read_private(row, location, dom.maximum_value_bytes)
+                field_values = await read_private_many(
+                    row, tuple(location for _, location in dom.fields), dom.maximum_value_bytes,
+                )
+                for index, ((field_id, _location), raw) in enumerate(
+                    zip(dom.fields, field_values, strict=True)
+                ):
                     fingerprint(raw)
                     if isinstance(raw, str):
                         values.append((field_id, raw))
@@ -1145,8 +1390,7 @@ class PlaywrightWebAdapter:
                 fields = tuple(comparisons)
             return count, owner, object_match, fields, digest.hexdigest(), tuple(values)
         finally:
-            for row in rows:
-                await row.dispose()
+            await _dispose_many(tuple(rows), suppress_cancel=sys.exc_info()[0] is not None)
 
     @_neutral
     async def read(
@@ -1243,7 +1487,7 @@ class PlaywrightWebAdapter:
                 self._private_reads[session.session_ref] = (spec, evidence, values)
             return evidence
         finally:
-            await region.dispose()
+            await _dispose_many((region,), suppress_cancel=sys.exc_info()[0] is not None)
 
     def _query_schema_valid(
         self, session: BrowserSessionRef, plan: RegisteredSitePlan, fields: dict[str, str],

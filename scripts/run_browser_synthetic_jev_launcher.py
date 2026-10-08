@@ -18,7 +18,7 @@ import sys
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, NoReturn
+from typing import BinaryIO, Callable, NoReturn
 
 _WORKTREE = Path("E:/code/eternalai/.worktrees/browser-runtime-v42")
 _SOURCE = Path("E:/code/eternalai/.env")
@@ -210,6 +210,26 @@ def _prompt_phrase() -> str:
         return phrase
     except (Exception, KeyboardInterrupt):
         raise ValueError("browser_jev_passphrase_invalid") from None
+
+
+
+def read_owner_credentials(mode: str, *, prompt_key: Callable[[], str]) -> tuple[str, str]:
+    """Owner-only selection; exact field parsing stays in the existing readers."""
+    if mode == "hidden":
+        return _prompt_phrase(), prompt_key()
+    if mode != "exact-env":
+        raise ValueError("browser_jev_launcher_arguments_invalid")
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise ValueError("browser_jev_owner_terminal_required")
+    confirmation = input(
+        "Load jev-passport and jev-key from E:/code/eternalai/.env "
+        "for this single trial? Type LOAD: "
+    )
+    if confirmation != "LOAD":
+        raise ValueError("browser_jev_owner_confirmation_cancelled")
+    phrase = _read_exact_field(b"jev-passport")
+    key = read_exact_jev_key()
+    return phrase, key
 
 
 def _docker_environment() -> dict[str, str]:

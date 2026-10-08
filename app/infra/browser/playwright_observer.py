@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import secrets
+import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -37,6 +38,7 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.scoping import scope_snapshot
 from app.infra.browser.browserless_wire import BrowserProviderError
+from app.infra.browser.playwright_dom_rules import DOMBatchError, match_actual_nodes
 
 
 class LiveResourceRegistry(Protocol):
@@ -124,6 +126,33 @@ class ExactRegion:
     projection: VisibleProjection
 
 
+@dataclass(slots=True, repr=False)
+class ResolutionRound:
+    """Borrowed handles for one locked resolution, never an authorization cache."""
+
+    observer: PlaywrightObserver
+    session: BrowserSessionRef
+    policy: ObservationPolicy
+    region: ExactRegion
+    nodes: tuple[tuple[VisibleCandidate, ExactNode], ...]
+    active: bool = True
+
+    def node(self, ref: TargetRef) -> ExactNode:
+        if not self.active or ref.scope != self.region.projection.scope:
+            raise _failure("stale")
+        for candidate, node in self.nodes:
+            if candidate.ref == ref:
+                return node
+        raise _failure("stale")
+
+    async def check(self) -> None:
+        if not self.active:
+            raise _failure("stale")
+        await self.observer._check_projection_locked(
+            self.session, self.region.projection, self.policy,
+        )
+
+
 @lru_cache(maxsize=1)
 def _snapshot_script() -> str:
     return Path(__file__).with_name("dom_snapshot.js").read_text(encoding="utf-8")
@@ -148,9 +177,12 @@ def _failure(code: ObserveCode) -> BrowserOperationError:
     )
 
 
-async def _dispose(handle: Any) -> None:
+async def _dispose(handle: Any, *, suppress_cancel: bool = False) -> None:
     try:
         await handle.dispose()
+    except asyncio.CancelledError:
+        if not suppress_cancel:
+            raise
     except Exception:
         # A failed disposal never changes a business result or starts an action.
         pass
@@ -161,6 +193,22 @@ async def _same_node(old: Any, current: Any) -> bool:
         return bool(await old.evaluate("(old, fresh) => old === fresh && old.isConnected", current))
     except Exception:
         return False
+
+
+async def _dispose_many(handles: tuple[Any, ...], *, suppress_cancel: bool = False) -> None:
+    """Release owned handles and preserve cancellation after the other exits."""
+    cancellation: asyncio.CancelledError | None = None
+    disposed: set[int] = set()
+    for handle in handles:
+        if handle is None or id(handle) in disposed:
+            continue
+        disposed.add(id(handle))
+        try:
+            await _dispose(handle, suppress_cancel=suppress_cancel or cancellation is not None)
+        except asyncio.CancelledError as error:
+            cancellation = error
+    if cancellation is not None:
+        raise cancellation
 
 
 def _origin(raw_url: str) -> tuple[str, str, int | None] | None:
@@ -188,6 +236,26 @@ class PlaywrightObserver:
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._observe_wait: dict[str, tuple[str, float]] = {}
         self._observe_calls: dict[str, int] = {}
+        self._snapshot_calls: dict[str, int] = {}
+        self._batch_counts: dict[str, dict[str, int]] = {}
+
+    def _count(self, session: BrowserSessionRef, name: str) -> None:
+        counters = self._batch_counts.setdefault(session.session_ref, {})
+        counters[name] = min(10000, counters.get(name, 0) + 1)
+
+    async def _identity_batch(
+        self, session: BrowserSessionRef, root: Any, previous_region: Any | None,
+        previous: tuple[Any, ...], current: tuple[Any, ...], maximum: int,
+    ) -> tuple[bool, tuple[int, ...]]:
+        self._count(session, "observer_identity_batch_attempts")
+        try:
+            result = await match_actual_nodes(
+                root, previous_region, previous, current, maximum=maximum,
+            )
+        except DOMBatchError as error:
+            raise _failure(error.code) from None
+        self._count(session, "observer_identity_batch_successes")
+        return result
 
     async def _live(self, session: BrowserSessionRef) -> Any:
         try:
@@ -374,6 +442,9 @@ class PlaywrightObserver:
         metadata_handle: Any = None
         nodes_handle: Any = None
         nodes: list[Any] = []
+        properties: dict[str, Any] = {}
+        transferred = False
+        containers_pending = True
         try:
             config = {
                 "policy": {
@@ -417,22 +488,34 @@ class PlaywrightObserver:
                 if node is None:
                     raise _failure("invalid_response")
                 nodes.append(node)
-            for key, value in properties.items():
+            for key, value in tuple(properties.items()):
                 if key not in {str(index) for index in range(len(raw_candidates))}:
+                    properties.pop(key)
                     await _dispose(value)
+            containers_pending = False
+            await _dispose_many((nodes_handle, metadata_handle, packet))
+            transferred = True
             return metadata, nodes
         except BrowserOperationError:
-            for node in nodes:
-                await _dispose(node)
             raise
         except Exception:
-            for node in nodes:
-                await _dispose(node)
             raise _failure("invalid_response") from None
         finally:
-            for handle in (nodes_handle, metadata_handle, packet):
-                if handle is not None:
-                    await _dispose(handle)
+            if not transferred:
+                # get_properties owns every returned handle, including values
+                # not yet appended to nodes. Cancelled allocation must release
+                # those too; cleanup cannot replace the original failure.
+                containers = ((nodes_handle, metadata_handle, packet) if containers_pending else ())
+                await _dispose_many((*properties.values(), *nodes, *containers), suppress_cancel=True)
+
+    async def _take_snapshot(
+        self, session: BrowserSessionRef, element: Any,
+        policy: ObservationPolicy, site: RegisteredRegion,
+    ) -> tuple[dict[str, Any], list[Any]]:
+        self._snapshot_calls[session.session_ref] = min(
+            10000, self._snapshot_calls.get(session.session_ref, 0) + 1,
+        )
+        return await self._snapshot(element, policy, site)
 
     @staticmethod
     def _safe_candidate(raw: Any, policy: ObservationPolicy) -> dict[str, Any]:
@@ -569,7 +652,9 @@ class PlaywrightObserver:
                             await _dispose(match)
                         raise _failure("resource_not_found" if not matches else "invalid_request")
                     region_handle = matches[0]
-                    metadata, new_handles = await self._snapshot(region_handle, policy, site)
+                    metadata, new_handles = await self._take_snapshot(
+                        session, region_handle, policy, site,
+                    )
                     try:
                         coverage = Coverage.model_validate(metadata["coverage"])
                     except Exception:
@@ -586,32 +671,48 @@ class PlaywrightObserver:
                         or safe_candidates
                     ):
                         coverage = coverage.model_copy(update={"trusted_empty": False})
-                prior_same_region = bool(
-                    old is not None
-                    and region_handle is not None
-                    and await _same_node(old.element, region_handle)
-                )
+                if (page.epoch != start_page_epoch
+                        or self._signature(page.page.main_frame) != start_tree
+                        or self._path(page, actual_frame) != frame_path):
+                    raise _failure("stale")
+                same_context = (old is not None and old.scope.page_id == page.page_id
+                                and old.scope.page_epoch == start_page_epoch
+                                and old.scope.frame_path == frame_path)
+                if old is not None and not same_context and request.expected_scope is not None:
+                    raise _failure("stale")
+                prior_same_region = False
+                previous_indices: tuple[int, ...] = tuple(-1 for _ in new_handles)
+                if region_handle is not None:
+                    previous_handles = (tuple(item.element for item in old.candidates)
+                                        if same_context and old is not None else ())
+                    try:
+                        prior_same_region, previous_indices = await self._identity_batch(
+                            session, region_handle,
+                            old.element if same_context and old is not None else None,
+                            previous_handles, tuple(new_handles), 255,
+                        )
+                    except Exception:
+                        if (page.epoch != start_page_epoch
+                                or self._signature(page.page.main_frame) != start_tree
+                                or self._path(page, actual_frame) != frame_path):
+                            raise _failure("stale") from None
+                        raise
                 token = (
                     old.token if prior_same_region and old is not None else secrets.token_hex(12)
                 )
                 next_epoch = old.next_epoch if prior_same_region and old is not None else 0
-                used: set[str] = set()
                 identities: list[_CandidateIdentity] = []
                 safe_rows: list[dict[str, Any]] = []
-                for safe, handle in zip(safe_candidates, new_handles, strict=True):
-                    previous = None
-                    if prior_same_region and old is not None:
-                        for candidate in old.candidates:
-                            if candidate.target_id not in used and await _same_node(
-                                candidate.element, handle
-                            ):
-                                previous = candidate
-                                break
+                for safe, handle, previous_index in zip(
+                    safe_candidates, new_handles, previous_indices, strict=True,
+                ):
+                    previous = (old.candidates[previous_index]
+                                if prior_same_region and old is not None and previous_index >= 0
+                                else None)
                     if previous is None:
                         next_epoch += 1
                         identity = _CandidateIdentity(secrets.token_hex(12), next_epoch, handle)
                     else:
-                        used.add(previous.target_id)
                         identity = _CandidateIdentity(previous.target_id, previous.epoch, handle)
                     identities.append(identity)
                     safe_rows.append(
@@ -667,9 +768,7 @@ class PlaywrightObserver:
                     )
                     committed = True
                     if old is not None:
-                        await _dispose(old.element)
-                        for candidate in old.candidates:
-                            await _dispose(candidate.element)
+                        await _dispose_many((old.element, *(c.element for c in old.candidates)))
                 return projection
             except BrowserOperationError:
                 raise
@@ -677,10 +776,7 @@ class PlaywrightObserver:
                 raise _failure("invalid_response") from None
             finally:
                 if not committed:
-                    if region_handle is not None:
-                        await _dispose(region_handle)
-                    for handle in new_handles:
-                        await _dispose(handle)
+                    await _dispose_many((region_handle, *new_handles), suppress_cancel=True)
 
     async def resolve_region(
         self,
@@ -752,25 +848,16 @@ class PlaywrightObserver:
             except Exception:
                 raise _failure("stale") from None
 
-    @asynccontextmanager
-    async def _candidate_batch(
-        self,
-        session: BrowserSessionRef,
-        projection: VisibleProjection,
+    async def _check_projection_locked(
+        self, session: BrowserSessionRef, projection: VisibleProjection,
         policy: ObservationPolicy,
-    ) -> AsyncIterator[tuple[ExactRegion, tuple[tuple[VisibleCandidate, ExactNode], ...]]]:
-        """Borrow nodes for one locked enumeration; validate DOM before and after."""
+    ) -> tuple[ExactRegion, tuple[tuple[VisibleCandidate, ExactNode], ...]]:
+        """Validate the full fresh DOM without replacing/discarding this round's handles."""
+        self._count(session, "observer_projection_check_attempts")
         def mark(stage: str) -> None:
             self._observe_wait[session.session_ref] = (stage, time.monotonic())
 
-        def mismatch(
-            stage: Literal[
-                "candidate_scope_mismatch", "candidate_frame_mismatch",
-                "candidate_region_mismatch", "candidate_metadata_mismatch",
-                "candidate_identity_mismatch", "candidate_availability_mismatch",
-                "candidate_topology_mismatch", "candidate_projection_mismatch",
-            ],
-        ) -> BrowserOperationError:
+        def mismatch(stage: str) -> BrowserOperationError:
             _, started = self._observe_wait[session.session_ref]
             self._observe_wait[session.session_ref] = (stage, started)
             return _failure("stale")
@@ -781,111 +868,143 @@ class PlaywrightObserver:
             policy.policy_id, policy.digest,
         ):
             raise _failure("denied")
-        expected = scope_snapshot(projection, session.binding, policy)
+        scope_snapshot(projection, session.binding, policy)
         key = (session.session_ref, projection.scope.region_id)
-        mark("candidate_region_lock")
-        async with self._locks.setdefault(key, asyncio.Lock()):
-            mark("candidate_live_authority")
-            live = await self._live(session)
-            mark("candidate_page")
-            page = await self._page(session, live)
-            state = self._observed.get(key)
-            if (
-                state is None or state.scope != projection.scope
-                or page.page_id != projection.scope.page_id
-                or page.epoch != projection.scope.page_epoch
-                or page.binding != session.binding
-            ):
-                raise mismatch("candidate_scope_mismatch")
-            mark("candidate_frame")
-            frame = await self._target_frame(page.page, site)
-            signature = self._signature(page.page.main_frame)
-            if self._path(page, frame) != projection.scope.frame_path:
-                raise mismatch("candidate_frame_mismatch")
-            mark("candidate_region_lookup")
-            regions = await frame.query_selector_all(site.region_selector)
-            try:
-                mark("candidate_region_identity")
-                if len(regions) != 1 or not await _same_node(state.element, regions[0]):
-                    raise mismatch("candidate_region_mismatch")
-                mark("candidate_region_disposal")
-            finally:
-                for region in regions:
-                    await _dispose(region)
-
-            mark("candidate_snapshot")
-            metadata, handles = await self._snapshot(state.element, policy, site)
-            nodes: list[tuple[VisibleCandidate, ExactNode]] = []
-            try:
-                mark("candidate_metadata")
-                safe = tuple(self._safe_candidate(raw, policy) for raw in metadata["candidates"])
-                if (
-                    Coverage.model_validate(metadata["coverage"]) != projection.coverage
-                    or len(safe) != len(projection.candidates)
-                    or len(handles) != len(projection.candidates)
-                    or len(state.candidates) != len(projection.candidates)
-                ):
-                    raise mismatch("candidate_metadata_mismatch")
-                for candidate, identity, raw, handle in zip(
-                    projection.candidates, state.candidates, safe, handles, strict=True,
-                ):
-                    mark("candidate_identity")
-                    if (
-                        identity.target_id != candidate.ref.target_id
-                        or identity.epoch != candidate.ref.candidate_epoch
-                        or candidate.ref.scope != projection.scope
-                        or VisibleCandidate(ref=candidate.ref, **raw) != candidate
-                        or not await _same_node(identity.element, handle)
-                    ):
-                        raise mismatch("candidate_identity_mismatch")
-                    if candidate.visible and candidate.enabled:
-                        mark("candidate_availability")
-                        if (
-                            not await identity.element.evaluate("el => el.isConnected")
-                            or not await identity.element.is_visible()
-                            or not await identity.element.is_enabled()
-                        ):
-                            raise mismatch("candidate_availability_mismatch")
-                        nodes.append((
-                            candidate,
-                            ExactNode(page.page, frame, identity.element, candidate.ref),
-                        ))
-                mark("candidate_handle_disposal")
-            finally:
-                for handle in handles:
-                    await _dispose(handle)
-            mark("candidate_topology")
-            if (
-                page.epoch != projection.scope.page_epoch
-                or self._signature(page.page.main_frame) != signature
-                or self._path(page, frame) != projection.scope.frame_path
-                or page.page.is_closed()
-            ):
-                raise mismatch("candidate_topology_mismatch")
-            mark("candidate_selection")
-            yield ExactRegion(page.page, frame, state.element, projection), tuple(nodes)
-
-        # No borrowed handle escapes the batch. Re-observation checks the whole
-        # candidate set, region identity and current authority after selector/key IO.
-        mark("candidate_reobserve")
-        reobserve_started = self._observe_wait[session.session_ref][1]
+        mark("candidate_live_authority")
+        live = await self._live(session)
+        mark("candidate_page")
+        page = await self._page(session, live)
+        state = self._observed.get(key)
+        if (
+            state is None or state.scope != projection.scope
+            or page.page_id != projection.scope.page_id
+            or page.epoch != projection.scope.page_epoch
+            or page.binding != session.binding
+        ):
+            raise mismatch("candidate_scope_mismatch")
+        mark("candidate_frame")
+        frame = await self._target_frame(page.page, site)
+        signature = self._signature(page.page.main_frame)
+        if self._path(page, frame) != projection.scope.frame_path:
+            raise mismatch("candidate_frame_mismatch")
+        mark("candidate_region_lookup")
+        regions = await frame.query_selector_all(site.region_selector)
         try:
-            refreshed = await self.observe(
-                session,
-                ObservationRequest(
-                    region_id=projection.scope.region_id, expected_scope=projection.scope,
-                ),
-                policy,
+            mark("candidate_region_identity")
+            if len(regions) != 1:
+                raise mismatch("candidate_region_mismatch")
+            same_region, _ = await self._identity_batch(
+                session, regions[0], state.element, (), (), 255,
             )
-        except BrowserOperationError as error:
-            if error.failure.code == "stale":
-                self._observe_wait[session.session_ref] = (
-                    "candidate_reobserve_stale", reobserve_started,
-                )
-            raise
-        self._observe_wait[session.session_ref] = ("candidate_reobserve", reobserve_started)
-        if scope_snapshot(refreshed, session.binding, policy) != expected:
+            if not same_region:
+                raise mismatch("candidate_region_mismatch")
+            mark("candidate_region_disposal")
+        finally:
+            await _dispose_many(tuple(regions), suppress_cancel=sys.exc_info()[0] is not None)
+
+        mark("candidate_snapshot")
+        metadata, handles = await self._take_snapshot(session, state.element, policy, site)
+        nodes: list[tuple[VisibleCandidate, ExactNode]] = []
+        try:
+            mark("candidate_metadata")
+            safe = tuple(self._safe_candidate(raw, policy) for raw in metadata["candidates"])
+            if (
+                Coverage.model_validate(metadata["coverage"]) != projection.coverage
+                or len(safe) != len(projection.candidates)
+                or len(handles) != len(projection.candidates)
+                or len(state.candidates) != len(projection.candidates)
+            ):
+                raise mismatch("candidate_metadata_mismatch")
+            same_region, indices = await self._identity_batch(
+                session, state.element, state.element,
+                tuple(item.element for item in state.candidates), tuple(handles), 255,
+            )
+            if not same_region or indices != tuple(range(len(handles))):
+                raise mismatch("candidate_identity_mismatch")
+            for candidate, identity, raw in zip(
+                projection.candidates, state.candidates, safe, strict=True,
+            ):
+                mark("candidate_identity")
+                if (
+                    identity.target_id != candidate.ref.target_id
+                    or identity.epoch != candidate.ref.candidate_epoch
+                    or candidate.ref.scope != projection.scope
+                    or VisibleCandidate(ref=candidate.ref, **raw) != candidate
+                ):
+                    raise mismatch("candidate_identity_mismatch")
+                if candidate.visible and candidate.enabled:
+                    mark("candidate_availability")
+                    if (
+                        not await identity.element.is_visible()
+                        or not await identity.element.is_enabled()
+                    ):
+                        raise mismatch("candidate_availability_mismatch")
+                    nodes.append((
+                        candidate,
+                        ExactNode(page.page, frame, identity.element, candidate.ref),
+                    ))
+            mark("candidate_handle_disposal")
+        finally:
+            await _dispose_many(tuple(handles), suppress_cancel=sys.exc_info()[0] is not None)
+        mark("candidate_topology")
+        if (
+            page.epoch != projection.scope.page_epoch
+            or self._signature(page.page.main_frame) != signature
+            or self._path(page, frame) != projection.scope.frame_path
+            or page.page.is_closed()
+        ):
+            raise mismatch("candidate_topology_mismatch")
+        # Keep frame observability and current authority, not just topology.
+        tree = await self._frame_tree(
+            page, page.page.main_frame, _origin(page.page.main_frame.url), [0],
+        )
+        if tree != projection.frames:
             raise mismatch("candidate_projection_mismatch")
+        mark("candidate_live_authority")
+        current = await self._live(session)
+        if (
+            current.context is not live.context
+            or self._pages.get(session.session_ref) is not page
+            or self._observed.get(key) is not state
+            or page.epoch != projection.scope.page_epoch
+            or self._signature(page.page.main_frame) != signature
+            or self._path(page, frame) != projection.scope.frame_path
+            or page.page.is_closed()
+            or not await state.element.evaluate("el => el.isConnected")
+        ):
+            raise mismatch("candidate_topology_mismatch")
+        self._count(session, "observer_projection_check_successes")
+        return ExactRegion(page.page, frame, state.element, projection), tuple(nodes)
+
+    @asynccontextmanager
+    async def _candidate_batch(
+        self, session: BrowserSessionRef, projection: VisibleProjection,
+        policy: ObservationPolicy,
+    ) -> AsyncIterator[tuple[ExactRegion, tuple[tuple[VisibleCandidate, ExactNode], ...]]]:
+        """Check both sides of selection; borrowing never crosses this region lock."""
+        key = (session.session_ref, projection.scope.region_id)
+        self._observe_wait[session.session_ref] = ("candidate_region_lock", time.monotonic())
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            resolved = await self._check_projection_locked(session, projection, policy)
+            yield resolved
+            self._observe_wait[session.session_ref] = ("candidate_reobserve", time.monotonic())
+            await self._check_projection_locked(session, projection, policy)
+
+    @asynccontextmanager
+    async def resolution_round(
+        self, session: BrowserSessionRef, request: ObservationRequest,
+        policy: ObservationPolicy,
+    ) -> AsyncIterator[ResolutionRound]:
+        projection = await self.observe(session, request, policy)
+        key = (session.session_ref, request.region_id)
+        async with self._locks.setdefault(key, asyncio.Lock()):
+            region, nodes = await self._check_projection_locked(session, projection, policy)
+            resolution = ResolutionRound(self, session, policy, region, nodes)
+            try:
+                yield resolution
+                await resolution.check()
+            finally:
+                resolution.active = False
 
     async def resolve_exact(
         self,

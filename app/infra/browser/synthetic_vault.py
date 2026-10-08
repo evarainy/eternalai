@@ -16,7 +16,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Final, Literal
 
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from pydantic import SecretStr
@@ -34,6 +34,18 @@ _FILES = frozenset((OPERATOR_FILE, BUSINESS_FILE, DEACTIVATION_FILE))
 _VERSION = "browser.synthetic.vault.v1"
 _MAX_PLAINTEXT = 131072
 _MAX_CIPHERTEXT = 262144
+
+
+class _VaultUnlockError(ValueError):
+    """Closed internal category; keep the existing public ValueError message."""
+
+    _STAGES = frozenset({"format", "kdf", "authentication", "json", "contract"})
+
+    def __init__(self, stage: str) -> None:
+        if stage not in self._STAGES:
+            raise ValueError("browser_vault_unlock_stage_invalid")
+        self.stage = stage
+        super().__init__("browser_vault_unlock_failed")
 
 
 def _private_console() -> None:
@@ -265,20 +277,29 @@ def decrypt_document(name: str, ciphertext: bytes, passphrase: str, *,
                      trial_id: str = ORIGINAL_TRIAL,
                      attempt_id: str | None = None) -> dict[str, Any]:
     _file_path(name, trial_id=trial_id, attempt_id=attempt_id)
+    if (not isinstance(ciphertext, bytes) or not 48 <= len(ciphertext) <= _MAX_CIPHERTEXT
+            or ciphertext[:4] != b"BSV1"):
+        raise _VaultUnlockError("format") from None
     try:
-        if (not isinstance(ciphertext, bytes) or not 48 <= len(ciphertext) <= _MAX_CIPHERTEXT
-                or ciphertext[:4] != b"BSV1"):
-            raise ValueError
-        payload = AESGCM(_derive(passphrase, ciphertext[4:20])).decrypt(
+        key = _derive(passphrase, ciphertext[4:20])
+    except (ValueError, UnicodeError, TypeError, UnsupportedAlgorithm):
+        raise _VaultUnlockError("kdf") from None
+    try:
+        payload = AESGCM(key).decrypt(
             ciphertext[20:32], ciphertext[32:],
             _aad(name, trial_id=trial_id, attempt_id=attempt_id)
         )
+    except InvalidTag:
+        raise _VaultUnlockError("authentication") from None
+    except (ValueError, TypeError):
+        raise _VaultUnlockError("format") from None
+    try:
         result = json.loads(payload)
-        if type(result) is not dict:
-            raise ValueError
-        return result
-    except (ValueError, InvalidTag, UnicodeError, TypeError):
-        raise ValueError("browser_vault_unlock_failed") from None
+    except (ValueError, UnicodeError, TypeError):
+        raise _VaultUnlockError("json") from None
+    if type(result) is not dict:
+        raise _VaultUnlockError("contract") from None
+    return result
 
 
 def _checked_file(path: Path) -> None:
