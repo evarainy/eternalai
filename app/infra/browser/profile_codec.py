@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import math
-from typing import cast
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from app.infra.browser.browserless_wire import BrowserProviderError, json_bytes
-from app.infra.browser.deployment_manifest import SyntheticSource
+
+
+class ProfileOrigins(Protocol):
+    @property
+    def origins(self) -> tuple[str, ...]: ...
 
 DIAGNOSTICS = (
     "skippedMalformedCookies",
@@ -93,7 +98,7 @@ def validate_idb_key(value: object, depth: int = 0) -> None:
     raise reject()
 
 
-def validate_state(state: object, source: SyntheticSource) -> dict[str, object]:
+def validate_state(state: object, source: ProfileOrigins) -> dict[str, object]:
     """Validate before upload, including every cookie/origin/IDB entry, never truncate."""
     validate_json(state)
     try:
@@ -198,7 +203,7 @@ def inline_key(value: object, path: object) -> object:
     return value
 
 
-def from_playwright(state: object, source: SyntheticSource) -> dict[str, object]:
+def from_playwright(state: object, source: ProfileOrigins) -> dict[str, object]:
     root = mapping(state, {"cookies", "origins"})
     origins: list[dict[str, object]] = []
     for value in sequence(root["origins"], 50):
@@ -277,6 +282,21 @@ def from_playwright(state: object, source: SyntheticSource) -> dict[str, object]
             }
         )
     return validate_state({"cookies": root["cookies"], "origins": origins}, source)
+
+
+def checked_playwright_state(state: object, source: ProfileOrigins) -> dict[str, object]:
+    """Preserve the public Playwright shape for storage_state/new_context restore.
+
+    The existing lossless validator checks every cookie and IndexedDB record.
+    Keep raw Playwright field names in the sealed payload so restore does not
+    need an approximate inverse conversion.
+    """
+    from_playwright(state, source)
+    try:
+        detached = cast(dict[str, object], json.loads(json_bytes(state)))
+    except (ValueError, UnicodeError, RecursionError, TypeError):
+        raise reject() from None
+    return detached
 
 
 def validate_upload(result: object, name: str, state: dict[str, object]) -> None:

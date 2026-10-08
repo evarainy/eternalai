@@ -1,4 +1,4 @@
-"""Trusted host installation for the bounded local synthetic READ_ONLY route.
+"""Trusted host installation for registered local READ_ONLY Sites.
 
 The operator supplies durable keys and independently verified grants. This module
 does not discover configuration, generate keys, register capabilities, mutate
@@ -23,6 +23,7 @@ from app.infra.browser.chat_inputs import (
 )
 from app.infra.browser.composition import (
     BrowserPublicationGrants,
+    BrowserRegisteredSourceVerifier,
     BrowserVerticalComponents,
     BrowserVerticalDependencies,
     build_browser_vertical,
@@ -46,7 +47,9 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
     LocalChromiumDeployment,
     LocalPlaywrightDriver,
+    RegisteredLocalSite,
 )
+from app.infra.browser.read_execution import BrowserReadExecutionFactory
 from app.infra.persistence.browser.authorization import CleanupAuthorize
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext, BrowserResourceCipher
 from app.infra.persistence.browser.leases import (
@@ -209,6 +212,24 @@ class UnsupportedLocalProfiles:
         raise BrowserProfileError("browser_local_profile_unsupported")
 
 
+class RegisteredLocalSiteVerifier:
+    """Only the installed source object may certify its exact publication."""
+
+    def __init__(
+        self, factory: LocalBrowserReadExecutionFactory, source: RegisteredLocalSite,
+    ) -> None:
+        if factory.source is not source:
+            raise ValueError("browser_local_site_factory_mismatch")
+        self._factory, self._source = factory, source
+
+    async def verify(self, manifest: object) -> bool:
+        return (
+            manifest == self._source.manifest
+            and self._source.manifest.source_kind == "registered_site"
+            and await self._factory.verify_source(self._source.manifest)
+        )
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class LocalBrowserInstallationDependencies:
     """Trusted host DI; each object is installed outside request argument parsing.
@@ -225,7 +246,7 @@ class LocalBrowserInstallationDependencies:
     capability_registry: PostgreSQLCapabilityRegistry
     session_binder: PrincipalSessionBinder
     policy: PolicyGuardPort
-    source: FixedSyntheticSource
+    source: FixedSyntheticSource | RegisteredLocalSite
     binding: BrowserBindingFact
     deployment: LocalChromiumDeployment
     decision: DecisionProvider
@@ -271,7 +292,10 @@ def build_local_browser_vertical(
     if not dependencies.enabled:
         return None
     deps = dependencies
-    if (type(deps.source) is not FixedSyntheticSource
+    source = deps.source
+    synthetic = type(source) is FixedSyntheticSource
+    registered = type(source) is RegisteredLocalSite
+    if (not (synthetic or registered)
             or type(deps.deployment) is not LocalChromiumDeployment
             or deps.deployment.enabled is not True
             or type(deps.provider_pools) is not BrowserProviderPoolRegistry
@@ -280,7 +304,10 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_recovery", None))
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
-    builder = (build_fixed_synthetic_observe_only_source
+    wrapped: BrowserReadExecutionFactory
+    source_verifier: BrowserRegisteredSourceVerifier
+    if isinstance(source, FixedSyntheticSource):
+        builder = (build_fixed_synthetic_observe_only_source
                if (deps.source.manifest.skill.version == OBSERVE_SKILL_VERSION
                    or deps.source.manifest.skill.version.startswith(OBSERVE_SKILL_VERSION + "_"))
                else build_fixed_synthetic_visible_query_source
@@ -288,18 +315,29 @@ def build_local_browser_vertical(
                else build_fixed_synthetic_diagnostic_source
                if deps.source.manifest.skill.version == DIAGNOSTIC_SKILL_VERSION
                else build_fixed_synthetic_query_source)
-    expected = (build_fixed_synthetic_observe_only_source(
+        expected = (build_fixed_synthetic_observe_only_source(
                     deps.source.manifest.site.decision_manifest,
                     attempt_id=observe_attempt_id_from_version(deps.source.manifest.skill.version),
                 ) if builder is build_fixed_synthetic_observe_only_source
                 else builder(deps.source.manifest.site.decision_manifest))
-    if (deps.source.manifest != expected.manifest or deps.source.html != expected.html
-            or deps.source.rules != expected.rules or deps.source.region != expected.region
-            or type(deps.source.projector) is not type(expected.projector)):
+        if (source.manifest != expected.manifest or source.html != expected.html
+                or source.rules != expected.rules or source.region != expected.region
+                or type(source.projector) is not type(expected.projector)):
+            raise ValueError("browser_local_source_invalid")
+    elif isinstance(source, RegisteredLocalSite) and (
+            source.manifest.source_kind != "registered_site"
+            or source.manifest.capability.target_system != deps.binding.target_system
+            or deps.deployment.offline_manifest is None
+            or deps.deployment.assets_root is None
+            or source.registration_digest()
+            != source.manifest.site.source.fixture_digest):
         raise ValueError("browser_local_source_invalid")
-    chat_parser: BrowserChatParserPort
+    chat_parser: BrowserChatParserPort | None
     if deps.input_mode == "structured":
-        chat_parser = FrozenSyntheticStructuredParser(seed=deps.source.manifest)
+        chat_parser = (
+            FrozenSyntheticStructuredParser(seed=source.manifest)
+            if isinstance(source, FixedSyntheticSource) else None
+        )
     elif deps.input_mode == "chat":
         if (deps.llm_provider is None or deps.structured_output is None
                 or deps.intent_model is None):
@@ -321,6 +359,7 @@ def build_local_browser_vertical(
     factory = LocalBrowserReadExecutionFactory(
         deps.source, resources, deps.binding, deps.decision, ttl_seconds=deps.ttl_seconds,
         execution_timeout_seconds=deps.execution_timeout_seconds,
+        session_factory=deps.session_factory if registered else None,
     )
     async def no_resource(run: RunSnapshot) -> bool:
         return await leases._prove_no_run_resource(run)
@@ -334,7 +373,12 @@ def build_local_browser_vertical(
         factory, deps.cleanup_authority,
         no_resource=no_resource, no_resource_in_session=no_resource_in_session,
     )
-    wrapped = FixedSourceReadFactory(factory, deps.source)
+    if isinstance(source, FixedSyntheticSource):
+        wrapped = FixedSourceReadFactory(factory, source)
+        source_verifier = FixedSyntheticSourceVerifier(wrapped)
+    else:
+        wrapped = factory
+        source_verifier = RegisteredLocalSiteVerifier(factory, source)
     unsupported = UnsupportedLocalProfiles()
     async def readiness(run: RunSnapshot, session: AsyncSession | None) -> bool:
         if (run.owner.tenant_id != deps.binding.tenant_id
@@ -375,13 +419,14 @@ def build_local_browser_vertical(
         session_factory=deps.session_factory, capability_registry=deps.capability_registry,
         session_binder=deps.session_binder, policy=deps.policy, tenant_id=deps.binding.tenant_id,
         seed=deps.source.manifest, publication_grants=deps.publication_grants,
-        source_verifier=FixedSyntheticSourceVerifier(wrapped), payload_keys=deps.payload_keys,
+        source_verifier=source_verifier, payload_keys=deps.payload_keys,
         active_payload_key_id=deps.active_payload_key_id,
         request_digest_keys=deps.request_digest_keys,
         active_request_digest_key_id=deps.active_request_digest_key_id,
         input_digest_key=deps.input_digest_key, result_digest_key=deps.result_digest_key,
         execution_factory=wrapped, lifecycle=lifecycle,
-        profile_capture_proof=unsupported, profile_cleanup_proof=unsupported,
+        profile_capture_proof=resources if registered else unsupported,
+        profile_cleanup_proof=unsupported,
         profile_cleanup_authority=unsupported, cancel_check=lifecycle.check_cancel,
         cancel_check_in_session=lifecycle.check_cancel_in_session,
         cleanup_authorize=deps.cleanup_authorize, cleanup_check=lifecycle.check_cleanup,
@@ -410,6 +455,8 @@ def build_local_browser_vertical(
         binding_reader=configured.binding_reader,
         lease_reserved=leases.has_run_lease,
     )
+    if registered:
+        factory.install_profiles(configured.profiles, configured.cipher)
 
     async def stop_resources() -> None:
         # Supervisor cancellation normally settles the claimed Run. Reconcile

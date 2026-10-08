@@ -1,8 +1,11 @@
 """Local installation boundaries; no browser launch or real database connection."""
 
 import asyncio
+import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock, Mock
 
@@ -11,11 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.browser_skill.models import BrowserOwner
 from app.infra.auth.crypto import PrincipalSessionBinder
+from app.infra.browser.deployment_manifest import LocalOfflineManifest
 from app.infra.browser.local_installation import (
+    LocalBrowserInstallationDependencies,
     PostgreSQLLocalCleanupGrant,
     UnsupportedLocalProfiles,
     build_local_browser_vertical,
 )
+from app.infra.browser.local_resource_lifecycle import (
+    LocalChromiumDeployment,
+    registered_subject_digest,
+)
+from app.infra.persistence.browser.crypto import BrowserClaimProofContext
+from app.infra.persistence.browser.leases import BrowserProviderPool, BrowserProviderPoolRegistry
+from app.infra.persistence.capability_registry.repository import PostgreSQLCapabilityRegistry
 from app.ports.auth import Principal, PrincipalOrgContext, SessionBindingError, VerifiedSessionToken
 from app.ports.browser_profile_store import (
     BrowserProfileContext,
@@ -24,6 +36,10 @@ from app.ports.browser_profile_store import (
 )
 from app.ports.browser_store import BrowserBindingKey, BrowserLeaseClaim, BrowserLeaseError
 from app.ports.credential_vault import BrowserAuthFact, BrowserBindingFact
+from app.ports.policy_guard import PolicyGuardPort
+from app.ports.task_store import SessionStorePort
+from app.ports.trace import TracePort
+from tests.infra.browser.test_local_read_execution import registered_site
 
 
 def _grant(*, expires: datetime | None = None) -> PostgreSQLLocalCleanupGrant:
@@ -156,3 +172,60 @@ def test_local_profiles_never_claim_capture_or_cleanup_success() -> None:
         with pytest.raises(BrowserProfileError) as failure:
             asyncio.run(action)
         assert failure.value.code == "browser_local_profile_unsupported"
+
+
+def test_registered_site_builds_the_existing_vertical_without_chat_parser(
+    tmp_path: Path,
+) -> None:
+    source = registered_site()
+    assets = [
+        {"asset_id": role, "role": role, "relative_path": role + ".bin",
+         "sha256": digest.hex(), "license_ref": "fixture_license"}
+        for role, digest in (
+            ("node", b"n" * 32), ("chromium", b"c" * 32),
+            ("playwright", b"w" * 32), ("helper", b"h" * 32),
+        )
+    ]
+    body = {"deployment_id": "fixture", "assets": assets}
+    body["manifest_digest"] = hashlib.sha256((
+        "browser.local.offline.v1\n"
+        + json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    ).encode("ascii")).hexdigest()
+    inventory = LocalOfflineManifest.model_validate(body)
+    deployment = LocalChromiumDeployment(
+        "local", bytes.fromhex(inventory.manifest_digest), tmp_path / "node",
+        tmp_path / "package", tmp_path / "browsers", b"h" * 32,
+        b"n" * 32, b"c" * 32, enabled=True,
+        assets_root=tmp_path, offline_manifest=inventory,
+    )
+    sessions: async_sessionmaker[AsyncSession] = async_sessionmaker()
+    binder = PrincipalSessionBinder(binding_key=b"fictitious-test-session-key-32bytes")
+    binding = BrowserBindingFact(
+        "tenant", "reader", "oa", "binding", 1,
+        registered_subject_digest("oa", "account_a"),
+    )
+    installed = build_local_browser_vertical(LocalBrowserInstallationDependencies(
+        session_factory=sessions,
+        capability_registry=PostgreSQLCapabilityRegistry(sessions),
+        session_binder=binder,
+        policy=Mock(spec=PolicyGuardPort), source=source, binding=binding,
+        deployment=deployment, decision=Mock(),
+        provider_pools=BrowserProviderPoolRegistry((BrowserProviderPool(
+            "local", (), deployment.manifest_digest,
+        ),)),
+        proof_context=BrowserClaimProofContext(b"p" * 32),
+        publication_grants=Mock(), cleanup_authority=Mock(),
+        cleanup_authorize=AsyncMock(),
+        payload_keys={"payload": b"p" * 32}, active_payload_key_id="payload",
+        resource_keys={"resource": b"r" * 32}, active_resource_key_id="resource",
+        request_digest_keys={"request": b"q" * 32},
+        active_request_digest_key_id="request",
+        input_digest_key=b"i" * 32, result_digest_key=b"o" * 32,
+        llm_provider=None, structured_output=None, intent_model=None,
+        trace=Mock(spec=TracePort), sessions=Mock(spec=SessionStorePort),
+        worker_id="fixture_worker", enabled=True, input_mode="structured",
+    ))
+    assert installed is not None
+    assert installed.chat is None
+    assert installed.submission.skill_id == source.manifest.skill.skill_id
+    assert installed.profiles is not None

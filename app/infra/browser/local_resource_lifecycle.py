@@ -18,14 +18,33 @@ import secrets
 import sys
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel
+
 from app.browser_skill.models import BrowserOperationError, BrowserSessionRef
+from app.browser_skill.publication_contracts import BrowserPublicationManifest, canonical_json
+from app.browser_skill.site_rules import ExpectedPopup, FrozenSiteAdapter, navigation_allowed
+from app.infra.browser.deployment_manifest import (
+    LocalOfflineManifest,
+    verify_local_offline_assets,
+)
 from app.infra.browser.playwright_actions import LiveBrowser
+from app.infra.browser.playwright_dom_rules import RegisteredDOMRules
+from app.infra.browser.playwright_observer import RegisteredRegion
+from app.infra.browser.profile_codec import checked_playwright_state
+from app.infra.browser.read_execution import BrowserOutputProjector
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext, resource_identity
+from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
+from app.ports.browser_profile_store import (
+    BrowserProfileCaptureFact,
+    BrowserProfileContext,
+    BrowserProfileError,
+    BrowserProfileGeneration,
+)
 from app.ports.browser_read_execution import (
     BrowserCaptureResolution,
     BrowserReadExecutionError,
@@ -48,6 +67,146 @@ if TYPE_CHECKING:
     from app.infra.browser.local_read_execution import LocalBrowserReadExecutionFactory
 
 Guard = Callable[[], Awaitable[None]]
+
+
+class LocalLoginSkill(Protocol):
+    async def __call__(self, page: Any, binding: BrowserBindingFact, guard: Guard) -> None:
+        """Audited, installed login only; guard before each browser send."""
+        ...
+
+
+def _registered_value(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return {part.name: _registered_value(getattr(value, part.name))
+                for part in fields(value)}
+    if isinstance(value, (tuple, list)):
+        return [_registered_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _registered_value(item) for key, item in value.items()}
+    return value
+
+
+def registered_local_digest(
+    *, entry_url: str, region: RegisteredRegion, rules: RegisteredDOMRules,
+    projector: BrowserOutputProjector, subject_selector: str,
+    subject_frame_selectors: tuple[str, ...] = (), capture_indexed_db: bool = False,
+    websocket_origins: tuple[str, ...] = (),
+    popup_expectations: tuple[ExpectedPopup, ...] = (),
+) -> str:
+    """Bind browser-specific Site configuration without a publication hash cycle."""
+    projector_type = type(projector)
+    payload = {
+        "entry_url": entry_url,
+        "region": _registered_value(region),
+        "rules": {
+            "steps": _registered_value(rules.steps),
+            "read": _registered_value(rules.read),
+        },
+        "projector": f"{projector_type.__module__}.{projector_type.__qualname__}",
+        "subject_selector": subject_selector,
+        "subject_frame_selectors": subject_frame_selectors,
+        "capture_indexed_db": capture_indexed_db,
+        "websocket_origins": websocket_origins,
+        "popup_expectations": tuple(
+            rule.model_dump(mode="json") for rule in popup_expectations
+        ),
+    }
+    return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RegisteredLocalSite:
+    """Trusted immutable registration for one real Site/ReadSpec publication.
+
+    The registration digest covers the browser-specific source settings. Login
+    implementation and deployment assets are installed by the trusted host, not
+    supplied in Run input or discovered from the page.
+    """
+
+    manifest: BrowserPublicationManifest
+    entry_url: str
+    region: RegisteredRegion
+    rules: RegisteredDOMRules
+    site: FrozenSiteAdapter
+    projector: BrowserOutputProjector
+    subject_selector: str
+    subject_frame_selectors: tuple[str, ...] = ()
+    login: LocalLoginSkill | None = field(default=None, repr=False)
+    capture_indexed_db: bool = False
+    websocket_origins: tuple[str, ...] = ()
+    popup_expectations: tuple[ExpectedPopup, ...] = ()
+
+    @property
+    def origins(self) -> tuple[str, ...]:
+        return self.manifest.site.navigation_origins
+
+    @property
+    def popup_origins(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(rule.origin for rule in self.popup_expectations))
+
+    def registration_digest(self) -> str:
+        return registered_local_digest(
+            entry_url=self.entry_url, region=self.region, rules=self.rules,
+            projector=self.projector, subject_selector=self.subject_selector,
+            subject_frame_selectors=self.subject_frame_selectors,
+            capture_indexed_db=self.capture_indexed_db,
+            websocket_origins=self.websocket_origins,
+            popup_expectations=self.popup_expectations,
+        )
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.manifest, BrowserPublicationManifest)
+            or self.manifest.source_kind != "registered_site"
+            or not isinstance(self.region, RegisteredRegion)
+            or not isinstance(self.rules, RegisteredDOMRules)
+            or not isinstance(self.site, FrozenSiteAdapter)
+            or not callable(self.projector)
+            or type(self.subject_selector) is not str
+            or not 1 <= len(self.subject_selector) <= 256
+            or type(self.subject_frame_selectors) is not tuple
+            or len(self.subject_frame_selectors) > 8
+            or any(not selector or len(selector) > 256
+                   for selector in self.subject_frame_selectors)
+            or type(self.capture_indexed_db) is not bool
+            or type(self.popup_expectations) is not tuple
+            or any(not isinstance(rule, ExpectedPopup) for rule in self.popup_expectations)
+            or type(self.websocket_origins) is not tuple
+            or (self.login is not None and not callable(self.login))
+            or not navigation_allowed(self.entry_url, self.origins)
+            or any(origin not in self.origins for origin in self.popup_origins)
+            or len({rule.step_id for rule in self.popup_expectations})
+            != len(self.popup_expectations)
+            or any(
+                rule.object_type != self.manifest.site.read_rule.object_type
+                or not any(
+                    step.step.step_id == rule.step_id
+                    and step.step.operation in {"click", "navigate"}
+                    and step.step.effect == "read_only"
+                    and step.effect.actual_effect == "read_only"
+                    for step in self.manifest.site.steps
+                ) for rule in self.popup_expectations
+            )
+            or len(set(self.websocket_origins)) != len(self.websocket_origins)
+            or any(
+                urlsplit(origin).scheme not in {"ws", "wss"}
+                or ("https" if origin.startswith("wss://") else "http")
+                + origin[origin.index("://"):] not in self.origins
+                for origin in self.websocket_origins
+            )
+            or self.rules.site_digest != self.manifest.site.digest
+            or self.rules.skill_digest != self.manifest.skill.digest
+            or self.rules.verifier_digest != self.manifest.verifier.digest
+            or self.region.policy_id != self.manifest.site.policy.policy_id
+            or self.region.policy_digest != self.manifest.site.policy.digest
+            or any(rule.observation.region_id != self.region.region_id
+                   for rule in self.manifest.site.steps)
+            or self.site.bootstrap(self.manifest.skill) != self.manifest.site_plan()
+            or self.registration_digest() != self.manifest.site.source.fixture_digest
+        ):
+            raise ValueError("browser_local_site_registration_invalid")
 
 
 def _json(value: object) -> bytes:
@@ -74,6 +233,14 @@ def local_subject_digest(
     ).digest()
 
 
+def registered_subject_digest(target_system: str, subject: str) -> bytes:
+    """Binding provisioner and live Site reader must agree on this exact codec."""
+    if (type(target_system) is not str or not target_system
+            or type(subject) is not str or not subject or len(subject) > 256):
+        raise ValueError("browser_local_subject_invalid")
+    return hashlib.sha256(_json(["browser.registered.subject.v1", target_system, subject])).digest()
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class LocalChromiumDeployment:
     provider_key: str
@@ -86,6 +253,9 @@ class LocalChromiumDeployment:
     chromium_digest: bytes
     enabled: bool = False
     timeout_seconds: float = 25.0
+    assets_root: Path | None = None
+    offline_manifest: LocalOfflineManifest | None = None
+    immutable_assets: bool = False
 
     def __post_init__(self) -> None:
         if (
@@ -104,6 +274,21 @@ class LocalChromiumDeployment:
                 for p in (self.node_executable, self.playwright_package, self.browsers_path)
             )
             or type(self.enabled) is not bool
+            or type(self.immutable_assets) is not bool
+            or ((self.assets_root is None) != (self.offline_manifest is None))
+            or (self.assets_root is not None and not self.assets_root.is_absolute())
+            or (self.offline_manifest is not None and bytes.fromhex(
+                self.offline_manifest.manifest_digest,
+            ) != self.manifest_digest)
+            or (self.offline_manifest is not None and any(
+                not any(asset.role == role and asset.sha256 == digest.hex()
+                        for asset in self.offline_manifest.assets)
+                for role, digest in (
+                    ("node", self.node_digest),
+                    ("chromium", self.chromium_digest),
+                    ("helper", self.helper_digest),
+                )
+            ))
             or not 1 <= self.timeout_seconds <= 30
         ):
             raise ValueError("browser_local_deployment_invalid")
@@ -222,7 +407,8 @@ class LocalPlaywrightDriver:
                     self._state = "failed"
                     raise BrowserReadExecutionError("unavailable") from None
                 except asyncio.CancelledError:
-                    if asyncio.current_task().cancelling():
+                    current_task = asyncio.current_task()
+                    if current_task is not None and current_task.cancelling():
                         self._state = "failed"
                         raise
                     self._starting = None
@@ -359,7 +545,7 @@ class _Resource:
     reference: bytes
     live: LiveBrowser | None
     page: Any
-    source: FixedSyntheticSource
+    source: FixedSyntheticSource | RegisteredLocalSite
     guard: Guard
     connection: Any = None
     context: Any = None
@@ -368,6 +554,9 @@ class _Resource:
     terminal_at: float | None = None
     faulted: bool = False
     closing: bool = False
+    capture_receipt: tuple[
+        BrowserProfileContext, BrowserProfileGeneration, bytes, int,
+    ] | None = field(default=None, repr=False)
 
 
 class LocalBrowserResources:
@@ -388,11 +577,39 @@ class LocalBrowserResources:
         self._resources: dict[str, _Resource] = {}
         self._helpers: dict[int, _NativeChromium] = {}
         self.driver = driver
+        self._assets_verified = False
+
+    def _verify_assets(self) -> None:
+        root, manifest = self.deployment.assets_root, self.deployment.offline_manifest
+        if root is None or manifest is None:
+            return
+        if self._assets_verified and self.deployment.immutable_assets:
+            return
+        try:
+            verify_local_offline_assets(root, manifest)
+            resolved = root.resolve(strict=True)
+            helper = Path(__file__).with_name("managed_chromium.js").resolve(strict=True)
+            for asset in manifest.assets:
+                path = (resolved / asset.relative_path).resolve(strict=True)
+                if ((asset.role == "node" and path != self.deployment.node_executable.resolve())
+                        or (asset.role == "helper" and path != helper)
+                        or (asset.role == "chromium" and not path.is_relative_to(
+                            self.deployment.browsers_path.resolve(),
+                        ))
+                        or (asset.role == "playwright" and not path.is_relative_to(
+                            self.deployment.playwright_package.resolve(),
+                        ))):
+                    raise ValueError("browser_local_asset_binding_invalid")
+        except (OSError, ValueError):
+            raise BrowserReadExecutionError("unsupported") from None
+        self._assets_verified = True
 
     async def start(self) -> None:
+        self._verify_assets()
         await self.driver.start()
 
     async def ensure_started(self) -> None:
+        self._verify_assets()
         await self.driver.ensure_started()
 
     async def stop(self) -> None:
@@ -437,14 +654,23 @@ class LocalBrowserResources:
         self,
         claim: BrowserLeaseClaim,
         session: BrowserSessionRef,
-        source: FixedSyntheticSource,
+        source: FixedSyntheticSource | RegisteredLocalSite,
         *,
         guard: Guard,
         subject_guard: Guard,
+        storage_state: dict[str, object] | None = None,
     ) -> _Resource:
         deployment = self.deployment
+        self._verify_assets()
         self._prune()
         helper = Path(__file__).with_name("managed_chromium.js")
+        from app.infra.browser.fixed_synthetic_seed import FixedSyntheticSource
+
+        synthetic = type(source) is FixedSyntheticSource
+        if not synthetic and type(source) is not RegisteredLocalSite:
+            raise BrowserReadExecutionError("unsupported")
+        if synthetic and storage_state is not None:
+            raise BrowserReadExecutionError("denied")
         if not await self.driver.probe():
             raise BrowserReadExecutionError("unavailable")
         if (
@@ -518,7 +744,8 @@ class LocalBrowserResources:
                 browser.new_context(
                     accept_downloads=False,
                     service_workers="block",
-                    java_script_enabled=False,
+                    java_script_enabled=not synthetic,
+                    **({"storage_state": storage_state} if storage_state is not None else {}),
                 ),
                 deployment.timeout_seconds,
             )
@@ -528,7 +755,7 @@ class LocalBrowserResources:
 
             async def route(request: Any) -> None:
                 await subject_guard()
-                if (
+                if synthetic and (
                     request.request.url == source.manifest.site.source.origin + "/"
                     and request.request.method == "GET"
                     and request.request.resource_type == "document"
@@ -536,12 +763,30 @@ class LocalBrowserResources:
                     await request.fulfill(
                         status=200, content_type="text/html; charset=utf-8", body=source.html
                     )
+                elif not synthetic and navigation_allowed(
+                    request.request.url, source.origins,
+                ):
+                    await request.continue_()
                 else:
                     item.faulted = True
                     await request.abort("blockedbyclient")
                 await subject_guard()
 
             await asyncio.wait_for(context.route("**/*", route), deployment.timeout_seconds)
+            if not synthetic:
+                async def socket_route(socket: Any) -> None:
+                    await subject_guard()
+                    origin = urlsplit(socket.url)
+                    socket_origin = f"{origin.scheme}://{origin.netloc}"
+                    if socket_origin in source.websocket_origins:
+                        socket.connect_to_server()
+                    else:
+                        item.faulted = True
+                        await socket.close()
+
+                await asyncio.wait_for(
+                    context.route_web_socket("**/*", socket_route), deployment.timeout_seconds,
+                )
             await guard()
             page = await asyncio.wait_for(context.new_page(), deployment.timeout_seconds)
             item.page = page
@@ -549,11 +794,15 @@ class LocalBrowserResources:
             # Page routes take precedence over the adapter's later context
             # origin route, so continue_() cannot bypass exact-byte fulfillment.
             page.set_default_timeout(deployment.timeout_seconds * 1000)
-            await asyncio.wait_for(page.route("**/*", route), deployment.timeout_seconds)
+            if synthetic:
+                await asyncio.wait_for(page.route("**/*", route), deployment.timeout_seconds)
             await guard()
-            await page.goto(source.manifest.site.source.origin + "/", wait_until="domcontentloaded")
+            target = (source.manifest.site.source.origin + "/" if synthetic
+                      else source.entry_url)
+            await page.goto(target, wait_until="domcontentloaded")
             await guard()
-            await self.check_subject(claim, reference)
+            if synthetic:
+                await self.check_subject(claim, reference)
             await guard()
             return item
         except BaseException as error:
@@ -635,6 +884,10 @@ class LocalBrowserResources:
         ):
             raise BrowserLeaseError("browser_local_subject_unavailable")
         await item.guard()
+        if isinstance(item.source, RegisteredLocalSite):
+            if await self.registered_subject_status(item) != "matched":
+                raise BrowserLeaseError("browser_local_subject_mismatch")
+            return
         if (
             item.page.is_closed()
             or item.page.url != item.source.manifest.site.source.origin + "/"
@@ -672,6 +925,152 @@ class LocalBrowserResources:
             or local_subject_digest(*actual) != claim.binding.subject_digest
         ):
             raise BrowserLeaseError("browser_local_subject_mismatch")
+
+    async def registered_subject_status(self, item: _Resource) -> str:
+        """Return only a closed status; actual account text is never retained."""
+        source = item.source
+        if not isinstance(source, RegisteredLocalSite):
+            raise BrowserLeaseError("browser_local_subject_unavailable")
+        claim = item.claim
+        if not isinstance(claim.binding, BrowserBindingFact):
+            raise BrowserLeaseError("browser_local_subject_unavailable")
+        page = item.page
+        if (page is None or page.is_closed() or item.faulted or item.native.exited
+                or not self.driver.ready or item.live is None
+                or not item.live.browser.is_connected()
+                or not navigation_allowed(page.url, source.origins)):
+            raise BrowserLeaseError("browser_local_subject_unavailable")
+        popup_counts: dict[str, int] = {}
+        for opened in item.live.context.pages:
+            if opened is page:
+                continue
+            if opened.url == "about:blank" and source.popup_expectations:
+                deadline = time.monotonic() + max(
+                    rule.wait_ms for rule in source.popup_expectations
+                ) / 1000
+                while opened.url == "about:blank" and time.monotonic() < deadline:
+                    await item.guard()
+                    await asyncio.sleep(0.05)
+            location = urlsplit(opened.url)
+            matched = tuple(
+                rule for rule in source.popup_expectations
+                if navigation_allowed(opened.url, (rule.origin,))
+                and location.path.startswith(rule.path_prefix)
+            )
+            if (opened.is_closed() or await opened.opener() is not page
+                    or len(matched) != 1):
+                raise BrowserLeaseError("browser_local_subject_mismatch")
+            rule = matched[0]
+            popup_counts[rule.step_id] = popup_counts.get(rule.step_id, 0) + 1
+            if popup_counts[rule.step_id] > rule.maximum_pages:
+                raise BrowserLeaseError("browser_local_subject_mismatch")
+        await item.guard()
+        frame = page
+        for selector in source.subject_frame_selectors:
+            frame = frame.frame_locator(selector)
+        locator = frame.locator(source.subject_selector)
+        count = await asyncio.wait_for(locator.count(), self.deployment.timeout_seconds)
+        if count == 0:
+            await item.guard()
+            return "logged_out"
+        if count != 1 or not await locator.is_visible():
+            raise BrowserLeaseError("browser_local_subject_mismatch")
+        subject = await asyncio.wait_for(locator.inner_text(), self.deployment.timeout_seconds)
+        await item.guard()
+        if type(subject) is not str or not subject or len(subject) > 256:
+            raise BrowserLeaseError("browser_local_subject_mismatch")
+        return ("matched" if hmac.compare_digest(
+            registered_subject_digest(claim.binding.target_system, subject),
+            claim.binding.subject_digest,
+        ) else "wrong_account")
+
+    async def capture_profile(
+        self,
+        item: _Resource,
+        context: BrowserProfileContext,
+        operation_id: str,
+        expected_revision: int,
+        cipher: BrowserPayloadCipher,
+    ) -> tuple[BrowserProfileContext, BrowserProfileGeneration, bytes, int]:
+        source = item.source
+        binding = context.claim.binding
+        item_binding = item.claim.binding
+        if (not isinstance(source, RegisteredLocalSite)
+                or not isinstance(binding, BrowserBindingFact)
+                or not isinstance(item_binding, BrowserBindingFact)
+                or item.capture_receipt is not None
+                or item.live is None or item.page is None
+                or resource_identity(item.claim) != resource_identity(context.claim)
+                or binding.subject_digest != item_binding.subject_digest
+                or type(expected_revision) is not int
+                or not 0 <= expected_revision < 9_007_199_254_740_991
+                or not operation_id):
+            raise BrowserProfileError("browser_local_capture_invalid")
+        await self.check_subject(context.claim, item.reference)
+        state = await asyncio.wait_for(
+            item.live.context.storage_state(indexed_db=source.capture_indexed_db),
+            self.deployment.timeout_seconds,
+        )
+        checked = checked_playwright_state(state, source)
+        payload: dict[str, object] = {"storage_state": checked}
+        encoded = _json(payload)
+        if len(encoded) > 1_000_000:
+            raise BrowserProfileError("browser_local_capture_budget")
+        generation_id = secrets.token_hex(16)
+        fact = BrowserProfileCaptureFact(
+            generation_id=generation_id,
+            binding_revision=binding.binding_revision,
+            profile_revision=expected_revision + 1,
+            lease_epoch=context.claim.lease_epoch,
+            provider_key=context.claim.provider_key,
+            capture_operation_id=operation_id,
+            manifest_digest=self.deployment.manifest_digest,
+            generation_ref_digest=self._proof.digest(
+                "browser-local-profile-ref.v1",
+                item.reference + generation_id.encode() + operation_id.encode(),
+            ),
+            subject_digest=binding.subject_digest,
+            origin_digest=hashlib.sha256(_json(source.origins)).digest(),
+            projection_digest=hashlib.sha256(encoded).digest(),
+            captured_bytes=len(encoded),
+        )
+        generation = cipher.encrypt_profile(
+            context.claim.auth.owner, binding, fact, payload,
+        )
+        evidence = secrets.token_bytes(32)
+        await self.check_subject(context.claim, item.reference)
+        item.capture_receipt = (context, generation, evidence, expected_revision)
+        return item.capture_receipt
+
+    async def verify_capture(
+        self,
+        context: BrowserProfileContext,
+        generation: BrowserProfileGeneration,
+        evidence: bytes,
+    ) -> BrowserProfileCaptureFact:
+        for item in self._resources.values():
+            receipt = item.capture_receipt
+            if (receipt is not None and receipt[0] == context
+                    and receipt[1] == generation and type(evidence) is bytes
+                    and hmac.compare_digest(receipt[2], evidence)
+                    and resource_identity(item.claim) == resource_identity(context.claim)):
+                await self.check_subject(context.claim, item.reference)
+                return generation.fact
+        raise BrowserProfileError("browser_local_capture_proof_invalid")
+
+    async def check_live_subject(
+        self,
+        context: BrowserProfileContext,
+        generation: BrowserProfileGeneration,
+    ) -> None:
+        for item in self._resources.values():
+            receipt = item.capture_receipt
+            if (receipt is not None and receipt[0] == context
+                    and receipt[1] == generation
+                    and resource_identity(item.claim) == resource_identity(context.claim)):
+                await self.check_subject(context.claim, item.reference)
+                return
+        raise BrowserProfileError("browser_local_subject_proof_invalid")
 
     async def terminate(self, item: _Resource) -> bytes:
         await self.cleanup_authority.check_cleanup(item.claim)
@@ -725,16 +1124,57 @@ class LocalBrowserReadLifecycle:
         run: RunSnapshot,
         checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserCaptureResolution:
-        await checkpoint.refresh()
-        return BrowserCaptureResolution("unsupported")
+        fresh = await checkpoint.refresh()
+        factory = self._factory
+        if not isinstance(factory.source, RegisteredLocalSite):
+            return BrowserCaptureResolution("unsupported")
+        state = factory.state_for_cleanup(fresh)
+        if (state is None or state.claim is None or state.resource is None
+                or not factory.claim_matches_run(state.claim, fresh)):
+            return BrowserCaptureResolution("unknown")
+        await factory._fence(state)
+        receipt = state.resource.capture_receipt
+        if receipt is None:
+            return BrowserCaptureResolution(
+                "absent" if fresh.capture_status == "prepared" else "unknown",
+            )
+        context, generation, evidence, revision = receipt
+        if (generation.fact.capture_operation_id != fresh.capture_operation_id
+                or context.run_id != fresh.run_id):
+            return BrowserCaptureResolution("unknown")
+        return BrowserCaptureResolution("found", context, generation, evidence, revision)
 
     async def send_capture(
         self,
         run: RunSnapshot,
         checkpoint: BrowserWorkerCheckpoint,
     ) -> BrowserCaptureResolution:
-        await checkpoint.refresh()
-        return BrowserCaptureResolution("unsupported")
+        fresh = await checkpoint.refresh()
+        factory = self._factory
+        if not isinstance(factory.source, RegisteredLocalSite):
+            return BrowserCaptureResolution("unsupported")
+        state = factory.state_for_cleanup(fresh)
+        if (state is None or state.claim is None or state.resource is None
+                or state.principal is None or state.profile_revision is None
+                or fresh.capture_status != "sent"
+                or not factory.claim_matches_run(state.claim, fresh)
+                or factory._cipher is None):
+            return BrowserCaptureResolution("unknown")
+        await factory._fence(state)
+        if state.resource.capture_receipt is not None:
+            return await self.lookup_capture(fresh, checkpoint)
+        operation = state.run.capture_operation_id
+        if type(operation) is not str or not operation:
+            return BrowserCaptureResolution("unknown")
+        context = BrowserProfileContext(
+            state.principal, state.claim, fresh.task_id, fresh.run_id,
+            state.run.worker_epoch,
+        )
+        receipt = await factory.resources.capture_profile(
+            state.resource, context, operation, state.profile_revision, factory._cipher,
+        )
+        await factory._fence(state)
+        return BrowserCaptureResolution("found", *receipt)
 
     async def cleanup(self, run: RunSnapshot) -> RunCleanup:
         key = BrowserBindingKey(
@@ -752,6 +1192,8 @@ class LocalBrowserReadLifecycle:
             # Durable absence, not memory absence or a failed recover_cleanup.
             # Own reservation_only claims still take the original cleanup path.
             self._remember_cleanup(run, "released", no_resource=True)
+            if state is not None:
+                await self._factory.release_account_gate(state)
             return "released"
         outcome: RunCleanup = "quarantined"
         if state is not None and state.released:
@@ -796,6 +1238,8 @@ class LocalBrowserReadLifecycle:
                 else:
                     outcome = "quarantined"
         self._remember_cleanup(run, outcome)
+        if state is not None and outcome in {"released", "terminated"}:
+            await self._factory.release_account_gate(state)
         return outcome
 
     def _remember_cleanup(

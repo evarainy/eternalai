@@ -76,6 +76,26 @@ class EffectFact(Contract):
     evidence_digest: Digest
 
 
+class ExpectedPopup(Contract):
+    """Audited Site sidecar, bound to one published read-only action step."""
+
+    step_id: OpaqueId
+    origin: str
+    path_prefix: Annotated[str, Field(min_length=1, max_length=512)]
+    object_type: OpaqueId
+    maximum_pages: Annotated[int, Field(ge=1, le=4)] = 1
+    wait_ms: Annotated[int, Field(ge=100, le=15_000)] = 5_000
+
+    @model_validator(mode="after")
+    def closed_location(self) -> Self:
+        canonical_origin(self.origin)
+        if (not self.path_prefix.startswith("/")
+                or self.path_prefix.startswith("//")
+                or any(c in self.path_prefix for c in "?#\\%*\r\n\t")):
+            raise ValueError("site_popup_path_invalid")
+        return self
+
+
 class SiteStepRule(Contract):
     step: SkillStep
     observation: ObservationRequest

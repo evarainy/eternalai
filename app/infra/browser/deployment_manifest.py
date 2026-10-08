@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import json
+import re
+from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -121,3 +125,64 @@ class BrowserDeployment(Contract):
             immutable_capture=bool(evidence and evidence.immutable_capture),
             confirmed_termination=bool(evidence and evidence.confirmed_termination),
         )
+
+
+class LocalOfflineAsset(Contract):
+    """One exact installed file; the path is relative to a trusted asset root."""
+
+    asset_id: OpaqueId
+    role: Literal[
+        "node", "chromium", "playwright", "helper", "font", "certificate",
+        "model", "runtime_dependency",
+    ]
+    relative_path: str = Field(min_length=1, max_length=512)
+    sha256: Digest
+    license_ref: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def safe_path(self) -> LocalOfflineAsset:
+        parts = self.relative_path.split("/")
+        if (not self.relative_path.isascii()
+                or any(not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]*", part)
+                       or part in {".", ".."} or part.startswith(".env") for part in parts)
+                or "\\" in self.relative_path):
+            raise ValueError("browser_local_asset_path_invalid")
+        return self
+
+
+class LocalOfflineManifest(Contract):
+    """Audited offline inventory. Runtime verification reads only these files."""
+
+    deployment_id: OpaqueId
+    manifest_digest: Digest
+    assets: Annotated[tuple[LocalOfflineAsset, ...], Field(min_length=4, max_length=4096)]
+
+    @model_validator(mode="after")
+    def complete_inventory(self) -> LocalOfflineManifest:
+        if ({"node", "chromium", "playwright", "helper"}
+                - {asset.role for asset in self.assets}
+                or len({asset.asset_id for asset in self.assets}) != len(self.assets)
+                or len({asset.relative_path for asset in self.assets}) != len(self.assets)):
+            raise ValueError("browser_local_asset_manifest_invalid")
+        payload = self.model_dump(mode="json", exclude={"manifest_digest"})
+        digest = hashlib.sha256((
+            "browser.local.offline.v1\n"
+            + json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        ).encode("ascii")).hexdigest()
+        if digest != self.manifest_digest:
+            raise ValueError("browser_local_asset_manifest_digest_invalid")
+        return self
+
+
+def verify_local_offline_assets(root: Path, manifest: LocalOfflineManifest) -> None:
+    """Verify exact files without scanning the surrounding installation tree."""
+    if not isinstance(root, Path) or not root.is_absolute():
+        raise ValueError("browser_local_asset_root_invalid")
+    resolved_root = root.resolve(strict=True)
+    for asset in manifest.assets:
+        path = (resolved_root / asset.relative_path).resolve(strict=True)
+        if not path.is_relative_to(resolved_root) or not path.is_file():
+            raise ValueError("browser_local_asset_path_invalid")
+        with path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != asset.sha256:
+                raise ValueError("browser_local_asset_digest_invalid")

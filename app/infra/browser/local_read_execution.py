@@ -1,4 +1,4 @@
-"""Concrete synthetic detail execution on an owned local Chromium process.
+"""Concrete registered detail execution on an owned local Chromium process.
 
 Installation is explicit and initially closed. The durable lease store, current
 authorization, actual live SUBJECT and existing Executor/Verifier remain the
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -17,7 +18,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.browser_skill.executor import DecisionContextFactory
 from app.browser_skill.models import (
@@ -45,6 +49,7 @@ from app.browser_skill.site_rules import RegisteredQueryReadRule
 from app.browser_skill.verifier import ReadSpecResolver, check_liveness, failure
 from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
+    RegisteredLocalSite,
     _Resource,
     local_subject_digest,
 )
@@ -53,8 +58,10 @@ from app.infra.browser.playwright_observer import PlaywrightObserver
 from app.infra.browser.playwright_web_adapter import OperationAuthority
 from app.infra.browser.read_execution import RegisteredReadExecution
 from app.infra.browser.systemone_http import DecisionHTTPProvider
+from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.auth import Principal
 from app.ports.browser import DecisionProvider
+from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileStorePort
 from app.ports.browser_read_execution import BrowserReadExecutionError, BrowserWorkerCheckpoint
 from app.ports.browser_run_store import RunCleanup, RunSnapshot
 from app.ports.browser_store import BrowserLeaseClaim, BrowserLeaseError, BrowserLeaseStorePort
@@ -91,6 +98,11 @@ class _Execution:
     publication_guard: Callable[[RunSnapshot], Awaitable[None]] | None = None
     operation_context: ExecutionContext | None = None
     authority_counts: dict[str, int] = field(default_factory=dict)
+    principal: Principal | None = None
+    profile_context: BrowserProfileContext | None = None
+    profile_revision: int | None = None
+    account_connection: AsyncConnection | None = field(default=None, repr=False)
+    account_locks: tuple[int, ...] = ()
 
     def count(self, name: str) -> None:
         self.authority_counts[name] = min(10000, self.authority_counts.get(name, 0) + 1)
@@ -127,13 +139,14 @@ class _FencedDecision:
 class LocalBrowserReadExecutionFactory:
     def __init__(
         self,
-        source: FixedSyntheticSource,
+        source: FixedSyntheticSource | RegisteredLocalSite,
         resources: LocalBrowserResources,
         binding: BrowserBindingFact,
         decision: DecisionProvider,
         *,
         ttl_seconds: int = 60,
         execution_timeout_seconds: int | None = None,
+        session_factory: async_sessionmaker[AsyncSession] | None = None,
     ) -> None:
         from app.infra.browser.fixed_synthetic_seed import (
             SYNTHETIC_TENANT,
@@ -143,13 +156,18 @@ class LocalBrowserReadExecutionFactory:
 
         if execution_timeout_seconds is None:
             execution_timeout_seconds = ttl_seconds
+        synthetic = type(source) is FixedSyntheticSource
+        registered = type(source) is RegisteredLocalSite
         if (
-            type(source) is not FixedSyntheticSource
+            not (synthetic or registered)
             or type(resources) is not LocalBrowserResources
-            or binding.tenant_id != SYNTHETIC_TENANT
-            or binding.ai_user_id != SYNTHETIC_USER
-            or binding.target_system != "oa"
-            or binding.subject_digest != local_subject_digest(SYNTHETIC_TENANT, SYNTHETIC_USER)
+            or (synthetic and (
+                binding.tenant_id != SYNTHETIC_TENANT
+                or binding.ai_user_id != SYNTHETIC_USER
+                or binding.target_system != "oa"
+                or binding.subject_digest != local_subject_digest(SYNTHETIC_TENANT, SYNTHETIC_USER)
+            ))
+            or (registered and (session_factory is None or not binding.subject_digest))
             or not isinstance(source.manifest.site.read_rule, RegisteredQueryReadRule)
             or not callable(getattr(decision, "decide", None))
             or type(ttl_seconds) is not int
@@ -173,6 +191,87 @@ class LocalBrowserReadExecutionFactory:
         self._states: dict[str, _Execution] = {}
         self._opening: set[str] = set()
         self._lease_reserved: Callable[[RunSnapshot], Awaitable[bool]] | None = None
+        self._session_factory = session_factory
+        self._profiles: BrowserProfileStorePort | None = None
+        self._cipher: BrowserPayloadCipher | None = None
+
+    def install_profiles(
+        self, store: BrowserProfileStorePort, cipher: BrowserPayloadCipher,
+    ) -> None:
+        if (self._profiles is not None or self._cipher is not None
+                or not callable(getattr(store, "load_active", None))
+                or type(cipher) is not BrowserPayloadCipher):
+            raise ValueError("browser_local_profile_installation_invalid")
+        self._profiles, self._cipher = store, cipher
+
+    @staticmethod
+    def _advisory_key(parts: list[str]) -> int:
+        digest = hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).digest()
+        return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+    async def _account_gate(self, state: _Execution) -> None:
+        """Coordinate local Site use across bindings and the existing auth poll.
+
+        The credential-poll key is the exact existing coordinator namespace.
+        The subject key additionally serializes two bindings for one business
+        account. Both locks stay with this Run until native termination proof.
+        """
+        if not isinstance(self.source, RegisteredLocalSite):
+            return
+        factory = self._session_factory
+        engine = None if factory is None else factory.kw.get("bind")
+        if not isinstance(engine, AsyncEngine):
+            raise BrowserReadExecutionError("unavailable")
+        poll = self._advisory_key([
+            "credential-poll", self.binding.tenant_id, self.binding.ai_user_id,
+            self.binding.target_system,
+        ])
+        account = self._advisory_key([
+            "browser-local-account.v1", self.binding.target_system,
+            self.binding.subject_digest.hex(),
+        ])
+        connection = await engine.connect()
+        acquired: list[int] = []
+        try:
+            for key in sorted({poll, account}):
+                result = await connection.execute(
+                    text("SELECT pg_try_advisory_lock(:key)"), {"key": key},
+                )
+                await connection.commit()
+                if result.scalar_one() is not True:
+                    raise _BrowserReadDeferred()
+                acquired.append(key)
+            state.account_connection = connection
+            state.account_locks = tuple(acquired)
+        except BaseException:
+            await self._unlock_connection(connection, tuple(acquired))
+            raise
+
+    @staticmethod
+    async def _unlock_connection(connection: AsyncConnection, locks: tuple[int, ...]) -> None:
+        try:
+            if connection.closed or connection.invalidated:
+                return
+            for key in reversed(locks):
+                unlocked = await connection.execute(
+                    text("SELECT pg_advisory_unlock(:key)"), {"key": key},
+                )
+                await connection.commit()
+                if unlocked.scalar_one() is not True:
+                    raise BrowserReadExecutionError("unavailable")
+        except BaseException:
+            await connection.invalidate()
+            raise
+        finally:
+            await connection.close()
+
+    async def release_account_gate(self, state: _Execution) -> None:
+        connection, locks = state.account_connection, state.account_locks
+        if connection is None:
+            return
+        state.account_connection = None
+        state.account_locks = ()
+        await self._unlock_connection(connection, locks)
 
     def install_authority(
         self,
@@ -209,8 +308,21 @@ class LocalBrowserReadExecutionFactory:
 
     async def verify_source(self, manifest: BrowserPublicationManifest) -> bool:
         self.authority()
+        if isinstance(self.source, RegisteredLocalSite):
+            return (
+                self.resources.deployment.enabled
+                and self._profiles is not None
+                and self._cipher is not None
+                and manifest == self.source.manifest
+                and self.source.registration_digest() == manifest.site.source.fixture_digest
+                and self.source.site.bootstrap(manifest.skill) == manifest.site_plan()
+                and self.source.rules.site_digest == manifest.site.digest
+                and self.source.rules.verifier_digest == manifest.verifier.digest
+                and isinstance(manifest.site.read_rule, RegisteredQueryReadRule)
+            )
         return (
             self.resources.deployment.enabled
+            and manifest.source_kind == "registered_synthetic_fixture"
             and manifest == self.source.manifest
             and hashlib.sha256(self.source.html).hexdigest() == manifest.site.source.fixture_digest
             and self.source.site.bootstrap(manifest.skill) == manifest.site_plan()
@@ -323,8 +435,6 @@ class LocalBrowserReadExecutionFactory:
         try:
             if not await self.verify_source(manifest):
                 raise BrowserReadExecutionError("denied")
-            from app.infra.browser.fixed_synthetic_seed import SyntheticDetailArguments
-
             if (
                 private_input.get("schema_version") != "browser.request.input.v2"
                 or private_input.get("capability_id") != manifest.capability.capability_id
@@ -333,17 +443,48 @@ class LocalBrowserReadExecutionFactory:
                 raise BrowserReadExecutionError("denied")
             try:
                 principal = Principal.model_validate(private_input.get("principal"))
-                arguments = SyntheticDetailArguments.model_validate(private_input.get("arguments"))
-            except ValidationError:
+                if isinstance(self.source, RegisteredLocalSite):
+                    arguments = private_input.get("arguments")
+                    key_name = manifest.site.read_rule.key_ref.name
+                    if (type(arguments) is not dict or not isinstance(arguments.get(key_name), str)
+                            or not 1 <= len(arguments[key_name]) <= 256
+                            or len(json.dumps(
+                                arguments, ensure_ascii=False, allow_nan=False,
+                            ).encode()) > 16_384
+                            or not Draft202012Validator(
+                                manifest.capability.input_schema,
+                            ).is_valid(arguments)):
+                        raise ValueError("invalid registered arguments")
+                    business_key = arguments[key_name]
+                else:
+                    from app.infra.browser.fixed_synthetic_seed import SyntheticDetailArguments
+
+                    arguments = SyntheticDetailArguments.model_validate(
+                        private_input.get("arguments"),
+                    )
+                    business_key = arguments.business_key
+            except (ValidationError, ValueError, TypeError, OverflowError, UnicodeError):
                 raise BrowserReadExecutionError("denied") from None
             if (
                 principal.ai_user_id != run.owner.user_id
                 or principal.org_ctx.tenant_id != run.owner.tenant_id
             ):
                 raise BrowserReadExecutionError("denied")
-            # No worker transport is created until the complete private input
-            # shape and admitted owner have passed local validation.
-            await self.resources.ensure_started()
+            invocation = private_input.get("invocation")
+            if invocation is not None and (
+                type(invocation) is not dict
+                or set(invocation) != {
+                    "caller", "entrypoint", "operator_user_id", "represented_user_id",
+                }
+                or invocation.get("caller") != "authenticated_session_v1"
+                or invocation.get("entrypoint") not in {
+                    "runtime_chat", "structured_internal",
+                }
+                or invocation.get("operator_user_id") != run.owner.user_id
+                or invocation.get("represented_user_id") != run.owner.user_id
+            ):
+                # An audit assertion in the sealed admission is never a grant.
+                raise BrowserReadExecutionError("denied")
             auth = BrowserAuthFact(
                 run.owner,
                 None,
@@ -352,8 +493,12 @@ class LocalBrowserReadExecutionFactory:
                 run.run_id,
                 "verified-session-v1",
             )
-            state = _Execution(run, checkpoint, auth, arguments.business_key)
+            state = _Execution(run, checkpoint, auth, business_key, principal=principal)
             self._states[run.run_id] = state
+            # Register cleanup ownership before worker-driver startup. Invalid
+            # private input above never starts or allocates anything.
+            await self._account_gate(state)
+            await self.resources.ensure_started()
             await self._fence(state)
             try:
                 state.claim = await leases.reserve(
@@ -382,6 +527,39 @@ class LocalBrowserReadExecutionFactory:
             await self._fence(state)
             state.claim = await leases.start_acquisition(state.claim)
             await self._fence(state, renew=True)
+            restored: dict[str, object] | None = None
+            if isinstance(self.source, RegisteredLocalSite):
+                if self._profiles is None or self._cipher is None:
+                    raise BrowserReadExecutionError("unavailable")
+                state.profile_context = BrowserProfileContext(
+                    principal, state.claim, run.task_id, run.run_id,
+                    state.run.worker_epoch,
+                )
+                head = await self._profiles.load_active(state.profile_context)
+                state.profile_revision = head.revision
+                if head.active is not None:
+                    from app.infra.browser.profile_codec import checked_playwright_state
+
+                    if head.active.fact.origin_digest != hashlib.sha256(
+                        json.dumps(self.source.origins, separators=(",", ":"),
+                                   ensure_ascii=True).encode("ascii"),
+                    ).digest():
+                        raise BrowserReadExecutionError("denied")
+                    envelope = self._cipher.decrypt_profile(
+                        run.owner, self.binding, head.active,
+                    )
+                    encoded_profile = json.dumps(
+                        envelope, sort_keys=True, separators=(",", ":"),
+                        ensure_ascii=True, allow_nan=False,
+                    ).encode("ascii")
+                    if (len(encoded_profile) != head.active.fact.captured_bytes
+                            or hashlib.sha256(encoded_profile).digest()
+                            != head.active.fact.projection_digest):
+                        raise BrowserReadExecutionError("denied")
+                    restored = checked_playwright_state(
+                        envelope.get("storage_state"), self.source,
+                    )
+                await self._fence(state, renew=True)
             scope = ScopeBinding(
                 owner=run.owner,
                 binding_id=self.binding.binding_id,
@@ -405,18 +583,42 @@ class LocalBrowserReadExecutionFactory:
                 self.source,
                 guard=guard,
                 subject_guard=subject_guard,
+                storage_state=restored,
             )
+            if isinstance(self.source, RegisteredLocalSite):
+                status = await self.resources.registered_subject_status(state.resource)
+                if status == "wrong_account":
+                    raise BrowserReadExecutionError("denied")
+                if status == "logged_out":
+                    if self.source.login is None:
+                        raise BrowserReadExecutionError("unsupported")
+                    # Exactly one audited Login Skill attempt. It receives only
+                    # the trusted binding and a current authority guard.
+                    await guard()
+                    await asyncio.wait_for(
+                        self.source.login(state.resource.page, self.binding, guard),
+                        self.resources.deployment.timeout_seconds,
+                    )
+                    await guard()
+                    if await self.resources.registered_subject_status(state.resource) != "matched":
+                        raise BrowserReadExecutionError("denied")
+                await self.resources.check_subject(state.claim, state.resource.reference)
             await self._fence(state)
             state.claim = await leases.record_acquired(state.claim, state.resource.acquire_token)
             state.acquired = True
             await self._fence(state, renew=True)
+            if isinstance(self.source, RegisteredLocalSite):
+                state.profile_context = BrowserProfileContext(
+                    principal, state.claim, run.task_id, run.run_id,
+                    state.run.worker_epoch,
+                )
             observer = PlaywrightObserver(self, {self.source.region.region_id: self.source.region})
             state.observer = observer
             await observer.register_page(state.session, state.resource.page)
             await self._fence(state, renew=True)
             key_digest = self.resources._proof.digest(
                 "browser-local-admitted-key.v1",
-                run.admission.input_digest + arguments.business_key.encode("utf-8"),
+                run.admission.input_digest + business_key.encode("utf-8"),
             ).hex()
             state.confirmed = ConfirmedBusinessKey(
                 confirmation_ref=run.run_id,
@@ -497,6 +699,8 @@ class LocalBrowserReadExecutionFactory:
                         and state.claim is None and state.resource is None
                         and self._states.get(run.run_id) is state):
                     self._states.pop(run.run_id)
+                if state.claim is None and state.resource is None:
+                    await self.release_account_gate(state)
                 if state.resource is None and state.claim is not None:
                     state.resource = next(
                         (

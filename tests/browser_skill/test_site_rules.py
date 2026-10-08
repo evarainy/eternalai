@@ -2,7 +2,12 @@ import pytest
 from pydantic import ValidationError
 
 from app.browser_skill.models import ActionCommand, ParameterRef
-from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredSitePlan, navigation_allowed
+from app.browser_skill.site_rules import (
+    ExpectedPopup,
+    FrozenSiteAdapter,
+    RegisteredSitePlan,
+    navigation_allowed,
+)
 from tests.browser_skill.fakes import FakeWorld, make_plan, make_skill
 
 
@@ -107,3 +112,12 @@ def test_site_registry_has_no_unregistered_fallback_or_duplicate_entry() -> None
         FrozenSiteAdapter((plan, plan))
     with pytest.raises(ValueError, match="site_skill_unregistered"):
         FrozenSiteAdapter(()).bootstrap(skill)
+
+
+@pytest.mark.parametrize("path", ["//other", "/detail?url=other", "/detail*", "detail"])
+def test_popup_expectation_requires_a_closed_path(path: str) -> None:
+    with pytest.raises(ValidationError, match="site_popup_path_invalid"):
+        ExpectedPopup(
+            step_id="open_detail", origin="https://fixture.invalid",
+            path_prefix=path, object_type="record",
+        )

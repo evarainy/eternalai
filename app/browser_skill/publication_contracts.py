@@ -133,7 +133,9 @@ class BrowserPublicationManifest(Contract):
     output: BrowserOutputDefinition
     capability_snapshot_json: Annotated[str, Field(min_length=2, max_length=262_144, repr=False)]
     capability_bindings: Annotated[tuple[VersionBinding, ...], Field(min_length=1, max_length=2)]
-    source_kind: Literal["registered_synthetic_fixture"] = "registered_synthetic_fixture"
+    source_kind: Literal["registered_synthetic_fixture", "registered_site"] = (
+        "registered_synthetic_fixture"
+    )
     effect: Literal["read_only"] = "read_only"
     execution_mode: Literal["browser_async_v1"] = "browser_async_v1"
 

@@ -8,6 +8,7 @@ from typing import cast
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.browser_skill import executor as executor_module
 from app.browser_skill import verifier as verifier_module
@@ -20,6 +21,11 @@ from app.browser_skill.models import (
     DecisionRequest,
     ModelManifest,
 )
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    publication_digest,
+)
+from app.browser_skill.site_rules import FrozenSiteAdapter
 from app.browser_skill.verifier import authorize_current, failure
 from app.infra.browser import local_read_execution as local_execution_module
 from app.infra.browser.fixed_synthetic_seed import (
@@ -33,14 +39,19 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalBrowserResources,
     LocalChromiumDeployment,
     LocalPlaywrightDriver,
+    RegisteredLocalSite,
     _Resource,
     local_subject_digest,
+    registered_local_digest,
+    registered_subject_digest,
 )
 from app.infra.browser.playwright_actions import LiveBrowser
 from app.infra.browser.playwright_web_adapter import PlaywrightWebAdapter, RegisteredExecution
 from app.infra.browser.read_execution import VerifiedBrowserReadExecution
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
+from app.infra.persistence.browser.payload_crypto import BrowserPayloadCipher
 from app.ports.browser import DecisionProvider, WebAdapter
+from app.ports.browser_profile_store import BrowserProfileStorePort
 from app.ports.browser_read_execution import BrowserReadExecutionError, BrowserWorkerCheckpoint
 from app.ports.browser_store import (
     BrowserCleanupAuthorityPort,
@@ -96,6 +107,111 @@ def factory_at(path: Path) -> LocalBrowserReadExecutionFactory:
         ),
         Mock(spec=DecisionProvider),
     )
+
+
+def registered_site() -> RegisteredLocalSite:
+    """Fictitious trusted registration, never an actual OA rule or credential."""
+    base = build_fixed_synthetic_query_source(ModelManifest(
+        request_model="synthetic_model", deployment_model="synthetic_deployment",
+        manifest_digest="a" * 64,
+    ))
+    entry_url = base.manifest.site.source.origin + "/"
+    data = base.manifest.model_dump(mode="json")
+    data["source_kind"] = "registered_site"
+    data["site"]["source"]["fixture_digest"] = registered_local_digest(
+        entry_url=entry_url, region=base.region, rules=base.rules,
+        projector=base.projector, subject_selector="[data-subject]",
+    )
+    data["site"]["steps"][0]["effect"]["evidence_digest"] = (
+        data["site"]["source"]["fixture_digest"]
+    )
+    data["site"]["steps"][0]["effect"]["proof_ref"] = "fixture_registered_read_v1"
+    data["site"]["digest"] = publication_digest(
+        "browser_site.publication.v1", data["site"],
+    )
+    data["skill"]["site_digest"] = data["site"]["digest"]
+    data["skill"]["digest"] = publication_digest(
+        "browser_skill.v1", data["skill"],
+    )
+    data["digest"] = publication_digest("browser_publication.durable.v1", data)
+    manifest = BrowserPublicationManifest.model_validate(data)
+    rules = replace(
+        base.rules, site_digest=manifest.site.digest, skill_digest=manifest.skill.digest,
+    )
+    return RegisteredLocalSite(
+        manifest, entry_url, base.region, rules,
+        FrozenSiteAdapter((manifest.site_plan(),)), base.projector,
+        "[data-subject]",
+    )
+
+
+def test_registered_site_is_distinct_from_fixed_synthetic_source() -> None:
+    site = registered_site()
+    assert site.manifest.source_kind == "registered_site"
+    assert site.registration_digest() == site.manifest.site.source.fixture_digest
+    assert registered_subject_digest("oa", "account_a") != registered_subject_digest(
+        "oa", "account_b",
+    )
+    with pytest.raises(ValueError, match="registration_invalid"):
+        replace(site, entry_url=site.manifest.site.source.origin + "/other")
+
+
+@pytest.mark.parametrize("arguments,invocation", [
+    ({"business_key": 5}, None),
+    ({"business_key": "\ud800"}, None),
+    ({"business_key": "key", "unapproved": "extra"}, None),
+    ({"business_key": "key"}, {
+        "caller": "authenticated_session_v1", "entrypoint": "runtime_chat",
+        "operator_user_id": "another_user", "represented_user_id": "reader",
+    }),
+])
+def test_registered_input_denied_before_worker_driver(
+    tmp_path: Path, arguments: dict[str, object], invocation: dict[str, str] | None,
+) -> None:
+    source = registered_site()
+    deployment = LocalChromiumDeployment(
+        "local", b"m" * 32, tmp_path / "node", tmp_path / "package",
+        tmp_path / "browsers", b"h" * 32, b"n" * 32, b"c" * 32, enabled=True,
+    )
+    resources = LocalBrowserResources(
+        deployment, BrowserClaimProofContext(b"p" * 32),
+        Mock(spec=BrowserCleanupAuthorityPort), LocalPlaywrightDriver(deployment),
+    )
+    resources.ensure_started = AsyncMock(side_effect=AssertionError("driver started"))
+    factory = LocalBrowserReadExecutionFactory(
+        source, resources,
+        BrowserBindingFact("tenant", "reader", "oa", "binding", 1,
+                           registered_subject_digest("oa", "account_a")),
+        Mock(spec=DecisionProvider), session_factory=async_sessionmaker(),
+    )
+    factory.install_authority(
+        leases=Mock(spec=BrowserLeaseStorePort),
+        current_auth=Mock(spec=BrowserCurrentAuthPort),
+        binding_reader=Mock(spec=BrowserBindingReaderPort),
+    )
+    factory.install_profiles(
+        Mock(spec=BrowserProfileStorePort),
+        BrowserPayloadCipher({"profile": b"k" * 32}, active_key_id="profile"),
+    )
+    original = persisted_run(phase="acquiring")
+    run = replace(original,
+                  admission=replace(original.admission,
+                                    publication_digest=bytes.fromhex(source.manifest.digest)),
+                  provider_key=None, lease_epoch=None, provider_manifest_digest=None)
+    private_input: dict[str, object] = {
+        "schema_version": "browser.request.input.v2", "channel": "web",
+        "capability_id": source.manifest.capability.capability_id,
+        "principal": {"ai_user_id": "reader", "display_name": "Fictitious reader",
+                      "roles": [], "org_ctx": {"tenant_id": "tenant"}},
+        "arguments": arguments,
+    }
+    if invocation is not None:
+        private_input["invocation"] = invocation
+    with pytest.raises(BrowserReadExecutionError) as denied:
+        asyncio.run(factory.open(run, source.manifest, private_input,
+                                 Mock(spec=BrowserWorkerCheckpoint)))
+    assert denied.value.code == "denied"
+    resources.ensure_started.assert_not_awaited()
 
 
 def test_authority_is_required_and_cannot_be_replaced(tmp_path: Path) -> None:

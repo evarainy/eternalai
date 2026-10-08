@@ -323,8 +323,10 @@ class PostgreSQLBrowserProfileStore:
                 or generation.fact.manifest_digest != run["provider_manifest_digest"]
             ):
                 raise BrowserProfileError("browser_profile_binding_stale")
-        assert self._capture is not None
-        await self._capture.check_live_subject(context, generation)
+        # Restore necessarily precedes creation of the live Context. A sealed
+        # generation is data, never authority; the caller must check the actual
+        # subject after restore before admitting business execution. Promotion
+        # retains its independent live-subject proof below.
         async with self._locked(context) as (_session, _run, head, _lease):
             if (
                 head is None

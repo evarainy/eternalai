@@ -173,7 +173,12 @@ class BrowserProfileCleanupAuthorityPort(Protocol):
 
 
 class BrowserProfileStorePort(Protocol):
-    async def load_active(self, context: BrowserProfileContext) -> BrowserProfileHead: ...
+    async def load_active(self, context: BrowserProfileContext) -> BrowserProfileHead:
+        """Load sealed state under current binding and lease.
+
+        Caller verifies the restored live subject before business execution.
+        """
+        ...
 
     async def record_validated(
         self,

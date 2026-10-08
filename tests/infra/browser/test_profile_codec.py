@@ -6,7 +6,12 @@ from uuid import uuid4
 import pytest
 
 from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.profile_codec import DIAGNOSTICS, from_playwright, validate_upload
+from app.infra.browser.profile_codec import (
+    DIAGNOSTICS,
+    checked_playwright_state,
+    from_playwright,
+    validate_upload,
+)
 from tests.infra.browser.provider_factories import source, state
 
 
@@ -20,6 +25,15 @@ def test_complete_idb_json_values_and_local_storage_are_preserved() -> None:
     store = result["origins"][0]["indexedDBs"][0]["objectStores"][0]
     assert store["entries"] == raw["origins"][0]["indexedDB"][0]["stores"][0]["records"]
     assert store["keyPath"] is None and store["autoIncrement"] is False
+
+
+def test_sealed_local_state_keeps_public_playwright_shape_without_aliasing() -> None:
+    raw = state()
+    checked = checked_playwright_state(raw, source())
+    assert checked == raw
+    assert checked is not raw
+    raw["origins"][0]["indexedDB"][0]["stores"][0]["records"].clear()
+    assert checked["origins"][0]["indexedDB"][0]["stores"][0]["records"]
 
 
 @pytest.mark.parametrize("compound", [False, True])
