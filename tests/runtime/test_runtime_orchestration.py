@@ -936,6 +936,48 @@ def test_reject_cancel_expiry_and_exception_keep_terminal_lifecycle_through_seam
     asyncio.run(exercise())
 
 
+def test_legacy_binding_cleanup_retry_keeps_legacy_terminal_owner(monkeypatch):
+    async def exercise():
+        h = _harness()
+        await _start(h)
+        pending = _pending(h)
+        before = list(h.tasks.status_updates)
+        original = h.runtime._workflow_engine.discard_checkpoint
+        injected = RuntimeError("synthetic legacy discard interruption")
+        discards = 0
+
+        async def discard(task_id):
+            nonlocal discards
+            discards += 1
+            if discards == 1:
+                raise injected
+            await original(task_id)
+
+        monkeypatch.setattr(h.runtime._workflow_engine, "discard_checkpoint", discard)
+        monkeypatch.setattr(
+            h.gate, "assert_task_bindings",
+            AsyncMock(side_effect=VersionBindingMismatchError("synthetic version conflict")),
+        )
+        with pytest.raises(RuntimeError) as interrupted:
+            await _confirm(h)
+        assert interrupted.value is injected
+        claim = next(iter(h.runtime._claimed_pending_confirmations.values()))
+        assert claim.cleanup_governed_only and claim.cleanup_governed is None
+        assert not claim.cleanup_complete and claim.pending is pending
+        assert h.tasks.status_updates == before
+        assert (await _confirm(h)).data["action_outcome"] == "action_already_claimed"
+        assert claim.cleanup_governed is False and claim.state == "completed"
+        assert claim.cleanup_complete and claim.pending is None
+        assert discards == 2 and h.tasks.status_updates == before
+        assert not h.runtime._pending_workflows and not h.engine._checkpoints
+        assert h.engine.resume_calls == _business_count(h) == 0
+        assert not any(step["event_type"] in {
+            "task_cancelled", "task_confirmation_invalidated",
+        } for step in h.trace.steps)
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize(
     ("site", "cas_winner"),
     [
@@ -1023,6 +1065,7 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
                 assert result.status == "cancelled"
                 assert h.engine.resume_calls == _business_count(h) == 0
             else:
+                before = list(h.tasks.status_updates)
 
                 async def binding_failure(*args: Any, **kwargs: Any) -> Any:
                     install_winner()
@@ -1032,6 +1075,10 @@ def test_all_five_checkpoint_cleanup_sites_forward_and_preserve_cas_winner(
                 result = await _confirm(h)
                 assert result.data["action_outcome"] == "action_version_conflict"
                 assert h.engine.resume_calls == _business_count(h) == 0
+                assert h.tasks.status_updates == before
+                assert not any(step["event_type"] in {
+                    "task_cancelled", "task_confirmation_invalidated",
+                } for step in h.trace.steps)
         if cas_winner:
             assert discard.call_args_list == [call(retired_task_id)]
             assert retired_task_id not in h.engine._checkpoints

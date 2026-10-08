@@ -176,6 +176,8 @@ class _ConfirmationClaim:
     error_code: ErrorCode | None = None
     cleanup_in_progress: bool = False
     cleanup_reason: Literal["cancelled", "expired", "exception"] | None = None
+    cleanup_governed_only: bool = False
+    cleanup_governed: bool | None = None
     governed_terminal: GovernedTerminalResult | None = None
     response_trace_pending: bool = False
     completion_remembered: bool = False
@@ -283,14 +285,18 @@ class RuntimeImpl:
                     action_type="confirm",
                 )
                 if outcome in {"action_version_conflict", "action_already_claimed"}:
-                    return await self._finish_version_binding_failure(
-                        response_id=str(uuid4()),
-                        task_id=pending.task_id,
-                        session_id=session_id,
-                        trace_id=pending.trace_id,
-                        capability_id=pending.capability_id,
-                        memory_key=memory_key,
-                    )
+                    claim = self._claimed_pending_confirmations[
+                        _pending_confirmation_claim_key(pending_key, pending)
+                    ]
+                    if claim.cleanup_governed is False:
+                        return await self._finish_version_binding_failure(
+                            response_id=str(uuid4()),
+                            task_id=pending.task_id,
+                            session_id=session_id,
+                            trace_id=pending.trace_id,
+                            capability_id=pending.capability_id,
+                            memory_key=memory_key,
+                        )
                 return envelope
             if _is_stale_workflow_confirmation_message(message):
                 return await self._build_stale_confirmation_response(
@@ -1146,6 +1152,7 @@ class RuntimeImpl:
         status: Literal["cancelled", "confirmation_invalidated"],
         reason: Literal["cancelled", "expired", "exception"],
         error_code: ErrorCode | None,
+        governed_only: bool = False,
     ) -> ResponseEnvelope:
         owner = pending.owner
         if owner is None:
@@ -1167,11 +1174,14 @@ class RuntimeImpl:
             claim.state = status
             claim.error_code = error_code
             claim.cleanup_reason = reason
+            claim.cleanup_governed_only = governed_only
             claim.pending = pending
             claim.retain_until = self._monotonic_clock() + _CONFIRMATION_TTL_SECONDS
             owns_pending = self._pending_workflows.get(pending_key) is pending
             if not owns_pending:
                 # A CAS loser owns no cleanup work; the winner must stay untouched.
+                if governed_only:
+                    claim.state = "completed"
                 claim.cleanup_complete = True
         envelope = self._confirmation_terminal_envelope(
             task_id=pending.task_id,
@@ -1215,7 +1225,7 @@ class RuntimeImpl:
                 )
                 if not governed:
                     await self._workflow_engine.discard_checkpoint(pending.task_id)
-            if not governed:
+            if not governed and not claim.cleanup_governed_only:
                 await self._finish_confirmation_terminal(
                     pending=pending,
                     status="cancelled"
@@ -1228,6 +1238,9 @@ class RuntimeImpl:
                 await self._record_governed_response(pending)
                 claim.response_trace_pending = False
             with self._pending_confirmation_claim_lock:
+                claim.cleanup_governed = governed
+                if not governed and claim.cleanup_governed_only:
+                    claim.state = "completed"
                 if self._pending_workflows.get(pending_key) is pending:
                     del self._pending_workflows[pending_key]
                 claim.cleanup_complete = True
@@ -1427,6 +1440,7 @@ class RuntimeImpl:
                 status="cancelled",
                 reason="cancelled",
                 error_code=None,
+                governed_only=True,
             )
             return self._response_builder.build_failed(
                 str(uuid4()),

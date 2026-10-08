@@ -137,7 +137,8 @@ def test_presend_exception_retirement_preserves_internal_error_and_replay(state,
 
 @pytest.mark.parametrize("boundary", ["gate_binding", "workflow_contract"])
 @pytest.mark.parametrize("fault", ["none", "task", "evaluation_after_write"])
-def test_version_rejection_finishes_governed_confirmation_without_replay(boundary, fault):
+@pytest.mark.parametrize("entry", ["action", "text"])
+def test_version_rejection_finishes_governed_confirmation_without_replay(boundary, fault, entry):
     async def run():
         gate = ControllableVersionGate()
         chat, h, pending, session = await governed_chat(gate=gate)
@@ -182,12 +183,25 @@ def test_version_rejection_finishes_governed_confirmation_without_replay(boundar
             chat.engine.configure_governed_validation(reject_contract)
         token = authenticated_session.set(session)
         try:
+            async def confirm():
+                if entry == "action":
+                    return await _dispatch(chat)
+                return await chat.runtime.handle_user_message(
+                    channel="web", principal=chat.principal,
+                    session_id=pending.owner.session_id,
+                    message=f"确认 {pending.gate_request_id}", client_capabilities={},
+                )
+
             if fault == "none":
-                assert _outcome(await _dispatch(chat)) == "action_version_conflict"
+                response = await confirm()
+                if entry == "action":
+                    assert _outcome(response) == "action_version_conflict"
+                else:
+                    assert response.status == "failed"
                 assert chat.runtime._task_store.records[pending.task_id].status == "cancelled"
             else:
                 with pytest.raises(GovernedFinalizationError) as interrupted:
-                    await _dispatch(chat)
+                    await confirm()
                 assert interrupted.value.__cause__ is injected
                 claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
                 assert not claim.cleanup_complete and claim.pending is pending
