@@ -1,108 +1,56 @@
-/* A fixed, bounded projection. The caller supplies only a registered region and
- * frozen allowlists. Raw DOM text and input values never leave this function. */
-(region, config) => {
-  const allowed = config.policy;
-  const site = config.site;
-  const roleSet = new Set(allowed.roles);
-  const names = new Set(allowed.names);
-  const contexts = new Set(allowed.context);
-  const rows = new Set(allowed.rowLabels);
-  const columns = new Set(allowed.columnLabels);
-  const maxCandidates = allowed.maximumCandidates;
-  const maxScanned = 4096;
-
-  const normalized = (value) => {
-    if (typeof value !== "string") return null;
-    const clean = value.replace(/\s+/gu, " ").trim();
-    return clean && clean.length <= 256 ? clean : null;
-  };
+/* Thin Site projection over an exact Node. Native Playwright owns ARIA roles,
+ * accessible names, visibility and enabled semantics. This code only classifies
+ * registered coverage markers and allowlisted Site metadata. */
+(node, config) => {
+  if (!node || !node.isConnected) throw new Error('detached');
   const approved = (value, choices) => {
-    const clean = normalized(value);
-    return clean && choices.has(clean) ? clean : null;
+    if (typeof value !== 'string') return null;
+    const clean = value.replace(/\s+/gu, ' ').trim();
+    return clean && clean.length <= 256 && choices.includes(clean) ? clean : null;
   };
-  const isVisible = (element) => {
-    if (!element || !element.isConnected || element.hidden || element.closest("[hidden], [inert], [aria-hidden='true']")) return false;
-    const style = element.ownerDocument.defaultView.getComputedStyle(element);
-    return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && element.getClientRects().length > 0;
-  };
-  const matches = (selector) => {
-    if (!selector) return [];
-    return Array.from(region.querySelectorAll(selector)).filter(isVisible);
-  };
-  const marker = (selector) => matches(selector).length === 1;
-  const roleOf = (element) => {
-    const explicit = normalized(element.getAttribute("role"));
-    if (explicit) return explicit;
-    const tag = element.localName;
-    if (tag === "button") return "button";
-    if (tag === "a" && element.hasAttribute("href")) return "link";
-    if (tag === "select") return "combobox";
-    if (tag === "option") return "option";
-    if (tag === "tr") return "row";
-    if (tag === "input") {
-      return ["text", "search", "email", "tel", "url", "number", ""].includes(element.type || "") ? "textbox" : null;
+  if (config.kind === 'coverage') {
+    const site = config.site;
+    const visibleMatches = selector => {
+      if (!selector) return 0;
+      return Array.from(node.querySelectorAll(selector)).filter(element => {
+        if (!element.isConnected || element.hidden ||
+            element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        const style = element.ownerDocument.defaultView.getComputedStyle(element);
+        return style.display !== 'none' &&
+          style.visibility !== 'hidden' && style.visibility !== 'collapse' &&
+          element.getClientRects().length > 0;
+      }).length;
+    };
+    if (node.querySelectorAll('*').length > 4096)
+      return {state: 'partial', reason: 'unobservable', trusted_empty: false, overflow: true};
+    let state = 'partial', reason = 'unobservable';
+    // Locator.get_by_role does not flatten nested Frame descendants. The Site
+    // must register and observe those Frames separately before claiming a full
+    // result for a region that contains one.
+    if (node.querySelectorAll('iframe,frame').length) reason = 'unobservable';
+    else if (visibleMatches(site.virtualizedSelector)) reason = 'virtualized';
+    else if (visibleMatches(site.paginationSelector)) reason = 'pagination';
+    else if (visibleMatches(site.completeSelector) === 1 && node.getAttribute('aria-busy') !== 'true') {
+      state = 'complete'; reason = 'complete';
     }
-    if (tag === "textarea") return "textbox";
-    return null;
-  };
-  const isSensitiveInput = (element) => {
-    if (element.localName !== "input" && element.localName !== "textarea") return false;
-    const type = (element.getAttribute("type") || "").toLowerCase();
-    const autocomplete = (element.getAttribute("autocomplete") || "").toLowerCase();
-    const identifier = `${element.getAttribute("name") || ""} ${element.getAttribute("id") || ""}`.toLowerCase();
-    return type === "password" || /(?:password|token|secret|session|cookie|otp|one.time.code|auth)/u.test(identifier) || /(?:password|one-time-code|cc-number|cc-csc)/u.test(autocomplete);
-  };
-  const rawName = (element) => {
-    const aria = element.getAttribute("aria-label");
-    if (aria !== null) return aria;
-    const labelledBy = element.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const ids = labelledBy.split(/\s+/u).filter(Boolean);
-      if (ids.length > 4) return null;
-      const labels = ids.map((id) => element.ownerDocument.getElementById(id));
-      if (labels.some((label) => !label || !isVisible(label))) return null;
-      return labels.map((label) => label.textContent || "").join(" ");
-    }
-    if (element.labels && element.labels.length === 1 && isVisible(element.labels[0])) return element.labels[0].textContent;
-    if (["button", "a", "option", "th"].includes(element.localName)) return element.textContent;
-    return element.getAttribute("title");
-  };
-
-  let coverage = { state: "partial", reason: "unobservable", trusted_empty: false };
-  if (matches(site.virtualizedSelector).length > 0) coverage = { state: "partial", reason: "virtualized", trusted_empty: false };
-  else if (matches(site.paginationSelector).length > 0) coverage = { state: "partial", reason: "pagination", trusted_empty: false };
-  else if (marker(site.completeSelector) && region.getAttribute("aria-busy") !== "true") coverage = { state: "complete", reason: "complete", trusted_empty: false };
-
-  const nodes = [];
-  const candidates = [];
-  const scanned = region.querySelectorAll("*");
-  if (scanned.length > maxScanned) return { metadata: { coverage: { state: "partial", reason: "unobservable", trusted_empty: false }, candidates: [], overflow: true }, nodes: [] };
-
-  for (const element of scanned) {
-    const role = roleOf(element);
-    if (!roleSet.has(role) || !isVisible(element) || isSensitiveInput(element)) continue;
-    const raw = rawName(element);
-    const name = approved(raw, names);
-    if (normalized(raw) && !name) continue;
-    const rawContext = element.getAttribute("data-browser-context");
-    const context = rawContext ? rawContext.split("|").map((entry) => approved(entry, contexts)) : [];
-    if (context.some((entry) => entry === null)) continue;
-    const rawRow = element.getAttribute("data-browser-row-label");
-    const rawColumn = element.getAttribute("data-browser-column-label");
-    const rowLabel = rawRow === null ? null : approved(rawRow, rows);
-    const columnLabel = rawColumn === null ? null : approved(rawColumn, columns);
-    if ((rawRow !== null && !rowLabel) || (rawColumn !== null && !columnLabel)) continue;
-    const enabled = !element.matches(":disabled") && element.getAttribute("aria-disabled") !== "true" && !element.closest("[aria-disabled='true']");
-    let valueState = "not_applicable";
-    if (role === "textbox" || role === "combobox") {
-      // Only a boolean leaves the browser; the value is never serialized.
-      valueState = element.value ? "nonempty" : "empty";
-    }
-    nodes.push(element);
-    candidates.push({ role, name, context, row_label: rowLabel, column_label: columnLabel, value_state: valueState, visible: true, enabled });
-    if (candidates.length > maxCandidates) return { metadata: { coverage, candidates: [], overflow: true }, nodes: [] };
+    return {state, reason, trusted_empty: state === 'complete' && visibleMatches(site.emptySelector) === 1, overflow: false};
   }
-
-  coverage.trusted_empty = coverage.state === "complete" && candidates.length === 0 && marker(site.emptySelector);
-  return { metadata: { coverage, candidates, overflow: false }, nodes };
+  if (config.kind !== 'candidate') throw new Error('invalid_kind');
+  const type = (node.getAttribute('type') || '').toLowerCase();
+  const autocomplete = (node.getAttribute('autocomplete') || '').toLowerCase();
+  const identifier = `${node.getAttribute('name') || ''} ${node.getAttribute('id') || ''}`.toLowerCase();
+  if ((node.localName === 'input' || node.localName === 'textarea') &&
+      (type === 'password' || /(?:password|token|secret|session|cookie|otp|one.time.code|auth)/u.test(identifier) ||
+       /(?:password|one-time-code|cc-number|cc-csc)/u.test(autocomplete))) return null;
+  const rawContext = node.getAttribute('data-browser-context');
+  const context = rawContext === null ? [] : rawContext.split('|').map(value => approved(value, config.context));
+  if (context.some(value => value === null)) return null;
+  const rawRow = node.getAttribute('data-browser-row-label');
+  const rawColumn = node.getAttribute('data-browser-column-label');
+  const row_label = rawRow === null ? null : approved(rawRow, config.rowLabels);
+  const column_label = rawColumn === null ? null : approved(rawColumn, config.columnLabels);
+  if ((rawRow !== null && row_label === null) || (rawColumn !== null && column_label === null)) return null;
+  const value_state = (node.localName === 'input' || node.localName === 'textarea' || node.localName === 'select')
+    ? (node.value ? 'nonempty' : 'empty') : 'not_applicable';
+  return {context, row_label, column_label, value_state};
 }

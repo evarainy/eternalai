@@ -1,11 +1,6 @@
-"""Exercise the fixed browser-side projection in a synthetic JavaScript DOM.
+"""The remaining browser JS projects only allowlisted Site metadata and coverage."""
 
-This proves filtering before serialization. A real Chromium DOM test remains a
-separate M0-03 environment obligation and is not claimed by these fakes.
-"""
-
-# The embedded Node fixture is JavaScript source; Python line wrapping would
-# make its security cases harder to inspect.
+# The embedded JavaScript is kept intact for readable browser-side scenarios.
 # ruff: noqa: E501
 
 from __future__ import annotations
@@ -17,55 +12,48 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[3] / "app/infra/browser/dom_snapshot.js"
 
 
-def test_fixed_js_filters_sensitive_values_and_unapproved_labels_before_serialization() -> None:
+def test_thin_js_keeps_private_values_out_and_distinguishes_partial_coverage() -> None:
     harness = r"""
 const vm = require('node:vm');
 const fs = require('node:fs');
 const project = vm.runInNewContext(`(${fs.readFileSync(process.argv[1], 'utf8')})`);
 class Element {
   constructor(tag, attrs = {}, value = '') {
-    this.localName = tag; this.attrs = attrs; this.value = value;
-    this.isConnected = true; this.hidden = false; this.textContent = attrs.text || '';
-    this.ownerDocument = { defaultView: { getComputedStyle: () => ({display: 'block', visibility: 'visible'}) }, getElementById: () => null };
+    this.localName = tag; this.attrs = attrs; this.value = value; this.isConnected = true;
+    this.ownerDocument = {defaultView: {getComputedStyle: () => ({display: 'block', visibility: 'visible'})}};
+    this.children = []; this.markers = {};
   }
-  getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
-  hasAttribute(name) { return this.getAttribute(name) !== null; }
+  getAttribute(key) { return Object.prototype.hasOwnProperty.call(this.attrs, key) ? this.attrs[key] : null; }
   closest() { return null; }
   getClientRects() { return [1]; }
-  matches(selector) { return selector === ':disabled' && this.hasAttribute('disabled'); }
-}
-class Region extends Element {
-  constructor(children, markers) { super('section'); this.children = children; this.markers = markers; }
   querySelectorAll(selector) { return selector === '*' ? this.children : (this.markers[selector] || []); }
 }
-const allowed = new Element('button', {'aria-label': 'Open', 'data-browser-context': 'Inbox', 'data-browser-row-label': 'R1', 'data-browser-column-label': 'Action'});
-const duplicate = new Element('button', {'aria-label': 'Open', 'disabled': ''});
-const secret = new Element('input', {'type': 'password', 'aria-label': 'Open'}, 'P4ssword-NEVER-EXPORT');
-const token = new Element('input', {'type': 'text', 'name': 'access_token', 'aria-label': 'Open'}, 'TOKEN-NEVER-EXPORT');
-const privateLabel = new Element('button', {'aria-label': 'PERSONAL-NAME-NEVER-EXPORT'});
-const hidden = new Element('button', {'aria-label': 'Open'}); hidden.hidden = true;
-const field = new Element('input', {'type': 'text', 'aria-label': 'Query'}, 'PRIVATE-INPUT-NEVER-EXPORT');
-const complete = new Element('span');
-const config = {
-  policy: { roles: ['button', 'textbox'], names: ['Open', 'Query'], context: ['Inbox'], rowLabels: ['R1'], columnLabels: ['Action'], maximumCandidates: 8 },
-  site: { completeSelector: '[complete]', emptySelector: '[empty]', paginationSelector: '[next]', virtualizedSelector: '[virtual]' }
-};
-const region = new Region([allowed, duplicate, secret, token, privateLabel, hidden, field], {'[complete]': [complete]});
-const result = project(region, config);
-if (result.metadata.candidates.length !== 3) throw Error('wrong candidate count');
-if (result.metadata.candidates[0].row_label !== 'R1' || result.metadata.candidates[0].column_label !== 'Action') throw Error('labels missing');
-if (result.metadata.candidates[1].enabled !== false) throw Error('disabled candidate state lost');
-if (result.metadata.candidates[2].value_state !== 'nonempty') throw Error('value state missing');
-if (result.metadata.coverage.trusted_empty) throw Error('nonempty region trusted empty');
-const serialized = JSON.stringify(result.metadata);
-for (const forbidden of ['P4ssword-NEVER-EXPORT', 'TOKEN-NEVER-EXPORT', 'PERSONAL-NAME-NEVER-EXPORT', 'PRIVATE-INPUT-NEVER-EXPORT']) {
-  if (serialized.includes(forbidden)) throw Error('unapproved value escaped');
+const input = new Element('input', {'type': 'text', 'data-browser-context': 'Inbox', 'data-browser-row-label': 'R1'}, 'PRIVATE-VALUE');
+const secret = new Element('input', {'type': 'password'}, 'PASSWORD-NEVER-EXPORT');
+const unapproved = new Element('button', {'data-browser-context': 'PRIVATE-LABEL'});
+const candidate = {kind: 'candidate', context: ['Inbox'], rowLabels: ['R1'], columnLabels: []};
+const projected = project(input, candidate);
+if (project(secret, candidate) !== null || project(unapproved, candidate) !== null) throw Error('unapproved candidate escaped');
+if (projected.value_state !== 'nonempty' || projected.row_label !== 'R1') throw Error('metadata missing');
+for (const forbidden of ['PRIVATE-VALUE', 'PASSWORD-NEVER-EXPORT', 'PRIVATE-LABEL']) {
+  if (JSON.stringify(projected).includes(forbidden)) throw Error('private value escaped');
 }
-const empty = new Region([], {'[complete]': [complete], '[empty]': [new Element('span')]});
-if (!project(empty, config).metadata.coverage.trusted_empty) throw Error('trusted empty proof missing');
-empty.markers['[next]'] = [new Element('button')];
-const partial = project(empty, config).metadata.coverage;
-if (partial.state !== 'partial' || partial.reason !== 'pagination' || partial.trusted_empty) throw Error('pagination claimed complete');
+const region = new Element('section');
+const marker = new Element('span');
+region.markers = {'[complete]': [marker], '[empty]': [marker], '[next]': [], '[virtual]': []};
+const site = {kind: 'coverage', site: {completeSelector: '[complete]', emptySelector: '[empty]', paginationSelector: '[next]', virtualizedSelector: '[virtual]'}};
+const complete = project(region, site);
+if (!complete.trusted_empty || complete.state !== 'complete') throw Error('trusted empty proof missing');
+region.markers['[next]'] = [marker];
+const pagination = project(region, site);
+if (pagination.reason !== 'pagination' || pagination.trusted_empty) throw Error('pagination claimed complete');
+region.markers['[virtual]'] = [marker];
+const virtualized = project(region, site);
+if (virtualized.reason !== 'virtualized') throw Error('virtualized claimed complete');
+region.markers['iframe,frame'] = [marker];
+const nestedFrame = project(region, site);
+if (nestedFrame.state !== 'partial' || nestedFrame.trusted_empty)
+  throw Error('nested frame claimed full coverage');
 const markerElements = (count, hidden = false) => Array.from({length: count}, () => {
   const element = new Element('span'); element.hidden = hidden; return element;
 });
@@ -81,35 +69,30 @@ const coverageCases = [
 ];
 const coverageFailures = [];
 for (const scenario of coverageCases) {
-  const scopedEmpty = new Region([], {
+  const scopedEmpty = new Element('section');
+  scopedEmpty.markers = {
     '[complete]': markerElements(scenario.complete ?? 1),
     '[empty]': markerElements(scenario.empty ?? 1),
     '[next]': [...markerElements(scenario.pagination), ...markerElements(2, true)],
     '[virtual]': [...markerElements(scenario.virtualized), ...markerElements(2, true)],
-  });
-  const observed = project(scopedEmpty, config).metadata;
-  const actual = [observed.coverage.state, observed.coverage.reason, observed.coverage.trusted_empty];
-  if (observed.candidates.length || JSON.stringify(actual) !== JSON.stringify(scenario.expected)) {
+  };
+  const observed = project(scopedEmpty, site);
+  const actual = [observed.state, observed.reason, observed.trusted_empty];
+  if (JSON.stringify(actual) !== JSON.stringify(scenario.expected))
     coverageFailures.push(`${scenario.name}: ${JSON.stringify(actual)}`);
-  }
 }
 if (coverageFailures.length) throw Error(`coverage regressions: ${coverageFailures.join('; ')}`);
-const bounded = new Region([allowed, duplicate, field], {'[complete]': [complete]});
-const resultBounded = project(bounded, {...config, policy: {...config.policy, maximumCandidates: 2}});
-if (!resultBounded.metadata.overflow || resultBounded.metadata.candidates.length) throw Error('overflow silently truncated');
-process.stdout.write(JSON.stringify({candidateCount: result.metadata.candidates.length, partialReason: partial.reason, overflow: resultBounded.metadata.overflow, coverageCases: coverageCases.length}));
+region.children = Array.from({length: 4097}, () => marker);
+const bounded = project(region, site);
+if (bounded.overflow !== true) throw Error('region bound missing');
+process.stdout.write(JSON.stringify({valueState: projected.value_state, partialReason: pagination.reason, overflow: bounded.overflow, coverageCases: coverageCases.length}));
 """
     result = subprocess.run(
         ["node", "--permission", f"--allow-fs-read={SCRIPT}", "-e", harness, str(SCRIPT)],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
+        capture_output=True, text=True, timeout=15, check=False,
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "candidateCount": 3,
-        "partialReason": "pagination",
-        "overflow": True,
+        "valueState": "nonempty", "partialReason": "pagination", "overflow": True,
         "coverageCases": 8,
     }

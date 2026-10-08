@@ -13,36 +13,40 @@ from tests.infra.browser.test_playwright_web_adapter import Handle, IdentityHand
 
 
 @pytest.mark.parametrize("cancel", [True, False])
-def test_snapshot_failure_releases_every_allocated_property_and_preserves_error(cancel) -> None:
+def test_snapshot_failure_releases_every_native_locator_handle_and_preserves_error(cancel) -> None:
     _, _, _, _, _, _, policy = fixture(nested=False)
-    first, second, extra = Mock(), Mock(), Mock()
-    for handle in (first, second, extra):
+    first, second = Mock(), Mock()
+    for handle in (first, second):
         handle.dispose = AsyncMock()
-    first.as_element.return_value = first
-    second.as_element.side_effect = (
+    first.is_visible = AsyncMock(return_value=True)
+    first.is_enabled = AsyncMock(return_value=True)
+    first.evaluate = AsyncMock(return_value={
+        "context": [], "row_label": None, "column_label": None,
+        "value_state": "not_applicable",
+    })
+    second.is_visible = AsyncMock(side_effect=(
         asyncio.CancelledError() if cancel else ValueError("synthetic malformed node")
-    )
-    nodes = SimpleNamespace(
-        get_properties=AsyncMock(return_value={"0": first, "1": second, "extra": extra}),
-        dispose=AsyncMock(),
-    )
-    metadata = SimpleNamespace(json_value=AsyncMock(return_value={
-        "coverage": {}, "candidates": [{}, {}], "overflow": False,
+    ))
+    element = SimpleNamespace(evaluate=AsyncMock(return_value={
+        "state": "complete", "reason": "complete", "trusted_empty": False,
+        "overflow": False,
     }), dispose=AsyncMock())
-    packet = SimpleNamespace(
-        get_property=AsyncMock(side_effect=[metadata, nodes]), dispose=AsyncMock()
+    candidate_locator = SimpleNamespace(element_handles=AsyncMock(return_value=[first, second]))
+    locator = SimpleNamespace(
+        element_handle=AsyncMock(return_value=element),
+        get_by_role=Mock(return_value=candidate_locator),
     )
-    element = SimpleNamespace(evaluate_handle=AsyncMock(return_value=packet))
+    frame = SimpleNamespace(locator=Mock(return_value=locator))
     site = SimpleNamespace(complete_selector=None, empty_selector=None,
                            pagination_selector=None, virtualized_selector=None)
     if cancel:
         with pytest.raises(asyncio.CancelledError):
-            asyncio.run(PlaywrightObserver._snapshot(element, policy, site))
+            asyncio.run(PlaywrightObserver._snapshot(frame, element, policy, site))
     else:
         with pytest.raises(BrowserOperationError) as caught:
-            asyncio.run(PlaywrightObserver._snapshot(element, policy, site))
+            asyncio.run(PlaywrightObserver._snapshot(frame, element, policy, site))
         assert caught.value.failure.code == "invalid_response"
-    for handle in (first, second, extra, nodes, metadata, packet):
+    for handle in (first, second):
         handle.dispose.assert_awaited_once_with()
 
 

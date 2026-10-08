@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import secrets
 import sys
 import time
@@ -436,88 +437,111 @@ class PlaywrightObserver:
 
     @staticmethod
     async def _snapshot(
-        element: Any, policy: ObservationPolicy, site: RegisteredRegion
+        frame: Any, element: Any, policy: ObservationPolicy, site: RegisteredRegion
     ) -> tuple[dict[str, Any], list[Any]]:
-        packet: Any = None
-        metadata_handle: Any = None
-        nodes_handle: Any = None
+        """Project public Playwright role locators in the registered Frame.
+
+        Python 1.63 has no public get_by_ref. The selected ElementHandles keep
+        exact Node identity for the existing send barrier; a raw AI snapshot
+        would add sensitive text without supplying an executable public ref.
+        """
         nodes: list[Any] = []
-        properties: dict[str, Any] = {}
+        allocated: list[Any] = []
         transferred = False
-        containers_pending = True
         try:
-            config = {
-                "policy": {
-                    "roles": list(policy.allowed_roles),
-                    "names": list(policy.allowed_names),
-                    "context": list(policy.allowed_context),
-                    "rowLabels": list(policy.allowed_row_labels),
-                    "columnLabels": list(policy.allowed_column_labels),
-                    "maximumCandidates": policy.maximum_candidates,
-                },
+            region = frame.locator(site.region_selector)
+            coverage = await element.evaluate(_snapshot_script(), {
+                "kind": "coverage",
                 "site": {
                     "completeSelector": site.complete_selector,
                     "emptySelector": site.empty_selector,
                     "paginationSelector": site.pagination_selector,
                     "virtualizedSelector": site.virtualized_selector,
                 },
-            }
-            packet = await element.evaluate_handle(_snapshot_script(), config)
-            metadata_handle = await packet.get_property("metadata")
-            metadata = await metadata_handle.json_value()
-            nodes_handle = await packet.get_property("nodes")
-            properties = await nodes_handle.get_properties()
-            if not isinstance(metadata, dict) or set(metadata) != {
-                "coverage",
-                "candidates",
-                "overflow",
+            })
+            if type(coverage) is not dict or set(coverage) != {
+                "state", "reason", "trusted_empty", "overflow",
             }:
                 raise _failure("invalid_response")
-            raw_candidates = metadata["candidates"]
-            if type(metadata["overflow"]) is not bool or not isinstance(raw_candidates, list):
+            overflow = coverage.pop("overflow")
+            if type(overflow) is not bool:
                 raise _failure("invalid_response")
-            if metadata["overflow"]:
+            if overflow:
                 raise _failure("overloaded")
-            if len(raw_candidates) > policy.maximum_candidates or len(properties) < len(
-                raw_candidates
-            ):
-                raise _failure("invalid_response")
-            for index in range(len(raw_candidates)):
-                item = properties.get(str(index))
-                node = item.as_element() if item is not None else None
-                if node is None:
-                    raise _failure("invalid_response")
-                nodes.append(node)
-            for key, value in tuple(properties.items()):
-                if key not in {str(index) for index in range(len(raw_candidates))}:
-                    properties.pop(key)
-                    await _dispose(value)
-            containers_pending = False
-            await _dispose_many((nodes_handle, metadata_handle, packet))
+            located = await region.element_handle(timeout=0)
+            try:
+                if located is None or not await _same_node(element, located):
+                    raise _failure("stale")
+            finally:
+                if located is not None:
+                    await _dispose(located)
+            candidates: list[dict[str, Any]] = []
+            # Native role/name computation replaces our generic DOM walk and
+            # hand-maintained accessible-name rules. Include unnamed controls
+            # only through an exact empty-name regex.
+            for role in dict.fromkeys(policy.allowed_roles):
+                for name in (*dict.fromkeys(policy.allowed_names), None):
+                    match_name = name if name is not None else re.compile(r"^$")
+                    found = await region.get_by_role(
+                        role, name=match_name, exact=True,
+                    ).element_handles()
+                    allocated.extend(found)
+                    if len(allocated) > policy.maximum_candidates:
+                        raise _failure("overloaded")
+                    for node in found:
+                        if not await node.is_visible():
+                            await _dispose(node)
+                            continue
+                        private = await node.evaluate(_snapshot_script(), {
+                            "kind": "candidate",
+                            "context": list(policy.allowed_context),
+                            "rowLabels": list(policy.allowed_row_labels),
+                            "columnLabels": list(policy.allowed_column_labels),
+                        })
+                        if private is None:
+                            await _dispose(node)
+                            continue
+                        if type(private) is not dict or set(private) != {
+                            "context", "row_label", "column_label", "value_state",
+                        }:
+                            raise _failure("invalid_response")
+                        private.update({
+                            "role": role, "name": name, "visible": True,
+                            "enabled": await node.is_enabled(),
+                        })
+                        nodes.append(node)
+                        candidates.append(private)
+            located = await region.element_handle(timeout=0)
+            try:
+                if located is None or not await _same_node(element, located):
+                    raise _failure("stale")
+            finally:
+                if located is not None:
+                    await _dispose(located)
+            # Unselected handles were disposed when filtered. A native locator
+            # result may not be retained beyond this observation round.
+            coverage["trusted_empty"] = (
+                coverage["state"] == "complete" and not candidates
+                and coverage["trusted_empty"] is True
+            )
             transferred = True
-            return metadata, nodes
+            return {"coverage": coverage, "candidates": candidates, "overflow": False}, nodes
         except BrowserOperationError:
             raise
         except Exception:
             raise _failure("invalid_response") from None
         finally:
             if not transferred:
-                # get_properties owns every returned handle, including values
-                # not yet appended to nodes. Cancelled allocation must release
-                # those too; cleanup cannot replace the original failure.
-                containers = ((nodes_handle, metadata_handle, packet) if containers_pending else ())
-                await _dispose_many(
-                    (*properties.values(), *nodes, *containers), suppress_cancel=True
-                )
+                await _dispose_many(tuple(allocated), suppress_cancel=True)
 
     async def _take_snapshot(
-        self, session: BrowserSessionRef, element: Any,
+        self, session: BrowserSessionRef, frame: Any, element: Any,
         policy: ObservationPolicy, site: RegisteredRegion,
     ) -> tuple[dict[str, Any], list[Any]]:
         self._snapshot_calls[session.session_ref] = min(
             10000, self._snapshot_calls.get(session.session_ref, 0) + 1,
         )
-        return await self._snapshot(element, policy, site)
+        return await self._snapshot(frame, element, policy, site)
 
     @staticmethod
     def _safe_candidate(raw: Any, policy: ObservationPolicy) -> dict[str, Any]:
@@ -655,7 +679,7 @@ class PlaywrightObserver:
                         raise _failure("resource_not_found" if not matches else "invalid_request")
                     region_handle = matches[0]
                     metadata, new_handles = await self._take_snapshot(
-                        session, region_handle, policy, site,
+                        session, actual_frame, region_handle, policy, site,
                     )
                     try:
                         coverage = Coverage.model_validate(metadata["coverage"])
@@ -905,7 +929,7 @@ class PlaywrightObserver:
             await _dispose_many(tuple(regions), suppress_cancel=sys.exc_info()[0] is not None)
 
         mark("candidate_snapshot")
-        metadata, handles = await self._take_snapshot(session, state.element, policy, site)
+        metadata, handles = await self._take_snapshot(session, frame, state.element, policy, site)
         nodes: list[tuple[VisibleCandidate, ExactNode]] = []
         try:
             mark("candidate_metadata")

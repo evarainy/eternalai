@@ -7,6 +7,7 @@ exercise the Python projection contract without a provider or cloud browser clai
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -38,6 +39,13 @@ class Handle:
         self.disposed = False
 
     async def evaluate(self, expression: str, arg: Any = None) -> Any:
+        if isinstance(arg, dict) and arg.get("kind") == "candidate":
+            data = getattr(self.node, "candidate", None)
+            if data is None or data.get("sensitive"):
+                return None
+            return {key: data[key] for key in (
+                "context", "row_label", "column_label", "value_state",
+            )}
         if expression == _IDENTITY_BATCH:
             assert set(arg) == {"region", "previous", "current"}
             if not self.node.connected or any(
@@ -69,39 +77,6 @@ class Handle:
         return self
 
 
-class Property:
-    def __init__(self, value: Any) -> None:
-        self.value = value
-
-    async def json_value(self) -> Any:
-        return self.value
-
-    async def get_properties(self) -> dict[str, Handle]:
-        return {str(index): Handle(node) for index, node in enumerate(self.value)}
-
-    async def dispose(self) -> None:
-        return None
-
-
-class Packet:
-    def __init__(self, region: Region) -> None:
-        self.region = region
-
-    async def get_property(self, name: str) -> Property:
-        if name == "metadata":
-            return Property(
-                {
-                    "coverage": self.region.coverage,
-                    "candidates": [item[1] for item in self.region.items],
-                    "overflow": False,
-                }
-            )
-        return Property([item[0] for item in self.region.items])
-
-    async def dispose(self) -> None:
-        return None
-
-
 @dataclass
 class Region:
     node: Node = field(default_factory=Node)
@@ -120,9 +95,43 @@ class RegionHandle(Handle):
         super().__init__(region.node)
         self.region = region
 
-    async def evaluate_handle(self, script: str, config: dict[str, Any]) -> Packet:
-        assert "rawName" in script and config["policy"]["roles"] == ["button"]
-        return Packet(self.region)
+    async def evaluate(self, expression: str, arg: Any = None) -> Any:
+        if isinstance(arg, dict) and arg.get("kind") == "coverage":
+            assert "trusted_empty" in expression
+            return {**self.region.coverage, "overflow": False}
+        return await super().evaluate(expression, arg)
+
+
+class CandidateLocator:
+    def __init__(self, region: Region, role: str, name: str | re.Pattern[str]) -> None:
+        self.region, self.role, self.name = region, role, name
+
+    async def element_handles(self) -> list[Handle]:
+        def name_matches(actual: str | None) -> bool:
+            if isinstance(self.name, str):
+                return actual == self.name
+            return self.name.fullmatch(actual or "") is not None
+        result = []
+        for node, data in self.region.items:
+            if data["role"] == self.role and name_matches(data["name"]):
+                node.candidate = data
+                result.append(Handle(node))
+        return result
+
+
+class RegionLocator:
+    def __init__(self, region: Region) -> None:
+        self.region = region
+
+    async def element_handle(self, *, timeout: int) -> RegionHandle:
+        assert timeout == 0
+        return RegionHandle(self.region)
+
+    def get_by_role(
+        self, role: str, *, name: str | re.Pattern[str], exact: bool,
+    ) -> CandidateLocator:
+        assert exact
+        return CandidateLocator(self.region, role, name)
 
 
 class IFrameHandle(Handle):
@@ -162,6 +171,11 @@ class Frame:
         if isinstance(value, list):
             return value
         return []
+
+    def locator(self, selector: str) -> RegionLocator:
+        value = self.selectors.get(selector)
+        assert isinstance(value, Region)
+        return RegionLocator(value)
 
 
 class Page:
@@ -541,9 +555,10 @@ def test_final_signature_rejects_tree_growth_with_the_same_total_budget() -> Non
         captured: list[Handle] = []
 
         async def snapshot_then_grow(
-            element: Handle, current_policy: ObservationPolicy, site: RegisteredRegion
+            frame: Frame, element: Handle, current_policy: ObservationPolicy,
+            site: RegisteredRegion,
         ) -> tuple[dict[str, Any], list[Any]]:
-            metadata, nodes = await original_snapshot(element, current_policy, site)
+            metadata, nodes = await original_snapshot(frame, element, current_policy, site)
             captured.extend([element, *nodes])
             for _ in range(3):
                 added = Frame(parent=root.child_frames[1])
@@ -650,14 +665,45 @@ def test_unapproved_projection_and_other_page_fail_closed_without_raw_output() -
     async def run() -> None:
         observer, registry, session, _, _, region, policy = fixture()
         region.items = [label("private synthetic marker")]
-        with pytest.raises(BrowserOperationError) as exc:
-            await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
-        assert exc.value.failure.code == "invalid_response"
-        assert "private synthetic marker" not in repr(exc.value)
+        result = await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert result.candidates == ()
+        assert not result.coverage.trusted_empty
+        assert "private synthetic marker" not in repr(result)
         registry.live.context.pages.append(Page(Frame()))
         different = BrowserSessionRef(session_ref="other", binding=session.binding)
         with pytest.raises(BrowserOperationError) as exc:
             await observer.observe(different, ObservationRequest(region_id="inbox"), policy)
         assert exc.value.failure.code == "stale"
+
+    asyncio.run(run())
+
+
+def test_native_locator_failure_has_no_legacy_observer_fallback() -> None:
+    async def run() -> None:
+        observer, _, session, _, target, _, policy = fixture()
+        native = target.locator("[data-browser-region=inbox]")
+
+        def unavailable(*args: Any, **kwargs: Any) -> CandidateLocator:
+            raise RuntimeError("private browser detail")
+
+        native.get_by_role = unavailable  # type: ignore[method-assign]
+        target.locator = lambda selector: native  # type: ignore[method-assign]
+        with pytest.raises(BrowserOperationError) as caught:
+            await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert caught.value.failure.code == "invalid_response"
+        assert "private browser detail" not in repr(caught.value)
+
+    asyncio.run(run())
+
+
+def test_native_empty_accessible_name_is_an_explicit_candidate() -> None:
+    async def run() -> None:
+        observer, _, session, _, _, region, policy = fixture()
+        node, data = label()
+        data["name"] = None
+        region.items = [(node, data)]
+        result = await observer.observe(session, ObservationRequest(region_id="inbox"), policy)
+        assert len(result.candidates) == 1
+        assert result.candidates[0].name is None
 
     asyncio.run(run())
