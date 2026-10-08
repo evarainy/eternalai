@@ -40,6 +40,7 @@ from app.infra.browser.local_resource_lifecycle import (
     LocalChromiumDeployment,
     local_subject_digest,
 )
+from app.infra.browser.synthetic_vault import ORIGINAL_TRIAL
 from app.infra.persistence.browser.crypto import BrowserClaimProofContext
 from app.infra.persistence.browser.leases import BrowserProviderPool, BrowserProviderPoolRegistry
 from app.ports.auth import (
@@ -302,16 +303,29 @@ def test_api_cli_selects_input_mode_explicitly(monkeypatch: pytest.MonkeyPatch) 
     run_browser_synthetic_api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(run_browser_synthetic_api)
 
-    received: list[tuple[str, Path | None]] = []
+    received: list[tuple[str, Path | None, bool, str, str | None, str | None]] = []
 
-    async def fake_serve(*, input_mode: str, operator_vault: Path | None) -> None:
-        received.append((input_mode, operator_vault))
+    async def fake_serve(
+        *, input_mode: str, operator_vault: Path | None, private_stdin: bool,
+        trial_id: str, attempt_id: str | None, identity_attempt_id: str | None,
+    ) -> None:
+        received.append((input_mode, operator_vault, private_stdin, trial_id,
+                         attempt_id, identity_attempt_id))
 
     monkeypatch.setattr(run_browser_synthetic_api, "_serve", fake_serve)
     assert run_browser_synthetic_api.main(["--enable"]) == 0
     assert run_browser_synthetic_api.main([
         "--enable", "--input-mode", "structured", "--operator-vault", "fixture.enc",
     ]) == 0
-    assert received == [("chat", None), ("structured", Path("fixture.enc"))]
+    assert run_browser_synthetic_api.main([
+        "--enable", "--input-mode", "structured", "--private-stdin",
+        "--trial-id", "observe-only", "--attempt-id", "attempt-1",
+        "--identity-attempt-id", "identity-1",
+    ]) == 0
+    assert received == [
+        ("chat", None, False, ORIGINAL_TRIAL, None, None),
+        ("structured", Path("fixture.enc"), False, ORIGINAL_TRIAL, None, None),
+        ("structured", None, True, "observe-only", "attempt-1", "identity-1"),
+    ]
     assert run_browser_synthetic_api.main(["--enable", "--input-mode", "unknown"]) == 2
-    assert len(received) == 2
+    assert len(received) == 3

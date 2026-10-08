@@ -74,6 +74,7 @@ def test_type_alias_literals_match_phase0_response_envelope_contract() -> None:
     assert _literal_values(TargetSystem) == ("oa", "u8", "hikvision_ivms", "business_platform")
     assert TargetSystem is CapabilityTargetSystem
     assert _literal_values(ResponseEnvelopeStatus) == (
+        "running",
         "completed",
         "blocked",
         "waiting_user",
@@ -187,6 +188,7 @@ def test_response_envelope_fields_types_defaults_and_required_shape_are_exact() 
     assert hints["task_id"] is str
     assert hints["session_id"] is str
     assert _literal_values(hints["status"]) == (
+        "running",
         "completed",
         "blocked",
         "waiting_user",
@@ -281,6 +283,7 @@ def test_response_envelope_json_schema_is_producible_for_static_schema_contract(
 
     assert properties["schema_version"]["default"] == "phase0.sdui.v1"
     assert properties["status"]["enum"] == [
+        "running",
         "completed",
         "blocked",
         "waiting_user",
