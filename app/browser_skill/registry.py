@@ -1,23 +1,27 @@
-"""Synthetic publication contract and a process-local reference authority.
+"""Publication digests, a legacy synthetic fixture, and reviewed PG transitions.
 
-This is not the BR-DB-02 durable implementation or a CapabilityRegistry adapter.
-Its owner-scoped heads simulate isolation, not the final tenant-level DB heads.
-No file is auto-published. Production Site/Verifier implementations, real login/
-MFA, registered public mock sources and catalog integration remain deferred.
+The process-local reference authority below remains only for synthetic contract
+tests. Reviewed teaching calls the existing BrowserPublicationStorePort; it does
+not create another catalog or turn a draft/replay digest into authority.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Never, Self, SupportsIndex
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from app.browser_skill.models import BrowserOwner, BrowserSkill, Contract, Digest, Epoch, OpaqueId
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    BrowserPublicationRecord,
+)
+from app.ports.browser_publication_store import BrowserPublicationStorePort
 
 Operation = Literal["prepare", "activate", "rollback", "read"]
 OwnerKey = tuple[str, str, str]
@@ -291,3 +295,179 @@ class PublicationView:
         ) != (version, digest):
             return None
         return publication.descriptor
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class TeachingReviewFact:
+    """Private current approval returned by the trusted review authority.
+
+    The digest/reference alone cannot authorize publication. The PG manifest
+    authority must independently recheck this fact in its prepare/switch path.
+    """
+
+    owner: BrowserOwner
+    draft_digest: str
+    replay_digest: str
+    publication_digest: str
+    approval_ref: str
+    reviewer_ref: str
+    evidence_digest: str
+    approved: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "owner", _owner_copy(self.owner))
+        for value in (self.draft_digest, self.replay_digest,
+                      self.publication_digest, self.evidence_digest):
+            TypeAdapter(Digest).validate_python(value, strict=True)
+        for value in (self.approval_ref, self.reviewer_ref):
+            TypeAdapter(OpaqueId).validate_python(value, strict=True)
+        if type(self.approved) is not bool:
+            raise PublicationError("teaching_review_fact_invalid")
+
+    def __repr__(self) -> str:
+        return "<TeachingReviewFact: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ReviewedPublicationAuthority:
+    """One PG authority plus trusted replay/review/transactional switch seams."""
+
+    store: BrowserPublicationStorePort
+    authorize: Callable[[BrowserOwner, str, str], Awaitable[bool]]
+    replay_current: Callable[[BrowserOwner, str, str, str], Awaitable[bool]]
+    review_fact: Callable[[BrowserOwner, str, str], Awaitable[TeachingReviewFact | None]]
+    rollback_reviewed: Callable[
+        [BrowserOwner, BrowserPublicationRecord, TeachingReviewFact],
+        Awaitable[BrowserPublicationRecord],
+    ]
+
+    def __post_init__(self) -> None:
+        if not all(callable(value) for value in (
+            self.authorize, self.replay_current, self.review_fact,
+            self.rollback_reviewed,
+        )):
+            raise PublicationError("teaching_publication_authority_required")
+
+    def __repr__(self) -> str:
+        return "<ReviewedPublicationAuthority: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+
+async def _review_current(
+    owner: BrowserOwner, manifest: BrowserPublicationManifest,
+    draft_digest: str, replay_digest: str, authority: ReviewedPublicationAuthority,
+    operation: str,
+) -> TeachingReviewFact:
+    if await authority.authorize(owner, manifest.skill.skill_id, operation) is not True:
+        raise PublicationError("teaching_publication_denied")
+    if await authority.replay_current(
+        owner, draft_digest, replay_digest, manifest.digest,
+    ) is not True:
+        raise PublicationError("teaching_replay_stale")
+    raw = await authority.review_fact(owner, draft_digest, replay_digest)
+    if raw is None:
+        raise PublicationError("teaching_review_required")
+    fact = TeachingReviewFact(
+        raw.owner, raw.draft_digest, raw.replay_digest,
+        raw.publication_digest, raw.approval_ref, raw.reviewer_ref,
+        raw.evidence_digest, raw.approved,
+    )
+    if (
+        fact.owner != owner or fact.draft_digest != draft_digest
+        or fact.replay_digest != replay_digest
+        or fact.publication_digest != manifest.digest or not fact.approved
+    ):
+        raise PublicationError("teaching_review_mismatch")
+    return fact
+
+
+async def publish_reviewed_candidate(
+    owner: BrowserOwner,
+    manifest: BrowserPublicationManifest,
+    *,
+    draft_digest: str,
+    replay_digest: str,
+    authority: ReviewedPublicationAuthority,
+) -> BrowserPublicationRecord:
+    """Prepare then atomically switch the existing PG publication head.
+
+    The switch callback must lock the tenant/Skill head, recheck the exact
+    approval and Capability/Policy, and retain old immutable rows for old Runs.
+    An approved review does not itself grant execution authority.
+    """
+    try:
+        owner = _owner_copy(owner)
+        manifest = BrowserPublicationManifest.model_validate_json(manifest.model_dump_json())
+        TypeAdapter(Digest).validate_python(draft_digest, strict=True)
+        TypeAdapter(Digest).validate_python(replay_digest, strict=True)
+        fact = await _review_current(
+            owner, manifest, draft_digest, replay_digest, authority, "publish",
+        )
+        prepared = await authority.store.prepare(owner, manifest)
+        if prepared.manifest != manifest or prepared.state != "prepared":
+            raise PublicationError("teaching_prepare_mismatch")
+        if await _review_current(
+            owner, manifest, draft_digest, replay_digest, authority, "publish",
+        ) != fact:
+            raise PublicationError("teaching_review_stale")
+        active = await authority.store.activate_reviewed(
+            owner, manifest,
+            draft_digest=draft_digest, replay_digest=replay_digest,
+            approval_ref=fact.approval_ref, reviewer_ref=fact.reviewer_ref,
+            evidence_digest=fact.evidence_digest,
+        )
+        if active.manifest != manifest or active.state != "active":
+            raise PublicationError("teaching_activation_mismatch")
+        frozen = await authority.store.get_frozen(owner, manifest.digest)
+        current = await authority.store.get_active(owner, manifest.skill.skill_id)
+        if frozen != active or current != active:
+            raise PublicationError("teaching_publication_head_mismatch")
+        return active
+    except PublicationError:
+        raise
+    except Exception:
+        raise PublicationError("teaching_publication_unavailable") from None
+
+
+async def rollback_reviewed_publication(
+    owner: BrowserOwner,
+    target_digest: str,
+    *,
+    draft_digest: str,
+    replay_digest: str,
+    authority: ReviewedPublicationAuthority,
+) -> BrowserPublicationRecord:
+    """Return to an already frozen version through the same PG head authority."""
+    try:
+        owner = _owner_copy(owner)
+        TypeAdapter(Digest).validate_python(target_digest, strict=True)
+        TypeAdapter(Digest).validate_python(draft_digest, strict=True)
+        TypeAdapter(Digest).validate_python(replay_digest, strict=True)
+        target = await authority.store.get_frozen(owner, target_digest)
+        if target is None or target.state != "inactive":
+            raise PublicationError("teaching_rollback_target_unavailable")
+        fact = await _review_current(
+            owner, target.manifest, draft_digest, replay_digest, authority, "rollback",
+        )
+        current = await authority.store.get_active(owner, target.manifest.skill.skill_id)
+        if current is None or current.manifest.digest == target_digest:
+            raise PublicationError("teaching_rollback_head_invalid")
+        result = await authority.rollback_reviewed(owner, target, fact)
+        if result.manifest != target.manifest or result.state != "active":
+            raise PublicationError("teaching_rollback_mismatch")
+        return result
+    except PublicationError:
+        raise
+    except Exception:
+        raise PublicationError("teaching_rollback_unavailable") from None

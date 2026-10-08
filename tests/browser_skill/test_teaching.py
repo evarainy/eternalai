@@ -1,0 +1,428 @@
+"""Synthetic new-primitive teaching contract; written for the later test window."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from typing import cast
+
+import pytest
+
+from app.browser_skill.compiler import (
+    DurableTeachingCompilerAuthority,
+    DurableTeachingDraft,
+    TeachingError,
+    compile_authorized_run,
+)
+from app.browser_skill.models import (
+    BrowserOwner,
+    LocatorHint,
+    ModelManifest,
+    ObservationRequest,
+    ScopeBinding,
+    SkillStep,
+    TargetRef,
+)
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    BrowserPublicationRecord,
+)
+from app.browser_skill.registry import (
+    PublicationError,
+    ReviewedPublicationAuthority,
+    TeachingReviewFact,
+    canonical_digest,
+    publish_reviewed_candidate,
+)
+from app.browser_skill.repair import (
+    FormalFailedStep,
+    FormalRepairAuthority,
+    ReadOnlyExplorationAuthority,
+    RepairError,
+    explore_registered_reads,
+    propose_formal_locator,
+)
+from app.browser_skill.site_rules import EffectFact, SiteStepRule
+from app.browser_skill.teaching import (
+    ReplayError,
+    TeachingReplayAuthority,
+    TeachingReplayProof,
+    replay_draft,
+)
+from app.browser_skill.trajectory import (
+    BindingRevisions,
+    ParameterApproval,
+    RunTeachingAuthority,
+    RunTeachingStep,
+    TrajectoryError,
+    TrajectoryEvent,
+    capture_authorized_run,
+)
+from app.infra.browser.fixed_synthetic_seed import build_fixed_synthetic_query_source
+from app.ports.browser_publication_store import BrowserPublicationStorePort
+from app.ports.browser_run_store import (
+    ProtectedRunEnvelope,
+    RunAdmission,
+    RunEffect,
+    RunSnapshot,
+)
+from tests.browser_skill.factories import binding, scope
+
+
+def _base() -> BrowserPublicationManifest:
+    model = ModelManifest(
+        request_model="synthetic_model", deployment_model="synthetic_pinned_v1",
+        manifest_digest=hashlib.sha256(b"synthetic teaching").hexdigest(),
+    )
+    return build_fixed_synthetic_query_source(model).manifest
+
+
+def _run(publication_digest: str, *, task_id: str = "task_source",
+         run_id: str = "run_source", effect: RunEffect = "acknowledged") -> RunSnapshot:
+    owner = binding().owner
+    expiry = datetime.now(UTC) + timedelta(minutes=5)
+    admission = RunAdmission(
+        owner=owner, task_id=task_id, run_id=run_id, target_system="oa",
+        binding_id=binding().binding_id, binding_revision=binding().binding_revision,
+        auth_fingerprint=b"a" * 32, auth_expires_at=expiry,
+        publication_digest=bytes.fromhex(publication_digest),
+        input_revision=1, input_digest=b"i" * 32,
+        protected_input=ProtectedRunEnvelope(
+            "aes256gcm-browser-input-v1", "synthetic", b"n" * 12, b"c" * 16,
+        ),
+    )
+    return RunSnapshot(
+        admission=admission, state_revision=9, status="completed", phase=None,
+        worker_id="synthetic", worker_epoch=1, worker_deadline=None,
+        provider_key=None, provider_manifest_digest=None, lease_epoch=None,
+        profile_generation_id=None, capture_operation_id=None,
+        capture_status="not_requested", cancel_requested=False,
+        cancel_acknowledged=False, effect=effect, verification="verified",
+        verification_evidence_digest=b"v" * 32, cleanup="released",
+        error_code=None, dispatch_failure_code=None, terminal_revision=9,
+        terminal_event_id="terminal", result_digest=None, protected_result=None,
+    )
+
+
+class SyntheticRunTeaching:
+    """Fake authoritative callbacks. This is not real PG/Executor evidence."""
+
+    def __init__(self) -> None:
+        self.base = _base()
+        first = self.base.site.steps[0]
+        second = SiteStepRule(
+            step=SkillStep(
+                step_id="inspect_collection", operation="click", effect="read_only",
+                locator=LocatorHint(kind="test_id", value="fixture_detail"),
+            ),
+            observation=ObservationRequest(region_id="fixture_messages"),
+            target_criteria=("Synthetic messages",),
+            effect=EffectFact(
+                operation="click", actual_effect="read_only",
+                proof_ref="synthetic_click_read_only",
+                evidence_digest=hashlib.sha256(b"synthetic click proof").hexdigest(),
+            ),
+        )
+        self.rules = {first.step.step_id: first, second.step.step_id: second}
+        self.source_run = _run(self.base.digest)
+        stamp = scope().model_copy(update={"region_id": "fixture_messages"})
+        target = TargetRef(target_id="synthetic_target", candidate_epoch=1, scope=stamp)
+        self.steps = tuple(
+            RunTeachingStep(
+                run_id="run_source", skill_version=self.base.skill.version,
+                skill_digest=self.base.skill.digest,
+                binding=BindingRevisions.from_binding(binding()),
+                primitive_id=rule.step.step_id,
+                event=TrajectoryEvent(
+                    sequence=index, event_id=f"event_{index}",
+                    step_id=rule.step.step_id, scope=stamp, target=target,
+                    operation=rule.step.operation, effect="read_only",
+                    effect_proof=rule.effect,
+                    policy_digest=self.base.site.policy.digest,
+                    approved_labels=("Synthetic messages",),
+                ),
+                rule_digest=canonical_digest(
+                    "browser_site_step.v1", rule.model_dump(mode="json"),
+                ),
+                dispatch_state="acknowledged",
+                dispatch_evidence_digest=hashlib.sha256(
+                    f"synthetic dispatch {index}".encode()
+                ).hexdigest(),
+            )
+            for index, rule in enumerate((first, second), start=1)
+        )
+        self.allowed = True
+
+    def run_authority(self) -> RunTeachingAuthority:
+        return RunTeachingAuthority(
+            current_binding=binding,
+            read_run=lambda _id, _binding: self.source_run,
+            read_steps=lambda _id, _binding: self.steps,
+            read_parameter_set_ref=lambda _id, _binding: "training_set",
+            frozen_publication=lambda _digest, _binding: self.base,
+            primitive_rule=lambda primitive_id, _base: self.rules.get(primitive_id),
+            authorize_capture=lambda _id, _binding: self.allowed,
+        )
+
+    def compiler_authority(self) -> DurableTeachingCompilerAuthority:
+        return DurableTeachingCompilerAuthority(
+            run=self.run_authority(),
+            authorize_target=lambda _binding, _base, skill_id:
+                self.allowed and skill_id == "synthetic_new_flow",
+            unpublished_combination=lambda _binding, _skill, steps:
+                self.allowed and steps == ("read_collection", "inspect_collection"),
+        )
+
+    def draft(self) -> DurableTeachingDraft:
+        source = capture_authorized_run(
+            "run_source", binding=binding(), authority=self.run_authority(),
+        )
+        return compile_authorized_run(
+            source, binding=binding(), target_skill_id="synthetic_new_flow",
+            version="v1", site_version="v2",
+            parameter_whitelist=(ParameterApproval(
+                name="business_key", purpose="business_key", format="opaque_id",
+            ),), authority=self.compiler_authority(),
+        )
+
+
+def test_new_registered_combination_compiles_without_a_published_full_flow() -> None:
+    sample = SyntheticRunTeaching()
+    draft = sample.draft()
+    assert tuple(step.operation for step in draft.publication.skill.steps) == (
+        "read", "click",
+    )
+    assert draft.publication.site.digest != sample.base.site.digest
+    assert draft.publication.verifier == sample.base.verifier
+    assert draft.publication.output == sample.base.output
+    assert draft.publication.skill.skill_id == "synthetic_new_flow"
+    assert draft.publication.site_plan().steps[1].step.step_id != "inspect_collection"
+
+
+def test_missing_current_grant_unknown_effect_and_old_flow_fail_closed() -> None:
+    sample = SyntheticRunTeaching()
+    sample.allowed = False
+    with pytest.raises(TrajectoryError, match="teaching_run_denied"):
+        capture_authorized_run(
+            "run_source", binding=binding(), authority=sample.run_authority(),
+        )
+    sample.allowed = True
+    sample.source_run = replace(sample.source_run, effect="unknown")
+    with pytest.raises(TrajectoryError, match="teaching_run_not_verified"):
+        capture_authorized_run(
+            "run_source", binding=binding(), authority=sample.run_authority(),
+        )
+    sample.source_run = _run(sample.base.digest)
+    sample.steps = sample.steps[:1]
+    source = capture_authorized_run(
+        "run_source", binding=binding(), authority=sample.run_authority(),
+    )
+    with pytest.raises(TeachingError, match="teaching_flow_already_published"):
+        compile_authorized_run(
+            source, binding=binding(), target_skill_id="synthetic_new_flow",
+            version="v1", site_version="v2",
+            parameter_whitelist=(ParameterApproval(
+                name="business_key", purpose="business_key", format="opaque_id",
+            ),), authority=sample.compiler_authority(),
+        )
+
+
+def test_heldout_replay_requires_same_subject_and_real_verified_run_fact() -> None:
+    sample = SyntheticRunTeaching()
+    draft = sample.draft()
+    replay_run = _run(
+        draft.publication.digest, task_id="task_replay", run_id="run_replay",
+    )
+    stored: list[TeachingReplayProof] = []
+
+    async def yes(*_args: object) -> bool:
+        return True
+
+    async def execute(*_args: object) -> tuple[str, str]:
+        return "task_replay", "run_replay"
+
+    async def read(*_args: object) -> RunSnapshot:
+        return replay_run
+
+    async def record(proof: TeachingReplayProof) -> bool:
+        stored.append(proof)
+        return True
+
+    authority = TeachingReplayAuthority(
+        compiler=sample.compiler_authority(), current_binding=binding,
+        authorize_replay=yes, heldout_set=yes, execute_draft=execute,
+        read_run=read, same_subject=yes, record_proof=record,
+        deadline_monotonic=10, clock=lambda: 0,
+    )
+    with pytest.raises(ReplayError, match="teaching_replay_not_heldout"):
+        asyncio.run(replay_draft(
+            draft, binding=binding(), heldout_parameter_set_ref="training_set",
+            authority=authority,
+        ))
+    proof = asyncio.run(replay_draft(
+        draft, binding=binding(), heldout_parameter_set_ref="holdout_set",
+        authority=authority,
+    ))
+    assert stored == [proof]
+    assert proof.verifier_evidence_digest == (b"v" * 32).hex()
+    replay_run = replace(replay_run, verification="mismatch")
+    with pytest.raises(ReplayError, match="teaching_replay_unverified"):
+        asyncio.run(replay_draft(
+            draft, binding=binding(), heldout_parameter_set_ref="second_holdout",
+            authority=authority,
+        ))
+
+
+def test_reviewed_publication_reads_approval_and_switches_pg_head() -> None:
+    sample = SyntheticRunTeaching()
+    draft = sample.draft()
+    owner = binding().owner
+    replay_digest = "b" * 64
+    prepared: BrowserPublicationRecord | None = None
+    active: BrowserPublicationRecord | None = None
+
+    class Store:
+        async def prepare(
+            self, who: BrowserOwner, manifest: BrowserPublicationManifest,
+        ) -> BrowserPublicationRecord:
+            nonlocal prepared
+            assert who == owner and manifest == draft.publication
+            prepared = BrowserPublicationRecord(
+                manifest=manifest, state="prepared", activation_revision=0,
+            )
+            return prepared
+
+        async def get_frozen(
+            self, _who: BrowserOwner, _digest: str,
+        ) -> BrowserPublicationRecord | None:
+            return active
+
+        async def get_active(
+            self, _who: BrowserOwner, _skill: str,
+        ) -> BrowserPublicationRecord | None:
+            return active
+
+        async def activate_reviewed(
+            self, who: BrowserOwner, manifest: BrowserPublicationManifest, *,
+            draft_digest: str, replay_digest: str, approval_ref: str,
+            reviewer_ref: str, evidence_digest: str,
+        ) -> BrowserPublicationRecord:
+            nonlocal active
+            assert prepared is not None and who == owner
+            assert (draft_digest, replay_digest, approval_ref, reviewer_ref,
+                    evidence_digest) == (draft.digest, "b" * 64, "approval",
+                                         "reviewer", "c" * 64)
+            active = BrowserPublicationRecord(
+                manifest=manifest, state="active", activation_revision=1,
+            )
+            return active
+
+    async def yes(*_args: object) -> bool:
+        return True
+
+    async def review(*_args: object) -> TeachingReviewFact:
+        return TeachingReviewFact(
+            owner, draft.digest, replay_digest, draft.publication.digest,
+            "approval", "reviewer", "c" * 64, True,
+        )
+
+    async def rollback_unused(*_args: object) -> BrowserPublicationRecord:
+        raise AssertionError("rollback was not requested")
+
+    authority = ReviewedPublicationAuthority(
+        store=cast(BrowserPublicationStorePort, Store()), authorize=yes, replay_current=yes,
+        review_fact=review,
+        rollback_reviewed=rollback_unused,
+    )
+    result = asyncio.run(publish_reviewed_candidate(
+        owner, draft.publication, draft_digest=draft.digest,
+        replay_digest=replay_digest, authority=authority,
+    ))
+    assert result == active
+    assert result is not None and result.manifest == draft.publication
+
+    async def no_review(*_args: object) -> None:
+        return None
+
+    denied = replace(authority, review_fact=no_review)
+    with pytest.raises(PublicationError, match="teaching_review_required"):
+        asyncio.run(publish_reviewed_candidate(
+            owner, draft.publication, draft_digest=draft.digest,
+            replay_digest=replay_digest, authority=denied,
+        ))
+
+
+def test_exploration_suggestions_are_registered_read_only_and_bounded() -> None:
+    sample = SyntheticRunTeaching()
+    emitted: list[str] = []
+
+    async def yes(*_args: object) -> bool:
+        return True
+
+    async def suggest(_run: str, prior: tuple[str, ...]) -> str | None:
+        return "inspect_collection" if not prior else None
+
+    async def dispatch(
+        _run: str, primitive: str, _binding: ScopeBinding,
+    ) -> RunTeachingStep:
+        assert primitive == "inspect_collection"
+        emitted.append(primitive)
+        return sample.steps[1]
+
+    authority = ReadOnlyExplorationAuthority(
+        current_binding=binding, authorize=yes,
+        registered_rule=lambda primitive, _base: sample.rules.get(primitive),
+        suggest_next=suggest, execute_step=dispatch,
+        clock=lambda: 0, deadline_monotonic=10,
+        maximum_steps=2, allowed_regions=("fixture_messages",),
+    )
+    result = asyncio.run(explore_registered_reads(
+        "run_source", binding=binding(), publication=sample.base,
+        authority=authority,
+    ))
+    assert emitted == ["inspect_collection"]
+    assert result == (sample.steps[1],)
+    sample.rules["inspect_collection"] = sample.rules["inspect_collection"].model_copy(
+        update={"effect": EffectFact(
+            operation="click", actual_effect="unknown",
+            proof_ref="unknown", evidence_digest="d" * 64,
+        )}
+    )
+    with pytest.raises(RepairError, match="exploration_effect_denied"):
+        asyncio.run(explore_registered_reads(
+            "run_source", binding=binding(), publication=sample.base,
+            authority=authority,
+        ))
+
+
+def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> None:
+    sample = SyntheticRunTeaching()
+    draft = sample.draft()
+    step = draft.publication.skill.steps[0]
+    failure = FormalFailedStep(
+        binding(), "run_failed", draft.publication.digest, step.step_id,
+        "locator_not_found", "not_sent", "e" * 64,
+    )
+    alternative = LocatorHint(kind="test_id", value="fixture_row_alternate")
+    holder: dict[str, FormalFailedStep | None] = {"failure": failure}
+    authority = FormalRepairAuthority(
+        compiler=sample.compiler_authority(), current_binding=binding,
+        failed_step=lambda _run, _step, _binding: holder["failure"],
+        approved_hints=lambda _manifest, _step, _binding: (alternative,),
+        authorize=lambda _draft, _binding: True,
+    )
+    proposal = propose_formal_locator(
+        draft, binding=binding(), failed_run_id="run_failed",
+        step_id=step.step_id, replacement=alternative, authority=authority,
+    )
+    assert proposal.replacement == alternative
+    assert proposal.primitive_id == "read_collection"
+    assert draft.publication.skill.steps[0] == step
+    holder["failure"] = None
+    with pytest.raises(RepairError, match="repair_failure_unavailable"):
+        propose_formal_locator(
+            draft, binding=binding(), failed_run_id="run_failed",
+            step_id=step.step_id, replacement=alternative, authority=authority,
+        )

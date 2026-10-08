@@ -1,9 +1,8 @@
-"""Compile authorized neutral events into a constrained, unpublished SkillDraft.
+"""Compile authorized neutral events into constrained unpublished drafts.
 
-The trusted composition supplies current owner, publication, source grant and
-registered Site facts. This module neither observes a page nor runs a step.
-Historical event targets are checked against their capture grant; a moved page
-does not retroactively turn a recorded event into a current target.
+The durable candidate path composes registered new primitives under the current
+Run, Site and permission facts. It neither observes a page nor runs a step.
+The older synthetic draft compiler remains for its existing contract callers.
 """
 
 from __future__ import annotations
@@ -24,6 +23,11 @@ from app.browser_skill.models import (
     ScopeBinding,
     SkillStep,
 )
+from app.browser_skill.publication_contracts import (
+    BrowserPublicationManifest,
+    BrowserSiteDefinition,
+    publication_digest,
+)
 from app.browser_skill.registry import Publication, canonical_digest
 from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredReadRule, RegisteredSitePlan
 from app.browser_skill.trajectory import (
@@ -34,9 +38,12 @@ from app.browser_skill.trajectory import (
     ParameterApproval,
     PublicationReference,
     RecordingContext,
+    RunTeachingAuthority,
+    RunTeachingSource,
     SkillDraft,
     TrajectoryEvent,
     _binding_copy,
+    capture_authorized_run,
 )
 
 
@@ -413,3 +420,238 @@ def compile_trajectory(
         context, source, draft.binding, publication, base_revision, expected_source_revision
     )
     return draft
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class DurableTeachingDraft:
+    """Review-only immutable candidate using the real PG publication contract."""
+
+    binding: ScopeBinding
+    source: RunTeachingSource
+    publication: BrowserPublicationManifest
+    parameter_whitelist: tuple[ParameterApproval, ...]
+    digest: str
+
+    def __post_init__(self) -> None:
+        checked = _binding_copy(self.binding)
+        source = RunTeachingSource(self.source.binding, self.source.manifest)
+        publication = BrowserPublicationManifest.model_validate_json(
+            self.publication.model_dump_json()
+        )
+        approvals = tuple(ParameterApproval.model_validate_json(item.model_dump_json())
+                          for item in self.parameter_whitelist)
+        if checked != source.binding or tuple(item.name for item in approvals) != (
+            publication.skill.parameters
+        ):
+            raise TeachingError("teaching_draft_binding_invalid")
+        expected = canonical_digest("browser_durable_teaching_draft.v1", {
+            "source_digest": source.manifest.digest,
+            "publication_digest": publication.digest,
+            "parameter_whitelist": [item.model_dump(mode="json") for item in approvals],
+        })
+        if self.digest != expected:
+            raise TeachingError("teaching_draft_digest_invalid")
+        object.__setattr__(self, "binding", checked)
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "publication", publication)
+        object.__setattr__(self, "parameter_whitelist", approvals)
+
+    def __repr__(self) -> str:
+        return "<DurableTeachingDraft: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class DurableTeachingCompilerAuthority:
+    """Trusted active catalog/grant checks, never external request assertions."""
+
+    run: RunTeachingAuthority
+    authorize_target: Callable[[ScopeBinding, BrowserPublicationManifest, str], bool]
+    unpublished_combination: Callable[[ScopeBinding, str, tuple[str, ...]], bool]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.run, RunTeachingAuthority) or not callable(
+            self.authorize_target
+        ) or not callable(self.unpublished_combination):
+            raise TeachingError("teaching_compiler_authority_required")
+
+    def __repr__(self) -> str:
+        return "<DurableTeachingCompilerAuthority: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("teaching_private_serialization_forbidden")
+
+
+def _formal_required_purposes(
+    base: BrowserPublicationManifest, steps: tuple[SkillStep, ...],
+) -> dict[str, ParameterPurpose]:
+    required: dict[str, ParameterPurpose] = {
+        base.site.read_rule.key_ref.name: "business_key",
+    }
+    if isinstance(base.site.read_rule, RegisteredReadRule):
+        for field in base.site.read_rule.fields:
+            name = field.value_ref.name
+            if name in required and required[name] != "expected_field":
+                raise TeachingError("teaching_parameter_purpose_conflict")
+            required[name] = "expected_field"
+    for step in steps:
+        for ref, purpose in (
+            (step.value_ref, "fill_value"),
+            (step.url_ref, "navigation_url"),
+            (step.option_ref, "option_values"),
+        ):
+            if ref is None:
+                continue
+            if ref.name in required and required[ref.name] != purpose:
+                raise TeachingError("teaching_parameter_purpose_conflict")
+            required[ref.name] = purpose  # type: ignore[assignment]
+    return required
+
+
+def compile_authorized_run(
+    source: RunTeachingSource,
+    *,
+    binding: ScopeBinding,
+    target_skill_id: str,
+    version: str,
+    site_version: str,
+    parameter_whitelist: tuple[ParameterApproval, ...],
+    authority: DurableTeachingCompilerAuthority,
+) -> DurableTeachingDraft:
+    """Compile a genuinely new order of registered read-only primitives.
+
+    Every rule is re-read from the trusted Site catalog. This only constructs an
+    immutable candidate; the existing publication store remains sole authority.
+    """
+    try:
+        binding = _binding_copy(binding)
+        target_skill_id = TypeAdapter(OpaqueId).validate_python(target_skill_id, strict=True)
+        version = TypeAdapter(OpaqueId).validate_python(version, strict=True)
+        site_version = TypeAdapter(OpaqueId).validate_python(site_version, strict=True)
+        source = RunTeachingSource(source.binding, source.manifest)
+        if source.binding != binding:
+            raise TeachingError("teaching_owner_or_binding_mismatch")
+        current = capture_authorized_run(
+            source.manifest.source_run_id, binding=binding, authority=authority.run,
+        )
+        if current != source:
+            raise TeachingError("teaching_run_stale")
+        base = BrowserPublicationManifest.model_validate_json(
+            authority.run.frozen_publication(
+                source.manifest.source_publication_digest, binding,
+            ).model_dump_json()
+        )
+        if (
+            base.digest != source.manifest.source_publication_digest
+            or base.skill.skill_id != source.manifest.source_skill_id
+            or base.skill.version != source.manifest.source_skill_version
+            or base.skill.digest != source.manifest.source_skill_digest
+            or base.skill.site_id != source.manifest.site_id
+            or base.site.digest != source.manifest.site_digest
+            or base.verifier.verifier_id != source.manifest.verifier_id
+            or base.verifier.digest != source.manifest.verifier_digest
+            or base.site.read_rule.object_type != source.manifest.object_type
+        ):
+            raise TeachingError("teaching_base_mismatch")
+        if authority.authorize_target(binding, base, target_skill_id) is not True:
+            raise TeachingError("teaching_target_denied")
+        if site_version == base.site.version or (
+            target_skill_id == base.skill.skill_id and version == base.skill.version
+        ):
+            raise TeachingError("teaching_version_not_new")
+        primitive_ids = tuple(item.primitive_id for item in source.manifest.steps)
+        if (
+            primitive_ids == tuple(item.step_id for item in base.skill.steps)
+            or authority.unpublished_combination(
+                binding, target_skill_id, primitive_ids,
+            ) is not True
+        ):
+            raise TeachingError("teaching_flow_already_published")
+        rules = []
+        for item in source.manifest.steps:
+            raw_rule = authority.run.primitive_rule(item.primitive_id, base)
+            if raw_rule is None:
+                raise TeachingError("teaching_primitive_unregistered")
+            rule = type(raw_rule).model_validate_json(raw_rule.model_dump_json())
+            if (
+                canonical_digest("browser_site_step.v1", rule.model_dump(mode="json"))
+                != item.rule_digest or not item.event.matches_step(rule.step)
+                or rule.effect.actual_effect != "read_only"
+                or rule.step.effect != "read_only"
+            ):
+                raise TeachingError("teaching_primitive_changed")
+            new_step = SkillStep.model_validate_json(
+                rule.step.model_copy(update={"step_id": canonical_step_id(item.event)})
+                .model_dump_json()
+            )
+            rules.append(rule.model_copy(update={"step": new_step}))
+        checked_rules = tuple(type(rule).model_validate_json(rule.model_dump_json())
+                              for rule in rules)
+        steps = tuple(rule.step for rule in checked_rules)
+        required = _formal_required_purposes(base, steps)
+        if type(parameter_whitelist) is not tuple:
+            raise TeachingError("teaching_whitelist_invalid")
+        approvals = tuple(ParameterApproval.model_validate_json(item.model_dump_json())
+                          for item in parameter_whitelist)
+        if (
+            len(approvals) != len(required)
+            or {item.name: item.purpose for item in approvals} != required
+        ):
+            raise TeachingError("teaching_whitelist_invalid")
+        site_payload = base.site.model_dump(mode="json")
+        site_payload.update(version=site_version,
+                            steps=[rule.model_dump(mode="json") for rule in checked_rules])
+        site_payload["digest"] = publication_digest(
+            "browser_site.publication.v1", site_payload,
+        )
+        site = BrowserSiteDefinition.model_validate_json(json.dumps(site_payload))
+        skill_payload = base.skill.model_dump(mode="json")
+        skill_payload.update(
+            skill_id=target_skill_id, version=version, site_digest=site.digest,
+            parameters=[item.name for item in approvals],
+            steps=[step.model_dump(mode="json") for step in steps],
+        )
+        skill_payload["digest"] = canonical_digest("browser_skill.v1", skill_payload)
+        skill = BrowserSkill.model_validate_json(json.dumps(skill_payload))
+        manifest_payload = base.model_dump(mode="json")
+        manifest_payload.update(skill=skill.model_dump(mode="json"),
+                                site=site.model_dump(mode="json"))
+        manifest_payload["digest"] = publication_digest(
+            "browser_publication.durable.v1", manifest_payload,
+        )
+        candidate = BrowserPublicationManifest.model_validate_json(
+            json.dumps(manifest_payload)
+        )
+        digest = canonical_digest("browser_durable_teaching_draft.v1", {
+            "source_digest": source.manifest.digest,
+            "publication_digest": candidate.digest,
+            "parameter_whitelist": [item.model_dump(mode="json") for item in approvals],
+        })
+        draft = DurableTeachingDraft(binding, source, candidate, approvals, digest)
+        # Recheck after every catalog callback and candidate build. A later
+        # replay/publish does this again; this is not a durable transaction.
+        if capture_authorized_run(
+            source.manifest.source_run_id, binding=binding, authority=authority.run,
+        ) != source or authority.authorize_target(binding, base, target_skill_id) is not True or (
+            authority.unpublished_combination(binding, target_skill_id, primitive_ids) is not True
+        ):
+            raise TeachingError("teaching_authorization_stale")
+        for item in source.manifest.steps:
+            current_rule = authority.run.primitive_rule(item.primitive_id, base)
+            if current_rule is None or canonical_digest(
+                "browser_site_step.v1", current_rule.model_dump(mode="json"),
+            ) != item.rule_digest:
+                raise TeachingError("teaching_primitive_changed")
+        return draft
+    except TeachingError:
+        raise
+    except Exception:
+        raise TeachingError("teaching_compile_unavailable") from None

@@ -1,8 +1,8 @@
-"""Authorized neutral teaching metadata; no browser calls, raw values or I/O.
+"""Authorized neutral teaching metadata; no browser calls or raw values.
 
-Only generated synthetic demonstrations are exercised at this checkpoint. Actual
-capture, Chat teaching, durable BR-DB-04 ownership and real-material permission
-are deferred. Recording a proven may_write effect never grants execution rights.
+The Run teaching path consumes owner-scoped Run/Executor audit from trusted
+composition. A captured event proves provenance, never dispatch or publication
+authority. The older process-local recorder remains for synthetic contracts.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Lock
-from typing import Annotated, Literal, Never, Self, SupportsIndex
+from typing import TYPE_CHECKING, Annotated, Literal, Never, Self, SupportsIndex
 
 from pydantic import Field, TypeAdapter, model_validator
 
@@ -30,8 +30,12 @@ from app.browser_skill.models import (
     SkillStep,
     TargetRef,
 )
+from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.registry import Publication, canonical_digest
-from app.browser_skill.site_rules import EffectFact
+from app.browser_skill.site_rules import EffectFact, SiteStepRule
+
+if TYPE_CHECKING:
+    from app.ports.browser_run_store import RunSnapshot
 
 
 class TrajectoryError(ValueError):
@@ -630,3 +634,196 @@ class SkillDraft(_Private):
             raise TrajectoryError("draft_base_revision_stale")
         if PublicationReference.from_publication(publication) != checked.base_publication:
             raise TrajectoryError("draft_publication_mismatch")
+
+
+class RunTeachingStep(Contract):
+    """Sanitized fact for one dispatched, registered primitive in a controlled Run."""
+
+    run_id: OpaqueId
+    skill_version: OpaqueId
+    skill_digest: Digest
+    binding: BindingRevisions
+    primitive_id: OpaqueId
+    event: TrajectoryEvent
+    rule_digest: Digest
+    dispatch_state: Literal["acknowledged"]
+    dispatch_evidence_digest: Digest
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if self.primitive_id != self.event.step_id:
+            raise ValueError("teaching_primitive_reference_mismatch")
+        return self
+
+
+class RunTeachingManifest(Contract):
+    """No parameters, DOM, screenshot, URL, cookie or raw business key."""
+
+    schema_version: Literal["browser_run_teaching.v1"] = "browser_run_teaching.v1"
+    source_run_id: OpaqueId
+    source_publication_digest: Digest
+    source_skill_id: OpaqueId
+    source_skill_version: OpaqueId
+    source_skill_digest: Digest
+    binding: BindingRevisions
+    site_id: OpaqueId
+    site_digest: Digest
+    verifier_id: OpaqueId
+    verifier_digest: Digest
+    object_type: OpaqueId
+    parameter_set_ref: OpaqueId
+    steps: Annotated[tuple[RunTeachingStep, ...], Field(min_length=1, max_length=64)]
+    digest: Digest
+
+    @model_validator(mode="after")
+    def integrity(self) -> Self:
+        if tuple(step.event.sequence for step in self.steps) != tuple(
+            range(1, len(self.steps) + 1)
+        ) or len({step.event.event_id for step in self.steps}) != len(self.steps):
+            raise ValueError("teaching_run_steps_invalid")
+        if canonical_digest(self.schema_version, self.model_dump(mode="json")) != self.digest:
+            raise ValueError("teaching_run_digest_mismatch")
+        return self
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RunTeachingSource(_Private):
+    binding: ScopeBinding
+    manifest: RunTeachingManifest
+    __getstate__ = _Private.__getstate__
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binding", _binding_copy(self.binding))
+        manifest = RunTeachingManifest.model_validate_json(self.manifest.model_dump_json())
+        if manifest.binding != BindingRevisions.from_binding(self.binding):
+            raise TrajectoryError("teaching_run_binding_mismatch")
+        object.__setattr__(self, "manifest", manifest)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RunTeachingAuthority(_Private):
+    """Installed by trusted Run/Executor composition, never built from a DTO.
+
+    The step reader must use the same owner-scoped audit as the Run reader. The
+    primitive reader returns audited Site rules, not page/model suggestions.
+    """
+
+    current_binding: Callable[[], ScopeBinding]
+    read_run: Callable[[str, ScopeBinding], RunSnapshot]
+    read_steps: Callable[[str, ScopeBinding], tuple[RunTeachingStep, ...]]
+    read_parameter_set_ref: Callable[[str, ScopeBinding], str]
+    frozen_publication: Callable[[str, ScopeBinding], BrowserPublicationManifest]
+    primitive_rule: Callable[[str, BrowserPublicationManifest], SiteStepRule | None]
+    authorize_capture: Callable[[str, ScopeBinding], bool]
+    __getstate__ = _Private.__getstate__
+
+    def __post_init__(self) -> None:
+        if not all(callable(value) for value in (
+            self.current_binding, self.read_run, self.read_steps,
+            self.read_parameter_set_ref, self.frozen_publication,
+            self.primitive_rule, self.authorize_capture,
+        )):
+            raise TrajectoryError("teaching_run_authority_required")
+
+
+def capture_authorized_run(
+    run_id: str, *, binding: ScopeBinding, authority: RunTeachingAuthority,
+) -> RunTeachingSource:
+    """Capture only an independently verified Run's minimal neutral step facts.
+
+    This does no browser work. Missing audit or current authorization fails closed.
+    A verified Run is provenance, never a new dispatch or publication grant.
+    """
+    import json
+
+    try:
+        run_id = TypeAdapter(OpaqueId).validate_python(run_id, strict=True)
+        binding = _binding_copy(binding)
+        if authority.current_binding() != binding or authority.authorize_capture(
+            run_id, _binding_copy(binding)
+        ) is not True:
+            raise TrajectoryError("teaching_run_denied")
+        run = authority.read_run(run_id, _binding_copy(binding))
+        if (
+            run.run_id != run_id or run.owner != binding.owner
+            or run.admission.binding_id != binding.binding_id
+            or run.admission.binding_revision != binding.binding_revision
+            or run.status != "completed" or run.effect != "acknowledged"
+            or run.verification != "verified" or run.error_code is not None
+            or run.verification_evidence_digest is None
+            or run.cancel_requested or run.cancel_acknowledged
+        ):
+            raise TrajectoryError("teaching_run_not_verified")
+        publication = BrowserPublicationManifest.model_validate_json(
+            authority.frozen_publication(run.admission.publication_digest.hex(), binding)
+            .model_dump_json()
+        )
+        if publication.digest != run.admission.publication_digest.hex():
+            raise TrajectoryError("teaching_run_publication_mismatch")
+        raw_steps = authority.read_steps(run_id, _binding_copy(binding))
+        if type(raw_steps) is not tuple or not 1 <= len(raw_steps) <= 64:
+            raise TrajectoryError("teaching_run_steps_unavailable")
+        steps = tuple(RunTeachingStep.model_validate_json(item.model_dump_json())
+                      for item in raw_steps)
+        for step in steps:
+            rule = authority.primitive_rule(step.primitive_id, publication)
+            if rule is None:
+                raise TrajectoryError("teaching_primitive_unregistered")
+            rule = SiteStepRule.model_validate_json(rule.model_dump_json())
+            event = step.event
+            if (
+                step.run_id != run_id
+                or step.skill_version != publication.skill.version
+                or step.skill_digest != publication.skill.digest
+                or step.binding != BindingRevisions.from_binding(binding)
+                or not event.matches_step(rule.step)
+                or rule.step.effect != "read_only"
+                or rule.effect.actual_effect != "read_only"
+                or event.effect_proof != rule.effect
+                or event.policy_digest != publication.site.policy.digest
+                or rule.observation.region_id != event.scope.region_id
+                or canonical_digest("browser_site_step.v1", rule.model_dump(mode="json"))
+                != step.rule_digest
+                or not set(event.approved_labels) <= set((
+                    *publication.site.policy.allowed_names,
+                    *publication.site.policy.allowed_context,
+                ))
+            ):
+                raise TrajectoryError("teaching_step_evidence_mismatch")
+        parameter_set_ref = TypeAdapter(OpaqueId).validate_python(
+            authority.read_parameter_set_ref(run_id, _binding_copy(binding)), strict=True,
+        )
+        payload: dict[str, object] = dict(
+            schema_version="browser_run_teaching.v1",
+            source_run_id=run_id,
+            source_publication_digest=publication.digest,
+            source_skill_id=publication.skill.skill_id,
+            source_skill_version=publication.skill.version,
+            source_skill_digest=publication.skill.digest,
+            binding=BindingRevisions.from_binding(binding).model_dump(mode="json"),
+            site_id=publication.site.site_id,
+            site_digest=publication.site.digest,
+            verifier_id=publication.verifier.verifier_id,
+            verifier_digest=publication.verifier.digest,
+            object_type=publication.site.read_rule.object_type,
+            parameter_set_ref=parameter_set_ref,
+            steps=[step.model_dump(mode="json") for step in steps],
+        )
+        payload["digest"] = canonical_digest("browser_run_teaching.v1", payload)
+        source = RunTeachingSource(binding, RunTeachingManifest.model_validate_json(
+            json.dumps(payload)
+        ))
+        # Audit and authorization may change while callbacks run. Require a
+        # stable snapshot at return; the caller must recheck before each use.
+        if (
+            authority.current_binding() != binding
+            or authority.authorize_capture(run_id, _binding_copy(binding)) is not True
+            or authority.read_run(run_id, _binding_copy(binding)) != run
+            or authority.read_steps(run_id, _binding_copy(binding)) != raw_steps
+        ):
+            raise TrajectoryError("teaching_run_stale")
+        return source
+    except TrajectoryError:
+        raise
+    except Exception:
+        raise TrajectoryError("teaching_run_unavailable") from None

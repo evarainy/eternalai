@@ -1,24 +1,28 @@
-"""Review-only locator proposals for authorized neutral failed steps.
+"""Bounded read-only exploration and review-only locator repair proposals.
 
-No page exploration, executable selector code, draft mutation or publication is
-performed here. A future editor must revalidate a proposal against the current
-draft and publication before applying it through its own approved workflow.
+Model suggestions identify registered primitives only. Actual actions must use
+the sole Run/Executor; a repair never mutates a draft, business object, grant or
+Verifier and cannot publish itself.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Literal, Never, Self, SupportsIndex
 
 from pydantic import Field, TypeAdapter, model_validator
 
 from app.browser_skill.compiler import (
+    DurableTeachingCompilerAuthority,
+    DurableTeachingDraft,
     TeachingContext,
     TeachingError,
     _check_whitelist,
     canonical_step_id,
+    compile_authorized_run,
     validate_draft_route_shape,
     validate_teaching_source,
 )
@@ -31,11 +35,14 @@ from app.browser_skill.models import (
     ScopeBinding,
     ScopeStamp,
 )
+from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.registry import Publication, canonical_digest
-from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredSitePlan
+from app.browser_skill.site_rules import FrozenSiteAdapter, RegisteredSitePlan, SiteStepRule
 from app.browser_skill.trajectory import (
+    BindingRevisions,
     NeutralTrajectory,
     PublicationReference,
+    RunTeachingStep,
     SkillDraft,
     TrajectoryEvent,
     _binding_copy,
@@ -447,3 +454,332 @@ def validate_locator_proposal(
     )
     if fresh != checked:
         raise RepairError("repair_proposal_stale")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class FormalFailedStep:
+    """Owner-scoped Run audit fact, never inferred from a page/model response."""
+
+    binding: ScopeBinding
+    run_id: str
+    publication_digest: str
+    step_id: str
+    reason: Literal["target_stale", "locator_not_found", "ambiguous_target"]
+    dispatch_state: Literal["not_sent"]
+    evidence_digest: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binding", _binding_copy(self.binding))
+        for value in (self.run_id, self.step_id):
+            TypeAdapter(OpaqueId).validate_python(value, strict=True)
+        for value in (self.publication_digest, self.evidence_digest):
+            TypeAdapter(Digest).validate_python(value, strict=True)
+        if self.dispatch_state != "not_sent":
+            raise RepairError("repair_effect_unknown")
+
+    def __repr__(self) -> str:
+        return "<FormalFailedStep: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+
+class FormalLocatorProposal(Contract):
+    schema_version: Literal["browser_formal_locator_proposal.v1"] = (
+        "browser_formal_locator_proposal.v1"
+    )
+    proposal_id: OpaqueId
+    draft_digest: Digest
+    source_digest: Digest
+    publication_digest: Digest
+    failed_run_id: OpaqueId
+    step_id: OpaqueId
+    primitive_id: OpaqueId
+    original_step_digest: Digest
+    failure_evidence_digest: Digest
+    replacement: LocatorHint
+    digest: Digest
+
+    @model_validator(mode="after")
+    def integrity(self) -> Self:
+        if canonical_digest(self.schema_version, self.model_dump(mode="json")) != self.digest:
+            raise ValueError("repair_formal_proposal_digest_mismatch")
+        return self
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class FormalRepairAuthority:
+    compiler: DurableTeachingCompilerAuthority
+    current_binding: Callable[[], ScopeBinding]
+    failed_step: Callable[[str, str, ScopeBinding], FormalFailedStep | None]
+    approved_hints: Callable[
+        [BrowserPublicationManifest, str, ScopeBinding], tuple[LocatorHint, ...]
+    ]
+    authorize: Callable[[DurableTeachingDraft, ScopeBinding], bool]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.compiler, DurableTeachingCompilerAuthority) or not all(
+            callable(value) for value in (
+                self.current_binding, self.failed_step,
+                self.approved_hints, self.authorize,
+            )
+        ):
+            raise RepairError("repair_formal_authority_required")
+
+    def __repr__(self) -> str:
+        return "<FormalRepairAuthority: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+
+def _formal_hint(
+    hint: LocatorHint, draft: DurableTeachingDraft,
+) -> None:
+    value = hint.value
+    if any(ord(c) < 32 for c in value) or any(
+        token in value.casefold()
+        for token in ("://", "javascript:", "data:", "<", ">", "`", "\\", ";", "${")
+    ):
+        raise RepairError("repair_hint_unsafe")
+    if hint.kind == "test_id":
+        try:
+            TypeAdapter(OpaqueId).validate_python(value, strict=True)
+        except Exception:
+            raise RepairError("repair_hint_unsafe") from None
+    elif hint.kind == "role_name":
+        policy = draft.publication.site.policy
+        if value not in (*policy.allowed_names, *policy.allowed_context,
+                         *policy.allowed_row_labels, *policy.allowed_column_labels):
+            raise RepairError("repair_hint_unapproved")
+    elif hint.kind == "business_key":
+        if value != draft.publication.site.read_rule.key_ref.name or not any(
+            item.name == value and item.purpose == "business_key"
+            for item in draft.parameter_whitelist
+        ):
+            raise RepairError("repair_hint_unapproved")
+    else:
+        raise RepairError("repair_hint_unsupported")
+
+
+def propose_formal_locator(
+    draft: DurableTeachingDraft,
+    *,
+    binding: ScopeBinding,
+    failed_run_id: str,
+    step_id: str,
+    replacement: LocatorHint,
+    authority: FormalRepairAuthority,
+) -> FormalLocatorProposal:
+    """Propose only a locator change for a proven not-sent failed draft step."""
+    try:
+        binding = _binding_copy(binding)
+        draft = DurableTeachingDraft(
+            draft.binding, draft.source, draft.publication,
+            draft.parameter_whitelist, draft.digest,
+        )
+        TypeAdapter(OpaqueId).validate_python(failed_run_id, strict=True)
+        TypeAdapter(OpaqueId).validate_python(step_id, strict=True)
+        replacement = LocatorHint.model_validate_json(replacement.model_dump_json())
+        if binding != draft.binding or authority.current_binding() != binding or (
+            authority.authorize(draft, binding) is not True
+        ):
+            raise RepairError("repair_denied")
+        current = compile_authorized_run(
+            draft.source, binding=binding,
+            target_skill_id=draft.publication.skill.skill_id,
+            version=draft.publication.skill.version,
+            site_version=draft.publication.site.version,
+            parameter_whitelist=draft.parameter_whitelist,
+            authority=authority.compiler,
+        )
+        if current != draft:
+            raise RepairError("repair_draft_stale")
+        index = next((i for i, step in enumerate(draft.publication.skill.steps)
+                      if step.step_id == step_id), None)
+        if index is None:
+            raise RepairError("repair_step_unknown")
+        step = draft.publication.skill.steps[index]
+        primitive_id = draft.source.manifest.steps[index].primitive_id
+        failure = authority.failed_step(failed_run_id, step_id, binding)
+        if failure is None:
+            raise RepairError("repair_failure_unavailable")
+        failure = FormalFailedStep(
+            failure.binding, failure.run_id, failure.publication_digest,
+            failure.step_id, failure.reason, failure.dispatch_state,
+            failure.evidence_digest,
+        )
+        if (failure.binding, failure.run_id, failure.publication_digest,
+                failure.step_id) != (binding, failed_run_id,
+                                    draft.publication.digest, step_id):
+            raise RepairError("repair_failure_scope_mismatch")
+        hints = authority.approved_hints(draft.publication, step_id, binding)
+        if type(hints) is not tuple or not hints or len(hints) > 32:
+            raise RepairError("repair_hints_unavailable")
+        checked_hints = tuple(LocatorHint.model_validate_json(item.model_dump_json())
+                              for item in hints)
+        if len(set(checked_hints)) != len(checked_hints):
+            raise RepairError("repair_hints_duplicate")
+        for hint in checked_hints:
+            _formal_hint(hint, draft)
+        if replacement not in checked_hints or replacement == step.locator:
+            raise RepairError("repair_hint_unapproved")
+        seed = canonical_digest("browser_formal_locator_id.v1", {
+            "draft_digest": draft.digest, "step_id": step_id,
+            "failure_evidence_digest": failure.evidence_digest,
+            "replacement": replacement.model_dump(mode="json"),
+        })
+        payload: dict[str, object] = dict(
+            schema_version="browser_formal_locator_proposal.v1",
+            proposal_id=f"proposal_{seed}", draft_digest=draft.digest,
+            source_digest=draft.source.manifest.digest,
+            publication_digest=draft.publication.digest,
+            failed_run_id=failed_run_id, step_id=step_id,
+            primitive_id=primitive_id,
+            original_step_digest=canonical_digest(
+                "browser_skill_step.v1", step.model_dump(mode="json"),
+            ),
+            failure_evidence_digest=failure.evidence_digest,
+            replacement=replacement.model_dump(mode="json"),
+        )
+        payload["digest"] = canonical_digest(
+            "browser_formal_locator_proposal.v1", payload,
+        )
+        proposal = FormalLocatorProposal.model_validate_json(json.dumps(payload))
+        if (
+            authority.current_binding() != binding
+            or authority.authorize(draft, binding) is not True
+            or authority.failed_step(failed_run_id, step_id, binding) != failure
+            or authority.approved_hints(draft.publication, step_id, binding) != hints
+        ):
+            raise RepairError("repair_evidence_stale")
+        return proposal
+    except RepairError:
+        raise
+    except Exception:
+        raise RepairError("repair_formal_unavailable") from None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class ReadOnlyExplorationAuthority:
+    """Only a bounded next-primitive proposal; execution stays in the sole Run."""
+
+    current_binding: Callable[[], ScopeBinding]
+    authorize: Callable[[str, ScopeBinding, BrowserPublicationManifest], Awaitable[bool]]
+    registered_rule: Callable[[str, BrowserPublicationManifest], SiteStepRule | None]
+    suggest_next: Callable[[str, tuple[str, ...]], Awaitable[str | None]]
+    execute_step: Callable[[str, str, ScopeBinding], Awaitable[RunTeachingStep]]
+    clock: Callable[[], float]
+    deadline_monotonic: float
+    maximum_steps: int
+    allowed_regions: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            not all(callable(value) for value in (
+                self.current_binding, self.authorize, self.registered_rule,
+                self.suggest_next, self.execute_step, self.clock,
+            ))
+            or type(self.maximum_steps) is not int
+            or not 1 <= self.maximum_steps <= 32
+            or type(self.allowed_regions) is not tuple
+            or not 1 <= len(self.allowed_regions) <= 32
+            or len(set(self.allowed_regions)) != len(self.allowed_regions)
+            or type(self.deadline_monotonic) not in (int, float)
+            or not math.isfinite(self.deadline_monotonic)
+        ):
+            raise RepairError("exploration_authority_invalid")
+        for region in self.allowed_regions:
+            TypeAdapter(OpaqueId).validate_python(region, strict=True)
+
+    def __repr__(self) -> str:
+        return "<ReadOnlyExplorationAuthority: process-local>"
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+    def __getstate__(self) -> Never:
+        raise TypeError("repair_private_serialization_forbidden")
+
+
+async def explore_registered_reads(
+    run_id: str,
+    *,
+    binding: ScopeBinding,
+    publication: BrowserPublicationManifest,
+    authority: ReadOnlyExplorationAuthority,
+) -> tuple[RunTeachingStep, ...]:
+    """Bound read-only suggestions to registered primitives and one controlled Run.
+
+    The returned facts are not a draft or source. The Run must independently
+    finish verified before capture_authorized_run can use its audit.
+    """
+    try:
+        run_id = TypeAdapter(OpaqueId).validate_python(run_id, strict=True)
+        binding = _binding_copy(binding)
+        publication = BrowserPublicationManifest.model_validate_json(
+            publication.model_dump_json()
+        )
+        emitted: list[RunTeachingStep] = []
+        for _ in range(authority.maximum_steps):
+            now = authority.clock()
+            if type(now) not in (int, float) or not math.isfinite(now) or now >= (
+                authority.deadline_monotonic
+            ):
+                raise RepairError("exploration_deadline")
+            if authority.current_binding() != binding or await authority.authorize(
+                run_id, binding, publication,
+            ) is not True:
+                raise RepairError("exploration_denied")
+            primitive_id = await authority.suggest_next(
+                run_id, tuple(item.primitive_id for item in emitted),
+            )
+            if primitive_id is None:
+                return tuple(emitted)
+            primitive_id = TypeAdapter(OpaqueId).validate_python(
+                primitive_id, strict=True,
+            )
+            raw_rule = authority.registered_rule(primitive_id, publication)
+            if raw_rule is None:
+                raise RepairError("exploration_primitive_unregistered")
+            rule = SiteStepRule.model_validate_json(raw_rule.model_dump_json())
+            if (
+                rule.step.step_id != primitive_id
+                or rule.step.effect != "read_only"
+                or rule.effect.actual_effect != "read_only"
+                or rule.step.operation not in {"read", "click"}
+                or rule.observation.region_id not in authority.allowed_regions
+            ):
+                raise RepairError("exploration_effect_denied")
+            if authority.current_binding() != binding or await authority.authorize(
+                run_id, binding, publication,
+            ) is not True:
+                raise RepairError("exploration_denied")
+            fact = RunTeachingStep.model_validate_json((await authority.execute_step(
+                run_id, primitive_id, binding,
+            )).model_dump_json())
+            if (
+                fact.run_id != run_id
+                or fact.skill_version != publication.skill.version
+                or fact.skill_digest != publication.skill.digest
+                or fact.binding != BindingRevisions.from_binding(binding)
+                or fact.primitive_id != primitive_id
+                or not fact.event.matches_step(rule.step)
+                or fact.event.effect_proof != rule.effect
+                or fact.rule_digest != canonical_digest(
+                    "browser_site_step.v1", rule.model_dump(mode="json"),
+                )
+            ):
+                raise RepairError("exploration_audit_mismatch")
+            emitted.append(fact)
+        return tuple(emitted)
+    except RepairError:
+        raise
+    except Exception:
+        raise RepairError("exploration_unavailable") from None
