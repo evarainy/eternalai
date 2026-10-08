@@ -138,9 +138,22 @@ def test_bound_record_requires_owned_company_rule_and_shanghai_week(migrated_dat
                     task_id=h["task"], confirmed=True, expected_action_digest=h["op"].action_digest
                 )
                 assert result.output["state"] == (
-                    "VERIFIED_SUCCESS" if case == "approved" else "CANCELLED"
+                    "VERIFIED_SUCCESS" if case == "approved" else "FAILED"
                 )
+                expected_error = None if case == "approved" else "adapter_payload_invalid"
+                op = await h["workflows"].by_task(h["task"])
+                assert op is not None and op.state == result.output["state"]
+                assert result.error_code == op.confirmation_error_code == expected_error
+                assert op.send_started is (case == "approved")
                 assert peer.effects == (1 if case == "approved" else 0)
                 assert len(peer.calls) > 0 if case == "approved" else peer.calls == []
+                calls = list(peer.calls)
+                replay = await h["workflow"].resume(
+                    task_id=h["task"], confirmed=True, expected_action_digest=h["op"].action_digest
+                )
+                assert replay.output["state"] == result.output["state"]
+                assert replay.error_code == expected_error
+                assert await h["workflows"].by_task(h["task"]) == op
+                assert peer.calls == calls and peer.effects == (1 if case == "approved" else 0)
 
         asyncio.run(run(), loop_factory=make_event_loop)

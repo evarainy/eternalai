@@ -197,11 +197,27 @@ def test_submit_precondition_is_independent_and_rechecked_before_http(
                 )
                 op = await h["workflows"].by_task(h["task"])
                 assert result.status == "failed" and peer.effects == 0
-                assert op.state == ("UNKNOWN" if fault == "before_http" else "CANCELLED")
+                assert op is not None
+                assert op.state == ("UNKNOWN" if fault == "before_http" else "FAILED")
+                expected_error = (
+                    "mcp_outcome_unknown" if fault == "before_http" else "adapter_payload_invalid"
+                )
+                assert result.output["state"] == op.state and result.error_code == expected_error
+                assert op.confirmation_error_code == (
+                    None if fault == "before_http" else expected_error
+                )
                 assert op.send_started is (fault == "before_http")
                 assert not any(body["method"] == "tools/call" for _, _, body in peer.calls)
                 if fault == "before_http":
                     assert provider.calls == 2
+                calls, provider_calls = list(peer.calls), provider.calls
+                replay = await h["workflow"].resume(
+                    task_id=h["task"], confirmed=True, expected_action_digest=h["op"].action_digest
+                )
+                assert replay.output["state"] == op.state and replay.error_code == expected_error
+                assert await h["workflows"].by_task(h["task"]) == op
+                assert peer.calls == calls and peer.effects == 0
+                assert provider.calls == provider_calls
 
         asyncio.run(run(), loop_factory=make_event_loop)
 
