@@ -38,6 +38,11 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
     """Generated text fixtures only; no real weights/checkpoint inference evidence."""
     root.mkdir(parents=True, exist_ok=True)
     runtime = [{"package": "pydantic", "version": importlib.metadata.version("pydantic")}]
+    adapter_bytes = json.dumps({
+        "schema_version": "decision_laya_input.v1",
+        "state_format": "laya_minimal_choice.v1",
+        "instruction": "Select the approved target.",
+    }).encode()
     calibration = dict(
         schema_version="decision_calibration.v1",
         checkpoint_revision="a" * 40,
@@ -46,6 +51,8 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
         evaluation_set_digest="b" * 64,
         evidence_digest="c" * 64,
         minimum_confidence=0.9,
+        score_semantics="laya_answer_confidence",
+        input_adapter_digest=hashlib.sha256(adapter_bytes).hexdigest(),
     )
     dependency_lock = dict(
         schema_version="decision_dependencies.v1",
@@ -62,12 +69,15 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
         "input_adapter",
         "calibration",
         "dependency_lock",
+        "license",
     ):
         content = (
             json.dumps(calibration)
             if role == "calibration"
             else json.dumps(dependency_lock)
             if role == "dependency_lock"
+            else adapter_bytes.decode()
+            if role == "input_adapter"
             else f"generated synthetic {role}, no actual model"
         )
         path = f"{role}.synthetic"
@@ -86,6 +96,8 @@ def artifact_bundle(root: Path) -> PinnedCheckpoint:
         tokenizer_revision="a" * 40,
         tokenizer_path="tokenizer.synthetic",
         dtype="float32",
+        device="cpu",
+        serving_backend="laya_eager",
         deployment="fixture-pinned-v1",
         input_schema_digest=schema_digest(ChoiceRequest),
         output_schema_digest=schema_digest(ChoiceResponse),
@@ -106,7 +118,7 @@ def seal_manifest(payload: dict[str, Any]) -> PinnedCheckpoint:
 
 def test_generated_manifest_pins_all_roles_schemas_and_metadata(tmp_path: Path) -> None:
     manifest = artifact_bundle(tmp_path)
-    assert len(manifest.artifacts) == 7
+    assert len(manifest.artifacts) == 8
     assert manifest.calibration.input_schema_digest == schema_digest(ChoiceRequest)
     assert manifest.tokenizer_revision == manifest.revision
     assert manifest.arbiter_reference == ARBITER_REFERENCE

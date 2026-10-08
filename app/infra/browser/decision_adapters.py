@@ -82,6 +82,11 @@ class _LocalResponse(Contract):
     distribution: tuple[_LocalProbability, ...]
     certainty: Probability
     usage: _Usage
+    score_semantics: Literal["synthetic_probability", "laya_answer_confidence"] = (
+        "synthetic_probability"
+    )
+    calibration_digest: str | None = None
+    manifest_digest: str | None = None
 
 
 def _json_bytes(value: object) -> bytes:
@@ -109,11 +114,15 @@ def _selection(
     choice: str,
     probabilities: dict[str, float],
     confidence: float,
+    probability_tolerance: float = 1e-6,
 ) -> DecisionResult:
     refs = {candidate.ref.target_id: candidate.ref for candidate in request.candidates}
     if set(probabilities) != set(refs) or choice not in refs:
         raise InvalidResponse("candidate_set_mismatch")
-    if not math.isclose(math.fsum(probabilities.values()), 1.0, rel_tol=0, abs_tol=1e-6):
+    if not math.isclose(
+        math.fsum(probabilities.values()), 1.0,
+        rel_tol=0, abs_tol=probability_tolerance,
+    ):
         raise InvalidResponse("probability_sum")
     maximum = max(probabilities.values())
     if probabilities[choice] != maximum:
@@ -260,6 +269,19 @@ class LocalChoiceCodec:
             raise ModelMismatch("deployment_mismatch")
         if response.request_id != request.request_id or response.snapshot != request.scope:
             raise InvalidResponse("stale_response")
+        is_synthetic = response.deployment == "synthetic-decision-test-v1"
+        if is_synthetic != (response.score_semantics == "synthetic_probability"):
+            raise InvalidResponse("score_semantics_mismatch")
+        if response.score_semantics == "laya_answer_confidence":
+            if (
+                response.calibration_digest is None
+                or len(response.calibration_digest) != 64
+                or any(char not in "0123456789abcdef" for char in response.calibration_digest)
+                or response.manifest_digest != context.manifest.manifest_digest
+            ):
+                raise InvalidResponse("calibration_missing")
+        elif response.calibration_digest is not None or response.manifest_digest is not None:
+            raise InvalidResponse("calibration_unexpected")
         if response.outcome != "selected":
             if response.selected_id is not None or response.distribution:
                 raise InvalidResponse("nonselection_payload")
@@ -279,4 +301,8 @@ class LocalChoiceCodec:
             response.selected_id,
             probabilities,
             response.certainty,
+            probability_tolerance=(
+                len(probabilities) * 0.00005 + 1e-6
+                if response.score_semantics == "laya_answer_confidence" else 1e-6
+            ),
         )

@@ -15,6 +15,7 @@ from app.browser_skill.models import Contract
 from services.decision.manifest import (
     CalibrationEvidence,
     ExactVersion,
+    LayaInputAdapter,
     PinnedCheckpoint,
     Revision,
     RuntimeRequirement,
@@ -108,7 +109,9 @@ def inspect_offline(manifest: PinnedCheckpoint, artifact_root: Path) -> OfflineR
             return OfflineResult("WAITING_ENV", ("runtime_dependency_missing",))
         if actual != requirement.version:
             return OfflineResult("FAIL", ("runtime_dependency_version_mismatch",))
-    metadata: dict[str, list[bytes]] = {"calibration": [], "dependency_lock": []}
+    metadata: dict[str, list[bytes]] = {
+        "calibration": [], "dependency_lock": [], "input_adapter": []
+    }
     for artifact in checked.artifacts:
         try:
             path = _exact_file(root, artifact.path)
@@ -138,14 +141,17 @@ def inspect_offline(manifest: PinnedCheckpoint, artifact_root: Path) -> OfflineR
         except OSError:
             return OfflineResult("WAITING_ENV", ("artifact_unreadable",))
     try:
-        if len(metadata["calibration"]) != 1 or len(metadata["dependency_lock"]) != 1:
+        if any(len(metadata[role]) != 1 for role in metadata):
             raise ValueError("metadata_ambiguous")
         calibration_raw = metadata["calibration"][0]
         dependency_raw = metadata["dependency_lock"][0]
+        adapter_raw = metadata["input_adapter"][0]
         strict_json(calibration_raw)
         strict_json(dependency_raw)
+        strict_json(adapter_raw)
         calibration = CalibrationEvidence.model_validate_json(calibration_raw)
         dependencies = DependencyLock.model_validate_json(dependency_raw)
+        LayaInputAdapter.model_validate_json(adapter_raw)
         if calibration != checked.calibration or (
             dependencies.checkpoint_revision,
             dependencies.python_version,

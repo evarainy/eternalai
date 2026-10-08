@@ -13,6 +13,7 @@
     "input_output_schema_digests",
     "registered_projection_policy",
     "weights_and_all_artifact_hashes_and_sizes",
+    "checkpoint_license_and_runtime_notices",
     "checkpoint_bound_calibration_evidence",
     "exact_offline_runtime_dependency_lock",
     "authorized_artifact_root_and_loaded_backend",

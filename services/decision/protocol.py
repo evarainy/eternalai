@@ -129,6 +129,12 @@ class EngineResult(Contract):
     distribution: tuple[ProbabilityEntry, ...]
     certainty: Probability
     usage: Usage
+    # A model choice probability is only usable with checkpoint-bound calibration.
+    # Synthetic probability is restricted to the explicitly synthetic deployment.
+    score_semantics: Literal["synthetic_probability", "laya_answer_confidence"] = (
+        "synthetic_probability"
+    )
+    calibration_digest: Digest | None = None
 
     @model_validator(mode="after")
     def shape(self) -> Self:
@@ -139,6 +145,10 @@ class EngineResult(Contract):
             raise ValueError("decision_nonselection_payload")
         if len({entry.id for entry in self.distribution}) != len(self.distribution):
             raise ValueError("decision_duplicate_probability")
+        if (self.score_semantics == "laya_answer_confidence") != (
+            self.calibration_digest is not None
+        ):
+            raise ValueError("decision_score_calibration_unbound")
         return self
 
 
@@ -147,23 +157,41 @@ class ChoiceResponse(EngineResult):
     request_id: OpaqueId
     deployment: SafeText
     snapshot: ScopeStamp
+    manifest_digest: Digest | None = None
 
 
 def encode_response(
-    request: ChoiceRequest, result: EngineResult, *, minimum_confidence: float, maximum_bytes: int
+    request: ChoiceRequest,
+    result: EngineResult,
+    *,
+    minimum_confidence: float,
+    maximum_bytes: int,
+    expected_semantics: Literal[
+        "synthetic_probability", "laya_answer_confidence"
+    ] = "synthetic_probability",
+    calibration_digest: Digest | None = None,
+    manifest_digest: Digest | None = None,
 ) -> bytes:
     checked = EngineResult.model_validate_json(result.model_dump_json(warnings=False))
+    if (checked.score_semantics, checked.calibration_digest) != (
+        expected_semantics, calibration_digest
+    ):
+        raise ValueError("decision_score_semantics_mismatch")
+    if (expected_semantics == "laya_answer_confidence") != (manifest_digest is not None):
+        raise ValueError("decision_manifest_binding_missing")
     if checked.outcome == "selected":
         probabilities = {item.id: item.p for item in checked.distribution}
         if set(probabilities) != {option.id for option in request.options}:
             raise ValueError("decision_candidate_set_mismatch")
-        if not math.isclose(math.fsum(probabilities.values()), 1.0, rel_tol=0, abs_tol=1e-6):
+        tolerance = (
+            len(probabilities) * 0.00005 + 1e-6
+            if checked.score_semantics == "laya_answer_confidence" else 1e-6
+        )
+        if not math.isclose(math.fsum(probabilities.values()), 1.0, rel_tol=0, abs_tol=tolerance):
             raise ValueError("decision_probability_sum")
         maximum = max(probabilities.values())
-        if (
-            checked.selected_id not in probabilities
-            or probabilities[checked.selected_id] != maximum
-        ):
+        chosen = checked.selected_id
+        if chosen is None or chosen not in probabilities or probabilities[chosen] != maximum:
             raise ValueError("decision_selection_not_maximal")
         if sum(value == maximum for value in probabilities.values()) != 1:
             checked = EngineResult(
@@ -172,6 +200,8 @@ def encode_response(
                 distribution=(),
                 certainty=0.0,
                 usage=checked.usage,
+                score_semantics=checked.score_semantics,
+                calibration_digest=checked.calibration_digest,
             )
         elif checked.certainty < minimum_confidence:
             checked = EngineResult(
@@ -180,12 +210,15 @@ def encode_response(
                 distribution=(),
                 certainty=checked.certainty,
                 usage=checked.usage,
+                score_semantics=checked.score_semantics,
+                calibration_digest=checked.calibration_digest,
             )
     response = ChoiceResponse(
         **checked.model_dump(),
         request_id=request.request_id,
         deployment=request.deployment,
         snapshot=request.snapshot,
+        manifest_digest=manifest_digest,
     )
     raw = response.model_dump_json().encode()
     if len(raw) > maximum_bytes:

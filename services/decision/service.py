@@ -118,6 +118,13 @@ class DecisionService:
         self.deployment = deployment
         self.execution_kind = engine.execution_kind
         self._engine_digest = engine.loaded_manifest_digest
+        self._score_semantics: Literal["synthetic_probability", "laya_answer_confidence"] = (
+            "laya_answer_confidence" if _manifest is not None else "synthetic_probability"
+        )
+        self._calibration_digest = (
+            _manifest.calibration.evidence_digest if _manifest is not None else None
+        )
+        self._manifest_digest = _manifest.digest if _manifest is not None else None
         self._policy = ProjectionPolicy.model_validate_json(policy.model_dump_json())
         self._authorize = authorize
         self.limits = ServingLimits.model_validate_json(limits.model_dump_json())
@@ -154,6 +161,8 @@ class DecisionService:
         limits: ServingLimits,
     ) -> DecisionService:
         checked = PinnedCheckpoint.model_validate_json(manifest.model_dump_json())
+        if checked.repository != "cklxx/laya-browser":
+            raise ServingFailure("WAITING_ENV")
         inspection = inspect_offline(checked, artifact_root)
         if inspection.status == "WAITING_ENV":
             raise ServingFailure("WAITING_ENV")
@@ -163,6 +172,10 @@ class DecisionService:
             or not inspection.receipt.matches(checked)
         ):
             raise ServingFailure("unavailable")
+        from services.decision.laya_backend import LayaEngine
+
+        if not isinstance(engine, LayaEngine):
+            raise ServingFailure("model_mismatch")
         return cls(
             engine=engine,
             deployment=checked.deployment,
@@ -171,6 +184,36 @@ class DecisionService:
             limits=limits,
             _receipt=inspection.receipt,
             _manifest=checked,
+        )
+
+    @classmethod
+    def from_local_checkpoint(
+        cls,
+        *,
+        manifest: PinnedCheckpoint,
+        artifact_root: Path,
+        device: Literal["cpu", "cuda"],
+        policy: ProjectionPolicy,
+        authorize: Callable[[ChoiceRequest], bool],
+        limits: ServingLimits,
+    ) -> DecisionService:
+        """Load the single local Laya backend, then bind it to this service."""
+        from services.decision.laya_backend import LayaEngine
+
+        checked = PinnedCheckpoint.model_validate_json(manifest.model_dump_json())
+        if (
+            checked.input_schema_digest != schema_digest(ChoiceRequest)
+            or checked.output_schema_digest != schema_digest(ChoiceResponse)
+            or checked.projection_policy_digest != policy.digest
+            or limits.minimum_confidence < checked.calibration.minimum_confidence
+        ):
+            raise ServingFailure("model_mismatch")
+        engine = LayaEngine.load(
+            manifest=checked, artifact_root=artifact_root, device=device
+        )
+        return cls.checkpoint(
+            engine=engine, manifest=checked, artifact_root=artifact_root,
+            policy=policy, authorize=authorize, limits=limits,
         )
 
     @property
@@ -248,6 +291,8 @@ class DecisionService:
                 result = operation.result()
             except asyncio.CancelledError:
                 raise ServingFailure("cancelled") from None
+            except ServingFailure:
+                raise
             except Exception:
                 raise ServingFailure("unavailable") from None
             self._engine_pinned()
@@ -258,6 +303,9 @@ class DecisionService:
                     result,
                     minimum_confidence=self.limits.minimum_confidence,
                     maximum_bytes=self.limits.maximum_response_bytes,
+                    expected_semantics=self._score_semantics,
+                    calibration_digest=self._calibration_digest,
+                    manifest_digest=self._manifest_digest,
                 )
             except (ValueError, TypeError, AttributeError):
                 raise ServingFailure("invalid_response") from None

@@ -20,25 +20,31 @@ requires actual A1 evidence. The specified challenger is
 card currently shows a `v32b` subfolder. Neither mutable card freezes our revision,
 tokenizer, dtype, input adapter or calibration.
 
+The local `LayaEngine` uses the checkpoint's documented `predict(state, questions)`
+choice interface through one pinned `laya` installation. It does not run operation
+selection, free-form text generation, Arbiter, a second model or a cloud endpoint.
 The [fixed Arbiter engine contract](https://raw.githubusercontent.com/0xBakeer/arbiter/bf71358774c85aeff2051ec7b1dcc4577a87706d/engines/README.md)
-defines load, row construction, batched prediction and routing interfaces. This
-source reference is A0 only. The injected `InferenceEngine` is a neutral coordination
-seam; it does not claim that Arbiter's default checkpoints are Browser322 or that
-mixed-batch parity has passed. A1 checkpoint parity, A2 serving isolation, A3 mixed
-batches, A4 offline/resources and A5 business quality remain WAITING_ENV. Missing
-GPU or weights is not a technical NO-GO. No fallback production stack is selected.
+is retained as an A0 reference only. A1 checkpoint parity, A2 serving isolation,
+A3 mixed batches, A4 offline/resources and A5 business quality remain WAITING_ENV.
+Missing GPU or weights is not a technical NO-GO.
 
 ## Registration and offline preflight
 
 An operator-approved `PinnedCheckpoint` must include the exact checkpoint/tokenizer
-revisions, subfolder, dtype, wire-schema and projection-policy digests, calibration,
-Python/runtime versions, and exact paths, sizes and SHA256 values for weights,
-tokenizer, configuration, audited model code, input adapter, calibration and dependency
-lock. `digest()` canonicalizes JSON and excludes only the object's own digest;
+revisions, subfolder, dtype, device, `laya_eager` backend, wire-schema and
+projection-policy digests, calibration, Python/runtime versions, and exact paths,
+sizes and SHA256 values for weights,
+tokenizer, configuration, audited model code, input adapter, calibration, dependency
+lock and checkpoint license/notice. Runtime dependency notices also need an
+operator-reviewed bundle. `digest()` canonicalizes JSON and excludes only the
+object's own digest;
 nested digests remain covered. Never use this public hash for private parameter values.
 
 The calibration artifact must parse as `CalibrationEvidence` and equal the manifest's
-checkpoint-bound evidence. The dependency-lock artifact must parse as `DependencyLock`
+checkpoint-bound evidence, including the `laya_answer_confidence` semantics and
+SHA256 of the exact input-adapter artifact. That artifact must parse as
+`decision_laya_input.v1`, pinning the choice instruction and minimal state format.
+The dependency-lock artifact must parse as `DependencyLock`
 and match the exact checkpoint, Python version and runtime requirements. Registration
 alone is insufficient: the offline checker checks installed versions and reads only
 listed artifacts under the explicitly authorized absolute root. It rejects links,
@@ -64,12 +70,18 @@ substitute for the selected model runtime's audited offline dependency bundle.
 
 ## Trusted composition and lifetime
 
-Use `DecisionService.checkpoint(...)` only with an already loaded backend whose
-manifest digest matches the physically checked artifacts, wire schemas, approved
-projection policy and calibration. Model loading is an injected operator responsibility;
-this package has no automatic loader. `DecisionService.synthetic(...)` accepts only a
-synthetic backend and fixes its deployment identity. Request strings cannot select a
-mode or bypass startup checks.
+Trusted composition calls `DecisionService.from_local_checkpoint(...)` with an
+operator-pinned manifest, absolute artifact root, explicit `cpu` or `cuda`, approved
+projection policy, current authorizer and serving limits. This runs the exact-file
+offline preflight, requires pinned `laya`, `torch`, `transformers`, `safetensors` and
+`huggingface-hub` versions, and loads only an existing local checkpoint directory.
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` must already be effective in the
+process; the deployment must also deny external network and mount artifacts read-only.
+Those library flags alone are not a network isolation proof. A missing checkpoint,
+wrong dependency or fallback device/dtype rejects startup. `DecisionService.checkpoint`
+remains the lower-level already-loaded-engine seam. `DecisionService.synthetic(...)`
+accepts only a synthetic backend and fixes its deployment identity. Request strings
+cannot select a mode or bypass startup checks.
 
 `create_app(service, authorize=...)` requires current HTTP authorization; omission
 denies requests. The service separately requires current input authorization and an
@@ -81,12 +93,27 @@ caller remains responsible for current scope and action authorization at dispatc
 Capacity is process-local and bounds actual active inference, not merely waiting HTTP
 requests. Timeout, cancellation or disconnect signals the backend and cancels its task;
 a backend that suppresses cancellation retains its slot until it actually finishes.
-Late results are discarded. Blocking model work must not block the event loop. The
+Late results are discarded. Blocking model work runs off the event loop; a cancelled
+await retains quota until the actual model forward finishes. The
 owner must await `service.close(...)`; `False` means work remains and must not be
 reported as released. There is no retry, fallback or automatic model reload.
 
 HTTP failures retain fixed codes: 401 unauthorized, 412 model mismatch, 422 unsupported input,
 429 overloaded, 504 timeout, 499 cancelled, 502 invalid output and 503 unavailable.
 No backend exception or rejected request body is echoed. Request/response byte limits,
-exact option sets, finite normalized probabilities and deployment identity are checked.
-Ties become ambiguous and calibrated low confidence becomes abstained.
+exact option sets, finite rounded choice probabilities, deployment identity,
+checkpoint digest and explicit score semantics are checked. Laya's
+`answer_confidence` is used as `certainty` only under checkpoint-bound calibration
+evidence; its normalized-entropy `confidence`, selected choice probability, raw
+logits and rank values are different quantities and cannot be substituted. A
+truncated state or collapsed option set is rejected. Ties become ambiguous and scores
+below the registered threshold become abstained. The threshold and Chinese quality
+still require an independent held-out calibration set; `WAITING_ENV` inventory cannot
+be started as a production model.
+
+The existing browser `DecisionDeployment` registry and composition code still permit
+only synthetic dispositions. Formal deployment integration must add a trusted
+`local_model` registration pinned to this manifest and a local endpoint with no
+remote fallback, plus the externally enforced network and read-only mount. The
+main Runtime LLM retains its existing vLLM raw JSON configuration. The deterministic
+read path is measured separately from model accuracy.

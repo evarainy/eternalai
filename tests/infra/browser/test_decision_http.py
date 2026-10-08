@@ -605,6 +605,9 @@ def test_distinct_local_codec_goes_through_http_and_binds_snapshot() -> None:
                     "distribution": [{"id": "target_a", "p": 0.95}, {"id": "target_b", "p": 0.05}],
                     "certainty": 0.95,
                     "usage": {"input_tokens": 20, "output_tokens": 10},
+                    "score_semantics": "laya_answer_confidence",
+                    "calibration_digest": "b" * 64,
+                    "manifest_digest": DIGEST,
                 },
             )
 
@@ -677,6 +680,9 @@ def test_local_codec_preserves_explicit_nonselection(status: str) -> None:
             "distribution": [],
             "certainty": 0.0,
             "usage": {"input_tokens": 20, "output_tokens": 0},
+            "score_semantics": "laya_answer_confidence",
+            "calibration_digest": "b" * 64,
+            "manifest_digest": DIGEST,
         }
     ).encode()
     result = LocalChoiceCodec().decode(raw, request(), context())

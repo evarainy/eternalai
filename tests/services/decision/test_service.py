@@ -254,7 +254,7 @@ def test_independent_concurrent_calls_do_not_mix_candidate_ids() -> None:
     asyncio.run(run())
 
 
-def test_checkpoint_startup_requires_actual_artifacts_and_loaded_digest(tmp_path: Path) -> None:
+def test_fake_model_engine_cannot_masquerade_as_loaded_checkpoint(tmp_path: Path) -> None:
     manifest = artifact_bundle(tmp_path)
     engine = FakeEngine()
     engine.execution_kind = "model"  # Constructor test double only; no inference is run.
@@ -267,8 +267,8 @@ def test_checkpoint_startup_requires_actual_artifacts_and_loaded_digest(tmp_path
         authorize=lambda _: True,
         limits=ServingLimits(),
     )
-    server = DecisionService.checkpoint(**kwargs)
-    assert server.deployment == manifest.deployment
+    with pytest.raises(ServingFailure, match="model_mismatch"):
+        DecisionService.checkpoint(**kwargs)
     assert engine.inputs == []
     engine.loaded_manifest_digest = "wrong"
     with pytest.raises(ServingFailure, match="model_mismatch"):

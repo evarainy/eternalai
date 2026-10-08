@@ -70,6 +70,7 @@ class Artifact(Contract):
         "input_adapter",
         "calibration",
         "dependency_lock",
+        "license",
     ]
     sha256: Digest
     size_bytes: Annotated[int, Field(gt=0, le=1_099_511_627_776)]
@@ -85,6 +86,14 @@ class RuntimeRequirement(Contract):
     version: ExactVersion
 
 
+class LayaInputAdapter(Contract):
+    """Pinned, non-executable mapping from approved choice input to Laya questions."""
+
+    schema_version: Literal["decision_laya_input.v1"]
+    state_format: Literal["laya_minimal_choice.v1"]
+    instruction: SafeText
+
+
 class CalibrationEvidence(Contract):
     schema_version: Literal["decision_calibration.v1"] = "decision_calibration.v1"
     checkpoint_revision: Revision
@@ -93,6 +102,8 @@ class CalibrationEvidence(Contract):
     evaluation_set_digest: Digest
     evidence_digest: Digest
     minimum_confidence: Probability
+    score_semantics: Literal["laya_answer_confidence"]
+    input_adapter_digest: Digest
 
 
 class PinnedCheckpoint(Contract):
@@ -103,6 +114,8 @@ class PinnedCheckpoint(Contract):
     tokenizer_revision: Revision
     tokenizer_path: SafeText
     dtype: Literal["float32", "float16", "bfloat16"]
+    device: Literal["cpu", "cuda"]
+    serving_backend: Literal["laya_eager"]
     deployment: SafeText
     input_schema_digest: Digest
     output_schema_digest: Digest
@@ -110,7 +123,7 @@ class PinnedCheckpoint(Contract):
     calibration: CalibrationEvidence
     python_version: ExactVersion
     runtime: Annotated[tuple[RuntimeRequirement, ...], Field(min_length=1, max_length=128)]
-    artifacts: Annotated[tuple[Artifact, ...], Field(min_length=7, max_length=4096)]
+    artifacts: Annotated[tuple[Artifact, ...], Field(min_length=8, max_length=4096)]
     arbiter_reference: Literal["bf71358774c85aeff2051ec7b1dcc4577a87706d"] = ARBITER_REFERENCE
     digest: Digest
 
@@ -130,6 +143,7 @@ class PinnedCheckpoint(Contract):
             "input_adapter",
             "calibration",
             "dependency_lock",
+            "license",
         }
         if {artifact.role for artifact in self.artifacts} != required:
             raise ValueError("decision_artifacts_incomplete")
@@ -144,6 +158,10 @@ class PinnedCheckpoint(Contract):
             self.calibration.output_schema_digest,
         ) != (self.revision, self.input_schema_digest, self.output_schema_digest):
             raise ValueError("decision_calibration_mismatch")
+        if self.calibration.input_adapter_digest not in {
+            artifact.sha256 for artifact in self.artifacts if artifact.role == "input_adapter"
+        }:
+            raise ValueError("decision_calibration_adapter_mismatch")
         if digest(self.schema_version, self.model_dump(mode="json")) != self.digest:
             raise ValueError("decision_manifest_digest_mismatch")
         return self
