@@ -63,10 +63,10 @@ from app.browser_skill.site_rules import (
 from app.browser_skill.verifier import authorize_current, check_liveness, failure
 from app.infra.browser.browserless_wire import BrowserProviderError
 from app.infra.browser.playwright_dom_rules import (
-    DOMValue,
-    DOMBatchError,
-    RegisteredDOMRules,
     ROW_IDENTITY_MATCH,
+    DOMBatchError,
+    DOMValue,
+    RegisteredDOMRules,
     bounded_children,
     filter_private_candidates,
     private_row_identity,
@@ -103,11 +103,15 @@ _OPTION_IDENTITY = """el => {
 }"""
 
 
-_FINAL_IDENTITY = ("(identity, config) => { const privateIdentity = " + ROW_IDENTITY_MATCH + ";"
-                + """
+_FINAL_IDENTITY = (
+    "(identity, config) => { const privateIdentity = "
+    + ROW_IDENTITY_MATCH
+    + ";"
+    + """
               const node = identity.node, region = identity.region;
               if (node !== config.element || !node.isConnected || !region.isConnected ||
-                  node.ownerDocument !== region.ownerDocument || !region.contains(node)) return false;
+                  node.ownerDocument !== region.ownerDocument ||"""
+    """ !region.contains(node)) return false;
               const regions = node.ownerDocument.querySelectorAll(config.region_selector);
               if (regions.length !== 1 || regions[0] !== region) return false;
               if (config.selector && !node.matches(config.selector)) return false;
@@ -143,7 +147,8 @@ _FINAL_IDENTITY = ("(identity, config) => { const privateIdentity = " + ROW_IDEN
                   option.value !== config.option_value || option.label !== config.option_label))
                 return false;
               return true;
-            }""")
+            }"""
+)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -520,8 +525,12 @@ class PlaywrightWebAdapter:
             result["observer_observe_calls"] = self._observer._observe_calls.get(session_ref, 0)
             result["observer_snapshot_calls"] = self._observer._snapshot_calls.get(session_ref, 0)
             for name, value in self._observer._batch_counts.get(session_ref, {}).items():
-                if name in {"observer_identity_batch_attempts", "observer_identity_batch_successes",
-                            "observer_projection_check_attempts", "observer_projection_check_successes"}:
+                if name in {
+                    "observer_identity_batch_attempts",
+                    "observer_identity_batch_successes",
+                    "observer_projection_check_attempts",
+                    "observer_projection_check_successes",
+                }:
                     result[name] = value
         result.update(self._filter_counts.get(session_ref, {}))
         progress = self._validation_progress.get(session_ref)
@@ -547,8 +556,13 @@ class PlaywrightWebAdapter:
             "observe_wait_stage": stage,
             "observe_wait_elapsed_ms": max(0, min(300000, int((now - started) * 1000))),
         }
-        if stage in {"region_resolution", "candidate_batch", "candidate_batch_after"} and isinstance(
-            self._observer, PlaywrightObserver,
+        if stage in {
+            "region_resolution",
+            "candidate_batch",
+            "candidate_batch_after",
+        } and isinstance(
+            self._observer,
+            PlaywrightObserver,
         ):
             inner = self._observer._observe_wait.get(session_ref)
             if inner is not None and inner[0] in {
@@ -921,7 +935,12 @@ class PlaywrightWebAdapter:
             )
             key = await self._sealed(context, plan.read_rule.key_ref, "business_key", purpose_id)
             expected_key = self._consume(
-                key, context, plan.read_rule.key_ref, "business_key", purpose_id, lambda value: value,
+                key,
+                context,
+                plan.read_rule.key_ref,
+                "business_key",
+                purpose_id,
+                lambda value: value,
             )
             fields = [
                 (key_field, expected_key,
@@ -1145,7 +1164,9 @@ class PlaywrightWebAdapter:
                     finally:
                         await _dispose_many((row,), suppress_cancel=sys.exc_info()[0] is not None)
                 finally:
-                    await _dispose_many((region_handle,), suppress_cancel=sys.exc_info()[0] is not None)
+                    await _dispose_many(
+                        (region_handle,), suppress_cancel=sys.exc_info()[0] is not None
+                    )
         else:
             self._validation_mark(session, "region_resolution")
             node = resolution.region

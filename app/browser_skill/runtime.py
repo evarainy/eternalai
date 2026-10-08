@@ -78,10 +78,16 @@ class BrowserReadWorker:
     """One claimed Run per call; default-off and no hidden polling/runtime re-entry."""
 
     def __init__(
-        self, store: BrowserRunStorePort, execution: BrowserReadExecutionPort,
-        profiles: BrowserProfileStorePort, *, worker_id: str, enabled: bool = False,
+        self,
+        store: BrowserRunStorePort,
+        execution: BrowserReadExecutionPort,
+        profiles: BrowserProfileStorePort,
+        *,
+        worker_id: str,
+        enabled: bool = False,
         ttl_seconds: int = 60,
-        record_diagnostic: Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]] | None = None,
+        record_diagnostic: Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]]
+        | None = None,
     ) -> None:
         checked_run_id(worker_id)
         if type(enabled) is not bool or type(ttl_seconds) is not int or not 5 <= ttl_seconds <= 300:
@@ -187,7 +193,8 @@ class BrowserReadWorker:
                     )
                     return checkpoint.run
                 mark(
-                    "result_settlement", "verified" if outcome.verification == "verified" else "failed",
+                    "result_settlement",
+                    "verified" if outcome.verification == "verified" else "failed",
                 )
                 await checkpoint.refresh(allow_cancel=True)
                 effect = "unknown" if checkpoint.run.effect == "unknown" else outcome.effect

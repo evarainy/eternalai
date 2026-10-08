@@ -20,8 +20,8 @@ from app.browser_skill.models import (
     ObservationRequest,
 )
 from app.infra.browser.browserless_wire import BrowserProviderError
-from app.infra.browser.playwright_observer import PlaywrightObserver, RegisteredRegion
 from app.infra.browser.playwright_dom_rules import _IDENTITY_BATCH
+from app.infra.browser.playwright_observer import PlaywrightObserver, RegisteredRegion
 from tests.browser_skill.factories import DIGEST, binding
 
 
@@ -40,7 +40,9 @@ class Handle:
     async def evaluate(self, expression: str, arg: Any = None) -> Any:
         if expression == _IDENTITY_BATCH:
             assert set(arg) == {"region", "previous", "current"}
-            if not self.node.connected or any(not handle.node.connected for handle in arg["current"]):
+            if not self.node.connected or any(
+                not handle.node.connected for handle in arg["current"]
+            ):
                 return {"status": "stale", "same_region": False, "indices": []}
             current = [handle.node for handle in arg["current"]]
             previous = [handle.node for handle in arg["previous"]]

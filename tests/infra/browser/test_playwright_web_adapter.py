@@ -23,12 +23,21 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.verifier import IndependentVerifier, failure
 from app.infra.browser.playwright_dom_rules import (
-    DOMRead, DOMStep, DOMValue, RegisteredDOMRules,
-    _FILTER_BATCH, _READ, _READ_MANY, _ROW_IDENTITY_EVALUATE,
+    _FILTER_BATCH,
+    _READ,
+    _READ_MANY,
+    _ROW_IDENTITY_EVALUATE,
+    DOMRead,
+    DOMStep,
+    DOMValue,
+    RegisteredDOMRules,
 )
 from app.infra.browser.playwright_observer import ExactNode, ExactRegion, ResolutionRound
 from app.infra.browser.playwright_web_adapter import (
-    PlaywrightWebAdapter, RegisteredExecution, _FINAL_IDENTITY, _OPTION_IDENTITY,
+    _FINAL_IDENTITY,
+    _OPTION_IDENTITY,
+    PlaywrightWebAdapter,
+    RegisteredExecution,
 )
 from tests.browser_skill.fakes import FakeWorld
 
@@ -199,7 +208,9 @@ def contains(region: Node, node: Node) -> bool:
     return region is node or any(contains(child, node) for child in region.children)
 
 
-def row_identity(region: Node, node: Node, row: Node, config: dict, world: World, strict: bool) -> bool:
+def row_identity(
+    region: Node, node: Node, row: Node, config: dict, world: World, strict: bool
+) -> bool:
     if not contains(region, row) or closest(node, config["row_selector"]) is not row:
         return False
     if config["selector"] and not node_matches(node, config["selector"]):
@@ -315,9 +326,15 @@ class Observer:
     def _make_round(self, session: Any, policy: Any) -> ResolutionRound:
         w = self.world
         region = ExactRegion(w.page, w.frame, Handle(w.region, w), w.view)
-        nodes = tuple((candidate, ExactNode(w.page, w.frame,
-                                           Handle(w.controls[candidate.ref.target_id], w), candidate.ref))
-                      for candidate in w.view.candidates)
+        nodes = tuple(
+            (
+                candidate,
+                ExactNode(
+                    w.page, w.frame, Handle(w.controls[candidate.ref.target_id], w), candidate.ref
+                ),
+            )
+            for candidate in w.view.candidates
+        )
         return ResolutionRound(self, session, policy, region, nodes)
 
     async def _check_projection_locked(self, session: Any, projection: Any, policy: Any) -> Any:
@@ -997,7 +1014,10 @@ def test_installed_operation_authority_is_exclusive_and_rechecked_after_cold_rou
         callback.assert_awaited_once()
         session, actual, subject = callback.await_args.args
         assert session == w.session and actual is w.context
-        assert subject.binding == w.session.binding and subject.business_key == w.confirmed.business_key
+        assert (
+            subject.binding == w.session.binding
+            and subject.business_key == w.confirmed.business_key
+        )
         assert w.authority_calls == 0
         callback.side_effect = failure("denied")
         with pytest.raises(BrowserOperationError) as denied:

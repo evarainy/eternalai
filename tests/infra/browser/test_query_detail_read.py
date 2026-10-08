@@ -132,7 +132,9 @@ def test_previous_verification_cannot_consume_a_later_dynamic_read() -> None:
     ("key", [".key"]), ("owner", [".key", ".tenant", ".user"]),
     ("object", [".key", ".tenant", ".user", ".object_type"]),
 ])
-def test_compare_rows_never_reads_later_fields_before_key_owner_and_type(boundary, selectors) -> None:
+def test_compare_rows_never_reads_later_fields_before_key_owner_and_type(
+    boundary, selectors
+) -> None:
     async def run():
         w = query_world()
         wrong = {"key": ".key", "owner": ".tenant", "object": ".object_type"}[boundary]
@@ -146,7 +148,9 @@ def test_compare_rows_never_reads_later_fields_before_key_owner_and_type(boundar
 
 
 @pytest.mark.parametrize("rows,over_budget", [(43, False), (44, True)])
-def test_unmatched_unicode_keys_still_consume_python_json_fingerprint_budget(rows, over_budget) -> None:
+def test_unmatched_unicode_keys_still_consume_python_json_fingerprint_budget(
+    rows, over_budget
+) -> None:
     async def scenario():
         w = query_world()
         private_key = "雨" * 1000
@@ -156,7 +160,9 @@ def test_unmatched_unicode_keys_still_consume_python_json_fingerprint_budget(row
         w.row.values[".key"] = private_key
         w.region.children = [w.row, *(Node(selector=".record", parent=w.region,
                                           values={".key": private_key}) for _ in range(rows - 1))]
-        w.rules = replace(w.rules, read=replace(w.rules.read, maximum_rows=64, maximum_value_bytes=4096))
+        w.rules = replace(
+            w.rules, read=replace(w.rules.read, maximum_rows=64, maximum_value_bytes=4096)
+        )
         w.adapter._rules[w.plan.skill_digest] = w.rules
         if over_budget:
             with pytest.raises(BrowserOperationError) as caught:

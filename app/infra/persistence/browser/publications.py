@@ -156,7 +156,9 @@ class PostgreSQLBrowserPublicationStore:
             row = (await session.execute(select(capabilities).where(
                 capabilities.c.capability_id == manifest.capability.capability_id
             ).with_for_update(read=True))).mappings().first()
-            self._compare(manifest, None if row is None else CapabilitySpec.model_validate(dict(row)))
+            self._compare(
+                manifest, None if row is None else CapabilitySpec.model_validate(dict(row))
+            )
         await self._source(owner, manifest)
         assert current is not None
         return current
@@ -239,7 +241,9 @@ class PostgreSQLBrowserPublicationStore:
         from app.infra.browser.synthetic_configuration import synthetic_jev_manifest
 
         decision = synthetic_jev_manifest()
-        successor = build_fixed_synthetic_observe_only_source(decision, attempt_id=attempt_id).manifest
+        successor = build_fixed_synthetic_observe_only_source(
+            decision, attempt_id=attempt_id
+        ).manifest
         if owner.tenant_id != SYNTHETIC_TENANT or _manifest(manifest) != successor:
             raise BrowserPublicationError("browser_publication_source_denied")
         if attempt_id is not None:

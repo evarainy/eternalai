@@ -97,8 +97,9 @@ def test_http_collector_records_only_same_invocation_transport_facts(boundary, e
         async with httpx2.AsyncClient(base_url="https://decision.invalid", trust_env=False,
                                      transport=httpx2.MockTransport(handler)) as client:
             collector = {}
-            result = await DecisionHTTPProvider(client, TypeSafeCodec(), deployment())._decide_with_collector(
-                request(), context(), collector)
+            result = await DecisionHTTPProvider(
+                client, TypeSafeCodec(), deployment()
+            )._decide_with_collector(request(), context(), collector)
             assert collector == expected
             assert result.error == ("unavailable" if boundary == "transport" else "timeout")
             assert "private" not in json.dumps(collector)
@@ -264,16 +265,28 @@ def test_late_cancelled_http_task_cannot_change_frozen_or_next_invocation_summar
                 first_context.cancellation.set()
                 assert (await asyncio.wait_for(first, 2)).error == "cancelled"
                 frozen = decision.http_diagnostic()
-                assert frozen == {"http_status": "unknown", "http_headers_received": False, "http_exception": "none"}
+                assert frozen == {
+                    "http_status": "unknown",
+                    "http_headers_received": False,
+                    "http_exception": "none",
+                }
                 pending = tuple(provider._pending)
                 assert len(pending) == 1
                 assert (await decision.decide(request(), context())).status == "selected"
                 second = decision.http_diagnostic()
-                assert second == {"http_status": 200, "http_headers_received": True, "http_exception": "none"}
+                assert second == {
+                    "http_status": 200,
+                    "http_headers_received": True,
+                    "http_exception": "none",
+                }
                 resume.set()
                 await asyncio.wait_for(asyncio.gather(*pending), 2)
                 assert decision.http_diagnostic() == second
-                assert frozen == {"http_status": "unknown", "http_headers_received": False, "http_exception": "none"}
+                assert frozen == {
+                    "http_status": "unknown",
+                    "http_headers_received": False,
+                    "http_exception": "none",
+                }
                 assert factory._fence.await_count == 4 and calls == 2
             finally:
                 resume.set()

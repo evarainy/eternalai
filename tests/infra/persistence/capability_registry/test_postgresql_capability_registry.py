@@ -135,9 +135,16 @@ def test_caller_session_reads_its_uncommitted_row_at_share_lock_position() -> No
             factory = _make_factory(engine)
             registry = _registry(factory)
             async with factory() as session, session.begin():
-                await session.execute(insert(capabilities).values(**capability.model_dump(mode="python")))
+                await session.execute(
+                    insert(capabilities).values(**capability.model_dump(mode="python"))
+                )
                 assert await registry.get(capability.capability_id) is None
-                assert await registry._get_in_session(session, capability.capability_id, for_share=True) == capability
+                assert (
+                    await registry._get_in_session(
+                        session, capability.capability_id, for_share=True
+                    )
+                    == capability
+                )
                 assert session.in_transaction()
                 # This synthetic test row has never been committed.
                 await session.rollback()

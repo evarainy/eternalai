@@ -22,7 +22,9 @@ def fixtures(callback=None):
     result = Mock()
     result.mappings.return_value.first.return_value = manifest.capability.model_dump(mode="python")
     session.execute = AsyncMock(return_value=result)
-    store = PostgreSQLBrowserPublicationStore(Mock(), registry, authority, capability_in_session=callback)
+    store = PostgreSQLBrowserPublicationStore(
+        Mock(), registry, authority, capability_in_session=callback
+    )
     return store, owner, manifest, registry, authority, session
 
 

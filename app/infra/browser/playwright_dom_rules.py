@@ -287,7 +287,11 @@ async def filter_private_candidates(
             raise DOMBatchError("invalid_response")
         state, value, code = item["state"], item["value"], item["code"]
         if state == "fatal":
-            if value is not None or type(code) is not str or code not in {"denied", "invalid_response"}:
+            if (
+                value is not None
+                or type(code) is not str
+                or code not in {"denied", "invalid_response"}
+            ):
                 raise DOMBatchError("invalid_response")
             if fatal is None:
                 fatal = "denied" if code == "denied" else "invalid_response"

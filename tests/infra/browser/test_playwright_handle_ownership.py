@@ -19,13 +19,19 @@ def test_snapshot_failure_releases_every_allocated_property_and_preserves_error(
     for handle in (first, second, extra):
         handle.dispose = AsyncMock()
     first.as_element.return_value = first
-    second.as_element.side_effect = asyncio.CancelledError() if cancel else ValueError("synthetic malformed node")
-    nodes = SimpleNamespace(get_properties=AsyncMock(return_value={"0": first, "1": second, "extra": extra}),
-                            dispose=AsyncMock())
+    second.as_element.side_effect = (
+        asyncio.CancelledError() if cancel else ValueError("synthetic malformed node")
+    )
+    nodes = SimpleNamespace(
+        get_properties=AsyncMock(return_value={"0": first, "1": second, "extra": extra}),
+        dispose=AsyncMock(),
+    )
     metadata = SimpleNamespace(json_value=AsyncMock(return_value={
         "coverage": {}, "candidates": [{}, {}], "overflow": False,
     }), dispose=AsyncMock())
-    packet = SimpleNamespace(get_property=AsyncMock(side_effect=[metadata, nodes]), dispose=AsyncMock())
+    packet = SimpleNamespace(
+        get_property=AsyncMock(side_effect=[metadata, nodes]), dispose=AsyncMock()
+    )
     element = SimpleNamespace(evaluate_handle=AsyncMock(return_value=packet))
     site = SimpleNamespace(complete_selector=None, empty_selector=None,
                            pagination_selector=None, virtualized_selector=None)
@@ -41,7 +47,9 @@ def test_snapshot_failure_releases_every_allocated_property_and_preserves_error(
 
 
 @pytest.mark.parametrize("suppress", [True, False])
-def test_cleanup_visits_remaining_owned_handles_once_before_propagating_cancellation(suppress) -> None:
+def test_cleanup_visits_remaining_owned_handles_once_before_propagating_cancellation(
+    suppress,
+) -> None:
     first = SimpleNamespace(dispose=AsyncMock(side_effect=asyncio.CancelledError()))
     second = SimpleNamespace(dispose=AsyncMock())
     if suppress:
@@ -53,7 +61,9 @@ def test_cleanup_visits_remaining_owned_handles_once_before_propagating_cancella
     second.dispose.assert_awaited_once_with()
 
 
-def test_failed_owned_identity_barrier_disposes_clones_without_disposing_option_holder(monkeypatch) -> None:
+def test_failed_owned_identity_barrier_disposes_clones_without_disposing_option_holder(
+    monkeypatch,
+) -> None:
     async def scenario():
         w = World("select_option")
         command = await w.command()
@@ -81,7 +91,9 @@ def test_failed_owned_identity_barrier_disposes_clones_without_disposing_option_
     asyncio.run(scenario())
 
 
-def test_failed_new_option_set_never_replaces_previous_holder_and_releases_allocations(monkeypatch) -> None:
+def test_failed_new_option_set_never_replaces_previous_holder_and_releases_allocations(
+    monkeypatch,
+) -> None:
     async def scenario():
         w = World("select_option")
         command = await w.command()
@@ -104,7 +116,9 @@ def test_failed_new_option_set_never_replaces_previous_holder_and_releases_alloc
         monkeypatch.setattr(Handle, "query_selector_all", query)
         monkeypatch.setattr(Handle, "evaluate", evaluate)
         with pytest.raises(asyncio.CancelledError):
-            await w.adapter._options_current(w.session, command.target, command.step, w.context, w.plan)
+            await w.adapter._options_current(
+                w.session, command.target, command.step, w.context, w.plan
+            )
         assert w.adapter._options[key] is previous
         assert len(allocations) == 2 and all(handle.disposed for handle in allocations)
         assert not previous.options[0].element.disposed

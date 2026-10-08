@@ -252,9 +252,13 @@ class FrozenSyntheticStructuredParser:
             if seed.skill.version == "v1":
                 expected = build_fixed_synthetic_query_source(seed.site.decision_manifest).manifest
             elif seed.skill.version == DIAGNOSTIC_SKILL_VERSION:
-                expected = build_fixed_synthetic_diagnostic_source(seed.site.decision_manifest).manifest
+                expected = build_fixed_synthetic_diagnostic_source(
+                    seed.site.decision_manifest
+                ).manifest
             elif seed.skill.version == VISIBLE_QUERY_SKILL_VERSION:
-                expected = build_fixed_synthetic_visible_query_source(seed.site.decision_manifest).manifest
+                expected = build_fixed_synthetic_visible_query_source(
+                    seed.site.decision_manifest
+                ).manifest
             else:
                 expected = build_fixed_synthetic_observe_only_source(
                     seed.site.decision_manifest,

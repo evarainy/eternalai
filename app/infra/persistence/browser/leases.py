@@ -308,13 +308,20 @@ class PostgreSQLBrowserLeaseStore:
         if current != run and replace(current, cancel_acknowledged=True) != run:
             return False
         active = current.status in {"running", "waiting_user"}
-        if (not current.cancel_requested or current.effect != "not_sent"
-                or current.lease_epoch is not None or current.provider_key is not None
-                or current.provider_manifest_digest is not None or current.verification is not None
-                or current.capture_status != "not_requested"
-                or current.capture_operation_id is not None or current.profile_generation_id is not None
-                or current.protected_result is not None or current.result_digest is not None
-                or current.verification_evidence_digest is not None):
+        if (
+            not current.cancel_requested
+            or current.effect != "not_sent"
+            or current.lease_epoch is not None
+            or current.provider_key is not None
+            or current.provider_manifest_digest is not None
+            or current.verification is not None
+            or current.capture_status != "not_requested"
+            or current.capture_operation_id is not None
+            or current.profile_generation_id is not None
+            or current.protected_result is not None
+            or current.result_digest is not None
+            or current.verification_evidence_digest is not None
+        ):
             return False
         if active:
             now = (await session.execute(text("SELECT clock_timestamp()"))).scalar_one()
@@ -354,16 +361,29 @@ class PostgreSQLBrowserLeaseStore:
                         and lease["release_proof_digest"] is not None)))
         # A complete, positively identified other Run is allowed to retain its
         # own lease/acquisition. Unknown/partial ownership fails closed.
-        return (lease["state"] in {"held", "quarantined"} and lease["capacity_held"]
-                and isinstance(lease["authorization_run_id"], str)
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", lease["authorization_run_id"]) is not None
-                and lease["authorization_run_id"] != run.run_id
-                and lease["authorization_revision"] is None
-                and lease["acquisition_phase"] in {"reservation_only", "acquiring", "acquired", "unknown"}
-                and all(lease[name] is not None for name in (
-                    "holder_id", "holder_session_id", "binding_revision", "auth_session_fingerprint",
-                    "auth_expires_at", "deadline", "provider_key", "acquisition_operation_id",
-                )))
+        return (
+            lease["state"] in {"held", "quarantined"}
+            and lease["capacity_held"]
+            and isinstance(lease["authorization_run_id"], str)
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,96}", lease["authorization_run_id"]) is not None
+            and lease["authorization_run_id"] != run.run_id
+            and lease["authorization_revision"] is None
+            and lease["acquisition_phase"]
+            in {"reservation_only", "acquiring", "acquired", "unknown"}
+            and all(
+                lease[name] is not None
+                for name in (
+                    "holder_id",
+                    "holder_session_id",
+                    "binding_revision",
+                    "auth_session_fingerprint",
+                    "auth_expires_at",
+                    "deadline",
+                    "provider_key",
+                    "acquisition_operation_id",
+                )
+            )
+        )
 
     async def _cleanup_allowed(self, claim: BrowserLeaseClaim) -> None:
         if self._cleanup_authority is None:
@@ -446,18 +466,30 @@ class PostgreSQLBrowserLeaseStore:
             if auth.authorization_run_id is not None:
                 # The credential lock is shared with cancellation/proof. An
                 # old pre-reserve await cannot create a claim after cancel.
-                eligible = (await session.execute(text(
-                    "SELECT 1 FROM browser_runs WHERE tenant_id=:tenant_id"
-                    " AND ai_user_id=:ai_user_id AND session_id=:session_id AND run_id=:run_id"
-                    " AND target_system=:target_system AND binding_id=:binding_id"
-                    " AND binding_revision=:binding_revision AND auth_fingerprint=:fingerprint"
-                    " AND auth_expires_at=:expires_at AND status IN ('running','waiting_user')"
-                    " AND phase='acquiring' AND effect='not_sent' AND NOT cancel_requested"
-                    " AND lease_epoch IS NULL AND provider_key IS NULL",
-                ), {**_key(binding), "session_id": auth.owner.session_id,
-                    "run_id": auth.authorization_run_id, "binding_revision": binding.binding_revision,
-                    "fingerprint": auth.fingerprint, "expires_at": auth.expires_at,
-                })).scalar_one_or_none()
+                eligible = (
+                    await session.execute(
+                        text(
+                            "SELECT 1 FROM browser_runs WHERE tenant_id=:tenant_id"
+                            " AND ai_user_id=:ai_user_id AND session_id=:session_id"
+                            " AND run_id=:run_id"
+                            " AND target_system=:target_system AND binding_id=:binding_id"
+                            " AND binding_revision=:binding_revision"
+                            " AND auth_fingerprint=:fingerprint"
+                            " AND auth_expires_at=:expires_at"
+                            " AND status IN ('running','waiting_user')"
+                            " AND phase='acquiring' AND effect='not_sent' AND NOT cancel_requested"
+                            " AND lease_epoch IS NULL AND provider_key IS NULL",
+                        ),
+                        {
+                            **_key(binding),
+                            "session_id": auth.owner.session_id,
+                            "run_id": auth.authorization_run_id,
+                            "binding_revision": binding.binding_revision,
+                            "fingerprint": auth.fingerprint,
+                            "expires_at": auth.expires_at,
+                        },
+                    )
+                ).scalar_one_or_none()
                 if eligible != 1:
                     raise BrowserLeaseError("browser_lease_stale")
             if auth.expires_at <= now:

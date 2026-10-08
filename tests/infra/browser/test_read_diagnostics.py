@@ -16,7 +16,6 @@ from app.infra.browser.read_execution import VerifiedBrowserReadExecution
 from tests.infra.browser.test_playwright_observer import fixture as observer_fixture
 from tests.infra.browser.test_playwright_web_adapter import World
 
-
 BASE_ATTRIBUTES = {
     "browser_read_outcome": "failed",
     "browser_completion_scope": "adapter_execution",
@@ -178,7 +177,10 @@ def test_observe_timeout_records_actual_wait_and_clears_stale_timing(
             "adapter_authority_calls", "observer_observe_calls", "observer_snapshot_calls",
         }
         if boundary == "authority_after":
-            expected_keys |= {"observer_identity_batch_attempts", "observer_identity_batch_successes"}
+            expected_keys |= {
+                "observer_identity_batch_attempts",
+                "observer_identity_batch_successes",
+            }
             assert payload["observer_identity_batch_attempts"] == 1
             assert payload["observer_identity_batch_successes"] == 1
         if inner is not None:

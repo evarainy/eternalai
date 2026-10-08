@@ -13,7 +13,9 @@ from tests.infra.persistence.browser.test_leases import Harness
 @pytest.mark.parametrize("busy,global_count,tenant_count,expected", [
     (False, 0, 0, True), (True, 0, 0, False), (False, 2, 0, False), (False, 0, 1, False),
 ])
-def test_capacity_hint_uses_supplied_session_without_locks_or_writes(busy, global_count, tenant_count, expected) -> None:
+def test_capacity_hint_uses_supplied_session_without_locks_or_writes(
+    busy, global_count, tenant_count, expected
+) -> None:
     h, session, result = Harness(), Mock(), Mock()
     h.store._sessions = Mock(side_effect=AssertionError("extra_session"))
     result.mappings.return_value.one.return_value = {
@@ -21,12 +23,16 @@ def test_capacity_hint_uses_supplied_session_without_locks_or_writes(busy, globa
         "tenant_count": tenant_count, "binding_busy": busy,
     }
     session.execute = AsyncMock(return_value=result)
-    assert asyncio.run(h.store._has_capacity_in_session(session, h.binding, "endpoint-a")) is expected
+    assert (
+        asyncio.run(h.store._has_capacity_in_session(session, h.binding, "endpoint-a")) is expected
+    )
     h.store._sessions.assert_not_called()
     assert session.execute.await_count == 1
     sql = str(session.execute.await_args.args[0])
     assert "SELECT" in sql and "capacity_held" in sql
-    assert all(word not in sql for word in ("FOR UPDATE", "advisory", "INSERT", "UPDATE ", "DELETE"))
+    assert all(
+        word not in sql for word in ("FOR UPDATE", "advisory", "INSERT", "UPDATE ", "DELETE")
+    )
     session.commit.assert_not_called()
     session.rollback.assert_not_called()
 

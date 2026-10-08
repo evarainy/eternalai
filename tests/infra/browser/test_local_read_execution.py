@@ -421,7 +421,9 @@ def test_authorization_rechecks_changes_across_subject_await(
         operation_authority = None
         if route == "operation":
             context = transport.bridge._fenced_context(
-                transport.execution.context, transport.factory.source.manifest, transport.checkpoint,
+                transport.execution.context,
+                transport.factory.source.manifest,
+                transport.checkpoint,
                 business_key="explicit_input_key",
                 bind_publication_guard=transport.execution.bind_publication_guard,
             )
@@ -479,14 +481,19 @@ def test_authorization_rechecks_changes_across_subject_await(
     assert continued == []
 
 
-def test_operation_authority_is_bound_and_retains_nested_subject_fences(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_operation_authority_is_bound_and_retains_nested_subject_fences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     transport = _open_with_simulated_transport(Path.cwd(), monkeypatch)
 
     async def scenario():
         execution = transport.execution
         context = transport.bridge._fenced_context(
-            execution.context, transport.factory.source.manifest, transport.checkpoint,
-            business_key="explicit_input_key", bind_publication_guard=execution.bind_publication_guard,
+            execution.context,
+            transport.factory.source.manifest,
+            transport.checkpoint,
+            business_key="explicit_input_key",
+            bind_publication_guard=execution.bind_publication_guard,
         )
         authority = execution.bind_operation_authority(context)
         spec = await execution.resolver(execution.session, context, execution.session.binding)
@@ -505,7 +512,9 @@ def test_operation_authority_is_bound_and_retains_nested_subject_fences(monkeypa
         with pytest.raises(BrowserOperationError) as cloned:
             await authority(execution.session, replace(context), spec)
         assert cloned.value.failure.code == "denied" and transport.state.authority_counts == {}
-        wrong = spec.model_copy(update={"binding": spec.binding.model_copy(update={"lease_epoch": 2})})
+        wrong = spec.model_copy(
+            update={"binding": spec.binding.model_copy(update={"lease_epoch": 2})}
+        )
         with pytest.raises(BrowserOperationError) as rebound:
             await authority(execution.session, context, wrong)
         assert rebound.value.failure.code == "stale" and transport.state.authority_counts == {}
@@ -527,8 +536,11 @@ def test_warm_authority_counts_include_real_subject_callback_fences(
     async def scenario():
         execution = transport.execution
         context = transport.bridge._fenced_context(
-            execution.context, transport.factory.source.manifest, transport.checkpoint,
-            business_key="explicit_input_key", bind_publication_guard=execution.bind_publication_guard,
+            execution.context,
+            transport.factory.source.manifest,
+            transport.checkpoint,
+            business_key="explicit_input_key",
+            bind_publication_guard=execution.bind_publication_guard,
         )
         callback = execution.bind_operation_authority(context) if route == "operation" else None
         transport.state.resource.live.context.route = AsyncMock()

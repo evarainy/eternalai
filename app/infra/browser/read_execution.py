@@ -20,7 +20,7 @@ from typing import Protocol, get_args
 from jsonschema import Draft202012Validator
 from referencing import Registry
 
-from app.browser_skill.executor import BrowserExecutor, ReadAwaitStage, DecisionContextFactory
+from app.browser_skill.executor import BrowserExecutor, DecisionContextFactory, ReadAwaitStage
 from app.browser_skill.models import (
     ActionCommand,
     BrowserOperationError,
@@ -233,7 +233,12 @@ class VerifiedBrowserReadExecution:
                 if type(headers) is bool:
                     attributes["decision_http_headers_received"] = headers
                 category = http_diagnostic.get("http_exception")
-                if type(category) is str and category in {"none", "timeout", "transport", "cancelled"}:
+                if type(category) is str and category in {
+                    "none",
+                    "timeout",
+                    "transport",
+                    "cancelled",
+                }:
                     attributes["decision_http_exception"] = category
                 kind = http_diagnostic.get("http_exception_kind")
                 if type(kind) is str and kind in {
@@ -527,17 +532,27 @@ class VerifiedBrowserReadExecution:
             # One end-of-attempt summary, after every adapter success condition.
             # Durable verification/finalization remains owned by worker/store.
             await self._record_failure_diagnostic(
-                run, executor._last_failure_diagnostic if executor is not None else None,
-                web=web, session_ref=execution.session.session_ref if execution is not None else None,
-                decision=outcome.decisions[-1] if outcome is not None and outcome.decisions else None,
-                decision_diagnostic=executor._last_decision_diagnostic if executor is not None else None,
-                http_diagnostic=(execution.decision_http_diagnostic()
-                                 if execution is not None and execution.decision_http_diagnostic is not None
-                                 else None),
+                run,
+                executor._last_failure_diagnostic if executor is not None else None,
+                web=web,
+                session_ref=execution.session.session_ref if execution is not None else None,
+                decision=outcome.decisions[-1]
+                if outcome is not None and outcome.decisions
+                else None,
+                decision_diagnostic=executor._last_decision_diagnostic
+                if executor is not None
+                else None,
+                http_diagnostic=(
+                    execution.decision_http_diagnostic()
+                    if execution is not None and execution.decision_http_diagnostic is not None
+                    else None
+                ),
                 stage_diagnostic=executor._last_stage_diagnostic if executor is not None else None,
-                bridge_diagnostic=bridge_diagnostic, verified=read_result == "verified",
+                bridge_diagnostic=bridge_diagnostic,
+                verified=read_result == "verified",
                 refresh_calls=getattr(checkpoint, "refresh_calls", None),
-                acquisition_ms=acquisition_ms, read_result=read_result,
+                acquisition_ms=acquisition_ms,
+                read_result=read_result,
                 model_calls=outcome.model_calls if outcome is not None else None,
             )
 

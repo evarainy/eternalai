@@ -3,8 +3,15 @@ import asyncio
 import pytest
 
 from app.infra.browser.playwright_dom_rules import (
-    DOMBatchError, DOMStep, DOMValue, _FILTER_BATCH, _IDENTITY_BATCH,
-    bounded_children, filter_private_candidates, match_actual_nodes, read_private,
+    _FILTER_BATCH,
+    _IDENTITY_BATCH,
+    DOMBatchError,
+    DOMStep,
+    DOMValue,
+    bounded_children,
+    filter_private_candidates,
+    match_actual_nodes,
+    read_private,
 )
 
 
@@ -93,7 +100,10 @@ def test_identity_batch_preserves_order_and_borrows_handles() -> None:
             return {"status": "ok", "same_region": True, "indices": [1, 0]}
 
     first, second, root = object(), object(), Root()
-    assert asyncio.run(match_actual_nodes(root, root, (first, second), (second, first))) == (True, (1, 0))
+    assert asyncio.run(match_actual_nodes(root, root, (first, second), (second, first))) == (
+        True,
+        (1, 0),
+    )
     assert root.calls == 1
 
 
@@ -105,7 +115,9 @@ def test_identity_batch_rejects_duplicate_indices_at_correct_length() -> None:
             return {"status": "ok", "same_region": True, "indices": [0, 0]}
 
     with pytest.raises(DOMBatchError) as failure:
-        asyncio.run(match_actual_nodes(Root(), object(), (object(), object()), (object(), object())))
+        asyncio.run(
+            match_actual_nodes(Root(), object(), (object(), object()), (object(), object()))
+        )
     assert failure.value.code == "invalid_response"
 
 

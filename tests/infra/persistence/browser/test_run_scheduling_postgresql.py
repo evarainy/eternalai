@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest

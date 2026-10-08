@@ -174,7 +174,9 @@ class DecisionHTTPProvider:
             ) as response:
                 collector["http_headers_received"] = True
                 status = response.status_code
-                collector["http_status"] = status if type(status) is int and 100 <= status <= 599 else "unknown"
+                collector["http_status"] = (
+                    status if type(status) is int and 100 <= status <= 599 else "unknown"
+                )
                 if response.status_code == 401:
                     return failure("unavailable", "unauthorized")
                 if response.status_code == 422:

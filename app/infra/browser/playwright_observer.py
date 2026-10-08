@@ -506,7 +506,9 @@ class PlaywrightObserver:
                 # not yet appended to nodes. Cancelled allocation must release
                 # those too; cleanup cannot replace the original failure.
                 containers = ((nodes_handle, metadata_handle, packet) if containers_pending else ())
-                await _dispose_many((*properties.values(), *nodes, *containers), suppress_cancel=True)
+                await _dispose_many(
+                    (*properties.values(), *nodes, *containers), suppress_cancel=True
+                )
 
     async def _take_snapshot(
         self, session: BrowserSessionRef, element: Any,
