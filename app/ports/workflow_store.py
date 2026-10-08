@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.mcp.models import OperationState
+from app.ports.error_codes import ErrorCode
 from app.ports.human_gate import HumanGateRequest
 from app.ports.mcp import McpAuthorizationContext
 
@@ -47,7 +48,7 @@ class WorkflowOperation(BaseModel):
     identity_evidence_digest: str = "unconfirmed"
     previous_attempts: tuple[str, ...] = ()
     # Internal cleanup evidence in the encrypted payload; legacy rows default to None.
-    confirmation_error_code: Literal["internal_error"] | None = None
+    confirmation_error_code: ErrorCode | None = None
 
     @model_validator(mode="after")
     def _validate_confirmation_failure(self) -> WorkflowOperation:
@@ -85,7 +86,7 @@ class WorkflowStorePort(Protocol):
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
         renewed_gate_expires_at: datetime | None = None,
-        confirmation_error_code: Literal["internal_error"] | None = None,
+        confirmation_error_code: ErrorCode | None = None,
     ) -> WorkflowOperation: ...
     async def consume(
         self,

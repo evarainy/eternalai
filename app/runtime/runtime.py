@@ -81,6 +81,7 @@ from app.ports.task_store import (
 )
 from app.ports.trace import TraceEvent, TraceEventStatus, TraceEventType, TracePort
 from app.ports.workflow_engine import (
+    GovernedConfirmationFailureResult,
     GovernedFinalizationError,
     GovernedTerminalResult,
     WorkflowEnginePort,
@@ -1483,7 +1484,7 @@ class RuntimeImpl:
                 _pending_confirmation_claim_key(key, pending)
             ]
             state = result.output["state"]
-            presend_failure = state == "FAILED" and result.error_code == "internal_error"
+            presend_failure = isinstance(result, GovernedConfirmationFailureResult)
             claim.state = (
                 "cancelled" if state == "CANCELLED" else
                 "confirmation_invalidated" if state == "EXPIRED" or presend_failure else "completed"

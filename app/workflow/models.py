@@ -83,6 +83,10 @@ class GovernedTerminalResult(WorkflowRunResult):
     """Typed in-process proof returned only after a durable governed terminal."""
 
 
+class GovernedConfirmationFailureResult(GovernedTerminalResult):
+    """Durable unsent failure; confirmation is invalid, original error is retained."""
+
+
 class GovernedFinalizationError(RuntimeError):
     """Business terminal is durable; task/trace writes still require repair."""
 

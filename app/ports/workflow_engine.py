@@ -26,7 +26,12 @@ from typing import Any, Mapping, Protocol
 from app.ports.capability_gateway import RequestOrgContext
 from app.ports.capability_registry import CapabilitySpec
 from app.ports.human_gate import HumanGateRequest, VersionBinding
-from app.workflow.models import GovernedFinalizationError, GovernedTerminalResult, WorkflowRunResult
+from app.workflow.models import (
+    GovernedConfirmationFailureResult,
+    GovernedFinalizationError,
+    GovernedTerminalResult,
+    WorkflowRunResult,
+)
 
 
 @dataclass(frozen=True)
@@ -98,6 +103,7 @@ class WorkflowEnginePort(Protocol):
 
 
 __all__ = (
+    "GovernedConfirmationFailureResult",
     "GovernedFinalizationError", "GovernedTerminalResult", "WorkflowEnginePort",
     "WorkflowVersionBindings",
 )

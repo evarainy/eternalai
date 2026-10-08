@@ -4,12 +4,15 @@ import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
 from app.infra.persistence.mcp.workflow_repository import PostgreSQLWorkflowStore
 from app.mcp.models import McpFailure
+from app.ports.capability_gateway import ErrorCode
+from app.ports.error_codes import ErrorCode as SharedErrorCode
 from app.ports.workflow_store import WorkflowOperation
 from tests.mcp.test_operations import fixture
 
@@ -31,7 +34,8 @@ class Session:
 
 
 @pytest.mark.parametrize("state", ["WAITING_LOCAL_CONFIRM", "READY"])
-def test_presend_internal_failure_serializes_and_reloads_without_schema_change(state):
+@pytest.mark.parametrize("error_code", get_args(ErrorCode))
+def test_presend_failure_serializes_and_reloads_without_schema_change(state, error_code):
     async def run():
         h = await fixture()
         session = Session(h.op.operation_id)
@@ -46,10 +50,11 @@ def test_presend_internal_failure_serializes_and_reloads_without_schema_change(s
             await repository.transition(op, state="FAILED")
         assert not session.statements
         failed = await repository.transition(
-            op, state="FAILED", confirmation_error_code="internal_error",
+            op, state="FAILED", confirmation_error_code=error_code,
         )
         assert failed.state == "FAILED" and not failed.send_started
-        assert failed.confirmation_error_code == "internal_error" and failed.public_result is None
+        assert failed.confirmation_error_code == error_code and failed.public_result is None
+        assert ErrorCode is SharedErrorCode
         sql_values = session.statements[0]
         row = {
             **repository._aad(failed),
@@ -61,12 +66,29 @@ def test_presend_internal_failure_serializes_and_reloads_without_schema_change(s
         }
         reloaded = repository._decode(row)
         assert reloaded == failed
-        assert h.operations.result(reloaded, "synthetic-trace").error_code == "internal_error"
+        assert h.operations.result(reloaded, "synthetic-trace").error_code == error_code
         assert set(session.statements[1]["checkpoint"]) == {
             "definition", "version", "state", "revision", "step_index", "gate_request_id",
         }
         legacy = op.model_dump(mode="json", exclude={"confirmation_error_code"})
         assert WorkflowOperation.model_validate(legacy).confirmation_error_code is None
+
+    asyncio.run(run())
+
+
+def test_presend_failure_rejects_unknown_error_code_before_sql():
+    async def run():
+        h = await fixture()
+        session = Session(h.op.operation_id)
+        repository = PostgreSQLWorkflowStore(SimpleNamespace(
+            sessions=SimpleNamespace(begin=lambda: session),
+        ))
+        op = h.op.model_copy(update={"state": "READY"})
+        with pytest.raises(ValidationError):
+            await repository.transition(
+                op, state="FAILED", confirmation_error_code="synthetic_unknown_code",
+            )
+        assert not session.statements
 
     asyncio.run(run())
 

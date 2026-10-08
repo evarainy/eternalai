@@ -23,6 +23,7 @@ from app.ports.workflow_store import (
     WorkflowStorePort,
 )
 from app.workflow.models import (
+    GovernedConfirmationFailureResult,
     GovernedFinalizationError,
     GovernedTerminalResult,
     GovernedWorkflowDefinition,
@@ -484,7 +485,10 @@ class GovernedOperations:
                 current = await self.store.transition(current, state="UNKNOWN")
         elif current.state == "READY":
             # No send permission consumed; this attempt is closed, never automatically replayed.
-            current = await self.store.transition(current, state="CANCELLED")
+            current = await self.store.transition(
+                current, state="FAILED",
+                confirmation_error_code=result.error_code or "internal_error",
+            )
         return self.result(current, op.operation_id)
 
     async def recover(self, op: WorkflowOperation) -> WorkflowOperation:
@@ -680,7 +684,9 @@ class GovernedOperations:
             else ("waiting_confirm" if op.state == "WAITING_LOCAL_CONFIRM" else "failed")
         )
         result_type = (
-            GovernedTerminalResult
+            GovernedConfirmationFailureResult
+            if op.state == "FAILED" and op.confirmation_error_code is not None
+            else GovernedTerminalResult
             if op.state in {"VERIFIED_SUCCESS", "FAILED", "CANCELLED", "EXPIRED"}
             else WorkflowRunResult
         )

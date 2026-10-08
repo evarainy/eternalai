@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncIterator
 
 import anyio
 import sqlalchemy as sa
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.infra.persistence.mcp.repository import PostgreSQLMcpStore
 from app.infra.persistence.mcp.schema import operations, workflow_runs
 from app.mcp.models import McpFailure, OperationState, digest
+from app.ports.error_codes import ErrorCode
 from app.ports.human_gate import HumanGateRequest
 from app.ports.mcp import McpAuthorizationContext
 from app.ports.workflow_store import GovernedWorkflowAuthorization, WorkflowOperation
@@ -243,12 +244,11 @@ class PostgreSQLWorkflowStore:
         renewed_context: McpAuthorizationContext | None = None,
         renewed_action_digest: str | None = None,
         renewed_gate_expires_at: datetime | None = None,
-        confirmation_error_code: Literal["internal_error"] | None = None,
+        confirmation_error_code: ErrorCode | None = None,
     ) -> WorkflowOperation:
         op = operation
         if confirmation_error_code is not None and (
-            confirmation_error_code != "internal_error"
-            or state != "FAILED"
+            state != "FAILED"
             or op.state not in {"WAITING_LOCAL_CONFIRM", "READY"}
             or op.send_started
         ):
@@ -268,7 +268,7 @@ class PostgreSQLWorkflowStore:
             "EXPIRED": {"WAITING_LOCAL_CONFIRM"},
         }
         if state not in allowed.get(op.state, set()) and not (
-            state == "FAILED" and confirmation_error_code == "internal_error"
+            state == "FAILED" and confirmation_error_code is not None
         ):
             raise McpFailure("mcp_operation_transition_invalid")
         renewal = renewed_action_digest is not None
@@ -334,6 +334,7 @@ class PostgreSQLWorkflowStore:
                     ),
                 }
             )
+        updated = WorkflowOperation.model_validate(updated.model_dump())
         async with self._store.sessions.begin() as session:
             changed = (
                 await session.execute(

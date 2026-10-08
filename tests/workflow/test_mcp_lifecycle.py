@@ -133,11 +133,31 @@ def test_presend_exception_retirement_preserves_internal_error_and_replay(state,
     asyncio.run(run())
 
 
-def test_runtime_gateway_presend_exception_retires_ready_without_replay_send():
+@pytest.mark.parametrize("mode,status,error_code", [
+    ("throw", "failed", "internal_error"),
+    ("return", "failed", "internal_error"),
+    ("return", "failed", "mcp_contract_unconfirmed"),
+    ("return", "denied", "policy_denied"),
+    ("return", "binding_required", "identity_revoked"),
+    ("return", "waiting_user", "confirm_required"),
+    ("return", "timeout", "adapter_timeout"),
+    ("return", "no_capability_found", "capability_not_found"),
+    ("return", "failed", None),
+    ("return", "completed", None),
+])
+@pytest.mark.parametrize("fault", ["none", "task", "guard_exit"])
+def test_runtime_gateway_presend_failure_retires_ready_without_replay_send(
+    mode, status, error_code, fault,
+):
     async def run():
         chat, h, pending, session = await governed_chat()
         h.store.op = h.op.model_copy(update={"state": "WAITING_LOCAL_CONFIRM"})
         calls = 0
+        failures = 0
+        expected_error = error_code or "internal_error"
+        original_update = chat.runtime._task_store.update_status
+        original_guard = h.store.execution_guard
+        injected = RuntimeError("synthetic failure finalizer interruption")
 
         async def owned(op):
             h.operations.lifecycle_owner(op)
@@ -146,25 +166,64 @@ def test_runtime_gateway_presend_exception_retires_ready_without_replay_send():
             nonlocal calls
             calls += 1
             assert h.store.op.state == "READY" and not h.store.op.send_started
-            raise RuntimeError("synthetic gateway registry failure before send")
+            if mode == "throw":
+                raise RuntimeError("synthetic gateway registry failure before send")
+            return ExecutionResult(status=status, error_code=error_code, trace_id=pending.trace_id)
+
+        async def update(task_id, *args, **kwargs):
+            nonlocal failures
+            if fault == "task" and task_id == pending.task_id and not failures:
+                failures += 1
+                raise injected
+            return await original_update(task_id, *args, **kwargs)
+
+        @asynccontextmanager
+        async def guard(op):
+            nonlocal failures
+            async with original_guard(op):
+                yield
+            if fault == "guard_exit" and h.store.op.state == "FAILED" and not failures:
+                failures += 1
+                raise injected
 
         h.operations.owned = owned
         h.operations.gateway = SimpleNamespace(execute_capability=execute)
+        chat.runtime._task_store.update_status = update
+        h.store.execution_guard = guard
         token = authenticated_session.set(session)
         try:
+            if fault != "none":
+                expected_exception = (
+                    RuntimeError if mode == "throw" and fault == "guard_exit"
+                    else GovernedFinalizationError
+                )
+                with pytest.raises(expected_exception) as interrupted:
+                    await _dispatch(chat)
+                assert type(interrupted.value) is expected_exception
+                assert (
+                    interrupted.value is injected if expected_exception is RuntimeError
+                    else interrupted.value.__cause__ is injected
+                )
+                assert failures == 1
             response = await _dispatch(chat)
             assert calls == chat.engine.resume_calls == 1
             assert _outcome(response) == "confirmation_invalidated"
             assert h.store.op.state == "FAILED" and not h.store.op.send_started
             task = chat.runtime._task_store.records[pending.task_id]
-            assert task.status == "confirmation_invalidated" and task.error_code == "internal_error"
-            assert h.operations.result(h.store.op, pending.trace_id).error_code == "internal_error"
+            assert task.status == "confirmation_invalidated" and task.error_code == expected_error
+            h.store.op = WorkflowOperation.model_validate_json(h.store.op.model_dump_json())
+            assert h.operations.result(h.store.op, pending.trace_id).error_code == expected_error
+            claim = next(iter(chat.runtime._claimed_pending_confirmations.values()))
+            assert claim.state == "confirmation_invalidated" and claim.error_code == expected_error
             terminal = sorted((event.event_type, event.error_code)
                               for event in chat.trace.once.values())
-            assert terminal == [
-                ("evaluation_recorded", "internal_error"),
-                ("task_confirmation_invalidated", "internal_error"),
+            expected_events = [
+                ("evaluation_recorded", expected_error),
+                ("task_confirmation_invalidated", expected_error),
             ]
+            if mode == "return" and fault != "guard_exit":
+                expected_events.append(("response_envelope_created", None))
+            assert terminal == sorted(expected_events)
             replay = await _dispatch(chat)
             assert _outcome(replay) == "confirmation_invalidated"
             assert calls == chat.engine.resume_calls == 1
@@ -217,8 +276,8 @@ def test_durable_terminal_survives_entire_runtime_completion(state, fault):
 
         async def owned(op):
             h.operations.lifecycle_owner(op)
-            if state == "FAILED":
-                h.store.op = h.store.op.model_copy(update={"state": "FAILED"})
+            if state in {"FAILED", "CANCELLED"}:
+                h.store.op = h.store.op.model_copy(update={"state": state})
             if state == "EXPIRED":
                 h.store.op = h.store.op.model_copy(
                     update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
@@ -226,8 +285,6 @@ def test_durable_terminal_survives_entire_runtime_completion(state, fault):
 
         async def execute(*args, **kwargs):
             nonlocal sends
-            if state == "CANCELLED":
-                return ExecutionResult(status="denied", trace_id=pending.trace_id)
             sends += 1
             await h.store.transition(h.store.op, state="SENDING")
             return ExecutionResult(
