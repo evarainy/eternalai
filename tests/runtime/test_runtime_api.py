@@ -729,9 +729,11 @@ def topk_identity_mapping(request: pytest.FixtureRequest) -> Iterator[Any]:
                 await connection.execute(
                     text(
                         "INSERT INTO oa_session_credentials "
-                        "(tenant_id, ai_user_id, cipher_version, nonce, encrypted_payload, "
+                        "(binding_id, tenant_id, ai_user_id, cipher_version, nonce,"
+                        " encrypted_payload, "
                         "expires_at, updated_at) "
-                        "VALUES (:tenant, :user, 'synthetic-unused', :blob, :blob, :expiry, :now)"
+                        "VALUES (md5(random()::text),:tenant, :user,"
+                        " 'synthetic-unused', :blob, :blob, :expiry, :now)"
                     ),
                     {
                         "tenant": f"tenant-{subject}",

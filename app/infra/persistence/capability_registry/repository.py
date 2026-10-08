@@ -76,13 +76,18 @@ class PostgreSQLCapabilityRegistry:
 
     async def get(self, capability_id: str) -> CapabilitySpec | None:
         async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    sa.select(capabilities).where(
-                        capabilities.c.capability_id == capability_id
-                    )
-                )
-            ).mappings().first()
+            return await self._get_in_session(session, capability_id)
+
+    async def _get_in_session(
+        self, session: AsyncSession, capability_id: str, *, for_share: bool = False,
+    ) -> CapabilitySpec | None:
+        """Internal PG read; the caller owns the transaction and session lifetime."""
+        statement = sa.select(capabilities).where(
+            capabilities.c.capability_id == capability_id,
+        )
+        if for_share:
+            statement = statement.with_for_update(read=True)
+        row = (await session.execute(statement)).mappings().first()
         if row is None:
             return None
         return _row_to_capability_spec(row)

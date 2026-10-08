@@ -1,0 +1,70 @@
+{
+  "schema_version": "browser_publication.v1",
+  "version": "synthetic_v1",
+  "skill": {
+    "schema_version": "browser_skill.v1",
+    "skill_id": "query_todos",
+    "version": "synthetic_v1",
+    "site_id": "ecology9_synthetic_site",
+    "site_digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad",
+    "verifier_id": "ecology9_synthetic_verifier",
+    "verifier_digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9",
+    "parameters": [],
+    "steps": [
+      {
+        "step_id": "step_1",
+        "operation": "read",
+        "locator": {
+          "kind": "test_id",
+          "value": "synthetic_todos"
+        },
+        "value_ref": null,
+        "url_ref": null,
+        "effect": "read_only",
+        "option_ref": null
+      }
+    ],
+    "digest": "b0ec60a6490ad5a10a74ef847b02551ed632984df1907292db22cd29b959f1f2"
+  },
+  "site": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "site",
+    "dependency_id": "ecology9_synthetic_site",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_site_v1",
+    "digest": "a228cb3d42caf31a589255735d2892581b356c2cc2b9a8bcb77a6f837696e8ad"
+  },
+  "verifier": {
+    "schema_version": "browser_dependency.v1",
+    "kind": "verifier",
+    "dependency_id": "ecology9_synthetic_verifier",
+    "version": "v1",
+    "source_kind": "synthetic_fixture",
+    "origin": "https://ecology9.invalid",
+    "contract": "synthetic_business_key_verifier_v1",
+    "digest": "3bfbcdbe4deb0f2b25a07c587620c30f66d026a904b7941e3b1d9981668614a9"
+  },
+  "descriptor": {
+    "schema_version": "browser_descriptor.v1",
+    "capability_id": "synthetic_query_todos",
+    "version": "synthetic_v1",
+    "skill_id": "query_todos",
+    "skill_version": "synthetic_v1",
+    "skill_digest": "b0ec60a6490ad5a10a74ef847b02551ed632984df1907292db22cd29b959f1f2",
+    "target_system": "oa",
+    "visibility": "public",
+    "http_api_preferred": true,
+    "execution_state": "synthetic_contract_only",
+    "deferred_capabilities": [
+      "real_site_adapter",
+      "real_verifier",
+      "capability_integration",
+      "registered_cloud_source"
+    ],
+    "digest": "c0fda8bd1901b4b2a6617dd2718e07cd9f808bb38eaca3a638bec56c37151e37"
+  },
+  "dependency_digest": "4562ca80518d8fe2781430f0b3f8082084c1418a3afa75da8a8193d1fdf98b86",
+  "digest": "98e87b3dde817b710777c6a8cb64ca774bd8550b1233f6a09d1a5fd321295add"
+}

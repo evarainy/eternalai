@@ -84,6 +84,7 @@
           },
           "status": {
             "enum": [
+              "running",
               "completed",
               "blocked",
               "waiting_user",
@@ -333,6 +334,19 @@
             "title": "Client Capabilities",
             "type": "object"
           },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 96,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -414,6 +428,7 @@
           },
           "status": {
             "enum": [
+              "running",
               "completed",
               "blocked",
               "waiting_user",

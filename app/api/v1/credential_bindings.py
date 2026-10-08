@@ -59,24 +59,34 @@ class CredentialBindingService:
         credential: PasswordBindingCredential,
     ) -> CredentialBindingView:
         try:
-            if target_system == "oa":
-                verified = await self._verifier.verify_for_binding(
-                    LoginCredential(
-                        loginid=credential.login_id,
-                        userpassword=credential.password,
-                    )
-                )
-                if (verified.org_ctx.tenant_id, verified.ai_user_id) != (
-                    principal.org_ctx.tenant_id,
-                    principal.ai_user_id,
-                ):
+            async with self._store.poll_lock(
+                principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
+            ) as acquired:
+                if not acquired:
                     _raise_binding_failed()
-            return await self._store.bind_password(
-                principal.ai_user_id,
-                target_system,
-                credential,
-                tenant_id=principal.org_ctx.tenant_id,
-            )
+                snapshot = await self._store.snapshot(
+                    principal.ai_user_id, target_system, tenant_id=principal.org_ctx.tenant_id
+                )
+                stamp = await self._store.claim_write(snapshot)
+                if target_system == "oa":
+                    verified = await self._verifier.verify_for_binding(
+                        LoginCredential(
+                            loginid=credential.login_id,
+                            userpassword=credential.password,
+                        )
+                    )
+                    if (verified.org_ctx.tenant_id, verified.ai_user_id) != (
+                        principal.org_ctx.tenant_id,
+                        principal.ai_user_id,
+                    ):
+                        _raise_binding_failed()
+                return await self._store.bind_password(
+                    principal.ai_user_id,
+                    target_system,
+                    credential,
+                    tenant_id=principal.org_ctx.tenant_id,
+                    expected_write=stamp,
+                )
         except HTTPException:
             raise
         except Exception:

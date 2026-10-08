@@ -33,6 +33,7 @@ export type ActionResponseEnvelopeStatus = typeof ActionResponseEnvelopeStatus[k
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ActionResponseEnvelopeStatus = {
+  running: 'running',
   completed: 'completed',
   blocked: 'blocked',
   waiting_user: 'waiting_user',
@@ -134,9 +135,12 @@ export const HandleRequestChannel = {
 
 export type HandleRequestClientCapabilities = { [key: string]: unknown };
 
+export type HandleRequestClientRequestId = string | null;
+
 export interface HandleRequest {
   channel: HandleRequestChannel;
   client_capabilities?: HandleRequestClientCapabilities;
+  client_request_id?: HandleRequestClientRequestId;
   message: string;
   session_id: string;
 }
@@ -168,6 +172,7 @@ export type ResponseEnvelopeStatus = typeof ResponseEnvelopeStatus[keyof typeof 
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
 export const ResponseEnvelopeStatus = {
+  running: 'running',
   completed: 'completed',
   blocked: 'blocked',
   waiting_user: 'waiting_user',

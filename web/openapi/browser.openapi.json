@@ -1,0 +1,660 @@
+{
+  "components": {
+    "schemas": {
+      "BrowserArtifactView": {
+        "additionalProperties": false,
+        "description": "Metadata only. Even available artifacts require a fresh owner-authorized fetch.",
+        "properties": {
+          "artifact_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "available",
+              "expired",
+              "unavailable"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "result",
+              "report",
+              "download",
+              "draft"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "enum": [
+              "application/json",
+              "application/pdf",
+              "text/plain",
+              "text/csv",
+              "image/png"
+            ],
+            "title": "Media Type",
+            "type": "string"
+          },
+          "size_bytes": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "kind",
+          "media_type",
+          "size_bytes",
+          "expires_at",
+          "availability"
+        ],
+        "title": "BrowserArtifactView",
+        "type": "object"
+      },
+      "BrowserCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "maxLength": 192,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "title": "BrowserCancelRequest",
+        "type": "object"
+      },
+      "BrowserCancelView": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged": {
+            "title": "Acknowledged",
+            "type": "boolean"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested",
+          "acknowledged"
+        ],
+        "title": "BrowserCancelView",
+        "type": "object"
+      },
+      "BrowserDraftView": {
+        "additionalProperties": false,
+        "properties": {
+          "base_publication_digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Base Publication Digest",
+            "type": "string"
+          },
+          "base_revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Base Revision",
+            "type": "integer"
+          },
+          "draft_digest": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Draft Digest",
+            "type": "string"
+          },
+          "draft_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 1.0,
+            "title": "Draft Revision",
+            "type": "integer"
+          },
+          "executable": {
+            "const": false,
+            "default": false,
+            "title": "Executable",
+            "type": "boolean"
+          },
+          "parameter_names": {
+            "items": {
+              "pattern": "^[A-Za-z0-9_-]{1,96}$",
+              "type": "string"
+            },
+            "maxItems": 64,
+            "title": "Parameter Names",
+            "type": "array"
+          },
+          "rejection": {
+            "anyOf": [
+              {
+                "enum": [
+                  "invalid_pattern",
+                  "unsafe_reference",
+                  "dependency_mismatch"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection"
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "validated",
+              "rejected"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_revision",
+          "base_revision",
+          "base_publication_digest",
+          "draft_digest",
+          "state",
+          "rejection",
+          "parameter_names"
+        ],
+        "title": "BrowserDraftView",
+        "type": "object"
+      },
+      "BrowserProgressView": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_steps": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Steps"
+          },
+          "phase": {
+            "enum": [
+              "queued",
+              "acquiring",
+              "running",
+              "verifying",
+              "waiting_user"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "total_steps": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Steps"
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "title": "BrowserProgressView",
+        "type": "object"
+      },
+      "BrowserResultView": {
+        "additionalProperties": false,
+        "properties": {
+          "automatic_replay": {
+            "const": false,
+            "default": false,
+            "title": "Automatic Replay",
+            "type": "boolean"
+          },
+          "business": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Business",
+            "type": "string"
+          },
+          "cleanup": {
+            "enum": [
+              "pending",
+              "released",
+              "terminated",
+              "quarantined",
+              "failed"
+            ],
+            "title": "Cleanup",
+            "type": "string"
+          },
+          "dispatch_failure_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unavailable",
+                  "overloaded",
+                  "invalid_request",
+                  "resource_not_found",
+                  "unsupported",
+                  "denied",
+                  "stale",
+                  "subject_mismatch",
+                  "invalid_response",
+                  "timeout",
+                  "cancelled",
+                  "effect_unknown",
+                  "quarantined"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatch Failure Code"
+          },
+          "effect": {
+            "enum": [
+              "not_sent",
+              "acknowledged",
+              "unknown"
+            ],
+            "title": "Effect",
+            "type": "string"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "browser_async_required",
+                  "browser_request_id_required",
+                  "request_key_conflict",
+                  "browser_target_stale",
+                  "browser_effect_unknown",
+                  "browser_resource_quarantined",
+                  "browser_decision_unavailable",
+                  "browser_decision_overloaded",
+                  "browser_decision_timeout",
+                  "browser_decision_cancelled",
+                  "browser_decision_invalid_response",
+                  "browser_decision_model_mismatch",
+                  "browser_decision_input_unsupported",
+                  "browser_verification_failed",
+                  "browser_not_sent",
+                  "browser_cancelled",
+                  "browser_read_execution_failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "terminal_revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "Terminal Revision",
+            "type": "integer"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "enum": [
+                  "verified",
+                  "mismatch",
+                  "incomplete",
+                  "unsupported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
+          }
+        },
+        "required": [
+          "business",
+          "effect",
+          "verification",
+          "cleanup",
+          "error_code",
+          "terminal_revision"
+        ],
+        "title": "BrowserResultView",
+        "type": "object"
+      },
+      "BrowserRunResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/BrowserRunView"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "BrowserRunResponse",
+        "type": "object"
+      },
+      "BrowserRunView": {
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BrowserArtifactView"
+            },
+            "maxItems": 64,
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "cancel": {
+            "$ref": "#/components/schemas/BrowserCancelView"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserDraftView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserProgressView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrowserResultView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "browser.run.v1",
+            "default": "browser.run.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "state_revision": {
+            "maximum": 9007199254740991.0,
+            "minimum": 0.0,
+            "title": "State Revision",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "waiting_user",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "pattern": "^[A-Za-z0-9_-]{1,96}$",
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "run_id",
+          "state_revision",
+          "status",
+          "progress",
+          "cancel",
+          "result"
+        ],
+        "title": "BrowserRunView",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "EternalAI",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/browser-runs/{task_id}/{run_id}": {
+      "get": {
+        "operationId": "get_run_api_v1_browser_runs__task_id___run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,96}$",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,96}$",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "maxLength": 192,
+              "minLength": 1,
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run"
+      }
+    },
+    "/api/v1/browser-runs/{task_id}/{run_id}/cancel": {
+      "post": {
+        "operationId": "cancel_run_api_v1_browser_runs__task_id___run_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,96}$",
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{1,96}$",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Run"
+      }
+    }
+  }
+}

@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 
-import { forwardRef, useRef } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentProps, FormEvent } from 'react';
 import { Conversations, Prompts, Sender, Welcome } from '@ant-design/x';
 import { useMutation } from '@tanstack/react-query';
-import { Button, Input, Typography } from 'antd';
+import { Alert, Button, Checkbox, Input, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { ConfirmCard } from '../components/ConfirmCard';
 import { RecordsList } from '../components/RecordsList';
@@ -16,17 +16,171 @@ import {
 } from '../contracts/runtimeProjection';
 import { projectRequestError } from '../contracts/runtimeRequestError';
 import { userActionOutcomeMessages } from '../contracts/userActionOutcome';
+import { compareBrowserRunUpdate } from '../contracts/browserRunProjection';
+import { BrowserRunCard } from '../features/browser/BrowserRunCard';
+import {
+  cancelBrowserRun,
+  parseBrowserAccepted,
+  parseBrowserFailed,
+  parseBrowserPending,
+  readBrowserRun,
+  submitBrowserMessage,
+  type BrowserAccepted,
+  type BrowserRunRead,
+} from '../features/browser/api';
+import {
+  clearBrowserAccepted,
+  loadBrowserAccepted,
+  parseBrowserOwnerScope,
+  parseBrowserSkillId,
+  saveBrowserAccepted,
+  type BrowserOwnerScope,
+} from '../features/browser/acceptedStore';
 import {
   handleActionApiV1RuntimeActionPost,
   handleApiV1RuntimeHandlePost,
 } from '../generated/runtime/runtime';
 import type { UIComponentTargetSystem, UserAction } from '../generated/runtime/runtime.schemas';
 import { useAIDockStore } from '../stores/aiDockStore';
-import { useCurrentIdentity } from '../app/identity';
+import { useAuthStore } from '../stores/authStore';
+import { useCurrentIdentity, useIdentityQuery } from '../app/identity';
 import { greetingWithName } from './chatGreeting';
 import styles from './ChatPage.module.css';
 
 const { Text } = Typography;
+
+interface ChatPageProps {
+  /** A trusted server configuration must supply the one published skill ID. */
+  browserSkillId?: string;
+}
+
+interface BrowserTarget {
+  readonly accepted: BrowserAccepted;
+  readonly conversationId: string;
+  readonly owner: BrowserOwnerScope;
+  readonly authGeneration: number;
+  readonly requestGeneration: number;
+}
+
+interface ChatSubmission {
+  readonly message: string;
+  readonly sessionId: string;
+  readonly authGeneration: number;
+  readonly browser: null | {
+    readonly skillId: string;
+    readonly requestId: string;
+    readonly owner: BrowserOwnerScope;
+  };
+}
+
+function BrowserRunMonitor({
+  target, onTerminal,
+}: { target: BrowserTarget; onTerminal: (terminal: boolean) => void }) {
+  const [read, setRead] = useState<BrowserRunRead | null>(null);
+  const [pollError, setPollError] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const currentRead = useRef<BrowserRunRead | null>(null);
+  const cancelRequest = useRef<AbortController | null>(null);
+  const live = useRef(true);
+
+  const applyRead = useCallback((incoming: BrowserRunRead): boolean | null => {
+    if (!live.current) return null;
+    const decision = compareBrowserRunUpdate(currentRead.current?.run ?? null, incoming.run, {
+      taskId: target.accepted.task_id,
+      runId: target.accepted.run_id,
+      requestGeneration: target.requestGeneration,
+      currentGeneration: target.requestGeneration,
+    });
+    if (decision === 'apply' || decision === 'noop') {
+      currentRead.current = incoming;
+      setRead(incoming);
+      setPollError(false);
+      if (incoming.run.result !== null) onTerminal(true);
+      return incoming.run.result !== null;
+    } else if (decision === 'conflict') {
+      setRead(null);
+      setPollError(true);
+      return null;
+    }
+    return false;
+  }, [target, onTerminal]);
+
+  useEffect(() => {
+    live.current = true;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const controller = new AbortController();
+    const poll = async () => {
+      if (!live.current || controller.signal.aborted) return;
+      if (++attempts > 90) {
+        setPollError(true);
+        return;
+      }
+      try {
+        const response = await readBrowserRun(
+          target.accepted.task_id, target.accepted.run_id,
+          target.conversationId, controller.signal,
+        );
+        if (!live.current || controller.signal.aborted) return;
+        if (applyRead(response) !== false) return;
+        timer = setTimeout(() => { void poll(); }, 2000);
+      } catch {
+        if (live.current && !controller.signal.aborted) {
+          setRead(null);
+          setPollError(true);
+        }
+      }
+    };
+    void poll();
+    return () => {
+      live.current = false;
+      controller.abort();
+      cancelRequest.current?.abort();
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [target, refresh, applyRead]);
+
+  const onCancel = async (taskId: string, runId: string) => {
+    if (!live.current || taskId !== target.accepted.task_id
+        || runId !== target.accepted.run_id) return;
+    const controller = new AbortController();
+    cancelRequest.current = controller;
+    try {
+      const response = await cancelBrowserRun(
+        taskId, runId, target.conversationId, controller.signal,
+      );
+      if (live.current && !controller.signal.aborted && applyRead(response) === null) {
+        throw new Error('browser_run_update_conflict');
+      }
+    } finally {
+      if (cancelRequest.current === controller) cancelRequest.current = null;
+    }
+  };
+
+  if (read === null) {
+    return pollError ? (
+      <Alert type="warning" showIcon title="无法读取浏览器任务"
+        action={<Button onClick={() => setRefresh((value) => value + 1)}>重试读取</Button>} />
+    ) : <p role="status">正在读取浏览器任务…</p>;
+  }
+  return (
+    <div>
+      <BrowserRunCard
+        parsedView={read.run}
+        taskId={target.accepted.task_id}
+        runId={target.accepted.run_id}
+        requestGeneration={target.requestGeneration}
+        currentGeneration={target.requestGeneration}
+        resultValue={read.value}
+        onCancel={onCancel}
+      />
+      {pollError ? (
+        <Alert type="warning" showIcon title="浏览器任务更新暂不可用"
+          action={<Button onClick={() => setRefresh((value) => value + 1)}>重试读取</Button>} />
+      ) : null}
+    </div>
+  );
+}
 
 const presentationLabels: Record<PresentationKind, string> = {
   completed: '办理完成',
@@ -165,9 +319,10 @@ function AssistantDetails({
   );
 }
 
-export default function ChatPage() {
+export default function ChatPage({ browserSkillId }: ChatPageProps) {
   const draft = useAIDockStore((state) => state.draft);
   const transcript = useAIDockStore((state) => state.transcript);
+  const currentSessionId = useAIDockStore((state) => state.sessionId);
   const appendTranscript = useAIDockStore((state) => state.appendTranscript);
   const setDraft = useAIDockStore((state) => state.setDraft);
   const startNewSession = useAIDockStore((state) => state.startNewSession);
@@ -177,44 +332,293 @@ export default function ChatPage() {
     return outcome === undefined ? null : userActionOutcomeMessages[outcome];
   };
   const identity = useCurrentIdentity();
+  const { data: me, refetch: refetchMe } = useIdentityQuery();
+  const authStatus = useAuthStore((state) => state.status);
+  const authGeneration = useAuthStore((state) => state.generation);
+  const browserOwner = useMemo(() => parseBrowserOwnerScope(me), [me]);
+  const meSkillId = useMemo(() => parseBrowserSkillId(me), [me]);
+  const activeSkillId = meSkillId !== null
+    && (browserSkillId === undefined || browserSkillId === meSkillId) ? meSkillId : null;
+  const browserAvailable = authStatus === 'authenticated'
+    && browserOwner !== null && activeSkillId !== null;
+  const [browserOptIn, setBrowserOptIn] = useState(false);
+  const [browserTarget, setBrowserTarget] = useState<BrowserTarget | null>(null);
+  const [browserTerminal, setBrowserTerminal] = useState(false);
+  const [browserStorageError, setBrowserStorageError] = useState(false);
+  const [browserIdentityReady, setBrowserIdentityReady] = useState(true);
+  const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
+  const [retrySubmission, setRetrySubmission] = useState<ChatSubmission | null>(null);
+  const browserGeneration = useRef(0);
+  const restoredScope = useRef<string | null>(null);
+  const ownerKey = browserOwner === null ? null
+    : `${browserOwner.tenant_id}/${browserOwner.user_id}`;
+  const ownerKeyRef = useRef<string | null>(ownerKey);
+  ownerKeyRef.current = ownerKey;
+  const skillIdRef = useRef<string | null>(meSkillId);
+  skillIdRef.current = meSkillId;
+  const identityCheck = useRef(0);
   const requestInFlight = useRef(false);
+  const activeSubmission = useRef<ChatSubmission | null>(null);
+  const browserSubmitContext = useRef<{
+    controller: AbortController; ownerKey: string;
+  } | null>(null);
+
+  useEffect(() => () => {
+    browserSubmitContext.current?.controller.abort();
+    activeSubmission.current = null;
+  }, []);
+  useEffect(() => { setBrowserIdentityReady(true); }, [authGeneration]);
+  useEffect(() => {
+    if (browserSubmitContext.current !== null
+        && browserSubmitContext.current.ownerKey !== ownerKey) {
+      browserSubmitContext.current.controller.abort();
+    }
+  }, [ownerKey]);
+
+  const recheckBrowserIdentity = useCallback(() => {
+    const auth = useAuthStore.getState();
+    if (auth.status !== 'authenticated') return;
+    const sequence = ++identityCheck.current;
+    const previousOwner = ownerKeyRef.current;
+    const previousSkill = skillIdRef.current;
+    setBrowserIdentityReady(false);
+    void refetchMe().then((result) => {
+      if (identityCheck.current !== sequence
+          || useAuthStore.getState().generation !== auth.generation) return;
+      if (!result.isSuccess) return;
+      const nextOwner = parseBrowserOwnerScope(result.data);
+      const nextSkill = parseBrowserSkillId(result.data);
+      const nextKey = nextOwner === null ? null
+        : `${nextOwner.tenant_id}/${nextOwner.user_id}`;
+      if (nextKey !== previousOwner || nextSkill !== previousSkill) {
+        clearBrowserAccepted();
+        browserSubmitContext.current?.controller.abort();
+        setBrowserTarget(null);
+        setBrowserTerminal(false);
+        setPendingSubmission(null);
+        setRetrySubmission(null);
+        setBrowserOptIn(false);
+      }
+      setBrowserIdentityReady(true);
+    }).catch(() => { /* Keep the previous browser result hidden until retry. */ });
+  }, [refetchMe]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+    let channel: BroadcastChannel | null = null;
+    const checkSequence = identityCheck;
+    const onFocus = () => recheckBrowserIdentity();
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') recheckBrowserIdentity();
+    };
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('eternalai-auth');
+        channel.onmessage = (event: MessageEvent<unknown>) => {
+          if (event.data === 'recheck-identity') recheckBrowserIdentity();
+        };
+      }
+    } catch { /* Focus still checks current server identity. */ }
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      ++checkSequence.current;
+      channel?.close();
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [authStatus, authGeneration, recheckBrowserIdentity]);
+
+  useEffect(() => {
+    if (!browserAvailable || browserOwner === null) return;
+    const scope = `${authGeneration}/${browserOwner.tenant_id}/${browserOwner.user_id}`;
+    if (restoredScope.current === scope) return;
+    restoredScope.current = scope;
+    const stored = loadBrowserAccepted(browserOwner);
+    if (stored === null) return;
+    const state = useAIDockStore.getState();
+    if (state.sessionId !== null && state.sessionId !== stored.conversation_id) {
+      clearBrowserAccepted();
+      return;
+    }
+    if (state.sessionId === null) {
+      if (state.transcript.length > 0 || state.draft.trim()) {
+        clearBrowserAccepted();
+        return;
+      }
+      useAIDockStore.setState({ sessionId: stored.conversation_id });
+    }
+    setBrowserTarget({
+      accepted: stored.accepted, conversationId: stored.conversation_id,
+      owner: stored.owner, authGeneration,
+      requestGeneration: ++browserGeneration.current,
+    });
+    setBrowserTerminal(false);
+  }, [browserAvailable, browserOwner, authGeneration]);
+
+  useEffect(() => {
+    if (browserTarget === null) return;
+    if (!browserAvailable || browserOwner === null
+        || browserTarget.authGeneration !== authGeneration
+        || browserTarget.owner.tenant_id !== browserOwner.tenant_id
+        || browserTarget.owner.user_id !== browserOwner.user_id
+        || useAIDockStore.getState().sessionId !== browserTarget.conversationId) {
+      clearBrowserAccepted();
+      setBrowserTarget(null);
+      setBrowserTerminal(false);
+      setBrowserOptIn(false);
+      setPendingSubmission(null);
+      setRetrySubmission(null);
+    }
+  }, [browserTarget, browserAvailable, browserOwner, authGeneration, currentSessionId]);
+
+  useEffect(() => {
+    const stillCurrent = (submission: ChatSubmission): boolean =>
+      authStatus === 'authenticated' && submission.authGeneration === authGeneration
+      && submission.sessionId === currentSessionId
+      && (submission.browser === null || ownerKey ===
+        `${submission.browser.owner.tenant_id}/${submission.browser.owner.user_id}`);
+    if (pendingSubmission !== null && !stillCurrent(pendingSubmission)) {
+      setPendingSubmission(null);
+    }
+    if (retrySubmission !== null && !stillCurrent(retrySubmission)) {
+      setRetrySubmission(null);
+    }
+    if (!browserAvailable && browserOptIn) setBrowserOptIn(false);
+  }, [currentSessionId, authStatus, authGeneration, ownerKey, browserAvailable,
+    browserOptIn, pendingSubmission, retrySubmission]);
+
+  const submissionIsCurrent = (submission: ChatSubmission): boolean => {
+    const auth = useAuthStore.getState();
+    return auth.status === 'authenticated' && auth.generation === submission.authGeneration
+      && useAIDockStore.getState().sessionId === submission.sessionId
+      && (submission.browser === null || ownerKeyRef.current ===
+        `${submission.browser.owner.tenant_id}/${submission.browser.owner.user_id}`);
+  };
+
+  const sendBrowserSubmission = async (submission: ChatSubmission): Promise<unknown> => {
+    const browser = submission.browser;
+    if (browser === null) throw new Error('browser_submission_invalid');
+    const controller = new AbortController();
+    browserSubmitContext.current = {
+      controller, ownerKey: `${browser.owner.tenant_id}/${browser.owner.user_id}`,
+    };
+    const stopOnSessionChange = useAIDockStore.subscribe((state) => {
+      if (state.sessionId !== submission.sessionId) controller.abort();
+    });
+    const stopOnAuthChange = useAuthStore.subscribe((state) => {
+      if (state.status !== 'authenticated' || state.generation !== submission.authGeneration) {
+        controller.abort();
+      }
+    });
+    try {
+      return await submitBrowserMessage(
+        submission.message, submission.sessionId, browser.skillId, browser.requestId,
+        controller.signal,
+      );
+    } finally {
+      stopOnSessionChange();
+      stopOnAuthChange();
+      if (browserSubmitContext.current?.controller === controller) {
+        browserSubmitContext.current = null;
+      }
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: async (message: string) => {
-      const store = useAIDockStore.getState();
-      const sessionId = store.ensureSession();
+      const submission = activeSubmission.current;
+      if (submission === null || submission.message !== message) {
+        throw new Error('chat_submission_invalid');
+      }
+      const { sessionId } = submission;
       const reference = /^(?:确认|confirm)\s+(\S+)$/i.exec(message)?.[1] ?? null;
       try {
-        const result = projectResponse(await handleApiV1RuntimeHandlePost({
-          channel: 'web',
-          session_id: sessionId,
-          message,
-          client_capabilities: {},
-        }));
+        const response = submission.browser === null
+          ? await handleApiV1RuntimeHandlePost({
+            channel: 'web', session_id: sessionId, message, client_capabilities: {},
+          })
+          : await sendBrowserSubmission(submission);
+        const pending = submission.browser === null ? null : parseBrowserPending(response);
+        if (pending !== null) {
+          if (submissionIsCurrent(submission)) {
+            setPendingSubmission(submission);
+            setRetrySubmission(null);
+          }
+          return null;
+        }
+        if (submission.browser !== null) {
+          const accepted = parseBrowserAccepted(response);
+          if (accepted !== null) {
+            if (submissionIsCurrent(submission)) {
+              setBrowserTarget({
+                accepted, conversationId: sessionId, owner: submission.browser.owner,
+                authGeneration: submission.authGeneration,
+                requestGeneration: ++browserGeneration.current,
+              });
+              setBrowserTerminal(false);
+              setPendingSubmission(null);
+              setRetrySubmission(null);
+              setBrowserStorageError(!saveBrowserAccepted(
+                submission.browser.owner, sessionId, accepted,
+              ));
+            }
+            return null;
+          }
+        }
+        const result = projectResponse(response);
+        if (submission.browser !== null && submissionIsCurrent(submission)) {
+          setPendingSubmission(null);
+          setRetrySubmission(parseBrowserFailed(response) === null ? submission : null);
+        }
         useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
         return result;
       } catch (error) {
         const projectedError = projectRequestError(error);
-        if (projectedError === null) {
+        if (projectedError === null && submission.browser === null) {
           throw error;
         }
-        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, projectedError);
-        return projectedError;
+        const result = projectedError ?? projectResponse(null);
+        if (submission.browser !== null && submissionIsCurrent(submission)) {
+          setPendingSubmission(null);
+          setRetrySubmission(submission);
+        }
+        useAIDockStore.getState().applyConfirmationResult(sessionId, reference, result);
+        return result;
       }
     },
     onSettled: () => {
+      activeSubmission.current = null;
       requestInFlight.current = false;
     },
   });
 
-  const submit = () => {
-    const message = draft.trim();
+  const submit = (retry?: ChatSubmission) => {
+    const message = retry?.message ?? draft.trim();
     if (!message || requestInFlight.current) {
       return;
     }
+    if (retry !== undefined && !submissionIsCurrent(retry)) return;
+    if (retry?.browser !== null && retry?.browser !== undefined && !browserIdentityReady) return;
+    if (retry === undefined && browserOptIn && !browserAvailable) return;
+    if (retry === undefined && browserOptIn && !browserIdentityReady) return;
+    if (retry === undefined && browserOptIn
+        && ((browserTarget !== null && !browserTerminal) || pendingSubmission !== null)) return;
+    const sessionId = retry?.sessionId ?? useAIDockStore.getState().ensureSession();
+    const browser = retry?.browser ?? (browserOptIn && browserOwner !== null
+      && activeSkillId !== null ? {
+        skillId: activeSkillId, requestId: crypto.randomUUID(), owner: browserOwner,
+      } : null);
+    const submission: ChatSubmission = retry ?? {
+      message, sessionId, authGeneration: useAuthStore.getState().generation, browser,
+    };
     requestInFlight.current = true;
-    appendTranscript({ role: 'user', text: message });
-    setDraft('');
+    if (retry === undefined) {
+      setRetrySubmission(null);
+      appendTranscript({ role: 'user', text: message });
+      setDraft('');
+    }
+    activeSubmission.current = submission;
     mutation.mutate(message);
   };
 
@@ -242,6 +646,27 @@ export default function ChatPage() {
     submit();
   };
 
+  const startFreshSession = () => {
+    clearBrowserAccepted();
+    setBrowserTarget(null);
+    setBrowserTerminal(false);
+    setPendingSubmission(null);
+    setRetrySubmission(null);
+    setBrowserStorageError(false);
+    setBrowserOptIn(false);
+    startNewSession();
+  };
+
+  const visibleBrowserTarget = browserAvailable && browserIdentityReady
+    && browserOwner !== null
+    && browserTarget !== null && currentSessionId === browserTarget.conversationId
+    && browserTarget.authGeneration === authGeneration
+    && browserTarget.owner.tenant_id === browserOwner.tenant_id
+    && browserTarget.owner.user_id === browserOwner.user_id ? browserTarget : null;
+  const browserSubmissionBlocked = browserOptIn
+    && (!browserIdentityReady || (browserTarget !== null && !browserTerminal)
+      || pendingSubmission !== null);
+
   const lastEntry = transcript.at(-1);
   const lastEntryFailed =
     lastEntry !== undefined &&
@@ -256,7 +681,7 @@ export default function ChatPage() {
         如实写明历史存不起来，不做刷新即失效却看起来像历史的列表。
       */}
       <aside aria-label="我问过的" className={styles.sessionRail}>
-        <Button block className={styles.newSessionButton} onClick={startNewSession}>
+        <Button block className={styles.newSessionButton} onClick={startFreshSession}>
           新对话
         </Button>
         <h2 className={styles.railTitle}>我问过的</h2>
@@ -352,6 +777,31 @@ export default function ChatPage() {
               </ol>
             )}
 
+            {visibleBrowserTarget === null ? null : (
+              <BrowserRunMonitor
+                key={`${visibleBrowserTarget.requestGeneration}/${visibleBrowserTarget.accepted.run_id}`}
+                target={visibleBrowserTarget}
+                onTerminal={setBrowserTerminal}
+              />
+            )}
+            {!browserIdentityReady && browserTarget !== null ? (
+              <Alert type="warning" showIcon title="正在核对浏览器任务身份"
+                action={<Button onClick={recheckBrowserIdentity}>重试核对</Button>} />
+            ) : null}
+            {browserStorageError && visibleBrowserTarget !== null ? (
+              <Alert type="warning" showIcon title="刷新后可能无法恢复此浏览器任务" />
+            ) : null}
+            {pendingSubmission !== null && submissionIsCurrent(pendingSubmission) ? (
+              <Alert type="info" showIcon title="浏览器任务正在准备，尚未生成运行记录"
+                action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  onClick={() => submit(pendingSubmission)}>继续检查</Button>} />
+            ) : null}
+            {retrySubmission !== null && submissionIsCurrent(retrySubmission) ? (
+              <Alert type="warning" showIcon title="浏览器请求未完成，可使用原请求重试"
+                action={<Button disabled={mutation.isPending || !browserIdentityReady}
+                  onClick={() => submit(retrySubmission)}>重试原请求</Button>} />
+            ) : null}
+
             {mutation.isPending ? (
               <div className={styles.pendingNotice} role="status">
                 <span className={styles.pendingDot} aria-hidden="true" />
@@ -359,7 +809,8 @@ export default function ChatPage() {
               </div>
             ) : null}
 
-            {lastEntryFailed && !mutation.isPending ? (
+            {lastEntryFailed && !mutation.isPending
+              && visibleBrowserTarget === null && pendingSubmission === null ? (
               <p className={styles.failureNotice}>
                 上面这一条没有办成。这里显示的是原因，不是「你没有要办的事」。
               </p>
@@ -386,18 +837,30 @@ export default function ChatPage() {
               disabled={mutation.isPending}
               footer={
                 <div className={styles.composerActions}>
+                  {browserAvailable && browserIdentityReady ? (
+                    <Checkbox checked={browserOptIn} onChange={(event) => {
+                      setBrowserOptIn(event.target.checked);
+                    }}>
+                      使用浏览器只读技能
+                    </Checkbox>
+                  ) : null}
                   <Button
                     type="primary"
                     htmlType="submit"
                     loading={mutation.isPending}
-                    disabled={!draft.trim() || mutation.isPending}
+                    disabled={!draft.trim() || mutation.isPending || browserSubmissionBlocked}
                   >
                     发送
                   </Button>
                 </div>
               }
-              onChange={(value) => setDraft(value)}
-              onSubmit={submit}
+              onChange={(value) => {
+                setDraft(value);
+                if (retrySubmission !== null && value.trim() !== retrySubmission.message) {
+                  setRetrySubmission(null);
+                }
+              }}
+              onSubmit={() => submit()}
               placeholder="问点什么，比如：我今天有什么要办的"
               suffix={false}
               value={draft}

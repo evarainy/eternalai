@@ -64,6 +64,40 @@ vi.mock('../../generated/runtime/runtime', async (importOriginal) => {
 });
 
 const SESSION_A = '11111111-1111-4111-8111-111111111111';
+const BROWSER_STORAGE_KEY = 'eternalai.browser.accepted.v1';
+
+function browserMe(userId: string) {
+  return {
+    authenticated: true,
+    display_name: DISPLAY_NAME,
+    org: null,
+    org_status: 'ok',
+    avatar_path: null,
+    browser_owner_scope: { tenant_id: 'tenant_alias', user_id: userId },
+    browser_skill_id: 'browser_read_skill_1',
+  };
+}
+
+function verifiedBrowserRun() {
+  return {
+    schema_version: 'browser.run.v1', task_id: 'task_1', run_id: 'run_1',
+    state_revision: 2, status: 'completed', progress: null,
+    cancel: { requested: false, acknowledged: false },
+    result: {
+      business: 'completed', effect: 'acknowledged', verification: 'verified',
+      cleanup: 'pending', error_code: null, dispatch_failure_code: null,
+      terminal_revision: 2, automatic_replay: false,
+    },
+    artifacts: [], draft: null,
+  };
+}
+
+function acceptedBrowserEnvelope() {
+  return envelope({
+    status: 'running',
+    data: { kind: 'accepted', task_id: 'task_1', run_id: 'run_1', state_revision: 1 },
+  });
+}
 
 function response(
   body: unknown,
@@ -254,6 +288,49 @@ describe('ChatPage request boundary', () => {
     sessionStorage.clear();
     useAuthStore.setState({ generation: 1, status: 'authenticated' });
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(SESSION_A);
+  });
+
+  it('hides a verified value and clears accepted IDs after a cross-tab owner switch', async () => {
+    identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
+      .mockResolvedValueOnce(browserMe('owner_b'));
+    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
+      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+    )));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
+    sendMessage('synthetic read');
+    expect(await screen.findByRole('region', { name: '浏览器结果' }))
+      .toHaveTextContent('visible_to_owner_a');
+    expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).not.toBeNull();
+
+    fireEvent.focus(window);
+    expect(screen.queryByText(/visible_to_owner_a/)).not.toBeInTheDocument();
+    await waitFor(() => expect(sessionStorage.getItem(BROWSER_STORAGE_KEY)).toBeNull());
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/runtime/handle'))
+      .toHaveLength(1);
+  });
+
+  it('keeps a verified value hidden while fresh identity is unavailable', async () => {
+    identityMock.readMe.mockResolvedValueOnce(browserMe('owner_a'))
+      .mockRejectedValueOnce(new Error('synthetic_identity_unavailable'));
+    const fetchMock = vi.fn((url: string) => Promise.resolve(response(
+      url === '/api/v1/runtime/handle' ? acceptedBrowserEnvelope()
+        : { run: verifiedBrowserRun(), value: { synthetic_value: 'visible_to_owner_a' } },
+    )));
+    vi.stubGlobal('fetch', fetchMock);
+    renderChat();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '使用浏览器只读技能' }));
+    sendMessage('synthetic read');
+    expect(await screen.findByRole('region', { name: '浏览器结果' }))
+      .toHaveTextContent('visible_to_owner_a');
+
+    fireEvent.focus(window);
+    expect(screen.queryByText(/visible_to_owner_a/)).not.toBeInTheDocument();
+    expect(await screen.findByText('正在核对浏览器任务身份')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/v1/runtime/handle'))
+      .toHaveLength(1);
   });
 
   it('uses the generated client with the fixed web request and one shared CSRF header', async () => {
@@ -1100,6 +1177,24 @@ describe('ChatPage response projection', () => {
       await screen.findByText('当前响应无法安全显示，请稍后重试。'),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('RAW_NON_JSON_RESPONSE');
+  });
+
+  it('keeps submission context out of mutation variables while pending and after completion', async () => {
+    let resolveResponse!: (value: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveResponse = resolve; });
+    const fetchMock = vi.fn().mockReturnValue(pending);
+    vi.stubGlobal('fetch', fetchMock);
+    const { client } = renderChat();
+    const message = '私有执行上下文测试';
+    sendMessage(message);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const variables = () => client.getMutationCache().getAll().map((item) => item.state.variables);
+    expect(useAIDockStore.getState().sessionId).toBe(SESSION_A);
+    expect(variables()).toEqual([message]);
+    await act(async () => { resolveResponse(response(envelope())); });
+    await screen.findByText('办理完成');
+    expect(variables()).toEqual([message]);
+    expect(JSON.stringify(variables())).not.toContain(SESSION_A);
   });
 
   it('retains only approved projections and does not expose other raw envelope fields', async () => {

@@ -12,7 +12,13 @@ from app.infra.auth.oa import (
     OATimeoutError,
     OAUpstreamServerError,
 )
-from app.ports.auth import AuthenticationPort, CredentialStoreError, LoginCredential, Principal
+from app.ports.auth import (
+    AuthenticationPort,
+    CredentialAuthenticationResult,
+    CredentialStoreError,
+    LoginCredential,
+    StaleCredentialWrite,
+)
 from app.ports.credential_binding import (
     BackgroundCredentialAcquirerPort,
     CredentialAcquisitionError,
@@ -39,36 +45,46 @@ class OAPasswordCredentialAcquirer:
         self._authentication = authentication
         self._binding_store = binding_store
 
-    async def acquire(self, candidate: CredentialPollCandidate) -> Principal:
+    async def acquire(self, candidate: CredentialPollCandidate) -> CredentialAuthenticationResult:
         if candidate.tenant_id != self._tenant_id:
             raise CredentialAcquisitionError("identity_mismatch")
         if candidate.target_system != "oa":
             raise CredentialAcquisitionError("unsupported_target")
+        if candidate.write_stamp is None:
+            raise CredentialAcquisitionError("local_failure")
         await self._ensure_captcha_is_not_required()
         try:
             binding = await self._binding_store.load_password_for_poll(
-                candidate.ai_user_id, candidate.target_system, tenant_id=candidate.tenant_id
+                candidate.ai_user_id,
+                candidate.target_system,
+                tenant_id=candidate.tenant_id,
+                expected_write=candidate.write_stamp,
             )
-            principal = await self._authentication.authenticate(
+            result = await self._authentication.refresh_credential(
                 LoginCredential(
                     loginid=binding.login_id,
                     userpassword=binding.password,
                 ),
-                reactivate_revoked_session=False,
+                expected_write=candidate.write_stamp,
                 expected_subject=(candidate.tenant_id, candidate.ai_user_id),
             )
+        except StaleCredentialWrite:
+            raise
         except OAAuthenticationError as error:
             raise CredentialAcquisitionError(error.failure_kind) from None
         except CredentialStoreError:
             raise CredentialAcquisitionError("local_failure") from None
         except Exception:
             raise CredentialAcquisitionError("local_failure") from None
+        principal = result.principal
+        if result.write_stamp is None:
+            raise CredentialAcquisitionError("local_failure")
         if (principal.org_ctx.tenant_id, principal.ai_user_id) != (
             candidate.tenant_id,
             candidate.ai_user_id,
         ):
             raise CredentialAcquisitionError("identity_mismatch")
-        return principal
+        return result
 
     async def _ensure_captcha_is_not_required(self) -> None:
         try:
