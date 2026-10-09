@@ -7,7 +7,7 @@ Resource lifecycle/cleanup belongs to the session owner, not this orchestrator.
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, get_args
 from uuid import uuid4
@@ -24,6 +24,7 @@ from app.browser_skill.models import (
     DecisionResult,
     DispatchReceipt,
     ExecutionContext,
+    LocatorHint,
     ObservationRequest,
     PageEvidence,
     ReadSpec,
@@ -37,11 +38,14 @@ from app.browser_skill.models import (
     VisibleProjection,
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
+from app.browser_skill.registry import canonical_digest
 from app.browser_skill.repair import (
     ExplorationFeedback,
     ExplorationRegionFeedback,
+    FormalRepairObservation,
     ReadOnlyExplorationAuthority,
     RepairError,
+    RepairFailureReason,
     explore_registered_reads,
 )
 from app.browser_skill.scoping import scope_snapshot
@@ -83,6 +87,16 @@ class StepAudit(Protocol):
         self, command: ActionCommand, rule: SiteStepRule, scope: ScopeStamp,
         receipt: DispatchReceipt, policy_digest: str, sequence: int,
     ) -> RunTeachingStep: ...
+
+
+class FailedStepAudit(Protocol):
+    """Persist only a registered target failure observed before this step's send."""
+
+    async def __call__(
+        self, rule: SiteStepRule, scope: ScopeStamp, policy_digest: str,
+        sequence: int, reason: RepairFailureReason,
+        observations: tuple[FormalRepairObservation, ...],
+    ) -> None: ...
 
 
 class TraversalAudit(Protocol):
@@ -198,6 +212,8 @@ class BrowserExecutor:
         "_last_decision_diagnostic",
         "_last_stage_diagnostic",
         "_step_audit",
+        "_failed_step_audit",
+        "_repair_hints",
         "_traversal_audit",
         "_write_gate",
         "_exploration_publication",
@@ -207,12 +223,14 @@ class BrowserExecutor:
     def __init__(
         self,
         web: WebAdapter,
-        decision: DecisionProvider,
+        decision: DecisionProvider | None,
         verifier: BrowserVerifierPort,
         site: SiteAdapter,
         resolver: ReadSpecResolver,
         decision_contexts: DecisionContextFactory,
         step_audit: StepAudit | None = None,
+        failed_step_audit: FailedStepAudit | None = None,
+        repair_hints: Mapping[str, tuple[LocatorHint, ...]] | None = None,
         traversal_audit: TraversalAudit | None = None,
         write_gate: WriteGate | None = None,
         exploration_publication: BrowserPublicationManifest | None = None,
@@ -225,6 +243,12 @@ class BrowserExecutor:
         self._resolve = resolver
         self._contexts = decision_contexts
         self._step_audit = step_audit
+        self._failed_step_audit = failed_step_audit
+        self._repair_hints = {
+            step_id: tuple(LocatorHint.model_validate_json(hint.model_dump_json())
+                           for hint in hints)
+            for step_id, hints in (repair_hints or {}).items()
+        }
         self._traversal_audit = traversal_audit
         self._write_gate = write_gate
         self._exploration_publication = exploration_publication
@@ -350,6 +374,11 @@ class BrowserExecutor:
             raise failure("invalid_response")
         if len(candidates) == 1:
             return candidates[0].ref
+        if (
+            len(candidates) > plan.decision_budget.max_candidates
+            or self._decision is None
+        ):
+            raise failure("unsupported")
         request = DecisionRequest(
             request_id=uuid4().hex,
             scope=scope,
@@ -446,6 +475,97 @@ class BrowserExecutor:
         if any(c not in snapshot.candidates for c in candidates):
             raise failure("invalid_response")
         return snapshot, candidates
+
+    async def _repair_observations(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, rule: SiteStepRule,
+        failed_scope: ScopeStamp,
+    ) -> tuple[FormalRepairObservation, ...]:
+        """One fresh local read; no replacement ref is used for a browser send."""
+        hints = self._repair_hints.get(rule.step.step_id, ())
+        if not hints or rule.step.operation == "select_option":
+            return ()
+
+        try:
+            check_liveness(context)
+            await authorize_current(session, context, spec)
+            observed = await self._web.observe(
+                session, ObservationRequest(region_id=failed_scope.region_id),
+                plan.policy,
+            )
+            snapshot = scope_snapshot(observed, context.expected_binding, plan.policy)
+            if (
+                snapshot.scope.region_id != rule.observation.region_id
+                or snapshot.coverage.state != "complete"
+            ):
+                return ()
+            proof: list[FormalRepairObservation] = []
+            for hint in hints:
+                if hint == rule.step.locator:
+                    continue
+                check_liveness(context)
+                await authorize_current(session, context, spec)
+                candidates = await self._web.repair_target_candidates(
+                    session, rule.step, hint, snapshot, context,
+                )
+                await authorize_current(session, context, spec)
+                if (
+                    len(candidates) != 1 or candidates[0] not in snapshot.candidates
+                    or not candidates[0].visible or not candidates[0].enabled
+                    or candidates[0].ref.scope != snapshot.scope
+                ):
+                    continue
+                proof.append(FormalRepairObservation(
+                    hint, snapshot.scope,
+                    canonical_digest("browser_repair_target.v1", {
+                        "target": candidates[0].ref.model_dump(mode="json"),
+                    }),
+                ))
+            check_liveness(context)
+            return tuple(proof)
+        except Exception:
+            # Failure to prove a fresh replacement leaves the original failure
+            # intact but supplies no repair candidate to the journal.
+            return ()
+
+    async def _bounded_repair_observations(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, rule: SiteStepRule,
+        failed_scope: ScopeStamp,
+    ) -> tuple[FormalRepairObservation, ...]:
+        remaining = context.deadline_monotonic - time.monotonic() - 0.5
+        if remaining <= 0:
+            return ()
+        try:
+            async with asyncio.timeout(min(2.0, remaining)):
+                return await self._repair_observations(
+                    session, context, plan, spec, rule, failed_scope,
+                )
+        except TimeoutError:
+            return ()
+
+    async def _wait_targets(
+        self, session: BrowserSessionRef, context: ExecutionContext,
+        plan: RegisteredSitePlan, spec: ReadSpec, rule: SiteStepRule,
+        progress: _Progress,
+    ) -> tuple[ScopedSnapshot, tuple[VisibleCandidate, ...]]:
+        """Bounded observation until a registered target is visible and enabled."""
+        deadline = min(context.deadline_monotonic, time.monotonic() + 5.0)
+        for _ in range(32):
+            check_liveness(context)
+            snapshot, candidates = await self._observe_targets(
+                session, rule.observation, rule.step, context, plan, spec,
+                progress,
+            )
+            eligible = tuple(item for item in candidates
+                             if item.visible and item.enabled)
+            if eligible:
+                return snapshot, eligible
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.05, remaining))
+        raise failure("timeout")
 
     async def _refresh_candidates(
         self,
@@ -803,14 +923,23 @@ class BrowserExecutor:
     async def _run(
         self, session: BrowserSessionRef, context: ExecutionContext, progress: _Progress
     ) -> ExecutionOutcome:
+        failed_rule: SiteStepRule | None = None
+        failed_scope: ScopeStamp | None = None
+        failed_policy_digest: str | None = None
+        failed_sequence = 0
+        step_send_entered = False
+        repair_plan: RegisteredSitePlan | None = None
+        repair_spec: ReadSpec | None = None
         try:
             plan = self._site.bootstrap(context.skill)
+            repair_plan = plan
             plan.validate_context(context)
             if self._site.observation_policy(context.skill) != plan.policy:
                 raise failure("denied")
             # Establish independently confirmed admission before observing private DOM.
             progress.mark("confirmation")
             spec = await confirmed_spec(session, context, plan, self._resolve)
+            repair_spec = spec
             if plan.exploration is not None:
                 await self._explore(session, context, plan, spec, progress)
             for rule in (() if plan.exploration is not None else plan.steps):
@@ -839,6 +968,11 @@ class BrowserExecutor:
                         )
                         progress.audit_inflight = False
                     continue
+                failed_rule = rule
+                failed_scope = None
+                failed_policy_digest = plan.policy.digest
+                failed_sequence = len(progress.receipts) + 1
+                step_send_entered = False
                 if (
                     rule.effect.actual_effect == "unknown"
                     or rule.step.effect != rule.effect.actual_effect
@@ -853,10 +987,17 @@ class BrowserExecutor:
                     progress.mark("authorization")
                     await authorize_current(session, context, spec)
                 else:
-                    snapshot, candidates = await self._observe_targets(
-                        session, rule.observation, rule.step, context, plan, spec, progress
-                    )
+                    if rule.step.operation == "wait":
+                        snapshot, candidates = await self._wait_targets(
+                            session, context, plan, spec, rule, progress,
+                        )
+                    else:
+                        snapshot, candidates = await self._observe_targets(
+                            session, rule.observation, rule.step,
+                            context, plan, spec, progress,
+                        )
                     audit_scope = snapshot.scope
+                    failed_scope = snapshot.scope
                     target = await self._choose(
                         candidates,
                         snapshot.scope,
@@ -869,6 +1010,9 @@ class BrowserExecutor:
                         ),
                     )
                     if rule.step.operation == "select_option":
+                        # Option selection has its own target set. A failure there
+                        # cannot prove that the step's parent locator is broken.
+                        failed_scope = None
                         options = await self._web.option_candidates(
                             session, target, rule.step, context
                         )
@@ -924,6 +1068,7 @@ class BrowserExecutor:
                     progress.mark("target_revalidation")
                     await self._web.revalidate(session, command, context)
                 check_liveness(context)
+                step_send_entered = True
                 progress.dispatch_inflight = True
                 progress.mark("dispatch")
                 receipt = await self._web.execute(session, command, context)
@@ -961,6 +1106,31 @@ class BrowserExecutor:
             check_liveness(context)
             return self._outcome(progress, context, verification=verification)
         except _DecisionStopped:
+            if (
+                self._failed_step_audit is not None and failed_rule is not None
+                and failed_scope is not None and failed_policy_digest is not None
+                and not step_send_entered and progress.decisions
+                and progress.decisions[-1].status in {"abstained", "ambiguous"}
+                and progress.decisions[-1].reason == "tie"
+            ):
+                observations = (
+                    await self._bounded_repair_observations(
+                        session, context, repair_plan, repair_spec,
+                        failed_rule, failed_scope,
+                    ) if repair_plan is not None and repair_spec is not None else ()
+                )
+                progress.audit_inflight = True
+                try:
+                    await self._failed_step_audit(
+                        failed_rule, failed_scope, failed_policy_digest,
+                        failed_sequence, "ambiguous_target", observations,
+                    )
+                except Exception:
+                    return self._outcome(
+                        progress, context, problem=failure("invalid_response").failure,
+                    )
+                finally:
+                    progress.audit_inflight = False
             return self._outcome(progress, context)
         except BrowserOperationError as exc:
             # An adapter may provide an authoritative not_sent failure after
@@ -971,6 +1141,40 @@ class BrowserExecutor:
                     progress, context,
                     problem=failure("effect_unknown", dispatched=True).failure,
                 )
+            reason: RepairFailureReason | None = (
+                "locator_not_found" if exc.failure.code == "resource_not_found"
+                and progress.stage == "target_candidates" else
+                "target_stale" if exc.failure.code == "stale"
+                and progress.stage in {
+                    "target_observation", "target_candidates",
+                    "decision_request", "target_revalidation",
+                }
+                else None
+            )
+            if (
+                reason is not None and self._failed_step_audit is not None
+                and failed_rule is not None and failed_scope is not None
+                and failed_policy_digest is not None and not step_send_entered
+                and exc.failure.dispatch_state == "not_sent"
+            ):
+                observations = (
+                    await self._bounded_repair_observations(
+                        session, context, repair_plan, repair_spec,
+                        failed_rule, failed_scope,
+                    ) if repair_plan is not None and repair_spec is not None else ()
+                )
+                progress.audit_inflight = True
+                try:
+                    await self._failed_step_audit(
+                        failed_rule, failed_scope, failed_policy_digest,
+                        failed_sequence, reason, observations,
+                    )
+                except Exception:
+                    return self._outcome(
+                        progress, context, problem=failure("invalid_response").failure,
+                    )
+                finally:
+                    progress.audit_inflight = False
             progress.dispatch_inflight = exc.failure.dispatch_state == "possibly_sent"
             return self._outcome(progress, context, problem=exc.failure)
         except Exception:

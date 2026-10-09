@@ -70,7 +70,10 @@ def navigation_allowed(url: str, origins: tuple[str, ...]) -> bool:
 
 
 class EffectFact(Contract):
-    operation: Literal["click", "fill", "select_option", "read", "navigate"]
+    operation: Literal[
+        "click", "fill", "select_option", "read", "navigate", "check",
+        "press_enter", "wait",
+    ]
     actual_effect: Literal["read_only", "may_write", "unknown"]
     proof_ref: OpaqueId
     evidence_digest: Digest
@@ -119,6 +122,8 @@ class SiteStepRule(Contract):
     def fixed_step(self) -> Self:
         if self.effect.operation != self.step.operation:
             raise ValueError("site_effect_operation_mismatch")
+        if self.step.operation == "wait" and self.effect.actual_effect != "read_only":
+            raise ValueError("site_wait_effect_invalid")
         if self.observation.expected_scope is not None:
             raise ValueError("site_cannot_register_live_scope")
         if bool(self.option_criteria) != (self.step.operation == "select_option"):

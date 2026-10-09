@@ -28,6 +28,7 @@ from app.browser_skill.models import (
     ActionCommand,
     BrowserOwner,
     DispatchReceipt,
+    LocatorHint,
     PageEvidence,
     ReadSpec,
     ScopeBinding,
@@ -36,6 +37,12 @@ from app.browser_skill.models import (
 )
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.browser_skill.registry import canonical_digest
+from app.browser_skill.repair import (
+    FormalFailedStep,
+    FormalLocatorProposal,
+    FormalRepairObservation,
+    RepairFailureReason,
+)
 from app.browser_skill.run_contracts import BrowserRunRef, CommitFact, _mint_commit_fact
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.teaching import TeachingReplayProof
@@ -83,6 +90,8 @@ _RUN = _TASK + " AND run_id=:run_id"
 _WRITER_LOCK = 746420212000
 _REQUEST_VERSION = "browser.request.v1"
 _STEP_AUDIT_VERSION = "browser.run_step_audit.v1"
+_FAILED_STEP_AUDIT_VERSION = "browser.run_failed_step_audit.v1"
+_LOCATOR_PROPOSAL_AUDIT_VERSION = "browser.run_locator_proposal.v1"
 _TRAVERSAL_TERMINAL_VERSION = "browser.traversal_terminal.v1"
 _WRITE_PREPARED_VERSION = "browser.write_prepared.v1"
 _WRITE_CONSUMED_VERSION = "browser.write_consumed.v1"
@@ -1131,6 +1140,15 @@ class PostgreSQLBrowserRunStore:
         return hmac.new(key, b"browser-run-step-audit-v1\x00" + encoded,
                         hashlib.sha256).hexdigest()
 
+    def _proposal_mac(self, data: dict[str, object], key_id: str) -> str:
+        key = self._digest_keys.get(key_id)
+        if key is None:
+            raise BrowserRunStoreError("browser_repair_proposal_key_unavailable")
+        encoded = json.dumps(data, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("ascii")
+        return hmac.new(key, b"browser-run-locator-proposal-v1\x00" + encoded,
+                        hashlib.sha256).hexdigest()
+
     def _traversal_mac(self, data: dict[str, object], key_id: str) -> str:
         key = self._digest_keys.get(key_id)
         if key is None:
@@ -2086,6 +2104,367 @@ class PostgreSQLBrowserRunStore:
             )
             updated = await self._update(session, current, {"effect": "acknowledged"})
             return updated, step
+
+    async def record_failed_step(
+        self, claim: RunSnapshot, *, rule: SiteStepRule, scope: ScopeStamp,
+        policy_digest: str, sequence: int, reason: RepairFailureReason,
+        observations: tuple[FormalRepairObservation, ...],
+    ) -> tuple[RunSnapshot, FormalFailedStep]:
+        """Commit a value-free pre-send failure from the installed Executor only."""
+        if (
+            type(sequence) is not int or not 1 <= sequence <= _MAX_STEP_AUDITS
+            or reason not in {"target_stale", "locator_not_found", "ambiguous_target"}
+            or scope.region_id != rule.observation.region_id
+            or type(observations) is not tuple or len(observations) > 32
+            or any(not isinstance(item, FormalRepairObservation)
+                   or item.scope.region_id != scope.region_id
+                   or item.replacement == rule.step.locator for item in observations)
+            or len({item.replacement for item in observations}) != len(observations)
+        ):
+            raise BrowserRunStoreError("browser_failed_step_audit_invalid")
+        async with self._transaction() as session:
+            current = await self._locked(session, claim, "advance")
+            if (
+                current.phase != "running" or current.cancel_requested
+                or current.effect == "unknown" or current.verification is not None
+                or current.lease_epoch is None
+            ):
+                raise BrowserRunStoreError("browser_failed_step_audit_stale")
+            manifest = await self._frozen_publication(session, current)
+            registered = next((item for item in manifest.site.steps
+                               if item.step.step_id == rule.step.step_id), None)
+            if (
+                manifest.source_kind != "registered_site"
+                or registered != rule or manifest.site.policy.digest != policy_digest
+                or rule.step.effect != rule.effect.actual_effect
+            ):
+                raise BrowserRunStoreError("browser_failed_step_audit_publication_mismatch")
+            previous = await self._audited_steps(session, current)
+            if len(previous) != sequence - 1:
+                raise BrowserRunStoreError("browser_failed_step_audit_sequence_conflict")
+            self._check_step_route(
+                manifest, tuple(item.event.step_id for item in previous)
+                + (rule.step.step_id,), complete=False,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, current, manifest,
+                ),
+            )
+            existing = (await session.execute(text(
+                "SELECT 1 FROM task_events WHERE task_id=:task"
+                " AND event_type='browser_run_failed_step'"
+                " AND payload->>'run_id'=:run LIMIT 1"
+            ), {"task": current.task_id, "run": current.run_id})).scalar_one_or_none()
+            if existing is not None:
+                raise BrowserRunStoreError("browser_failed_step_audit_duplicate")
+            if rule.step.effect == "may_write":
+                send = await self._write_event(
+                    session, current, _WRITE_SEND_VERSION,
+                    self._write_event_id(
+                        "write-send", f"{current.run_id}:{sequence}",
+                    ),
+                )
+                if send is not None:
+                    raise BrowserRunStoreError("browser_failed_step_effect_uncertain")
+            payload: dict[str, object] = {
+                "schema_version": _FAILED_STEP_AUDIT_VERSION,
+                "run_id": current.run_id,
+                "sequence": sequence,
+                "run_revision": current.state_revision + 1,
+                "publication_digest": manifest.digest,
+                "step_id": rule.step.step_id,
+                "scope": scope.model_dump(mode="json"),
+                "policy_digest": policy_digest,
+                "binding_id": current.admission.binding_id,
+                "binding_revision": current.admission.binding_revision,
+                "lease_epoch": current.lease_epoch,
+                "worker_epoch": current.worker_epoch,
+                "reason": reason,
+                "dispatch_state": "not_sent",
+                "observations": [
+                    {"replacement": item.replacement.model_dump(mode="json"),
+                     "scope": item.scope.model_dump(mode="json"),
+                     "target_digest": item.target_digest}
+                    for item in observations
+                ],
+                "key_id": self._active_digest_key_id,
+            }
+            payload["mac"] = self._step_mac(payload, self._active_digest_key_id)
+            await append_owned_event(
+                session, tenant_id=current.owner.tenant_id,
+                ai_user_id=current.owner.user_id,
+                session_id=current.owner.session_id,
+                task_id=current.task_id,
+                event=TaskEventRecord(
+                    event_id=uuid5(
+                        NAMESPACE_URL,
+                        f"browser-run-failed-step-v1:{current.run_id}:{sequence}",
+                    ).hex,
+                    task_id=current.task_id, event_type="browser_run_failed_step",
+                    timestamp=await self._now(session), payload=payload,
+                ),
+            )
+            updated = await self._update(session, current, {"effect": current.effect})
+            binding = ScopeBinding(
+                owner=current.owner, binding_id=current.admission.binding_id,
+                binding_revision=current.admission.binding_revision,
+                authorization_run_id=current.run_id,
+                evidence_version=current.admission.auth_evidence_version,
+                lease_epoch=current.lease_epoch,
+            )
+            return updated, FormalFailedStep(
+                binding, current.run_id, manifest.digest, rule.step.step_id,
+                reason, "not_sent", str(payload["mac"]), observations,
+            )
+
+    async def read_failed_step(
+        self, owner: BrowserOwner, task_id: str, run_id: str, step_id: str,
+    ) -> FormalFailedStep | None:
+        """Read only an authenticated terminal failure with its exact MAC."""
+        checked_run_id(step_id)
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            if (
+                run.status != "failed" or run.verification == "verified"
+                or run.effect == "unknown" or run.cancel_requested
+                or run.lease_epoch is None
+            ):
+                return None
+            manifest = await self._frozen_publication(session, run)
+            if manifest.source_kind != "registered_site":
+                return None
+            rows = (await session.execute(text(
+                "SELECT payload FROM task_events WHERE task_id=:task"
+                " AND event_type='browser_run_failed_step'"
+                " AND payload->>'run_id'=:run"
+            ), {"task": task_id, "run": run_id})).mappings().all()
+            if not rows:
+                return None
+            if len(rows) != 1 or not isinstance(rows[0]["payload"], dict):
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid")
+            payload = rows[0]["payload"]
+            unsigned = {key: value for key, value in payload.items() if key != "mac"}
+            key_id, mac = payload.get("key_id"), payload.get("mac")
+            if (
+                type(key_id) is not str or type(mac) is not str
+                or payload.get("schema_version") != _FAILED_STEP_AUDIT_VERSION
+                or payload.get("run_id") != run_id
+                or payload.get("publication_digest") != manifest.digest
+                or type(payload.get("step_id")) is not str
+                or type(payload.get("sequence")) is not int
+                or type(payload.get("run_revision")) is not int
+                or not 1 <= payload["run_revision"] <= run.state_revision
+                or payload.get("binding_id") != run.admission.binding_id
+                or payload.get("binding_revision") != run.admission.binding_revision
+                or payload.get("lease_epoch") != run.lease_epoch
+                or payload.get("worker_epoch") != run.worker_epoch
+                or payload.get("dispatch_state") != "not_sent"
+                or payload.get("policy_digest") != manifest.site.policy.digest
+                or payload.get("reason") not in {
+                    "target_stale", "locator_not_found", "ambiguous_target",
+                }
+                or not hmac.compare_digest(mac, self._step_mac(unsigned, key_id))
+            ):
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid")
+            audited_step_id = payload["step_id"]
+            rule = next((item for item in manifest.site.steps
+                         if item.step.step_id == audited_step_id), None)
+            try:
+                scope = ScopeStamp.model_validate(payload["scope"])
+            except (KeyError, ValueError):
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid") from None
+            raw_observations = payload.get("observations")
+            if type(raw_observations) is not list or len(raw_observations) > 32:
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid")
+            try:
+                observations = tuple(FormalRepairObservation(
+                    LocatorHint.model_validate(item["replacement"]),
+                    ScopeStamp.model_validate(item["scope"]),
+                    item["target_digest"],
+                ) for item in raw_observations)
+            except (KeyError, TypeError, ValueError):
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid") from None
+            previous = await self._audited_steps(session, run)
+            if (
+                rule is None or scope.region_id != rule.observation.region_id
+                or len(previous) != payload["sequence"] - 1
+                or any(item.scope.region_id != scope.region_id
+                       or item.replacement == rule.step.locator
+                       for item in observations)
+                or len({item.replacement for item in observations}) != len(observations)
+            ):
+                raise BrowserRunStoreError("browser_failed_step_audit_invalid")
+            self._check_step_route(
+                manifest, tuple(item.event.step_id for item in previous)
+                + (audited_step_id,), complete=False,
+                terminal_after=await self._traversal_terminal_in_session(
+                    session, run, manifest,
+                ),
+            )
+            binding = ScopeBinding(
+                owner=run.owner, binding_id=run.admission.binding_id,
+                binding_revision=run.admission.binding_revision,
+                authorization_run_id=run_id,
+                evidence_version=run.admission.auth_evidence_version,
+                lease_epoch=run.lease_epoch,
+            )
+            if audited_step_id != step_id:
+                return None
+            return FormalFailedStep(
+                binding, run_id, manifest.digest, audited_step_id,
+                payload["reason"], "not_sent", mac, observations,
+            )
+
+    async def record_locator_proposal(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+        proposal: FormalLocatorProposal,
+    ) -> None:
+        try:
+            checked = FormalLocatorProposal.model_validate_json(
+                proposal.model_dump_json()
+            )
+        except ValueError:
+            raise BrowserRunStoreError("browser_repair_proposal_invalid") from None
+        failure = await self.read_failed_step(
+            owner, task_id, run_id, checked.step_id,
+        )
+        if (
+            failure is None or checked.failed_run_id != run_id
+            or checked.publication_digest != failure.publication_digest
+            or checked.failure_evidence_digest != failure.evidence_digest
+            or not any(
+                item.replacement == checked.replacement
+                and item.digest == checked.observation_evidence_digest
+                for item in failure.observations
+            )
+        ):
+            raise BrowserRunStoreError("browser_repair_proposal_stale")
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            if (
+                run.status != "failed" or run.effect == "unknown"
+                or run.cancel_requested or run.verification == "verified"
+                or run.admission.publication_digest.hex() != checked.publication_digest
+            ):
+                raise BrowserRunStoreError("browser_repair_proposal_stale")
+            manifest = await self._frozen_publication(session, run)
+            plan = await self._teaching_plan_in_session(session, run, manifest)
+            step = next((item for item in manifest.skill.steps
+                         if item.step_id == checked.step_id), None)
+            if (
+                step is None or checked.original_step_digest != canonical_digest(
+                    "browser_skill_step.v1", step.model_dump(mode="json"),
+                ) or checked.primitive_id != self._primitive_id(
+                    manifest, checked.step_id,
+                )
+                or (
+                    checked.source_kind == "published_skill"
+                    and (plan is not None or checked.draft_digest != manifest.digest
+                         or checked.source_digest != manifest.digest)
+                )
+                or (
+                    checked.source_kind == "teaching_draft"
+                    and (plan is None or plan.purpose != "teaching"
+                         or plan.publication_digest != manifest.digest
+                         or checked.source_digest != plan.source_publication_digest)
+                )
+            ):
+                raise BrowserRunStoreError("browser_repair_proposal_invalid")
+            event_id = uuid5(
+                NAMESPACE_URL, f"browser-run-locator-proposal-v1:{checked.proposal_id}",
+            ).hex
+            existing = (await session.execute(text(
+                "SELECT event_type,payload FROM task_events WHERE task_id=:task"
+                " AND event_id=:event"
+            ), {"task": task_id, "event": event_id})).mappings().one_or_none()
+            if existing is not None:
+                old = existing["payload"]
+                if (
+                    existing["event_type"] != "browser_locator_proposal"
+                    or not isinstance(old, dict)
+                    or old.get("schema_version") != _LOCATOR_PROPOSAL_AUDIT_VERSION
+                    or old.get("run_id") != run_id
+                    or old.get("proposal") != checked.model_dump(mode="json")
+                    or type(old.get("key_id")) is not str
+                    or type(old.get("mac")) is not str
+                    or not hmac.compare_digest(
+                        old["mac"], self._proposal_mac(
+                            {key: value for key, value in old.items() if key != "mac"},
+                            old["key_id"],
+                        ),
+                    )
+                ):
+                    raise BrowserRunStoreError("browser_repair_proposal_invalid")
+                return
+            payload: dict[str, object] = {
+                "schema_version": _LOCATOR_PROPOSAL_AUDIT_VERSION,
+                "run_id": run_id,
+                "proposal": checked.model_dump(mode="json"),
+                "key_id": self._active_digest_key_id,
+            }
+            payload["mac"] = self._proposal_mac(payload, self._active_digest_key_id)
+            await append_owned_event(
+                session, tenant_id=owner.tenant_id, ai_user_id=owner.user_id,
+                session_id=owner.session_id, task_id=task_id,
+                event=TaskEventRecord(
+                    event_id=event_id, task_id=task_id,
+                    event_type="browser_locator_proposal",
+                    timestamp=await self._now(session), payload=payload,
+                ),
+            )
+
+    async def read_locator_proposals(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> tuple[FormalLocatorProposal, ...]:
+        async with self._transaction() as session:
+            run = await self._read_run(session, owner, task_id, run_id)
+            await self._authority.check_run(session, run, "read")
+            rows = (await session.execute(text(
+                "SELECT payload FROM task_events WHERE task_id=:task"
+                " AND event_type='browser_locator_proposal'"
+                " AND payload->>'run_id'=:run ORDER BY event_id"
+            ), {"task": task_id, "run": run_id})).mappings().all()
+        if len(rows) > 32:
+            raise BrowserRunStoreError("browser_repair_proposal_overflow")
+        proposals: list[FormalLocatorProposal] = []
+        for row in rows:
+            payload = row["payload"]
+            if not isinstance(payload, dict):
+                raise BrowserRunStoreError("browser_repair_proposal_invalid")
+            key_id, mac = payload.get("key_id"), payload.get("mac")
+            if (
+                payload.get("schema_version") != _LOCATOR_PROPOSAL_AUDIT_VERSION
+                or payload.get("run_id") != run_id
+                or type(key_id) is not str or type(mac) is not str
+                or not hmac.compare_digest(
+                    mac, self._proposal_mac(
+                        {key: value for key, value in payload.items() if key != "mac"},
+                        key_id,
+                    ),
+                )
+            ):
+                raise BrowserRunStoreError("browser_repair_proposal_invalid")
+            try:
+                proposal = FormalLocatorProposal.model_validate(payload["proposal"])
+            except (KeyError, ValueError):
+                raise BrowserRunStoreError("browser_repair_proposal_invalid") from None
+            evidence = await self.read_failed_step(
+                owner, task_id, run_id, proposal.step_id,
+            )
+            if (
+                evidence is None or proposal.failed_run_id != run_id
+                or proposal.publication_digest != evidence.publication_digest
+                or proposal.failure_evidence_digest != evidence.evidence_digest
+                or not any(
+                    item.replacement == proposal.replacement
+                    and item.digest == proposal.observation_evidence_digest
+                    for item in evidence.observations
+                )
+            ):
+                raise BrowserRunStoreError("browser_repair_proposal_stale")
+            proposals.append(proposal)
+        return tuple(proposals)
 
     async def read_teaching_steps(
         self, owner: BrowserOwner, task_id: str, run_id: str,

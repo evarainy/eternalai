@@ -27,6 +27,7 @@ from app.browser_skill.compiler import (
 )
 from app.browser_skill.models import (
     BrowserOwner,
+    LocatorHint,
     OpaqueId,
     ScopeBinding,
     TeachingPlan,
@@ -41,6 +42,13 @@ from app.browser_skill.registry import (
     ReviewedPublicationAuthority,
     canonical_digest,
     publish_reviewed_candidate,
+)
+from app.browser_skill.repair import (
+    FormalLocatorProposal,
+    FormalRepairAuthority,
+    RepairError,
+    _formal_hint,
+    propose_formal_locator,
 )
 from app.browser_skill.run_contracts import BrowserArtifactView
 from app.browser_skill.runtime import BrowserReadWorker
@@ -291,6 +299,9 @@ class BrowserVerticalDependencies:
          Literal["confirmed", "rejected"]],
         Awaitable[HumanGateDecisionRecord],
     ] | None = None
+    locator_repair_hints: Mapping[str, tuple[LocatorHint, ...]] = field(
+        default_factory=dict, repr=False,
+    )
 
 
 @dataclass(slots=True, repr=False)
@@ -335,6 +346,9 @@ class BrowserVerticalComponents:
     )
     reviewed_publication: ReviewedPublicationAuthority | None = field(
         default=None, compare=False, repr=False,
+    )
+    _repair_hints: tuple[tuple[str, tuple[LocatorHint, ...]], ...] = field(
+        default=(), compare=False, repr=False,
     )
 
     async def start_resources(self) -> None:
@@ -437,6 +451,7 @@ class BrowserVerticalComponents:
                 skill_id=draft.publication.skill.skill_id,
                 skill_version=draft.publication.skill.version,
                 arguments=heldout_arguments, client_request_id=client_request_id,
+                replay_source=(source_task_id, source_run_id, draft.digest),
             )
             data = envelope.data
             if not isinstance(data, dict):
@@ -497,6 +512,218 @@ class BrowserVerticalComponents:
             draft, binding=binding, heldout_parameter_set_ref=heldout_ref,
             authority=authority,
         )
+
+    async def propose_locator_repair(
+        self, principal: Principal, bound_session: str, *,
+        failed_task_id: str, failed_run_id: str,
+        step_id: str, replacement: LocatorHint,
+        source_task_id: str | None = None, source_run_id: str | None = None,
+        parameter_whitelist: tuple[ParameterApproval, ...] = (),
+    ) -> FormalLocatorProposal:
+        """Trusted internal entry for one review-only failed Run proposal."""
+        if self._seed.source_kind != "registered_site" or not self._repair_hints:
+            raise RepairError("repair_formal_unavailable")
+        invocation = self.submission._invocation(principal, bound_session)
+        owner = invocation.owner
+        hints = dict(self._repair_hints).get(step_id, ())
+        if not hints:
+            raise RepairError("repair_hints_unavailable")
+        if source_task_id is None and source_run_id is None:
+            if parameter_whitelist:
+                raise RepairError("repair_request_invalid")
+            failed = await self.runs.get(owner, failed_task_id, failed_run_id)
+            evidence = await self.runs.read_failed_step(
+                owner, failed_task_id, failed_run_id, step_id,
+            )
+            current = await self.publications.get_active(
+                owner, self._seed.skill.skill_id,
+            )
+            plan = await self.runs.load_teaching_plan(
+                owner, failed_task_id, failed_run_id,
+            )
+            if (
+                current is None or current.manifest != self._seed
+                or failed.status != "failed" or failed.cancel_requested
+                or failed.effect == "unknown" or failed.verification == "verified"
+                or failed.admission.publication_digest.hex() != self._seed.digest
+                or plan is not None or evidence is None
+            ):
+                raise RepairError("repair_failure_scope_mismatch")
+            await self.publications.assert_current(owner, self._seed)
+            binding = evidence.binding
+            authority = FormalRepairAuthority(
+                compiler=None, current_binding=lambda: binding,
+                failed_step=lambda requested, step, scope: evidence
+                if (requested, step, scope) == (failed_run_id, step_id, binding)
+                else None,
+                approved_hints=lambda publication, step, scope: hints
+                if (publication, step, scope)
+                == (self._seed, step_id, binding) else (),
+                authorize=lambda candidate, scope:
+                    candidate == self._seed and scope == binding,
+            )
+            proposal = propose_formal_locator(
+                self._seed, binding=binding, failed_run_id=failed_run_id,
+                step_id=step_id, replacement=replacement, authority=authority,
+            )
+            if (
+                await self.runs.get(owner, failed_task_id, failed_run_id) != failed
+                or await self.runs.read_failed_step(
+                    owner, failed_task_id, failed_run_id, step_id,
+                ) != evidence
+                or await self.runs.load_teaching_plan(
+                    owner, failed_task_id, failed_run_id,
+                ) is not None
+            ):
+                raise RepairError("repair_evidence_stale")
+            await self.publications.assert_current(owner, self._seed)
+            self.submission._recheck(invocation)
+            await self.runs.record_locator_proposal(
+                owner, failed_task_id, failed_run_id, proposal,
+            )
+            return proposal
+        if source_task_id is None or source_run_id is None:
+            raise RepairError("repair_request_invalid")
+        draft, compiler, source_run = await self.submission._compile_teaching_context(
+            principal, bound_session, source_task_id, source_run_id,
+            parameter_whitelist,
+        )
+        binding = draft.binding
+        owner = binding.owner
+        failed = await self.runs.get(owner, failed_task_id, failed_run_id)
+        plan = await self.runs.load_teaching_plan(owner, failed_task_id, failed_run_id)
+        evidence = await self.runs.read_failed_step(
+            owner, failed_task_id, failed_run_id, step_id,
+        )
+        sealed = self.cipher.decrypt_input(failed.admission)
+        source_ref = sealed.get("replay_source")
+        step_pairs = tuple(
+            (item.step_id, item.primitive_id) for item in draft.publication.site.step_primitives
+        )
+        if (
+            draft.publication != self._seed
+            or failed.status != "failed" or failed.cancel_requested
+            or failed.effect == "unknown" or failed.verification == "verified"
+            or failed.owner != source_run.owner
+            or failed.admission.binding_id != binding.binding_id
+            or failed.admission.binding_revision != binding.binding_revision
+            or failed.admission.target_system != source_run.admission.target_system
+            or failed.admission.publication_digest.hex() != draft.publication.digest
+            or plan is None or plan.purpose != "teaching"
+            or plan.publication_digest != draft.publication.digest
+            or plan.source_publication_digest
+            != source_run.admission.publication_digest.hex()
+            or plan.sealed_input_digest != failed.admission.input_digest.hex()
+            or tuple((item.step_id, item.primitive_id) for item in plan.steps)
+            != step_pairs
+            or source_ref != {
+                "task_id": source_task_id, "run_id": source_run_id,
+                "draft_digest": draft.digest,
+            }
+            or evidence is None
+        ):
+            raise RepairError("repair_failure_scope_mismatch")
+        authority = FormalRepairAuthority(
+            compiler=compiler, current_binding=lambda: binding,
+            failed_step=lambda requested, step, scope: evidence
+            if (requested, step, scope) == (failed_run_id, step_id, binding)
+            else None,
+            approved_hints=lambda publication, step, scope: hints
+            if (publication, step, scope)
+            == (draft.publication, step_id, binding) else (),
+            authorize=lambda candidate, scope: candidate == draft and scope == binding,
+        )
+        proposal = propose_formal_locator(
+            draft, binding=binding, failed_run_id=failed_run_id,
+            step_id=step_id, replacement=replacement, authority=authority,
+        )
+        refreshed, _, current_source = await self.submission._compile_teaching_context(
+            principal, bound_session, source_task_id, source_run_id,
+            parameter_whitelist,
+        )
+        if (
+            refreshed != draft or current_source != source_run
+            or await self.runs.get(owner, failed_task_id, failed_run_id) != failed
+            or await self.runs.load_teaching_plan(owner, failed_task_id, failed_run_id)
+            != plan
+            or await self.runs.read_failed_step(
+                owner, failed_task_id, failed_run_id, step_id,
+            ) != evidence
+        ):
+            raise RepairError("repair_evidence_stale")
+        self.submission._recheck(invocation)
+        await self.runs.record_locator_proposal(
+            owner, failed_task_id, failed_run_id, proposal,
+        )
+        return proposal
+
+    async def read_locator_repair_proposals(
+        self, principal: Principal, bound_session: str, *,
+        task_id: str, run_id: str,
+    ) -> tuple[FormalLocatorProposal, ...]:
+        """Internal owner-scoped review read; proposals never activate a Skill."""
+        invocation = self.submission._invocation(principal, bound_session)
+        run = await self.runs.get(invocation.owner, task_id, run_id)
+        if run.admission.publication_digest.hex() != self._seed.digest:
+            raise RepairError("repair_failure_scope_mismatch")
+        await self.publications.assert_current(invocation.owner, self._seed)
+        proposals = await self.runs.read_locator_proposals(
+            invocation.owner, task_id, run_id,
+        )
+        await self.publications.assert_current(invocation.owner, self._seed)
+        self.submission._recheck(invocation)
+        return proposals
+
+    async def _journal_published_locator_proposals(self, run: RunSnapshot) -> None:
+        """Worker continuation from a terminal failed Run, with no model or DOM IO."""
+        if (
+            run.status != "failed" or run.effect == "unknown"
+            or run.cancel_requested or not self._repair_hints
+            or run.admission.publication_digest.hex() != self._seed.digest
+            or await self.runs.load_teaching_plan(
+                run.owner, run.task_id, run.run_id,
+            ) is not None
+        ):
+            return
+        current = await self.publications.get_active(
+            run.owner, self._seed.skill.skill_id,
+        )
+        if current is None or current.manifest != self._seed:
+            return
+        await self.publications.assert_current(run.owner, self._seed)
+        for step_id, hints in self._repair_hints:
+            evidence = await self.runs.read_failed_step(
+                run.owner, run.task_id, run.run_id, step_id,
+            )
+            if evidence is None:
+                continue
+            binding = evidence.binding
+            authority = FormalRepairAuthority(
+                compiler=None, current_binding=lambda: binding,
+                failed_step=lambda requested, step, scope: evidence
+                if (requested, step, scope) == (run.run_id, step_id, binding)
+                else None,
+                approved_hints=lambda publication, step, scope: hints
+                if (publication, step, scope)
+                == (self._seed, step_id, binding) else (),
+                authorize=lambda candidate, scope:
+                    candidate == self._seed and scope == binding,
+            )
+            step = next(item for item in self._seed.skill.steps
+                        if item.step_id == step_id)
+            for hint in hints:
+                if (hint == step.locator or not any(
+                    item.replacement == hint for item in evidence.observations
+                )):
+                    continue
+                proposal = propose_formal_locator(
+                    self._seed, binding=binding, failed_run_id=run.run_id,
+                    step_id=step_id, replacement=hint, authority=authority,
+                )
+                await self.runs.record_locator_proposal(
+                    run.owner, run.task_id, run.run_id, proposal,
+                )
+        await self.publications.assert_current(run.owner, self._seed)
 
     async def run_business_ready(self) -> tuple[RunSnapshot, ...]:
         # One business lane for the installed single-binding factory. Busy owners
@@ -586,6 +813,11 @@ class BrowserVerticalComponents:
                 failed_owners += 1
                 continue
             if result is not None:
+                try:
+                    await self._journal_published_locator_proposals(result)
+                except Exception:
+                    failed_owners += 1
+                    continue
                 completed.append(result)
                 if maximum_runs is not None and len(completed) >= maximum_runs:
                     break
@@ -684,6 +916,34 @@ def _validate_dependencies(deps: BrowserVerticalDependencies) -> None:
                  or not callable(getattr(deps.publication_grants,
                                          "check_in_session", None)))):
         raise ValueError("browser_teaching_installation_invalid")
+    hints = deps.locator_repair_hints
+    steps = {item.step_id for item in deps.seed.skill.steps}
+    if (
+        not isinstance(hints, Mapping) or len(hints) > len(steps)
+        or (bool(hints) and deps.seed.source_kind != "registered_site")
+    ):
+        raise ValueError("browser_repair_installation_invalid")
+    for step_id, values in hints.items():
+        if (
+            type(step_id) is not str or step_id not in steps
+            or type(values) is not tuple or not 1 <= len(values) <= 32
+            or any(not isinstance(value, LocatorHint) for value in values)
+            or len(set(values)) != len(values)
+        ):
+            raise ValueError("browser_repair_installation_invalid")
+        original = next(item for item in deps.seed.skill.steps
+                        if item.step_id == step_id)
+        if all(value == original.locator for value in values):
+            raise ValueError("browser_repair_installation_invalid")
+        try:
+            for value in values:
+                _formal_hint(
+                    value, deps.seed,
+                    deps.seed.site.read_rule.key_ref.name
+                    in deps.seed.skill.parameters,
+                )
+        except RepairError:
+            raise ValueError("browser_repair_installation_invalid") from None
 
 
 def build_browser_vertical(
@@ -798,6 +1058,7 @@ def build_browser_vertical(
     execution = VerifiedBrowserReadExecution(
         deps.execution_factory, deps.lifecycle, publications, cipher,
         result_digest_key=deps.result_digest_key, record_diagnostic=record_read_diagnostic,
+        repair_hints=deps.locator_repair_hints,
     )
     run_authority = PostgreSQLBrowserRunAuthority(
         current_auth=current_auth, verification_check=execution.check_verified_candidate,
@@ -1209,4 +1470,9 @@ def build_browser_vertical(
     return BrowserVerticalComponents(
         publications, cipher, current_auth, binding_reader, profiles, runs, execution,
         worker, chat, submission, deps.session_factory, deps.tenant_id, seed,
+        _repair_hints=tuple(
+            (step_id, tuple(LocatorHint.model_validate_json(value.model_dump_json())
+                            for value in values))
+            for step_id, values in deps.locator_repair_hints.items()
+        ),
     )

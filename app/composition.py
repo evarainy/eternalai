@@ -184,6 +184,9 @@ class ProductionComponents:
     browser_policy: MinimalPolicyGuard
     browser_sessions: SessionStorePort
     browser_trace: TracePort
+    browser_llm_provider: LLMProviderPort
+    browser_structured_output: StructuredOutputPort
+    browser_intent_model: str
 
 
 def build_credential_store(
@@ -686,6 +689,9 @@ def build_production_components(
         enable_thinking=settings.llm_enable_thinking,
     )
     resolved_llm = production_llm if llm_provider is None else llm_provider
+    resolved_structured_output = (
+        JSONStructuredOutputProvider() if structured_output is None else structured_output
+    )
     overview_evaluator = OverviewPostconditionEvaluator()
     if not isinstance(overview_evaluator, OverviewPostconditionEvaluator):
         raise RuntimeError("overview_evaluator_configuration_invalid")
@@ -696,9 +702,7 @@ def build_production_components(
         gateway=gateway,
         trace_port=resolved_trace_port,
         llm_provider=resolved_llm,
-        structured_output=(
-            JSONStructuredOutputProvider() if structured_output is None else structured_output
-        ),
+        structured_output=resolved_structured_output,
         intent_model=settings.llm_model,
         workflow_engine=workflow_engine,
         validate_workflow=validate_workflow,
@@ -866,6 +870,9 @@ def build_production_components(
         browser_policy=policy_guard,
         browser_sessions=session_store,
         browser_trace=resolved_trace_port,
+        browser_llm_provider=resolved_llm,
+        browser_structured_output=resolved_structured_output,
+        browser_intent_model=settings.llm_model,
         mcp_service=McpApiService(
             OAuthConnections(
                 mcp_profiles,

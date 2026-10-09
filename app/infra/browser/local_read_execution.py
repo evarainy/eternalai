@@ -139,6 +139,8 @@ class _FencedDecision:
         collector: dict[str, str | int] = {}
         try:
             provider = self._factory.decision
+            if provider is None:
+                raise failure("unsupported")
             if isinstance(provider, DecisionHTTPProvider):
                 result = await provider._decide_with_collector(request, context, collector)
             else:
@@ -155,7 +157,7 @@ class LocalBrowserReadExecutionFactory:
         source: FixedSyntheticSource | RegisteredLocalSite,
         resources: LocalBrowserResources,
         binding: BrowserBindingFact,
-        decision: DecisionProvider,
+        decision: DecisionProvider | None,
         *,
         ttl_seconds: int = 60,
         execution_timeout_seconds: int | None = None,
@@ -185,7 +187,12 @@ class LocalBrowserReadExecutionFactory:
             or (isinstance(source, RegisteredLocalSite) and bool(source.download_expectations)
                 and not isinstance(file_artifacts, LocalFileArtifacts))
             or not isinstance(source.manifest.site.read_rule, RegisteredQueryReadRule)
-            or not callable(getattr(decision, "decide", None))
+            or (decision is None and (
+                not registered
+                or source.manifest.site.decision_budget.max_candidates != 1
+                or source.manifest.site.exploration is not None
+            ))
+            or (decision is not None and not callable(getattr(decision, "decide", None)))
             or type(ttl_seconds) is not int
             or not 30 <= ttl_seconds <= 300
             or type(execution_timeout_seconds) is not int
@@ -847,7 +854,7 @@ class LocalBrowserReadExecutionFactory:
                 ).encode("ascii")
                 return hashlib.sha256(b"browser_download_verified.v1\n" + encoded).hexdigest()
 
-            decision = _FencedDecision(self, state)
+            decision = _FencedDecision(self, state) if self.decision is not None else None
             return RegisteredReadExecution(
                 state.session,
                 context,
@@ -863,7 +870,7 @@ class LocalBrowserReadExecutionFactory:
                 bind_publication_guard,
                 bind_operation_authority,
                 lambda: dict(state.authority_counts),
-                decision.http_diagnostic,
+                decision.http_diagnostic if decision is not None else None,
                 registered_popup_source=(
                     self.source if isinstance(self.source, RegisteredLocalSite) else None
                 ),
@@ -1000,7 +1007,16 @@ class LocalBrowserReadExecutionFactory:
                 permitted = (
                     ref == manifest.site.read_rule.key_ref
                     and (step_id == manifest.verifier.verifier_id or (
-                        step is not None and step.locator.kind == "business_key"
+                        step is not None and (
+                            step.locator.kind == "business_key"
+                            or (
+                                isinstance(self.source, RegisteredLocalSite)
+                                and any(item.step_id == step_id and item.key is not None
+                                        for item in self.source.rules.steps)
+                                and any(item.step_id == step_id
+                                        for item in self.source.rules.repair_targets)
+                            )
+                        )
                     ))
                 )
             elif purpose == "expected_field":

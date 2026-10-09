@@ -15,11 +15,18 @@ import uvicorn
 
 from app.composition import ProductionComponents, build_production_components
 from app.config import ProductionSettings
-from app.infra.browser.local_installation import LocalBrowserInstallationDependencies
+from app.infra.browser.local_installation import (
+    LocalBrowserInstallationDependencies,
+    RegisteredProductionInputs,
+    build_registered_production_installation,
+)
 from app.main import create_production_app
 
+OperatorInput = LocalBrowserInstallationDependencies | RegisteredProductionInputs
 OperatorFactory = Callable[
-    [ProductionComponents], AbstractAsyncContextManager[LocalBrowserInstallationDependencies]
+    [ProductionComponents], AbstractAsyncContextManager[
+        OperatorInput | tuple[OperatorInput, ...]
+    ],
 ]
 
 
@@ -49,7 +56,9 @@ def _load_factory(reference: str) -> OperatorFactory:
     return cast(OperatorFactory, factory)
 
 
-async def _serve(factory: OperatorFactory, port: int) -> None:
+async def _serve(
+    factory: OperatorFactory, port: int, host: str = "127.0.0.1",
+) -> None:
     settings = ProductionSettings.from_environment()
     if settings.browser.enabled is not True:
         raise _StartupError
@@ -57,7 +66,18 @@ async def _serve(factory: OperatorFactory, port: int) -> None:
     manager = factory(components)
     if not isinstance(manager, AbstractAsyncContextManager):
         raise _StartupError
-    async with manager as installation:
+    async with manager as supplied:
+        def bind(item: OperatorInput) -> LocalBrowserInstallationDependencies:
+            if type(item) is RegisteredProductionInputs:
+                return build_registered_production_installation(components, item)
+            if type(item) is LocalBrowserInstallationDependencies:
+                return item
+            raise _StartupError
+
+        installation = (
+            tuple(bind(item) for item in supplied)
+            if isinstance(supplied, tuple) else bind(supplied)
+        )
         application = create_production_app(
             settings,
             browser_installation=lambda current: installation
@@ -65,7 +85,7 @@ async def _serve(factory: OperatorFactory, port: int) -> None:
             production_components=components,
         )
         server = uvicorn.Server(uvicorn.Config(
-            application, host="127.0.0.1", port=port,
+            application, host=host, port=port,
             access_log=False, log_level="critical", log_config=None,
         ))
         await server.serve()
@@ -81,13 +101,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = _SilentParser(allow_abbrev=False, add_help=False)
     parser.add_argument("--enable", action="store_true")
     parser.add_argument("--factory")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     try:
         args = parser.parse_args(argv)
         if (args.enable is not True or args.factory is None
+                or args.host not in {"127.0.0.1", "0.0.0.0"}
                 or not 1 <= args.port <= 65535):
             raise _StartupError
-        asyncio.run(_serve(_load_factory(args.factory), args.port))
+        asyncio.run(_serve(_load_factory(args.factory), args.port, args.host))
     except BaseException:
         # Never print a configured Site, origin, credential or exception detail.
         print("browser_registered_server_unavailable", file=sys.stderr)

@@ -21,6 +21,12 @@ from app.browser_skill.models import (
     ScopeStamp,
     TeachingPlan,
 )
+from app.browser_skill.repair import (
+    FormalFailedStep,
+    FormalLocatorProposal,
+    FormalRepairObservation,
+    RepairFailureReason,
+)
 from app.browser_skill.run_contracts import CommitFact
 
 if TYPE_CHECKING:
@@ -368,6 +374,33 @@ class BrowserRunStorePort(Protocol):
         policy_digest: str, sequence: int,
     ) -> tuple[RunSnapshot, RunTeachingStep]:
         """Commit one acknowledged registered step under the Run worker CAS."""
+        ...
+
+    async def record_failed_step(
+        self, claim: RunSnapshot, *, rule: SiteStepRule, scope: ScopeStamp,
+        policy_digest: str, sequence: int, reason: RepairFailureReason,
+        observations: tuple[FormalRepairObservation, ...],
+    ) -> tuple[RunSnapshot, FormalFailedStep]:
+        """Sign one known pre-send target failure under the exact worker fence."""
+        ...
+
+    async def read_failed_step(
+        self, owner: BrowserOwner, task_id: str, run_id: str, step_id: str,
+    ) -> FormalFailedStep | None:
+        """Read a MAC-checked failed step from a terminal, authorized Run."""
+        ...
+
+    async def record_locator_proposal(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+        proposal: FormalLocatorProposal,
+    ) -> None:
+        """Journal a review-only proposal after checking its failed-step digest."""
+        ...
+
+    async def read_locator_proposals(
+        self, owner: BrowserOwner, task_id: str, run_id: str,
+    ) -> tuple[FormalLocatorProposal, ...]:
+        """Read MAC-checked proposals under current owner and Run authority."""
         ...
 
     async def record_traversal_terminal(

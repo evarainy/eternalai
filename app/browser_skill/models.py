@@ -27,7 +27,10 @@ Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 Epoch = Annotated[int, Field(ge=0)]
 SafeText = Annotated[str, Field(min_length=1, max_length=256)]
 Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
-Role = Literal["button", "link", "textbox", "combobox", "option", "row", "treeitem", "tab"]
+Role = Literal[
+    "button", "link", "textbox", "combobox", "option", "row", "treeitem", "tab",
+    "checkbox", "radio", "switch", "menuitem", "listbox", "dialog",
+]
 DecisionStatus = Literal["selected", "abstained", "ambiguous", "unsupported"]
 DecisionError = Literal[
     "unavailable",
@@ -429,7 +432,10 @@ class LocatorHint(Contract):
 
 class SkillStep(Contract):
     step_id: OpaqueId
-    operation: Literal["click", "fill", "select_option", "read", "navigate"]
+    operation: Literal[
+        "click", "fill", "select_option", "read", "navigate", "check",
+        "press_enter", "wait",
+    ]
     locator: LocatorHint
     value_ref: ParameterRef | None = None
     url_ref: ParameterRef | None = None
@@ -444,6 +450,8 @@ class SkillStep(Contract):
             raise ValueError("skill_url_reference_mismatch")
         if (self.operation == "select_option") != (self.option_ref is not None):
             raise ValueError("skill_option_reference_mismatch")
+        if self.operation == "wait" and self.effect != "read_only":
+            raise ValueError("skill_wait_effect_invalid")
         return self
 
 

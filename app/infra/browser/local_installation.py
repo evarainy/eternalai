@@ -11,13 +11,13 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx2
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.browser_skill.models import BrowserOwner
+from app.browser_skill.models import BrowserOwner, LocatorHint
 from app.browser_skill.publication_contracts import BrowserPublicationManifest
 from app.infra.auth.crypto import PrincipalSessionBinder
 from app.infra.browser.chat_inputs import (
@@ -103,6 +103,9 @@ from app.ports.structured_output import StructuredOutputPort
 from app.ports.task_store import SessionStorePort
 from app.ports.trace import TracePort
 from services.decision.manifest import PinnedCheckpoint
+
+if TYPE_CHECKING:
+    from app.composition import ProductionComponents
 
 
 class PostgreSQLLocalCleanupGrant:
@@ -298,7 +301,7 @@ class LocalBrowserInstallationDependencies:
     source: FixedSyntheticSource | RegisteredLocalSite
     binding: BrowserBindingFact
     deployment: LocalChromiumDeployment
-    decision: DecisionProvider
+    decision: DecisionProvider | None
     provider_pools: BrowserProviderPoolRegistry
     proof_context: BrowserClaimProofContext = field(repr=False)
     publication_grants: BrowserPublicationGrants
@@ -325,11 +328,112 @@ class LocalBrowserInstallationDependencies:
     publication_review: BrowserPublicationReviewPort | None = None
     file_artifacts: LocalFileArtifacts | None = None
     teaching_base: BrowserPublicationManifest | None = None
+    locator_repair_hints: Mapping[str, tuple[LocatorHint, ...]] = field(
+        default_factory=dict, repr=False,
+    )
     approved_checkpoint: PinnedCheckpoint | None = None
     profile_retention_seconds: int | None = None
     profile_cleanup_contexts: (
         Callable[[], Awaitable[tuple[BrowserProfileContext, ...]]] | None
     ) = None
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class RegisteredProductionInputs:
+    """Real operator facts; shared app authorities are wired in this repository.
+
+    A reviewed factory supplies these immutable Site-specific objects and owns
+    their lifetimes. No actor, grant, binding, key or browser asset is invented
+    here. Source registration and current DB authority are checked downstream.
+    """
+
+    source: RegisteredLocalSite
+    binding: BrowserBindingFact
+    deployment: LocalChromiumDeployment
+    decision: DecisionProvider | None
+    provider_pools: BrowserProviderPoolRegistry
+    proof_context: BrowserClaimProofContext = field(repr=False)
+    publication_grants: BrowserPublicationGrants
+    cleanup_authority: BrowserCleanupAuthorityPort
+    payload_keys: Mapping[str, bytes] = field(repr=False)
+    active_payload_key_id: str
+    resource_keys: Mapping[str, bytes] = field(repr=False)
+    active_resource_key_id: str
+    request_digest_keys: Mapping[str, bytes] = field(repr=False)
+    active_request_digest_key_id: str
+    input_digest_key: bytes = field(repr=False)
+    result_digest_key: bytes = field(repr=False)
+    input_mode: Literal["chat", "structured"] = "structured"
+    ttl_seconds: int = 60
+    execution_timeout_seconds: int | None = None
+    publication_review: BrowserPublicationReviewPort | None = None
+    file_artifacts: LocalFileArtifacts | None = None
+    teaching_base: BrowserPublicationManifest | None = None
+    locator_repair_hints: Mapping[str, tuple[LocatorHint, ...]] = field(
+        default_factory=dict, repr=False,
+    )
+    approved_checkpoint: PinnedCheckpoint | None = None
+    profile_retention_seconds: int | None = None
+    profile_cleanup_contexts: (
+        Callable[[], Awaitable[tuple[BrowserProfileContext, ...]]] | None
+    ) = None
+
+
+def build_registered_production_installation(
+    components: ProductionComponents, inputs: RegisteredProductionInputs,
+) -> LocalBrowserInstallationDependencies:
+    """Bind one real registration to the already built main Runtime authorities."""
+    from app.composition import ProductionComponents
+
+    if (type(components) is not ProductionComponents
+            or type(inputs) is not RegisteredProductionInputs
+            or type(inputs.source) is not RegisteredLocalSite
+            or not isinstance(inputs.cleanup_authority, PostgreSQLLocalCleanupGrant)
+            or inputs.cleanup_authority._sessions is not components.browser_session_factory
+            or inputs.cleanup_authority._binder is not components.session_binder
+            or inputs.cleanup_authority._binding != BrowserBindingKey(
+                inputs.binding.tenant_id, inputs.binding.ai_user_id,
+                inputs.binding.target_system, inputs.binding.binding_id,
+            )
+            or inputs.cleanup_authority._publication
+            != bytes.fromhex(inputs.source.manifest.digest)):
+        raise ValueError("browser_production_inputs_invalid")
+    return LocalBrowserInstallationDependencies(
+        session_factory=components.browser_session_factory,
+        capability_registry=components.browser_capability_registry,
+        session_binder=components.session_binder, policy=components.browser_policy,
+        source=inputs.source, binding=inputs.binding,
+        deployment=inputs.deployment, decision=inputs.decision,
+        provider_pools=inputs.provider_pools, proof_context=inputs.proof_context,
+        publication_grants=inputs.publication_grants,
+        cleanup_authority=inputs.cleanup_authority,
+        cleanup_authorize=inputs.cleanup_authority.authorize_run,
+        payload_keys=inputs.payload_keys,
+        active_payload_key_id=inputs.active_payload_key_id,
+        resource_keys=inputs.resource_keys,
+        active_resource_key_id=inputs.active_resource_key_id,
+        request_digest_keys=inputs.request_digest_keys,
+        active_request_digest_key_id=inputs.active_request_digest_key_id,
+        input_digest_key=inputs.input_digest_key,
+        result_digest_key=inputs.result_digest_key,
+        llm_provider=(components.browser_llm_provider
+                      if inputs.input_mode == "chat" else None),
+        structured_output=(components.browser_structured_output
+                           if inputs.input_mode == "chat" else None),
+        intent_model=(components.browser_intent_model
+                      if inputs.input_mode == "chat" else None),
+        trace=components.browser_trace, sessions=components.browser_sessions,
+        worker_id="browser_" + inputs.source.manifest.digest[:32], enabled=True,
+        ttl_seconds=inputs.ttl_seconds, input_mode=inputs.input_mode,
+        execution_timeout_seconds=inputs.execution_timeout_seconds,
+        publication_review=inputs.publication_review,
+        file_artifacts=inputs.file_artifacts,
+        teaching_base=inputs.teaching_base,
+        locator_repair_hints=inputs.locator_repair_hints,
+        approved_checkpoint=inputs.approved_checkpoint,
+        profile_retention_seconds=inputs.profile_retention_seconds,
+        profile_cleanup_contexts=inputs.profile_cleanup_contexts,
+    )
 
 
 @asynccontextmanager
@@ -395,6 +499,27 @@ def build_local_browser_vertical(
             or not callable(getattr(deps.cleanup_authority, "check_recovery", None))
             or not callable(getattr(deps.cleanup_authority, "check_cleanup", None))):
         raise ValueError("browser_local_installation_invalid")
+    if synthetic and deps.locator_repair_hints:
+        raise ValueError("browser_repair_installation_invalid")
+    if isinstance(source, RegisteredLocalSite):
+        if any(
+            type(hints) is not tuple or len(hints) > 32
+            or any(not isinstance(hint, LocatorHint) for hint in hints)
+            or len({(hint.kind, hint.value) for hint in hints}) != len(hints)
+            for hints in deps.locator_repair_hints.values()
+        ):
+            raise ValueError("browser_repair_installation_invalid")
+        expected_repairs = {
+            (step_id, hint.kind, hint.value)
+            for step_id, hints in deps.locator_repair_hints.items()
+            for hint in hints
+        }
+        installed_repairs = {
+            (item.step_id, item.hint.kind, item.hint.value)
+            for item in source.rules.repair_targets
+        }
+        if expected_repairs != installed_repairs:
+            raise ValueError("browser_repair_installation_invalid")
     replay_lookup: InstalledReplayProofLookup | None = None
     review: PostgreSQLTeachingPublicationReview | None = None
     if registered:
@@ -420,16 +545,22 @@ def build_local_browser_vertical(
     if registered and isinstance(source, RegisteredLocalSite):
         decision = deps.decision
         checkpoint = deps.approved_checkpoint
-        if (type(decision) is not DecisionHTTPProvider
-                or not isinstance(checkpoint, PinnedCheckpoint)
-                or decision._deployment.disposition != "local_model"
-                or checkpoint.digest != source.manifest.site.decision_manifest.manifest_digest
-                or checkpoint.deployment
-                != source.manifest.site.decision_manifest.deployment_model
-                or decision._deployment.manifest_digest
-                != checkpoint.digest
-                or decision._deployment.registered_sources
-                != (source.manifest.site.source,)):
+        if decision is None:
+            if (
+                checkpoint is not None or deps.input_mode != "structured"
+                or source.manifest.site.decision_budget.max_candidates != 1
+                or source.manifest.site.exploration is not None
+            ):
+                raise ValueError("browser_local_decision_installation_invalid")
+        elif (type(decision) is not DecisionHTTPProvider
+              or not isinstance(checkpoint, PinnedCheckpoint)
+              or decision._deployment.disposition != "local_model"
+              or checkpoint.digest != source.manifest.site.decision_manifest.manifest_digest
+              or checkpoint.deployment
+              != source.manifest.site.decision_manifest.deployment_model
+              or decision._deployment.manifest_digest != checkpoint.digest
+              or decision._deployment.registered_sources
+              != (source.manifest.site.source,)):
             raise ValueError("browser_local_decision_installation_invalid")
         if source.manifest.site.exploration is not None:
             suggester = source.exploration_suggest
@@ -661,6 +792,7 @@ def build_local_browser_vertical(
         ).hex(),
         file_artifacts=deps.file_artifacts if registered else None,
         teaching_base=deps.teaching_base if registered else None,
+        locator_repair_hints=deps.locator_repair_hints if registered else {},
         teaching_review_request=request_teaching_review if registered else None,
         teaching_review_decide=decide_teaching_review if registered else None,
         initial_review_request=(request_initial_review if registered

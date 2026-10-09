@@ -35,6 +35,7 @@ from app.browser_skill.models import (
     DecisionStatus,
     DispatchPermit,
     ExecutionContext,
+    LocatorHint,
     ParameterPurpose,
     ParameterRef,
     ReadSpec,
@@ -98,7 +99,7 @@ class RegisteredReadExecution:
     observer: PlaywrightObserver
     rules: tuple[RegisteredDOMRules, ...]
     site: SiteAdapter
-    decision: DecisionProvider
+    decision: DecisionProvider | None
     resolver: ReadSpecResolver
     decision_contexts: DecisionContextFactory
     project_output: BrowserOutputProjector
@@ -163,6 +164,7 @@ class VerifiedBrowserReadExecution:
         self, factory: BrowserReadExecutionFactory, lifecycle: BrowserReadLifecycle,
         publications: BrowserPublicationStorePort, cipher: BrowserPayloadCipher,
         *, result_digest_key: bytes,
+        repair_hints: Mapping[str, tuple[LocatorHint, ...]] | None = None,
         record_diagnostic: (
             Callable[[RunSnapshot, dict[str, str | int]], Awaitable[None]] | None
         ) = None,
@@ -173,6 +175,11 @@ class VerifiedBrowserReadExecution:
         self._publications, self._cipher = publications, cipher
         self._result_key = result_digest_key
         self._record_diagnostic = record_diagnostic
+        self._repair_hints = {
+            step_id: tuple(LocatorHint.model_validate_json(hint.model_dump_json())
+                           for hint in hints)
+            for step_id, hints in (repair_hints or {}).items()
+        }
         self._emissions: dict[str, _VerifiedEmission] = {}
         self._observe_only_manifest: BrowserPublicationManifest | None = None
         self._observe_only_receipt: tuple[RunSnapshot, int] | None = None
@@ -538,6 +545,8 @@ class VerifiedBrowserReadExecution:
                 web, execution.decision, verifier, execution.site,
                 execution.resolver, decision_contexts,
                 step_audit=getattr(checkpoint, "record_step", None),
+                failed_step_audit=getattr(checkpoint, "record_failed_step", None),
+                repair_hints=self._repair_hints,
                 traversal_audit=getattr(
                     checkpoint, "record_traversal_terminal", None,
                 ),

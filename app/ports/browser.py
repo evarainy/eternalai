@@ -12,6 +12,7 @@ from app.browser_skill.models import (
     DecisionResult,
     DispatchReceipt,
     ExecutionContext,
+    LocatorHint,
     ObservationPolicy,
     ObservationRequest,
     PageEvidence,
@@ -59,6 +60,22 @@ class BrowserProvider(Protocol):
 
 
 class WebAdapter(Protocol):
+    async def repair_target_candidates(
+        self,
+        session: BrowserSessionRef,
+        registered_step: SkillStep,
+        approved_hint: LocatorHint,
+        projection: VisibleProjection,
+        context: ExecutionContext,
+    ) -> tuple[VisibleCandidate, ...]:
+        """Read-only probe of a trusted replacement under the registered step region.
+
+        The adapter must bind ``(step_id, approved_hint)`` to a host-installed
+        replacement rule, recheck current authority, and return only current
+        projection members. This cannot send an action or rewrite an old ref.
+        """
+        ...
+
     async def target_candidates(
         self,
         session: BrowserSessionRef,

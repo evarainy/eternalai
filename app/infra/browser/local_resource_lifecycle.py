@@ -151,6 +151,8 @@ def registered_local_digest(
     }
     if rules.traversal is not None:
         payload["traversal"] = _registered_value(rules.traversal)
+    if rules.repair_targets:
+        payload["repair_targets"] = _registered_value(rules.repair_targets)
     if exploration_suggest is not None:
         implementation = type(exploration_suggest)
         payload["exploration_suggest"] = {

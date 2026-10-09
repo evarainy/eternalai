@@ -293,6 +293,7 @@ class BrowserSubmissionService:
         self, *, principal: Principal, bound_session: str,
         skill_id: str, skill_version: str, arguments: dict[str, Any],
         client_request_id: str,
+        replay_source: tuple[str, str, str] | None = None,
     ) -> ResponseEnvelope:
         """Internal prepared-candidate admission; one Run and MAC plan commit."""
         self._invocation(principal, bound_session)
@@ -300,14 +301,28 @@ class BrowserSubmissionService:
                 or self._teaching_candidate_digest is None
                 or self._teaching_publication is None or self._teaching_plan is None):
             raise BrowserChatError("browser_teaching_unavailable")
+        if replay_source is not None:
+            try:
+                if type(replay_source) is not tuple or len(replay_source) != 3:
+                    raise ValueError("invalid replay source")
+                checked_run_id(replay_source[0])
+                checked_run_id(replay_source[1])
+                if (type(replay_source[2]) is not str or len(replay_source[2]) != 64
+                        or any(c not in "0123456789abcdef" for c in replay_source[2])):
+                    raise ValueError("invalid replay digest")
+            except Exception:
+                raise BrowserChatError("browser_teaching_replay_source_invalid") from None
         try:
-            semantic = _json({
+            semantic_payload: dict[str, object] = {
                 "schema_version": "browser.request.semantic.teaching.v1",
                 "skill_id": skill_id, "skill_version": skill_version,
                 "candidate_digest": self._teaching_candidate_digest,
                 "source_publication_digest": self._teaching_base_digest,
                 "arguments": arguments,
-            })
+            }
+            if replay_source is not None:
+                semantic_payload["replay_source"] = replay_source
+            semantic = _json(semantic_payload)
         except (TypeError, ValueError):
             raise BrowserChatError("browser_request_input_invalid", http_status=422) from None
         if len(semantic) > 1_048_576 or len(_json(arguments)) > 16_384:
@@ -321,6 +336,7 @@ class BrowserSubmissionService:
             skill_version=skill_version, semantic=semantic, arguments_for=supplied,
             client_request_id=client_request_id, channel="api",
             entrypoint="structured_internal", teaching=True,
+            replay_source=replay_source,
         )
 
     async def submit_initial_validation(
@@ -390,6 +406,7 @@ class BrowserSubmissionService:
         client_request_id: str, channel: Literal["web", "cli", "api", "mock"],
         entrypoint: Literal["runtime_chat", "structured_internal"],
         teaching: bool = False,
+        replay_source: tuple[str, str, str] | None = None,
     ) -> ResponseEnvelope:
         invocation = self._invocation(principal, bound_session)
         owner = invocation.owner
@@ -524,6 +541,13 @@ class BrowserSubmissionService:
                                "operator_user_id": owner.user_id,
                                "represented_user_id": owner.user_id},
             }
+            if replay_source is not None:
+                if not teaching:
+                    raise BrowserChatError("browser_teaching_replay_source_invalid")
+                payload["replay_source"] = {
+                    "task_id": replay_source[0], "run_id": replay_source[1],
+                    "draft_digest": replay_source[2],
+                }
             input_digest = hmac.digest(
                 self._input_key,
                 b"browser-run-input-v1\x00" + run_id.encode("ascii") + b"\x00" + _json(payload),

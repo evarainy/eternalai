@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -44,6 +45,7 @@ from app.browser_skill.repair import (
     ExplorationRegionFeedback,
     FormalFailedStep,
     FormalRepairAuthority,
+    FormalRepairObservation,
     ReadOnlyExplorationAuthority,
     RepairError,
     explore_registered_reads,
@@ -66,7 +68,9 @@ from app.browser_skill.trajectory import (
     _route_teaching_plan,
     capture_authorized_run,
 )
+from app.infra.browser.composition import BrowserVerticalComponents
 from app.infra.browser.fixed_synthetic_seed import build_fixed_synthetic_query_source
+from app.ports.auth import Principal
 from app.ports.browser_publication_store import BrowserPublicationStorePort
 from app.ports.browser_run_store import (
     ProtectedRunEnvelope,
@@ -527,11 +531,24 @@ def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> 
     sample = SyntheticRunTeaching()
     draft = sample.draft()
     step = draft.publication.skill.steps[0]
-    failure = FormalFailedStep(
-        binding(), "run_failed", draft.publication.digest, step.step_id,
-        "locator_not_found", "not_sent", "e" * 64,
+    failed_binding = ScopeBinding(
+        owner=binding().owner, binding_id=binding().binding_id,
+        binding_revision=binding().binding_revision,
+        authorization_run_id="run_failed", evidence_version="verified-session-v1",
+        lease_epoch=4,
     )
     alternative = LocatorHint(kind="test_id", value="fixture_row_alternate")
+    observed = FormalRepairObservation(
+        alternative,
+        scope().model_copy(update={
+            "region_id": draft.publication.site.steps[0].observation.region_id,
+        }),
+        "d" * 64,
+    )
+    failure = FormalFailedStep(
+        failed_binding, "run_failed", draft.publication.digest, step.step_id,
+        "locator_not_found", "not_sent", "e" * 64, (observed,),
+    )
     holder: dict[str, FormalFailedStep | None] = {"failure": failure}
     authority = FormalRepairAuthority(
         compiler=sample.compiler_authority(), current_binding=binding,
@@ -544,11 +561,177 @@ def test_formal_repair_only_proposes_a_locator_for_proven_not_sent_failure() -> 
         step_id=step.step_id, replacement=alternative, authority=authority,
     )
     assert proposal.replacement == alternative
+    assert proposal.observation_evidence_digest == observed.digest
     assert proposal.primitive_id == "read_collection"
     assert draft.publication.skill.steps[0] == step
+    holder["failure"] = FormalFailedStep(
+        binding(), "run_failed", draft.publication.digest, step.step_id,
+        "locator_not_found", "not_sent", "e" * 64,
+    )
+    with pytest.raises(RepairError, match="repair_failure_scope_mismatch"):
+        propose_formal_locator(
+            draft, binding=binding(), failed_run_id="run_failed",
+            step_id=step.step_id, replacement=alternative, authority=authority,
+        )
     holder["failure"] = None
     with pytest.raises(RepairError, match="repair_failure_unavailable"):
         propose_formal_locator(
             draft, binding=binding(), failed_run_id="run_failed",
             step_id=step.step_id, replacement=alternative, authority=authority,
         )
+
+
+def test_published_registered_run_uses_the_same_review_only_repair_contract() -> None:
+    publication = registered_site().manifest
+    step = publication.skill.steps[0]
+    failed_binding = ScopeBinding(
+        owner=binding().owner, binding_id=binding().binding_id,
+        binding_revision=binding().binding_revision,
+        authorization_run_id="run_published_failed",
+        evidence_version="verified-session-v1", lease_epoch=5,
+    )
+    failure = FormalFailedStep(
+        failed_binding, "run_published_failed", publication.digest,
+        step.step_id, "target_stale", "not_sent", "e" * 64,
+        (FormalRepairObservation(
+            LocatorHint(kind="test_id", value="fixture_row_alternate"),
+            scope().model_copy(update={
+                "region_id": publication.site.steps[0].observation.region_id,
+            }),
+            "d" * 64,
+        ),),
+    )
+    hint = LocatorHint(kind="test_id", value="fixture_row_alternate")
+    authority = FormalRepairAuthority(
+        compiler=None, current_binding=lambda: failed_binding,
+        failed_step=lambda _run, _step, _binding: failure,
+        approved_hints=lambda _manifest, _step, _binding: (hint,),
+        authorize=lambda candidate, scope:
+            candidate == publication and scope == failed_binding,
+    )
+    proposal = propose_formal_locator(
+        publication, binding=failed_binding,
+        failed_run_id="run_published_failed", step_id=step.step_id,
+        replacement=hint, authority=authority,
+    )
+    assert proposal.source_kind == "published_skill"
+    assert proposal.publication_digest == publication.digest
+    assert proposal.original_step_digest == canonical_digest(
+        "browser_skill_step.v1", step.model_dump(mode="json"),
+    )
+    assert publication.skill.steps[0] == step
+    unobserved = replace(failure, observations=())
+    without_probe = replace(authority, failed_step=lambda _run, _step, _binding: unobserved)
+    with pytest.raises(RepairError, match="repair_observation_unavailable"):
+        propose_formal_locator(
+            publication, binding=failed_binding,
+            failed_run_id="run_published_failed", step_id=step.step_id,
+            replacement=hint, authority=without_probe,
+        )
+
+
+def test_installed_published_repair_entry_requires_the_failed_run_audit() -> None:
+    async def scenario() -> None:
+        publication = registered_site().manifest
+        step = publication.skill.steps[0]
+        owner = binding().owner
+        failed = replace(
+            _run(publication.digest, run_id="run_published_failed"),
+            status="failed", verification=None,
+            verification_evidence_digest=None,
+            error_code="browser_verification_failed", lease_epoch=5,
+        )
+        failed_binding = ScopeBinding(
+            owner=owner, binding_id=binding().binding_id,
+            binding_revision=binding().binding_revision,
+            authorization_run_id=failed.run_id,
+            evidence_version="verified-session-v1", lease_epoch=5,
+        )
+        evidence = FormalFailedStep(
+            failed_binding, failed.run_id, publication.digest, step.step_id,
+            "locator_not_found", "not_sent", "e" * 64,
+            (FormalRepairObservation(
+                LocatorHint(kind="test_id", value="fixture_row_alternate"),
+                scope().model_copy(update={
+                    "region_id": publication.site.steps[0].observation.region_id,
+                }),
+                "d" * 64,
+            ),),
+        )
+        hint = LocatorHint(kind="test_id", value="fixture_row_alternate")
+
+        class Runs:
+            failure: FormalFailedStep | None = evidence
+            recorded: list[object] = []
+
+            async def get(self, requested_owner, task_id, run_id):
+                assert (requested_owner, task_id, run_id) == (
+                    owner, failed.task_id, failed.run_id,
+                )
+                return failed
+
+            async def read_failed_step(self, requested_owner, task_id, run_id, step_id):
+                assert (requested_owner, task_id, run_id, step_id) == (
+                    owner, failed.task_id, failed.run_id, step.step_id,
+                )
+                return self.failure
+
+            async def load_teaching_plan(self, requested_owner, task_id, run_id):
+                assert (requested_owner, task_id, run_id) == (
+                    owner, failed.task_id, failed.run_id,
+                )
+                return None
+
+            async def record_locator_proposal(
+                self, requested_owner, task_id, run_id, proposal,
+            ) -> None:
+                assert (requested_owner, task_id, run_id) == (
+                    owner, failed.task_id, failed.run_id,
+                )
+                self.recorded.append(proposal)
+
+        class Publications:
+            checks = 0
+
+            async def get_active(self, requested_owner, skill_id):
+                assert (requested_owner, skill_id) == (owner, publication.skill.skill_id)
+                return SimpleNamespace(manifest=publication)
+
+            async def assert_current(self, requested_owner, candidate):
+                assert (requested_owner, candidate) == (owner, publication)
+                self.checks += 1
+
+        runs, publications = Runs(), Publications()
+        installed = SimpleNamespace(
+            _seed=publication,
+            _repair_hints=((step.step_id, (hint,)),),
+            runs=runs, publications=publications,
+            submission=SimpleNamespace(
+                _invocation=lambda _principal, _session: SimpleNamespace(owner=owner),
+                _recheck=lambda _invocation: None,
+            ),
+        )
+        kwargs = dict(
+            failed_task_id=failed.task_id, failed_run_id=failed.run_id,
+            step_id=step.step_id, replacement=hint,
+        )
+        principal = cast(Principal, object())
+        proposal = await BrowserVerticalComponents.propose_locator_repair(
+            cast(BrowserVerticalComponents, installed), principal, owner.session_id,
+            **kwargs,
+        )
+        assert proposal.source_kind == "published_skill"
+        assert publications.checks == 2
+        assert runs.recorded == [proposal]
+        await BrowserVerticalComponents._journal_published_locator_proposals(
+            cast(BrowserVerticalComponents, installed), failed,
+        )
+        assert runs.recorded == [proposal, proposal]
+        runs.failure = None
+        with pytest.raises(RepairError, match="repair_failure_scope_mismatch"):
+            await BrowserVerticalComponents.propose_locator_repair(
+                cast(BrowserVerticalComponents, installed), principal,
+                owner.session_id, **kwargs,
+            )
+
+    asyncio.run(scenario())

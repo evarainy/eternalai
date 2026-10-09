@@ -17,6 +17,7 @@ from app.browser_skill.models import (
     ReadSpec,
     ScopeStamp,
 )
+from app.browser_skill.repair import FormalRepairObservation, RepairFailureReason
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileContext, BrowserProfileGeneration
@@ -53,6 +54,14 @@ class BrowserWorkerCheckpoint(Protocol):
         receipt: DispatchReceipt, policy_digest: str, sequence: int,
     ) -> RunTeachingStep:
         """Persist one acknowledged, registered step before the next browser send."""
+        ...
+
+    async def record_failed_step(
+        self, rule: SiteStepRule, scope: ScopeStamp, policy_digest: str,
+        sequence: int, reason: RepairFailureReason,
+        observations: tuple[FormalRepairObservation, ...],
+    ) -> None:
+        """Persist a sanitized, definitely pre-send target failure."""
         ...
 
     async def reserve_write_dispatch(

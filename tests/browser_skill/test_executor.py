@@ -8,7 +8,14 @@ import pytest
 
 from app.browser_skill import executor as executor_module
 from app.browser_skill.executor import BrowserExecutor
-from app.browser_skill.models import ActionCommand, BrowserOperationError, ReadSpec, TargetRef
+from app.browser_skill.models import (
+    ActionCommand,
+    BrowserOperationError,
+    DecisionResult,
+    LocatorHint,
+    ReadSpec,
+    TargetRef,
+)
 from app.browser_skill.site_rules import FrozenSiteAdapter
 from app.browser_skill.verifier import failure
 from tests.browser_skill.fakes import FakeWorld
@@ -125,6 +132,140 @@ def test_model_nonselection_stops_without_dispatch_and_preserves_status(status: 
     result = run(world)
     assert result.sequence == "stopped" and result.decisions[0].status == status
     assert len(world.sends) == 0 and world.reads == 0
+
+
+@pytest.mark.parametrize("failure_kind,expected", [
+    ("missing", "locator_not_found"),
+    ("stale", "target_stale"),
+])
+def test_only_a_pre_send_registered_target_failure_reaches_repair_audit(
+    failure_kind: str, expected: str,
+) -> None:
+    world = FakeWorld("read")
+    recorded: list[tuple[str, str, int, str]] = []
+
+    async def audit(rule, scope, policy_digest, sequence, reason, observations) -> None:
+        assert scope == world.view.scope
+        assert observations == ()
+        recorded.append((rule.step.step_id, policy_digest, sequence, reason))
+
+    if failure_kind == "missing":
+        world.matches = ()
+    else:
+        async def stale(*_args: object) -> None:
+            raise failure("stale")
+        world.revalidate = stale
+    executor = BrowserExecutor(
+        world, world.decision, world.verifier, world.site,
+        world.read_spec, world.decision_context,
+        failed_step_audit=audit,
+    )
+    outcome = asyncio.run(executor.run(world.session, world.context))
+    assert outcome.failure is not None and outcome.failure.dispatch_state == "not_sent"
+    assert recorded == [(
+        world.plan.steps[0].step.step_id, world.plan.policy.digest, 1, expected,
+    )]
+    assert world.sends == []
+
+
+def test_uncertain_dispatch_never_creates_locator_repair_evidence() -> None:
+    world = FakeWorld("read")
+    world.receipt_state = "possibly_sent"
+    recorded: list[str] = []
+
+    async def audit(_rule, _scope, _policy, _sequence, reason, _observations) -> None:
+        recorded.append(reason)
+
+    executor = BrowserExecutor(
+        world, world.decision, world.verifier, world.site,
+        world.read_spec, world.decision_context,
+        failed_step_audit=audit,
+    )
+    outcome = asyncio.run(executor.run(world.session, world.context))
+    assert outcome.failure is not None and outcome.failure.dispatch_state == "possibly_sent"
+    assert recorded == []
+
+
+def test_option_candidate_failure_does_not_implicate_the_parent_locator() -> None:
+    world = FakeWorld("select_option")
+    world._inputs["options"] = ()
+    recorded: list[str] = []
+
+    async def audit(_rule, _scope, _policy, _sequence, reason, _observations) -> None:
+        recorded.append(reason)
+
+    executor = BrowserExecutor(
+        world, world.decision, world.verifier, world.site,
+        world.read_spec, world.decision_context,
+        failed_step_audit=audit,
+    )
+    outcome = asyncio.run(executor.run(world.session, world.context))
+    assert outcome.failure is not None and outcome.failure.code == "resource_not_found"
+    assert world.sends == [] and recorded == []
+
+
+def test_explicit_target_tie_is_reviewable_without_dispatch() -> None:
+    world = FakeWorld("read")
+    world.matches = tuple(c.ref.target_id for c in world.view.candidates)
+    recorded: list[str] = []
+
+    async def tie(request, _context):
+        return DecisionResult(
+            request_id=request.request_id, scope=request.scope,
+            status="ambiguous", reason="tie",
+        )
+
+    async def audit(_rule, _scope, _policy, _sequence, reason, _observations) -> None:
+        recorded.append(reason)
+
+    world.decision.decide = tie
+    executor = BrowserExecutor(
+        world, world.decision, world.verifier, world.site,
+        world.read_spec, world.decision_context,
+        failed_step_audit=audit,
+    )
+    outcome = asyncio.run(executor.run(world.session, world.context))
+    assert outcome.sequence == "stopped" and outcome.decisions[0].reason == "tie"
+    assert world.sends == [] and recorded == ["ambiguous_target"]
+
+
+def test_registered_repair_probe_reobserves_before_recording_a_candidate() -> None:
+    world = FakeWorld("read")
+    world.matches = ()
+    hint = LocatorHint(kind="test_id", value="replacement_test_id")
+    calls: list[str] = []
+    observations = []
+    original_observe = world.observe
+
+    async def observe(session, request, policy):
+        calls.append("observe")
+        return await original_observe(session, request, policy)
+
+    async def repair_targets(session, step, approved, projection, context):
+        assert step == world.plan.steps[0].step and approved == hint
+        assert projection.scope == world.view.scope
+        calls.append("repair")
+        return (world.view.candidates[0],)
+
+    async def audit(_rule, _scope, _policy, _sequence, _reason, proven) -> None:
+        calls.append("audit")
+        observations.extend(proven)
+
+    world.observe = observe
+    world.repair_target_candidates = repair_targets
+    executor = BrowserExecutor(
+        world, world.decision, world.verifier, world.site,
+        world.read_spec, world.decision_context,
+        failed_step_audit=audit,
+        repair_hints={world.plan.steps[0].step.step_id: (hint,)},
+    )
+    outcome = asyncio.run(executor.run(world.session, world.context))
+    assert outcome.failure is not None and outcome.failure.code == "resource_not_found"
+    assert calls == ["observe", "observe", "repair", "audit"]
+    assert len(observations) == 1 and observations[0].replacement == hint
+    assert observations[0].scope == world.view.scope
+    assert len(observations[0].target_digest) == 64
+    assert world.sends == []
 
 
 def test_model_error_retains_exact_code_without_retry() -> None:

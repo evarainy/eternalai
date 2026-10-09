@@ -170,7 +170,10 @@ class TrajectoryEvent(Contract):
     scope: ScopeStamp
     target: TargetRef | None = None
     option: TargetRef | None = None
-    operation: Literal["click", "fill", "select_option", "read", "navigate"]
+    operation: Literal[
+        "click", "fill", "select_option", "read", "navigate", "check",
+        "press_enter", "wait",
+    ]
     effect: Literal["read_only", "may_write"]
     effect_proof: EffectFact
     value_ref: ParameterRef | None = None

@@ -196,7 +196,14 @@ def make_router(
                     detail={"code": "browser_runtime_unavailable"},
                     headers={"Cache-Control": "no-store"},
                 )
-            if body.client_capabilities.get("browser_skill_id") != browser_chat.skill_id:
+            selected_skill = body.client_capabilities.get(
+                "browser_skill_id", browser_chat.skill_id,
+            )
+            selector = getattr(browser_chat, "can_select_skill", None)
+            if (type(selected_skill) is not str or (
+                selected_skill != browser_chat.skill_id
+                and (not callable(selector) or selector(selected_skill) is not True)
+            )):
                 raise HTTPException(
                     status_code=409,
                     detail={"code": "browser_skill_not_configured"},
@@ -211,7 +218,7 @@ def make_router(
                 message=body.message,
                 client_capabilities=body.client_capabilities,
                 client_request_id=body.client_request_id,
-                skill_id=browser_chat.skill_id,
+                skill_id=selected_skill,
             )
         bound_runtime, session_id = _bind_runtime_request(
             runtime=runtime,

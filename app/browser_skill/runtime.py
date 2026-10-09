@@ -15,6 +15,7 @@ from app.browser_skill.models import (
     ReadSpec,
     ScopeStamp,
 )
+from app.browser_skill.repair import FormalRepairObservation, RepairFailureReason
 from app.browser_skill.site_rules import SiteStepRule
 from app.browser_skill.trajectory import RunTeachingStep
 from app.ports.browser_profile_store import BrowserProfileStorePort
@@ -102,6 +103,19 @@ class _Checkpoint:
         if command.step.effect == "may_write":
             self._write_reservation = None
         return step
+
+    async def record_failed_step(
+        self, rule: SiteStepRule, scope: ScopeStamp, policy_digest: str,
+        sequence: int, reason: RepairFailureReason,
+        observations: tuple[FormalRepairObservation, ...],
+    ) -> None:
+        if self._write_reservation is not None:
+            raise BrowserReadExecutionError("denied")
+        await self.refresh()
+        self.run, _ = await self.store.record_failed_step(
+            self.run, rule=rule, scope=scope, policy_digest=policy_digest,
+            sequence=sequence, reason=reason, observations=observations,
+        )
 
     async def reserve_write_dispatch(
         self, command: ActionCommand, rule: SiteStepRule,
